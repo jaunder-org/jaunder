@@ -8,6 +8,7 @@
 //! live instance and treats a dead/mismatched holder as stale. A further follow-on
 //! adds an `admin_token` (admin channel, #142).
 
+use host::error;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -108,7 +109,7 @@ pub(crate) fn check_startup_mutex(path: &Path) -> std::io::Result<StartupCheck> 
             return Ok(StartupCheck::Proceed);
         }
         Err(error) => {
-            host::error::report_swallowed(
+            error::report_swallowed(
                 host::error::ErrorKind::Internal,
                 host::error::ErrorClass::Transient,
                 "server.runtime_file.read",
@@ -149,7 +150,7 @@ pub(crate) fn check_startup_mutex(path: &Path) -> std::io::Result<StartupCheck> 
 }
 
 fn report_runtime_decode(error: &(dyn std::error::Error + 'static)) {
-    host::error::report_swallowed(
+    error::report_swallowed(
         host::error::ErrorKind::Internal,
         host::error::ErrorClass::Bug,
         "server.runtime_file.decode",
@@ -173,7 +174,7 @@ fn remove_runtime_file_with(path: &Path, remove: fn(&Path) -> std::io::Result<()
     match remove(path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => host::error::report_swallowed(
+        Err(error) => error::report_swallowed(
             host::error::ErrorKind::Internal,
             host::error::ErrorClass::Transient,
             "server.runtime_file.remove",
@@ -203,7 +204,7 @@ impl RuntimeFileGuard {
         match write_atomic(&path, addr, start_time) {
             Ok(()) => Self { path: Some(path) },
             Err(error) => {
-                host::error::report_swallowed(
+                error::report_swallowed(
                     host::error::ErrorKind::Internal,
                     host::error::ErrorClass::Transient,
                     "server.runtime_file.write",

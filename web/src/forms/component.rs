@@ -4,7 +4,7 @@ use std::str::FromStr;
 use leptos::prelude::*;
 
 use super::field::Field;
-use super::submit_gate::request_submit_gate;
+use super::submit_gate;
 use server_fn::ServerFn;
 
 /// Wire a native form to a generated [`ServerAction`] through one input constructor.
@@ -27,7 +27,7 @@ where
     S::Error: Send + Sync + 'static,
     F: Fn() -> Option<S> + Send + Sync + 'static,
 {
-    let (disabled, dispatch) = request_submit_gate(
+    let (disabled, dispatch) = submit_gate::request_submit_gate(
         action.pending().into(),
         Callback::new(move |()| request()),
         Callback::new(move |input| {

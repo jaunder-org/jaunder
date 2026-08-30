@@ -7,7 +7,7 @@ use axum::{
 use common::ids::UserId;
 use common::token::{RawToken, TokenHash};
 use common::username::Username;
-use host::auth::{CredentialResolutionError, CredentialTransport, resolve_credential};
+use host::auth::{self, CredentialResolutionError, CredentialTransport};
 use leptos::prelude::expect_context;
 use std::sync::{
     Arc,
@@ -89,7 +89,7 @@ where
     type Rejection = Rejection;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let resolution = resolve_credential(&parts.headers).map_err(|error| match error {
+        let resolution = auth::resolve_credential(&parts.headers).map_err(|error| match error {
             CredentialResolutionError::Missing => Rejection::MissingToken,
             CredentialResolutionError::InvalidAuthorization => Rejection::InvalidAuthorization,
         })?;

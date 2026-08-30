@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use common::media::MediaReferenceKind;
 use common::tagged_url::BaseUrl;
 use futures_util::{StreamExt, stream};
+use host::error;
 use storage::{
     ForeignEvidenceSink, InstanceId, MediaReferenceEvidence, MediaReferenceOwnershipResolver,
     PersistedMediaReference,
@@ -99,7 +100,7 @@ impl<T: HeadTransport + 'static> MediaReferenceOwnershipResolver
         };
         if let Err(error) = timeout(OPERATION_TIMEOUT, operation).await {
             // A timed-out operation intentionally leaves unfinished rows live.
-            host::error::report_swallowed(
+            error::report_swallowed(
                 host::error::ErrorKind::Internal,
                 host::error::ErrorClass::Transient,
                 "server.media_ownership.operation_timeout",
@@ -180,7 +181,7 @@ impl Ownership {
 
 fn report_probe_error(error: &HeadTransportError) {
     // Transport failures intentionally fail closed so an unverified row remains live.
-    host::error::report_swallowed(
+    error::report_swallowed(
         host::error::ErrorKind::Internal,
         host::error::ErrorClass::Transient,
         "server.media_ownership.probe",

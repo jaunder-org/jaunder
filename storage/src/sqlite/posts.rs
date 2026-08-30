@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sqlx::{Pool, QueryBuilder, Sqlite};
 
+use crate::helpers;
 use crate::posts::{
     DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostBookkeepingRow,
     PostMediaReferenceBackfill, PostTagDiff, PostTagRow, SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID,
@@ -35,7 +36,7 @@ pub(crate) fn finish_post_update(
     primary: Result<PostRecord, UpdatePostError>,
     rollback: Result<(), sqlx::Error>,
 ) -> Result<PostRecord, UpdatePostError> {
-    crate::helpers::preserve_after_secondary(
+    helpers::preserve_after_secondary(
         primary,
         rollback,
         host::error::ErrorKind::Storage,
@@ -48,7 +49,7 @@ pub(crate) fn finish_post_tags(
     primary: Result<(), TaggingError>,
     rollback: Result<(), sqlx::Error>,
 ) -> Result<(), TaggingError> {
-    crate::helpers::preserve_after_secondary(
+    helpers::preserve_after_secondary(
         primary,
         rollback,
         host::error::ErrorKind::Storage,
@@ -515,7 +516,7 @@ impl PostDialect for Sqlite {
                 sqlx::query("COMMIT").execute(&mut *conn).await?;
                 Ok(())
             }
-            Err(error) => crate::helpers::preserve_after_secondary(
+            Err(error) => helpers::preserve_after_secondary(
                 Err(error),
                 sqlx::query("ROLLBACK")
                     .execute(&mut *conn)

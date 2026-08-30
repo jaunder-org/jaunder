@@ -1,6 +1,6 @@
-use crate::backup::{UpdateSettings, get_settings, is_warning_visible};
+use crate::backup::{self, UpdateSettings};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedBareInput, ValidatedInput, validated_error};
+use crate::forms::{self, Field, ValidatedBareInput, ValidatedInput};
 use crate::topbar::Topbar;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use leptos::prelude::*;
@@ -9,7 +9,10 @@ use strum::VariantArray;
 #[component]
 pub fn BackupSettingsPage() -> impl IntoView {
     let update_action = ServerAction::<UpdateSettings>::new();
-    let settings = Resource::new(move || update_action.version().get(), |_| get_settings());
+    let settings = Resource::new(
+        move || update_action.version().get(),
+        |_| backup::get_settings(),
+    );
 
     view! {
         <Topbar title="Backup Settings" sub="Operations" />
@@ -58,7 +61,7 @@ fn backup_destination_field(destination: Field<DestinationPath>) -> impl IntoVie
                 class=Some("j-backup-input")
             />
         </label>
-        {validated_error(
+        {forms::validated_error(
             destination.error,
             Signal::derive(move || destination.is_touched()),
             |msg| view! { <p class="error">{msg}</p> }.into_any(),
@@ -167,7 +170,7 @@ fn backup_settings_form(
 
 #[component]
 pub fn BackupBanner() -> impl IntoView {
-    let visible = Resource::new(|| (), |()| is_warning_visible());
+    let visible = Resource::new(|| (), |()| backup::is_warning_visible());
     view! {
         <crate::banner::WarnBanner
             visible=visible

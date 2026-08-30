@@ -11,7 +11,7 @@
 use std::str::FromStr;
 
 use common::invite::ProfferedInviteCode;
-use common::token::{InvalidTokenShape, validate_shape};
+use common::token::{self, InvalidTokenShape};
 use macros::StrNewtype;
 
 /// A validated invite code held server-side.
@@ -31,7 +31,7 @@ impl FromStr for InviteCode {
     type Err = InvalidTokenShape;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        validate_shape(s)?;
+        token::validate_shape(s)?;
         Ok(InviteCode(s.to_owned()))
     }
 }

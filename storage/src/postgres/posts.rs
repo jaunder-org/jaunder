@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sqlx::{Pool, Postgres, QueryBuilder};
 
+use crate::helpers;
 use crate::posts::{
     DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostBookkeepingRow,
     PostMediaReferenceBackfill, PostTag, PostTagDiff, PostTagRow, SELECT_POST_TAGS,
@@ -36,7 +37,7 @@ pub(crate) fn finish_post_update_rejection(
     primary: Result<PostRecord, UpdatePostError>,
     rollback: Result<(), sqlx::Error>,
 ) -> Result<PostRecord, UpdatePostError> {
-    crate::helpers::preserve_after_secondary(
+    helpers::preserve_after_secondary(
         primary,
         rollback,
         host::error::ErrorKind::Storage,
@@ -66,7 +67,7 @@ pub(crate) fn finish_post_tags_not_found(
     primary: Result<(), TaggingError>,
     rollback: Result<(), sqlx::Error>,
 ) -> Result<(), TaggingError> {
-    crate::helpers::preserve_after_secondary(
+    helpers::preserve_after_secondary(
         primary,
         rollback,
         host::error::ErrorKind::Storage,
@@ -575,7 +576,7 @@ impl PostDialect for Postgres {
                         && html.as_ref() == candidate.rendered_html.as_str()
                 });
         if !unchanged {
-            return crate::helpers::preserve_after_secondary(
+            return helpers::preserve_after_secondary(
                 Err(sqlx::Error::Protocol(
                     "post rendered HTML changed during media-reference backfill".to_owned(),
                 )),

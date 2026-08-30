@@ -11,11 +11,9 @@ use common::post_body::{InvalidPostBody, PostBody};
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::tag::TagLabel;
-use common::tagged_url::{BaseUrl, EditUriUrl, Permalink, compose};
+use common::tagged_url::{self, BaseUrl, EditUriUrl, Permalink};
 use common::time::UtcInstant;
-use host::atompub::{
-    Category, Content, Entry, Link, Text, draft_marker, is_draft, set_draft, set_j_slug,
-};
+use host::atompub::{self, Category, Content, Entry, Link, Text};
 use storage::{PostFormat, PostRecord};
 
 /// The post-shaped data carried by an incoming `AtomPub` `Entry`.
@@ -132,13 +130,13 @@ pub fn entry_to_post_fields(
         .iter()
         .filter_map(|c| c.term().parse::<TagLabel>().ok())
         .collect();
-    let is_draft = is_draft(entry);
+    let is_draft = atompub::is_draft(entry);
     // A declared `app:draft` is an explicit Atom lifecycle source, including
     // `no`; only a genuinely absent marker leaves room for Org metadata.
     let published = entry
         .published()
         .map(|published| UtcInstant::from(published.with_timezone(&Utc)));
-    let lifecycle = match draft_marker(entry) {
+    let lifecycle = match atompub::draft_marker(entry) {
         Some(true) => Presence::Present(PublicationState::Draft),
         Some(false) => Presence::Present(classify_published(
             published.unwrap_or(request_clock),
@@ -180,7 +178,7 @@ pub fn post_to_entry(post: &PostRecord, base_url: &BaseUrl) -> Entry {
     let username = &*post.author_username;
     let edit_path = format!("/atompub/{username}/posts/{}", post.post_id);
     // `compose` joins base + the edit path (or emits the relative path when unset).
-    let edit_uri: EditUriUrl = compose(base_url, &edit_path);
+    let edit_uri: EditUriUrl = tagged_url::compose(base_url, &edit_path);
 
     // Content: the post's format becomes the wire media `type` (native source form).
     let content_type = format_to_wire(post.format);
@@ -196,7 +194,7 @@ pub fn post_to_entry(post: &PostRecord, base_url: &BaseUrl) -> Entry {
         links.push(Link {
             rel: "alternate".into(),
             // Consumed inline into a `String`, so the role takes the turbofish form.
-            href: compose::<Permalink>(base_url, &alt_path).to_string(),
+            href: tagged_url::compose::<Permalink>(base_url, &alt_path).to_string(),
             ..Default::default()
         });
     }
@@ -231,12 +229,12 @@ pub fn post_to_entry(post: &PostRecord, base_url: &BaseUrl) -> Entry {
         ..Default::default()
     };
 
-    set_draft(&mut entry, post.published_at.is_none());
+    atompub::set_draft(&mut entry, post.published_at.is_none());
     // Read-only server slug (ADR-0023): emitted on every entry, draft or live.
     // `set_j_slug` takes `&str` — it is the generic AtomPub XML-extension writer
     // (a serialization boundary, like the JSON serde bridge), not a slug-value
     // carrier; the typed `Slug` is derefed to its text here.
-    set_j_slug(&mut entry, post.slug.as_ref());
+    atompub::set_j_slug(&mut entry, post.slug.as_ref());
     entry
 }
 
@@ -1066,7 +1064,7 @@ mod tests {
 
         let entry = post_to_entry(&post, &parse_url("https://example.com/"));
 
-        assert!(!is_draft(&entry));
+        assert!(!atompub::is_draft(&entry));
     }
 
     #[test]
@@ -1084,7 +1082,7 @@ mod tests {
 
         let entry = post_to_entry(&post, &parse_url("https://example.com/"));
 
-        assert!(is_draft(&entry));
+        assert!(atompub::is_draft(&entry));
     }
 
     #[test]

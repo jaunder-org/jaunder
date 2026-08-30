@@ -3,12 +3,10 @@ use axum::{
     response::{Html, IntoResponse, Response},
 };
 use common::seed::{Page, PageSeed, RenderedPost};
-use host::etag::sha256_of;
-use web::app::{
-    GLUE_URL, MODULE_BEFORE_INIT_MARK, PREPAINT_SCRIPT, WASM_URL, render_head, render_shell,
-};
-use web::error::{SwallowedSource, report_swallowed};
-use web::posts::authored_post;
+use host::etag;
+use web::app::{self, GLUE_URL, MODULE_BEFORE_INIT_MARK, PREPAINT_SCRIPT, WASM_URL};
+use web::error::{self, SwallowedSource};
+use web::posts;
 
 use super::Shell;
 
@@ -19,8 +17,8 @@ use super::Shell;
 pub fn document(seed: &PageSeed) -> String {
     // Both arrive as `Markup` (trust is type-carried across the crate boundary);
     // this is where they exit to the untyped response body.
-    let head = render_head(seed).into_string();
-    let body = render_shell(seed).into_string();
+    let head = app::render_head(seed).into_string();
+    let body = app::render_shell(seed).into_string();
     let blob = serde_json::to_string(seed).unwrap_or_else(|_| "null".to_string());
     format!(
         concat!(
@@ -49,7 +47,7 @@ pub fn document(seed: &PageSeed) -> String {
 /// already matches. Identical `seed` ⇒ identical bytes ⇒ identical `ETag`.
 pub(super) fn cacheable(headers: &HeaderMap, seed: &PageSeed) -> Response {
     let body = document(seed);
-    let etag = sha256_of(body.as_bytes());
+    let etag = etag::sha256_of(body.as_bytes());
 
     if let Some(inm) = headers.get(header::IF_NONE_MATCH)
         && inm.to_str().ok() == Some(etag.as_ref())
@@ -92,7 +90,10 @@ pub(super) fn permalink_response(
 ) -> Response {
     match result {
         // Anonymous viewer ⇒ never the author, so `is_author = false`.
-        Ok(Some(record)) => cacheable(headers, &PageSeed::Permalink(authored_post(record, false))),
+        Ok(Some(record)) => cacheable(
+            headers,
+            &PageSeed::Permalink(posts::authored_post(record, false)),
+        ),
         // No *public* post here: a draft its author must see, or nothing at all.
         // Serve the shell so the CSR client resolves it with the session.
         Ok(None) => shell_response(shell),
@@ -141,7 +142,7 @@ pub(super) fn tag_response(
     match result {
         Ok(page) => cacheable(headers, &into_seed(page)),
         Err(error) => {
-            report_swallowed(
+            error::report_swallowed(
                 error.kind(),
                 error.class(),
                 context,

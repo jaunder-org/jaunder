@@ -7,6 +7,8 @@
 //! on `StrNewtype` would put that invariant one editing mistake away from a trailer arm.
 //! A separate derive cannot leak a constructor: the codegen is not in it.
 
+use crate::sqlx_bridge;
+
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::DeriveInput;
@@ -36,7 +38,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
         // field's type — decoding alone would leave the column integer-shaped. So all
         // three inners move together, and the decode borrows to parse and drops (the
         // per-conversion rule in `sqlx_bridge`'s module doc).
-        return crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
+        return sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
             name,
             generics: &generics,
             type_inner: quote! { String },
@@ -73,7 +75,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
             pg_array: false,
         });
     }
-    crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
+    sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
         name,
         generics: &generics,
         type_inner: quote! { #inner },

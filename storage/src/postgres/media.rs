@@ -1,4 +1,4 @@
-use crate::posts::media_advisory_lock_key;
+use crate::posts;
 use async_trait::async_trait;
 use common::media::{ByteSize, MediaRef};
 use sqlx::{Pool, Postgres, QueryBuilder};
@@ -35,7 +35,7 @@ impl MediaDialect for Postgres {
         conn: &mut <Self as sqlx::Database>::Connection,
         media: &MediaRef,
     ) -> sqlx::Result<()> {
-        let key = media_advisory_lock_key(media);
+        let key = posts::media_advisory_lock_key(media);
         sqlx::query("SELECT pg_advisory_xact_lock($1)")
             .bind(key)
             .execute(conn)

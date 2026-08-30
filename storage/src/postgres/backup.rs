@@ -13,13 +13,14 @@ use crate::backup::{
     build_manifest, ensure_schema_version, json_value_as_restore_text, order_by_clause,
     read_table_rows, restore_table_order, validate_instance_identity_backup, validate_restore_row,
 };
-use crate::sql::quote_identifier;
+use crate::helpers;
+use crate::sql;
 
 fn finish_export_rollback(
     primary: Result<BackupManifest, BackupError>,
     rollback: Result<(), sqlx::Error>,
 ) -> Result<BackupManifest, BackupError> {
-    crate::helpers::preserve_after_secondary(
+    helpers::preserve_after_secondary(
         primary,
         rollback,
         host::error::ErrorKind::Storage,
@@ -32,7 +33,7 @@ fn finish_restore_rollback<T>(
     primary: Result<T, BackupError>,
     rollback: Result<(), sqlx::Error>,
 ) -> Result<T, BackupError> {
-    crate::helpers::preserve_after_secondary(
+    helpers::preserve_after_secondary(
         primary,
         rollback,
         host::error::ErrorKind::Storage,
@@ -136,7 +137,7 @@ pub(crate) async fn restore_database(
         // *checks*, not `ON DELETE CASCADE` *actions*
         // (docs/adr/0115-clear-then-load-restore.md).
         for table in &manifest.tables {
-            sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
+            sqlx::query(&format!("DELETE FROM {}", sql::quote_identifier(table)))
                 .execute(&mut *connection)
                 .await
                 .map_err(map_restore_error)?;
@@ -238,7 +239,7 @@ async fn import_table(
 fn insert_sql(table: &str, columns: &[ColumnInfo]) -> String {
     let column_list = columns
         .iter()
-        .map(|column| quote_identifier(&column.name))
+        .map(|column| sql::quote_identifier(&column.name))
         .collect::<Vec<_>>()
         .join(", ");
     let placeholders = columns
@@ -253,12 +254,12 @@ fn insert_sql(table: &str, columns: &[ColumnInfo]) -> String {
     if table == "users" {
         format!(
             "INSERT INTO {} ({column_list}) OVERRIDING SYSTEM VALUE VALUES ({placeholders})",
-            quote_identifier(table)
+            sql::quote_identifier(table)
         )
     } else {
         format!(
             "INSERT INTO {} ({column_list}) VALUES ({placeholders})",
-            quote_identifier(table)
+            sql::quote_identifier(table)
         )
     }
 }
@@ -355,13 +356,13 @@ async fn export_table(
 fn json_select(table: &str, columns: &[ColumnInfo]) -> String {
     let column_list = columns
         .iter()
-        .map(|column| quote_identifier(&column.name))
+        .map(|column| sql::quote_identifier(&column.name))
         .collect::<Vec<_>>()
         .join(", ");
     format!(
         "SELECT to_jsonb(export_row)::text FROM (SELECT {column_list} FROM {} ORDER BY {}) AS export_row",
-        quote_identifier(table),
-        order_by_clause(columns, quote_identifier)
+        sql::quote_identifier(table),
+        order_by_clause(columns, sql::quote_identifier)
     )
 }
 

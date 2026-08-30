@@ -12,9 +12,7 @@ use sqlx::postgres::PgConnectOptions;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{PgPool, SqlitePool};
 
-use crate::AppState;
-use crate::postgres::open_postgres_database_with_pool;
-use crate::sqlite::open_sqlite_database_with_pool;
+use crate::{AppState, postgres, sqlite};
 
 // ---------------------------------------------------------------------------
 // DbConnectOptions
@@ -412,7 +410,7 @@ pub async fn open_database_with_observer(
     match opts {
         DbConnectOptions::Sqlite(options) => {
             let (state, pool, instance_id) =
-                open_sqlite_database_with_pool(options, true, runtime).await?;
+                sqlite::open_sqlite_database_with_pool(options, true, runtime).await?;
             Ok(OpenedDatabase {
                 state,
                 instance_id,
@@ -423,7 +421,7 @@ pub async fn open_database_with_observer(
         }
         DbConnectOptions::Postgres { options, .. } => {
             let (state, pool, instance_id) =
-                open_postgres_database_with_pool(options, runtime).await?;
+                postgres::open_postgres_database_with_pool(options, runtime).await?;
             Ok(OpenedDatabase {
                 state,
                 instance_id,
@@ -468,7 +466,7 @@ pub async fn open_existing_database_with_observer(
     match opts {
         DbConnectOptions::Sqlite(options) => {
             let (state, pool, instance_id) =
-                open_sqlite_database_with_pool(options, false, runtime).await?;
+                sqlite::open_sqlite_database_with_pool(options, false, runtime).await?;
             Ok(OpenedDatabase {
                 state,
                 instance_id,
@@ -479,7 +477,7 @@ pub async fn open_existing_database_with_observer(
         }
         DbConnectOptions::Postgres { options, .. } => {
             let (state, pool, instance_id) =
-                open_postgres_database_with_pool(options, runtime).await?;
+                postgres::open_postgres_database_with_pool(options, runtime).await?;
             Ok(OpenedDatabase {
                 state,
                 instance_id,

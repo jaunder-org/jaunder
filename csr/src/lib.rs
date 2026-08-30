@@ -3,7 +3,11 @@
 // to monomorphize it (mirrors web/src/lib.rs).
 #![recursion_limit = "512"]
 
-use client::perf::{BOOT_ENTRY, BOOT_MOUNT_DONE, BOOT_RENDER_START, BOOT_SEED_PARSED, mark};
+use client::{
+    dom,
+    perf::{self, BOOT_ENTRY, BOOT_MOUNT_DONE, BOOT_RENDER_START, BOOT_SEED_PARSED},
+    telemetry,
+};
 use common::client_telemetry::{ClientErrorContext, ClientSourceKind};
 use common::seed::PageSeed;
 
@@ -28,11 +32,11 @@ extern "C" {
 }
 
 fn projector_seed() -> Option<PageSeed> {
-    let json = client::dom::text_content_by_id("jaunder-seed");
+    let json = dom::text_content_by_id("jaunder-seed");
     let Ok(seed) = web::app::decode_projector_seed(json.as_deref()) else {
         let source_kind = ClientSourceKind::InvalidSeed;
-        client::telemetry::report_swallowed(
-            client::telemetry::error_kind(source_kind),
+        telemetry::report_swallowed(
+            telemetry::error_kind(source_kind),
             ClientErrorContext::ProjectorSeedDecode,
             source_kind,
         );
@@ -49,16 +53,16 @@ fn projector_seed() -> Option<PageSeed> {
 /// this is an ordinary `mount_to_body`.
 fn mount() {
     let seed = projector_seed();
-    mark(BOOT_SEED_PARSED);
+    perf::mark(BOOT_SEED_PARSED);
     // App re-renders the identical content from `seed`, so removing the
     // server-painted copy avoids a duplicate paint without a visible flash (the
     // removal and remount happen in one synchronous task).
-    client::dom::remove_element_by_id("app");
+    dom::remove_element_by_id("app");
     // Drop the projector-painted discovery <link>s so the reactive FeedDiscovery/
     // RsdDiscovery mounted below produce the ONLY set (no invisible duplicate). Crawlers/
     // no-JS never run this, so their head is unchanged (#198).
-    client::dom::remove_elements_by_selector(&format!("link[{}]", web::app::DISCOVERY_MARKER_ATTR));
-    mark(BOOT_RENDER_START);
+    dom::remove_elements_by_selector(&format!("link[{}]", web::app::DISCOVERY_MARKER_ATTR));
+    perf::mark(BOOT_RENDER_START);
     leptos::mount::mount_to_body(move || {
         provide_context(seed.clone());
         view! { <App /> }
@@ -69,10 +73,10 @@ fn mount() {
 pub fn main() {
     // First statement: `BOOT_ENTRY` is the wasm's own "I am running" timestamp, and
     // the harness derives fetch/compile/instantiate from the gap before it.
-    mark(BOOT_ENTRY);
+    perf::mark(BOOT_ENTRY);
     _ = console_log::init_with_level(log::Level::Debug);
     console_error_panic_hook::set_once();
     mount();
-    mark(BOOT_MOUNT_DONE);
+    perf::mark(BOOT_MOUNT_DONE);
     mark_ready();
 }

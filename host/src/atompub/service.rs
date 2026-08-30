@@ -9,7 +9,7 @@ use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
 use super::title::{CollectionTitle, WorkspaceTitle};
-use super::xml::{write_empty_element, write_text_element};
+use super::xml;
 use super::{APP_NS, ATOM_NS, J_NS};
 use common::tag::Tag;
 use common::tagged_url::CollectionHrefUrl;
@@ -80,7 +80,7 @@ pub fn render_service_document(doc: &ServiceDocument) -> String {
     let _ = writer.write_event(Event::Start(root));
 
     let _ = writer.write_event(Event::Start(BytesStart::new("app:workspace")));
-    write_text_element(&mut writer, "atom:title", &doc.workspace_title);
+    xml::write_text_element(&mut writer, "atom:title", &doc.workspace_title);
 
     // Capability discovery (ADR-0023): advertise the Jaunder wire extensions this
     // server understands so clients can detect support before relying on them.
@@ -103,10 +103,10 @@ fn write_collection(writer: &mut Writer<Vec<u8>>, coll: &CollectionDecl) {
     start.push_attribute(("href", coll.href.as_ref()));
     let _ = writer.write_event(Event::Start(start));
 
-    write_text_element(writer, "atom:title", &coll.title);
+    xml::write_text_element(writer, "atom:title", &coll.title);
 
     for media_type in &coll.accept {
-        write_text_element(writer, "app:accept", media_type.as_ref());
+        xml::write_text_element(writer, "app:accept", media_type.as_ref());
     }
 
     if !coll.categories.is_empty() {
@@ -115,7 +115,7 @@ fn write_collection(writer: &mut Writer<Vec<u8>>, coll: &CollectionDecl) {
         let _ = writer.write_event(Event::Start(cat_elem));
 
         for term in &coll.categories {
-            write_empty_element(writer, "atom:category", &[("term", term)]);
+            xml::write_empty_element(writer, "atom:category", &[("term", term)]);
         }
 
         let _ = writer.write_event(Event::End(BytesEnd::new("app:categories")));

@@ -26,7 +26,7 @@ use host::feed::{FeedEventStatus, FeedPath};
 use host::invite::InviteCode;
 use host::stored_password_hash::StoredPasswordHash;
 
-use super::format::{BackupManifest, json_value_as_restore_text, read_table_rows};
+use super::format::{self, BackupManifest};
 
 #[derive(Debug, Clone)]
 pub struct BackupRestoreOutcome {
@@ -139,13 +139,16 @@ pub(crate) fn validate_instance_identity_backup(
             "current-schema backup is missing instance_identity".to_owned(),
         ));
     }
-    let rows = read_table_rows(source_path, "instance_identity")?;
+    let rows = format::read_table_rows(source_path, "instance_identity")?;
     let [row] = rows.as_slice() else {
         return Err(crate::backup::BackupError::InvalidBackup(
             "instance_identity must contain exactly one row".to_owned(),
         ));
     };
-    let Some(value) = row.get("instance_id").and_then(json_value_as_restore_text) else {
+    let Some(value) = row
+        .get("instance_id")
+        .and_then(format::json_value_as_restore_text)
+    else {
         return Err(crate::backup::BackupError::InvalidBackup(
             "instance_identity.instance_id must be a string".to_owned(),
         ));
@@ -437,7 +440,7 @@ impl RestoreTableRow for UserConfigRestoreRow {
 }
 
 fn restore_text(row: &RestoreRowMap, column: &str) -> Option<RestoreText> {
-    json_value_as_restore_text(row.get(column)?).map(RestoreText)
+    format::json_value_as_restore_text(row.get(column)?).map(RestoreText)
 }
 
 fn push_issue(

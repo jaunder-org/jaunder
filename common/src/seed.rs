@@ -11,7 +11,7 @@ use crate::ids::PostId;
 use crate::post_body::PostBody;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
-use crate::render::{PostFormat, RenderedHtml, deserialize_rendered_html};
+use crate::render::{self, PostFormat, RenderedHtml};
 use crate::root_relative_url::RootRelativeUrl;
 use crate::slug::Slug;
 use crate::tag::{Tag, TagLabel};
@@ -42,7 +42,8 @@ pub struct RenderedPost {
     pub title: Option<PostTitle>,
     pub summary: Option<PostSummary>,
     pub slug: Slug,
-    #[serde(deserialize_with = "deserialize_rendered_html")]
+    #[serde(deserialize_with = "render::deserialize_rendered_html")]
+    // rendered-html-from-trusted:allow seed DTO rebuilds HTML serialized by Jaunder's own server (#701)
     pub rendered_html: RenderedHtml,
     pub created_at: UtcInstant,
     /// `None` for an unpublished draft.

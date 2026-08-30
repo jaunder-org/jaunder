@@ -12,8 +12,7 @@ use super::{
     PostgresSessionStorage, PostgresSiteConfigStorage, PostgresSubscriptionStorage,
     PostgresUserConfigStorage, PostgresUserStorage,
 };
-use crate::instance_identity::ensure_instance_identity;
-use crate::posts::backfill_post_media_references;
+use crate::{instance_identity, posts};
 
 fn make_postgres_app_state(pool: PgPool) -> Arc<crate::AppState> {
     Arc::new(crate::AppState {
@@ -58,8 +57,8 @@ pub(crate) async fn open_postgres_database_with_pool(
     let options = resolved_postgres_options(options, runtime);
     let pool = PgPool::connect_with(options).await?;
     sqlx::migrate!("./migrations/postgres").run(&pool).await?;
-    let instance_id = ensure_instance_identity(&pool).await?;
-    backfill_post_media_references(&pool).await?;
+    let instance_id = instance_identity::ensure_instance_identity(&pool).await?;
+    posts::backfill_post_media_references(&pool).await?;
     Ok((make_postgres_app_state(pool.clone()), pool, instance_id))
 }
 

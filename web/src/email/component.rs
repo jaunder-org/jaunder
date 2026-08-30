@@ -1,7 +1,7 @@
 //! Email vertical — wasm-only UI (ADR-0070): the email-settings page and the
 //! verify-email landing.
 
-use super::{RequestVerification, email_status_line, parse_verification_token, verify};
+use super::RequestVerification;
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::profile;
@@ -27,7 +27,7 @@ pub fn EmailPage() -> impl IntoView {
                     {move || Suspend::new(async move {
                         match profile.await {
                             Ok(data) => {
-                                let email_status = email_status_line(
+                                let email_status = super::email_status_line(
                                     data.email.as_ref(),
                                     data.email_verified,
                                 );
@@ -82,8 +82,8 @@ pub fn VerifyEmailPage() -> impl IntoView {
     // (ADR-0065 pre-validation): a malformed token short-circuits to a validation error
     // with no server round-trip; a well-formed one is verified server-side.
     let result = Resource::new(token, |raw: String| async move {
-        let token = parse_verification_token(&raw)?;
-        verify(token).await
+        let token = super::parse_verification_token(&raw)?;
+        super::verify(token).await
     });
 
     view! {

@@ -12,11 +12,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
-use host::metrics::SaturationSnapshot;
+use host::{error, metrics::SaturationSnapshot};
 use storage::{DbPoolObserver, DbPoolSnapshot, FeedEventStorage, MediaStorage};
 use tokio::task::JoinHandle;
 
-use crate::backup::latest_successful_backup_timestamp;
+use crate::backup;
 
 const FEED_CLAIM_LEASE_TIMEOUT: chrono::Duration = chrono::Duration::minutes(5);
 const SATURATION_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
@@ -205,7 +205,7 @@ impl SaturationSources {
                 let Some(root) = &real.backup_destination_root else {
                     return Ok(None);
                 };
-                latest_successful_backup_timestamp(root)
+                backup::latest_successful_backup_timestamp(root)
                     .map(|timestamp| timestamp.map(|timestamp| timestamp.value().timestamp()))
             }
             #[cfg(test)]
@@ -397,11 +397,11 @@ pub async fn sample_saturation_once(
     snapshot.media_filesystem_bytes = match media_filesystem_bytes {
         Ok(value) => Some(value),
         Err(error) => {
-            host::error::report_swallowed(
-                host::error::ErrorKind::Storage,
-                host::error::ErrorClass::Transient,
+            error::report_swallowed(
+                error::ErrorKind::Storage,
+                error::ErrorClass::Transient,
                 "server.metrics.media_filesystem_bytes",
-                host::error::SwallowedSource::Error(error.as_ref()),
+                error::SwallowedSource::Error(error.as_ref()),
             );
             None
         }
@@ -431,11 +431,11 @@ fn spawn_saturation_sampler_with_interval(
 }
 
 fn report_source_failure(context: &'static str) {
-    host::error::report_swallowed(
-        host::error::ErrorKind::Storage,
-        host::error::ErrorClass::Transient,
+    error::report_swallowed(
+        error::ErrorKind::Storage,
+        error::ErrorClass::Transient,
         context,
-        host::error::SwallowedSource::Redacted,
+        error::SwallowedSource::Redacted,
     );
 }
 

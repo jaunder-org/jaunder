@@ -16,13 +16,11 @@ use common::seed::{Page, RenderedPost};
 use common::tag::Tag;
 use common::time::UtcInstant;
 use common::username::Username;
-use common::visibility::{ViewerIdentity, viewer_user_id};
-use storage::{
-    PostCursor, PostRecord, PostStorage, UserStorage, list_by_tag_rows, to_post_cursor, wire_cursor,
-};
+use common::visibility::{self, ViewerIdentity};
+use storage::{self, PostCursor, PostRecord, PostStorage, UserStorage};
 
 use crate::error::{InternalError, InternalResult};
-use crate::posts::rendered_post;
+use crate::posts;
 
 /// Assemble a cursor-paginated [`Page`] of [`RenderedPost`] rows from one
 /// over-fetched row set (`page_size + 1` rows detect `has_more`). Shared by every
@@ -37,12 +35,12 @@ pub(super) fn page_from_rows(
     let has_more = page_size.has_more(rows.len());
     rows.truncate(page_size.page_len());
     let next_cursor = has_more
-        .then(|| rows.last().map(to_post_cursor))
+        .then(|| rows.last().map(storage::to_post_cursor))
         .flatten()
-        .map(|c| wire_cursor(&c));
+        .map(|c| storage::wire_cursor(&c));
     let posts = rows
         .into_iter()
-        .filter_map(|post| rendered_post(post, viewer_user_id))
+        .filter_map(|post| posts::rendered_post(post, viewer_user_id))
         .collect();
     Page {
         posts,
@@ -74,7 +72,11 @@ pub async fn fetch_user_posts(
             UtcInstant::now(),
         )
         .await?;
-    Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
+    Ok(page_from_rows(
+        rows,
+        page_size,
+        visibility::viewer_user_id(viewer),
+    ))
 }
 
 /// The shared site-wide timeline query, used by both the `list_local_timeline`
@@ -98,7 +100,11 @@ pub async fn fetch_local_timeline(
             UtcInstant::now(),
         )
         .await?;
-    Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
+    Ok(page_from_rows(
+        rows,
+        page_size,
+        visibility::viewer_user_id(viewer),
+    ))
 }
 
 /// The shared "posts site-wide carrying a tag" query, used by both the
@@ -115,7 +121,7 @@ pub async fn fetch_posts_by_tag(
     limit: Option<PageSize>,
 ) -> InternalResult<Page<RenderedPost>> {
     let page_size = limit.unwrap_or_default();
-    let rows = list_by_tag_rows(
+    let rows = storage::list_by_tag_rows(
         posts
             .list_posts_by_tag(
                 tag,
@@ -126,7 +132,11 @@ pub async fn fetch_posts_by_tag(
             )
             .await,
     )?;
-    Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
+    Ok(page_from_rows(
+        rows,
+        page_size,
+        visibility::viewer_user_id(viewer),
+    ))
 }
 
 /// The shared "posts by a user carrying a tag" query, used by both the
@@ -149,7 +159,7 @@ pub async fn fetch_user_posts_by_tag(
         .await?
         .ok_or_else(|| InternalError::not_found("user"))?;
     let page_size = limit.unwrap_or_default();
-    let rows = list_by_tag_rows(
+    let rows = storage::list_by_tag_rows(
         posts
             .list_user_posts_by_tag(
                 author.user_id,
@@ -161,7 +171,11 @@ pub async fn fetch_user_posts_by_tag(
             )
             .await,
     )?;
-    Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
+    Ok(page_from_rows(
+        rows,
+        page_size,
+        visibility::viewer_user_id(viewer),
+    ))
 }
 
 #[cfg(all(test, feature = "server"))]

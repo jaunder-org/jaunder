@@ -15,7 +15,7 @@ use common::post_summary::PostSummary;
 use common::render::PostFormat;
 use common::seed::{AuthoredPost, TagSummary};
 use common::slug::Slug;
-use common::time::{UtcInstant, utc_instant_from_local};
+use common::time::{self, UtcInstant};
 use common::visibility::{AudienceBase, AudienceSelection};
 
 use crate::forms::Field;
@@ -35,7 +35,7 @@ pub enum PublicationIntent {
 pub fn publication_from_local(publish: bool, value: &str) -> PublicationIntent {
     if !publish {
         PublicationIntent::Draft
-    } else if let Some(at) = utc_instant_from_local(value) {
+    } else if let Some(at) = time::utc_instant_from_local(value) {
         PublicationIntent::PublishAt(at)
     } else {
         PublicationIntent::PublishNow

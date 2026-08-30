@@ -1,4 +1,4 @@
-use crate::forms::{Field, ValidatedBareInput, validated_error};
+use crate::forms::{self, Field, ValidatedBareInput};
 use crate::topbar::Topbar;
 use common::session_label::SessionLabel;
 use leptos::prelude::*;
@@ -89,7 +89,7 @@ fn AppPasswordCreator(create_action: ServerAction<CreateAppPassword>) -> impl In
                 id=Some("app-password-label")
                 placeholder=Some("Label (e.g. MarsEdit)")
             />
-            {validated_error(
+            {forms::validated_error(
                 label_field.error,
                 Signal::derive(move || label_field.is_touched()),
                 |msg| view! { <p class="error">{msg}</p> }.into_any(),

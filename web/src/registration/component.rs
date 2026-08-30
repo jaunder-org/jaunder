@@ -3,10 +3,10 @@
 //! [`marker_storage`](crate::auth::marker_storage) binding) directly, no `cfg`
 //! gates inside this file.
 
-use super::{Register, RegistrationRequest, get_policy};
-use crate::auth::{SessionUser, set_session};
+use super::{Register, RegistrationRequest};
+use crate::auth::{self, SessionUser};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedInput, server_action_submit};
+use crate::forms::{self, Field, ValidatedInput};
 use crate::topbar::Topbar;
 use common::invite::ProfferedInviteCode;
 use common::password::ProfferedPassword;
@@ -35,7 +35,7 @@ pub fn RegisterPage() -> impl IntoView {
     use leptos_router::hooks::use_query_map;
 
     let register_action = ServerAction::<Register>::new();
-    let policy = Resource::new(|| (), |()| get_policy());
+    let policy = Resource::new(|| (), |()| super::get_policy());
 
     // The invite code arrives in the URL (`?invite_code=…`) from the invitation link,
     // not typed by hand. Read it once at mount — a plain read is safe here because the
@@ -55,7 +55,7 @@ pub fn RegisterPage() -> impl IntoView {
         if let Some(Ok(())) = register_action.value().get()
             && let Some(input) = register_action.input().get()
         {
-            set_session(SessionUser {
+            auth::set_session(SessionUser {
                 username: input.request.username.clone(),
                 is_operator: false,
             });
@@ -114,7 +114,7 @@ fn RegistrationForm(
     let parsed_invite = (!invite_code.is_empty())
         .then(|| invite_code.parse::<ProfferedInviteCode>().ok())
         .flatten();
-    let (disabled, submit) = server_action_submit(action, move || {
+    let (disabled, submit) = forms::server_action_submit(action, move || {
         username
             .parsed()
             .zip(password.parsed())

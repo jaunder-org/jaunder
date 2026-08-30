@@ -12,9 +12,10 @@ use tokio_cron_scheduler::{Job, JobScheduler};
 
 use common::backup::BackupConfig;
 use common::time::UtcInstant;
+use host::{error, metrics};
 use storage::{
     BackupExportOptions, BackupManifest, BackupMode, DbConnectOptions, SiteConfigStorage,
-    StorageRuntimeConfig, export_backup,
+    StorageRuntimeConfig,
 };
 
 /// Starts the background backup worker if configured.
@@ -68,7 +69,7 @@ async fn run_scheduled_backup(
 ) -> anyhow::Result<PathBuf> {
     fs::create_dir_all(destination_root)?;
     let destination_path = backup_path_for_mode(destination_root, config.mode);
-    export_backup(BackupExportOptions {
+    storage::export_backup(BackupExportOptions {
         database,
         runtime,
         media_path,
@@ -77,8 +78,8 @@ async fn run_scheduled_backup(
     })
     .await?;
     let pruned = prune_backups(destination_root, config.retention_count.value())?;
-    host::metrics::backup_bytes(backup_size_bytes(&destination_path));
-    host::metrics::backup_pruned(u64::try_from(pruned).unwrap_or(u64::MAX));
+    metrics::backup_bytes(backup_size_bytes(&destination_path));
+    metrics::backup_pruned(u64::try_from(pruned).unwrap_or(u64::MAX));
     tracing::info!(path = %destination_path.display(), "scheduled backup complete");
     Ok(destination_path)
 }
@@ -158,11 +159,11 @@ where
 
 fn finish_backup_size(size: u64, error: Option<std::io::Error>) -> u64 {
     if let Some(error) = error {
-        host::error::report_swallowed(
-            host::error::ErrorKind::Internal,
-            host::error::ErrorClass::Transient,
+        error::report_swallowed(
+            error::ErrorKind::Internal,
+            error::ErrorClass::Transient,
             "server.backup.measure_size",
-            host::error::SwallowedSource::Error(&error),
+            error::SwallowedSource::Error(&error),
         );
     }
     size
@@ -184,24 +185,24 @@ async fn run_scheduled_backup_logged(
     let result =
         run_scheduled_backup(database, runtime, media_path, destination_root, config).await;
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    host::metrics::backup_duration_ms(elapsed_ms);
-    host::metrics::backup_run(backup_result_metric(result.is_ok()));
+    metrics::backup_duration_ms(elapsed_ms);
+    metrics::backup_run(backup_result_metric(result.is_ok()));
     if let Err(error) = result {
-        host::error::report_swallowed(
-            host::error::ErrorKind::Storage,
-            host::error::ErrorClass::Transient,
+        error::report_swallowed(
+            error::ErrorKind::Storage,
+            error::ErrorClass::Transient,
             "server.backup.scheduled_run",
-            host::error::SwallowedSource::Error(error.as_ref()),
+            error::SwallowedSource::Error(error.as_ref()),
         );
     }
 }
 
 /// Maps a backup run's success flag to its bounded `result` attribute.
-fn backup_result_metric(succeeded: bool) -> host::metrics::BackupResult {
+fn backup_result_metric(succeeded: bool) -> metrics::BackupResult {
     if succeeded {
-        host::metrics::BackupResult::Success
+        metrics::BackupResult::Success
     } else {
-        host::metrics::BackupResult::Failure
+        metrics::BackupResult::Failure
     }
 }
 
@@ -288,11 +289,11 @@ pub fn latest_successful_backup_timestamp(
     }
 
     if saw_malformed_artifact {
-        host::error::report_swallowed(
-            host::error::ErrorKind::Storage,
-            host::error::ErrorClass::Transient,
+        error::report_swallowed(
+            error::ErrorKind::Storage,
+            error::ErrorClass::Transient,
             "server.metrics.backup_last_success",
-            host::error::SwallowedSource::Redacted,
+            error::SwallowedSource::Redacted,
         );
     }
 

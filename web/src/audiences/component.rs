@@ -1,17 +1,13 @@
 //! The co-located reactive UI for named-audience management: `AudiencesPage` and
 //! its child components, plus the keyed reactive store backing the list. Wasm-only.
 
-use super::api::{
-    AddSubscriber, AudienceMembershipRequest, Create, Delete, RemoveSubscriber, Rename,
-    RenameAudienceRequest, list_members, list_mine, list_my_subscribers,
-};
 use super::model::{SubscriberSummary, Summary, SummaryStoreFields};
-use crate::error::WebResult;
-// `crate::forms::Field` (the validated-input field) is aliased to avoid colliding with
-// `reactive_stores::Field` (the keyed-store field used by `AudienceRow`).
-use crate::forms::{
-    Field as ValidatedField, ValidatedBareInput, server_action_submit, validated_error,
+use super::{
+    AddSubscriber, AudienceMembershipRequest, Create, Delete, RemoveSubscriber, Rename,
+    RenameAudienceRequest, list_members, list_my_subscribers,
 };
+use crate::error::WebResult;
+use crate::forms::{self, Field as ValidatedField, ValidatedBareInput};
 use crate::icon::Icons;
 use crate::reactive::{Invalidator, invalidator_scope};
 use crate::topbar::Topbar;
@@ -56,7 +52,7 @@ pub fn AudiencesPage() -> impl IntoView {
     let store = Store::new(AudienceListData::default());
     let state = client::reactive::patched(
         move || list.track(),
-        list_mine,
+        super::list_mine,
         move |rows| store.audiences().patch(rows),
     );
 
@@ -182,7 +178,7 @@ fn CreateAudienceForm() -> impl IntoView {
                 </button>
             </ActionForm>
             // Touched-gated inline validation message (the newtype's own `Display`).
-            {validated_error(
+            {forms::validated_error(
                 name.error,
                 Signal::derive(move || name.is_touched()),
                 |m| view! { <p class="error">{m}</p> }.into_any(),
@@ -226,7 +222,7 @@ fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView 
     // row is already valid (submit enabled); clearing it disables Rename and — once
     // touched — shows the newtype's own message inline.
     let name = ValidatedField::<AudienceName>::prefilled(&name);
-    let (rename_disabled, submit_rename) = server_action_submit(rename_action, move || {
+    let (rename_disabled, submit_rename) = forms::server_action_submit(rename_action, move || {
         name.parsed().map(|name| Rename {
             request: RenameAudienceRequest { audience_id, name },
         })
@@ -239,7 +235,7 @@ fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView 
                 <button type="submit" class="j-btn" prop:disabled=move || rename_disabled.get()>
                     "Rename"
                 </button>
-                {validated_error(
+                {forms::validated_error(
                     name.error,
                     Signal::derive(move || name.is_touched()),
                     |m| view! { <p class="error">{m}</p> }.into_any(),
@@ -349,12 +345,12 @@ fn MemberToggle(
         subscription_id,
     };
     let remove_request = request.clone();
-    let (remove_disabled, submit_remove) = server_action_submit(remove_action, move || {
+    let (remove_disabled, submit_remove) = forms::server_action_submit(remove_action, move || {
         Some(RemoveSubscriber {
             request: remove_request.clone(),
         })
     });
-    let (add_disabled, submit_add) = server_action_submit(add_action, move || {
+    let (add_disabled, submit_add) = forms::server_action_submit(add_action, move || {
         Some(AddSubscriber {
             request: request.clone(),
         })

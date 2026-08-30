@@ -7,15 +7,14 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 
 use common::pagination::RowLimit;
-use common::tagged_url::{CollectionHref, compose};
+use common::tagged_url::{self, CollectionHref};
 use host::atompub::{
-    CollectionAccept, CollectionDecl, CollectionTitle, ServiceDocument, WorkspaceTitle,
-    render_service_document,
+    self, CollectionAccept, CollectionDecl, CollectionTitle, ServiceDocument, WorkspaceTitle,
 };
 use storage::{PostStorage, SiteConfigStorage};
 use web::auth;
 
-use super::{HandlerError, required_base_url};
+use super::HandlerError;
 
 /// `GET /atompub/service` — the authenticated user's `AtomPub` service document.
 ///
@@ -28,7 +27,7 @@ pub async fn service_document(
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: auth::User,
 ) -> Result<Response, HandlerError> {
-    let base = required_base_url(site_config.as_ref()).await?;
+    let base = super::required_base_url(site_config.as_ref()).await?;
     let username = &auth_user.username;
 
     // A flat cap on the service-document category list, not a page — there is no
@@ -47,20 +46,20 @@ pub async fn service_document(
         posts_collection: CollectionDecl {
             // A struct-literal field cannot be ascribed, so the role is spelled as a
             // turbofish on the tag — the alias rule's stated exception.
-            href: compose::<CollectionHref>(&base, &posts_path),
+            href: tagged_url::compose::<CollectionHref>(&base, &posts_path),
             title: CollectionTitle::posts(),
             accept: vec![CollectionAccept::AtomEntry],
             categories,
         },
         media_collection: CollectionDecl {
-            href: compose::<CollectionHref>(&base, &media_path),
+            href: tagged_url::compose::<CollectionHref>(&base, &media_path),
             title: CollectionTitle::media(),
             accept: vec![CollectionAccept::AnyMediaType],
             categories: Vec::new(),
         },
     };
 
-    let xml = render_service_document(&doc);
+    let xml = atompub::render_service_document(&doc);
     Ok((
         [(
             header::CONTENT_TYPE,

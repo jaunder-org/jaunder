@@ -6,6 +6,7 @@ use host::invite::InviteCode;
 use sqlx::{Database, Pool};
 
 use crate::backend::Backend;
+use crate::helpers;
 use common::ids::UserId;
 use common::time::UtcInstant;
 
@@ -57,7 +58,7 @@ impl<DB: Database> InviteStore<DB> {
 impl<DB> InviteStorage for InviteStore<DB>
 where
     DB: Backend,
-    crate::helpers::InviteRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    helpers::InviteRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `InviteCode` binds/decodes as itself via the ADR-0071 sqlx bridge.
     String: sqlx::Type<DB>,
@@ -85,7 +86,7 @@ where
     }
 
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>> {
-        let rows = sqlx::query_as::<_, crate::helpers::InviteRow>(
+        let rows = sqlx::query_as::<_, helpers::InviteRow>(
             "SELECT code, created_at, expires_at, used_at, used_by FROM invites",
         )
         .fetch_all(&self.pool)
@@ -96,7 +97,7 @@ where
         // the records here is infallible.
         Ok(rows
             .into_iter()
-            .map(crate::helpers::invite_record_from_row)
+            .map(helpers::invite_record_from_row)
             .collect())
     }
 }

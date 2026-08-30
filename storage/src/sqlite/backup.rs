@@ -13,13 +13,14 @@ use crate::backup::{
     build_manifest, ensure_schema_version, order_by_clause, read_table_rows, restore_table_order,
     validate_instance_identity_backup, validate_restore_row,
 };
-use crate::sql::{quote_identifier, quote_literal};
+use crate::helpers;
+use crate::sql;
 
 fn finish_export_rollback(
     primary: Result<BackupManifest, BackupError>,
     rollback: Result<(), sqlx::Error>,
 ) -> Result<BackupManifest, BackupError> {
-    crate::helpers::preserve_after_secondary(
+    helpers::preserve_after_secondary(
         primary,
         rollback,
         host::error::ErrorKind::Storage,
@@ -32,7 +33,7 @@ fn finish_restore_rollback<T>(
     primary: Result<T, BackupError>,
     rollback: Result<(), sqlx::Error>,
 ) -> Result<T, BackupError> {
-    crate::helpers::preserve_after_secondary(
+    helpers::preserve_after_secondary(
         primary,
         rollback,
         host::error::ErrorKind::Storage,
@@ -45,7 +46,7 @@ fn finish_foreign_key_restore<T>(
     primary: Result<T, BackupError>,
     foreign_keys: Result<(), sqlx::Error>,
 ) -> Result<T, BackupError> {
-    crate::helpers::preserve_after_secondary(
+    helpers::preserve_after_secondary(
         primary,
         foreign_keys,
         host::error::ErrorKind::Storage,
@@ -149,7 +150,7 @@ pub(crate) async fn restore_database(
         // Clear every table before loading any, keeping the two backends' restore
         // shape identical (docs/adr/0115-clear-then-load-restore.md).
         for table in &manifest.tables {
-            sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
+            sqlx::query(&format!("DELETE FROM {}", sql::quote_identifier(table)))
                 .execute(&mut *connection)
                 .await
                 .map_err(map_restore_error)?;
@@ -254,7 +255,7 @@ async fn import_table(
 fn insert_sql(table: &str, columns: &[String]) -> String {
     let column_list = columns
         .iter()
-        .map(|column| quote_identifier(column))
+        .map(|column| sql::quote_identifier(column))
         .collect::<Vec<_>>()
         .join(", ");
     let placeholders = (1..=columns.len())
@@ -263,7 +264,7 @@ fn insert_sql(table: &str, columns: &[String]) -> String {
         .join(", ");
     format!(
         "INSERT INTO {} ({column_list}) VALUES ({placeholders})",
-        quote_identifier(table)
+        sql::quote_identifier(table)
     )
 }
 
@@ -318,7 +319,7 @@ async fn columns(
     connection: &mut SqliteConnection,
     table: &str,
 ) -> Result<Vec<ColumnInfo>, BackupError> {
-    let sql = format!("PRAGMA table_info({})", quote_identifier(table));
+    let sql = format!("PRAGMA table_info({})", sql::quote_identifier(table));
     let rows = sqlx::query(&sql).fetch_all(&mut *connection).await?;
     rows.into_iter()
         .map(|row| {
@@ -358,14 +359,14 @@ fn json_select(table: &str, columns: &[ColumnInfo]) -> String {
     let json_args = columns
         .iter()
         .map(|column| {
-            let name = quote_literal(&column.name);
+            let name = sql::quote_literal(&column.name);
             let value = if is_bool_column(column) {
                 format!(
                     "CASE WHEN {column_name} IS NULL THEN NULL WHEN {column_name} THEN json('true') ELSE json('false') END",
-                    column_name = quote_identifier(&column.name)
+                    column_name = sql::quote_identifier(&column.name)
                 )
             } else {
-                quote_identifier(&column.name)
+                sql::quote_identifier(&column.name)
             };
             format!("{name}, {value}")
         })
@@ -373,8 +374,8 @@ fn json_select(table: &str, columns: &[ColumnInfo]) -> String {
         .join(", ");
     format!(
         "SELECT json_object({json_args}) FROM {} ORDER BY {}",
-        quote_identifier(table),
-        order_by_clause(columns, quote_identifier)
+        sql::quote_identifier(table),
+        order_by_clause(columns, sql::quote_identifier)
     )
 }
 

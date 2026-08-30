@@ -11,15 +11,16 @@ use leptos::prelude::*;
 use leptos_router::NavigateOptions;
 use leptos_router::hooks::{use_navigate, use_params_map};
 
+use client::telemetry;
 use common::seed::Page;
 // `Summary` is module-qualified at its use site: this file already has
 // `PostSummary` and `TagSummary` in scope, and a bare `Summary` among them says
 // nothing about which one it is.
-use crate::audiences::{self, list_mine};
+use crate::audiences;
 use crate::avatar::Avatar;
 use crate::error::WebError;
 use crate::feed_discovery::{FeedDiscovery, RsdDiscovery};
-use crate::forms::{Field, ValidatedBareInput, ValidatedTextarea, validated_error};
+use crate::forms::{self, Field, ValidatedBareInput, ValidatedTextarea};
 use crate::media::MediaUpload;
 // `Get`/`Update` are deliberately absent from this list: naming the generated
 // structs here would shadow the identically-named `leptos::prelude` traits this
@@ -242,11 +243,7 @@ fn dispatch_after_confirm(message: &str, context: ClientErrorContext, dispatch: 
         }
         Err(error) => {
             let source_kind = error.source_kind();
-            client::telemetry::report_swallowed(
-                client::telemetry::error_kind(source_kind),
-                context,
-                source_kind,
-            );
+            telemetry::report_swallowed(telemetry::error_kind(source_kind), context, source_kind);
         }
     }
 }
@@ -407,7 +404,7 @@ pub fn PostCard<'a>(
 /// explicit host-tested state consumed by both the picker and its submit gate.
 fn load_named_audiences() -> RwSignal<NamedAudienceState> {
     let state = RwSignal::new(NamedAudienceState::Loading);
-    let named = Resource::new(|| (), |()| list_mine());
+    let named = Resource::new(|| (), |()| audiences::list_mine());
     Effect::new(move |_| {
         state.set(NamedAudienceState::resolve(named.get()));
     });
@@ -1347,7 +1344,7 @@ fn SlugOverrideInput(slug_field: Field<Slug>) -> impl IntoView {
                 placeholder=Some("auto")
                 class=Some("j-field-val")
             />
-            {validated_error(
+            {forms::validated_error(
                 slug_field.error,
                 Signal::derive(move || slug_field.is_touched()),
                 |msg| view! { <span class="error">{msg}</span> }.into_any(),

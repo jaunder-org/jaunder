@@ -12,10 +12,8 @@ use super::{
     SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
     SqliteUserConfigStorage, SqliteUserStorage,
 };
-use crate::AppState;
 use crate::db::StorageRuntimeConfig;
-use crate::instance_identity::ensure_instance_identity;
-use crate::posts::backfill_post_media_references;
+use crate::{AppState, instance_identity, posts};
 
 fn make_sqlite_app_state(pool: SqlitePool) -> Arc<AppState> {
     Arc::new(AppState {
@@ -79,8 +77,8 @@ pub(crate) async fn open_sqlite_database_with_pool(
         .await?;
 
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
-    let instance_id = ensure_instance_identity(&pool).await?;
-    backfill_post_media_references(&pool).await?;
+    let instance_id = instance_identity::ensure_instance_identity(&pool).await?;
+    posts::backfill_post_media_references(&pool).await?;
     Ok((make_sqlite_app_state(pool.clone()), pool, instance_id))
 }
 

@@ -8,9 +8,9 @@
 use common::pagination::PageSize;
 use leptos::prelude::*;
 
-use super::{CockpitState, resolve_initial_page};
+use super::CockpitState;
 use crate::posts::InlineComposer;
-use crate::timeline::{NoIdentity, TimelineGate, list_home_feed};
+use crate::timeline::{self, NoIdentity, TimelineGate};
 use crate::topbar::Topbar;
 
 #[component]
@@ -33,8 +33,8 @@ pub fn CockpitPage() -> impl IntoView {
     let initial_page = Resource::new(
         move || refresh_version.get(),
         move |_| async move {
-            resolve_initial_page(session.reconcile.await, || {
-                list_home_feed(None, Some(PageSize::default()))
+            super::resolve_initial_page(session.reconcile.await, || {
+                timeline::list_home_feed(None, Some(PageSize::default()))
             })
             .await
         },
@@ -53,7 +53,7 @@ pub fn CockpitPage() -> impl IntoView {
     });
 
     let on_load_more = Callback::new(move |()| {
-        crate::timeline::spawn_load_more(state.timeline, list_home_feed);
+        timeline::spawn_load_more(state.timeline, timeline::list_home_feed);
     });
 
     let read_username = move || state.username.get();

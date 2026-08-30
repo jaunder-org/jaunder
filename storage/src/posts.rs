@@ -7,15 +7,12 @@ use sha2::{Digest, Sha256};
 use sqlx::{Database, Pool, QueryBuilder, Row};
 use thiserror::Error;
 
-use crate::InstanceId;
 use crate::backend::Backend;
-use crate::helpers::parse_post_tags_json;
+use crate::{InstanceId, helpers};
 use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
-use common::media::{
-    MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind, parse_media_url,
-};
+use common::media::{self, MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind};
 use common::pagination::{PageSize, RowLimit};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
@@ -27,13 +24,11 @@ use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::time::UtcInstant;
 use common::username::Username;
-use common::visibility::{
-    AudienceTarget, SubscriberRef, TargetKind, ViewerIdentity, local_subscriber_ref,
-};
+use common::visibility::{self, AudienceTarget, SubscriberRef, TargetKind, ViewerIdentity};
 use host::error::{InternalError, InternalResult};
-use host::etag::post_content_etag;
+use host::etag;
 use host::feed::FeedPath;
-use host::render::{RenderOutput, extract_media_refs};
+use host::render::{self, RenderOutput};
 
 /// The validated calendar date of a public permalink lookup key. Re-exported from
 /// `common::time` so storage callers and the trait method name the domain type
@@ -158,7 +153,7 @@ where
         let deleted_at = row.try_get::<Option<UtcInstant>, _>("deleted_at")?;
         let summary = row.try_get::<Option<PostSummary>, _>("summary")?;
         let tags_json = row.try_get::<String, _>("tags")?;
-        let tags = parse_post_tags_json(&tags_json, post_id)?;
+        let tags = helpers::parse_post_tags_json(&tags_json, post_id)?;
 
         Ok(Self {
             post_id,
@@ -2178,7 +2173,7 @@ where
                 media: media
                     .into_iter()
                     .map(|(_, _, _, _, form)| {
-                        let Some(reference) = parse_media_url(form.as_ref()) else {
+                        let Some(reference) = media::parse_media_url(form.as_ref()) else {
                             unreachable!("MediaReferenceForm decodes only exact parser output");
                         };
                         reference
@@ -3353,7 +3348,7 @@ fn resolution_where(viewer: &ViewerIdentity, start: usize) -> (String, Resolutio
         // resolves for itself.
         ViewerIdentity::Local { user_id } => ResolutionBinds::Local {
             user_id: *user_id,
-            subref: local_subscriber_ref(*user_id),
+            subref: visibility::local_subscriber_ref(*user_id),
         },
         // A remote viewer is never the author, whatever its ref parses as: the
         // author bind stays NULL, so `p.user_id = NULL` is unknown and admits
@@ -3625,7 +3620,7 @@ pub(crate) fn update_expectation_error(
         return Some(UpdatePostError::BookkeepingMismatch);
     }
 
-    let current_etag = post_content_etag(
+    let current_etag = etag::post_content_etag(
         existing.title.as_ref(),
         &existing.body,
         &existing.format,
@@ -3903,7 +3898,7 @@ where
     let candidates: Vec<PostMediaReferenceBackfill> = posts
         .into_iter()
         .map(|(post_id, rendered_html)| PostMediaReferenceBackfill {
-            references: extract_media_refs(rendered_html.as_ref()),
+            references: render::extract_media_refs(rendered_html.as_ref()),
             post_id,
             rendered_html: rendered_html.to_string(),
         })

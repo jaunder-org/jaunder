@@ -1,10 +1,10 @@
 use common::{
     feed::{FeedFormat, FeedSurface},
-    tagged_url::{BaseUrl, CanonicalUrl, FeedUrl, Permalink, compose},
+    tagged_url::{self, BaseUrl, CanonicalUrl, FeedUrl, Permalink},
     time::UtcInstant,
 };
-use host::etag::feed_etag;
-use host::feed::{FeedItem, FeedMetadata, FeedPath, FeedTitle, HybridWindow, parse};
+use host::etag;
+use host::feed::{self, FeedItem, FeedMetadata, FeedPath, FeedTitle, HybridWindow};
 use storage::{FeedCacheRow, FeedCacheStorage, PostRecord, PostStorage, SiteConfigStorage};
 use thiserror::Error;
 
@@ -43,7 +43,7 @@ pub async fn regenerate_feed(
     // A `FeedPath` is always parseable, so this never yields `None`; `BadUrl` is
     // retained as a mapped (never-hit) error rather than an `expect()`/panic.
     let (surface, format) =
-        parse(feed_path).ok_or_else(|| RegenerateError::BadUrl(feed_path.to_string()))?; // cov:ignore
+        feed::parse(feed_path).ok_or_else(|| RegenerateError::BadUrl(feed_path.to_string()))?; // cov:ignore
 
     let feeds = site_config.get_feeds_config().await.map_err(storage_err)?;
     let identity = site_config.get_identity().await.map_err(storage_err)?;
@@ -76,7 +76,7 @@ pub async fn regenerate_feed(
 
     let items = build_feed_items(base, &published);
 
-    let self_url: FeedUrl = compose(base, feed_path);
+    let self_url: FeedUrl = tagged_url::compose(base, feed_path);
     let canonical_path = match &surface {
         FeedSurface::Site => "/".to_owned(),
         // urlencoding::encode (external) takes &str.
@@ -86,7 +86,7 @@ pub async fn regenerate_feed(
             format!("/~{username}/tags/{}/", urlencoding::encode(tag.as_ref()))
         }
     };
-    let canonical_url: CanonicalUrl = compose(base, &canonical_path);
+    let canonical_url: CanonicalUrl = tagged_url::compose(base, &canonical_path);
 
     let updated_at = items
         .iter()
@@ -105,11 +105,11 @@ pub async fn regenerate_feed(
     };
 
     let body = match format {
-        FeedFormat::Rss => host::feed::render_rss(&meta, &items),
-        FeedFormat::Atom => host::feed::render_atom(&meta, &items),
-        FeedFormat::Json => host::feed::render_json(&meta, &items),
+        FeedFormat::Rss => feed::render_rss(&meta, &items),
+        FeedFormat::Atom => feed::render_atom(&meta, &items),
+        FeedFormat::Json => feed::render_json(&meta, &items),
     };
-    let etag = feed_etag(&items, now.value());
+    let etag = etag::feed_etag(&items, now.value());
 
     let Ok(row) = FeedCacheRow::new(
         feed_path.clone(),
@@ -155,7 +155,7 @@ fn build_feed_items(base: &BaseUrl, records: &[PostRecord]) -> Vec<FeedItem> {
                 // (#560, D1). `base` is the required site origin.
                 // A struct-literal field cannot be ascribed, so the role is spelled as a
                 // turbofish on the tag — the alias rule's stated exception.
-                permalink: compose::<Permalink>(base, &p.permalink()),
+                permalink: tagged_url::compose::<Permalink>(base, &p.permalink()),
                 summary: p.summary.clone(),
                 // FeedItem carries the post's RenderedHtml unflattened (#470); the value
                 // is already rendered — no from_trusted rebuild, just propagate it.

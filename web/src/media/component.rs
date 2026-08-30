@@ -16,8 +16,9 @@ use super::{
     format_bytes, get_usage, list_mine, storage_usage_percent, upload,
 };
 use crate::error::{WebError, WebResult};
-use crate::forms::server_action_submit;
+use crate::forms;
 use crate::topbar::Topbar;
+use client::telemetry;
 
 /// A media upload control: a button that opens the file picker and immediately
 /// uploads the chosen file via the [`super::upload`] multipart `#[server]`
@@ -56,8 +57,8 @@ pub fn MediaUpload(
             Ok(outcome) => outcome,
             Err(error) => {
                 let source_kind = error.source_kind();
-                client::telemetry::report_swallowed(
-                    client::telemetry::error_kind(source_kind),
+                telemetry::report_swallowed(
+                    telemetry::error_kind(source_kind),
                     ClientErrorContext::MediaFormData,
                     source_kind,
                 );
@@ -337,7 +338,7 @@ fn force_delete_form(
 ) -> impl IntoView + use<> {
     let display_name = request.filename.decoded().into_owned();
     request.force = Some(true);
-    let (disabled, submit) = server_action_submit(delete_action, move || {
+    let (disabled, submit) = forms::server_action_submit(delete_action, move || {
         Some(Delete {
             request: request.clone(),
         })
@@ -371,7 +372,7 @@ fn render_media_row(item: &Item, delete_action: ServerAction<Delete>) -> impl In
         source: item.source,
         force: None,
     };
-    let (disabled, submit) = server_action_submit(delete_action, move || {
+    let (disabled, submit) = forms::server_action_submit(delete_action, move || {
         Some(Delete {
             request: request.clone(),
         })

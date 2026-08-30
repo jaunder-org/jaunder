@@ -12,9 +12,10 @@ use common::{
     username::Username,
 };
 use host::feed::FeedPath;
+use host::metrics;
 use storage::{FeedCacheStorage, PostStorage, SiteConfigStorage};
 
-use super::regenerate::regenerate_feed;
+use super::regenerate;
 use crate::soft_path::SoftPath;
 use web::error::InternalError;
 
@@ -52,15 +53,15 @@ async fn serve(
     let feed_path = FeedPath::canonical(&surface, format);
     let row = match feed_cache.get(&feed_path).await {
         Ok(Some(row)) => {
-            host::metrics::feed_cache(host::metrics::CacheResult::Hit);
+            metrics::feed_cache(metrics::CacheResult::Hit);
             row
         }
         Ok(None) => {
-            host::metrics::feed_cache(host::metrics::CacheResult::Miss);
+            metrics::feed_cache(metrics::CacheResult::Miss);
             // Cache miss: build the feed inline rather than 404. The background
             // worker only refreshes feeds that have pending events, so a cold or
             // evicted cache entry has no other path back to being populated.
-            match regenerate_feed(
+            match regenerate::regenerate_feed(
                 site_config.as_ref(),
                 posts.as_ref(),
                 feed_cache.as_ref(),

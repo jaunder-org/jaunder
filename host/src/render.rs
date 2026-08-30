@@ -1,6 +1,6 @@
 //! Host-side rendering and media-reference extraction.
 
-use common::media::{MediaReference, parse_media_url};
+use common::media::{self, MediaReference};
 use common::post_body::PostBody;
 use common::render::{PostFormat, RenderedHtml};
 /// Renders `body` to HTML based on `format`. Pure, infallible function. The
@@ -176,7 +176,7 @@ pub(super) fn extract_media_refs_with(html: &str, pairs: &[(&str, &str)]) -> Vec
                             .iter()
                             .any(|(el, at)| *el == element && *at == name)
                     })
-                    .filter_map(|attr| parse_media_url(&attr.value)),
+                    .filter_map(|attr| media::parse_media_url(&attr.value)),
             );
             TokenSinkResult::Continue
         }

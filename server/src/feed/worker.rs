@@ -7,15 +7,19 @@ use std::time::Duration;
 use crate::websub::WebSubClient;
 use chrono::Utc;
 use common::ids::FeedEventId;
-use common::tagged_url::{FeedUrl, HubUrl, compose};
+use common::tagged_url::{self, FeedUrl, HubUrl};
 use common::time::UtcInstant;
-use host::feed::{FeedPath, affected_feed_urls};
+use host::{
+    error,
+    feed::{self, FeedPath},
+    metrics,
+};
 use storage::{
     FeedCacheStorage, FeedEventRecord, FeedEventStorage, PostStorage, SiteConfigStorage,
 };
 use tokio::sync::Mutex;
 
-use super::regenerate::{RegenerateError, regenerate_feed};
+use super::regenerate::{self, RegenerateError};
 
 const BATCH_LIMIT: usize = 200;
 const LEASE_TIMEOUT: Duration = Duration::from_mins(5);
@@ -31,7 +35,7 @@ fn report_continuation(
     context: &'static str,
     error: &(dyn std::error::Error + 'static),
 ) {
-    host::error::report_swallowed(
+    error::report_swallowed(
         kind,
         class,
         context,
@@ -127,7 +131,7 @@ impl FeedWorker {
             Some(last) => {
                 let mut urls = Vec::new();
                 for post in self.posts().list_posts_gone_live_between(last, now).await? {
-                    urls.extend(affected_feed_urls(&post.username, &post.tag_slugs));
+                    urls.extend(feed::affected_feed_urls(&post.username, &post.tag_slugs));
                 }
                 urls
             }
@@ -241,7 +245,7 @@ impl FeedWorker {
         let ids: Vec<FeedEventId> = recs.iter().map(|r| r.id).collect();
         let started = std::time::Instant::now();
 
-        match regenerate_feed(
+        match regenerate::regenerate_feed(
             self.site_config(),
             self.posts(),
             self.feed_cache(),
@@ -250,8 +254,8 @@ impl FeedWorker {
         .await
         {
             Ok(row) => {
-                host::metrics::feed_regeneration(host::metrics::RegenResult::Ok);
-                host::metrics::feed_regen_duration_ms(
+                metrics::feed_regeneration(metrics::RegenResult::Ok);
+                metrics::feed_regen_duration_ms(
                     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 );
                 if let Err(error) = self.feed_events().mark_regenerated(&ids).await {
@@ -310,13 +314,13 @@ impl FeedWorker {
                 // cov:ignore-stop
             };
             // `compose` joins the required base + the feed path into an absolute URL.
-            let absolute: FeedUrl = compose(base, feed_url);
+            let absolute: FeedUrl = tagged_url::compose(base, feed_url);
             tracing::info!(feed_url = %feed_url, hub = %hub, attempt, "feed.websub.ping.attempted");
 
             let result = self.websub.send_publish(hub, &absolute).await;
             match result {
                 Ok(()) => {
-                    host::metrics::websub_ping(host::metrics::PingOutcome::Success);
+                    metrics::websub_ping(metrics::PingOutcome::Success);
                     tracing::info!(feed_url = %feed_url, hub = %hub, attempt, "feed.websub.ping.succeeded");
                     if let Err(error) = self.feed_events().mark_pinged(ids).await {
                         report_continuation(
@@ -337,7 +341,7 @@ impl FeedWorker {
                     let attempt_usize = usize::try_from(attempt).unwrap_or(0);
                     let next_attempt_idx = attempt_usize.saturating_sub(1);
                     if next_attempt_idx >= BACKOFFS_SECS.len() {
-                        host::metrics::websub_ping(host::metrics::PingOutcome::Exhausted);
+                        metrics::websub_ping(metrics::PingOutcome::Exhausted);
                         if let Err(error) =
                             self.feed_events().mark_exhausted(ids, &e.to_string()).await
                         {
@@ -353,7 +357,7 @@ impl FeedWorker {
                             i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
                         );
                         let next = UtcInstant::from(Utc::now() + delay);
-                        host::metrics::websub_ping(host::metrics::PingOutcome::Failed);
+                        metrics::websub_ping(metrics::PingOutcome::Failed);
                         if let Err(error) = self
                             .feed_events()
                             .mark_failed(ids, &e.to_string(), next)
@@ -371,7 +375,7 @@ impl FeedWorker {
             }
         } else {
             // No hub configured — treat as complete.
-            host::metrics::websub_ping(host::metrics::PingOutcome::NoHub);
+            metrics::websub_ping(metrics::PingOutcome::NoHub);
             if let Err(error) = self.feed_events().mark_pinged(ids).await {
                 report_continuation(
                     host::error::ErrorKind::Storage,
@@ -393,7 +397,7 @@ impl FeedWorker {
         recs: &[FeedEventRecord],
         e: &RegenerateError,
     ) {
-        host::metrics::feed_regeneration(host::metrics::RegenResult::Error);
+        metrics::feed_regeneration(metrics::RegenResult::Error);
         let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
         let attempt_usize = usize::try_from(attempt).unwrap_or(0);
         let next_attempt_idx = attempt_usize.saturating_sub(1);

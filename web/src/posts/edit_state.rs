@@ -1,5 +1,5 @@
 use common::post_body::PostBody;
-use common::time::{UtcInstant, local_datetime_from_utc, strict_utc_instant_from_local};
+use common::time::{self, UtcInstant};
 use leptos::prelude::*;
 use thiserror::Error;
 
@@ -93,7 +93,7 @@ impl ScheduledEditState {
             return Ok(PublicationIntent::Draft);
         }
 
-        strict_utc_instant_from_local(&value)
+        time::strict_utc_instant_from_local(&value)
             .map(PublicationIntent::PublishAt)
             .ok_or(InvalidSchedule)
     }
@@ -106,7 +106,7 @@ impl EditPublicationState {
             LoadedPublication::Draft => Self::Draft(draft_publish_at),
             LoadedPublication::Scheduled(original) => Self::Scheduled(ScheduledEditState::new(
                 original,
-                local_datetime_from_utc(original),
+                time::local_datetime_from_utc(original),
             )),
             LoadedPublication::Live => Self::Live,
         }

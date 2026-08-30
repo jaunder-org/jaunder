@@ -12,7 +12,7 @@ use std::str::FromStr;
 
 use macros::{NumNewtype, StrNewtype};
 
-use crate::token::{InvalidTokenShape, validate_shape};
+use crate::token::{self, InvalidTokenShape};
 
 /// A raw invite code as **submitted by a client** during registration.
 ///
@@ -30,7 +30,7 @@ impl FromStr for ProfferedInviteCode {
     type Err = InvalidTokenShape;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        validate_shape(s)?;
+        token::validate_shape(s)?;
         Ok(ProfferedInviteCode(s.to_owned()))
     }
 }

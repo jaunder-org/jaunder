@@ -16,7 +16,7 @@ use common::username::Username;
 use host::password::Password;
 use host::stored_password_hash::StoredPasswordHash;
 
-use crate::helpers::{UserRow, user_record_from_row};
+use crate::helpers::{self, UserRow};
 
 /// A user account record returned by [`UserStorage`] queries.
 ///
@@ -212,7 +212,7 @@ impl<DB: Database> UserStore<DB> {
         &self,
         username: &Username,
         password: &Password,
-        verify_operation: crate::helpers::VerifyPasswordOperation,
+        verify_operation: helpers::VerifyPasswordOperation,
     ) -> Result<UserRecord, UserAuthError>
     where
         DB: Backend,
@@ -281,9 +281,9 @@ impl<DB: Database> UserStore<DB> {
             // Equalize timing with the present-user path to avoid a username
             // enumeration oracle (§2.1): perform a dummy Argon2 verification
             // before rejecting. The result is intentionally discarded.
-            if let Err(error) = crate::helpers::verify_password_with(
+            if let Err(error) = helpers::verify_password_with(
                 password.clone(),
-                crate::helpers::dummy_password_hash().clone(),
+                helpers::dummy_password_hash().clone(),
                 verify_operation,
             )
             .await
@@ -298,7 +298,7 @@ impl<DB: Database> UserStore<DB> {
             return Err(UserAuthError::InvalidCredentials);
         };
 
-        let valid = crate::helpers::verify_password_with(password.clone(), hash, verify_operation)
+        let valid = helpers::verify_password_with(password.clone(), hash, verify_operation)
             .instrument(tracing::info_span!(
                 "storage.user.authenticate.verify_password",
                 db.system = DB::DB_SYSTEM
@@ -323,19 +323,17 @@ impl<DB: Database> UserStore<DB> {
             .await
             .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
 
-        Ok(crate::helpers::build_user_record(
-            crate::helpers::UserRecordParts {
-                user_id,
-                username,
-                display_name,
-                bio,
-                created_at,
-                last_authenticated_at: Some(now),
-                email,
-                email_verified,
-                is_operator,
-            },
-        ))
+        Ok(helpers::build_user_record(helpers::UserRecordParts {
+            user_id,
+            username,
+            display_name,
+            bio,
+            created_at,
+            last_authenticated_at: Some(now),
+            email,
+            email_verified,
+            is_operator,
+        }))
     }
 }
 
@@ -389,7 +387,7 @@ where
         display_name: Option<&'a DisplayName>,
         is_operator: bool,
     ) -> Result<UserId, CreateUserError> {
-        let password_hash = crate::helpers::hash_password(password.clone())
+        let password_hash = helpers::hash_password(password.clone())
             .instrument(tracing::info_span!(
                 "storage.user.create_user.hash_password",
                 db.system = DB::DB_SYSTEM
@@ -449,7 +447,7 @@ where
         .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(user_record_from_row))
+        Ok(row.map(helpers::user_record_from_row))
     }
 
     async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>> {
@@ -461,7 +459,7 @@ where
         .bind(username)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(user_record_from_row))
+        Ok(row.map(helpers::user_record_from_row))
     }
 
     async fn update_profile<'a>(
@@ -495,7 +493,7 @@ where
     }
 
     async fn set_password(&self, user_id: UserId, new_password: &Password) -> sqlx::Result<()> {
-        let password_hash = crate::helpers::hash_password(new_password.clone())
+        let password_hash = helpers::hash_password(new_password.clone())
             .await
             .map_err(sqlx::Error::Io)?;
 
