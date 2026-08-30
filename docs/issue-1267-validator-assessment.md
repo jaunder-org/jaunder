@@ -10,16 +10,15 @@
 - selective adoption requires at least one qualifying and one non-qualifying
   family; otherwise reject.
 
-No family qualifies. The repository greenfield ceiling is **gross 101 physical
-Rust SLOC, replacement 116, net −15**. The field-predicate ceiling is negative
-after its required 50 SLOC of shared support, and its secret-bearing uses remain
-independently disqualified: they must not expose validator's value-bearing
-errors and must preserve cheap-before-expensive and timing behavior. Domain
-newtypes have a raw positive subtotal but reverse accepted typed-boundary ADRs;
-cross-field checks are negative; every parser, registry, and stateful family has
-zero validator-owned behavior. The `common`/web path also has no explicit wasm
-support guarantee. Thus there is neither a qualifying family nor a basis for
-selective use.
+No family qualifies. The repository greenfield ceiling is **gross 121 physical
+Rust SLOC, replacement 139, net −18**. The field-predicate ceiling is negative
+after its required support, and its secret-bearing uses remain independently
+disqualified: they must not expose validator's value-bearing errors and must
+preserve cheap-before-expensive and timing behavior. Domain newtypes have a raw
+negative subtotal and reverse accepted typed-boundary ADRs; cross-field and
+protocol/grammar checks are negative; every registry and stateful family has
+zero validator-owned behavior. The manifests declare no wasm-specific feature.
+Thus there is neither a qualifying family nor a basis for selective use.
 
 These numbers are a **greenfield, validator-native ceiling**, not migration
 feasibility, implementation effort, or an architecture-compatible proposal. They
@@ -35,20 +34,21 @@ The assessment evaluates
 `validator = { version = "0.21.0", features = ["derive"] }`. Release metadata
 declares Rust **1.88** MSRV (matching the workspace fact at the assessed HEAD).
 The source companion is `validator_derive` **0.20.1**; the published `validator`
-manifest depends on `validator_derive ^0.20`. It is std-based (no `no_std`
-feature) and makes no explicit wasm target guarantee; proc macros execute on the
-host. Its API is synchronous:
-`Validate::validate(&self) -> Result<(), ValidationErrors>` and context
-validation uses synchronous `ValidateArgs::validate_with_args`. It supplies no
-parser/canonical-value result, normalization, async I/O, storage, transaction,
-atomic-write, cryptographic, multipart, rate-limit, or process-state facility.
+manifest depends on `validator_derive ^0.20`. The manifests declare standard
+library dependencies and no `no_std` or wasm-specific feature. Its API is
+synchronous: `Validate::validate(&self) -> Result<(), ValidationErrors>` and
+context validation uses synchronous `ValidateArgs::validate_with_args`. It
+supplies no parser/canonical-value result, normalization, async I/O, storage,
+transaction, atomic-write, cryptographic, multipart, rate-limit, or
+process-state facility.
 
 Primary sources:
 [0.21.0 release record](https://index.crates.io/va/li/validator),
 [`validator` manifest](https://github.com/Keats/validator/blob/68f2e33d236f579ae7bf42c82cf2ca7986f176f6/validator/Cargo.toml),
 [`validator_derive` manifest](https://github.com/Keats/validator/blob/68f2e33d236f579ae7bf42c82cf2ca7986f176f6/validator_derive/Cargo.toml),
-[README attributes](https://github.com/Keats/validator/blob/68f2e33d236f579ae7bf42c82cf2ca7986f176f6/README.md#built-in-validators),
+[README attributes](https://github.com/Keats/validator/blob/68f2e33d236f579ae7bf42c82cf2ca7986f176f6/README.md),
 [`Validate`/collection traits](https://github.com/Keats/validator/blob/68f2e33d236f579ae7bf42c82cf2ca7986f176f6/validator/src/traits.rs),
+[`validator_derive` proc-macro source](https://github.com/Keats/validator/blob/68f2e33d236f579ae7bf42c82cf2ca7986f176f6/validator_derive/src/lib.rs),
 [error types](https://github.com/Keats/validator/blob/68f2e33d236f579ae7bf42c82cf2ca7986f176f6/validator/src/types.rs),
 [URL predicate](https://github.com/Keats/validator/blob/68f2e33d236f579ae7bf42c82cf2ca7986f176f6/validator/src/validation/urls.rs),
 [email predicate](https://github.com/Keats/validator/blob/68f2e33d236f579ae7bf42c82cf2ca7986f176f6/validator/src/validation/email.rs),
@@ -109,15 +109,19 @@ non-candidate disposition is:
 `common/feed/mod.rs`, `common/test_support/**`, all `client/src/**`, all
 `csr/src/**`, `server/src/build_staging.rs`, `xtask/src/test_support.rs`,
 `xtask/src/elisp_coverage/tests.rs`, `macros/tests/**`, and
-`tools/devtool/tests/provision_cli.rs`. All remaining matches in reviewed
-modules are `duplicate/reference <ledger owner>` when they invoke a candidate
-owner; otherwise they are `E-NODV` (process/filesystem/JSON/trace/coverage
-parsing, serialization, rendering, DTO/state, or module wiring without a
-data-validity decision). The following deterministic command reproduces the
-per-path manifest and is the authoritative disposition key: a path appearing in
-the ledger is `candidate <ID>`; a path in the preceding list is its named
-exclusion; every other manifest path is `E-NODV` unless its call is explicitly
-marked `duplicate/reference` in the ledger.
+`tools/devtool/tests/provision_cli.rs`. The command already excludes its
+path-based test targets. It nevertheless overcaptures **14** inline
+`#[cfg(test)]` declarations because their enclosing production files remain in
+scope; each is explicitly marked `E-TEST` in the 147-hit appendix and excluded
+from the population. All remaining matches in reviewed modules are
+`duplicate/reference <ledger owner>` when they invoke a candidate owner;
+otherwise they are `E-NODV` (process/filesystem/JSON/trace/coverage parsing,
+serialization, rendering, DTO/state, or module wiring without a data-validity
+decision). The following deterministic command reproduces the per-path manifest
+and is the authoritative disposition key: a path appearing in the ledger is
+`candidate <ID>`; a path in the preceding list is its named exclusion; every
+other manifest path is `E-NODV` unless its call is explicitly marked
+`duplicate/reference` or `E-TEST` in the ledger.
 
 ```sh
 git ls-files -- '*.rs' ':!**/tests/**' ':!**/test_support/**' ':!test-support/**' \
@@ -151,9 +155,9 @@ is stated in the ledger so each line is charged exactly once.
 ```rust
 use validator::Validate;
 #[derive(Validate)]
-struct Nonblank<'a> {
+pub struct Nonblank<'a> {
     #[validate(length(min = 1))]
-    value: &'a str,
+    pub value: &'a str,
 }
 #[derive(Validate)]
 struct MaxBio<'a> {
@@ -285,18 +289,25 @@ TagsInput { tags: &out }.validate().map_err(|_|
 
 It does not claim Tag/TagLabel canonicalization.
 
-### S4 — host nonblank predicate (12 physical SLOC)
+### S4 — cross-crate use of common nonblank predicate (seven physical SLOC)
 
 ```rust
+// common/src/lib.rs
+pub mod validator_support;
+// host/src/feed/metadata.rs
+use common::validator_support::Nonblank;
 use validator::Validate;
-#[derive(Validate)]
-struct Nonblank<'a> {
-    #[validate(length(min = 1))]
-    value: &'a str,
-}
+// host/src/atompub/title.rs
+use common::validator_support::Nonblank;
+use validator::Validate;
+// host/src/stored_password_hash.rs
+use common::validator_support::Nonblank;
+use validator::Validate;
 ```
 
-This six-SLOC support is charged once. The concrete one-line adapters are:
+S1 exposes its `Nonblank` type and `value` field publicly without changing its
+physical count. S4's assembly plus the three module-local import pairs are the
+seven cross-crate support lines. The H6/H7/H11 adapters remain:
 
 ```rust
 Nonblank { value }.validate().map_err(|_| InvalidFeedTitle)?;
@@ -334,6 +345,37 @@ if (FeedCacheFormats {
 
 Its `None` recovery and `MismatchedFeedCacheRowFormat` construction remain.
 
+### S6 — backup catalog nullability (10 physical SLOC)
+
+```rust
+use std::sync::LazyLock;
+use regex::Regex;
+use validator::Validate;
+static NULLABILITY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(YES|NO)$").unwrap());
+#[derive(Validate)]
+struct CatalogNullabilityInput<'a> {
+    #[validate(regex(path = *NULLABILITY_RE))]
+    value: &'a str,
+}
+fn parse_catalog_nullability(value: &str) -> Result<(), &'static str> { CatalogNullabilityInput { value }.validate().map_err(|_| "catalog nullability must be YES or NO") }
+```
+
+### S7 — Content-Type grammar predicates (12 physical SLOC)
+
+```rust
+use std::sync::LazyLock;
+use regex::Regex;
+use validator::Validate;
+static HEADER_VALUE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[\t\x20-\x7e]*$").unwrap());
+static CONTENT_TYPE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[ \t]*[!#$%&'*+\-.^_`|~0-9A-Za-z]+/[!#$%&'*+\-.^_`|~0-9A-Za-z]+[ \t]*(?:;.*)?$").unwrap());
+#[derive(Validate)]
+struct ContentTypeInput<'a> {
+    #[validate(regex(path = *HEADER_VALUE_RE), regex(path = *CONTENT_TYPE_RE))]
+    value: &'a str,
+}
+fn validate_content_type(value: &str) -> Result<(), InvalidContentType> { ContentTypeInput { value }.validate().map_err(|_| InvalidContentType) }
+```
+
 ## Candidate ledger
 
 Abbreviations: **Own** = validator-owned classification (`F` full, `P` partial,
@@ -344,59 +386,64 @@ Every `N` row has `0/0/0/0`, no sketch, and retains all named behavior.
 
 ### Common
 
-| ID  | Source (path:range; symbol)                                                         | Family; tags               | Own; sketch              |   C/R/G/N | Retain; K; A; D                                                                              |
-| --- | ----------------------------------------------------------------------------------- | -------------------------- | ------------------------ | --------: | -------------------------------------------------------------------------------------------- |
-| C01 | `common/src/text.rs:19-30`; `truncate_by_graphemes`                                 | domain; grapheme/shared    | N; —                     |   0/0/0/0 | grapheme truncation; no split; —; no truncation API                                          |
-| C02 | `common/src/text.rs:41-59`; `non_empty*`                                            | domain; trim/shared        | N; —                     |   0/0/0/0 | trim/allocation; —; 0063/0065; no normalization                                              |
-| C03 | `common/src/username.rs:27-33` (7); `Username::from_str`                            | domain; regex/lowercase    | P; S2 username           |   7/6/7/1 | lowercase/type door; ASCII-only; 0063/0065/0134; no canonical result                         |
-| C04 | `common/src/password.rs:29-36` (8); `validate_password_shape`                       | field; secret/cheap        | F; A1                    | 8/13/8/−5 | wrappers/hash/order; validate before hash/no values; 0018/0022/0063/0065; secret errors      |
-| C05 | `common/src/password.rs:51-58`; `ProfferedPassword::from_str`                       | domain; secret             | N; —                     |   0/0/0/0 | redacted inbound type; no values; 0063; representation                                       |
-| C06 | `common/src/token.rs:28-35` (8); `validate_shape`                                   | field; base64url/secret    | F; A2                    | 8/10/8/−2 | typed doors; cheap/no raw errors; 0018/0022; secret semantics                                |
-| C07 | `common/src/token.rs:121-158`; `RawToken`/`TokenHash`                               | domain; redaction          | N; —                     |   0/0/0/0 | hash/type separation; credential safety; 0063; trust boundary                                |
-| C08 | `common/src/invite.rs:29-35`; `ProfferedInviteCode`                                 | domain; secret             | N; —                     |   0/0/0/0 | secret inbound type; no leakage; 0063/0065; representation                                   |
-| C09 | `common/src/invite.rs:44-52`; `InviteTtlHours`                                      | domain; range              | N; —                     |   0/0/0/0 | generated `NumNewtype` parse/SQL invariant; 0063/0071; no removable predicate                |
-| C10 | `common/src/auth.rs:35-56`; `parse_basic_auth`                                      | protocol; Base64/UTF-8     | N; —                     |   0/0/0/0 | all wire grammar; opaque errors/order; 0014/0018/0022; parser                                |
-| C11 | `common/src/audience.rs:28-30` (3); `AudienceName`                                  | domain; trim               | P; S1 Nonblank adapter   |   3/1/3/2 | trim/spelling; —; 0063/0065; typed boundary                                                  |
-| C12 | `common/src/bio.rs:34-36` (3); `Bio`                                                | domain; trim/cap           | P; S1 MaxBio adapter     |   3/1/3/2 | trim/optionality; bound; 0063/0065; typed boundary                                           |
-| C13 | `common/src/display_name.rs:37-39` (3); `DisplayName`                               | domain; trim/cap           | P; S1 Max255 adapter     |   3/1/3/2 | trim/case; bound; 0063/0065; typed boundary                                                  |
-| C14 | `common/src/email.rs:52-74`; `Email`                                                | protocol; RFC/domain norm  | N; —                     |   0/0/0/0 | parser/canonical output; bounded error; 0063/0065; predicate only                            |
-| C15 | `common/src/mailbox.rs:58-135`; `Mailbox`                                           | protocol; RFC/render       | N; —                     |   0/0/0/0 | grammar/quoted render; avoid ambiguity; 0063; parser                                         |
-| C16 | `common/src/etag.rs:13-80`; ETag                                                    | protocol; wire/storage     | N; —                     |   0/0/0/0 | quoted grammar/canonicality; conditional write; —; parser                                    |
-| C17 | `common/src/idempotency_key.rs:27-29` (3); key                                      | domain; trim/write         | P; S1 Nonblank adapter   |   3/1/3/2 | trim/type/atomic coupling; atomic write; 0063; typed boundary                                |
-| C18 | `common/src/post_body.rs:59-70`; `PostBody`                                         | domain; multiline/verbatim | N; —                     |   0/0/0/0 | nonblank-line semantics; no trim; 0105; not built-in                                         |
-| C19 | `common/src/post_summary.rs:38-40` (3); summary                                     | domain; trim/cap           | P; S1 MaxSummary adapter |   3/1/3/2 | trim/derived truncation; Unicode; 0063/0105; typed boundary                                  |
-| C20 | `common/src/post_title.rs:39-41` (3); title                                         | domain; trim               | P; S1 Nonblank adapter   |   3/1/3/2 | trim; —; 0063/0065; typed boundary                                                           |
-| C21 | `common/src/slug.rs:13-115`; `Slug`                                                 | protocol; NFC/grapheme     | N; —                     |   0/0/0/0 | normalization/grammar; public identity; 0063; no normalization                               |
-| C22 | `common/src/tag.rs:143-148` (6); Tag/list                                           | domain; canonical/list     | P; S3 adapter            |   6/6/6/0 | parsing/dedup/canonicality; stable identity; 0063/0065/0068; typed boundary                  |
-| C23 | `common/src/site.rs:46-48` (3); `SiteTitle`                                         | domain; trim               | P; S1 Nonblank adapter   |   3/1/3/2 | trim; —; 0063/0065; typed boundary                                                           |
-| C24 | `common/src/session_label.rs:40-42` (3); label                                      | domain; trim/lossy         | P; S1 Max255 adapter     |   3/1/3/2 | trusted fallback; bound; 0063; typed boundary                                                |
-| C25 | `common/src/root_relative_url.rs:1-45`; URL                                         | protocol; injection        | N; —                     |   0/0/0/0 | URL grammar; reject authority; 0073; no parse output                                         |
-| C26 | `common/src/tagged_url.rs:38-120`; URL                                              | protocol; role/canonical   | N; —                     |   0/0/0/0 | role/parser/canonicality; URL role safety; 0073/0112; predicate only                         |
-| C27 | `common/src/time.rs:8-110`; time/date                                               | protocol; RFC3339          | N; —                     |   0/0/0/0 | parse/canonical/date; —; 0063/0072; parser                                                   |
-| C28 | `common/src/media.rs:150-154` (5), `common/src/media.rs:544-549` (6); `ContentHash` | field; path safety         | F; S2 hash               | 11/6/11/5 | trusted producer only; validate before path; 0080/0084; current-door conflict                |
-| C29 | `common/src/media.rs:308-533`; `Filename`                                           | protocol; path/encoding    | N; —                     |   0/0/0/0 | safe leaf/encode/budget/truncate; traversal safety; 0080/0084/0140; grammar                  |
-| C30 | `common/src/media.rs:711-875`; media form                                           | protocol; URL/ownership    | N; —                     |   0/0/0/0 | URL/layout/identity; no userinfo; 0073/0080/0140; parser                                     |
-| C31 | `common/src/pagination.rs:20-29`; `PageSize`                                        | domain; range/clamp        | N; —                     |   0/0/0/0 | generated `NumNewtype` invariant, clamp/+1 semantics; 0019/0071/0092; no removable predicate |
-| C32 | `common/src/pagination.rs:55-62`; offset                                            | domain; range              | N; —                     |   0/0/0/0 | generated `NumNewtype` invariant/sqlx type; 0019/0071; no removable predicate                |
-| C33 | `common/src/pagination.rs:79-137`; limit                                            | domain; coupled            | N; —                     |   0/0/0/0 | generated `NumNewtype` invariant/has-more helpers; 0019/0092; no removable predicate         |
-| C34 | `common/src/backup.rs:20-193`; backup config                                        | registry; cron/path        | N; —                     |   0/0/0/0 | registry/grammar/policy; safe config; 0102; registry                                         |
-| C35 | `common/src/pg_identifier.rs:14-50`; ID                                             | registry; SQL grammar      | N; —                     |   0/0/0/0 | contextual grammar; injection boundary; —; parser                                            |
-| C36 | `common/src/pg_role_password.rs:34-36` (3); password                                | domain; secret             | P; S1 Nonblank adapter   |   3/1/3/2 | redaction; no values; 0063; typed boundary                                                   |
-| C37 | `common/src/smtp_host.rs:37-39` (3); host                                           | domain; config             | P; S1 Nonblank adapter   |   3/1/3/2 | config type; —; 0063; typed boundary                                                         |
-| C38 | `common/src/smtp_username.rs:28-30` (3); user                                       | domain; config             | P; S1 Nonblank adapter   |   3/1/3/2 | config type; credential care; 0063; typed boundary                                           |
-| C39 | `common/src/smtp_password.rs:46-48` (3); password                                   | domain; secret             | P; S1 Nonblank adapter   |   3/1/3/2 | redaction; no values; 0063; typed boundary/security                                          |
-| C40 | `common/src/smtp_port.rs:69-71` (3); port                                           | domain; integer            | P; S1 port adapter       |   3/1/3/2 | retained parse and actionable `InvalidSmtpPort { value, reason }`; —; 0063                   |
-| C41 | `common/src/smtp_sender.rs:11-58`; sender                                           | protocol; mailbox          | N; —                     |   0/0/0/0 | mailbox parser/spelling; syntax; 0063; parser                                                |
-| C42 | `common/src/visibility.rs:97-99` (3); `SubscriberRef`                               | domain; nonblank/enum      | P; S1 Nonblank adapter   |   3/1/3/2 | enum/sqlx/ref semantics; identity; 0102/0151; typed boundary                                 |
-| C43 | `common/src/visibility.rs:232-301`; audience transforms                             | cross-field; nonwidening   | N; —                     |   0/0/0/0 | private/default projection; never widen; 0151; policy                                        |
-| C44 | `common/src/org.rs:115-329`; Org helpers                                            | cross-field; normalization | N; —                     |   0/0/0/0 | parse/lifecycle/body/audience; explicit order; 0101/0105; custom schema retains all          |
-| C45 | `common/src/render.rs:1-248`; format/HTML                                           | registry; trust            | N; —                     |   0/0/0/0 | sanitizer/trust door; HTML safety; 0079/0123/0105; not validation                            |
-| C46 | `common/src/client_telemetry.rs:9-72`; event                                        | registry; closed           | N; —                     |   0/0/0/0 | protocol vocabulary; bounded telemetry; 0102; registry                                       |
-| C47 | `common/src/local_storage_key.rs:1-27`; key                                         | registry; closed           | N; —                     |   0/0/0/0 | key vocabulary; —; 0102; registry                                                            |
-| C48 | `common/src/feed/grammar.rs:1-53`; format/surface                                   | protocol; closed URL       | N; —                     |   0/0/0/0 | token/map/URL generation; canonical URL; 0073/0102; parser                                   |
+| ID  | Source (path:range; symbol)                                                         | Family; tags                  | Own; sketch              |    C/R/G/N | Retain; K; A; D                                                                                                                              |
+| --- | ----------------------------------------------------------------------------------- | ----------------------------- | ------------------------ | ---------: | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| C01 | `common/src/text.rs:19-30`; `truncate_by_graphemes`                                 | domain; grapheme/shared       | N; —                     |    0/0/0/0 | grapheme truncation; no split; —; no truncation API                                                                                          |
+| C02 | `common/src/text.rs:41-59`; `non_empty*`                                            | domain; trim/shared           | N; —                     |    0/0/0/0 | trim/allocation; —; 0063/0065; no normalization                                                                                              |
+| C03 | `common/src/username.rs:27-33` (7); `Username::from_str`                            | domain; regex/lowercase       | P; S2 username           |    7/6/7/1 | lowercase/type door; ASCII-only; 0063/0065/0134; no canonical result                                                                         |
+| C04 | `common/src/password.rs:29-36` (8); `validate_password_shape`                       | field; secret/cheap           | F; A1                    |  8/13/8/−5 | wrappers/hash/order; validate before hash/no values; 0018/0022/0063/0065; secret errors                                                      |
+| C05 | `common/src/password.rs:51-58`; `ProfferedPassword::from_str`                       | domain; secret                | N; —                     |    0/0/0/0 | redacted inbound type; no values; 0063; representation                                                                                       |
+| C06 | `common/src/token.rs:28-35` (8); `validate_shape`                                   | field; base64url/secret       | F; A2                    |  8/10/8/−2 | typed doors; cheap/no raw errors; 0018/0022; secret semantics                                                                                |
+| C07 | `common/src/token.rs:121-158`; `RawToken`/`TokenHash`                               | domain; redaction             | N; —                     |    0/0/0/0 | hash/type separation; credential safety; 0063; trust boundary                                                                                |
+| C08 | `common/src/invite.rs:29-35`; `ProfferedInviteCode`                                 | domain; secret                | N; —                     |    0/0/0/0 | secret inbound type; no leakage; 0063/0065; representation                                                                                   |
+| C09 | `common/src/invite.rs:44-52`; `InviteTtlHours`                                      | domain; range                 | N; —                     |    0/0/0/0 | generated `NumNewtype` parse/SQL invariant; 0063/0071; no removable predicate                                                                |
+| C10 | `common/src/auth.rs:35-56`; `parse_basic_auth`                                      | protocol; Base64/UTF-8        | N; —                     |    0/0/0/0 | all wire grammar; opaque errors/order; 0014/0018/0022; parser                                                                                |
+| C11 | `common/src/audience.rs:28-30` (3); `AudienceName`                                  | domain; trim                  | P; S1 Nonblank adapter   |    3/1/3/2 | trim/spelling; —; 0063/0065; typed boundary                                                                                                  |
+| C12 | `common/src/bio.rs:34-36` (3); `Bio`                                                | domain; trim/cap              | P; S1 MaxBio adapter     |    3/1/3/2 | trim/optionality; bound; 0063/0065; typed boundary                                                                                           |
+| C13 | `common/src/display_name.rs:37-39` (3); `DisplayName`                               | domain; trim/cap              | P; S1 Max255 adapter     |    3/1/3/2 | trim/case; bound; 0063/0065; typed boundary                                                                                                  |
+| C14 | `common/src/email.rs:52-74`; `Email`                                                | protocol; RFC/domain norm     | N; —                     |    0/0/0/0 | parser/canonical output; bounded error; 0063/0065; predicate only                                                                            |
+| C15 | `common/src/mailbox.rs:58-135`; `Mailbox`                                           | protocol; RFC/render          | N; —                     |    0/0/0/0 | grammar/quoted render; avoid ambiguity; 0063; parser                                                                                         |
+| C16 | `common/src/etag.rs:13-80`; ETag                                                    | protocol; wire/storage        | N; —                     |    0/0/0/0 | quoted grammar/canonicality; conditional write; —; parser                                                                                    |
+| C17 | `common/src/idempotency_key.rs:27-29` (3); key                                      | domain; trim/write            | P; S1 Nonblank adapter   |    3/1/3/2 | trim/type/atomic coupling; atomic write; 0063; typed boundary                                                                                |
+| C18 | `common/src/post_body.rs:59-70`; `PostBody`                                         | domain; multiline/verbatim    | N; —                     |    0/0/0/0 | nonblank-line semantics; no trim; 0105; not built-in                                                                                         |
+| C19 | `common/src/post_summary.rs:38-40` (3); summary                                     | domain; trim/cap              | P; S1 MaxSummary adapter |    3/1/3/2 | trim/derived truncation; Unicode; 0063/0105; typed boundary                                                                                  |
+| C20 | `common/src/post_title.rs:39-41` (3); title                                         | domain; trim                  | P; S1 Nonblank adapter   |    3/1/3/2 | trim; —; 0063/0065; typed boundary                                                                                                           |
+| C21 | `common/src/slug.rs:13-115`; `Slug`                                                 | protocol; NFC/grapheme        | N; —                     |    0/0/0/0 | normalization/grammar; public identity; 0063; no normalization                                                                               |
+| C22 | `common/src/tag.rs:143-148` (6); Tag/list                                           | domain; canonical/list        | P; S3 adapter            |    6/6/6/0 | parsing/dedup/canonicality; stable identity; 0063/0065/0068; typed boundary                                                                  |
+| C23 | `common/src/site.rs:46-48` (3); `SiteTitle`                                         | domain; trim                  | P; S1 Nonblank adapter   |    3/1/3/2 | trim; —; 0063/0065; typed boundary                                                                                                           |
+| C24 | `common/src/session_label.rs:40-42` (3); label                                      | domain; trim/lossy            | P; S1 Max255 adapter     |    3/1/3/2 | trusted fallback; bound; 0063; typed boundary                                                                                                |
+| C25 | `common/src/root_relative_url.rs:1-45`; URL                                         | protocol; injection           | N; —                     |    0/0/0/0 | URL grammar; reject authority; 0073; no parse output                                                                                         |
+| C26 | `common/src/tagged_url.rs:38-120`; URL                                              | protocol; role/canonical      | N; —                     |    0/0/0/0 | role/parser/canonicality; URL role safety; 0073/0112; predicate only                                                                         |
+| C27 | `common/src/time.rs:8-110`; time/date                                               | protocol; RFC3339             | N; —                     |    0/0/0/0 | parse/canonical/date; —; 0063/0072; parser                                                                                                   |
+| C28 | `common/src/media.rs:150-154` (5), `common/src/media.rs:544-549` (6); `ContentHash` | field; path safety            | F; S2 hash               |  11/6/11/5 | trusted producer only; validate before path; 0080/0084/0140; current-door conflict                                                           |
+| C29 | `common/src/media.rs:308-533`; `Filename`                                           | protocol; path/encoding       | N; —                     |    0/0/0/0 | safe leaf/encode/budget/truncate; traversal safety; 0080/0084/0140; grammar                                                                  |
+| C30 | `common/src/media.rs:711-875`; media form                                           | protocol; URL/ownership       | N; —                     |    0/0/0/0 | URL/layout/identity; no userinfo; 0073/0080/0140; parser                                                                                     |
+| C31 | `common/src/pagination.rs:20-29`; `PageSize`                                        | domain; range/clamp           | N; —                     |    0/0/0/0 | generated `NumNewtype` invariant, clamp/+1 semantics; 0019/0071/0092; no removable predicate                                                 |
+| C32 | `common/src/pagination.rs:55-62`; offset                                            | domain; range                 | N; —                     |    0/0/0/0 | generated `NumNewtype` invariant/sqlx type; 0019/0071; no removable predicate                                                                |
+| C33 | `common/src/pagination.rs:79-137`; limit                                            | domain; coupled               | N; —                     |    0/0/0/0 | generated `NumNewtype` invariant/has-more helpers; 0019/0092; no removable predicate                                                         |
+| C34 | `common/src/backup.rs:20-193`; backup config                                        | registry; cron/path           | N; —                     |    0/0/0/0 | registry/grammar/policy; safe config; 0102; registry                                                                                         |
+| C35 | `common/src/pg_identifier.rs:14-50`; ID                                             | registry; SQL grammar         | N; —                     |    0/0/0/0 | contextual grammar; injection boundary; —; parser                                                                                            |
+| C36 | `common/src/pg_role_password.rs:34-36` (3); password                                | domain; secret                | P; S1 Nonblank adapter   |    3/1/3/2 | redaction; no values; 0063; typed boundary                                                                                                   |
+| C37 | `common/src/smtp_host.rs:37-39` (3); host                                           | domain; config                | P; S1 Nonblank adapter   |    3/1/3/2 | config type; —; 0063; typed boundary                                                                                                         |
+| C38 | `common/src/smtp_username.rs:28-30` (3); user                                       | domain; config                | P; S1 Nonblank adapter   |    3/1/3/2 | config type; credential care; 0063; typed boundary                                                                                           |
+| C39 | `common/src/smtp_password.rs:46-48` (3); password                                   | domain; secret                | P; S1 Nonblank adapter   |    3/1/3/2 | redaction; no values; 0063; typed boundary/security                                                                                          |
+| C40 | `common/src/smtp_port.rs:69-71` (3); port                                           | domain; integer               | P; S1 port adapter       |    3/1/3/2 | retained parse and actionable `InvalidSmtpPort { value, reason }`; —; 0063                                                                   |
+| C41 | `common/src/smtp_sender.rs:11-58`; sender                                           | protocol; mailbox             | N; —                     |    0/0/0/0 | mailbox parser/spelling; syntax; 0063; parser                                                                                                |
+| C42 | `common/src/visibility.rs:97-99` (3); `SubscriberRef`                               | domain; nonblank/enum         | P; S1 Nonblank adapter   |    3/1/3/2 | enum/sqlx/ref semantics; identity; 0102/0151; typed boundary                                                                                 |
+| C43 | `common/src/visibility.rs:232-301`; audience transforms                             | cross-field; nonwidening      | N; —                     |    0/0/0/0 | private/default projection; never widen; 0151; policy                                                                                        |
+| C44 | `common/src/org.rs:115-329`; Org helpers                                            | cross-field; normalization    | N; —                     |    0/0/0/0 | parse/lifecycle/body/audience; explicit order; 0101/0105; custom schema retains all                                                          |
+| C45 | `common/src/render.rs:1-248`; format/HTML                                           | registry; trust               | N; —                     |    0/0/0/0 | sanitizer/trust door; HTML safety; 0079/0123/0105; not validation                                                                            |
+| C46 | `common/src/client_telemetry.rs:9-72`; event                                        | registry; closed              | N; —                     |    0/0/0/0 | protocol vocabulary; bounded telemetry; 0102; registry                                                                                       |
+| C47 | `common/src/local_storage_key.rs:1-27`; key                                         | registry; closed              | N; —                     |    0/0/0/0 | key vocabulary; —; 0102; registry                                                                                                            |
+| C48 | `common/src/feed/grammar.rs:1-53`; format/surface                                   | protocol; closed URL          | N; —                     |    0/0/0/0 | token/map/URL generation; canonical URL; 0073/0102; parser                                                                                   |
+| C49 | `common/src/media.rs:956,958-960,965-985` (17); `ContentType::from_str`/grammar     | protocol; header grammar      | F; S7                    | 17/12/17/5 | validator owns both exact regex predicates; retained `ContentType(s.to_owned())`; media address ADRs 0080/0084/0140; parser fit disqualifier |
+| C50 | `storage/src/backup/catalog.rs:63,65-66` (3); `CatalogNullability::from_str`        | protocol; closed token        | F; S6                    |  3/10/3/−7 | validator owns YES/NO predicate; retained `Self(value.to_owned())`; —; larger                                                                |
+| C51 | `storage/src/backup/catalog.rs:118-123`; `BackupRowJson::from_str`                  | protocol; JSON/trailing input | N; —                     |    0/0/0/0 | serde JSON object visitor, exact trailing-input rejection, and allocation remain; —; parser                                                  |
 
-Common shared support: **SS-C-1 = S1 DTOs 26 + S2 imports/statics 5 + S3 DTO 6 =
-C/R/G/N 0/37/0/−37**; allocated once.
+Shared support is allocated to exactly one consuming primary family: S1 (26), S2
+(5), S3 (6), and S4's seven cross-crate lines go to **domain**; S5 (7) goes to
+**cross-field**. For cross-family S2, the deterministic owner is the lowest-ID
+consumer, C03 (domain). No support is separately subtotalled.
 
 ### Host/storage
 
@@ -429,9 +476,10 @@ C/R/G/N 0/37/0/−37**; allocated once.
 | H25 | `storage/src/helpers.rs:240-615`; helpers                                                                                   | stateful; dummy/shared        | N; —            |  0/0/0/0 | decode/classify/dummy hash; timing; 0018; no primitive                             |
 | H26 | `storage/src/backup/restore_validation.rs:83-121,129-175,204-214,234-460`; restore                                          | stateful; generated rows      | N; —            |  0/0/0/0 | typed parse/report/write safety; validate before writes; —; parser/state           |
 
-Host/storage replacement support: **SS-HS-1 = S4 0/6/0/−6** and **SS-HS-2 = S5
-0/7/0/−7**. They are each allocated exactly once; H20 generic behavior, adapter
-variants, H23 generic logic, and H25 helpers are not duplicated.
+Host/storage has no separately subtotalled support: S4's seven cross-crate
+support lines are allocated to domain and S5's seven DTO lines to cross-field
+under the common rule above. H20 generic behavior, adapter variants, H23 generic
+logic, and H25 helpers are not duplicated.
 
 ### Boundary (`web`/`server`; client and csr have no candidate)
 
@@ -486,26 +534,26 @@ SLOC; it is included to make the non-additive inventory auditable.
 
 ## Arithmetic and rule application
 
-| Exclusive primary family   | Rows / allocated support                                                                                            | Current | Replacement |   Gross |     Net | Qualification                                                        |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------: | ----------: | ------: | ------: | -------------------------------------------------------------------- |
-| Stateful/storage           | B07,B11–B13,B15,B18,B20,B22; H13–H26; B-BUILD                                                                       |       0 |           0 |       0 |       0 | no validator-owned async/state/I/O/transaction behavior              |
-| Protocol/grammar           | C10,C14–C16,C21,C25–C27,C29–C30,C41,C48; B03,B06,B14,B16–B17,B23; H2–H4; M-SHARED,M-TEXT,M-SERVER,X-IDS,X-ADR,D-CSR |       0 |           0 |       0 |       0 | parser/canonicalization/codegen disqualifier                         |
-| Configuration registry     | C34,C35,C45–C47; B21; H1,H12; M-STR,M-SQLX,D-PROVISION,D-CHECK                                                      |       0 |           0 |       0 |       0 | closed registry/dispatch disqualifier                                |
-| Cross-field                | C43,C44; B02,B04,B05,B08,B19; H15                                                                                   |       1 |           5 |       1 |      −4 | equality adapter is larger; other policy remains custom              |
-| Domain newtype             | C01–C03,C05,C07–C09,C11–C13,C17–C24,C31–C40,C42; B01,B09,B10; H5–H11                                                |      73 |          32 |      73 |      41 | positive raw net, but typed-boundary/normalization/ADR disqualifiers |
-| Field predicate            | C04,C06,C28; M-NUM                                                                                                  |      27 |          29 |      27 |      −2 | required secret-safe adapter/error work is larger                    |
-| Shared replacement support | SS-C-1; SS-HS-1,SS-HS-2                                                                                             |       0 |          50 |       0 |     −50 | complete independently constructible DTO support                     |
-| **Repository total**       | every ledger row and support row above                                                                              | **101** |     **116** | **101** | **−15** | **reject**                                                           |
+| Exclusive primary family | Rows / allocated support                                                                                                | Current | Replacement |   Gross |     Net | Qualification                                           |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------- | ------: | ----------: | ------: | ------: | ------------------------------------------------------- |
+| Stateful/storage         | B07,B11–B13,B15,B18,B20,B22; H13–H26; B-BUILD                                                                           |       0 |           0 |       0 |       0 | no validator-owned async/state/I/O/transaction behavior |
+| Protocol/grammar         | C10,C14–C16,C21,C25–C27,C29–C30,C41,C48–C51; B03,B06,B14,B16–B17,B23; H2–H4; M-SHARED,M-TEXT,M-SERVER,X-IDS,X-ADR,D-CSR |      20 |          22 |      20 |      −2 | grammar/parser/canonicalization/codegen disqualifier    |
+| Configuration registry   | C34,C35,C45–C47; B21; H1,H12; M-STR,M-SQLX,D-PROVISION,D-CHECK                                                          |       0 |           0 |       0 |       0 | closed registry/dispatch disqualifier                   |
+| Cross-field              | C43,C44; B02,B04,B05,B08,B19; H15; S5 support                                                                           |       1 |          12 |       1 |     −11 | equality adapter is larger; other policy remains custom |
+| Domain newtype           | C01–C03,C05,C07–C09,C11–C13,C17–C24,C31–C40,C42; B01,B09,B10; H5–H11; S1–S4 support                                     |      73 |          76 |      73 |      −3 | typed-boundary/normalization/ADR disqualifiers          |
+| Field predicate          | C04,C06,C28; M-NUM                                                                                                      |      27 |          29 |      27 |      −2 | required secret-safe adapter/error work is larger       |
+| **Repository total**     | every ledger row and allocated support above                                                                            | **121** |     **139** | **121** | **−18** | **reject**                                              |
 
-The table is the canonical reconciliation. Common contributes **82** current
-SLOC; host/storage contributes **19**. Complete replacement support is 50 SLOC
-and row-local replacement is 66 SLOC, totaling 116. No import, derive, type,
-brace, static, or adapter line is unallocated.
+The table is the canonical reconciliation. Common contributes **99** current
+SLOC; host/storage contributes **22**. Replacement lines are allocated to their
+consuming primary family: 88 candidate-local lines plus 51 support lines
+total 139. No import, derive, type, brace, static, or adapter line is
+unallocated.
 
 ```text
-current = common 82 + host/storage 19 + boundary 0 + tooling 0 = 101
-replacement = row-local 66 + shared support 50 = 116
-net = 101 − 116 = −15
+current = common 99 + host/storage 22 + boundary 0 + tooling 0 = 121
+replacement = candidate-local 88 + allocated support 51 = 139
+net = 121 − 139 = −18
 ```
 
 The raw positive domain-newtype subtotal and field-predicate ceiling cannot
@@ -552,152 +600,152 @@ decision.
 rg -n --no-heading -g '*.rs' -g '!**/tests/**' -g '!**/test_support/**' -g '!test-support/**' -g '!**/benches/**' -g '!**/examples/**' -g '!**/fixtures/**' -e '^[[:space:]]*impl[[:space:]]+(FromStr|TryFrom)' -e '^[[:space:]]*(pub([^()]*)?[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]+(validate|parse|normalize|canonical|from_str|try_from)[[:space:]]*\(' common/src host/src storage/src web/src server/src macros/src xtask/src tools/coverage/src tools/devtool/src tools/doctests/src server/build.rs | sort -t: -k1,1 -k2,2n -u
 ```
 
-| path:line                                                 | matched construct                                                                      | disposition            |
-| --------------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------- |
-| `common/src/audience.rs:23`                               | `impl FromStr for AudienceName {`                                                      | candidate C11          |
-| `common/src/audience.rs:26`                               | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C11          |
-| `common/src/backup.rs:99`                                 | `impl FromStr for BackupSchedule {`                                                    | candidate C34          |
-| `common/src/backup.rs:102`                                | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C34          |
-| `common/src/backup.rs:149`                                | `impl FromStr for DestinationPath {`                                                   | candidate C34          |
-| `common/src/backup.rs:152`                                | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C34          |
-| `common/src/bio.rs:29`                                    | `impl FromStr for Bio {`                                                               | candidate C12          |
-| `common/src/bio.rs:32`                                    | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C12          |
-| `common/src/display_name.rs:32`                           | `impl FromStr for DisplayName {`                                                       | candidate C13          |
-| `common/src/display_name.rs:35`                           | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C13          |
-| `common/src/email.rs:52`                                  | `impl FromStr for Email {`                                                             | candidate C14          |
-| `common/src/email.rs:55`                                  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C14          |
-| `common/src/etag.rs:60`                                   | `impl FromStr for ETag {`                                                              | candidate C16          |
-| `common/src/etag.rs:63`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C16          |
-| `common/src/idempotency_key.rs:22`                        | `impl FromStr for IdempotencyKey {`                                                    | candidate C17          |
-| `common/src/idempotency_key.rs:25`                        | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C17          |
-| `common/src/invite.rs:29`                                 | `impl FromStr for ProfferedInviteCode {`                                               | candidate C08          |
-| `common/src/invite.rs:32`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C08          |
-| `common/src/mailbox.rs:58`                                | `impl FromStr for Mailbox {`                                                           | candidate C15          |
-| `common/src/mailbox.rs:61`                                | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C15          |
-| `common/src/media.rs:146`                                 | `impl FromStr for ContentHash {`                                                       | candidate C28          |
-| `common/src/media.rs:149`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C28          |
-| `common/src/media.rs:308`                                 | `impl FromStr for Filename {`                                                          | candidate C29          |
-| `common/src/media.rs:311`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C29          |
-| `common/src/media.rs:711`                                 | `impl FromStr for MediaReferenceForm {`                                                | candidate C30          |
-| `common/src/media.rs:714`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C30          |
-| `common/src/media.rs:952`                                 | `impl FromStr for ContentType {`                                                       | named exclusion E-NODV |
-| `common/src/media.rs:955`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | named exclusion E-NODV |
-| `common/src/media.rs:2020`                                | `fn canonical(raw: &str) -> Filename {`                                                | named exclusion E-NODV |
-| `common/src/org.rs:594`                                   | `fn normalize(source: &str) -> OrgNormalization {`                                     | named exclusion E-NODV |
-| `common/src/password.rs:51`                               | `impl FromStr for ProfferedPassword {`                                                 | candidate C05          |
-| `common/src/password.rs:54`                               | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C05          |
-| `common/src/pg_identifier.rs:23`                          | `impl FromStr for PgRoleName {`                                                        | candidate C35          |
-| `common/src/pg_identifier.rs:26`                          | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C35          |
-| `common/src/pg_identifier.rs:43`                          | `impl FromStr for PgDatabaseName {`                                                    | candidate C35          |
-| `common/src/pg_identifier.rs:46`                          | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C35          |
-| `common/src/pg_role_password.rs:30`                       | `impl FromStr for PgRolePassword {`                                                    | candidate C36          |
-| `common/src/pg_role_password.rs:33`                       | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C36          |
-| `common/src/post_body.rs:59`                              | `impl FromStr for PostBody {`                                                          | candidate C18          |
-| `common/src/post_body.rs:65`                              | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C18          |
-| `common/src/post_body.rs:77`                              | `fn parse(s: &str) -> PostBody {`                                                      | named exclusion E-NODV |
-| `common/src/post_summary.rs:33`                           | `impl FromStr for PostSummary {`                                                       | candidate C19          |
-| `common/src/post_summary.rs:36`                           | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C19          |
-| `common/src/post_title.rs:34`                             | `impl FromStr for PostTitle {`                                                         | candidate C20          |
-| `common/src/post_title.rs:37`                             | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C20          |
-| `common/src/root_relative_url.rs:32`                      | `impl FromStr for RootRelativeUrl {`                                                   | candidate C25          |
-| `common/src/root_relative_url.rs:35`                      | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C25          |
-| `common/src/session_label.rs:35`                          | `impl FromStr for SessionLabel {`                                                      | candidate C24          |
-| `common/src/session_label.rs:38`                          | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C24          |
-| `common/src/site.rs:41`                                   | `impl FromStr for SiteTitle {`                                                         | candidate C23          |
-| `common/src/site.rs:44`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C23          |
-| `common/src/slug.rs:39`                                   | `impl FromStr for Slug {`                                                              | candidate C21          |
-| `common/src/slug.rs:42`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C21          |
-| `common/src/smtp_host.rs:33`                              | `impl FromStr for SmtpHost {`                                                          | candidate C37          |
-| `common/src/smtp_host.rs:36`                              | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C37          |
-| `common/src/smtp_password.rs:32`                          | `impl FromStr for SmtpPassword {`                                                      | candidate C39          |
-| `common/src/smtp_password.rs:35`                          | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C39          |
-| `common/src/smtp_port.rs:60`                              | `impl FromStr for SmtpPort {`                                                          | candidate C40          |
-| `common/src/smtp_port.rs:63`                              | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C40          |
-| `common/src/smtp_sender.rs:47`                            | `impl FromStr for SmtpSender {`                                                        | candidate C41          |
-| `common/src/smtp_sender.rs:50`                            | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C41          |
-| `common/src/smtp_username.rs:24`                          | `impl FromStr for SmtpUsername {`                                                      | candidate C38          |
-| `common/src/smtp_username.rs:27`                          | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C38          |
-| `common/src/tagged_url.rs:109`                            | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C26          |
-| `common/src/tag.rs:26`                                    | `impl FromStr for Tag {`                                                               | candidate C22          |
-| `common/src/tag.rs:29`                                    | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C22          |
-| `common/src/tag.rs:68`                                    | `impl FromStr for TagLabel {`                                                          | candidate C22          |
-| `common/src/tag.rs:71`                                    | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C22          |
-| `common/src/time.rs:63`                                   | `impl FromStr for UtcInstant {`                                                        | candidate C27          |
-| `common/src/time.rs:66`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C27          |
-| `common/src/token.rs:121`                                 | `impl FromStr for RawToken {`                                                          | candidate C07          |
-| `common/src/token.rs:124`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C07          |
-| `common/src/token.rs:152`                                 | `impl FromStr for TokenHash {`                                                         | candidate C07          |
-| `common/src/token.rs:155`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C07          |
-| `common/src/username.rs:23`                               | `impl FromStr for Username {`                                                          | candidate C03          |
-| `common/src/username.rs:26`                               | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C03          |
-| `common/src/visibility.rs:93`                             | `impl FromStr for SubscriberRef {`                                                     | candidate C42          |
-| `common/src/visibility.rs:96`                             | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate C42          |
-| `host/src/atompub/title.rs:17`                            | `impl FromStr for WorkspaceTitle {`                                                    | candidate H7           |
-| `host/src/atompub/title.rs:20`                            | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H7           |
-| `host/src/atompub/title.rs:46`                            | `impl FromStr for CollectionTitle {`                                                   | candidate H7           |
-| `host/src/atompub/title.rs:49`                            | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H7           |
-| `host/src/atompub/title.rs:81`                            | `impl FromStr for CollectionFeedTitle {`                                               | candidate H7           |
-| `host/src/atompub/title.rs:84`                            | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H7           |
-| `host/src/capture.rs:131`                                 | `pub fn parse(key: &str) -> Option<Self> {`                                            | named exclusion E-NODV |
-| `host/src/config_key.rs:104`                              | `pub fn validate(self, raw: &str) -> Result<(), InvalidSiteConfigValue> {`             | named exclusion E-NODV |
-| `host/src/config_key.rs:219`                              | `pub fn validate(self, raw: &str) -> Result<(), InvalidUserConfigValue> {`             | named exclusion E-NODV |
-| `host/src/feed/feed_path.rs:38`                           | `pub fn canonical(surface: &FeedSurface, format: FeedFormat) -> Self {`                | candidate H4           |
-| `host/src/feed/feed_path.rs:62`                           | `impl FromStr for FeedPath {`                                                          | candidate H4           |
-| `host/src/feed/feed_path.rs:65`                           | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate H4           |
-| `host/src/feed/feed_path.rs:105`                          | `pub fn parse(path: &str) -> Option<(FeedSurface, FeedFormat)> {`                      | named exclusion E-NODV |
-| `host/src/feed/metadata.rs:27`                            | `impl FromStr for FeedTitle {`                                                         | candidate H6           |
-| `host/src/feed/metadata.rs:30`                            | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H6           |
-| `host/src/feed/metadata.rs:63`                            | `impl FromStr for FeedDescription {`                                                   | candidate H6           |
-| `host/src/feed/metadata.rs:66`                            | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H6           |
-| `host/src/invite.rs:30`                                   | `impl FromStr for InviteCode {`                                                        | candidate H8           |
-| `host/src/invite.rs:33`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate H8           |
-| `host/src/invite.rs:39`                                   | `impl TryFrom<ProfferedInviteCode> for InviteCode {`                                   | candidate H8           |
-| `host/src/invite.rs:45`                                   | `fn try_from(p: ProfferedInviteCode) -> Result<Self, Self::Error> {`                   | candidate H8           |
-| `host/src/password.rs:15`                                 | `impl FromStr for Password {`                                                          | candidate H9           |
-| `host/src/password.rs:18`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate H9           |
-| `host/src/password.rs:24`                                 | `impl TryFrom<ProfferedPassword> for Password {`                                       | candidate H9           |
-| `host/src/password.rs:27`                                 | `fn try_from(password: ProfferedPassword) -> Result<Self, Self::Error> {`              | candidate H9           |
-| `host/src/stored_password_hash.rs:25`                     | `impl FromStr for StoredPasswordHash {`                                                | candidate H11          |
-| `host/src/stored_password_hash.rs:28`                     | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate H11          |
-| `macros/src/id_newtype.rs:67`                             | `fn from_str(s: &str) -> ::core::result::Result<Self, Self::Err> {`                    | named exclusion E-NODV |
-| `macros/src/num_newtype.rs:184`                           | `fn from_str(s: &str) -> ::core::result::Result<Self, Self::Err> {`                    | named exclusion E-NODV |
-| `macros/src/num_newtype.rs:213`                           | `fn try_from(v: #inner) -> ::core::result::Result<Self, Self::Error> {`                | named exclusion E-NODV |
-| `macros/src/server_fn.rs:94`                              | `fn parse(input: ParseStream<'_>) -> syn::Result<Self> {`                              | named exclusion E-NODV |
-| `macros/src/str_newtype.rs:157`                           | `fn try_from(s: ::std::string::String) -> ::core::result::Result<Self, Self::Error> {` | named exclusion E-NODV |
-| `macros/src/str_newtype.rs:277`                           | `fn try_from(s: ::std::string::String) -> ::core::result::Result<Self, Self::Error> {` | named exclusion E-NODV |
-| `server/src/cli.rs:98`                                    | `impl FromStr for BootstrapDb {`                                                       | candidate B21          |
-| `server/src/cli.rs:101`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate B21          |
-| `server/src/cli.rs:158`                                   | `impl FromStr for AppTarget {`                                                         | candidate B21          |
-| `server/src/cli.rs:161`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate B21          |
-| `server/src/cli.rs:450`                                   | `fn parse(args: &[&str]) -> Cli {`                                                     | named exclusion E-NODV |
-| `server/src/soft_path.rs:27`                              | `pub fn parse(s: &str) -> Self {`                                                      | named exclusion E-NODV |
-| `storage/src/backup/catalog.rs:59`                        | `impl FromStr for CatalogNullability {`                                                | named exclusion E-NODV |
-| `storage/src/backup/catalog.rs:62`                        | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | named exclusion E-NODV |
-| `storage/src/backup/catalog.rs:115`                       | `impl FromStr for BackupRowJson {`                                                     | named exclusion E-NODV |
-| `storage/src/backup/catalog.rs:118`                       | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | named exclusion E-NODV |
-| `storage/src/backup/restore_validation.rs:167`            | `fn validate(&self, report: &mut RestoreValidationReport);`                            | named exclusion E-NODV |
-| `storage/src/backup/restore_validation.rs:241`            | `fn validate(&self, report: &mut RestoreValidationReport) {`                           | named exclusion E-NODV |
-| `storage/src/backup/restore_validation.rs:277`            | `fn validate(&self, report: &mut RestoreValidationReport) {`                           | named exclusion E-NODV |
-| `storage/src/backup/restore_validation.rs:397`            | `fn validate(&self, report: &mut RestoreValidationReport) {`                           | named exclusion E-NODV |
-| `storage/src/backup/restore_validation.rs:427`            | `fn validate(&self, report: &mut RestoreValidationReport) {`                           | named exclusion E-NODV |
-| `storage/src/db.rs:178`                                   | `impl FromStr for DbConnectOptions {`                                                  | named exclusion E-NODV |
-| `storage/src/db.rs:181`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | named exclusion E-NODV |
-| `storage/src/helpers.rs:249`                              | `impl FromStr for SerializedPostTags {`                                                | candidate H25          |
-| `storage/src/helpers.rs:252`                              | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H25          |
-| `storage/src/instance_identity.rs:32`                     | `impl FromStr for InstanceId {`                                                        | candidate H13          |
-| `storage/src/instance_identity.rs:35`                     | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H13          |
-| `xtask/src/census/orchestrate.rs:178`                     | `fn validate(mut report: CellReport) -> CellReport {`                                  | named exclusion E-NODV |
-| `xtask/src/steps/duration_budget.rs:38`                   | `fn validate(&self, source: &str) -> Result<(), String> {`                             | named exclusion E-NODV |
-| `xtask/src/steps/duration_budget.rs:407`                  | `fn validate(report: &str, manifest: &str) -> Result<String, String> {`                | named exclusion E-NODV |
-| `xtask/src/steps/error_swallowing_inventory_check.rs:169` | `fn validate(markdown: &str, expected_baseline_count: usize) -> Vec<String> {`         | named exclusion E-NODV |
-| `xtask/src/steps/server_fn_tracing_check.rs:87`           | `fn parse(input: ParseStream<'_>) -> syn::Result<Self> {`                              | named exclusion E-NODV |
-| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1100`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | named exclusion E-NODV |
-| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1122`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | named exclusion E-NODV |
-| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1143`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | named exclusion E-NODV |
-| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1162`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | named exclusion E-NODV |
-| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1183`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | named exclusion E-NODV |
-| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1207`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | named exclusion E-NODV |
-| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1239`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | named exclusion E-NODV |
-| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1291`  | `fn from_str(_: &str) -> Result<Self, Self::Err> {`                                    | named exclusion E-NODV |
-| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1308`  | `fn from_str(_: &str) -> Result<Self, Self::Err> { todo!() }`                          | named exclusion E-NODV |
-| `xtask/src/steps/sqlx_newtype_bind_check.rs:68`           | `fn parse(label: &str) -> Option<Self> {`                                              | named exclusion E-NODV |
+| path:line                                                 | matched construct                                                                      | disposition               |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------- |
+| `common/src/audience.rs:23`                               | `impl FromStr for AudienceName {`                                                      | candidate C11             |
+| `common/src/audience.rs:26`                               | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C11             |
+| `common/src/backup.rs:99`                                 | `impl FromStr for BackupSchedule {`                                                    | candidate C34             |
+| `common/src/backup.rs:102`                                | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C34             |
+| `common/src/backup.rs:149`                                | `impl FromStr for DestinationPath {`                                                   | candidate C34             |
+| `common/src/backup.rs:152`                                | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C34             |
+| `common/src/bio.rs:29`                                    | `impl FromStr for Bio {`                                                               | candidate C12             |
+| `common/src/bio.rs:32`                                    | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C12             |
+| `common/src/display_name.rs:32`                           | `impl FromStr for DisplayName {`                                                       | candidate C13             |
+| `common/src/display_name.rs:35`                           | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C13             |
+| `common/src/email.rs:52`                                  | `impl FromStr for Email {`                                                             | candidate C14             |
+| `common/src/email.rs:55`                                  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C14             |
+| `common/src/etag.rs:60`                                   | `impl FromStr for ETag {`                                                              | candidate C16             |
+| `common/src/etag.rs:63`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C16             |
+| `common/src/idempotency_key.rs:22`                        | `impl FromStr for IdempotencyKey {`                                                    | candidate C17             |
+| `common/src/idempotency_key.rs:25`                        | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C17             |
+| `common/src/invite.rs:29`                                 | `impl FromStr for ProfferedInviteCode {`                                               | candidate C08             |
+| `common/src/invite.rs:32`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C08             |
+| `common/src/mailbox.rs:58`                                | `impl FromStr for Mailbox {`                                                           | candidate C15             |
+| `common/src/mailbox.rs:61`                                | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C15             |
+| `common/src/media.rs:146`                                 | `impl FromStr for ContentHash {`                                                       | candidate C28             |
+| `common/src/media.rs:149`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C28             |
+| `common/src/media.rs:308`                                 | `impl FromStr for Filename {`                                                          | candidate C29             |
+| `common/src/media.rs:311`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C29             |
+| `common/src/media.rs:711`                                 | `impl FromStr for MediaReferenceForm {`                                                | candidate C30             |
+| `common/src/media.rs:714`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C30             |
+| `common/src/media.rs:952`                                 | `impl FromStr for ContentType {`                                                       | candidate C49             |
+| `common/src/media.rs:955`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C49             |
+| `common/src/media.rs:2020`                                | `fn canonical(raw: &str) -> Filename {`                                                | E-TEST (inline cfg(test)) |
+| `common/src/org.rs:594`                                   | `fn normalize(source: &str) -> OrgNormalization {`                                     | E-TEST (inline cfg(test)) |
+| `common/src/password.rs:51`                               | `impl FromStr for ProfferedPassword {`                                                 | candidate C05             |
+| `common/src/password.rs:54`                               | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C05             |
+| `common/src/pg_identifier.rs:23`                          | `impl FromStr for PgRoleName {`                                                        | candidate C35             |
+| `common/src/pg_identifier.rs:26`                          | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C35             |
+| `common/src/pg_identifier.rs:43`                          | `impl FromStr for PgDatabaseName {`                                                    | candidate C35             |
+| `common/src/pg_identifier.rs:46`                          | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C35             |
+| `common/src/pg_role_password.rs:30`                       | `impl FromStr for PgRolePassword {`                                                    | candidate C36             |
+| `common/src/pg_role_password.rs:33`                       | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C36             |
+| `common/src/post_body.rs:59`                              | `impl FromStr for PostBody {`                                                          | candidate C18             |
+| `common/src/post_body.rs:65`                              | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C18             |
+| `common/src/post_body.rs:77`                              | `fn parse(s: &str) -> PostBody {`                                                      | E-TEST (inline cfg(test)) |
+| `common/src/post_summary.rs:33`                           | `impl FromStr for PostSummary {`                                                       | candidate C19             |
+| `common/src/post_summary.rs:36`                           | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C19             |
+| `common/src/post_title.rs:34`                             | `impl FromStr for PostTitle {`                                                         | candidate C20             |
+| `common/src/post_title.rs:37`                             | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C20             |
+| `common/src/root_relative_url.rs:32`                      | `impl FromStr for RootRelativeUrl {`                                                   | candidate C25             |
+| `common/src/root_relative_url.rs:35`                      | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C25             |
+| `common/src/session_label.rs:35`                          | `impl FromStr for SessionLabel {`                                                      | candidate C24             |
+| `common/src/session_label.rs:38`                          | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C24             |
+| `common/src/site.rs:41`                                   | `impl FromStr for SiteTitle {`                                                         | candidate C23             |
+| `common/src/site.rs:44`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C23             |
+| `common/src/slug.rs:39`                                   | `impl FromStr for Slug {`                                                              | candidate C21             |
+| `common/src/slug.rs:42`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C21             |
+| `common/src/smtp_host.rs:33`                              | `impl FromStr for SmtpHost {`                                                          | candidate C37             |
+| `common/src/smtp_host.rs:36`                              | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C37             |
+| `common/src/smtp_password.rs:32`                          | `impl FromStr for SmtpPassword {`                                                      | candidate C39             |
+| `common/src/smtp_password.rs:35`                          | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C39             |
+| `common/src/smtp_port.rs:60`                              | `impl FromStr for SmtpPort {`                                                          | candidate C40             |
+| `common/src/smtp_port.rs:63`                              | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C40             |
+| `common/src/smtp_sender.rs:47`                            | `impl FromStr for SmtpSender {`                                                        | candidate C41             |
+| `common/src/smtp_sender.rs:50`                            | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C41             |
+| `common/src/smtp_username.rs:24`                          | `impl FromStr for SmtpUsername {`                                                      | candidate C38             |
+| `common/src/smtp_username.rs:27`                          | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C38             |
+| `common/src/tagged_url.rs:109`                            | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C26             |
+| `common/src/tag.rs:26`                                    | `impl FromStr for Tag {`                                                               | candidate C22             |
+| `common/src/tag.rs:29`                                    | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C22             |
+| `common/src/tag.rs:68`                                    | `impl FromStr for TagLabel {`                                                          | candidate C22             |
+| `common/src/tag.rs:71`                                    | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C22             |
+| `common/src/time.rs:63`                                   | `impl FromStr for UtcInstant {`                                                        | candidate C27             |
+| `common/src/time.rs:66`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C27             |
+| `common/src/token.rs:121`                                 | `impl FromStr for RawToken {`                                                          | candidate C07             |
+| `common/src/token.rs:124`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C07             |
+| `common/src/token.rs:152`                                 | `impl FromStr for TokenHash {`                                                         | candidate C07             |
+| `common/src/token.rs:155`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C07             |
+| `common/src/username.rs:23`                               | `impl FromStr for Username {`                                                          | candidate C03             |
+| `common/src/username.rs:26`                               | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate C03             |
+| `common/src/visibility.rs:93`                             | `impl FromStr for SubscriberRef {`                                                     | candidate C42             |
+| `common/src/visibility.rs:96`                             | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate C42             |
+| `host/src/atompub/title.rs:17`                            | `impl FromStr for WorkspaceTitle {`                                                    | candidate H7              |
+| `host/src/atompub/title.rs:20`                            | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H7              |
+| `host/src/atompub/title.rs:46`                            | `impl FromStr for CollectionTitle {`                                                   | candidate H7              |
+| `host/src/atompub/title.rs:49`                            | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H7              |
+| `host/src/atompub/title.rs:81`                            | `impl FromStr for CollectionFeedTitle {`                                               | candidate H7              |
+| `host/src/atompub/title.rs:84`                            | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H7              |
+| `host/src/capture.rs:131`                                 | `pub fn parse(key: &str) -> Option<Self> {`                                            | named exclusion E-NODV    |
+| `host/src/config_key.rs:104`                              | `pub fn validate(self, raw: &str) -> Result<(), InvalidSiteConfigValue> {`             | candidate H1              |
+| `host/src/config_key.rs:219`                              | `pub fn validate(self, raw: &str) -> Result<(), InvalidUserConfigValue> {              | candidate H1              |
+| `host/src/feed/feed_path.rs:38`                           | `pub fn canonical(surface: &FeedSurface, format: FeedFormat) -> Self {`                | candidate H4              |
+| `host/src/feed/feed_path.rs:62`                           | `impl FromStr for FeedPath {`                                                          | candidate H4              |
+| `host/src/feed/feed_path.rs:65`                           | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate H4              |
+| `host/src/feed/feed_path.rs:105`                          | `pub fn parse(path: &str) -> Option<(FeedSurface, FeedFormat)> {`                      | candidate H4              |
+| `host/src/feed/metadata.rs:27`                            | `impl FromStr for FeedTitle {`                                                         | candidate H6              |
+| `host/src/feed/metadata.rs:30`                            | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H6              |
+| `host/src/feed/metadata.rs:63`                            | `impl FromStr for FeedDescription {`                                                   | candidate H6              |
+| `host/src/feed/metadata.rs:66`                            | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H6              |
+| `host/src/invite.rs:30`                                   | `impl FromStr for InviteCode {`                                                        | candidate H8              |
+| `host/src/invite.rs:33`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate H8              |
+| `host/src/invite.rs:39`                                   | `impl TryFrom<ProfferedInviteCode> for InviteCode {`                                   | candidate H8              |
+| `host/src/invite.rs:45`                                   | `fn try_from(p: ProfferedInviteCode) -> Result<Self, Self::Error> {`                   | candidate H8              |
+| `host/src/password.rs:15`                                 | `impl FromStr for Password {`                                                          | candidate H9              |
+| `host/src/password.rs:18`                                 | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate H9              |
+| `host/src/password.rs:24`                                 | `impl TryFrom<ProfferedPassword> for Password {`                                       | candidate H9              |
+| `host/src/password.rs:27`                                 | `fn try_from(password: ProfferedPassword) -> Result<Self, Self::Error> {`              | candidate H9              |
+| `host/src/stored_password_hash.rs:25`                     | `impl FromStr for StoredPasswordHash {`                                                | candidate H11             |
+| `host/src/stored_password_hash.rs:28`                     | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate H11             |
+| `macros/src/id_newtype.rs:67`                             | `fn from_str(s: &str) -> ::core::result::Result<Self, Self::Err> {`                    | named exclusion E-NODV    |
+| `macros/src/num_newtype.rs:184`                           | `fn from_str(s: &str) -> ::core::result::Result<Self, Self::Err> {`                    | named exclusion E-NODV    |
+| `macros/src/num_newtype.rs:213`                           | `fn try_from(v: #inner) -> ::core::result::Result<Self, Self::Error> {`                | named exclusion E-NODV    |
+| `macros/src/server_fn.rs:94`                              | `fn parse(input: ParseStream<'_>) -> syn::Result<Self> {`                              | named exclusion E-NODV    |
+| `macros/src/str_newtype.rs:157`                           | `fn try_from(s: ::std::string::String) -> ::core::result::Result<Self, Self::Error> {` | named exclusion E-NODV    |
+| `macros/src/str_newtype.rs:277`                           | `fn try_from(s: ::std::string::String) -> ::core::result::Result<Self, Self::Error> {` | named exclusion E-NODV    |
+| `server/src/cli.rs:98`                                    | `impl FromStr for BootstrapDb {`                                                       | candidate B21             |
+| `server/src/cli.rs:101`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate B21             |
+| `server/src/cli.rs:158`                                   | `impl FromStr for AppTarget {`                                                         | candidate B21             |
+| `server/src/cli.rs:161`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate B21             |
+| `server/src/cli.rs:450`                                   | `fn parse(args: &[&str]) -> Cli {`                                                     | E-TEST (inline cfg(test)) |
+| `server/src/soft_path.rs:27`                              | `pub fn parse(s: &str) -> Self {`                                                      | named exclusion E-NODV    |
+| `storage/src/backup/catalog.rs:59`                        | `impl FromStr for CatalogNullability {`                                                | candidate C50             |
+| `storage/src/backup/catalog.rs:62`                        | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate C50             |
+| `storage/src/backup/catalog.rs:115`                       | `impl FromStr for BackupRowJson {`                                                     | candidate C51             |
+| `storage/src/backup/catalog.rs:118`                       | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate C51             |
+| `storage/src/backup/restore_validation.rs:167`            | `fn validate(&self, report: &mut RestoreValidationReport);`                            | candidate H26             |
+| `storage/src/backup/restore_validation.rs:241`            | `fn validate(&self, report: &mut RestoreValidationReport) {`                           | candidate H26             |
+| `storage/src/backup/restore_validation.rs:277`            | `fn validate(&self, report: &mut RestoreValidationReport) {`                           | candidate H26             |
+| `storage/src/backup/restore_validation.rs:397`            | `fn validate(&self, report: &mut RestoreValidationReport) {`                           | candidate H26             |
+| `storage/src/backup/restore_validation.rs:427`            | `fn validate(&self, report: &mut RestoreValidationReport) {`                           | candidate H26             |
+| `storage/src/db.rs:178`                                   | `impl FromStr for DbConnectOptions {`                                                  | candidate H12             |
+| `storage/src/db.rs:181`                                   | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | candidate H12             |
+| `storage/src/helpers.rs:249`                              | `impl FromStr for SerializedPostTags {`                                                | candidate H25             |
+| `storage/src/helpers.rs:252`                              | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H25             |
+| `storage/src/instance_identity.rs:32`                     | `impl FromStr for InstanceId {`                                                        | candidate H13             |
+| `storage/src/instance_identity.rs:35`                     | `fn from_str(value: &str) -> Result<Self, Self::Err> {`                                | candidate H13             |
+| `xtask/src/census/orchestrate.rs:178`                     | `fn validate(mut report: CellReport) -> CellReport {`                                  | named exclusion E-NODV    |
+| `xtask/src/steps/duration_budget.rs:38`                   | `fn validate(&self, source: &str) -> Result<(), String> {`                             | named exclusion E-NODV    |
+| `xtask/src/steps/duration_budget.rs:407`                  | `fn validate(report: &str, manifest: &str) -> Result<String, String> {`                | E-TEST (inline cfg(test)) |
+| `xtask/src/steps/error_swallowing_inventory_check.rs:169` | `fn validate(markdown: &str, expected_baseline_count: usize) -> Vec<String> {`         | named exclusion E-NODV    |
+| `xtask/src/steps/server_fn_tracing_check.rs:87`           | `fn parse(input: ParseStream<'_>) -> syn::Result<Self> {`                              | named exclusion E-NODV    |
+| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1100`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | E-TEST (inline cfg(test)) |
+| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1122`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | E-TEST (inline cfg(test)) |
+| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1143`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | E-TEST (inline cfg(test)) |
+| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1162`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | E-TEST (inline cfg(test)) |
+| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1183`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | E-TEST (inline cfg(test)) |
+| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1207`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | E-TEST (inline cfg(test)) |
+| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1239`  | `fn from_str(s: &str) -> Result<Self, Self::Err> {`                                    | E-TEST (inline cfg(test)) |
+| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1291`  | `fn from_str(_: &str) -> Result<Self, Self::Err> {`                                    | E-TEST (inline cfg(test)) |
+| `xtask/src/steps/server_fn_wire_arg_error_check.rs:1308`  | `fn from_str(_: &str) -> Result<Self, Self::Err> { todo!() }`                          | E-TEST (inline cfg(test)) |
+| `xtask/src/steps/sqlx_newtype_bind_check.rs:68`           | `fn parse(label: &str) -> Option<Self> {`                                              | named exclusion E-NODV    |
