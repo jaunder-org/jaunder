@@ -8,6 +8,7 @@ use sqlx::{Database, Pool, QueryBuilder, Row};
 use thiserror::Error;
 
 use crate::backend::Backend;
+use crate::sql::Exists;
 use crate::{InstanceId, helpers};
 use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
@@ -29,6 +30,7 @@ use host::error::{InternalError, InternalResult};
 use host::etag;
 use host::feed::FeedPath;
 use host::render::{self, RenderOutput};
+const TAG_EXISTS_SQL: &str = "SELECT EXISTS(SELECT 1 FROM tags WHERE tag_slug = $1)";
 
 /// The validated calendar date of a public permalink lookup key. Re-exported from
 /// `common::time` so storage callers and the trait method name the domain type
@@ -1804,7 +1806,7 @@ where
     DB: PostDialect,
     PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (bool,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (Exists,): for<'r> sqlx::FromRow<'r, DB::Row>,
     PostTagRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     TagListRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (TargetKind, Option<AudienceId>): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -2819,11 +2821,11 @@ where
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        let tag_exists: bool =
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
-                .bind(tag_slug)
-                .fetch_one(&self.pool)
-                .await?;
+        let tag_exists = sqlx::query_scalar::<_, Exists>(TAG_EXISTS_SQL)
+            .bind(tag_slug)
+            .fetch_one(&self.pool)
+            .await?
+            .into_bool();
 
         if !tag_exists {
             return Err(ListByTagError::TagNotFound);
@@ -2912,11 +2914,11 @@ where
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        let tag_exists: bool =
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
-                .bind(tag_slug)
-                .fetch_one(&self.pool)
-                .await?;
+        let tag_exists = sqlx::query_scalar::<_, Exists>(TAG_EXISTS_SQL)
+            .bind(tag_slug)
+            .fetch_one(&self.pool)
+            .await?
+            .into_bool();
 
         if !tag_exists {
             return Err(ListByTagError::TagNotFound);

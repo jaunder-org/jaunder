@@ -4,6 +4,7 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::sql::Exists;
     use crate::test_support::{
         Backend, PostgresTestConfig, postgres_only, recorded_postgres_url, unique_postgres_url,
     };
@@ -31,13 +32,15 @@ mod tests {
         let mut conn = sqlx::PgConnection::connect_with(&options)
             .await
             .expect("connect to bootstrap database");
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
-                // sqlx-newtype-bind:allow permanent-primitive — bootstrap database name is a Postgres catalog lookup input.
-                .bind(db_name)
-                .fetch_one(&mut conn)
-                .await
-                .expect("query pg_database");
+        let exists = sqlx::query_scalar::<_, Exists>(
+            "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
+        )
+        // sqlx-newtype-bind:allow permanent-primitive — bootstrap database name is a Postgres catalog lookup input.
+        .bind(db_name)
+        .fetch_one(&mut conn)
+        .await
+        .expect("query pg_database")
+        .into_bool();
         conn.close().await.ok();
         exists
     }

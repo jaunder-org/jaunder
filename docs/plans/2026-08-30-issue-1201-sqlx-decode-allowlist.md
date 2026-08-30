@@ -20,7 +20,7 @@ Out:
 
 ## Task outline
 
-- [ ] Task 1: Make shared count and existence decodes semantic and cross-backend
+- [x] Task 1: Make shared count and existence decodes semantic and cross-backend
   - Contract: private storage-wide `RowCount` enforces a nonnegative `i64` and
     exposes an explicit lossless conversion for public counts; private
     storage-wide `Exists` wraps `bool`. Portable `EXISTS` queries decode

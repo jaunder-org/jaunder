@@ -9,6 +9,7 @@ use crate::feed_events::{
     self, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
 };
 
+use crate::sql::RowCount;
 /// SQLite-backed feed-event storage.
 pub type SqliteFeedEventStorage = FeedEventStore<Sqlite>;
 
@@ -79,7 +80,7 @@ impl FeedEventDialect for Sqlite {
         now: UtcInstant,
         lease_cutoff: UtcInstant,
     ) -> Result<u64, FeedEventError> {
-        let count = sqlx::query_scalar::<_, i64>(
+        let count = sqlx::query_scalar::<_, RowCount>(
             "SELECT COUNT(*) FROM feed_events \
              WHERE (status = 'pending' AND next_attempt_at <= $1) \
                 OR (status = 'claimed' AND claimed_at < $2)",
@@ -88,7 +89,7 @@ impl FeedEventDialect for Sqlite {
         .bind(lease_cutoff)
         .fetch_one(pool)
         .await?;
-        Ok(u64::try_from(count).unwrap_or(0))
+        Ok(count.into_u64())
     }
 
     async fn mark_regenerated(

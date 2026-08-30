@@ -21,6 +21,7 @@ use host::error::InternalResult;
 use sqlx::{Database, Pool, Row};
 
 use crate::error::RequireRow;
+use crate::sql::Exists;
 
 /// A subscription row returned by [`SubscriptionStorage::list_subscribers`].
 #[derive(Clone, Debug)]
@@ -131,25 +132,24 @@ pub trait SubscriptionDialect: Database {
     /// `author_user_id, channel_id, subscriber_ref`.
     const DELETE_SUBSCRIPTION: &'static str = "DELETE FROM subscriptions \
          WHERE author_user_id = $1 AND channel_id = $2 AND subscriber_ref = $3";
-    /// `EXISTS` of an `active` subscription for the triple, shaped as an integer
-    /// so both backends decode into the same `(i64,)` row. Bind order:
+    /// `EXISTS` of an `active` subscription for the triple. Bind order:
     /// `author_user_id, channel_id, subscriber_ref`.
-    const IS_ACTIVE_SUBSCRIBER: &'static str = "SELECT CASE WHEN EXISTS( \
+    const IS_ACTIVE_SUBSCRIBER: &'static str = "SELECT EXISTS( \
            SELECT 1 FROM subscriptions s \
            JOIN subscription_statuses st ON st.status_id = s.status_id \
            WHERE s.author_user_id = $1 AND s.channel_id = $2 AND s.subscriber_ref = $3 \
-             AND st.name = 'active') THEN CAST(1 AS BIGINT) ELSE CAST(0 AS BIGINT) END";
+             AND st.name = 'active')";
     /// `EXISTS` of an `active` subscription on the seeded `local` channel, whose
     /// id is resolved by subquery rather than bound — a local viewer's channel is
     /// never a free parameter (ADR-0020, #6). Bind order:
     /// `author_user_id, subscriber_ref`.
-    const IS_ACTIVE_LOCAL_SUBSCRIBER: &'static str = "SELECT CASE WHEN EXISTS( \
+    const IS_ACTIVE_LOCAL_SUBSCRIBER: &'static str = "SELECT EXISTS( \
            SELECT 1 FROM subscriptions s \
            JOIN subscription_statuses st ON st.status_id = s.status_id \
            WHERE s.author_user_id = $1 \
              AND s.channel_id = (SELECT channel_id FROM channels WHERE name = 'local') \
              AND s.subscriber_ref = $2 \
-             AND st.name = 'active') THEN CAST(1 AS BIGINT) ELSE CAST(0 AS BIGINT) END";
+             AND st.name = 'active')";
     /// Lists the author's `active` subscriptions. Bind order: `author_user_id`.
     const LIST_ACTIVE_SUBSCRIBERS: &'static str = "SELECT \
            s.subscription_id, s.channel_id, s.subscriber_ref, s.created_at \
@@ -196,8 +196,7 @@ impl<DB: Database> SubscriptionStore<DB> {
 impl<DB> SubscriptionStorage for SubscriptionStore<DB>
 where
     DB: SubscriptionDialect,
-    // `IS_ACTIVE_SUBSCRIBER` yields an existence flag, not an id — it stays `i64`.
-    (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (Exists,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SubscriptionId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (ChannelId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'r> SubscriptionId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
@@ -266,7 +265,7 @@ where
             // `local` row, which `IS_ACTIVE_LOCAL_SUBSCRIBER` resolves itself.
             ViewerIdentity::Local { user_id } => {
                 let subscriber_ref = visibility::local_subscriber_ref(*user_id);
-                sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_LOCAL_SUBSCRIBER)
+                sqlx::query_as::<_, (Exists,)>(DB::IS_ACTIVE_LOCAL_SUBSCRIBER)
                     .bind(author_user_id)
                     .bind(&subscriber_ref)
                     .fetch_one(&self.pool)
@@ -276,7 +275,7 @@ where
                 channel_id,
                 subscriber_ref,
             } => {
-                sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_SUBSCRIBER)
+                sqlx::query_as::<_, (Exists,)>(DB::IS_ACTIVE_SUBSCRIBER)
                     .bind(author_user_id)
                     .bind(*channel_id)
                     .bind(subscriber_ref)
@@ -284,7 +283,7 @@ where
                     .await?
             }
         };
-        Ok(exists != 0)
+        Ok(exists.into_bool())
     }
 
     async fn list_subscribers(
