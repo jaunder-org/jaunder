@@ -37,7 +37,7 @@ Out:
     auditable population or executed finite fallback, then independently
     reconstruct every command before semantic inspection begins.
 
-- [ ] Task 2: Execute discovery and reconcile the raw occurrence population.
+- [x] Task 2: Execute discovery and reconcile the raw occurrence population.
   - Contract: `.xtask/audits/issue-1224/occurrences.jsonl` has one record per
     `(query_id, normalized_location_or_symbol)` with raw evidence; `groups.json`
     assigns each occurrence to exactly one candidate group while preserving
