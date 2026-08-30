@@ -131,7 +131,7 @@ mod tests {
             title: Some(parse_post_title("t")),
             permalink: parse_url("https://ex.com/p"),
             summary: None,
-            content_html: crate::render::sanitize("<p>c</p>"),
+            content_html: common::test_support::rendered_html("<p>c</p>"),
             published_at: timestamp,
             updated_at: timestamp,
             tags: vec![],

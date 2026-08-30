@@ -282,7 +282,7 @@ pub(crate) mod test_fixtures {
                 title: Some(common::test_support::parse_post_title("Hello & <World>")),
                 summary: None,
                 slug: "hello".parse().unwrap(),
-                rendered_html: RenderedHtml::from_trusted("<p>Hi <em>there</em></p>"),
+                rendered_html: common::test_support::rendered_html("<p>Hi <em>there</em></p>"),
                 created_at: parse_utc_instant("2026-01-02T03:04:05Z"),
                 published_at: Some(parse_utc_instant("2026-01-02T03:04:05Z")),
                 permalink: Some(parse_root_relative_url("/~alice/2026/01/02/hello")),
@@ -304,7 +304,7 @@ pub(crate) mod test_fixtures {
             title: Some(common::test_support::parse_post_title("First")),
             summary: Some(parse_post_summary("An excerpt")),
             slug: "first".parse().unwrap(),
-            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+            rendered_html: common::test_support::rendered_html("<p>body</p>"),
             created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             published_at: Some(parse_utc_instant("2026-01-01T00:00:00Z")),
             permalink: Some(parse_root_relative_url("/~bob/2026/01/01/first")),
@@ -368,7 +368,7 @@ mod tests {
         let ctx = TagCtx::ForUser(parse_username("alice"));
         let title = parse_post_title("T");
         let author = parse_username("alice");
-        let body = RenderedHtml::from_trusted("<p>b</p>");
+        let body = common::test_support::rendered_html("<p>b</p>");
         let view = PostView {
             username: &author,
             title: Some(&title),
@@ -558,7 +558,7 @@ mod tests {
         // the projector's anonymous paint (the action column is purely additive).
         let ctx = TagCtx::SiteWide;
         let author = parse_username("bob");
-        let body = RenderedHtml::from_trusted("<p>b</p>");
+        let body = common::test_support::rendered_html("<p>b</p>");
         let view = PostView {
             username: &author,
             title: None,
@@ -581,7 +581,7 @@ mod tests {
     fn post_content_keeps_title_as_text_without_permalink() {
         let ctx = TagCtx::SiteWide;
         let author = parse_username("bob");
-        let body = RenderedHtml::from_trusted("<p>b</p>");
+        let body = common::test_support::rendered_html("<p>b</p>");
         let title = parse_post_title("Draft title");
         let view = PostView {
             username: &author,
@@ -606,7 +606,7 @@ mod tests {
     fn post_content_renders_draft_banner_when_present() {
         let ctx = TagCtx::SiteWide;
         let author = parse_username("bob");
-        let body = RenderedHtml::from_trusted("<p>b</p>");
+        let body = common::test_support::rendered_html("<p>b</p>");
         let summary = parse_post_summary("An excerpt");
         let view = PostView {
             username: &author,
@@ -634,7 +634,7 @@ mod tests {
     fn post_article_wraps_inner_in_j_post_article() {
         let ctx = TagCtx::SiteWide;
         let author = parse_username("bob");
-        let body = RenderedHtml::from_trusted("<p>b</p>");
+        let body = common::test_support::rendered_html("<p>b</p>");
         let title = parse_post_title("T");
         let view = PostView {
             username: &author,

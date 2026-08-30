@@ -135,7 +135,7 @@ mod tests {
             slug::Slug,
             time::UtcInstant,
         };
-        use storage::{PostFormat, PostRecord, RenderedHtml};
+        use storage::{PostFormat, PostRecord};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let author_username = parse_username("author");
@@ -150,7 +150,7 @@ mod tests {
                 slug,
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+                rendered_html: common::test_support::rendered_html("<p>body</p>"),
                 created_at: UtcInstant::from(base_time),
                 updated_at: UtcInstant::from(base_time),
                 published_at: Some(UtcInstant::from(base_time)),
@@ -187,7 +187,7 @@ mod tests {
             slug::Slug,
             time::UtcInstant,
         };
-        use storage::{PostFormat, PostRecord, RenderedHtml};
+        use storage::{PostFormat, PostRecord};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let author_username = parse_username("author");
@@ -202,7 +202,7 @@ mod tests {
                 slug,
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+                rendered_html: common::test_support::rendered_html("<p>body</p>"),
                 created_at: UtcInstant::from(base_time),
                 updated_at: UtcInstant::from(base_time),
                 published_at: None,
@@ -242,7 +242,7 @@ mod tests {
             slug::Slug,
             time::UtcInstant,
         };
-        use storage::{PostFormat, PostRecord, RenderedHtml};
+        use storage::{PostFormat, PostRecord};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let author_username = parse_username("author");
@@ -257,7 +257,7 @@ mod tests {
                 slug,
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+                rendered_html: common::test_support::rendered_html("<p>body</p>"),
                 created_at: UtcInstant::from(base_time),
                 updated_at: UtcInstant::from(base_time),
                 published_at: None,

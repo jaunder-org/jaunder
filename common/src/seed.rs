@@ -158,7 +158,7 @@ mod tests {
             title: None,
             summary: None,
             slug: "hello".parse().unwrap(),
-            rendered_html: RenderedHtml::from_trusted("<p>hi</p>"),
+            rendered_html: crate::test_support::rendered_html("<p>hi</p>"),
             created_at: instant(),
             published_at,
             permalink: None,

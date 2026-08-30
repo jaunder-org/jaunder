@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use common::ids::{PostId, RevisionId};
+use common::revision_history::{RevisionHistoryAudience, RevisionHistoryDetail};
 use rstest::*;
 use rstest_reuse::*;
 use server_fn::ServerFn;
 use storage::test_support::{Backend, TestEnv, backends};
-use web::posts::{PostRevisionHistory, RevisionHistoryDetail, RevisionHistoryPage, SavedPost};
+use web::posts::{PostRevisionHistory, RevisionHistoryPage, SavedPost};
 
 use crate::helpers::{create_user_and_session, post_json};
 
@@ -153,7 +154,7 @@ async fn revision_history_http_exposes_page_current_and_detail_fields(#[case] ba
     assert!(detail.tags.is_empty());
     assert_eq!(
         detail.audiences,
-        vec![web::posts::RevisionHistoryAudience {
+        vec![RevisionHistoryAudience {
             kind: "public".to_owned(),
             audience_id: None,
         }]

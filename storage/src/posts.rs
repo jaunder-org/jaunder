@@ -6008,7 +6008,7 @@ mod tests {
                 "\n\n   The first non-empty line of the body is here. \n\n Another line.",
             ),
             format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted(
+            rendered_html: common::test_support::rendered_html(
                 "<p>The first non-empty line of the body is here.</p>",
             ),
             created_at: UtcInstant::now(),
@@ -6040,7 +6040,7 @@ mod tests {
             slug: parse_slug("hello-world"),
             body: parse_post_body("My body"),
             format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
+            rendered_html: common::test_support::rendered_html("<p>My body</p>"),
             created_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
             updated_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
             published_at: Some(UtcInstant::from(
@@ -6064,7 +6064,7 @@ mod tests {
             slug: parse_slug("hello-world"),
             body: parse_post_body("My body"),
             format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
+            rendered_html: common::test_support::rendered_html("<p>My body</p>"),
             created_at: UtcInstant::now(),
             updated_at: UtcInstant::now(),
             published_at: None,

@@ -190,7 +190,7 @@ mod tests {
             title: Some(parse_post_title("t")),
             permalink: parse_url("https://ex.com/p"),
             summary: None,
-            content_html: RenderedHtml::from_trusted("<p>c</p>"),
+            content_html: common::test_support::rendered_html("<p>c</p>"),
             published_at: ts,
             updated_at: ts,
             tags: vec![],

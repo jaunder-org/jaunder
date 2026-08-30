@@ -131,10 +131,8 @@ impl RawToken {
     /// Wraps a token freshly produced by the server-side generator
     /// (`host::token::generate`) **without** re-validating it — the generator's
     /// output is base64url by construction, so the shape check is redundant. This
-    /// is the single trusted-construction door (mirroring
-    /// [`crate::render::RenderedHtml::from_trusted`]); **untrusted** input (a
-    /// cookie, a header, the wire) must go through [`FromStr`]/`TryFrom`, which
-    /// validate.
+    /// is the single trusted-construction door; **untrusted** input (a cookie, a
+    /// header, the wire) must go through [`FromStr`]/`TryFrom`, which validate.
     #[must_use]
     pub fn from_generated(token: impl Into<String>) -> Self {
         RawToken(token.into())

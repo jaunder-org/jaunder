@@ -33,7 +33,7 @@ Out:
     decoding on SQLite and Postgres preserves rendered bytes without
     re-sanitization or new failure behavior.
 
-- [ ] Task 2: Cut every caller over and close the public raw door
+- [x] Task 2: Cut every caller over and close the public raw door
   - Contract: `host` enables `common/sanitize`; rendering and other production
     callers invoke `common::render::sanitize` directly; exact fixtures use
     `common::test_support::rendered_html`; after every caller migrates, delete

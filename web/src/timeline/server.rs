@@ -176,8 +176,7 @@ mod tests {
     use common::time::UtcInstant;
     use common::visibility::ViewerIdentity;
     use storage::{
-        ListByTagError, MockPostStorage, MockUserStorage, PostFormat, PostRecord, RenderedHtml,
-        UserRecord,
+        ListByTagError, MockPostStorage, MockUserStorage, PostFormat, PostRecord, UserRecord,
     };
 
     fn post(post_id: i64) -> PostRecord {
@@ -190,7 +189,7 @@ mod tests {
             slug: parse_slug("hello-world"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+            rendered_html: common::test_support::rendered_html("<p>body</p>"),
             created_at: UtcInstant::from(now),
             updated_at: UtcInstant::from(now),
             published_at: Some(UtcInstant::from(now)),

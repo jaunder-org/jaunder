@@ -26,37 +26,27 @@ use thiserror::Error;
 ///
 /// A `PostBody` is not a `RenderedHtml`, and neither converts to the other.
 ///
-/// The positive companion shows the identical fixture compiles — both paths resolve
-/// and both construction doors accept a `&str` — so each `compile_fail` below fails
-/// for the type mismatch rather than because a door changed shape. (Fixture lines
-/// are hidden with `#`.)
-///
+/// Positive companion: both endpoint types resolve independently.
 /// ```
-/// use common::post_body::PostBody;
-/// use common::render::RenderedHtml;
-/// let body: PostBody = "x".parse().unwrap();
-/// let html = RenderedHtml::from_trusted("x");
-/// let _b: &str = body.as_ref();
-/// let _h: &str = html.as_ref();
+/// # use common::post_body::PostBody;
+/// # use common::render::RenderedHtml;
+/// fn names_resolve(_: Option<PostBody>, _: Option<RenderedHtml>) {}
 /// ```
 ///
-/// No `PostBody` -> `RenderedHtml` conversion. Asserted on `.into()`, not on a
-/// function argument: Rust never coerces an argument through `From`, so
-/// `want_html(body)` would fail for any two distinct types and would keep failing
-/// even if the `From` impl this forbids were added.
+/// No `PostBody` -> `RenderedHtml` conversion. Asserted on `Into` itself:
 /// ```compile_fail
 /// # use common::post_body::PostBody;
 /// # use common::render::RenderedHtml;
-/// # let body: PostBody = "x".parse().unwrap();
-/// let _h: RenderedHtml = body.into();
+/// fn require_into<T: Into<RenderedHtml>>() {}
+/// require_into::<PostBody>();
 /// ```
 ///
 /// …nor the reverse:
 /// ```compile_fail
 /// # use common::post_body::PostBody;
 /// # use common::render::RenderedHtml;
-/// # let html = RenderedHtml::from_trusted("x");
-/// let _b: PostBody = html.into();
+/// fn require_into<T: Into<PostBody>>() {}
+/// require_into::<RenderedHtml>();
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
 pub struct PostBody(String);

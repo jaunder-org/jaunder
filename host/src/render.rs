@@ -1,67 +1,10 @@
-//! Host-side rendering, HTML sanitization, and media-reference extraction.
+//! Host-side rendering and media-reference extraction.
 
 use common::media::{MediaReference, parse_media_url};
 use common::post_body::PostBody;
 use common::render::{PostFormat, RenderedHtml};
-
-/// The single allowlist every [`sanitize`] call scrubs against — defined once
-/// here so no caller can drift to a different policy.
-///
-/// ammonia's audited default, widened in exactly one place: `class` on `<pre>` and
-/// `<code>`, so a fenced code block keeps the language marker `pulldown-cmark`
-/// emits (`class="language-rust"`). Because the tag/attribute allowlist alone would
-/// permit *any* class on attacker-supplied content — letting a post borrow our app's
-/// CSS to mimic or hide UI — an attribute filter narrows the values to `language-*`
-/// tokens and drops everything else. Widening this list is a security decision;
-/// `sanitize_*` tests pin both halves.
-///
-/// # Widening also obliges you to classify the new attributes (#711)
-///
-/// A post's media references are extracted from *this* allowlist's output, so an
-/// attribute permitted here but unknown to the extractor is a silent blind spot in
-/// the `post_media` table — the exact failure mode #711 exists to fix. So every
-/// `(element, attribute)` pair this builder permits must be classified: either the
-/// **pair** appears in [`MEDIA_URL_ATTRS`] (its value names media) or the
-/// **attribute name** appears in [`INERT_ATTRS`] (it does not, on any element).
-/// `sanitizer_surface_is_fully_classified` fails the build until each newly
-/// permitted pair is classified, so this cannot be forgotten — but it is a
-/// judgement call, not a formality.
-///
-/// One shape does not fit: a **multi-URL** attribute such as `srcset` carries a
-/// list, and [`MEDIA_URL_ATTRS`] is one attribute → one URL. Permitting it means
-/// widening that table to carry a per-attribute parse mode *first*; classifying it
-/// as-is would silently record a wrong single-URL parse.
-pub(super) static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> =
-    std::sync::LazyLock::new(|| {
-        let mut builder = ammonia::Builder::default();
-        builder.add_tag_attributes("code", ["class"]);
-        builder.add_tag_attributes("pre", ["class"]);
-        builder.attribute_filter(|_element, attribute, value| {
-            if attribute != "class" {
-                return Some(value.into());
-            }
-            // Only reachable for `pre`/`code`: ammonia runs this filter solely for
-            // (tag, attribute) pairs the allowlist above already permits, and `class`
-            // is permitted nowhere else — a `class` on any other element is dropped
-            // before it gets here.
-            let kept = value
-                .split_whitespace()
-                .filter(|token| token.starts_with("language-"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            (!kept.is_empty()).then_some(kept.into())
-        });
-        builder
-    });
-
-/// Sanitizes untrusted HTML into a common-owned `RenderedHtml`.
-#[must_use]
-pub fn sanitize(raw: &str) -> RenderedHtml {
-    // rendered-html-from-trusted:allow host sanitizer establishes RenderedHtml's safety invariant (#847)
-    RenderedHtml::from_trusted(SANITIZER.clean(raw).to_string())
-}
 /// Renders `body` to HTML based on `format`. Pure, infallible function. The
-/// output is a [`RenderedHtml`], minted through [`sanitize`] — a post body is
+/// output is a [`RenderedHtml`], minted through [`common::render::sanitize`] — a post body is
 /// author-supplied, so it is outside input and every format's output is scrubbed.
 ///
 /// All three formats need that scrub, not just [`PostFormat::Html`]: the Markdown and
@@ -77,7 +20,7 @@ pub fn render(body: &PostBody, format: &PostFormat) -> RenderedHtml {
         PostFormat::Org => render_org(body),
         PostFormat::Html => body.to_string(),
     };
-    sanitize(&html)
+    common::render::sanitize(&html)
 }
 
 /// Renders Markdown to HTML using pulldown-cmark with common extensions.
@@ -101,10 +44,11 @@ pub(super) fn render_org(body: &str) -> String {
     orgize::Org::parse(body).to_html()
 }
 
-/// The `(element, attribute)` pairs whose values name media. Adding an element to
-/// [`SANITIZER`] means adding its URL-bearing attributes here — the walk knows no tag
-/// names of its own, so extending to `<video>`/`<audio>` is a **data edit**
-/// (`("video", "src")`, `("video", "poster")`, `("audio", "src")`, …) with no change to
+/// The `(element, attribute)` pairs whose values name media. When common's
+/// sanitizer permits an element/attribute pair, its URL-bearing attributes belong
+/// here — the walk knows no tag names of its own, so extending to
+/// `<video>`/`<audio>` is a **data edit** (`("video", "src")`,
+/// `("video", "poster")`, `("audio", "src")`, …) with no change to
 /// `extract_media_refs_with`, which `extract_walk_is_table_driven_not_tag_hardcoded`
 /// keeps a checked claim rather than a hope.
 ///
@@ -114,7 +58,7 @@ pub(super) fn render_org(body: &str) -> String {
 ///
 /// Public because it is the contract of [`extract_media_refs`]: what the walk looks at
 /// is data, and reviewable as data. Its counterpart is [`INERT_ATTRS`], and between them
-/// they must cover everything [`SANITIZER`] permits —
+/// they must cover common's complete sanitizer surface —
 /// `sanitizer_surface_is_fully_classified` enforces that.
 pub const MEDIA_URL_ATTRS: &[(&str, &str)] = &[("a", "href"), ("img", "src")];
 
@@ -136,7 +80,7 @@ pub const MEDIA_URL_ATTRS: &[(&str, &str)] = &[("a", "href"), ("img", "src")];
 /// name-level rule sound; a name that is a URL somewhere would be silently excused
 /// everywhere. So `src`, `href`, `poster`, `srcset`, `data`, `action`, `formaction` and
 /// `ping` must never appear here — each is either an entry in [`MEDIA_URL_ATTRS`] for the
-/// element that carries it, or (for a tag [`SANITIZER`] does not permit) simply absent,
+/// element that carries it, or simply absent when common's sanitizer does not permit it,
 /// which is what keeps the coupling test biting when the allowlist widens.
 ///
 /// `cite` is the one entry a reader should question: it *is* URL-valued. It is here as a
@@ -155,7 +99,7 @@ pub const INERT_ATTRS: &[&str] = &[
     "align", "char", "charoff", "colspan", "headers", "height", "rowspan", "scope", "size", "span",
     "summary", "width", // List numbering (`<ol>`).
     "start",
-    // `SANITIZER`'s one widening: the `language-*` marker on a fenced code block, whose
+    // Common's one widening: the `language-*` marker on a fenced code block, whose
     // values the attribute filter already narrows.
     "class",
 ];
@@ -378,109 +322,6 @@ mod tests {
                 "canonicalization changed rendered output for {raw:?}"
             );
         }
-    }
-
-    // `sanitize` is the establishing door (#445): it is what makes the type's
-    // invariant — "contains no active markup" — true rather than asserted. These
-    // assert on the *absence* of the dangerous token rather than exact output,
-    // because ammonia's escaping details are not our contract.
-    #[test]
-    fn sanitize_strips_script_element() {
-        let h = sanitize("<p>hi</p><script>alert(1)</script>");
-        assert!(!h.contains("<script"), "{h}");
-        assert!(!h.contains("alert(1)"), "{h}");
-        assert!(h.contains("<p>hi</p>"), "{h}");
-    }
-
-    #[test]
-    fn sanitize_strips_event_handler_attributes() {
-        let h = sanitize(r#"<img src="x" onerror="alert(1)">"#);
-        assert!(!h.contains("onerror"), "{h}");
-    }
-
-    #[test]
-    fn sanitize_strips_javascript_urls() {
-        let h = sanitize(r#"<a href="javascript:alert(1)">x</a>"#);
-        assert!(!h.contains("javascript:"), "{h}");
-    }
-
-    #[test]
-    fn sanitize_preserves_formatting_markup() {
-        // The shapes `pulldown-cmark` and `orgize` actually emit. If the default
-        // allowlist eats any of these, posts render degraded — widen deliberately
-        // rather than letting it pass.
-        let h = sanitize(
-            "<h2>Heading</h2><p><em>em</em> <strong>strong</strong></p>\
-             <ul><li>item</li></ul>\
-             <pre><code class=\"language-rust\">let x = 1;</code></pre>\
-             <table><thead><tr><th>h</th></tr></thead>\
-             <tbody><tr><td>c</td></tr></tbody></table>\
-             <blockquote><p>quoted</p></blockquote>",
-        );
-        for expected in [
-            "<h2>",
-            "<em>",
-            "<strong>",
-            "<ul>",
-            "<li>",
-            "<pre>",
-            "<code",
-            "<table>",
-            "<thead>",
-            "<th>",
-            "<td>",
-            "<blockquote>",
-        ] {
-            assert!(h.contains(expected), "{expected} was stripped from: {h}");
-        }
-        // `pulldown-cmark` puts the fence's language in `class="language-rust"` on
-        // the `<code>`; ammonia's default drops `class` entirely, so `SANITIZER`
-        // re-admits it for `pre`/`code`.
-        assert!(h.contains("language-rust"), "code-block language lost: {h}");
-    }
-
-    #[test]
-    fn sanitize_keeps_only_language_classes_on_code() {
-        // Re-admitting `class` must not become arbitrary class injection: a post
-        // could otherwise borrow the app's own CSS to mimic or hide UI. Only
-        // `language-*` tokens survive, and only on `pre`/`code`.
-        let h = sanitize(r#"<pre><code class="language-rust j-anon-only">x</code></pre>"#);
-        assert!(h.contains("language-rust"), "{h}");
-        assert!(
-            !h.contains("j-anon-only"),
-            "non-language class survived: {h}"
-        );
-
-        // …and `class` stays disallowed everywhere else — dropped by the tag
-        // allowlist before the attribute filter is consulted at all.
-        let other = sanitize(r#"<p class="j-anon-only">x</p>"#);
-        assert!(
-            !other.contains("j-anon-only"),
-            "class survived on <p>: {other}"
-        );
-
-        // The filter's drop-entirely branch: on `code`, where `class` *is*
-        // allowlisted, a value with no `language-*` token must lose the attribute
-        // outright rather than surviving as an empty `class=""`.
-        let none_kept = sanitize(r#"<code class="j-anon-only">x</code>"#);
-        assert!(
-            !none_kept.contains("j-anon-only"),
-            "non-language class survived on <code>: {none_kept}"
-        );
-        assert!(
-            !none_kept.contains("class"),
-            "empty class attribute left behind: {none_kept}"
-        );
-    }
-
-    #[test]
-    fn sanitize_preserves_safe_links_and_images() {
-        let h = sanitize(
-            r#"<a href="https://example.com">link</a><img src="https://example.com/a.png">"#,
-        );
-        assert!(h.contains("https://example.com"), "{h}");
-        assert!(h.contains("<a "), "{h}");
-        assert!(h.contains("<img"), "{h}");
     }
 
     // -- Markdown tests --
@@ -921,73 +762,45 @@ mod tests {
 
     /// Permitted `(element, attribute)` pairs appearing in neither classification table.
     ///
-    /// The enumeration is `tags × generic_attributes ∪ tag_attributes` — `generic_attributes`
-    /// applies to every tag, so omitting that product would leave a hole. It is deliberately
-    /// *not* filtered by any URL-attribute predicate: ammonia's `is_url_attr` is private, and
-    /// a hand-written substitute would not recognise `srcset` as URL-bearing — the exact
-    /// attribute this coupling is most likely to be widened with. So the assertion is
-    /// inverted: every permitted pair must be classified, whether or not it looks like a URL.
-    fn unclassified_sanitizer_pairs(builder: &ammonia::Builder<'_>) -> Vec<(String, String)> {
-        let tags = builder.clone_tags();
-        let generic_attributes = builder.clone_generic_attributes();
-        let tag_attributes = builder.clone_tag_attributes();
-
-        let generic_pairs = tags
-            .iter()
-            .flat_map(|tag| generic_attributes.iter().map(move |attr| (*tag, *attr)));
-        let specific_pairs = tag_attributes
-            .iter()
-            .flat_map(|(tag, attrs)| attrs.iter().map(move |attr| (*tag, *attr)));
-
-        let mut unclassified: Vec<(String, String)> = generic_pairs
-            .chain(specific_pairs)
+    /// The common-owned sanitizer exposes its complete output surface as pairs. This
+    /// assertion is deliberately inverted: every permitted pair must be classified,
+    /// whether or not it looks URL-valued.
+    fn unclassified_sanitizer_pairs(
+        pairs: impl IntoIterator<Item = (&'static str, &'static str)>,
+    ) -> Vec<(String, String)> {
+        let mut unclassified: Vec<(String, String)> = pairs
+            .into_iter()
             .filter(|&(tag, attr)| !is_classified(tag, attr))
             .map(|(tag, attr)| (tag.to_owned(), attr.to_owned()))
             .collect();
-        // Sorted so a failure reads the same on every run — the two ammonia collections are
-        // hash sets, so iteration order is not stable.
+        // Sorted so a failure reads the same on every run.
         unclassified.sort();
         unclassified
     }
 
-    /// Fails when `SANITIZER` permits an `(element, attribute)` pair that neither
-    /// `MEDIA_URL_ATTRS` nor `INERT_ATTRS` classifies — i.e. someone widened the
-    /// allowlist without saying whether the new attribute's value names media.
-    ///
-    /// To resolve: classify each reported pair. Into `MEDIA_URL_ATTRS` if its value is a
-    /// URL a reader is pointed at, otherwise into `INERT_ATTRS` with a one-line reason —
-    /// and only if the name names no URL on *any* element, which is that table's
-    /// standing invariant. Silence is not an option, which is the whole point:
-    /// separating the extractor's surface from the sanitiser's allowlist would otherwise
-    /// recreate #711's own failure mode — widen the sanitiser, forget the extractor, and
-    /// `post_media` quietly acquires a blind spot.
+    /// Fails when common's sanitizer permits an `(element, attribute)` pair that
+    /// neither `MEDIA_URL_ATTRS` nor `INERT_ATTRS` classifies.
     #[test]
     fn sanitizer_surface_is_fully_classified() {
-        let unclassified = unclassified_sanitizer_pairs(&SANITIZER);
+        let unclassified =
+            unclassified_sanitizer_pairs(common::render::sanitizer_permitted_attribute_pairs());
         assert!(
             unclassified.is_empty(),
-            "SANITIZER permits {unclassified:?}, which appear in neither MEDIA_URL_ATTRS nor \
-             INERT_ATTRS. Classify each: add the pair to MEDIA_URL_ATTRS if its value names \
-             media, otherwise add the attribute name to INERT_ATTRS with a reason."
+            "the common sanitizer permits {unclassified:?}, which appear in neither \
+             MEDIA_URL_ATTRS nor INERT_ATTRS. Classify each: add the pair to \
+             MEDIA_URL_ATTRS if its value names media, otherwise add the attribute \
+             name to INERT_ATTRS with a reason."
         );
     }
 
     #[test]
-    fn sanitizer_coupling_test_bites_when_the_allowlist_widens() {
-        // Prove the guard can fail. A widened builder with an unclassified URL-bearing
-        // attribute must be reported — otherwise the check above is decorative.
-        let mut widened = ammonia::Builder::default();
-        widened.add_tags(["video"]);
-        // `src` is in MEDIA_URL_ATTRS — but paired with `img`, so `("video", "src")` is
-        // still unclassified. That is what keeps the *pair* half of the rule meaningful
-        // after INERT_ATTRS collapsed to bare names: a media name is never excused
-        // element-agnostically. `poster` is a name nothing classifies at all.
-        widened.add_tag_attributes("video", ["src", "poster"]);
-        // A *generic* attribute too: it applies to every tag, so it is only reported if
-        // the enumeration really forms `tags × generic_attributes`. Without that product
-        // the check would look healthy while missing a whole axis.
-        widened.add_generic_attributes(["data-poster"]);
-        let unclassified = unclassified_sanitizer_pairs(&widened);
+    fn sanitizer_coupling_test_bites_when_the_policy_widens() {
+        // Prove the guard can fail without duplicating or mutating common's policy.
+        let unclassified = unclassified_sanitizer_pairs([
+            ("video", "src"),
+            ("video", "poster"),
+            ("img", "data-poster"),
+        ]);
         for attr in ["src", "poster"] {
             assert!(
                 unclassified.contains(&("video".to_owned(), attr.to_owned())),
@@ -1006,8 +819,8 @@ mod tests {
         // The invariant the name-level table rests on. An inert *name* excuses that
         // attribute on every element at once, so listing one that carries a URL anywhere
         // would open a blind spot everywhere — and silently, since the coupling check
-        // would then read as healthy. These are the names a widening of `SANITIZER` is
-        // most likely to bring in.
+        // would then read as healthy. These are the names a widening of common's
+        // sanitizer is most likely to bring in.
         for name in [
             "src",
             "href",
