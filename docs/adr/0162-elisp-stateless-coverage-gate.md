@@ -1,25 +1,25 @@
-# ADR-DRAFT: Elisp stateless coverage gate
+# ADR-0162: Elisp stateless coverage gate
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-29
 - Issue: [#82](https://github.com/jaunder-org/jaunder/issues/82)
 
 ## Context
 
-[ADR-0031](../0031-elisp-separately-tested-subproject.md) deliberately kept
-Elisp outside the Rust coverage gate: `cargo-llvm-cov` cannot instrument Emacs
-Lisp, leaving ERT's "a test per pure function" as an unenforced expectation.
-[ADR-0035](../0035-elisp-live-integration-harness.md) subsequently established
-both pure and live ERT populations, but they still have no shared line-coverage
+[ADR-0031](0031-elisp-separately-tested-subproject.md) deliberately kept Elisp
+outside the Rust coverage gate: `cargo-llvm-cov` cannot instrument Emacs Lisp,
+leaving ERT's "a test per pure function" as an unenforced expectation.
+[ADR-0035](0035-elisp-live-integration-harness.md) subsequently established both
+pure and live ERT populations, but they still have no shared line-coverage
 verdict. The production Emacs Protocol Client needs an enforceable coverage
 contract that covers its pure behavior and its real-server behavior without
 measuring test infrastructure as product code.
 
 The Rust gate's stateful predecessor was replaced by the stateless model in
-[ADR-0050](../0050-stateless-coverage-gate.md): a strict verdict derived only
-from the report and source tree, with reviewable, source-local exemptions. The
-Elisp gate should preserve that property rather than introduce a baseline,
-ratchet, or an approval artifact whose meaning drifts as files move.
+[ADR-0050](0050-stateless-coverage-gate.md): a strict verdict derived only from
+the report and source tree, with reviewable, source-local exemptions. The Elisp
+gate should preserve that property rather than introduce a baseline, ratchet, or
+an approval artifact whose meaning drifts as files move.
 
 Some top-level forms are inherently declarative and produce no executable
 coverage stop. Requiring a repeated source marker for those forms obscures the

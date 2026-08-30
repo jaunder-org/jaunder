@@ -1768,7 +1768,7 @@ live-server integration harness, `jaunder-test--with-live-server`
 ([ADR-0035](adr/0035-elisp-live-integration-harness.md)) — the testing section
 owns both. The floor is `Package-Requires: ((emacs "29.1"))`
 ([ADR-0042](adr/0042-emacs-org-atom-mapping-struct-seam.md)). The
-[Elisp stateless coverage gate](adr/drafts/elisp-stateless-coverage-gate.md)
+[Elisp stateless coverage gate](adr/0162-elisp-stateless-coverage-gate.md)
 censuses every production Protocol Client module and top-level source form
 before testing, then reconciles every executable Edebug point with exactly one
 LCOV record. A zero-stop form with exactly its single synthetic opening-line
@@ -2424,7 +2424,7 @@ derivation ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
 `xtask/src/steps/static_checks.rs:17-18`); one `emacsForCi` toolchain
 (`flake.nix:563`) serves both.
 
-The [Elisp stateless coverage gate](adr/drafts/elisp-stateless-coverage-gate.md)
+The [Elisp stateless coverage gate](adr/0162-elisp-stateless-coverage-gate.md)
 runs the pure and live ERT observations in one hermetic NixOS producer and, for
 every controlled outcome, realizes
 `$out/elisp-coverage/{lcov.info,summary.txt,status.json}`. Its host consumer

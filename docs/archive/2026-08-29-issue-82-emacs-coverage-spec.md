@@ -55,7 +55,7 @@ pure ERT suite with the live server-backed ERT suite and runs in CI through
   CI static lane; full `validate` inherits that verdict without rerunning the
   live suite or defining a second coverage population.
 - This engineering decision changes no domain term in `CONTEXT.md`. Its durable
-  rationale is recorded in `docs/adr/drafts/elisp-stateless-coverage-gate.md`.
+  rationale is recorded in `docs/adr/0162-elisp-stateless-coverage-gate.md`.
 
 ## Acceptance
 
