@@ -25,7 +25,7 @@ Out:
 
 ## Task outline
 
-- [ ] Task 1: Freeze the audited commit and search manifest on issue #1224.
+- [x] Task 1: Freeze the audited commit and search manifest on issue #1224.
   - Contract: the comment records the audited SHA, tracked Rust/TypeScript/Elisp
     roots, stable query IDs, exact tool commands/patterns/options and versions,
     normalization/grouping rules, and finite fallbacks for every unavailable
