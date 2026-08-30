@@ -1139,9 +1139,9 @@
         # The gate runs at workers=2 (#155, see playwright.config.ts), so the
         # VMs are sized 3 GB / 2 vCPU: cores >= workers avoids in-guest CPU
         # starvation, and with the Firefox process-slimming prefs 3 GB clears the
-        # OOM that heavier VMs hit (#61). At workers=2 the per-VM footprint is
-        # small enough that a 16-core dev box (and CI's per-combo runners) run the
-        # combos comfortably; see docs/observability.md #155 AC3/AC4.
+        # OOM that heavier VMs hit (#61). #828's full CI factorial found no
+        # admissible 3-worker arm: 3 vCPU / 3 GB OOMed; the faster 4 vCPU / 4 GB
+        # arm increased SQLite flakiness. See docs/observability.md #828.
         e2eGateChecks = pkgs.lib.listToAttrs (
           map (c: {
             name = "e2e-${c.backend}-${c.browser}";

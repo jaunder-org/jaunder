@@ -663,6 +663,86 @@ backend axis. This conclusion has a shelf life: if client-side work such as #819
 reduces the dominant cost enough to increase the server share, re-establish
 suite-level backend independence before dropping the axis again.
 
+## #828 — E2E worker scaling curve has no admissible treatment (2026-08-29)
+
+**Verdict: retain 2 workers / 2 VM vCPUs / 3072 MiB.** Three-worker
+configurations can be much faster, but the full CI factorial found no treatment
+that met both the predeclared 20% speed threshold and the per-backend flakiness
+veto. The result is a measured knee, not the earlier one-point assumption.
+
+### Quiet-host screen
+
+One fresh salted `cargo xtask e2e sqlite firefox` run per arm established that
+scaling was worth testing on CI:
+
+| arm       | workers | VM vCPUs | pre/post loadavg (1m) | Playwright `.stats.duration` | non-suite overhead | command elapsed | cases | attempts | flaky | unexpected |
+| --------- | ------- | -------- | --------------------- | ---------------------------- | ------------------ | --------------- | ----- | -------- | ----- | ---------- |
+| control   | 2       | 2        | 1.29 / 2.53           | 446.455 s                    | 38.691 s           | 485.146 s       | 225   | 225      | 0     | 0          |
+| treatment | 3       | 4        | 1.14 / 3.50           | 286.061 s                    | 29.935 s           | 315.996 s       | 225   | 226      | 1     | 0          |
+
+Both pre-run loads were below 1.5; process inventories found no unrelated Cargo,
+Nix, QEMU, browser, or Node process using at least 1% CPU. The treatment was
+**160.394 s (35.9%) faster**, with no OOM or infrastructure failure. Its one
+fail-then-pass was recorded but, with one exposure, was not treated as a
+flake-rate estimate; the result advanced to CI.
+
+### CI factorial
+
+CI used public `ubuntu-24.04` runners
+([documented](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+as 4 vCPU / 16 GiB), runner image `20260823.283.1`. Five arms separated the
+3-worker CPU/memory axes:
+
+| arm     | workers / VM vCPU / MiB | SQLite median | PostgreSQL median | primary (slower backend) | improvement | flaky sum SQLite / PostgreSQL | disposition                 |
+| ------- | ----------------------- | ------------- | ----------------- | ------------------------ | ----------- | ----------------------------- | --------------------------- |
+| control | 2 / 2 / 3072            | 671.591 s     | 703.867 s         | 703.867 s                | —           | 2 / 3                         | baseline                    |
+| A       | 3 / 3 / 3072            | 644.920 s¹    | —                 | —                        | —           | 1 / —                         | OOM veto                    |
+| B       | 3 / 3 / 4096            | 636.014 s     | 622.684 s         | 636.014 s                | 9.6%        | 3 / 1                         | too slow; SQLite flake veto |
+| C       | 3 / 4 / 3072            | 478.620 s     | 630.911 s         | 630.911 s                | 10.4%       | 2 / 3                         | too slow                    |
+| D       | 3 / 4 / 4096            | 485.705 s     | 453.141 s         | 485.705 s                | 31.0%       | 3 / 3                         | SQLite flake veto           |
+
+¹ Arm A stopped after round 1: PostgreSQL/Firefox exhausted its 3072 MiB VM and
+panicked at 479.7 s. Per protocol, an OOM is not replaceable and cancels the
+arm's remaining rounds.
+
+Exactly three valid rounds were collected for every non-OOM arm. Scheduled
+orders were control→A→B→C→D, A→B→C→D→control, and B→C→D→control→A; A's round 2
+and 3 slots were canceled after its OOM. Values below are Playwright seconds;
+`S/P flake` is `flaky/unexpected` for SQLite and PostgreSQL. Job seconds include
+setup/build:
+
+| round | arm     | config   | salt           | workflow    |  SQLite | PostgreSQL | job S/P | S/P flake | note           |
+| ----- | ------- | -------- | -------------- | ----------- | ------: | ---------: | ------- | --------- | -------------- |
+| 1     | control | 2/2/3072 | 828-r1-control | 33272733281 | 677.686 |    752.359 | 825/925 | 1/0, 1/0  |                |
+| 1     | A       | 3/3/3072 | 828-r1-a       | 33273716265 | 644.920 |          — | 804/664 | 1/0, —    | PostgreSQL OOM |
+| 1     | B       | 3/3/4096 | 828-r1-b       | 33274658023 | 641.333 |    644.098 | 803/813 | 1/0, 1/0  |                |
+| 1     | C       | 3/4/3072 | 828-r1-c       | 33275441493 | 478.620 |    630.911 | 673/784 | 1/0, 1/0  |                |
+| 1     | D       | 3/4/4096 | 828-r1-d-repl1 | 33277270023 | 620.589 |    412.990 | 795/584 | 1/0, 1/0  | replacement²   |
+| 2     | B       | 3/3/4096 | 828-r2-b       | 33278245905 | 636.014 |    622.684 | 790/773 | 1/0, 0/0  |                |
+| 2     | C       | 3/4/3072 | 828-r2-c       | 33279006892 | 459.391 |    636.184 | 637/807 | 0/0, 1/0  |                |
+| 2     | D       | 3/4/4096 | 828-r2-d       | 33279808650 | 485.705 |    587.348 | 637/739 | 1/0, 1/0  |                |
+| 2     | control | 2/2/3072 | 828-r2-control | 33280671842 | 671.591 |    703.867 | 829/871 | 1/0, 1/0  |                |
+| 3     | B       | 3/3/4096 | 828-r3-b       | 33281484132 | 478.951 |    622.076 | 672/791 | 1/0, 0/0  |                |
+| 3     | C       | 3/4/3072 | 828-r3-c       | 33282295434 | 578.809 |    624.497 | 727/795 | 1/0, 1/0  |                |
+| 3     | D       | 3/4/4096 | 828-r3-d       | 33282989222 | 405.039 |    453.141 | 590/657 | 1/0, 1/0  |                |
+| 3     | control | 2/2/3072 | 828-r3-control | 33283687362 | 653.504 |    677.017 | 817/845 | 0/0, 1/0  |                |
+
+² D's first round attempt (workflow `33276362151`, salt `828-r1-d`) was replaced
+because the PostgreSQL collector's OTLP port never became ready before any E2E
+result existed.
+
+The control itself recorded 2 SQLite and 3 PostgreSQL flakes over equal
+exposure. B and D each exceeded the control's SQLite count (3 > 2), so both are
+vetoed. C matched control flakiness but improved the slower backend by only
+10.4%, below the 20% threshold. There is therefore no eligible treatment and no
+tie set.
+
+Memory separates feasibility but not an admissible winner: 3 GiB OOMed with 3
+cores; 4 GiB kept that arm alive. Four cores plus 4 GiB produced the fastest raw
+result, but bought it with increased SQLite flakiness. The temporary salts and
+treatment settings were restored; reopen only if the timeout/flakiness or
+runner-resource premise changes.
+
 ## #818 — why firefox is slower: wasm compile (findings, 2026-08-05)
 
 **Verdict: actionable, and it is wasm compile+instantiate.** Firefox spends
