@@ -4262,11 +4262,22 @@ where
     Ok(row.map(|(published_at,)| published_at))
 }
 
+/// Database-provided physical identity retained only by the no-write regression.
+#[cfg(test)]
+#[derive(Debug, macros::SqlxBridge)]
+pub(crate) struct PhysicalPostTagRowId(String);
+
+#[cfg(test)]
+impl PhysicalPostTagRowId {
+    pub(crate) fn into_inner(self) -> String {
+        self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::feed_cache::FeedCacheRow;
-    use crate::post_test_types::PhysicalPostTagRowId;
     use crate::test_support::{
         Backend, CloseablePool, MEDIA_TEST_SHA256, SeedRawPost, SeedUser, TestEnv, UpdateRawPost,
         backends, create_draft_via_service, create_post_via_service, fetch_post_media, fp,

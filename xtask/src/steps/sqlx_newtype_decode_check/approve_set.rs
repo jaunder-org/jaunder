@@ -840,6 +840,18 @@ mod tests {
     }
 
     #[test]
+    fn cfg_gated_top_level_bridge_type_is_collected() {
+        let src = r#"
+            #[cfg(test)]
+            #[derive(macros::SqlxBridge)]
+            struct PhysicalPostTagRowId(String);
+        "#;
+        let mut set = ApproveSet::default();
+        collect_declarations(src, Root::Policed, &mut set).expect("parses");
+        assert!(set.approved.contains("PhysicalPostTagRowId"));
+    }
+
+    #[test]
     fn resolves_an_alias_to_its_approved_underlying_newtype() {
         // `pub type HubUrl = TaggedUrl<Hub>;` — the decode names the alias, the bridge is on
         // the generic type. Without resolution every role alias would false-fail (#875).

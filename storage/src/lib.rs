@@ -30,8 +30,6 @@ mod media_ownership;
 mod migrations;
 mod password;
 mod post_service;
-#[cfg(test)]
-mod post_test_types;
 mod postgres;
 mod posts;
 mod role_instant;
