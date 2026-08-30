@@ -13,6 +13,10 @@
 //! property: `html!` is a compile-time macro that builds a string, with no runtime.
 
 use common::render::RenderedHtml;
+use leptos::{
+    prelude::{AddAnyAttr, InnerHtmlAttribute, IntoView},
+    tachys::html::element::InnerHtml,
+};
 use maud::{PreEscaped, Render};
 
 /// A rendered HTML fragment — the render layer's currency and its **only**
@@ -81,6 +85,19 @@ impl Markup {
     #[must_use]
     pub fn into_string(self) -> String {
         self.0
+    }
+
+    /// Inject this trusted fragment into a childless Leptos element.
+    ///
+    /// Callers choose the exact host element and attributes, but cannot supply an
+    /// arbitrary string to the sink.
+    pub fn inject_into<E>(self, element: E) -> impl IntoView
+    where
+        E: InnerHtmlAttribute<String>,
+        <E as AddAnyAttr>::Output<InnerHtml<String>>: IntoView,
+    {
+        // html-sink:allow accepts only the render layer's trusted Markup output
+        element.inner_html(self.into_string())
     }
 }
 
@@ -202,6 +219,21 @@ mod markup_tests {
         assert_eq!(
             Markup::new(html! { div { (inner) } }),
             "<div><em>a &amp; b</em></div>"
+        );
+    }
+
+    #[test]
+    fn trusted_markup_adapter_preserves_element_and_injects_verbatim() {
+        use leptos::prelude::*;
+
+        let markup = Markup::new(html! { em { "x & y" } });
+        let rendered = markup
+            .inject_into(leptos::html::div().class("host").style("display:contents"))
+            .to_html();
+
+        assert_eq!(
+            rendered,
+            r#"<div class="host" style="display:contents;"><em>x &amp; y</em></div>"#
         );
     }
 

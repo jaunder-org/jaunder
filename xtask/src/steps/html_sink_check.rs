@@ -2,11 +2,11 @@
 //! `inner_html` and `set_inner_html` — to enumerated, individually justified sites.
 //!
 //! These are the DOM's raw doors. Whatever string reaches them is parsed as markup,
-//! so a value that was never escaped or sanitized becomes script. `web` reaches them
-//! deliberately, in a handful of places, because the projector's server-painted
-//! markup and the CSR client's first paint must coincide (ADR-0041 §2/§4) and the
+//! so a value that was never escaped or sanitized becomes script. `web` reaches one
+//! deliberately through a typed adapter because the projector's server-painted
+//! markup and the CSR client's first paint must coincide (ADR-0041 §2/§4), and the
 //! only way to reuse the *same* pure render output is to inject it. That is a good
-//! reason, and it is exactly why the set must stay small and written down.
+//! reason, and it is exactly why the audited sink stays singular and written down.
 //!
 //! **Population** (read structurally, ADR-0085 principle 1): every `inner_html` or
 //! `set_inner_html` **ident** anywhere under [`POLICED_ROOTS`], in ordinary code and
@@ -23,10 +23,10 @@
 //! construct to appear is a hypothesis, not an enumeration.
 //!
 //! Every member fails unless the line **immediately above** it carries a
-//! `// html-sink:allow <reason>` marker (#778). The marker is what keeps the
-//! exemption scoped to one site rather than to a function (ADR-0085 principle 4):
-//! `PostDisplay` genuinely holds two sinks, and each argues for itself instead of
-//! sharing one fn-keyed entry that a third would silently join.
+//! `// html-sink:allow <reason>` marker (#778). Ordinary trusted rendering routes
+//! through `web::html::Markup::inject_into`, so its adapter sink owns the one production
+//! marker. A genuinely different future sink must still justify itself at its
+//! own source site (ADR-0085 principle 4).
 //!
 //! The scan itself — test-code exemption, enclosing-fn tracking, the macro token
 //! walk and the marker rule — is [`crate::steps::ident_gate`]; this module is the
@@ -71,15 +71,11 @@ const SINKS: &[&str] = &["inner_html", "set_inner_html"];
 /// The gate: population, roots and prose. Exemptions are in-source markers on the
 /// line above each sink (#778), so there is no list here.
 ///
-/// **The reasons those markers carry all have the same shape, and that is the
-/// point:** the injected value is the output of the *pure render layer* — the
-/// identical fn the projector server-renders — so it is markup we built, escaped by
-/// maud, never a string that arrived from outside. A marker that cannot say that is
-/// a sink that should not exist.
-///
-/// (Each sink carries its own marker and its own reason (#778) — a reason list
-/// keyed by enclosing fn cannot distinguish `PostDisplay`'s two sinks, the
-/// anonymous and authored layouts of the same article.)
+/// The ordinary render path has one marked adapter sink: `Markup::inject_into`
+/// accepts the render layer's typed `Markup`, then performs the final conversion
+/// and injection. Callers choose their exact host element without handling an
+/// arbitrary string or naming the raw attribute. A separate sink must carry its
+/// own marker and reason rather than silently joining the adapter's exemption.
 const GATE: Gate = Gate {
     step: "html-sink",
     roots: POLICED_ROOTS,
@@ -91,13 +87,13 @@ const GATE: Gate = Gate {
     report: Report {
         subject: "an unescaped-HTML sink",
         verdict: "is not marked — whatever string reaches it is parsed as markup (XSS) (#333)",
-        recovery: "  recovery: an unescaped sink is only safe when the string was built by our own \
-                   render layer — a `Markup`, or a `RenderedHtml` that `host::render::sanitize` \
-                   scrubbed. If the value came from anywhere else, do not inject it: render it as \
-                   text, where maud escapes it. If this is a genuine coincidence sink (the \
-                   projector paints the same markup), say so in a \
-                   `// html-sink:allow <reason>` comment on the line IMMEDIATELY ABOVE the sink \
-                   — not trailing it, which the formatters move. Currently marked:",
+        recovery: "  recovery: route trusted render output through \
+                   `web::html::Markup::inject_into`, whose interface accepts `Markup` rather than an \
+                   arbitrary string. If the value came from anywhere else, do not inject it: \
+                   render it as text, where maud escapes it. If a genuinely different raw sink \
+                   is unavoidable, say why in a `// html-sink:allow <reason>` comment on the \
+                   line IMMEDIATELY ABOVE the sink — not trailing it, which the formatters move. \
+                   Currently marked:",
     },
 };
 
@@ -127,21 +123,19 @@ pub fn run(result: &mut CommandResult) {
 mod tests {
     use super::{problems, violations};
 
-    /// `PostDisplay` legitimately holds TWO sinks, and each now argues for itself.
-    #[test]
-    fn two_sinks_in_one_fn_each_need_their_own_marker() {
-        let src = r#"
-            fn PostDisplay(view: PostView) -> AnyView {
-                if a {
-                    // html-sink:allow anonymous layout — posts::render output (#179)
-                    view! { <article inner_html=inner></article> }.into_any()
-                } else {
-                    // html-sink:allow authored layout — posts::render output (#181)
-                    view! { <div inner_html=inner_content></div> }.into_any()
-                }
+    const ADAPTER_SOURCE: &str = r#"
+        impl Markup {
+            fn inject_into(self, element: Element) -> AnyView {
+                // html-sink:allow accepts only the render layer's trusted Markup output
+                element.inner_html(self.into_string())
             }
-        "#;
-        assert_eq!(violations(src).unwrap(), vec![]);
+        }
+    "#;
+
+    /// Ordinary callers use the typed adapter, whose one sink carries the marker.
+    #[test]
+    fn typed_adapter_owns_the_marked_sink() {
+        assert_eq!(violations(ADAPTER_SOURCE).unwrap(), vec![]);
     }
 
     /// A fn name buys nothing: only a per-sink marker exempts.
@@ -283,49 +277,9 @@ mod tests {
         assert_eq!(violations(src).unwrap().len(), 1);
     }
 
-    /// The five real sites, in their four fns — the shape the tree has today, each
-    /// carrying the marker it carries in production.
+    /// The one real production site, carrying the marker it carries in the tree.
     fn the_real_tree() -> Vec<(String, String)> {
-        vec![
-            (
-                "web/src/posts/component.rs".to_string(),
-                r#"
-                    fn PostDisplay(view: PostView) -> AnyView {
-                        match children {
-                            // html-sink:allow anonymous layout — posts::render output (#179)
-                            None => view! { <article inner_html=inner></article> }.into_any(),
-                            // html-sink:allow authored layout — posts::render output (#181)
-                            Some(c) => view! { <div inner_html=inner_content></div> }.into_any(),
-                        }
-                    }
-                    fn permalink_first_paint(seed: Option<PostResponse>) -> AnyView {
-                        // html-sink:allow permalink_article output — the projector's own paint
-                        view! { <div inner_html=html></div> }.into_any()
-                    }
-                "#
-                .to_string(),
-            ),
-            (
-                "web/src/home/component.rs".to_string(),
-                r#"
-                    fn HomePage() -> impl IntoView {
-                        // html-sink:allow render_masthead output — the shared pure fn (ADR-0041 §2)
-                        view! { <div inner_html=masthead.clone()></div> }
-                    }
-                "#
-                .to_string(),
-            ),
-            (
-                "web/src/sidebar/component.rs".to_string(),
-                r#"
-                    fn Sidebar() -> impl IntoView {
-                        // html-sink:allow render_sidebar output — the anonymous paint
-                        view! { <div inner_html=anon_html.clone()></div> }
-                    }
-                "#
-                .to_string(),
-            ),
-        ]
+        vec![("web/src/html.rs".to_string(), ADAPTER_SOURCE.to_string())]
     }
 
     #[test]
@@ -381,7 +335,9 @@ mod tests {
         ));
         let detail = problems(&scanned).expect("a problem");
         assert!(
-            detail.contains("web/src/home/component.rs:4 — render_masthead output — the shared pure fn (ADR-0041 §2)"),
+            detail.contains(
+                "web/src/html.rs:5 — accepts only the render layer's trusted Markup output"
+            ),
             "{detail}"
         );
     }

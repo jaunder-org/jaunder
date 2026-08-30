@@ -193,9 +193,10 @@ pub fn PostDisplay<'a>(
         // not the component" (ADR-0041 §4). The projector only ever renders this
         // anonymous view, so this is the only path that must coincide.
         None => {
-            let inner = crate::posts::render::render_post_inner(&view).into_string();
-            // html-sink:allow posts::render::render_post_inner output — the same pure render the projector paints (#179)
-            view! { <article class="j-post" inner_html=inner></article> }.into_any()
+            let inner = crate::posts::render::render_post_inner(&view);
+            inner
+                .inject_into(leptos::html::article().class("j-post"))
+                .into_any()
         }
         // Authored layout (own posts, with the action column). The content column is
         // the SAME `render_post_content` the anonymous arm wraps, injected via
@@ -204,13 +205,12 @@ pub fn PostDisplay<'a>(
         // `inner_html` can't) overlays it as a sibling — hand-rebuilt reactive
         // markup here would diverge from the projector and reintroduce the flash.
         Some(children) => {
-            let inner_content = crate::posts::render::render_post_content(&view).into_string();
+            let inner_content = crate::posts::render::render_post_content(&view);
             view! {
                 <article class="j-post">
                     <Avatar name=&post.username size=38 />
                     <div style="min-width:0;display:flex;gap:8px;align-items:flex-start">
-                        // html-sink:allow posts::render::render_post_content output — the projector's own paint (#181)
-                        <div style="flex:1;min-width:0" inner_html=inner_content></div>
+                        {inner_content.inject_into(leptos::html::div().style("flex:1;min-width:0"))}
                         {children()}
                     </div>
                 </article>
@@ -933,9 +933,9 @@ fn permalink_first_paint(seed_post: Option<AuthoredPost>) -> AnyView {
             // Just the article — this fallback sits inside the reactive PostPage's
             // own `j-scroll`/`j-page`. `display:contents` keeps the host wrapper out
             // of the layout so it coincides with the projector's permalink page.
-            let html = crate::posts::render::permalink_article(&seed.post).into_string();
-            // html-sink:allow posts::render::permalink_article output — the projector's own permalink paint
-            view! { <div style="display:contents" inner_html=html></div> }.into_any()
+            let html = crate::posts::render::permalink_article(&seed.post);
+            html.inject_into(leptos::html::div().style("display:contents"))
+                .into_any()
         }
         None => view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any(),
     }

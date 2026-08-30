@@ -55,7 +55,7 @@ pub fn HomePage() -> impl IntoView {
     // and shown for the anonymous visitor. Single-mode Local (#181, D10): `/` is
     // always the enhanced public timeline; the owner's own posts gain the
     // client-side action column reactively via `TimelineRows`/`PostCard`.
-    let masthead = super::render::render_masthead().into_string();
+    let masthead = super::render::render_masthead();
 
     view! {
         <FeedDiscovery surface=&FeedSurface::Site />
@@ -64,8 +64,7 @@ pub fn HomePage() -> impl IntoView {
         // `Loading → Rows` rather than rebuilding it, which matters here because it
         // is projector-coincident markup (ADR-0041 §2).
         <TimelineGate state=state on_mutate=on_mutate on_load_more=on_load_more>
-            // html-sink:allow home::render::render_masthead output — the shared pure fn (ADR-0041 §2)
-            <div style="display:contents" inner_html=masthead.clone()></div>
+            {masthead.clone().inject_into(leptos::html::div().style("display:contents"))}
         </TimelineGate>
     }
 }
