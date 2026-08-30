@@ -50,7 +50,7 @@ pool-backed or independently committing compatibility form behind.
 
 ## Task outline
 
-- [ ] **Task 1: Make custom SQLite write transactions tracked and drop-safe.**
+- [x] **Task 1: Make custom SQLite write transactions tracked and drop-safe.**
   - Contract: replace raw test-support `BEGIN IMMEDIATE` guards with SQLx 0.8.6
     `Connection::begin_with("BEGIN IMMEDIATE")`; an unfinished guard owns a
     tracked `Transaction` whose drop starts rollback before reuse.

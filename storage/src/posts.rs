@@ -5128,6 +5128,43 @@ mod tests {
         assert_eq!(slugs_of(&*env.state.posts, post).await, vec!["gamma"]);
     }
 
+    /// An abandoned test lock must have the same rollback and reuse behavior on
+    /// both backends: its writes stay uncommitted, and it cannot poison the
+    /// pooled connection for the next writer.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn dropping_post_write_lock_rolls_back_and_leaves_writer_usable(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await.user_id;
+        let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
+
+        let mut abandoned = env
+            .base
+            .pool()
+            .lock_post_for_write(post)
+            .await
+            .expect("take post write lock");
+        abandoned
+            .add_tag(&parse_tag_label("uncommitted"))
+            .await
+            .expect("write through held lock");
+        drop(abandoned);
+
+        assert_eq!(
+            slugs_of(&*env.state.posts, post).await,
+            Vec::<String>::new()
+        );
+
+        env.state
+            .posts
+            .set_post_tags(post, user, &[parse_tag_label("committed")])
+            .await
+            .expect("subsequent writer succeeds");
+        assert_eq!(slugs_of(&*env.state.posts, post).await, vec!["committed"]);
+    }
+
     /// A tag mutation captures a complete revision, including current media. On
     /// `PostgreSQL` copy must wait for the ordinary media lock rather than
     /// racing a guarded delete or reclaim (ADR-0154).
