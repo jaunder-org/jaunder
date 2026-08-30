@@ -146,9 +146,9 @@ pub fn create_router_with_media_reference_ownership_resolver(
                 let mailer = server_fn_mailer.clone();
                 leptos_axum::handle_server_fns_with_context(
                     move || {
-                        crate::context::provide_app_state_contexts(&state);
-                        crate::context::provide_mailer_context(&mailer);
-                        crate::context::provide_media_ownership_context(&resolver, &instance_id);
+                        context::provide_app_state_contexts(&state);
+                        context::provide_mailer_context(&mailer);
+                        context::provide_media_ownership_context(&resolver, &instance_id);
                         provide_context(web::auth::CookieSettings {
                             secure: secure_cookies,
                         });

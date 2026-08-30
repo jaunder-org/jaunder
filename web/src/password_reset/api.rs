@@ -4,11 +4,13 @@
 #[cfg(feature = "server")]
 use {
     crate::error::InternalError,
+    crate::mail,
     chrono::Duration,
     common::mailer::{EmailMessage, MailSender},
-    common::tagged_url::{MailConfirmUrl, compose},
+    common::tagged_url::{self, MailConfirmUrl},
     common::time::UtcInstant,
-    host::password::Password,
+    host::metrics::{self, EmailKind, PasswordResetEvent},
+    host::password,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{AtomicOps, PasswordResetStorage, SiteConfigStorage, UserStorage},
@@ -53,14 +55,14 @@ pub async fn request(username: Username) -> WebResult<()> {
     // Fetch the site's absolute base URL once we know we'll send — before
     // minting the token, so a misconfigured site fails without leaving an
     // orphan reset token behind.
-    let base_url = crate::mail::require_base_url(&*site_config).await?;
+    let base_url = mail::require_base_url(&*site_config).await?;
 
     let expires_at = UtcInstant::from(chrono::Utc::now() + Duration::hours(1));
     let raw_token = password_resets
         .create_password_reset(user_id, expires_at)
         .await?;
 
-    let reset_url: MailConfirmUrl = compose(&base_url, "/reset-password");
+    let reset_url: MailConfirmUrl = tagged_url::compose(&base_url, "/reset-password");
     let link = format!("{reset_url}?token={raw_token}");
     let message = EmailMessage {
         from: None,
@@ -71,14 +73,9 @@ pub async fn request(username: Username) -> WebResult<()> {
         ),
     };
 
-    crate::mail::send_recording_metrics(
-        &*mailer,
-        &message,
-        host::metrics::EmailKind::PasswordReset,
-    )
-    .await?;
+    mail::send_recording_metrics(&*mailer, &message, EmailKind::PasswordReset).await?;
 
-    host::metrics::password_reset(host::metrics::PasswordResetEvent::Requested);
+    metrics::password_reset(PasswordResetEvent::Requested);
     Ok(())
 }
 
@@ -99,10 +96,10 @@ pub async fn confirm(request: ConfirmPasswordResetRequest) -> WebResult<()> {
     // `new_password` is the inbound-secret twin (ADR-0063); convert into the
     // serde-free domain `Password` at the boundary. `token` is a `RawToken` wire
     // arg — its serde bridge already rejected a malformed shape on decode.
-    let password = Password::try_from(new_password)?;
+    let password = password::Password::try_from(new_password)?;
 
     atomic.confirm_password_reset(&token, &password).await?;
 
-    host::metrics::password_reset(host::metrics::PasswordResetEvent::Completed);
+    metrics::password_reset(PasswordResetEvent::Completed);
     Ok(())
 }

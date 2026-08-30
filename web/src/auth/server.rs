@@ -7,7 +7,10 @@ use axum::{
 use common::ids::UserId;
 use common::token::{RawToken, TokenHash};
 use common::username::Username;
-use host::auth::{CredentialResolutionError, CredentialTransport, resolve_credential};
+use host::{
+    auth::{self, CredentialResolutionError, CredentialTransport},
+    metrics,
+};
 use leptos::prelude::expect_context;
 use std::sync::{
     Arc,
@@ -89,7 +92,7 @@ where
     type Rejection = Rejection;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let resolution = resolve_credential(&parts.headers).map_err(|error| match error {
+        let resolution = auth::resolve_credential(&parts.headers).map_err(|error| match error {
             CredentialResolutionError::Missing => Rejection::MissingToken,
             CredentialResolutionError::InvalidAuthorization => Rejection::InvalidAuthorization,
         })?;
@@ -104,7 +107,7 @@ where
 
         match sessions.authenticate(&credential.token).await {
             Ok(record) => {
-                host::metrics::session_validation(host::metrics::SessionOutcome::Ok);
+                metrics::session_validation(metrics::SessionOutcome::Ok);
                 verify_basic_username(&record.username, credential.expected_username.as_ref())?;
                 if session_cookie_present
                     && transport != CredentialTransport::Cookie
@@ -119,7 +122,7 @@ where
                 })
             }
             Err(error) => {
-                host::metrics::session_validation(storage::session_outcome(&error));
+                metrics::session_validation(storage::session_outcome(&error));
                 Err(Rejection::Session { transport, error })
             }
         }
@@ -287,7 +290,7 @@ pub fn set_session_cookie(raw_token: &RawToken) {
     let secure = use_context::<CookieSettings>().is_none_or(|settings| settings.secure);
 
     if let Some(opts) = use_context::<ResponseOptions>() {
-        let cookie = host::auth::session_cookie_header(raw_token, secure);
+        let cookie = auth::session_cookie_header(raw_token, secure);
         if let Ok(val) = axum::http::HeaderValue::from_str(&cookie) {
             opts.insert_header(axum::http::header::SET_COOKIE, val);
         }
@@ -301,7 +304,7 @@ pub fn clear_session_cookie() {
     let secure = use_context::<CookieSettings>().is_none_or(|settings| settings.secure);
 
     if let Some(opts) = use_context::<ResponseOptions>() {
-        let cookie = host::auth::clear_session_cookie_header(secure);
+        let cookie = auth::clear_session_cookie_header(secure);
         if let Ok(val) = axum::http::HeaderValue::from_str(&cookie) {
             opts.insert_header(axum::http::header::SET_COOKIE, val);
         }

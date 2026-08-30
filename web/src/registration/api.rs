@@ -30,12 +30,13 @@ pub struct RegistrationRequest {
 // through it.
 #[cfg(feature = "server")]
 use {
-    crate::auth::set_session_cookie,
+    crate::auth,
     crate::error::InternalError,
     common::ids::UserId,
     common::session_label::SessionLabel,
     host::invite::InviteCode,
-    host::password::Password,
+    host::metrics::{self, InviteEvent, RegistrationResult, RegistrationSource},
+    host::password,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{AtomicOps, SessionStorage, SiteConfigStorage, UserStorage},
@@ -81,7 +82,7 @@ pub async fn register(request: RegistrationRequest) -> WebResult<()> {
     // password is rejected at deserialization), client-pre-validated via
     // `<ValidatedInput<_>>` (ADR-0065). `ProfferedPassword` is the inbound-secret
     // twin of the serde-free `Password` (ADR-0063); convert into it here.
-    let password = Password::try_from(password)?;
+    let password = password::Password::try_from(password)?;
     let span = tracing::Span::current();
     span.record("registration.invite_present", invite_code.is_some());
     let policy = site_config
@@ -122,7 +123,7 @@ pub async fn register(request: RegistrationRequest) -> WebResult<()> {
                     .map_err(Into::into);
                 // A successful invite registration redeems the code.
                 if result.is_ok() {
-                    host::metrics::invite(host::metrics::InviteEvent::Redeemed);
+                    metrics::invite(InviteEvent::Redeemed);
                 }
                 result
             } else {
@@ -135,13 +136,13 @@ pub async fn register(request: RegistrationRequest) -> WebResult<()> {
             Err(InternalError::validation("registration is closed"))
         }
     };
-    host::metrics::registration(
-        host::metrics::RegistrationSource::Web,
+    metrics::registration(
+        RegistrationSource::Web,
         metric_policy,
         if user_id_result.is_ok() {
-            host::metrics::RegistrationResult::Ok
+            RegistrationResult::Ok
         } else {
-            host::metrics::RegistrationResult::Rejected
+            RegistrationResult::Rejected
         },
     );
     let user_id = user_id_result?;
@@ -154,7 +155,7 @@ pub async fn register(request: RegistrationRequest) -> WebResult<()> {
         ))
         .await?;
 
-    set_session_cookie(&raw_token);
+    auth::set_session_cookie(&raw_token);
     leptos_axum::redirect("/");
     // Session establishment is cookie-only (#533) — nothing to return.
     Ok(())

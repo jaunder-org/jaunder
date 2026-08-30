@@ -1,5 +1,6 @@
-use super::state::{SubscribePaint, paint};
-use super::{Subscribe, Unsubscribe, is_subscribed};
+use super::state::{self, SubscribePaint};
+use super::{Subscribe, Unsubscribe};
+use crate::auth;
 use common::username::Username;
 use leptos::prelude::*;
 
@@ -18,7 +19,7 @@ pub fn SubscribeButton(username: Username) -> impl IntoView {
 
     // Re-query the subscription after either action mutates it; the viewer identity
     // comes from the shared session (stable, so it needs no per-action re-query) (#591).
-    let session = crate::auth::use_session();
+    let session = auth::use_session();
     let username_for_state = username.clone();
     let state = Resource::new(
         move || (subscribe.version().get(), unsubscribe.version().get()),
@@ -26,7 +27,7 @@ pub fn SubscribeButton(username: Username) -> impl IntoView {
             let username = username_for_state.clone();
             async move {
                 // The error is carried, not collapsed — see `state::paint` (#861).
-                let subscribed = is_subscribed(username.clone()).await;
+                let subscribed = super::is_subscribed(username.clone()).await;
                 (
                     session.current.get_untracked().map(|u| u.username),
                     subscribed,
@@ -43,7 +44,7 @@ pub fn SubscribeButton(username: Username) -> impl IntoView {
                 let username = profile_username.clone();
                 Suspend::new(async move {
                     let (viewer, subscribed) = state.await;
-                    match paint(viewer.as_ref(), &username, subscribed) {
+                    match state::paint(viewer.as_ref(), &username, subscribed) {
                         SubscribePaint::Hidden => ().into_any(),
                         SubscribePaint::Toggle(subscribed) => {
                             view! {

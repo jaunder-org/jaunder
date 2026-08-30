@@ -1035,7 +1035,7 @@ wholesale).
 **Trim, do not delete, the AtomPub status test.**
 `server/src/atompub/mod.rs:412-426` is a single test —
 `storage_and_document_errors_map_to_status` — whose three assertions cover
-`sqlx::Error`, `AtomError` and `TaggingError::AlreadyTagged`. Only the third
+`sqlx::Error`, `Error` and `TaggingError::AlreadyTagged`. Only the third
 (`:422-425`) is orphaned; deleting the whole test would drop two unrelated,
 still-valid assertions.
 

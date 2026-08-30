@@ -6,7 +6,7 @@
 //! at a boundary in the `server` crate, not here.
 //!
 //! The Atom documents themselves are `atom_syndication`'s. **Reading is entirely
-//! upstream's** — a consumer calls `Entry::from_str` and maps [`AtomError`] at its
+//! upstream's** — a consumer calls `Entry::from_str` and maps [`Error`] at its
 //! own boundary; this module deliberately offers no parse wrapper, because one
 //! would be a rename of `parse` and nothing more. Writing goes through [`entry`],
 //! which composes the documents whose shape is ours: the collection `<feed>` with
@@ -35,9 +35,9 @@ pub use rsd::render_rsd_document;
 /// across the `AtomPub` surface (including the server-side mapping boundary).
 ///
 /// Reading a document is `Entry::from_str` / `Feed::read_from` directly — there is
-/// no wrapper. [`AtomError`] comes along so a consumer can map a parse failure onto
+/// no wrapper. [`Error`] comes along so a consumer can map a parse failure onto
 /// its own error type (the server turns it into a `400`).
-pub use atom_syndication::{Category, Content, Entry, Error as AtomError, Link, Text};
+pub use atom_syndication::{Category, Content, Entry, Error, Link, Text};
 
 mod ns;
 pub use ns::{APP_NS, ATOM_NS, J_NS};

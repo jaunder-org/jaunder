@@ -6,7 +6,7 @@
 use leptos::prelude::*;
 
 use crate::feed_discovery::FeedDiscovery;
-use crate::timeline::{TimelineGate, TimelineState, list_local_timeline, wire_timeline_resolve};
+use crate::timeline::{self, TimelineGate, TimelineState};
 use common::seed::PageSeed;
 use common::{feed::FeedSurface, pagination::PageSize};
 
@@ -39,13 +39,13 @@ pub fn HomePage() -> impl IntoView {
     // performed via the client-side action column, reflect immediately.
     let initial_page = Resource::new(
         move || refresh_version.get(),
-        |_| list_local_timeline(None, Some(PageSize::default())),
+        |_| timeline::list_local_timeline(None, Some(PageSize::default())),
     );
 
-    wire_timeline_resolve(state, initial_page);
+    timeline::wire_timeline_resolve(state, initial_page);
 
     let on_load_more = Callback::new(move |()| {
-        crate::timeline::spawn_load_more(state, list_local_timeline);
+        timeline::spawn_load_more(state, timeline::list_local_timeline);
     });
 
     // The masthead (topbar + anon Sign-in/Register links + hero) is the shared

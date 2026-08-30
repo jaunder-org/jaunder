@@ -14,11 +14,9 @@ use tokio::fs;
 use tokio_util::io::ReaderStream;
 
 use common::ids::UserId;
-use common::media::{
-    ContentHash, ContentType, Filename, MediaSource, detect_content_type, media_path, should_inline,
-};
+use common::media::{self, ContentHash, ContentType, Filename, MediaSource};
 use common::tagged_url::MediaSourceUrl;
-use host::etag::from_content_hash;
+use host::etag;
 use storage::{MediaError, MediaStorage};
 use web::auth;
 use web::error::InternalError;
@@ -185,7 +183,7 @@ async fn serve_response(
     };
 
     // ETag / If-None-Match check.
-    let etag = from_content_hash(&hash);
+    let etag = etag::from_content_hash(&hash);
     if let Some(if_none_match) = req_headers.get(axum::http::header::IF_NONE_MATCH) {
         // `ETag: PartialEq<&str>` (the reverse `str: PartialEq<ETag>` isn't derived).
         if etag == if_none_match.to_str().unwrap_or("") {
@@ -200,7 +198,7 @@ async fn serve_response(
         .map_err(serve_internal_error)?
         // Both read inside the typed filename, which decodes only at the display
         // boundary. Extension detection must not inspect its encoded spelling.
-        .map_or_else(|| detect_content_type(&filename), |r| r.content_type);
+        .map_or_else(|| media::detect_content_type(&filename), |r| r.content_type);
 
     let disposition = content_disposition(&content_type, &filename);
 
@@ -273,7 +271,7 @@ fn resolve_media_path(
     storage_path: &std::path::Path,
     address: ServeAddress,
 ) -> (MediaSource, ContentHash, Filename, PathBuf) {
-    let file_path = storage_path.join("media").join(media_path(
+    let file_path = storage_path.join("media").join(media::media_path(
         &address.source,
         &address.hash,
         &address.filename,
@@ -287,9 +285,9 @@ fn resolve_media_path(
 /// The decoded filename is only for this display header; its canonical spelling remains on
 /// the storage and URL paths. `inline` vs `attachment` follows [`should_inline`].
 fn content_disposition(content_type: &ContentType, filename: &Filename) -> String {
-    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+    use percent_encoding::utf8_percent_encode;
 
-    let disposition = if should_inline(content_type.as_ref()) {
+    let disposition = if media::should_inline(content_type.as_ref()) {
         "inline"
     } else {
         "attachment"
@@ -307,7 +305,7 @@ fn content_disposition(content_type: &ContentType, filename: &Filename) -> Strin
         fallback.push(c);
     }
 
-    let encoded = utf8_percent_encode(&decoded, NON_ALPHANUMERIC);
+    let encoded = utf8_percent_encode(&decoded, percent_encoding::NON_ALPHANUMERIC);
     format!("{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
 }
 
@@ -489,7 +487,7 @@ mod tests {
     async fn serve_response_returns_304_on_matching_if_none_match() {
         let (temp, address) = stored_file("photo.jpg");
         let media = storage::MockMediaStorage::new();
-        let etag = from_content_hash(&parse_content_hash(SAMPLE_HASH));
+        let etag = etag::from_content_hash(&parse_content_hash(SAMPLE_HASH));
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             axum::http::header::IF_NONE_MATCH,
@@ -555,7 +553,7 @@ mod tests {
         .expect("serve response");
 
         assert_eq!(response.status(), StatusCode::OK);
-        let expected = detect_content_type(&Filename::sanitized("photo.jpg").unwrap());
+        let expected = media::detect_content_type(&Filename::sanitized("photo.jpg").unwrap());
         assert_eq!(
             response
                 .headers()

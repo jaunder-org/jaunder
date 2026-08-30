@@ -10,16 +10,13 @@
 //! propagated to callers that could not act on it — the policy choice this advisory
 //! layer is entitled to make on the primitive's truthful `Result`.
 
-use super::marker::{SessionUser, decode_marker, encode_marker};
+use super::marker::{self, SessionUser};
+use client::{storage, telemetry};
 use common::{client_telemetry::ClientErrorContext, local_storage_key::LocalStorageKey};
 
-fn report_storage_error(context: ClientErrorContext, error: client::storage::StorageError) {
+fn report_storage_error(context: ClientErrorContext, error: storage::StorageError) {
     let source_kind = error.source_kind();
-    client::telemetry::report_swallowed(
-        client::telemetry::error_kind(source_kind),
-        context,
-        source_kind,
-    );
+    telemetry::report_swallowed(telemetry::error_kind(source_kind), context, source_kind);
 }
 
 /// Get + decode the marker. `None` when absent, malformed, or the store could
@@ -27,8 +24,8 @@ fn report_storage_error(context: ClientErrorContext, error: client::storage::Sto
 /// malformed advisory marker remains ordinary anonymous control flow.
 #[must_use]
 pub fn get() -> Option<SessionUser> {
-    match client::storage::get(LocalStorageKey::AuthMarker.as_ref()) {
-        Ok(raw) => raw.and_then(|raw| decode_marker(&raw)),
+    match storage::get(LocalStorageKey::AuthMarker.as_ref()) {
+        Ok(raw) => raw.and_then(|raw| marker::decode_marker(&raw)),
         Err(error) => {
             report_storage_error(ClientErrorContext::SessionMarkerRead, error);
             None
@@ -39,9 +36,10 @@ pub fn get() -> Option<SessionUser> {
 /// Write the marker for `user`. A failed write is non-fatal — the reconcile
 /// `Effect` re-writes it on the next load — but is reported before continuing.
 pub fn set(user: &SessionUser) {
-    if let Err(error) =
-        client::storage::set(LocalStorageKey::AuthMarker.as_ref(), &encode_marker(user))
-    {
+    if let Err(error) = storage::set(
+        LocalStorageKey::AuthMarker.as_ref(),
+        &marker::encode_marker(user),
+    ) {
         report_storage_error(ClientErrorContext::SessionMarkerWrite, error);
     }
 }
@@ -50,7 +48,7 @@ pub fn set(user: &SessionUser) {
 /// clears a stale marker against a dead session on the next load — but is
 /// reported before continuing.
 pub fn remove() {
-    if let Err(error) = client::storage::remove(LocalStorageKey::AuthMarker.as_ref()) {
+    if let Err(error) = storage::remove(LocalStorageKey::AuthMarker.as_ref()) {
         report_storage_error(ClientErrorContext::SessionMarkerRemove, error);
     }
 }

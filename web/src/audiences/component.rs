@@ -1,20 +1,17 @@
 //! The co-located reactive UI for named-audience management: `AudiencesPage` and
 //! its child components, plus the keyed reactive store backing the list. Wasm-only.
 
-use super::api::{
-    AddSubscriber, AudienceMembershipRequest, Create, Delete, RemoveSubscriber, Rename,
-    RenameAudienceRequest, list_members, list_mine, list_my_subscribers,
-};
 use super::model::{SubscriberSummary, Summary, SummaryStoreFields};
-use crate::error::WebResult;
-// `crate::forms::Field` (the validated-input field) is aliased to avoid colliding with
-// `reactive_stores::Field` (the keyed-store field used by `AudienceRow`).
-use crate::forms::{
-    Field as ValidatedField, ValidatedBareInput, server_action_submit, validated_error,
+use super::{
+    AddSubscriber, AudienceMembershipRequest, Create, Delete, RemoveSubscriber, Rename,
+    RenameAudienceRequest,
 };
+use crate::error::WebResult;
+use crate::forms::{self, ValidatedBareInput};
 use crate::icon::Icons;
 use crate::reactive::{Invalidator, invalidator_scope};
 use crate::topbar::Topbar;
+use client::reactive;
 use common::audience::AudienceName;
 use common::ids::{AudienceId, SubscriptionId};
 use common::list_state::ListState;
@@ -48,15 +45,15 @@ invalidator_scope! {
 #[component]
 pub fn AudiencesPage() -> impl IntoView {
     // The audience list: a keyed reactive store, refetched via the `AudienceList` invalidator
-    // and `patch`ed in place on success (`client::reactive::patched` owns the plumbing) — so
+    // and `patch`ed in place on success (`reactive::patched` owns the plumbing) — so
     // unchanged rows keep their DOM (and their `MemberChecklist`'s loaded members) and a rename
     // updates just that row's name. `state` drives the sibling loading/empty/error node.
     let list = AudienceList(Invalidator::new());
     provide_context(list);
     let store = Store::new(AudienceListData::default());
-    let state = client::reactive::patched(
+    let state = reactive::patched(
         move || list.track(),
-        list_mine,
+        super::list_mine,
         move |rows| store.audiences().patch(rows),
     );
 
@@ -67,7 +64,7 @@ pub fn AudiencesPage() -> impl IntoView {
     // never swallowed into an empty roster (#346).
     let roster = Invalidator::new();
     let subscribers: RosterSignal =
-        client::reactive::sticky(move || roster.track(), list_my_subscribers);
+        reactive::sticky(move || roster.track(), super::list_my_subscribers);
     provide_context(subscribers);
 
     view! {
@@ -150,12 +147,12 @@ pub fn AudiencesPage() -> impl IntoView {
 #[component]
 fn CreateAudienceForm() -> impl IntoView {
     let list = expect_context::<AudienceList>();
-    let create_action = client::reactive::action::<Create>(move || list.notify());
+    let create_action = reactive::action::<Create>(move || list.notify());
     // Client-side pre-validation (ADR-0065) via direct-bind: the same `AudienceName::from_str`
     // the typed `#[server]` arg decodes through gates submit (disable-until-valid), so a valid
     // name is a precondition of dispatch and the empty-name rejection never round-trips for a
     // real client. `required` is dropped — the newtype rule is the single source of truth.
-    let name = ValidatedField::<AudienceName>::new();
+    let name = forms::Field::<AudienceName>::new();
 
     view! {
         <section class="j-card">
@@ -182,7 +179,7 @@ fn CreateAudienceForm() -> impl IntoView {
                 </button>
             </ActionForm>
             // Touched-gated inline validation message (the newtype's own `Display`).
-            {validated_error(
+            {forms::validated_error(
                 name.error,
                 Signal::derive(move || name.is_touched()),
                 |m| view! { <p class="error">{m}</p> }.into_any(),
@@ -220,13 +217,13 @@ fn AudienceRow(row: Field<Summary>) -> impl IntoView {
 #[component]
 fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView {
     let list = expect_context::<AudienceList>();
-    let rename_action = client::reactive::action::<Rename>(move || list.notify());
-    let delete_action = client::reactive::action::<Delete>(move || list.notify());
+    let rename_action = reactive::action::<Rename>(move || list.notify());
+    let delete_action = reactive::action::<Delete>(move || list.notify());
     // Client-side pre-validation (ADR-0065), seeded from the existing name so a pristine
     // row is already valid (submit enabled); clearing it disables Rename and — once
     // touched — shows the newtype's own message inline.
-    let name = ValidatedField::<AudienceName>::prefilled(&name);
-    let (rename_disabled, submit_rename) = server_action_submit(rename_action, move || {
+    let name = forms::Field::<AudienceName>::prefilled(&name);
+    let (rename_disabled, submit_rename) = forms::server_action_submit(rename_action, move || {
         name.parsed().map(|name| Rename {
             request: RenameAudienceRequest { audience_id, name },
         })
@@ -239,7 +236,7 @@ fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView 
                 <button type="submit" class="j-btn" prop:disabled=move || rename_disabled.get()>
                     "Rename"
                 </button>
-                {validated_error(
+                {forms::validated_error(
                     name.error,
                     Signal::derive(move || name.is_touched()),
                     |m| view! { <p class="error">{m}</p> }.into_any(),
@@ -276,10 +273,12 @@ fn MemberChecklist(audience_id: AudienceId) -> impl IntoView {
     // not every audience's (and never the list). `sticky` retains the last member list across
     // that refetch so a toggle never flashes "Loading members…" (`None` until first resolve).
     let members = Invalidator::new();
-    let add_action = client::reactive::action::<AddSubscriber>(move || members.notify());
-    let remove_action = client::reactive::action::<RemoveSubscriber>(move || members.notify());
-    let member_ids =
-        client::reactive::sticky(move || members.track(), move || list_members(audience_id));
+    let add_action = reactive::action::<AddSubscriber>(move || members.notify());
+    let remove_action = reactive::action::<RemoveSubscriber>(move || members.notify());
+    let member_ids = reactive::sticky(
+        move || members.track(),
+        move || super::list_members(audience_id),
+    );
 
     view! {
         {move || {
@@ -349,12 +348,12 @@ fn MemberToggle(
         subscription_id,
     };
     let remove_request = request.clone();
-    let (remove_disabled, submit_remove) = server_action_submit(remove_action, move || {
+    let (remove_disabled, submit_remove) = forms::server_action_submit(remove_action, move || {
         Some(RemoveSubscriber {
             request: remove_request.clone(),
         })
     });
-    let (add_disabled, submit_add) = server_action_submit(add_action, move || {
+    let (add_disabled, submit_add) = forms::server_action_submit(add_action, move || {
         Some(AddSubscriber {
             request: request.clone(),
         })

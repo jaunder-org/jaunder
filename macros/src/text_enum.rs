@@ -12,7 +12,7 @@
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::parse::Parser as _;
+use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::{DeriveInput, Expr, ExprLit, Lit, Meta, Path, Token};
 

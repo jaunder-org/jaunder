@@ -3,9 +3,9 @@
 //! [`marker_storage`](super::marker_storage) binding) directly, no `cfg` gates
 //! inside this file.
 
-use super::{Login, LoginRequest, Logout, SessionUser, clear_session, set_session};
+use super::{Login, LoginRequest, Logout, SessionUser};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedInput, server_action_submit};
+use crate::forms::{self, Field, ValidatedInput};
 use crate::topbar::Topbar;
 use common::password::ProfferedPassword;
 use common::username::Username;
@@ -21,7 +21,7 @@ pub fn LoginPage() -> impl IntoView {
     // into the advisory marker (#181, ADR-0044) for the next pre-paint boot.
     Effect::new(move |_| {
         if let Some(Ok(session)) = login_action.value().get() {
-            set_session(session);
+            super::set_session(session);
         }
     });
 
@@ -52,7 +52,7 @@ pub fn LoginPage() -> impl IntoView {
 fn LoginForm(action: ServerAction<Login>) -> impl IntoView {
     let username = Field::<Username>::new();
     let password = Field::<ProfferedPassword>::new();
-    let (disabled, submit) = server_action_submit(action, move || {
+    let (disabled, submit) = forms::server_action_submit(action, move || {
         username
             .parsed()
             .zip(password.parsed())
@@ -109,7 +109,7 @@ pub fn LogoutPage() -> impl IntoView {
     // ADR-0044). The server clears the real cookie.
     Effect::new(move |_| {
         if let Some(Ok(())) = logout_action.value().get() {
-            clear_session();
+            super::clear_session();
         }
     });
 

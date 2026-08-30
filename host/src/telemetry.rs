@@ -9,9 +9,8 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::Context as _;
 use opentelemetry::KeyValue;
-use opentelemetry::trace::TracerProvider as _;
+use opentelemetry::trace::TracerProvider;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
 use tracing_error::ErrorLayer;
@@ -311,11 +310,13 @@ fn build_otel_tracer(
     endpoint: &str,
     resource: Resource,
 ) -> anyhow::Result<opentelemetry_sdk::trace::SdkTracerProvider> {
-    let exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_tonic()
-        .with_endpoint(endpoint)
-        .build()
-        .context("failed to build OTLP span exporter")?;
+    let exporter = anyhow::Context::context(
+        opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint(endpoint)
+            .build(),
+        "failed to build OTLP span exporter",
+    )?;
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_resource(resource)
         .with_batch_exporter(exporter)
@@ -328,11 +329,13 @@ fn build_otel_meter(
     endpoint: &str,
     resource: Resource,
 ) -> anyhow::Result<opentelemetry_sdk::metrics::SdkMeterProvider> {
-    let exporter = opentelemetry_otlp::MetricExporter::builder()
-        .with_tonic()
-        .with_endpoint(endpoint)
-        .build()
-        .context("failed to build OTLP metric exporter")?;
+    let exporter = anyhow::Context::context(
+        opentelemetry_otlp::MetricExporter::builder()
+            .with_tonic()
+            .with_endpoint(endpoint)
+            .build(),
+        "failed to build OTLP metric exporter",
+    )?;
     let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
         .with_resource(resource)
         .with_periodic_exporter(exporter)

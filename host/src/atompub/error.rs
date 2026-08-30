@@ -3,13 +3,13 @@ use thiserror::Error;
 /// An `AtomPub` document could not be **written**.
 ///
 /// There is deliberately no read counterpart. `atom_syndication` owns parsing, so
-/// a document the client sent that will not parse surfaces as [`AtomError`] and
-/// each consumer maps it at its own boundary (the server: a `400`). Failing to
-/// write a document we composed ourselves is never the client's fault, so the two
+/// a document the client sent that will not parse surfaces as [`Error`] and each
+/// consumer maps it at its own boundary (the server: a `400`). Failing to write a
+/// document we composed ourselves is never the client's fault, so the two
 /// directions are separate types rather than two variants of one — which is what
 /// keeps a serialization failure off the `400` path.
 ///
-/// [`AtomError`]: crate::atompub::AtomError
+/// [`Error`]: crate::atompub::Error
 #[derive(Debug, Error)]
 pub enum AtomPubError {
     /// `atom_syndication` could not write the document.

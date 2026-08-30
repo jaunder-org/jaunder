@@ -8,7 +8,7 @@ use common::tagged_url::{HomepageUrl, ServiceDocUrl};
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
-use super::xml::{write_empty_element, write_text_element};
+use super::xml;
 
 /// Serializes a Really Simple Discovery (`RSD`) document.
 ///
@@ -58,11 +58,11 @@ pub fn render_rsd_document(service_url: &ServiceDocUrl, homepage_url: &HomepageU
     let _ = writer.write_event(Event::Start(root));
 
     let _ = writer.write_event(Event::Start(BytesStart::new("service")));
-    write_text_element(&mut writer, "engineName", "Jaunder");
-    write_text_element(&mut writer, "homePageLink", homepage_url.as_ref());
+    xml::write_text_element(&mut writer, "engineName", "Jaunder");
+    xml::write_text_element(&mut writer, "homePageLink", homepage_url.as_ref());
 
     let _ = writer.write_event(Event::Start(BytesStart::new("apis")));
-    write_empty_element(
+    xml::write_empty_element(
         &mut writer,
         "api",
         &[

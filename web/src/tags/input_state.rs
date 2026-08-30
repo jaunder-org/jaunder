@@ -11,7 +11,7 @@ use leptos::prelude::*;
 
 use common::seed::TagSummary;
 
-use super::input_logic::{next_suggestion, parse_committed_tag, prev_suggestion, push_unique};
+use super::input_logic;
 
 /// The committed `tags` plus the transient text-field / autocomplete signals.
 ///
@@ -75,7 +75,7 @@ impl InputState {
     pub fn commit(self, tag: TagSummary) {
         self.mutate_tags(|tags| {
             let length = tags.len();
-            push_unique(tags, tag);
+            input_logic::push_unique(tags, tag);
             tags.len() != length
         });
         self.input_text.set(String::new());
@@ -136,7 +136,7 @@ impl InputState {
                 if self.input_text.get().trim().is_empty() {
                     return false;
                 }
-                match parse_committed_tag(&self.input_text.get()) {
+                match input_logic::parse_committed_tag(&self.input_text.get()) {
                     Ok(tag) => self.commit(tag),
                     Err(e) => self.error.set(Some(e)),
                 }
@@ -147,12 +147,14 @@ impl InputState {
                 false
             }
             "ArrowDown" => {
-                self.selected_idx
-                    .update(|i| *i = next_suggestion(*i, self.suggestions.get().len()));
+                self.selected_idx.update(|i| {
+                    *i = input_logic::next_suggestion(*i, self.suggestions.get().len());
+                });
                 true
             }
             "ArrowUp" => {
-                self.selected_idx.update(|i| *i = prev_suggestion(*i));
+                self.selected_idx
+                    .update(|i| *i = input_logic::prev_suggestion(*i));
                 true
             }
             "Escape" => {

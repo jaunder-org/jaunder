@@ -17,9 +17,9 @@ use crate::{
     post_body::PostBody,
     post_summary::PostSummary,
     post_title::PostTitle,
-    render::{PostFormat, canonicalize_body, derive_post_naming},
+    render::{self, PostFormat},
     slug::Slug,
-    tag::{TagLabel, parse_and_validate_tags},
+    tag::{self, TagLabel},
     time::UtcInstant,
     visibility::AudienceTarget,
 };
@@ -241,7 +241,7 @@ fn parse_leading_block(
     }
     if !fields.tags.is_empty() {
         parsed.tags = Presence::Present(
-            parse_and_validate_tags(fields.tags)
+            tag::parse_and_validate_tags(fields.tags)
                 .map_err(|_| OrgMetadataError::Invalid("invalid KEYWORDS".into()))?,
         );
     }
@@ -559,8 +559,8 @@ fn canonical_body(
         body.to_owned()
     };
     let body: PostBody = source.parse().map_err(|_| OrgMetadataError::MetadataOnly)?;
-    let heading_title = derive_post_naming(None, &body, &PostFormat::Org).0;
-    canonicalize_body(&body, &PostFormat::Org)
+    let heading_title = render::derive_post_naming(None, &body, &PostFormat::Org).0;
+    render::canonicalize_body(&body, &PostFormat::Org)
         .map(|body| (body, heading_title))
         .map_err(|_| OrgMetadataError::MetadataOnly)
 }

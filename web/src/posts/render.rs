@@ -13,10 +13,9 @@
 //! coverage-measured; the `#[cfg(test)] mod tests` below are the coincidence
 //! tests that protect the byte-identical output.
 
-use crate::home::render::render_masthead;
+use crate::home::render;
 use crate::html::Markup;
 use crate::taglist::TagCtx;
-use crate::timeline::render::render_load_more;
 use crate::{avatar, taglist, topbar};
 use common::ids::PostId;
 use common::post_summary::PostSummary;
@@ -63,7 +62,7 @@ pub(crate) fn render_body(seed: &PageSeed) -> Markup {
         // Home (anonymous "Local" mode): the shared masthead as the leading chrome,
         // then the same flush timeline body as the profile/tag pages.
         PageSeed::SiteTimeline(page) => render_timeline_page(
-            &render_masthead(),
+            &render::render_masthead(),
             &page.posts,
             page.has_more,
             &TagCtx::SiteWide,
@@ -253,7 +252,7 @@ fn render_timeline_page(
                 p { (empty_text) }
             } @else {
                 (render_posts(posts, tag_ctx))
-                (render_load_more(has_more))
+                (crate::timeline::render::render_load_more(has_more))
             }
         }
     })

@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use common::password::{InvalidPassword, ProfferedPassword, validate_password_shape};
+use common::password::{self, InvalidPassword, ProfferedPassword};
 use macros::StrNewtype;
 use thiserror::Error;
 
@@ -16,7 +16,7 @@ impl FromStr for Password {
     type Err = InvalidPassword;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        validate_password_shape(s)?;
+        password::validate_password_shape(s)?;
         Ok(Self(s.to_owned()))
     }
 }

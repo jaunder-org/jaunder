@@ -14,15 +14,11 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "server")]
 use {
-    crate::auth::require_auth,
+    crate::auth,
     crate::error::InternalError,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{
-        ProfileUpdate, UserConfigStorage, UserStorage,
-        get_default_post_format as storage_get_default_post_format,
-        set_default_post_format as storage_set_default_post_format,
-    },
+    storage::{ProfileUpdate, UserConfigStorage, UserStorage},
 };
 
 /// Profile data returned by [`get`].
@@ -38,7 +34,7 @@ pub struct Data {
 /// Returns the authenticated user's profile.
 #[macros::server]
 pub async fn get() -> WebResult<Data> {
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     let users = expect_context::<Arc<dyn UserStorage>>();
     let user = users
         .get_user(auth.user_id)
@@ -61,7 +57,7 @@ pub async fn get() -> WebResult<Data> {
 /// needed — an empty wire value is rejected at decode, clearing goes via omission.
 #[macros::server(skip_all)]
 pub async fn update(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebResult<()> {
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     let users = expect_context::<Arc<dyn UserStorage>>();
     users
         .update_profile(
@@ -78,18 +74,18 @@ pub async fn update(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebR
 /// Retrieves the authenticated user's default post format preference.
 #[macros::server]
 pub async fn get_default_post_format() -> WebResult<PostFormat> {
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     let config = expect_context::<Arc<dyn UserConfigStorage>>();
-    let format = storage_get_default_post_format(config.as_ref(), auth.user_id).await?;
+    let format = storage::get_default_post_format(config.as_ref(), auth.user_id).await?;
     Ok(format)
 }
 
 /// Sets the authenticated user's default post format preference.
 #[macros::server]
 pub async fn set_default_post_format(format: PostFormat) -> WebResult<()> {
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     let config = expect_context::<Arc<dyn UserConfigStorage>>();
-    storage_set_default_post_format(config.as_ref(), auth.user_id, format).await?;
+    storage::set_default_post_format(config.as_ref(), auth.user_id, format).await?;
     Ok(())
 }
 

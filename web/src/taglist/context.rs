@@ -3,9 +3,8 @@
 
 use common::username::Username;
 
-/// Linking context for a post's footer tag chips — imported by the reactive post
-/// view (`crate::posts`) as `TagContext`. `SiteWide` links each
-/// chip to `/tags/:slug` only; `ForUser` also renders the "· here" link to
+/// Linking context for a post's footer tag chips. `SiteWide` links each chip to
+/// `/tags/:slug` only; `ForUser` also renders the "· here" link to
 /// `/~:username/tags/:slug`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TagCtx {

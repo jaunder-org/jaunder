@@ -4,11 +4,11 @@ use crate::error::WebResult;
 use common::username::Username;
 
 #[cfg(feature = "server")]
-use super::server::resolve_author;
+use super::server;
 #[cfg(feature = "server")]
 use {
-    crate::auth::require_auth,
-    common::visibility::local_subscriber_identity,
+    crate::auth,
+    common::visibility,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{SubscriptionStorage, UserStorage},
@@ -23,10 +23,10 @@ use {
 pub async fn subscribe(author_username: Username) -> WebResult<()> {
     let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
     let users = expect_context::<Arc<dyn UserStorage>>();
-    let auth = require_auth().await?;
-    let author_id = resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
+    let auth = auth::require_auth().await?;
+    let author_id = server::resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
     let channel_id = subscriptions.local_channel_id().await?;
-    let subscriber = local_subscriber_identity(channel_id, auth.user_id);
+    let subscriber = visibility::local_subscriber_identity(channel_id, auth.user_id);
     subscriptions.subscribe(author_id, &subscriber).await?;
     Ok(())
 }
@@ -38,10 +38,10 @@ pub async fn subscribe(author_username: Username) -> WebResult<()> {
 pub async fn unsubscribe(author_username: Username) -> WebResult<()> {
     let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
     let users = expect_context::<Arc<dyn UserStorage>>();
-    let auth = require_auth().await?;
-    let author_id = resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
+    let auth = auth::require_auth().await?;
+    let author_id = server::resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
     let channel_id = subscriptions.local_channel_id().await?;
-    let subscriber = local_subscriber_identity(channel_id, auth.user_id);
+    let subscriber = visibility::local_subscriber_identity(channel_id, auth.user_id);
     subscriptions.unsubscribe(author_id, &subscriber).await?;
     Ok(())
 }
@@ -55,10 +55,12 @@ pub async fn unsubscribe(author_username: Username) -> WebResult<()> {
 pub async fn is_subscribed(author_username: Username) -> WebResult<bool> {
     let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
     let users = expect_context::<Arc<dyn UserStorage>>();
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     // `resolve_author` rejects a self-target; treat that as "not subscribed"
     // so the profile can hide the button rather than surfacing an error.
-    let Ok(author_id) = resolve_author(users.as_ref(), &author_username, auth.user_id).await else {
+    let Ok(author_id) =
+        server::resolve_author(users.as_ref(), &author_username, auth.user_id).await
+    else {
         return Ok(false);
     };
     let viewer = common::visibility::ViewerIdentity::local(auth.user_id);

@@ -1,4 +1,4 @@
-use super::{UpdateIdentity, get_identity};
+use super::UpdateIdentity;
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
@@ -9,7 +9,10 @@ use leptos::prelude::*;
 #[component]
 pub fn SiteSettingsPage() -> impl IntoView {
     let update_action = ServerAction::<UpdateIdentity>::new();
-    let settings = Resource::new(move || update_action.version().get(), |_| get_identity());
+    let settings = Resource::new(
+        move || update_action.version().get(),
+        |_| super::get_identity(),
+    );
 
     view! {
         <Topbar title="Site Settings" sub="Operations" />

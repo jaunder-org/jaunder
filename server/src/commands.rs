@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Context as _;
+use anyhow::Context;
 
 use crate::cli::{AppTarget, BootstrapDb, Commands, SiteConfigAction, StorageArgs};
 use crate::mailer::LettreMailSender;
@@ -18,20 +18,16 @@ use common::invite::InviteTtlHours;
 use common::mailer::{EmailMessage, MailSender};
 use common::pg_role_password::PgRolePassword;
 use common::session_label::SessionLabel;
-use common::tagged_url::{MailConfirmUrl, compose};
+use common::tagged_url::{self, MailConfirmUrl};
 use common::token::RawToken;
 use common::username::Username;
 use host::config_key::SiteConfigKey;
+use host::metrics;
 use host::password::Password;
 use host::smtp_config::SmtpConfig;
-use storage::load_smtp_config;
 use storage::{
     BackupExportOptions, BackupRestoreOptions, BackupRestoreOutcome, RestoreValidationReport,
-    export_backup, restore_backup,
-};
-use storage::{
-    StorageRuntimeConfig, init_storage, open_database, open_existing_database,
-    open_existing_database_with_observer,
+    StorageRuntimeConfig,
 };
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
@@ -229,13 +225,13 @@ impl SiteConfigAction {
 /// Returns an error if the storage directory cannot be created, or if the
 /// database cannot be initialized.
 pub async fn cmd_init(storage: &StorageArgs, skip_if_exists: bool) -> anyhow::Result<()> {
-    match init_storage(&storage.storage_path) {
+    match storage::init_storage(&storage.storage_path) {
         Ok(()) => {}
         Err(e) if skip_if_exists && e.kind() == io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.into()),
     }
     let runtime = storage_runtime_config(&storage.db)?;
-    open_database(&storage.db, &runtime).await?;
+    storage::open_database(&storage.db, &runtime).await?;
     println!(
         "Initialized: storage={} db={}",
         storage.storage_path.display(),
@@ -315,7 +311,7 @@ pub async fn cmd_user_create(
     is_operator: bool,
 ) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(&storage.db)?;
-    let state = open_existing_database(&storage.db, &runtime)
+    let state = storage::open_existing_database(&storage.db, &runtime)
         .await
         .context(INIT_FIRST_CONTEXT)?;
 
@@ -342,7 +338,7 @@ pub async fn cmd_user_create(
     .await?;
 
     // CLI user creation bypasses the site registration policy entirely.
-    host::metrics::registration(
+    metrics::registration(
         host::metrics::RegistrationSource::Cli,
         host::metrics::RegistrationPolicy::CliBypass,
         host::metrics::RegistrationResult::Ok,
@@ -396,7 +392,7 @@ pub async fn cmd_app_password_create(
     label: &SessionLabel,
 ) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(&storage.db)?;
-    let state = open_existing_database(&storage.db, &runtime)
+    let state = storage::open_existing_database(&storage.db, &runtime)
         .await
         .context(INIT_FIRST_CONTEXT)?;
     let token = app_password_create(&state, username, label).await?;
@@ -415,7 +411,7 @@ pub async fn cmd_user_invite(
     expires_in: Option<InviteTtlHours>,
 ) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(&storage.db)?;
-    let state = open_existing_database(&storage.db, &runtime)
+    let state = storage::open_existing_database(&storage.db, &runtime)
         .await
         .context(INIT_FIRST_CONTEXT)?;
 
@@ -426,12 +422,12 @@ pub async fn cmd_user_invite(
     );
 
     let code = state.invites().create_invite(expires_at).await?;
-    host::metrics::invite(host::metrics::InviteEvent::Created);
+    metrics::invite(host::metrics::InviteEvent::Created);
     // Deliberate operator-facing reveal via `AsRef` (InviteCode has no Display/serde). With a
     // configured base URL, print a ready-to-send invitation link; otherwise the bare code.
     match state.site_config().get_identity().await?.base_url {
         Some(base_url) => {
-            let register_url: MailConfirmUrl = compose(&base_url, "/register");
+            let register_url: MailConfirmUrl = tagged_url::compose(&base_url, "/register");
             println!("{register_url}?invite_code={}", code.as_ref());
         }
         None => println!("{}", code.as_ref()),
@@ -447,7 +443,7 @@ pub async fn cmd_user_invite(
 /// sent.
 pub async fn cmd_smtp_test(storage: &StorageArgs, to: &Email) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(&storage.db)?;
-    let state = open_existing_database(&storage.db, &runtime)
+    let state = storage::open_existing_database(&storage.db, &runtime)
         .await
         .context(INIT_FIRST_CONTEXT)?;
 
@@ -462,7 +458,7 @@ async fn smtp_test_with(
     to: &Email,
     build_smtp: impl FnOnce(&SmtpConfig) -> Result<Box<dyn MailSender>, crate::mailer::BuildMailerError>,
 ) -> anyhow::Result<()> {
-    let smtp_config = load_smtp_config(site_config)
+    let smtp_config = storage::load_smtp_config(site_config)
         .await
         .context("SMTP is misconfigured")?
         .ok_or_else(|| anyhow::anyhow!("SMTP is not configured"))?;
@@ -499,7 +495,7 @@ pub async fn cmd_backup(
 ) -> anyhow::Result<PathBuf> {
     let runtime = storage_runtime_config(&storage.db)?;
     let destination_path = path.unwrap_or_else(|| default_backup_path(storage, mode));
-    let manifest = export_backup(BackupExportOptions {
+    let manifest = storage::export_backup(BackupExportOptions {
         database: &storage.db,
         runtime: &runtime,
         media_path: &storage.storage_path.join("media"),
@@ -534,7 +530,7 @@ pub async fn cmd_restore(
     }
     let runtime = storage_runtime_config(&storage.db)?;
     ensure_restore_target_empty(storage, &runtime).await?;
-    let outcome = restore_backup(BackupRestoreOptions {
+    let outcome = storage::restore_backup(BackupRestoreOptions {
         database: &storage.db,
         runtime: &runtime,
         media_path: &storage.storage_path.join("media"),
@@ -641,7 +637,7 @@ impl StartupDatabaseOperations for RealStartupDatabaseOperations {
         options: &storage::DbConnectOptions,
         runtime: &StorageRuntimeConfig,
     ) -> sqlx::Result<StartupDatabase> {
-        let opened = open_existing_database_with_observer(options, runtime).await?;
+        let opened = storage::open_existing_database_with_observer(options, runtime).await?;
         Ok(StartupDatabase {
             state: opened.state,
             instance_id: opened.instance_id,
@@ -654,12 +650,12 @@ impl StartupDatabaseOperations for RealStartupDatabaseOperations {
         storage: &StorageArgs,
         runtime: &StorageRuntimeConfig,
     ) -> anyhow::Result<()> {
-        match init_storage(&storage.storage_path) {
+        match storage::init_storage(&storage.storage_path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error.into()),
         }
-        open_database(&storage.db, runtime).await?;
+        storage::open_database(&storage.db, runtime).await?;
         Ok(())
     }
 
@@ -804,7 +800,7 @@ async fn prepare_saturation_metrics(
         .context("failed to load backup configuration for saturation metrics")?;
     let backup_destination_root = backup_config.destination_path.as_deref().map(PathBuf::from);
     let snapshot = Arc::new(RwLock::new(host::metrics::SaturationSnapshot::default()));
-    let observables = host::metrics::register_saturation_observables(snapshot.clone());
+    let observables = metrics::register_saturation_observables(snapshot.clone());
     let sources = crate::metrics::SaturationSources::real(
         db.feed_events.clone(),
         db.media.clone(),
@@ -1062,7 +1058,7 @@ async fn cmd_site_config_set(
 ) -> anyhow::Result<()> {
     key.validate(value)?;
     let runtime = storage_runtime_config(&storage.db)?;
-    let state = open_existing_database(&storage.db, &runtime).await?;
+    let state = storage::open_existing_database(&storage.db, &runtime).await?;
     state.site_config.set(key, value).await?;
     eprintln!("set site_config {key} = {value}");
     Ok(())
@@ -1072,7 +1068,7 @@ async fn cmd_site_config_set(
 /// so a caller can distinguish an unset key from an empty value.
 async fn cmd_site_config_get(storage: &StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(&storage.db)?;
-    let state = open_existing_database(&storage.db, &runtime).await?;
+    let state = storage::open_existing_database(&storage.db, &runtime).await?;
     match state.site_config.get_raw(key).await? {
         Some(value) => {
             println!("{value}");
@@ -1085,7 +1081,7 @@ async fn cmd_site_config_get(storage: &StorageArgs, key: SiteConfigKey) -> anyho
 /// Print all `site_config` entries as `key=value`, one per line, ordered by key.
 async fn cmd_site_config_list(storage: &StorageArgs) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(&storage.db)?;
-    let state = open_existing_database(&storage.db, &runtime).await?;
+    let state = storage::open_existing_database(&storage.db, &runtime).await?;
     let entries = state.site_config.list().await?;
     print!("{}", format_entries(&entries));
     Ok(())
@@ -1095,7 +1091,7 @@ async fn cmd_site_config_list(storage: &StorageArgs) -> anyhow::Result<()> {
 /// stderr notes which happened.
 async fn cmd_site_config_unset(storage: &StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(&storage.db)?;
-    let state = open_existing_database(&storage.db, &runtime).await?;
+    let state = storage::open_existing_database(&storage.db, &runtime).await?;
     if state.site_config.delete(key).await? {
         eprintln!("unset site_config {key}");
     } else {
@@ -1117,7 +1113,7 @@ async fn cmd_site_config_unset(storage: &StorageArgs, key: SiteConfigKey) -> any
 /// An empty value on an optional key is *not* invalid: empty means unset (spec
 /// D1b), which `SiteConfigKey::validate` already honours.
 fn format_entries(entries: &[(String, String)]) -> String {
-    use std::fmt::Write as _;
+    use std::fmt::Write;
     entries.iter().fold(String::new(), |mut out, (k, v)| {
         // writeln! to a String is infallible; the newline gives one entry per line.
         let _ = match k.parse::<SiteConfigKey>() {
@@ -1846,7 +1842,7 @@ mod tests {
     async fn site_config_set_rejects_an_invalid_value(#[case] backend: Backend) {
         let base = TempDir::new().expect("temp dir");
         let (args, _pg) = site_config_args(backend, &base).await;
-        let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
+        let state = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
             .await
             .expect("reopen");
         let before = state.site_config.list().await.unwrap().len();
@@ -1873,7 +1869,7 @@ mod tests {
             .await
             .expect("empty means unset on an optional key");
 
-        let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
+        let state = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
             .await
             .expect("reopen");
         assert_eq!(
@@ -1954,9 +1950,10 @@ mod tests {
         .await
         .expect("upsert ok");
 
-        let state = open_existing_database(&storage_args.db, &StorageRuntimeConfig::default())
-            .await
-            .expect("reopen");
+        let state =
+            storage::open_existing_database(&storage_args.db, &StorageRuntimeConfig::default())
+                .await
+                .expect("reopen");
         assert_eq!(
             state
                 .site_config

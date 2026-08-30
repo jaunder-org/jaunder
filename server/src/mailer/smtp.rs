@@ -1,16 +1,13 @@
 //! SMTP mail transport backed by [`lettre`].
 
 use async_trait::async_trait;
-use common::mailbox::Mailbox as CommonMailbox;
 use common::mailer::{EmailMessage, MailError, MailSender};
 use common::smtp_tls_mode::SmtpTlsMode;
 use host::smtp_config::SmtpConfig;
 use lettre::{
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
     message::Mailbox,
-    transport::smtp::{
-        AsyncSmtpTransportBuilder, Error as SmtpTransportError, authentication::Credentials,
-    },
+    transport::smtp::{AsyncSmtpTransportBuilder, authentication::Credentials},
 };
 use thiserror::Error;
 
@@ -26,7 +23,7 @@ pub enum BuildMailerError {
     InvalidSender(#[source] lettre::address::AddressError),
     /// Failed to build the SMTP transport.
     #[error("failed to build SMTP transport: {0}")]
-    Transport(#[source] SmtpTransportError),
+    Transport(#[source] lettre::transport::smtp::Error),
 }
 
 /// An [`EmailMessage`] reached the transport with no recipients.
@@ -61,15 +58,22 @@ impl LettreMailSender {
 
     fn from_config_with(
         config: &SmtpConfig,
-        starttls_relay: fn(&str) -> Result<AsyncSmtpTransportBuilder, SmtpTransportError>,
-        tls_relay: fn(&str) -> Result<AsyncSmtpTransportBuilder, SmtpTransportError>,
+        starttls_relay: fn(
+            &str,
+        )
+            -> Result<AsyncSmtpTransportBuilder, lettre::transport::smtp::Error>,
+        tls_relay: fn(&str) -> Result<AsyncSmtpTransportBuilder, lettre::transport::smtp::Error>,
     ) -> Result<Self, BuildMailerError> {
         // Fallible, unlike the conversions in `build_message`. Those take an
         // `Email`, which always survives lettre's parser (#297). This takes an
         // operator-authored `SmtpSender`: parse it through `common::Mailbox` to
         // normalize any accepted display-name spelling to Mailbox's RFC-safe render
         // form (#837), then let lettre validate its own boundary.
-        let Ok(common_sender) = config.sender.to_string().parse::<CommonMailbox>() else {
+        let Ok(common_sender) = config
+            .sender
+            .to_string()
+            .parse::<common::mailbox::Mailbox>()
+        else {
             unreachable!("SmtpSender invariant guarantees common::Mailbox parseability")
         };
         let sender: Mailbox = common_sender
@@ -291,7 +295,7 @@ mod tests {
         }
     }
 
-    fn transport_build_error() -> SmtpTransportError {
+    fn transport_build_error() -> lettre::transport::smtp::Error {
         lettre::transport::smtp::client::TlsParametersBuilder::new("mail.example.com".to_owned())
             .set_min_tls_version(lettre::transport::smtp::client::TlsVersion::Tlsv10)
             .build_rustls()
@@ -299,7 +303,9 @@ mod tests {
             .expect("rustls rejects TLS 1.0")
     }
 
-    fn fail_transport_build(_host: &str) -> Result<AsyncSmtpTransportBuilder, SmtpTransportError> {
+    fn fail_transport_build(
+        _host: &str,
+    ) -> Result<AsyncSmtpTransportBuilder, lettre::transport::smtp::Error> {
         Err(transport_build_error())
     }
 
@@ -329,9 +335,9 @@ mod tests {
         let error = anyhow::Error::new(error);
 
         assert!(
-            error
-                .chain()
-                .any(|source| source.downcast_ref::<SmtpTransportError>().is_some()),
+            error.chain().any(|source| source
+                .downcast_ref::<lettre::transport::smtp::Error>()
+                .is_some()),
             "concrete lettre transport source must remain in the chain: {error:#}"
         );
     }
@@ -399,9 +405,9 @@ mod tests {
             .expect_err("send against a dead endpoint must fail");
         let error = anyhow::Error::new(error);
         assert!(
-            error
-                .chain()
-                .any(|source| source.downcast_ref::<SmtpTransportError>().is_some()),
+            error.chain().any(|source| source
+                .downcast_ref::<lettre::transport::smtp::Error>()
+                .is_some()),
             "concrete lettre transport source must remain downcastable: {error:#}"
         );
     }

@@ -186,10 +186,10 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
       `#[error(...)]` attributes, the inherent
       `impl AtomPubError { pub fn new }`, the `#[cfg(test)] mod tests` (1 test),
       and `use thiserror::Error;`. → **one deviation from verbatim**: the doc
-      comment links `[`AtomError`]`, which resolved in `mod.rs` because the
+      comment links `[`Error`]`, which resolved in `mod.rs` because the
       `atom_syndication` re-export is there. In `error.rs` it does not, and
       `doc-links` is a gate, so the doc gained an explicit
-      `[`AtomError`]: crate::atompub::AtomError` target.
+      `[`Error`]: crate::atompub::Error` target.
 - [x] `mod.rs`: keep the `//!` doc, `mod xml;`, the four `pub mod` + `pub use`
       pairs, and the `pub use atom_syndication::{…}` block. Add
       `mod ns; pub use ns::{APP_NS, ATOM_NS, J_NS};` and
@@ -417,7 +417,7 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 
 - [x] `error.rs`: `pub enum HandlerError`, `impl IntoResponse for HandlerError`,
       the **11** `From<…> for HandlerError` impls (`sqlx`, `StatusCode`,
-      `AtomError`, `AtomPubError`, `TaggingError`, `TagValidationError`,
+      `Error`, `AtomPubError`, `TaggingError`, `TagValidationError`,
       `InvalidPostBody`, `PerformCreationError`, `PerformUpdateError`,
       `DeleteMediaError`, `anyhow`), and `fn log_internal`. **Hazard:** the
       `From<anyhow::Error>` impl reaches `crate::media::map_error` — the _server

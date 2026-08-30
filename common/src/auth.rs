@@ -33,7 +33,7 @@ pub enum BasicAuthParseError {
 /// and [`BasicAuthParseError::Malformed`] when Basic credentials fail base64,
 /// UTF-8, separator, username, or token validation.
 pub fn parse_basic_auth(header: &str) -> Result<BasicAuthCredential, BasicAuthParseError> {
-    use base64::Engine as _;
+    use base64::Engine;
 
     let rest = header
         .strip_prefix("Basic ")

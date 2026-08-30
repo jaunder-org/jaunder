@@ -3,11 +3,12 @@
 
 #[cfg(feature = "server")]
 use {
-    crate::auth::require_auth,
+    crate::auth,
     crate::error::InternalError,
+    crate::mail,
     chrono::Utc,
     common::mailer::{EmailMessage, MailSender},
-    common::tagged_url::{MailConfirmUrl, compose},
+    common::tagged_url::{self, MailConfirmUrl},
     leptos::prelude::*,
     std::sync::Arc,
     storage::{InviteStorage, RegistrationPolicy, SiteConfigStorage},
@@ -49,7 +50,7 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<()> {
         expires_in_hours,
         recipient_email,
     } = request;
-    let _auth = require_auth().await?;
+    let _auth = auth::require_auth().await?;
     let invites = expect_context::<Arc<dyn InviteStorage>>();
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     let mailer = expect_context::<Arc<dyn MailSender>>();
@@ -58,7 +59,7 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<()> {
     // must not leave an undelivered invite behind (no orphan). The recipient is
     // already a validated `Email` — the typed `#[server]` arg rejects a malformed
     // address at decode time (ADR-0065), so no in-handler parse is needed.
-    let base_url = crate::mail::require_base_url(&*site_config).await?;
+    let base_url = mail::require_base_url(&*site_config).await?;
 
     // The bound now lives in `InviteTtlHours` (1..=336): the typed arg rejects an
     // out-of-range value at decode, so no in-body overflow check is needed. `hours` is
@@ -75,7 +76,7 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<()> {
     // Deliberate egress of the secret via `AsRef` (InviteCode has no Display/serde).
     // Compose base + `/register` (correct slash boundary) then append the code as a
     // raw query param, preserving its exact spelling.
-    let register_url: MailConfirmUrl = compose(&base_url, "/register");
+    let register_url: MailConfirmUrl = tagged_url::compose(&base_url, "/register");
     let link = format!("{register_url}?invite_code={}", code.as_ref());
     let message = EmailMessage {
         from: None,
@@ -85,8 +86,7 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<()> {
             "You've been invited to create an account. Click the link below to register:\n\n{link}\n\nThis invitation expires in {hours} hours."
         ),
     };
-    crate::mail::send_recording_metrics(&*mailer, &message, host::metrics::EmailKind::Invite)
-        .await?;
+    mail::send_recording_metrics(&*mailer, &message, host::metrics::EmailKind::Invite).await?;
     Ok(())
 }
 
@@ -94,7 +94,7 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<()> {
 /// policy; returns an error otherwise.
 #[macros::server]
 pub async fn list() -> WebResult<Vec<Info>> {
-    let _auth = require_auth().await?;
+    let _auth = auth::require_auth().await?;
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     let invites = expect_context::<Arc<dyn InviteStorage>>();
     let policy = site_config.get_registration_policy().await?;

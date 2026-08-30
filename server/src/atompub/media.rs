@@ -11,18 +11,18 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use common::media::{ContentHash, Filename, MediaRef, MediaSource, media_url};
+use common::media::{self, ContentHash, Filename, MediaRef, MediaSource};
 use common::root_relative_url::RootRelativeUrl;
-use common::tagged_url::{BaseUrl, EditMediaUriUrl, EditUriUrl, compose};
+use common::tagged_url::{self, BaseUrl, EditMediaUriUrl, EditUriUrl};
 use common::username::Username;
-use host::atompub::{MediaLinkEntry, render_media_link_entry};
+use host::atompub::{self, MediaLinkEntry};
 use storage::{
     InstanceId, MediaManager, MediaRecord, MediaReferenceOwnershipResolver, MediaStorage,
-    PostStorage, SiteConfigStorage, resolve_media_reference_ownership,
+    PostStorage, SiteConfigStorage,
 };
 use web::auth;
 
-use super::{HandlerError, required_base_url};
+use super::HandlerError;
 
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
 
@@ -37,8 +37,8 @@ type MemberDeleteExtensions = (
 
 /// Builds the media-link entry for a stored media record.
 fn media_link_entry(record: &MediaRecord, base: &BaseUrl, username: &Username) -> MediaLinkEntry {
-    let binary_path = media_url(&MediaSource::Upload, &record.sha256, &record.filename);
-    let binary: EditMediaUriUrl = compose(base, &binary_path);
+    let binary_path = media::media_url(&MediaSource::Upload, &record.sha256, &record.filename);
+    let binary: EditMediaUriUrl = tagged_url::compose(base, &binary_path);
     // The member URL is a *different* layout from the serve path (it is the AtomPub
     // collection's, not the content-addressed store's), so it is built here rather than by
     // `media_path`. The filename needs no encoding at either site (#720): a `Filename`
@@ -60,7 +60,7 @@ fn media_link_entry(record: &MediaRecord, base: &BaseUrl, username: &Username) -
         };
         url
     };
-    let edit: EditUriUrl = compose(base, &edit_path);
+    let edit: EditUriUrl = tagged_url::compose(base, &edit_path);
     MediaLinkEntry {
         // The member URL *is* the entry's atom:id — the edit URI is the canonical
         // identifier in the AtomPub member representation.
@@ -138,9 +138,9 @@ pub async fn collection_post(
         .await?
         .ok_or(HandlerError::Invariant)?;
 
-    let base = required_base_url(site_config.as_ref()).await?;
+    let base = super::required_base_url(site_config.as_ref()).await?;
     let entry = media_link_entry(&record, &base, &username);
-    let xml = render_media_link_entry(&entry)?;
+    let xml = atompub::render_media_link_entry(&entry)?;
     let status = if existed {
         StatusCode::OK
     } else {
@@ -216,9 +216,9 @@ pub(super) async fn member_get(
         .await?
         .ok_or(HandlerError::NotFound)?;
 
-    let base = required_base_url(site_config.as_ref()).await?;
+    let base = super::required_base_url(site_config.as_ref()).await?;
     let entry = media_link_entry(&record, &base, &username);
-    let xml = render_media_link_entry(&entry)?;
+    let xml = atompub::render_media_link_entry(&entry)?;
     Ok(([(header::CONTENT_TYPE, ENTRY_CONTENT_TYPE)], xml).into_response())
 }
 
@@ -259,7 +259,7 @@ pub(super) async fn member_delete(
     // forced deletion and potential last-row reclamation.
     let identity = site_config.get_identity().await?;
     let references = posts.list_media_references(&media_ref).await?;
-    let evidence = resolve_media_reference_ownership(
+    let evidence = storage::resolve_media_reference_ownership(
         resolver.as_ref(),
         references.references(),
         &instance_id,

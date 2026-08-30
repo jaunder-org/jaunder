@@ -19,7 +19,7 @@ use common::media::UploadedMedia;
 
 #[cfg(feature = "server")]
 use {
-    crate::auth::require_auth,
+    crate::auth,
     crate::error::{ErrorClass, ErrorKind, InternalError},
     common::media::MediaRef,
     // Server-only: the delete guard's key. The CSR build never runs a query.
@@ -29,9 +29,9 @@ use {
     std::sync::Arc,
     std::{collections::BTreeSet, path::PathBuf},
     storage::{
-        DeleteMediaError, InstanceId, MediaError, MediaManager, MediaReferenceOwnershipResolver,
-        MediaStorage, PostStorage, SiteConfigStorage, TryDeleteOutcome,
-        resolve_media_reference_ownership,
+        self, DeleteMediaError, InstanceId, MediaError, MediaManager,
+        MediaReferenceOwnershipResolver, MediaStorage, PostStorage, SiteConfigStorage,
+        TryDeleteOutcome,
     },
 };
 
@@ -84,7 +84,7 @@ pub async fn list_mine(
     limit: Option<PageSize>,
     offset: Option<PageOffset>,
 ) -> WebResult<Vec<Item>> {
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     let media = expect_context::<Arc<dyn MediaStorage>>();
 
     let records = media
@@ -116,7 +116,7 @@ pub async fn list_mine(
 /// Returns storage usage for the authenticated user.
 #[macros::server]
 pub async fn get_usage() -> WebResult<UsageData> {
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     let media = expect_context::<Arc<dyn MediaStorage>>();
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
 
@@ -144,7 +144,7 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MediaDeletion> {
         source,
         force,
     } = request;
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     let media = expect_context::<Arc<dyn MediaStorage>>();
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -165,7 +165,7 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MediaDeletion> {
     let references = posts.list_media_references(&media_ref).await?;
     let resolver = expect_context::<Arc<dyn MediaReferenceOwnershipResolver>>();
     let instance_id = expect_context::<InstanceId>();
-    let evidence = resolve_media_reference_ownership(
+    let evidence = storage::resolve_media_reference_ownership(
         resolver.as_ref(),
         references.references(),
         &instance_id,
@@ -294,7 +294,7 @@ fn map_multipart_error(error: multer::Error) -> InternalError {
 /// The multipart `#[server]` fn (#517).
 #[macros::server(input = MultipartFormData, skip_all)]
 pub async fn upload(data: MultipartData) -> WebResult<UploadedMedia> {
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     let media = expect_context::<Arc<dyn MediaStorage>>();
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
 

@@ -15,16 +15,12 @@ use common::visibility::ViewerIdentity;
 
 use crate::soft_path::SoftPath;
 use std::{future::Future, sync::Arc};
-use storage::{PostStorage, UserStorage, fetch_post_record};
-use web::error::{SwallowedSource, report_swallowed};
-use web::timeline::{
-    fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
-};
+use storage::{PostStorage, UserStorage};
+use web::error::{self, SwallowedSource};
+use web::timeline;
 
 use super::Shell;
-use super::document::{
-    cacheable, permalink_response, shell_response, tag_response, timeline_response,
-};
+use super::document;
 
 /// Register the public projector routes. Generic over the router state because
 /// the handlers extract only request `Extension`s (the storage traits + the
@@ -77,9 +73,9 @@ async fn permalink(
         // An unparseable segment — or an impossible date (e.g. month 13) — is never
         // public content: let the client route it (it may be a server URL the SPA
         // reloads for), a uniform soft-404 (#583).
-        return shell_response(&shell);
+        return document::shell_response(&shell);
     };
-    let result = fetch_post_record(
+    let result = storage::fetch_post_record(
         posts.as_ref(),
         &ViewerIdentity::Anonymous,
         &username,
@@ -88,21 +84,21 @@ async fn permalink(
         UtcInstant::now(),
     )
     .await;
-    permalink_response(result, &headers, &shell)
+    document::permalink_response(result, &headers, &shell)
 }
 
 async fn site_timeline(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     headers: HeaderMap,
 ) -> Response {
-    let result = fetch_local_timeline(
+    let result = timeline::fetch_local_timeline(
         posts.as_ref(),
         &ViewerIdentity::Anonymous,
         None,
         Some(PageSize::default()),
     )
     .await;
-    timeline_response(result, &headers, PageSeed::SiteTimeline)
+    document::timeline_response(result, &headers, PageSeed::SiteTimeline)
 }
 
 /// Project a username-keyed public page, or serve the SPA shell when the
@@ -128,18 +124,18 @@ where
     Fut: Future<Output = web::error::InternalResult<PageSeed>>,
 {
     let Some(username) = username.into() else {
-        return shell_response(shell);
+        return document::shell_response(shell);
     };
     match fetch_seed(username).await {
-        Ok(seed) => cacheable(headers, &seed),
+        Ok(seed) => document::cacheable(headers, &seed),
         Err(error) => {
-            report_swallowed(
+            error::report_swallowed(
                 error.kind(),
                 error.class(),
                 context,
                 SwallowedSource::Error(&error),
             );
-            shell_response(shell)
+            document::shell_response(shell)
         }
     }
 }
@@ -158,7 +154,7 @@ async fn profile(
         &shell,
         "server.projector.profile",
         |username| async move {
-            fetch_user_posts(
+            timeline::fetch_user_posts(
                 posts.as_ref(),
                 &ViewerIdentity::Anonymous,
                 &username,
@@ -187,9 +183,9 @@ async fn site_tag(
     // `Tag::from_str` lowercases, so the projected heading and the client render
     // coincide. An unparseable tag is never public content — let the client route it.
     let Some(tag) = tag.into() else {
-        return shell_response(&shell);
+        return document::shell_response(&shell);
     };
-    let result = fetch_posts_by_tag(
+    let result = timeline::fetch_posts_by_tag(
         posts.as_ref(),
         &ViewerIdentity::Anonymous,
         &tag,
@@ -197,7 +193,7 @@ async fn site_tag(
         Some(PageSize::default()),
     )
     .await;
-    tag_response(
+    document::tag_response(
         result,
         &headers,
         &shell,
@@ -221,7 +217,7 @@ async fn user_tag(
     // coincide. An unparseable username/tag is never public content — serve the
     // shell and let the client route it.
     let Some(tag) = tag.into() else {
-        return shell_response(&shell);
+        return document::shell_response(&shell);
     };
     username_page_response(
         username,
@@ -229,7 +225,7 @@ async fn user_tag(
         &shell,
         "server.projector.user_tag",
         |username| async move {
-            fetch_user_posts_by_tag(
+            timeline::fetch_user_posts_by_tag(
                 posts.as_ref(),
                 users.as_ref(),
                 &ViewerIdentity::Anonymous,

@@ -2,10 +2,7 @@ use async_trait::async_trait;
 
 use sqlx::PgPool;
 
-use crate::helpers::{
-    InviteTokenStateRow, TokenState, TokenStateRow, classify_invite_token_state,
-    classify_token_state,
-};
+use crate::helpers::{self, InviteTokenStateRow, TokenState, TokenStateRow};
 use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::display_name::DisplayName;
 use common::ids::UserId;
@@ -19,7 +16,7 @@ pub(crate) fn finish_password_reset_rejection(
     primary: Result<(), ConfirmPasswordResetError>,
     rollback: Result<(), sqlx::Error>,
 ) -> Result<(), ConfirmPasswordResetError> {
-    crate::helpers::preserve_after_secondary(
+    helpers::preserve_after_secondary(
         primary,
         rollback,
         host::error::ErrorKind::Storage,
@@ -42,7 +39,7 @@ impl PostgresAtomicOps {
         &self,
         raw_token: &RawToken,
         new_password: &Password,
-        hash_operation: crate::helpers::HashPasswordOperation,
+        hash_operation: helpers::HashPasswordOperation,
     ) -> Result<(), ConfirmPasswordResetError> {
         let token_hash =
             host::token::hash(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
@@ -72,7 +69,7 @@ impl PostgresAtomicOps {
             .fetch_optional(&mut *tx)
             .await?;
 
-            let primary = match classify_token_state(row, now) {
+            let primary = match helpers::classify_token_state(row, now) {
                 TokenState::Missing => Err(ConfirmPasswordResetError::NotFound),
                 TokenState::AlreadyUsed => Err(ConfirmPasswordResetError::AlreadyUsed),
                 TokenState::Expired | TokenState::Claimable => {
@@ -85,10 +82,9 @@ impl PostgresAtomicOps {
         // ADR-0022: hash only after the token claim succeeds, so a bogus/used/expired
         // token is rejected above without paying the Argon2 cost. A hash failure here
         // `?`-returns and drops the tx → rollback → the claim reverts (token not consumed).
-        let password_hash =
-            crate::helpers::hash_password_with(new_password.clone(), hash_operation)
-                .await
-                .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
+        let password_hash = helpers::hash_password_with(new_password.clone(), hash_operation)
+            .await
+            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
             .bind(&password_hash)
@@ -130,14 +126,14 @@ impl AtomicOps for PostgresAtomicOps {
         .await?;
 
         let now = UtcInstant::now();
-        match classify_invite_token_state(row, now) {
+        match helpers::classify_invite_token_state(row, now) {
             TokenState::Missing => return Err(RegisterWithInviteError::InviteNotFound),
             TokenState::AlreadyUsed => return Err(RegisterWithInviteError::InviteAlreadyUsed),
             TokenState::Expired => return Err(RegisterWithInviteError::InviteExpired),
             TokenState::Claimable => {}
         }
 
-        let password_hash = crate::helpers::hash_password(password.clone())
+        let password_hash = helpers::hash_password(password.clone())
             .await
             .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?; // cov:ignore
 
@@ -185,7 +181,7 @@ impl AtomicOps for PostgresAtomicOps {
         self.confirm_password_reset_with(
             raw_token,
             new_password,
-            crate::helpers::hash_password_operation(new_password),
+            helpers::hash_password_operation(new_password),
         )
         .await
     }

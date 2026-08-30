@@ -1,35 +1,35 @@
 use common::{
-    feed::{FeedFormat, FeedSurface, canonicalize},
+    feed::{self, FeedFormat, FeedSurface},
     username::Username,
 };
 use leptos::prelude::*;
 use leptos_meta::Link;
 
-use super::labels::{rsd_href, surface_label};
+use super::labels;
 /// Renders feed auto-discovery link tags for RSS, Atom, and JSON Feed.
 /// The component itself is invisible; it hoists `<link>` tags into the document head.
 #[component]
 pub fn FeedDiscovery<'a>(surface: &'a FeedSurface) -> impl IntoView + use<> {
-    let label = surface_label(surface);
+    let label = labels::surface_label(surface);
 
     view! {
         <Link
             rel="alternate"
             type_="application/rss+xml"
             title=format!("{label} (RSS)")
-            href=canonicalize(surface, FeedFormat::Rss)
+            href=feed::canonicalize(surface, FeedFormat::Rss)
         />
         <Link
             rel="alternate"
             type_="application/atom+xml"
             title=format!("{label} (Atom)")
-            href=canonicalize(surface, FeedFormat::Atom)
+            href=feed::canonicalize(surface, FeedFormat::Atom)
         />
         <Link
             rel="alternate"
             type_="application/feed+json"
             title=format!("{label} (JSON Feed)")
-            href=canonicalize(surface, FeedFormat::Json)
+            href=feed::canonicalize(surface, FeedFormat::Json)
         />
     }
 }
@@ -44,7 +44,7 @@ pub fn RsdDiscovery<'a>(username: &'a Username) -> impl IntoView + use<> {
             rel="EditURI"
             type_="application/rsd+xml"
             title="AtomPub (RSD)"
-            href=rsd_href(username)
+            href=labels::rsd_href(username)
         />
     }
 }

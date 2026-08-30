@@ -10,6 +10,7 @@ use sqlx::{Database, FromRow, Pool};
 
 use crate::InstanceId;
 use crate::backend::Backend;
+use crate::helpers;
 use crate::posts::MediaReferenceEvidence;
 use thiserror::Error;
 
@@ -220,7 +221,7 @@ impl<DB: Database> MediaStore<DB> {
 impl<DB> MediaStorage for MediaStore<DB>
 where
     DB: MediaDialect,
-    crate::helpers::MediaRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    helpers::MediaRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `ContentHash`/`Filename` bind and decode as themselves via the ADR-0071 sqlx
@@ -291,7 +292,7 @@ where
         filename: &Filename,
         source: &MediaSource,
     ) -> sqlx::Result<Option<MediaRecord>> {
-        let row = sqlx::query_as::<_, crate::helpers::MediaRow>(
+        let row = sqlx::query_as::<_, helpers::MediaRow>(
             "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
              FROM media
              WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
@@ -303,7 +304,7 @@ where
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(row.map(crate::helpers::media_record_from_row))
+        Ok(row.map(helpers::media_record_from_row))
     }
 
     #[tracing::instrument(
@@ -358,9 +359,7 @@ where
         Ok(rows
             .iter()
             .filter_map(|row| {
-                match crate::helpers::MediaRow::from_row(row)
-                    .map(crate::helpers::media_record_from_row)
-                {
+                match helpers::MediaRow::from_row(row).map(helpers::media_record_from_row) {
                     Ok(record) => Some(record),
                     Err(error) => {
                         tracing::warn!(%error, "skipping undecodable media row in list_media");
@@ -461,7 +460,7 @@ where
         sha256: &ContentHash,
         source: &MediaSource,
     ) -> sqlx::Result<Option<MediaRecord>> {
-        let row = sqlx::query_as::<_, crate::helpers::MediaRow>(
+        let row = sqlx::query_as::<_, helpers::MediaRow>(
             "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
              FROM media
              WHERE sha256 = $1 AND source = $2
@@ -472,7 +471,7 @@ where
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(row.map(crate::helpers::media_record_from_row))
+        Ok(row.map(helpers::media_record_from_row))
     }
 }
 

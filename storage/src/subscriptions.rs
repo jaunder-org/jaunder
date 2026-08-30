@@ -14,8 +14,8 @@ use common::ids::{ChannelId, SubscriptionId, UserId};
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{
-    InvalidSubscriberRef, SubscriberIdentity, SubscriberRef, SubscriptionPolicy,
-    SubscriptionStatus, ViewerIdentity, local_subscriber_ref,
+    self, InvalidSubscriberRef, SubscriberIdentity, SubscriberRef, SubscriptionPolicy,
+    SubscriptionStatus, ViewerIdentity,
 };
 use host::error::InternalResult;
 use sqlx::{Database, Pool, Row};
@@ -265,7 +265,7 @@ where
             // A local viewer carries no channel: it can only ever be the
             // `local` row, which `IS_ACTIVE_LOCAL_SUBSCRIBER` resolves itself.
             ViewerIdentity::Local { user_id } => {
-                let subscriber_ref = local_subscriber_ref(*user_id);
+                let subscriber_ref = visibility::local_subscriber_ref(*user_id);
                 sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_LOCAL_SUBSCRIBER)
                     .bind(author_user_id)
                     .bind(&subscriber_ref)

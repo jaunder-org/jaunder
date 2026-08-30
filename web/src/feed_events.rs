@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use common::{tag::Tag, username::Username};
-use host::feed::affected_feed_urls;
+use host::feed;
 use storage::{FeedEventError, FeedEventStorage};
 
 #[cfg(test)]
@@ -33,7 +33,7 @@ pub async fn enqueue_feed_events(
     // this runs synchronously inside every post-mutation server fn, where a
     // per-row loop churns the write lock (#766).
     events
-        .enqueue_many(&affected_feed_urls(username, tag_slugs))
+        .enqueue_many(&feed::affected_feed_urls(username, tag_slugs))
         .await
 }
 

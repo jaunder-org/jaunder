@@ -9,17 +9,16 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool, Row};
 
 use crate::backup::{
-    BackupError, BackupManifest, BackupMode, ColumnInfo, RestoreValidationReport, backup_table_set,
-    build_manifest, ensure_schema_version, json_value_as_restore_text, order_by_clause,
-    read_table_rows, restore_table_order, validate_instance_identity_backup, validate_restore_row,
+    self, BackupError, BackupManifest, BackupMode, ColumnInfo, RestoreValidationReport,
 };
-use crate::sql::quote_identifier;
+use crate::helpers;
+use crate::sql;
 
 fn finish_export_rollback(
     primary: Result<BackupManifest, BackupError>,
     rollback: Result<(), sqlx::Error>,
 ) -> Result<BackupManifest, BackupError> {
-    crate::helpers::preserve_after_secondary(
+    helpers::preserve_after_secondary(
         primary,
         rollback,
         host::error::ErrorKind::Storage,
@@ -32,7 +31,7 @@ fn finish_restore_rollback<T>(
     primary: Result<T, BackupError>,
     rollback: Result<(), sqlx::Error>,
 ) -> Result<T, BackupError> {
-    crate::helpers::preserve_after_secondary(
+    helpers::preserve_after_secondary(
         primary,
         rollback,
         host::error::ErrorKind::Storage,
@@ -80,7 +79,7 @@ pub(crate) async fn export_database(
             export_table(&mut connection, destination_path, table, &columns).await?;
         }
 
-        Ok(build_manifest(
+        Ok(backup::build_manifest(
             schema_version,
             schema_checksum,
             mode,
@@ -116,8 +115,8 @@ pub(crate) async fn restore_database(
 ) -> Result<RestoreValidationReport, BackupError> {
     let mut connection = pool.acquire().await?;
     let schema_version = schema_version(&mut connection).await?;
-    ensure_schema_version(manifest, schema_version)?;
-    validate_instance_identity_backup(source_path, manifest)?;
+    backup::ensure_schema_version(manifest, schema_version)?;
+    backup::validate_instance_identity_backup(source_path, manifest)?;
     sqlx::query("BEGIN")
         .execute(&mut *connection)
         .await
@@ -136,12 +135,12 @@ pub(crate) async fn restore_database(
         // *checks*, not `ON DELETE CASCADE` *actions*
         // (docs/adr/0115-clear-then-load-restore.md).
         for table in &manifest.tables {
-            sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
+            sqlx::query(&format!("DELETE FROM {}", sql::quote_identifier(table)))
                 .execute(&mut *connection)
                 .await
                 .map_err(map_restore_error)?;
         }
-        for table in restore_table_order(&manifest.tables) {
+        for table in backup::restore_table_order(&manifest.tables) {
             let columns = columns(&mut connection, table).await?;
             import_table(
                 &mut connection,
@@ -192,7 +191,7 @@ async fn existing_export_tables(connection: &mut PgConnection) -> Result<Vec<Str
         .into_iter()
         .map(|row| row.try_get::<String, _>("table_name"))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(backup_table_set(names))
+    Ok(backup::backup_table_set(names))
 }
 
 async fn import_table(
@@ -202,7 +201,7 @@ async fn import_table(
     columns: &[ColumnInfo],
     validation_report: &mut RestoreValidationReport,
 ) -> Result<(), BackupError> {
-    let rows = read_table_rows(source_path, table)?;
+    let rows = backup::read_table_rows(source_path, table)?;
     if rows.is_empty() {
         return Ok(());
     }
@@ -215,7 +214,7 @@ async fn import_table(
     let insert = insert_sql(table, &column_names);
 
     for row in rows {
-        validate_restore_row(table, &row, validation_report);
+        backup::validate_restore_row(table, &row, validation_report);
         let mut query = sqlx::query(&insert);
         for column in &column_names {
             let value = row.get(&column.name).ok_or_else(|| {
@@ -224,7 +223,7 @@ async fn import_table(
                     column.name
                 ))
             })?;
-            query = query.bind(json_value_as_restore_text(value));
+            query = query.bind(backup::json_value_as_restore_text(value));
         }
         query
             .execute(&mut *connection)
@@ -238,7 +237,7 @@ async fn import_table(
 fn insert_sql(table: &str, columns: &[ColumnInfo]) -> String {
     let column_list = columns
         .iter()
-        .map(|column| quote_identifier(&column.name))
+        .map(|column| sql::quote_identifier(&column.name))
         .collect::<Vec<_>>()
         .join(", ");
     let placeholders = columns
@@ -253,12 +252,12 @@ fn insert_sql(table: &str, columns: &[ColumnInfo]) -> String {
     if table == "users" {
         format!(
             "INSERT INTO {} ({column_list}) OVERRIDING SYSTEM VALUE VALUES ({placeholders})",
-            quote_identifier(table)
+            sql::quote_identifier(table)
         )
     } else {
         format!(
             "INSERT INTO {} ({column_list}) VALUES ({placeholders})",
-            quote_identifier(table)
+            sql::quote_identifier(table)
         )
     }
 }
@@ -355,13 +354,13 @@ async fn export_table(
 fn json_select(table: &str, columns: &[ColumnInfo]) -> String {
     let column_list = columns
         .iter()
-        .map(|column| quote_identifier(&column.name))
+        .map(|column| sql::quote_identifier(&column.name))
         .collect::<Vec<_>>()
         .join(", ");
     format!(
         "SELECT to_jsonb(export_row)::text FROM (SELECT {column_list} FROM {} ORDER BY {}) AS export_row",
-        quote_identifier(table),
-        order_by_clause(columns, quote_identifier)
+        sql::quote_identifier(table),
+        backup::order_by_clause(columns, sql::quote_identifier)
     )
 }
 

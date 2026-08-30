@@ -11,6 +11,7 @@ use common::token::RawToken;
 use crate::backend::Backend;
 use crate::helpers::TokenStateRow;
 use common::ids::UserId;
+use host::token;
 
 /// Errors returned by [`PasswordResetStorage::use_password_reset`].
 #[derive(Debug, Error)]
@@ -92,7 +93,7 @@ where
         user_id: UserId,
         expires_at: UtcInstant,
     ) -> sqlx::Result<RawToken> {
-        let (raw_token, token_hash) = host::token::generate_hashed();
+        let (raw_token, token_hash) = token::generate_hashed();
         let now = UtcInstant::now();
 
         sqlx::query(
@@ -113,8 +114,7 @@ where
         &self,
         raw_token: &RawToken,
     ) -> Result<UserId, UsePasswordResetError> {
-        let token_hash =
-            host::token::hash(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
+        let token_hash = token::hash(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
 
         let now = UtcInstant::now();
 

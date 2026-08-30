@@ -1,9 +1,9 @@
 //! Invites vertical — wasm-only UI (ADR-0070): the invite management page.
 
-use super::{Create, CreateInviteRequest, Info, list};
+use super::{Create, CreateInviteRequest, Info};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedInput, server_action_submit};
-use crate::registration::get_policy;
+use crate::forms::{self, Field, ValidatedInput};
+use crate::registration;
 use crate::topbar::Topbar;
 use common::email::Email;
 use common::invite::InviteTtlHours;
@@ -25,8 +25,8 @@ pub fn InvitesPage() -> impl IntoView {
             successful_creates.update(|version| *version += 1);
         }
     });
-    let policy = Resource::new(|| (), |()| get_policy());
-    let invites = Resource::new(move || successful_creates.get(), |_| list());
+    let policy = Resource::new(|| (), |()| registration::get_policy());
+    let invites = Resource::new(move || successful_creates.get(), |_| super::list());
 
     view! {
         <Topbar title="Invites" sub="Manage codes" />
@@ -68,7 +68,7 @@ fn InviteCreateForm(action: ServerAction<Create>) -> impl IntoView {
     // Optional TTL: empty dispatches `None` for the server's 168-hour default. A
     // non-empty value is dispatched only after `Field::parsed()` validates it.
     let ttl = Field::<InviteTtlHours>::optional();
-    let (disabled, submit) = server_action_submit(action, move || {
+    let (disabled, submit) = forms::server_action_submit(action, move || {
         let expires_in_hours = ttl
             .value
             .with(|value| value.trim().is_empty())

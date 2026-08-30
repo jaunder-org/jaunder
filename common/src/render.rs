@@ -3,12 +3,12 @@
 //! Host-only sanitization lives here behind the optional `sanitize` feature;
 //! pure transformations remain available to both CSR and host callers.
 
-use crate::post_summary::truncate_at_text_boundary;
+use crate::post_summary;
 use std::fmt;
 
 use crate::post_body::{InvalidPostBody, PostBody};
 use crate::post_title::PostTitle;
-use crate::slug::{Slug, slugify_title};
+use crate::slug::{self, Slug};
 
 /// The format/markup language used to author a post body.
 ///
@@ -192,7 +192,8 @@ pub(crate) fn deserialize_rendered_html<'de, D>(deserializer: D) -> Result<Rende
 where
     D: serde::Deserializer<'de>,
 {
-    use serde::Deserialize as _;
+    use serde::Deserialize;
+    // rendered-html-from-trusted:allow rebuilds RenderedHtml from a wire DTO field our own server serialized (#445)
     String::deserialize(deserializer).map(RenderedHtml)
 }
 // The rest of the StrNewtype read-out trailer (#502), hand-written to preserve the
@@ -274,7 +275,7 @@ pub fn derive_post_naming(
     // already-normalized value, so feeding it back through `Slug::from_str` is
     // idempotent — see its rustdoc. Deriving the slug here rather than at each call
     // site is what makes that guarantee usable (#785).
-    let Ok(slug) = slugify_title(&seed).parse::<Slug>() else {
+    let Ok(slug) = slug::slugify_title(&seed).parse::<Slug>() else {
         unreachable!("slugify_title's output always re-parses as a Slug")
     };
 
@@ -289,7 +290,7 @@ fn first_meaningful_line(body: &PostBody) -> String {
     let Some(line) = body.lines().map(str::trim).find(|line| !line.is_empty()) else {
         unreachable!("a PostBody always has a non-blank line")
     };
-    truncate_at_text_boundary(line, 100)
+    post_summary::truncate_at_text_boundary(line, 100)
 }
 
 fn extract_markdown_title(body: &str) -> Option<(String, String)> {

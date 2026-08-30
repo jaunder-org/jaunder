@@ -85,11 +85,11 @@ impl From<StatusCode> for HandlerError {
     }
 }
 
-impl From<host::atompub::AtomError> for HandlerError {
+impl From<host::atompub::Error> for HandlerError {
     /// A document the client sent that `atom_syndication` will not parse is a `400`.
     /// This is the whole read-side mapping: handlers call `body.parse::<Entry>()?`
     /// and land here.
-    fn from(_: host::atompub::AtomError) -> Self {
+    fn from(_: host::atompub::Error) -> Self {
         HandlerError::BadRequest
     }
 }
@@ -140,9 +140,10 @@ impl From<common::post_body::InvalidPostBody> for HandlerError {
 
 impl From<storage::PerformCreationError> for HandlerError {
     fn from(err: storage::PerformCreationError) -> Self {
-        use storage::PerformCreationError as E;
         match err {
-            E::EmptyPost | E::InvalidSlug(_) | E::BookkeepingMismatch => HandlerError::BadRequest,
+            storage::PerformCreationError::EmptyPost
+            | storage::PerformCreationError::InvalidSlug(_)
+            | storage::PerformCreationError::BookkeepingMismatch => HandlerError::BadRequest,
             // Exhausted/CreatedNotFound/Storage are all internal failures.
             error => internal(error),
         }
@@ -151,22 +152,23 @@ impl From<storage::PerformCreationError> for HandlerError {
 
 impl From<storage::PerformUpdateError> for HandlerError {
     fn from(err: storage::PerformUpdateError) -> Self {
-        use storage::PerformUpdateError as E;
         match err {
-            E::EmptyPost | E::BookkeepingMismatch => HandlerError::BadRequest,
-            E::StaleContent => HandlerError::PreconditionFailed,
-            E::NotFound | E::Unauthorized => HandlerError::NotFound,
-            error @ E::Storage(_) => internal(error),
+            storage::PerformUpdateError::EmptyPost
+            | storage::PerformUpdateError::BookkeepingMismatch => HandlerError::BadRequest,
+            storage::PerformUpdateError::StaleContent => HandlerError::PreconditionFailed,
+            storage::PerformUpdateError::NotFound | storage::PerformUpdateError::Unauthorized => {
+                HandlerError::NotFound
+            }
+            error @ storage::PerformUpdateError::Storage(_) => internal(error),
         }
     }
 }
 
 impl From<storage::DeleteMediaError> for HandlerError {
     fn from(err: storage::DeleteMediaError) -> Self {
-        use storage::DeleteMediaError as E;
         match err {
-            E::NotFound => HandlerError::NotFound,
-            error @ E::Internal(_) => internal(error),
+            storage::DeleteMediaError::NotFound => HandlerError::NotFound,
+            error @ storage::DeleteMediaError::Internal(_) => internal(error),
         }
     }
 }
@@ -196,7 +198,7 @@ mod tests {
 
     #[test]
     fn an_unparseable_document_is_a_bad_request() {
-        let err = host::atompub::AtomError::InvalidStartTag;
+        let err = host::atompub::Error::InvalidStartTag;
         assert_eq!(status(err.into()), StatusCode::BAD_REQUEST);
     }
 
@@ -244,7 +246,7 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(
-            status(host::atompub::AtomError::InvalidStartTag.into()),
+            status(host::atompub::Error::InvalidStartTag.into()),
             StatusCode::BAD_REQUEST
         );
         assert_eq!(

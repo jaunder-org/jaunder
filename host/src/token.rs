@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::Engine;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
@@ -26,7 +26,9 @@ fn random_bytes() -> [u8; 32] {
 /// base64url without padding (43 characters).
 #[must_use]
 pub fn generate() -> RawToken {
-    RawToken::from_generated(URL_SAFE_NO_PAD.encode(random_bytes()))
+    RawToken::from_generated(
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random_bytes()),
+    )
 }
 
 /// A raw token whose characters are in-alphabet but whose length is not a valid
@@ -51,11 +53,13 @@ impl std::error::Error for TokenHashError {}
 /// value that reached us from an untrusted source (a cookie or header) with a
 /// valid charset but an invalid length.
 pub fn hash(token: &RawToken) -> Result<TokenHash, TokenHashError> {
-    let bytes = URL_SAFE_NO_PAD
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(token.as_ref())
         .map_err(|_| TokenHashError)?;
     let digest = Sha256::digest(&bytes);
-    Ok(TokenHash::from_digest(URL_SAFE_NO_PAD.encode(digest)))
+    Ok(TokenHash::from_digest(
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest),
+    ))
 }
 
 /// Mints a token and its stored hash in one step. Infallible: it hashes the raw
@@ -63,8 +67,11 @@ pub fn hash(token: &RawToken) -> Result<TokenHash, TokenHashError> {
 #[must_use]
 pub fn generate_hashed() -> (RawToken, TokenHash) {
     let bytes = random_bytes();
-    let raw = RawToken::from_generated(URL_SAFE_NO_PAD.encode(bytes));
-    let token_hash = TokenHash::from_digest(URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)));
+    let raw =
+        RawToken::from_generated(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes));
+    let token_hash = TokenHash::from_digest(
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)),
+    );
     (raw, token_hash)
 }
 

@@ -55,11 +55,12 @@
 //! type is served inline or as an attachment (the `Content-Disposition`).
 
 use std::borrow::Cow;
+use std::fmt::Write;
 use std::path::Path;
 use std::str::FromStr;
 
 use macros::{NumNewtype, StrNewtype};
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
+use percent_encoding::{AsciiSet, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
@@ -168,7 +169,6 @@ impl ContentHash {
     /// it goes through [`FromStr`]/`TryFrom`, which validate the canonical form.
     #[must_use]
     pub fn from_digest(digest: [u8; 32]) -> Self {
-        use std::fmt::Write as _;
         let mut hex = String::with_capacity(64);
         for byte in digest {
             // Infallible: writing to a String never errors.
@@ -570,14 +570,16 @@ pub enum MediaSource {
 }
 
 /// The percent-encode set for the filename segment of a media path: everything
-/// [`NON_ALPHANUMERIC`] encodes, minus the RFC 3986 *unreserved* marks `-._~`.
+/// [`percent_encoding::NON_ALPHANUMERIC`] encodes, minus the RFC 3986 *unreserved* marks
+/// `-._~`.
 ///
 /// Keeping those four unencoded is what makes an ordinary name round-trip byte-identical —
 /// `photo.jpg` stays `photo.jpg` — which is the point of encoding here at all: the on-disk
-/// name has to stay greppable and paste-able from a URL. Bare [`NON_ALPHANUMERIC`] would
+/// name has to stay greppable and paste-able from a URL. Bare
+/// [`percent_encoding::NON_ALPHANUMERIC`] would
 /// yield `my%2Dphoto%2Ejpg` and make every stored file unreadable. (`content_disposition`
 /// in the `server` crate *does* use the bare set; correct there, wrong here.)
-const MEDIA_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
+const MEDIA_SEGMENT_ENCODE_SET: &AsciiSet = &percent_encoding::NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
     .remove(b'_')

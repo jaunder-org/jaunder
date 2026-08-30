@@ -2,14 +2,13 @@
 
 use std::{fs, path::Path};
 
-use crate::sqlite::resolved_sqlite_options;
-use crate::{DbConnectOptions, StorageRuntimeConfig, resolved_postgres_options};
+use crate::{DbConnectOptions, StorageRuntimeConfig, postgres, sqlite};
 
 use super::{
     BackupMode, archive,
     error::BackupError,
-    format::{BackupManifest, read_manifest, validate_manifest, write_manifest},
-    media::{mirror_media_directory, previous_directory_backup, restore_media_directory},
+    format::{self, BackupManifest},
+    media,
     restore_validation::{BackupRestoreOutcome, RestoreValidationReport},
 };
 
@@ -57,8 +56,8 @@ pub async fn restore_backup(
         .as_ref()
         .map_or(options.source_path, archive::TemporaryBackupDirectory::path);
 
-    let manifest = read_manifest(source_path)?;
-    validate_manifest(&manifest)?;
+    let manifest = format::read_manifest(source_path)?;
+    format::validate_manifest(&manifest)?;
 
     let validation_report = match manifest.mode {
         BackupMode::Directory | BackupMode::Archive => {
@@ -75,7 +74,7 @@ pub async fn restore_backup(
         }
     };
 
-    restore_media_directory(&source_path.join("media"), options.media_path)?;
+    media::restore_media_directory(&source_path.join("media"), options.media_path)?;
     Ok(BackupRestoreOutcome {
         manifest,
         validation_report,
@@ -107,30 +106,27 @@ async fn export_directory_backup(
 
     let manifest = match options.database {
         DbConnectOptions::Sqlite(connect_options) => {
-            let resolved = resolved_sqlite_options(connect_options, options.runtime);
+            let resolved = sqlite::resolved_sqlite_options(connect_options, options.runtime);
             let pool = sqlx::SqlitePool::connect_with(resolved).await?;
-            crate::sqlite::backup::export_database(&pool, options.destination_path, options.mode)
-                .await?
+            sqlite::backup::export_database(&pool, options.destination_path, options.mode).await?
         }
         DbConnectOptions::Postgres {
             options: pg_options,
             ..
         } => {
-            let resolved = resolved_postgres_options(pg_options, options.runtime);
+            let resolved = postgres::resolved_postgres_options(pg_options, options.runtime);
             let pool = sqlx::PgPool::connect_with(resolved).await?;
-            crate::postgres::backup::export_database(&pool, options.destination_path, options.mode)
-                .await?
+            postgres::backup::export_database(&pool, options.destination_path, options.mode).await?
         }
     };
 
-    let previous_backup = previous_directory_backup(options.destination_path)?;
-    mirror_media_directory(
+    let previous_backup = media::previous_directory_backup(options.destination_path)?;
+    media::mirror_media_directory(
         options.media_path,
         &options.destination_path.join("media"),
         previous_backup.as_deref(),
     )?;
-
-    write_manifest(options.destination_path, &manifest)?;
+    format::write_manifest(options.destination_path, &manifest)?;
     Ok(manifest)
 }
 
@@ -147,17 +143,17 @@ async fn restore_directory_backup(
 
     match options.database {
         DbConnectOptions::Sqlite(connect_options) => {
-            let resolved = resolved_sqlite_options(connect_options, options.runtime);
+            let resolved = sqlite::resolved_sqlite_options(connect_options, options.runtime);
             let pool = sqlx::SqlitePool::connect_with(resolved).await?;
-            crate::sqlite::backup::restore_database(&pool, options.source_path, manifest).await
+            sqlite::backup::restore_database(&pool, options.source_path, manifest).await
         }
         DbConnectOptions::Postgres {
             options: pg_options,
             ..
         } => {
-            let resolved = resolved_postgres_options(pg_options, options.runtime);
+            let resolved = postgres::resolved_postgres_options(pg_options, options.runtime);
             let pool = sqlx::PgPool::connect_with(resolved).await?;
-            crate::postgres::backup::restore_database(&pool, options.source_path, manifest).await
+            postgres::backup::restore_database(&pool, options.source_path, manifest).await
         }
     }
 }

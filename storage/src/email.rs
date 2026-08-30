@@ -11,6 +11,7 @@ use common::email::Email;
 use common::ids::UserId;
 use common::time::UtcInstant;
 use common::token::RawToken;
+use host::token;
 
 /// Errors returned by [`EmailVerificationStorage::use_email_verification`].
 #[derive(Debug, Error)]
@@ -118,7 +119,7 @@ where
         email: &Email,
         expires_at: UtcInstant,
     ) -> sqlx::Result<RawToken> {
-        let (raw_token, token_hash) = host::token::generate_hashed();
+        let (raw_token, token_hash) = token::generate_hashed();
         let now = UtcInstant::now();
 
         let mut tx = self.pool.begin().await?;
@@ -157,8 +158,7 @@ where
         &self,
         raw_token: &RawToken,
     ) -> Result<(UserId, Email), UseEmailVerificationError> {
-        let token_hash =
-            host::token::hash(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
+        let token_hash = token::hash(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
 
         let now = UtcInstant::now();
 

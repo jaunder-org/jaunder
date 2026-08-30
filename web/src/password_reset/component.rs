@@ -3,7 +3,7 @@
 
 use super::{Confirm, ConfirmPasswordResetRequest, Request};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedInput, server_action_submit};
+use crate::forms::{self, Field, ValidatedInput};
 use crate::topbar::Topbar;
 use common::password::ProfferedPassword;
 use common::token::RawToken;
@@ -76,7 +76,7 @@ pub fn ResetPasswordPage() -> impl IntoView {
         .and_then(|value| value.parse::<RawToken>().ok());
     let confirm_action = ServerAction::<Confirm>::new();
     let new_password = Field::<ProfferedPassword>::new();
-    let (disabled, submit) = server_action_submit(confirm_action, move || {
+    let (disabled, submit) = forms::server_action_submit(confirm_action, move || {
         token
             .clone()
             .zip(new_password.parsed())

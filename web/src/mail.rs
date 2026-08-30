@@ -10,7 +10,7 @@
 use crate::error::InternalError;
 use common::mailer::{EmailMessage, MailSender};
 use common::tagged_url::BaseUrl;
-use host::metrics::EmailKind;
+use host::metrics::{self, EmailKind};
 use storage::SiteConfigStorage;
 
 /// The site's absolute base URL, or a validation error when it is unset — a
@@ -36,8 +36,8 @@ pub async fn send_recording_metrics(
     let started = std::time::Instant::now();
     let send_result = mailer.send_email(message).await;
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    host::metrics::email_send_duration_ms(elapsed_ms);
-    host::metrics::email_send_result(kind, &send_result);
+    metrics::email_send_duration_ms(elapsed_ms);
+    metrics::email_send_result(kind, &send_result);
     send_result?;
     Ok(())
 }

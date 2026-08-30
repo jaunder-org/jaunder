@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use common::mailer::{MailSender, NoopMailSender};
 use host::smtp_config::SmtpConfig;
-use storage::{SiteConfigStorage, load_smtp_config};
+use storage::SiteConfigStorage;
 
 use super::{FileMailSender, LettreMailSender};
 
@@ -38,7 +38,7 @@ async fn build_mailer_with(
         return Ok(Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>);
     }
 
-    let Some(config) = load_smtp_config(site_config).await? else {
+    let Some(config) = storage::load_smtp_config(site_config).await? else {
         return Ok(Arc::new(NoopMailSender) as Arc<dyn MailSender>);
     };
 

@@ -4,16 +4,13 @@ use common::tagged_url::BaseUrl;
 
 #[cfg(feature = "server")]
 use {
-    crate::auth::{is_operator_soft, require_operator},
-    crate::error::InternalError,
-    leptos::prelude::*,
-    std::sync::Arc,
+    crate::auth, crate::error::InternalError, leptos::prelude::*, std::sync::Arc,
     storage::SiteConfigStorage,
 };
 
 #[macros::server]
 pub async fn get_identity() -> WebResult<SiteIdentity> {
-    require_operator().await?;
+    auth::require_operator().await?;
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     site_config
         .get_identity()
@@ -23,7 +20,7 @@ pub async fn get_identity() -> WebResult<SiteIdentity> {
 
 #[macros::server]
 pub async fn update_identity(title: SiteTitle, base_url: Option<BaseUrl>) -> WebResult<()> {
-    require_operator().await?;
+    auth::require_operator().await?;
 
     // `base_url` is a typed `Option<BaseUrl>` wire arg (ADR-0065): the
     // validating serde bridge already rejected a malformed/non-http(s) value at
@@ -44,7 +41,7 @@ pub async fn update_identity(title: SiteTitle, base_url: Option<BaseUrl>) -> Web
 /// attributable to an explicit `Authorization` credential reject.
 #[macros::server]
 pub async fn is_base_url_warning_visible() -> WebResult<bool> {
-    if !is_operator_soft().await? {
+    if !auth::is_operator_soft().await? {
         return Ok(false);
     }
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();

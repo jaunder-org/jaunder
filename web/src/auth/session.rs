@@ -7,7 +7,7 @@
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
-use super::{SessionUser, get_session, marker_storage};
+use super::{SessionUser, marker_storage};
 use crate::error::WebResult;
 
 /// The viewer/session identity shared across the app tree.
@@ -30,7 +30,7 @@ pub struct SessionContext {
 pub fn provide_session_context() {
     let current = RwSignal::new(marker_storage::get());
     let location = use_location();
-    let reconcile = Resource::new(move || location.pathname.get(), |_| get_session());
+    let reconcile = Resource::new(move || location.pathname.get(), |_| super::get_session());
     Effect::new(move |_| {
         if let Some(Ok(next)) = reconcile.get() {
             match &next {

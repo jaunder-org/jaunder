@@ -13,26 +13,26 @@ use serde::Deserialize;
 use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::PostId;
-use common::org::{OrgOperation, OrgStructuredMetadata, Presence, PublicationState, normalize_org};
+use common::org::{self, OrgOperation, OrgStructuredMetadata, Presence, PublicationState};
 use common::pagination::PageSize;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::tag::TagLabel;
-use common::tagged_url::{BaseUrl, EditUriUrl, FeedUrl, PaginationUrl, compose};
+use common::tagged_url::{self, BaseUrl, EditUriUrl, FeedUrl, PaginationUrl};
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
-use host::atompub::{CollectionFeedTitle, Entry, FeedMeta, entry_to_xml, render_feed};
-use host::etag::post_content_etag;
+use host::atompub::{self, CollectionFeedTitle, Entry, FeedMeta};
+use host::etag;
 use storage::{
     AudienceStorage, CollectionCursor, InvalidAudienceTargets, PostRecord, PostStorage,
-    SiteConfigStorage, UserConfigStorage, validate_named_audience_targets,
+    SiteConfigStorage, UserConfigStorage,
 };
 use web::auth;
 
-use super::mapping::{PostFields, entry_to_post_fields, post_to_entry};
-use super::{HandlerError, required_base_url};
+use super::HandlerError;
+use super::mapping::{self, PostFields};
 
 const FEED_CONTENT_TYPE: &str = "application/atom+xml;type=feed;charset=utf-8";
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
@@ -102,7 +102,7 @@ impl PostServices {
 /// transport-neutral projection is owned by `common`; this storage adapter only
 /// projects ordered post-tag labels into it.
 pub(crate) fn etag_for(post: &PostRecord) -> ETag {
-    post_content_etag(
+    etag::post_content_etag(
         post.title.as_ref(),
         &post.body,
         &post.format,
@@ -154,7 +154,7 @@ async fn authorize_audiences(
     let Presence::Present(targets) = targets else {
         return Ok(Presence::Absent);
     };
-    validate_named_audience_targets(audiences, author_user_id, &targets)
+    storage::validate_named_audience_targets(audiences, author_user_id, &targets)
         .await
         .map_err(|error| match error {
             InvalidAudienceTargets::Invalid => HandlerError::BadRequest,
@@ -199,7 +199,7 @@ async fn normalize_atom_input(
         });
     }
 
-    let normalized = normalize_org(
+    let normalized = org::normalize_org(
         fields.body.as_ref(),
         OrgStructuredMetadata {
             title: scalar_presence(fields.title.as_ref()),
@@ -313,9 +313,9 @@ pub async fn collection_get(
         records.truncate(limit.page_len());
     }
 
-    let base = required_base_url(site_config).await?;
+    let base = super::required_base_url(site_config).await?;
     let collection_path = format!("/atompub/{username}/posts");
-    let collection_url: FeedUrl = compose(&base, &collection_path);
+    let collection_url: FeedUrl = tagged_url::compose(&base, &collection_path);
 
     let next: Option<PaginationUrl> = if has_more {
         records.last().map(|last| {
@@ -331,7 +331,10 @@ pub async fn collection_get(
         None
     };
 
-    let entries: Vec<_> = records.iter().map(|p| post_to_entry(p, &base)).collect();
+    let entries: Vec<_> = records
+        .iter()
+        .map(|p| mapping::post_to_entry(p, &base))
+        .collect();
 
     let updated = records
         .first()
@@ -349,7 +352,7 @@ pub async fn collection_get(
         previous: None,
     };
 
-    let xml = render_feed(&meta, &entries)?;
+    let xml = atompub::render_feed(&meta, &entries)?;
     Ok(([(header::CONTENT_TYPE, FEED_CONTENT_TYPE)], xml).into_response())
 }
 
@@ -402,9 +405,9 @@ pub async fn member_get(
     let posts = services.posts();
     let site_config = services.site_config();
     let post = owned_post(posts, &auth_user, &username, post_id).await?;
-    let base = required_base_url(site_config).await?;
-    let entry = post_to_entry(&post, &base);
-    let xml = entry_to_xml(&entry)?;
+    let base = super::required_base_url(site_config).await?;
+    let entry = mapping::post_to_entry(&post, &base);
+    let xml = atompub::entry_to_xml(&entry)?;
     Ok((
         [
             (header::CONTENT_TYPE, ENTRY_CONTENT_TYPE.to_string()),
@@ -468,7 +471,7 @@ pub async fn collection_post(
     let entry: Entry = body.parse()?;
     let request_clock = UtcInstant::now();
     let default_format = storage::get_default_post_format(user_config, auth_user.user_id).await?;
-    let fields = entry_to_post_fields(&entry, default_format, request_clock)?;
+    let fields = mapping::entry_to_post_fields(&entry, default_format, request_clock)?;
     let format = fields.format;
     let is_draft = fields.is_draft;
     let NormalizedAtomInput {
@@ -513,7 +516,7 @@ pub async fn collection_post(
     )
     .await;
 
-    let base = required_base_url(site_config).await?;
+    let base = super::required_base_url(site_config).await?;
     // Re-fetch as the authenticated owner so a non-Public default audience is not
     // hidden, and so the response entry carries the post's tags.
     let viewer = owner_viewer(&auth_user);
@@ -553,8 +556,8 @@ fn post_entry_response(
     username: &Username,
 ) -> Result<Response, HandlerError> {
     let location_path = format!("/atompub/{username}/posts/{}", post.post_id);
-    let location: EditUriUrl = compose(base, &location_path);
-    let xml = entry_to_xml(&post_to_entry(post, base))?;
+    let location: EditUriUrl = tagged_url::compose(base, &location_path);
+    let xml = atompub::entry_to_xml(&mapping::post_to_entry(post, base))?;
     Ok((
         status,
         [
@@ -600,7 +603,7 @@ pub async fn member_put(
     let entry: Entry = body.parse()?;
     let request_clock = UtcInstant::now();
     let default_format = storage::get_default_post_format(user_config, auth_user.user_id).await?;
-    let fields = entry_to_post_fields(&entry, default_format, request_clock)?;
+    let fields = mapping::entry_to_post_fields(&entry, default_format, request_clock)?;
     let format = fields.format;
     let is_draft = fields.is_draft;
     let NormalizedAtomInput {
@@ -647,8 +650,8 @@ pub async fn member_put(
         .get_post_by_id(post_id, &viewer)
         .await?
         .ok_or(HandlerError::Invariant)?;
-    let base = required_base_url(site_config).await?;
-    let xml = entry_to_xml(&post_to_entry(&post, &base))?;
+    let base = super::required_base_url(site_config).await?;
+    let xml = atompub::entry_to_xml(&mapping::post_to_entry(&post, &base))?;
     Ok((
         StatusCode::OK,
         [

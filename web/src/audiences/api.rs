@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
 use {
     super::model,
-    crate::auth::require_auth,
+    crate::auth,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{AudienceStorage, SubscriptionStorage},
@@ -32,7 +32,7 @@ pub struct AudienceMembershipRequest {
 #[macros::server(skip_all)]
 pub async fn create(name: AudienceName) -> WebResult<AudienceId> {
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     // `name` arrives already validated (typed wire arg, client-pre-validated via the
     // direct-bound `AudienceName` field, per ADR-0065): its serde bridge routes
     // through `AudienceName::from_str`, so the empty/whitespace rule ran on decode.
@@ -45,7 +45,7 @@ pub async fn create(name: AudienceName) -> WebResult<AudienceId> {
 pub async fn rename(request: RenameAudienceRequest) -> WebResult<()> {
     let RenameAudienceRequest { audience_id, name } = request;
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     // `name` arrives already validated (see `create`).
     audiences
         .rename_audience(auth.user_id, audience_id, &name)
@@ -57,7 +57,7 @@ pub async fn rename(request: RenameAudienceRequest) -> WebResult<()> {
 #[macros::server]
 pub async fn delete(audience_id: AudienceId) -> WebResult<()> {
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     audiences.delete_audience(auth.user_id, audience_id).await?;
     Ok(())
 }
@@ -66,7 +66,7 @@ pub async fn delete(audience_id: AudienceId) -> WebResult<()> {
 #[macros::server]
 pub async fn list_mine() -> WebResult<Vec<Summary>> {
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     model::list_audiences(auth.user_id, audiences.as_ref()).await
 }
 
@@ -75,7 +75,7 @@ pub async fn list_mine() -> WebResult<Vec<Summary>> {
 #[macros::server]
 pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
     let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     model::list_subscribers(auth.user_id, subscriptions.as_ref()).await
 }
 
@@ -91,7 +91,7 @@ pub async fn add_subscriber(request: AudienceMembershipRequest) -> WebResult<()>
         subscription_id,
     } = request;
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     audiences
         .add_member(auth.user_id, audience_id, subscription_id)
         .await?;
@@ -107,7 +107,7 @@ pub async fn remove_subscriber(request: AudienceMembershipRequest) -> WebResult<
         subscription_id,
     } = request;
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     audiences
         .remove_member(auth.user_id, audience_id, subscription_id)
         .await?;
@@ -119,7 +119,7 @@ pub async fn remove_subscriber(request: AudienceMembershipRequest) -> WebResult<
 #[macros::server]
 pub async fn list_members(audience_id: AudienceId) -> WebResult<Vec<SubscriptionId>> {
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     let members = audiences.list_members(auth.user_id, audience_id).await?;
     Ok(members)
 }

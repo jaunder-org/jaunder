@@ -7,13 +7,13 @@ use common::render::PostFormat;
 use leptos::prelude::*;
 
 use super::DefaultPostFormatState;
-use super::api::{SetDefaultPostFormat, Update, get, get_default_post_format};
+use super::api::{self, SetDefaultPostFormat, Update};
 
 /// Profile page — shows username, display name, bio; allows updating.
 #[component]
 pub fn ProfilePage() -> impl IntoView {
     let update_action = ServerAction::<Update>::new();
-    let profile = Resource::new(move || update_action.version().get(), |_| get());
+    let profile = Resource::new(move || update_action.version().get(), |_| api::get());
     // Client-validated display name and bio (both optional: empty clears them),
     // owned by the component so the bespoke form can `.dispatch` the typed
     // `Update` args — the ADR-0065 direct-bind pattern (mirrors the post
@@ -115,7 +115,7 @@ pub fn ProfilePage() -> impl IntoView {
 #[component]
 fn DefaultPostFormatControl() -> impl IntoView {
     let action = ServerAction::<SetDefaultPostFormat>::new();
-    let initial = Resource::new(|| (), |()| get_default_post_format());
+    let initial = Resource::new(|| (), |()| api::get_default_post_format());
     // The state belongs to the component rather than the transient Suspend
     // scope. Loading and Failed deliberately carry no format, so neither can
     // dispatch a fabricated Markdown preference.
