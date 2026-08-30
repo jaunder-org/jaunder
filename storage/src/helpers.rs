@@ -810,6 +810,19 @@ mod tests {
     }
 
     #[test]
+    fn serialized_post_tags_display_encodes_canonical_json() {
+        let tags = SerializedPostTags::from_str(
+            r#"[{"tag_id": 1, "tag_slug": "rust", "tag_display": "Rust"}]"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            tags.0.to_string(),
+            r#"[{"tag_id":1,"tag_slug":"rust","tag_display":"Rust"}]"#
+        );
+    }
+
+    #[test]
     fn serialized_post_tags_attach_post_identity_after_parsing() {
         let tags_json = r#"[{"tag_id": 1, "tag_slug": "rust", "tag_display": "Rust"}]"#;
         let tags = SerializedPostTags::from_str(tags_json)

@@ -1161,7 +1161,7 @@ mod tests {
             ),
         ];
 
-        let rows = crate::with_closeable_pool!(env.base.pool(), pool, {
+        let claimed_rows = crate::with_closeable_pool!(env.base.pool(), pool, {
             for fixture in &fixtures {
                 sqlx::query(
                     "INSERT INTO feed_events \
@@ -1191,12 +1191,11 @@ mod tests {
             .unwrap()
             .into_iter()
             .map(ClaimedRow::from)
-            .map(|row| match row {
-                ClaimedRow::Record(record) => *record,
-                ClaimedRow::Corrupt(_) => panic!("fixture has a valid feed URL"),
-            })
-            .collect::<Vec<FeedEventRecord>>()
+            .collect::<Vec<ClaimedRow>>()
         });
+
+        let (rows, corrupt_ids) = partition_claimed(claimed_rows);
+        assert!(corrupt_ids.is_empty());
 
         assert_eq!(rows.len(), fixtures.len());
 
