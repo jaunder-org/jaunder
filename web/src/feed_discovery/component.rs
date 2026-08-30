@@ -1,5 +1,5 @@
 use common::{
-    feed::{FeedFormat, FeedSurface, canonicalize},
+    feed::{self, FeedFormat, FeedSurface},
     username::Username,
 };
 use leptos::prelude::*;
@@ -17,19 +17,19 @@ pub fn FeedDiscovery<'a>(surface: &'a FeedSurface) -> impl IntoView + use<> {
             rel="alternate"
             type_="application/rss+xml"
             title=format!("{label} (RSS)")
-            href=canonicalize(surface, FeedFormat::Rss)
+            href=feed::canonicalize(surface, FeedFormat::Rss)
         />
         <Link
             rel="alternate"
             type_="application/atom+xml"
             title=format!("{label} (Atom)")
-            href=canonicalize(surface, FeedFormat::Atom)
+            href=feed::canonicalize(surface, FeedFormat::Atom)
         />
         <Link
             rel="alternate"
             type_="application/feed+json"
             title=format!("{label} (JSON Feed)")
-            href=canonicalize(surface, FeedFormat::Json)
+            href=feed::canonicalize(surface, FeedFormat::Json)
         />
     }
 }

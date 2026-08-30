@@ -13,7 +13,7 @@
 
 #[cfg(feature = "server")]
 use {
-    crate::{auth::optional_auth, error::InternalResult},
+    crate::{auth, error::InternalResult},
     common::visibility::ViewerIdentity,
 };
 
@@ -39,7 +39,7 @@ use {
 pub async fn viewer_identity() -> InternalResult<ViewerIdentity> {
     // ---- Layer C insertion point: precedence ladder begins here. ----
     // 1. Account session (the only positively-authenticated branch in Layer A).
-    match optional_auth().await? {
+    match auth::optional_auth().await? {
         Some(auth) => Ok(ViewerIdentity::local(auth.user_id)),
         None => {
             // 2. (Layer C) viewer-session branch inserts here.

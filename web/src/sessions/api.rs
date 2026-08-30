@@ -14,7 +14,7 @@ use crate::error::WebResult;
 
 #[cfg(feature = "server")]
 use {
-    crate::auth::require_auth, crate::error::InternalError, leptos::prelude::*, std::sync::Arc,
+    crate::auth, crate::error::InternalError, leptos::prelude::*, std::sync::Arc,
     storage::SessionStorage,
 };
 
@@ -32,7 +32,7 @@ pub struct Info {
 /// `is_current` is `true` for the session used to make this request.
 #[macros::server]
 pub async fn list() -> WebResult<Vec<Info>> {
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     let sessions = expect_context::<Arc<dyn SessionStorage>>();
     let records = sessions.list_sessions(auth.user_id).await?;
     Ok(records
@@ -63,7 +63,7 @@ pub async fn create_app_password(label: SessionLabel) -> WebResult<AppPassword> 
     // `label` is a typed wire arg (ADR-0065): the `SessionLabel` serde bridge
     // already trimmed it and rejected empty/over-long at decode, so there is no
     // manual validation here.
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     let sessions = expect_context::<Arc<dyn SessionStorage>>();
     let token = sessions.create_session(auth.user_id, &label).await?;
     Ok(AppPassword { token, label })
@@ -72,7 +72,7 @@ pub async fn create_app_password(label: SessionLabel) -> WebResult<AppPassword> 
 /// Revokes a session belonging to the authenticated user.
 #[macros::server(skip_all)]
 pub async fn revoke(token_hash: TokenHash) -> WebResult<()> {
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     let sessions = expect_context::<Arc<dyn SessionStorage>>();
     let session_records = sessions.list_sessions(auth.user_id).await?;
     // `revoke_session` keys only on the token hash, so confirm the target

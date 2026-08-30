@@ -6,7 +6,7 @@ use host::feed::FeedEventClaimLimit;
 use sqlx::{Pool, Sqlite};
 
 use crate::feed_events::{
-    ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
+    self, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
 };
 
 /// SQLite-backed feed-event storage.
@@ -20,11 +20,7 @@ fn finish_purge(
     primary: Vec<FeedEventRecord>,
     purge: Result<(), sqlx::Error>,
 ) -> Vec<FeedEventRecord> {
-    crate::feed_events::finish_corrupt_purge(
-        primary,
-        purge,
-        "storage.sqlite.feed_events.purge_corrupt",
-    )
+    feed_events::finish_corrupt_purge(primary, purge, "storage.sqlite.feed_events.purge_corrupt")
 }
 
 /// Deletes claimed rows whose `feed_url` cannot decode. Partitioning reports
@@ -73,7 +69,7 @@ impl FeedEventDialect for Sqlite {
         .fetch_all(pool)
         .await?;
 
-        let (records, corrupt) = crate::feed_events::partition_claimed(rows);
+        let (records, corrupt) = feed_events::partition_claimed(rows);
         let purge = purge_corrupt(pool, &corrupt).await;
         Ok(finish_purge(records, purge))
     }

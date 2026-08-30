@@ -723,7 +723,13 @@ fn FullComposer(
     // bypass the disabled buttons.
     let (submit_disabled, dispatch) = super::submit_gate(
         state.body,
-        Signal::derive(move || !slug_field.is_valid()),
+        Signal::derive(move || {
+            !slug_field.is_valid()
+                || !state.summary_field.is_valid()
+                || state.audience.with(|selection| {
+                    named.with(|state| state.selection_for_submit(selection).is_none())
+                })
+        }),
         Callback::new(move |(body, publish): (PostBody, bool)| {
             let publication = super::publication_from_local(publish, &state.publish_at.get());
             if state.audience.with(|selection| {

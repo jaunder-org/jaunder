@@ -6,16 +6,13 @@ use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, 
 
 #[cfg(feature = "server")]
 use {
-    crate::auth::{is_operator_soft, require_operator},
-    crate::error::InternalError,
-    leptos::prelude::*,
-    std::sync::Arc,
+    crate::auth, crate::error::InternalError, leptos::prelude::*, std::sync::Arc,
     storage::SiteConfigStorage,
 };
 
 #[macros::server]
 pub async fn is_warning_visible() -> WebResult<bool> {
-    if !is_operator_soft().await? {
+    if !auth::is_operator_soft().await? {
         return Ok(false);
     }
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -25,7 +22,7 @@ pub async fn is_warning_visible() -> WebResult<bool> {
 
 #[macros::server]
 pub async fn get_settings() -> WebResult<BackupConfig> {
-    require_operator().await?;
+    auth::require_operator().await?;
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     site_config
         .get_backup_config()
@@ -40,7 +37,7 @@ pub async fn update_settings(
     retention_count: RetentionCount,
     mode: BackupMode,
 ) -> WebResult<()> {
-    require_operator().await?;
+    auth::require_operator().await?;
 
     // All four fields arrive already validated by the typed arg `Deserialize`: the required
     // `schedule`/`retention_count`/`mode` ran their `FromStr`/min-1-bound/enum parse, and

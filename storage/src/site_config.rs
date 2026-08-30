@@ -4,6 +4,7 @@ use crate::backend::Backend;
 use async_trait::async_trait;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use common::media::{MaxFileSize, UserQuota};
+use common::text;
 use host::config_key::SiteConfigKey;
 use host::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
 use host::smtp_config::SmtpConfig;
@@ -163,7 +164,7 @@ pub trait SiteConfigStorage: Send + Sync {
         let Some(raw) = self
             .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
             .await?
-            .and_then(common::text::non_empty_owned)
+            .and_then(text::non_empty_owned)
         else {
             return Ok(None);
         };
@@ -198,7 +199,7 @@ pub trait SiteConfigStorage: Send + Sync {
         let base_url = match self
             .get_raw(SiteConfigKey::SiteBaseUrl)
             .await?
-            .and_then(common::text::non_empty_owned)
+            .and_then(text::non_empty_owned)
         {
             None => None,
             Some(raw) => {
