@@ -24,6 +24,16 @@ impl_role_instant!(FeedCacheUpdatedAt, UtcInstant);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
 struct FeedCacheGeneratedAt(UtcInstant);
 impl_role_instant!(FeedCacheGeneratedAt, UtcInstant);
+
+/// A rendered feed body stored and served verbatim until representation validation.
+#[derive(Debug, macros::SqlxBridge)]
+struct StoredFeedBody(String);
+
+impl StoredFeedBody {
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
 /// A cached rendered Syndication Feed whose path and representation formats agree.
 ///
 /// The constructor couples the path's format with the closed representation (#697;
@@ -125,7 +135,7 @@ pub trait FeedCacheStorage: Send + Sync {
 #[derive(Debug, sqlx::FromRow)]
 struct FeedCacheRowRecord {
     feed_url: FeedPath,
-    body: String,
+    body: StoredFeedBody,
     etag: ETag,
     content_type: ContentType,
     updated_at: FeedCacheUpdatedAt,
@@ -146,7 +156,7 @@ struct FeedCacheRowParts {
 fn row_from_record(row: FeedCacheRowRecord) -> Result<FeedCacheRow, FeedCacheError> {
     let parts = FeedCacheRowParts {
         feed_path: row.feed_url,
-        body: row.body,
+        body: row.body.into_inner(),
         etag: row.etag,
         content_type: row.content_type,
         updated_at: row.updated_at,

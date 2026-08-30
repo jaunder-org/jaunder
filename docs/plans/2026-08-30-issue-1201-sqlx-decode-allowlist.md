@@ -31,7 +31,7 @@ Out:
     tag existence, subscriptions, and feed-event counts without integer-to-bool
     or negative-to-zero fallback behavior.
 
-- [ ] Task 2: Give catalog, backup, config, opaque, lossy, and test values
+- [x] Task 2: Give catalog, backup, config, opaque, and schema-test values
       explicit roles
   - Contract: each catalog metadata role and each intentionally lossless stored
     value receives a private concern-owned bridge type; closed tokens and
@@ -42,21 +42,23 @@ Out:
     migration after Task 1 supplies `Exists`. No generic representation wrapper
     is introduced.
   - Verification: focused dual-backend backup/schema tests cover metadata,
-    export, checksum, migration-version, physical-row-ID, and database-emptiness
-    paths; focused config/session/feed-cache tests prove unknown-key export and
-    deletion, opaque-value fidelity, structured-payload rejection, and
-    session-label repair.
+    export, checksum, migration-version, and database-emptiness paths; focused
+    config and feed-cache tests prove unknown-key export and deletion,
+    opaque-value fidelity, and structured-payload rejection.
 
 - [ ] Task 3: Type production row state and isolate custom row policy
   - Contract: feed attempts use a nonnegative checked type; email verification
     and operator status use distinct bool wrappers; serialized post tags use a
-    validating role type. Feed-event claim SQL decodes a fully policed
-    intermediate row, then conversion alone owns feed-URL diversion. The proven
-    handwritten post decoder remains within the existing strict grammar.
+    validating role type. Stored session labels and physical row identities use
+    distinct lossless private types. Feed-event claim SQL decodes a fully
+    policed intermediate row, then conversion alone owns feed-URL diversion. The
+    proven handwritten post decoder remains within the existing strict grammar.
   - Verification: SQLite and PostgreSQL focused tests prove negative and
     out-of-range attempts propagate without row mutation, only feed-URL parse
     failures divert, all other claim-field failures propagate, user flags retain
-    behavior, and invalid post-tag payloads retain column-scoped diagnostics.
+    behavior, invalid post-tag payloads retain column-scoped diagnostics,
+    physical-row identity tests retain meaning, and session-label repair remains
+    lossless.
 
 - [ ] Task 4: Cut over the gate and its architectural record
   - Contract: after Tasks 1–3 leave no unapproved leaf, delete `Allowed`,

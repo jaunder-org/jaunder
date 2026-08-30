@@ -12,6 +12,8 @@ use super::{
     PostgresSessionStorage, PostgresSiteConfigStorage, PostgresSubscriptionStorage,
     PostgresUserConfigStorage, PostgresUserStorage,
 };
+use crate::backup::CatalogTableName;
+use crate::sql::Exists;
 use crate::{instance_identity, posts};
 
 fn make_postgres_app_state(pool: PgPool) -> Arc<crate::AppState> {
@@ -70,7 +72,7 @@ pub(crate) async fn database_is_empty(
 ) -> sqlx::Result<bool> {
     let options = resolved_postgres_options(options, runtime);
     let pool = PgPool::connect_with(options).await?;
-    let tables = sqlx::query_scalar::<_, String>(
+    let tables = sqlx::query_scalar::<_, CatalogTableName>(
         "SELECT table_name FROM information_schema.tables \
          WHERE table_schema = 'public' AND table_type = 'BASE TABLE' \
            AND table_name <> '_sqlx_migrations'",
@@ -81,12 +83,13 @@ pub(crate) async fn database_is_empty(
         if crate::db::MIGRATION_SEEDED_TABLES.contains(&table.as_str()) {
             continue;
         }
-        let has_row = sqlx::query_scalar::<_, bool>(&format!(
+        let has_row = sqlx::query_scalar::<_, Exists>(&format!(
             "SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)",
-            crate::sql::quote_identifier(&table)
+            crate::sql::quote_identifier(table.as_str())
         ))
         .fetch_one(&pool)
-        .await?;
+        .await?
+        .into_bool();
         if has_row {
             return Ok(false);
         }

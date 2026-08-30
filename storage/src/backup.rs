@@ -4,6 +4,7 @@
 //! via hard links, so a series of backups doesn't re-store unchanged blobs.
 
 mod archive;
+mod catalog;
 mod error;
 mod format;
 mod media;
@@ -18,6 +19,10 @@ pub use restore_validation::{
     BackupRestoreOutcome, RestoreValidationIssue, RestoreValidationReport,
 };
 
+pub(crate) use catalog::{
+    BackupRowJson, CatalogColumnName, CatalogDefinition, CatalogNullability, CatalogTableName,
+    CatalogTypeName, MigrationVersion,
+};
 pub(crate) use format::{
     ColumnInfo, backup_table_set, build_manifest, ensure_schema_version,
     json_value_as_restore_text, order_by_clause, read_table_rows, restore_table_order,

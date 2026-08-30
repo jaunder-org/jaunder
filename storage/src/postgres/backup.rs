@@ -9,7 +9,9 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool, Row};
 
 use crate::backup::{
-    self, BackupError, BackupManifest, BackupMode, ColumnInfo, RestoreValidationReport,
+    self, BackupError, BackupManifest, BackupMode, BackupRowJson, CatalogColumnName,
+    CatalogNullability, CatalogTableName, CatalogTypeName, ColumnInfo, MigrationVersion,
+    RestoreValidationReport,
 };
 use crate::helpers;
 use crate::sql;
@@ -189,7 +191,10 @@ async fn existing_export_tables(connection: &mut PgConnection) -> Result<Vec<Str
     .await?;
     let names = rows
         .into_iter()
-        .map(|row| row.try_get::<String, _>("table_name"))
+        .map(|row| {
+            row.try_get::<CatalogTableName, _>("table_name")
+                .map(CatalogTableName::into_inner)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(backup::backup_table_set(names))
 }
@@ -291,8 +296,12 @@ async fn repair_sequences(connection: &mut PgConnection) -> Result<(), BackupErr
     .fetch_all(&mut *connection)
     .await?;
     for row in serial_columns {
-        let table: String = row.try_get("table_name")?;
-        let column: String = row.try_get("column_name")?;
+        let table = row
+            .try_get::<CatalogTableName, _>("table_name")?
+            .into_inner();
+        let column = row
+            .try_get::<CatalogColumnName, _>("column_name")?
+            .into_inner();
         let sql = format!(
             "SELECT setval(
                 pg_get_serial_sequence('{table}', '{column}'),
@@ -324,8 +333,10 @@ async fn columns(
             // `ColumnInfo` is a plain struct, so its field types police nothing — the
             // turbofish is what makes these two decodes visible to `sqlx-newtype-decode`.
             Ok(ColumnInfo {
-                name: row.try_get::<String, _>("column_name")?,
-                type_name: row.try_get::<String, _>("udt_name")?,
+                name: row
+                    .try_get::<CatalogColumnName, _>("column_name")?
+                    .into_inner(),
+                type_name: row.try_get::<CatalogTypeName, _>("udt_name")?.into_inner(),
             })
         })
         .collect()
@@ -343,7 +354,7 @@ async fn export_table(
     let mut rows = sqlx::query(&select).fetch(&mut *connection);
 
     while let Some(row) = rows.try_next().await? {
-        let json: String = row.try_get(0)?;
+        let json: BackupRowJson = row.try_get(0)?;
         writer.write_all(json.as_bytes())?;
         writer.write_all(b"\n")?;
     }
@@ -365,12 +376,12 @@ fn json_select(table: &str, columns: &[ColumnInfo]) -> String {
 }
 
 async fn schema_version(connection: &mut PgConnection) -> Result<i64, BackupError> {
-    Ok(
-        sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(version) FROM _sqlx_migrations")
-            .fetch_one(&mut *connection)
-            .await?
-            .unwrap_or_default(),
+    Ok(sqlx::query_scalar::<_, Option<MigrationVersion>>(
+        "SELECT MAX(version) FROM _sqlx_migrations",
     )
+    .fetch_one(&mut *connection)
+    .await?
+    .map_or(0, MigrationVersion::into_i64))
 }
 
 async fn schema_checksum(connection: &mut PgConnection) -> Result<String, BackupError> {
@@ -384,10 +395,14 @@ async fn schema_checksum(connection: &mut PgConnection) -> Result<String, Backup
     .await?;
     let mut hasher = Sha256::new();
     for row in rows {
-        let table_name: String = row.try_get("table_name")?;
-        let column_name: String = row.try_get("column_name")?;
-        let type_name: String = row.try_get("udt_name")?;
-        let is_nullable: String = row.try_get("is_nullable")?;
+        let table_name = row
+            .try_get::<CatalogTableName, _>("table_name")?
+            .into_inner();
+        let column_name = row
+            .try_get::<CatalogColumnName, _>("column_name")?
+            .into_inner();
+        let type_name = row.try_get::<CatalogTypeName, _>("udt_name")?.into_inner();
+        let is_nullable: CatalogNullability = row.try_get("is_nullable")?;
         hasher.update(table_name.as_bytes());
         hasher.update(b"\0");
         hasher.update(column_name.as_bytes());

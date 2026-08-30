@@ -12,8 +12,11 @@ use super::{
     SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
     SqliteUserConfigStorage, SqliteUserStorage,
 };
+use crate::AppState;
+use crate::backup::CatalogTableName;
 use crate::db::StorageRuntimeConfig;
-use crate::{AppState, instance_identity, posts};
+use crate::sql::Exists;
+use crate::{instance_identity, posts};
 
 fn make_sqlite_app_state(pool: SqlitePool) -> Arc<AppState> {
     Arc::new(AppState {
@@ -89,7 +92,7 @@ pub(crate) async fn database_is_empty(
     runtime: &StorageRuntimeConfig,
 ) -> sqlx::Result<bool> {
     let pool = SqlitePool::connect_with(resolved_sqlite_options(options, runtime)).await?;
-    let tables = sqlx::query_scalar::<_, String>(
+    let tables = sqlx::query_scalar::<_, CatalogTableName>(
         "SELECT name FROM sqlite_master \
          WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> '_sqlx_migrations'",
     )
@@ -99,13 +102,13 @@ pub(crate) async fn database_is_empty(
         if crate::db::MIGRATION_SEEDED_TABLES.contains(&table.as_str()) {
             continue;
         }
-        let has_row = sqlx::query_scalar::<_, i64>(&format!(
+        let has_row = sqlx::query_scalar::<_, Exists>(&format!(
             "SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)",
-            crate::sql::quote_identifier(&table)
+            crate::sql::quote_identifier(table.as_str())
         ))
         .fetch_one(&pool)
         .await?
-            != 0;
+        .into_bool();
         if has_row {
             return Ok(false);
         }

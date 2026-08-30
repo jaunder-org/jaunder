@@ -8,6 +8,16 @@ use sqlx::{Database, Pool};
 
 use host::config_key::UserConfigKey;
 
+/// A user-config value preserved exactly until its key-specific read policy parses it.
+#[derive(Debug, macros::SqlxBridge)]
+struct StoredUserConfigValue(String);
+
+impl StoredUserConfigValue {
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
+
 /// Async operations on the `user_config` key-value table.
 ///
 /// This trait manages individual user preferences and settings, which are
@@ -83,8 +93,8 @@ impl<DB> UserConfigStorage for UserConfigStore<DB>
 where
     DB: Backend,
     // Restated from `Backend` (supertrait where-clauses don't propagate; ADR-0019),
-    // plus the `(String,)` row decode for `get` and the query-arguments bound.
-    (String,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    // plus the lossless stored-value row decode for `get` and the query-arguments bound.
+    (StoredUserConfigValue,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `UserConfigKey`'s sqlx bridge reports `String` as its type (the token is bound as
@@ -99,7 +109,7 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn get(&self, user_id: UserId, key: UserConfigKey) -> sqlx::Result<Option<String>> {
-        let row = sqlx::query_as::<_, (String,)>(
+        let row = sqlx::query_as::<_, (StoredUserConfigValue,)>(
             "SELECT value FROM user_config WHERE user_id = $1 AND key = $2",
         )
         .bind(user_id)
@@ -107,7 +117,7 @@ where
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(row.map(|(v,)| v))
+        Ok(row.map(|(value,)| value.into_inner()))
     }
 
     #[tracing::instrument(
@@ -161,6 +171,27 @@ mod tests {
         assert_eq!(result, PostFormat::Markdown);
     }
 
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_preserves_opaque_stored_values(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let config = &*env.state.user_config;
+        let value = "unknown representation\nretained verbatim";
+
+        config
+            .set(user_id, UserConfigKey::DefaultPostFormat, value)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            config
+                .get(user_id, UserConfigKey::DefaultPostFormat)
+                .await
+                .unwrap(),
+            Some(value.to_owned())
+        );
+    }
     #[apply(backends)]
     #[tokio::test]
     async fn set_and_get_default_post_format_markdown(#[case] backend: Backend) {

@@ -9,7 +9,9 @@ use sha2::{Digest, Sha256};
 use sqlx::{Row, SqliteConnection, SqlitePool, error::ErrorKind};
 
 use crate::backup::{
-    self, BackupError, BackupManifest, BackupMode, ColumnInfo, RestoreValidationReport,
+    self, BackupError, BackupManifest, BackupMode, BackupRowJson, CatalogColumnName,
+    CatalogDefinition, CatalogTableName, CatalogTypeName, ColumnInfo, MigrationVersion,
+    RestoreValidationReport,
 };
 use crate::helpers;
 use crate::sql;
@@ -208,7 +210,10 @@ async fn existing_export_tables(
         .await?;
     let names = rows
         .into_iter()
-        .map(|row| row.try_get::<String, _>("name"))
+        .map(|row| {
+            row.try_get::<CatalogTableName, _>("name")
+                .map(CatalogTableName::into_inner)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(backup::backup_table_set(names))
 }
@@ -326,8 +331,11 @@ async fn columns(
             // `type` read below already carried one, and its `.to_ascii_lowercase()` puts
             // it outside field position anyway.)
             Ok(ColumnInfo {
-                name: row.try_get::<String, _>("name")?,
-                type_name: row.try_get::<String, _>("type")?.to_ascii_lowercase(),
+                name: row.try_get::<CatalogColumnName, _>("name")?.into_inner(),
+                type_name: row
+                    .try_get::<CatalogTypeName, _>("type")?
+                    .into_inner()
+                    .to_ascii_lowercase(),
             })
         })
         .collect()
@@ -345,7 +353,7 @@ async fn export_table(
     let mut rows = sqlx::query(&select).fetch(&mut *connection);
 
     while let Some(row) = rows.try_next().await? {
-        let json: String = row.try_get(0)?;
+        let json: BackupRowJson = row.try_get(0)?;
         writer.write_all(json.as_bytes())?;
         writer.write_all(b"\n")?;
     }
@@ -382,12 +390,12 @@ fn is_bool_column(column: &ColumnInfo) -> bool {
 }
 
 async fn schema_version(connection: &mut SqliteConnection) -> Result<i64, BackupError> {
-    Ok(
-        sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(version) FROM _sqlx_migrations")
-            .fetch_one(&mut *connection)
-            .await?
-            .unwrap_or_default(),
+    Ok(sqlx::query_scalar::<_, Option<MigrationVersion>>(
+        "SELECT MAX(version) FROM _sqlx_migrations",
     )
+    .fetch_one(&mut *connection)
+    .await?
+    .map_or(0, MigrationVersion::into_i64))
 }
 
 async fn schema_checksum(connection: &mut SqliteConnection) -> Result<String, BackupError> {
@@ -401,8 +409,8 @@ async fn schema_checksum(connection: &mut SqliteConnection) -> Result<String, Ba
     .await?;
     let mut hasher = Sha256::new();
     for row in rows {
-        let name: String = row.try_get("name")?;
-        let sql: String = row.try_get("sql")?;
+        let name = row.try_get::<CatalogTableName, _>("name")?.into_inner();
+        let sql: CatalogDefinition = row.try_get("sql")?;
         hasher.update(name.as_bytes());
         hasher.update(b"\0");
         hasher.update(sql.as_bytes());
