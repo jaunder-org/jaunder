@@ -1,7 +1,7 @@
 //! Dual-target post format, rendered-HTML value, and naming normalization.
 //!
-//! Host-only rendering and sanitization live in `host::render`; this module
-//! retains the values and pure transformations reached by CSR and host callers.
+//! Host-only sanitization lives here behind the optional `sanitize` feature;
+//! pure transformations remain available to both CSR and host callers.
 
 use crate::post_summary::truncate_at_text_boundary;
 use std::fmt;
@@ -52,12 +52,12 @@ pub enum PostFormat {
 /// view sink accepts only `RenderedHtml`, so a raw `String`/body cannot reach it
 /// by accident.
 ///
-/// The host-owned [`host::render::sanitize`] function **establishes** this
-/// invariant by scrubbing outside input. [`RenderedHtml::from_trusted`]
-/// **inherits** it when rebuilding output already sanitized and round-tripped
-/// through our own storage or wire. The `rendered-html-from-trusted` static
-/// check confines that reconstruction door to reviewed call sites, so an inbound
-/// path cannot quietly substitute it for host sanitization.
+/// The feature-gated [`sanitize`] function **establishes** this invariant by
+/// scrubbing outside input. [`RenderedHtml::from_trusted`] **inherits** it when
+/// rebuilding output already sanitized and round-tripped through our own storage
+/// or wire. The `rendered-html-from-trusted` static check confines that
+/// reconstruction door to reviewed call sites, so an inbound path cannot quietly
+/// substitute it for sanitization.
 ///
 /// Reading *out* is convenient —
 /// `Display`, `AsRef<str>`, `Borrow<str>`, `Deref<Target = str>`, `PartialEq<str>`,
@@ -89,7 +89,7 @@ pub enum PostFormat {
 /// let _: RenderedHtml = "<p>x</p>".to_string().into();
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, macros::SqlxBridge)]
-pub struct RenderedHtml(String);
+pub struct RenderedHtml(pub(crate) String);
 impl RenderedHtml {
     /// Rebuild a `RenderedHtml` already sanitized and round-tripped through our
     /// own store or wire. This door **inherits** the invariant rather than
@@ -105,6 +105,44 @@ impl RenderedHtml {
     pub fn from_trusted(html: impl Into<String>) -> Self {
         Self(html.into())
     }
+}
+
+/// The single allowlist every [`sanitize`] call scrubs against. It is ammonia's
+/// audited default, widened only to retain fenced-code language markers.
+///
+/// Re-admitting `class` without narrowing its values would let attacker-supplied
+/// markup borrow application CSS. Only `language-*` tokens survive on `<pre>` and
+/// `<code>`; expanding this policy is a security decision.
+#[cfg(feature = "sanitize")]
+static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::LazyLock::new(|| {
+    let mut builder = ammonia::Builder::default();
+    builder.add_tag_attributes("code", ["class"]);
+    builder.add_tag_attributes("pre", ["class"]);
+    builder.attribute_filter(|_element, attribute, value| {
+        if attribute != "class" {
+            return Some(value.into());
+        }
+        // Only reachable for `pre`/`code`: ammonia runs this filter solely for
+        // allowlisted tag/attribute pairs, and `class` is permitted nowhere else.
+        let kept = value
+            .split_whitespace()
+            .filter(|token| token.starts_with("language-"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        (!kept.is_empty()).then_some(kept.into())
+    });
+    builder
+});
+
+/// Sanitizes untrusted HTML into a [`RenderedHtml`].
+///
+/// This is the only public production door that establishes the type's safety
+/// invariant. It is feature-gated because client-side builds do not process
+/// outside HTML and must not acquire the sanitizer dependency.
+#[cfg(feature = "sanitize")]
+#[must_use]
+pub fn sanitize(raw: &str) -> RenderedHtml {
+    RenderedHtml(SANITIZER.clean(raw).to_string())
 }
 
 impl fmt::Display for RenderedHtml {
@@ -445,6 +483,73 @@ pub fn canonicalize_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rendered_html_test_fixture_preserves_exact_bytes() {
+        let raw = "<script>fixture markup</script>";
+        assert_eq!(crate::test_support::rendered_html(raw).as_ref(), raw);
+    }
+
+    // The sanitizer is a public feature-gated seam. Assert only its observable
+    // policy, not ammonia's incidental escaping and attribute serialization.
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_removes_active_markup() {
+        let html = sanitize(r#"<p>safe</p><script>alert(1)</script><img src="x" onerror="x">"#);
+        assert!(!html.contains("<script"), "{html}");
+        assert!(!html.contains("alert(1)"), "{html}");
+        assert!(!html.contains("onerror"), "{html}");
+        assert!(html.contains("<p>safe</p>"), "{html}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_preserves_allowed_safe_markup() {
+        let html = sanitize(
+            "<h2>Heading</h2><p><em>em</em> <strong>strong</strong></p>\
+             <ul><li>item</li></ul>\
+             <table><thead><tr><th>h</th></tr></thead>\
+             <tbody><tr><td>c</td></tr></tbody></table>\
+             <blockquote><p>quoted</p></blockquote>\
+             <a href=\"https://example.com\">link</a>\
+             <img src=\"https://example.com/a.png\">",
+        );
+        for expected in [
+            "<h2>",
+            "<em>",
+            "<strong>",
+            "<ul>",
+            "<li>",
+            "<table>",
+            "<thead>",
+            "<th>",
+            "<td>",
+            "<blockquote>",
+            "https://example.com",
+            "<a ",
+            "<img",
+        ] {
+            assert!(
+                html.contains(expected),
+                "{expected} was stripped from: {html}"
+            );
+        }
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_keeps_only_language_classes_on_code_blocks() {
+        let html = sanitize(r#"<pre><code class="language-rust j-anon-only">x</code></pre>"#);
+        assert!(html.contains("language-rust"), "{html}");
+        assert!(!html.contains("j-anon-only"), "{html}");
+
+        let non_code = sanitize(r#"<p class="j-anon-only">x</p>"#);
+        assert!(!non_code.contains("j-anon-only"), "{non_code}");
+
+        let no_language = sanitize(r#"<code class="j-anon-only">x</code>"#);
+        assert!(!no_language.contains("j-anon-only"), "{no_language}");
+        assert!(!no_language.contains("class"), "{no_language}");
+    }
 
     #[test]
     fn rendered_html_display_and_as_ref_expose_inner() {

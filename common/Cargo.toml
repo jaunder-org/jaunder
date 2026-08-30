@@ -12,6 +12,7 @@ chrono = { workspace = true, features = ["serde"] }
 chrono-tz.workspace = true
 croner.workspace = true
 macros = { path = "../macros" }
+ammonia = { workspace = true, optional = true }
 orgize.workspace = true
 percent-encoding.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -29,6 +30,9 @@ unicode-segmentation = "1"
 # Decode). Off by default and never enabled for wasm — the CSR/wasm build pulls
 # `common` without it, so `sqlx` is never in the wasm dependency graph.
 sqlx = ["dep:sqlx"]
+# Optional host-only sanitizer for inbound rendered HTML. CSR/wasm callers leave
+# this feature off, so `ammonia` stays out of their dependency graph.
+sanitize = ["dep:ammonia"]
 # Compiles shared test-only helpers such as the capturing mail sender. Password
 # KDF test parameters are host-owned and no longer ride this feature.
 test-utils = []

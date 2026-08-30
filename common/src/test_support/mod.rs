@@ -31,6 +31,10 @@ pub use urls_time::{
     parse_etag, parse_root_relative_url, parse_url, parse_utc_instant, permalink_date,
 };
 
+mod render;
+
+pub use render::rendered_html;
+
 mod numbers;
 
 pub use numbers::{
