@@ -6,9 +6,11 @@ use host::feed::FeedEventClaimLimit;
 use sqlx::{Pool, Sqlite};
 
 use crate::feed_events::{
-    self, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
+    self, ClaimedFeedEventRow, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord,
+    FeedEventStore,
 };
 
+use crate::sql::RowCount;
 /// SQLite-backed feed-event storage.
 pub type SqliteFeedEventStorage = FeedEventStore<Sqlite>;
 
@@ -47,10 +49,12 @@ impl FeedEventDialect for Sqlite {
         lease_cutoff: UtcInstant,
         limit: FeedEventClaimLimit,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
-        // Single autocommit statement: SQLite takes the write lock immediately,
-        // so there is no deferred read-then-write lock upgrade (ADR-0021) and the
-        // 5s busy_timeout applies cleanly. Mirrors the Postgres CTE claim.
-        let rows = sqlx::query_as::<_, ClaimedRow>(
+        // The write-first transaction retains SQLite's immediate write-lock behavior
+        // (ADR-0021) while holding the atomic UPDATE … RETURNING claim until every
+        // row decodes and conversion partitions feed-URL purge candidates. Dropping
+        // it rolls back any non-URL decode error; commit precedes existing URL purge.
+        let mut tx = pool.begin().await?;
+        let rows = sqlx::query_as::<_, ClaimedFeedEventRow>(
             "UPDATE feed_events SET status = 'claimed', claimed_at = $1 \
              WHERE id IN ( \
                  SELECT id FROM feed_events \
@@ -66,10 +70,14 @@ impl FeedEventDialect for Sqlite {
         .bind(now)
         .bind(lease_cutoff)
         .bind(limit)
-        .fetch_all(pool)
-        .await?;
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(ClaimedRow::from)
+        .collect();
 
         let (records, corrupt) = feed_events::partition_claimed(rows);
+        tx.commit().await?;
         let purge = purge_corrupt(pool, &corrupt).await;
         Ok(finish_purge(records, purge))
     }
@@ -79,7 +87,7 @@ impl FeedEventDialect for Sqlite {
         now: UtcInstant,
         lease_cutoff: UtcInstant,
     ) -> Result<u64, FeedEventError> {
-        let count = sqlx::query_scalar::<_, i64>(
+        let count = sqlx::query_scalar::<_, RowCount>(
             "SELECT COUNT(*) FROM feed_events \
              WHERE (status = 'pending' AND next_attempt_at <= $1) \
                 OR (status = 'claimed' AND claimed_at < $2)",
@@ -88,7 +96,7 @@ impl FeedEventDialect for Sqlite {
         .bind(lease_cutoff)
         .fetch_one(pool)
         .await?;
-        Ok(u64::try_from(count).unwrap_or(0))
+        Ok(count.into_u64())
     }
 
     async fn mark_regenerated(

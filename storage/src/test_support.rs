@@ -19,7 +19,7 @@ use crate::posts::{
     CreatePostError, CreatePostInput, INSERT_POST_TAG, PostBookkeepingExpectation, PublishUpdate,
     UPSERT_TAG_RETURNING_ID, UpdatePostInput,
 };
-use crate::sql::quote_identifier;
+use crate::sql::{Exists, quote_identifier};
 use crate::{
     AppState, DbConnectOptions, PostFormat, PostRecord, StorageRuntimeConfig,
     resolved_postgres_options,
@@ -130,6 +130,9 @@ pub fn rewrite_media_filename_in_backup(backup_path: &Path, filename: &str) {
     std::fs::write(media_ndjson, rewritten).expect("write media backup");
 }
 
+const RAW_MEDIA_FILENAME_EXISTS_SQL: &str =
+    "SELECT EXISTS(SELECT 1 FROM media WHERE filename = $1)";
+
 /// Returns whether the live `media` table contains `filename` as its raw stored value.
 ///
 /// # Panics
@@ -141,26 +144,26 @@ pub async fn raw_media_filename_exists(db: &DbConnectOptions, filename: &str) ->
             let pool = SqlitePool::connect_with(options.clone())
                 .await
                 .expect("connect sqlite");
-            let exists: i64 =
-                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM media WHERE filename = $1)")
-                    // sqlx-newtype-bind:allow permanent-primitive — intentionally invalid backup filename fixture may not parse as Filename.
-                    .bind(filename)
-                    .fetch_one(&pool)
-                    .await
-                    .expect("query sqlite media");
-            exists != 0
+            sqlx::query_scalar::<_, Exists>(RAW_MEDIA_FILENAME_EXISTS_SQL)
+                // sqlx-newtype-bind:allow permanent-primitive — intentionally invalid backup filename fixture may not parse as Filename.
+                .bind(filename)
+                .fetch_one(&pool)
+                .await
+                .expect("query sqlite media")
+                .into_bool()
         }
         DbConnectOptions::Postgres { options, .. } => {
             let options = resolved_postgres_options(options, &StorageRuntimeConfig::default());
             let pool = PgPool::connect_with(options)
                 .await
                 .expect("connect postgres");
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM media WHERE filename = $1)")
+            sqlx::query_scalar::<_, Exists>(RAW_MEDIA_FILENAME_EXISTS_SQL)
                 // sqlx-newtype-bind:allow permanent-primitive — intentionally invalid backup filename fixture may not parse as Filename.
                 .bind(filename)
                 .fetch_one(&pool)
                 .await
                 .expect("query postgres media")
+                .into_bool()
         }
     }
 }
@@ -884,13 +887,14 @@ async fn ensure_template_db(config: &PostgresTestConfig) {
         .await
         .unwrap();
 
-    let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
-            .bind(TEMPLATE_DB)
-            .fetch_one(&mut admin)
-            .await
-            .unwrap();
-
+    let exists = sqlx::query_scalar::<_, Exists>(
+        "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
+    )
+    .bind(TEMPLATE_DB)
+    .fetch_one(&mut admin)
+    .await
+    .unwrap()
+    .into_bool();
     if !exists {
         let DbConnectOptions::Postgres { options, .. } = config.test_url().parse().unwrap() else {
             unreachable!("PostgreSQL test URL always yields PostgreSQL options")
@@ -1758,9 +1762,10 @@ pub async fn update_post_body_via_service(
 #[cfg(test)]
 mod tests {
     use super::{
-        AudienceTarget, Backend, CreatePostError, PostFormat, PostSummary, PostgresDbGuard,
-        PostgresTestConfig, SeedPost, SeedRawPost, SeedUser, UtcInstant, backends, bootstrap_url,
-        parse_post_title, report_drop_outcome, splice_db_name,
+        AudienceTarget, Backend, CreatePostError, DbConnectOptions, PostFormat, PostSummary,
+        PostgresDbGuard, PostgresTestConfig, SeedPost, SeedRawPost, SeedUser, UtcInstant, backends,
+        bootstrap_url, parse_post_title, raw_media_filename_exists, recorded_postgres_url,
+        report_drop_outcome, seed_media, splice_db_name, sqlite_url,
     };
 
     // The free renderer, to pin that the builder's HTML is exactly `render(body)` — the
@@ -2149,5 +2154,31 @@ mod tests {
             .await
             .unwrap();
         assert!(published.is_empty(), "build() does not persist");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn raw_media_filename_exists_reports_the_stored_existence_fact(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let db: DbConnectOptions = match backend {
+            Backend::Sqlite => sqlite_url(&env.base),
+            Backend::Postgres => recorded_postgres_url(&env.base)
+                .parse()
+                .expect("recorded Postgres URL parses"),
+        };
+        let filename = "exists.jpg";
+
+        assert!(
+            !raw_media_filename_exists(&db, filename).await,
+            "a filename with no media row is absent"
+        );
+
+        let author = SeedUser::new().seed(&env.state).await;
+        seed_media(&env.state, author.user_id, filename).await;
+
+        assert!(
+            raw_media_filename_exists(&db, filename).await,
+            "a stored media row is present"
+        );
     }
 }

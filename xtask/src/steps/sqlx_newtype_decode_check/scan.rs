@@ -3,23 +3,20 @@ use syn::spanned::Spanned;
 
 use super::approve_set::{ApproveSet, is_from_row, unapproved_leaves};
 
-/// One decode site: where it is, and what it decodes into.
+/// One unapproved decode target: where it is, and why it failed approval.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DecodeSite {
-    /// Enclosing function name; empty at item level (a declared target type).
-    pub(super) function: String,
     /// Rendered decode target, whitespace-stripped.
     pub(super) target: String,
-    /// Rendered first argument / field name. A key and a message, never a decision.
+    /// Rendered first argument / field name for the diagnostic.
     pub(super) what: String,
     /// The leaf types that are not approved — the reason this site is in the report.
-    /// Message only; matching keys on the four fields above.
     pub(super) unapproved: Vec<String>,
     pub(super) line: usize,
 }
 
-/// Renders `t` to source text with all whitespace removed, so the key is stable
-/// against rustfmt reflow and `syn`'s token spacing (`Option < i64 >` → `Option<i64>`).
+/// Renders `t` to source text with whitespace removed, making diagnostics stable against
+/// rustfmt reflow and `syn`'s token spacing (`Option < i64 >` → `Option<i64>`).
 pub(super) fn render<T: ToTokens>(t: &T) -> String {
     t.to_token_stream()
         .to_string()
@@ -60,9 +57,9 @@ fn nth_type_arg(args: &syn::PathArguments, n: usize) -> Option<syn::Type> {
     nth_type_of(ab.args.iter(), n)
 }
 
-/// Walks a file collecting [`DecodeSite`]s, carrying the enclosing function or
-/// trait-default-method name/return type and the enclosing `let` ascription so each call
-/// can take its **nearest** declared type.
+/// Walks a file collecting unapproved decode targets, carrying the enclosing function or
+/// trait-default-method return type and the enclosing `let` ascription so each call can take
+/// its **nearest** declared type.
 struct Scanner<'a> {
     /// The types a decode may legally land in.
     approve: &'a ApproveSet,
@@ -73,7 +70,6 @@ struct Scanner<'a> {
     /// Spans of those calls, so [`Scanner::record`] can decline them rather than pinning
     /// them to whatever `let` or `fn` return happens to enclose the struct literal.
     field_positions: std::collections::HashSet<(usize, usize)>,
-    function: String,
     fn_ret: Option<syn::Type>,
     let_ty: Option<syn::Type>,
 }
@@ -88,7 +84,6 @@ impl Scanner<'_> {
             unreadable_fields: Vec::new(),
             field_positions,
             approve,
-            function: String::new(),
             fn_ret: None,
             let_ty: None,
         }
@@ -111,7 +106,6 @@ impl Scanner<'_> {
             return;
         }
         self.out.push(DecodeSite {
-            function: self.function.clone(),
             target: render(&target),
             what,
             unapproved,
@@ -119,12 +113,10 @@ impl Scanner<'_> {
         });
     }
 
-    fn visit_block_with(&mut self, name: &str, ret: Option<syn::Type>, block: &syn::Block) {
-        let prev_name = std::mem::replace(&mut self.function, name.to_string());
+    fn visit_block_with(&mut self, ret: Option<syn::Type>, block: &syn::Block) {
         let prev_ret = std::mem::replace(&mut self.fn_ret, ret);
         let prev_let = self.let_ty.take();
         syn::visit::Visit::visit_block(self, block);
-        self.function = prev_name;
         self.fn_ret = prev_ret;
         self.let_ty = prev_let;
     }
@@ -187,18 +179,16 @@ fn unreadable_field_positions(file: &syn::File) -> std::collections::HashSet<(us
 
 impl<'ast> syn::visit::Visit<'ast> for Scanner<'_> {
     fn visit_item_fn(&mut self, i: &'ast syn::ItemFn) {
-        let ret = return_type(&i.sig);
-        self.visit_block_with(&i.sig.ident.to_string(), ret, &i.block);
+        self.visit_block_with(return_type(&i.sig), &i.block);
     }
 
     fn visit_impl_item_fn(&mut self, i: &'ast syn::ImplItemFn) {
-        let ret = return_type(&i.sig);
-        self.visit_block_with(&i.sig.ident.to_string(), ret, &i.block);
+        self.visit_block_with(return_type(&i.sig), &i.block);
     }
 
     fn visit_trait_item_fn(&mut self, i: &'ast syn::TraitItemFn) {
         if let Some(block) = &i.default {
-            self.visit_block_with(&i.sig.ident.to_string(), return_type(&i.sig), block);
+            self.visit_block_with(return_type(&i.sig), block);
         }
     }
 
@@ -261,7 +251,6 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner<'_> {
                 let unapproved = unapproved_leaves(&f.ty, self.approve);
                 if !unapproved.is_empty() {
                     self.out.push(DecodeSite {
-                        function: String::new(),
                         target: render(&f.ty),
                         what: f
                             .ident
@@ -286,7 +275,6 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner<'_> {
                 let unapproved = unapproved_leaves(elem, self.approve);
                 if !unapproved.is_empty() {
                     self.out.push(DecodeSite {
-                        function: String::new(),
                         target: render(elem),
                         what: format!("{}.{n}", i.ident),
                         unapproved,
@@ -299,7 +287,7 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner<'_> {
     }
 }
 
-/// Every `i64`-family decode in `source`, or the parse error.
+/// Every structurally readable decode with an unapproved target in `source`, or the parse error.
 ///
 /// A file that will not parse is **not** silently skipped: an unparsed file is a file
 /// the gate cannot see, and a gate that quietly shrinks its own population is the
@@ -383,8 +371,7 @@ mod tests {
 
     #[test]
     fn fn_return_type_covers_every_arm() {
-        // `test_support.rs`'s `scalar_i64`: one fn return type, a decode in EACH arm.
-        // Allowlist entry `scalar_i64 ×2` depends on this yielding two records, not one.
+        // One fn return type supplies the declared target for a decode in each arm.
         let src = r#"
             async fn scalar_i64(&self, sql: &str) -> Result<i64, sqlx::Error> {
                 match self {
@@ -445,8 +432,7 @@ mod tests {
 
     #[test]
     fn one_let_over_two_calls_yields_two_records() {
-        // `backup.rs`'s table count: one `let live_count: i64 = match {…}` over two
-        // dialect arms. Collapsing them to one record would make the counts unmatchable.
+        // One `let` over two dialect calls still yields two records.
         let src = r#"
             fn f() {
                 let live_count: i64 = match pool {
@@ -460,10 +446,7 @@ mod tests {
 
     #[test]
     fn turbofish_wins_over_the_enclosing_fn_return() {
-        // `postgres/backup.rs`'s `schema_version` is `-> Result<i64, _>` around a
-        // `query_scalar::<_, Option<i64>>`. Both positions fire; precedence must pick
-        // the turbofish and record ONE site, or the seed allowlist can never match and
-        // the gate fails on a clean tree.
+        // Both positions fire; precedence must choose the turbofish and record one site.
         let src = r#"
             async fn schema_version(c: &mut C) -> Result<i64, BackupError> {
                 Ok(sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(version) FROM m")

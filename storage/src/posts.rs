@@ -7,8 +7,10 @@ use sha2::{Digest, Sha256};
 use sqlx::{Database, Pool, QueryBuilder, Row};
 use thiserror::Error;
 
+use crate::InstanceId;
 use crate::backend::Backend;
-use crate::{InstanceId, helpers};
+use crate::helpers::SerializedPostTags;
+use crate::sql::Exists;
 use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
@@ -29,6 +31,7 @@ use host::error::{InternalError, InternalResult};
 use host::etag;
 use host::feed::FeedPath;
 use host::render::{self, RenderOutput};
+const TAG_EXISTS_SQL: &str = "SELECT EXISTS(SELECT 1 FROM tags WHERE tag_slug = $1)";
 
 /// The validated calendar date of a public permalink lookup key. Re-exported from
 /// `common::time` so storage callers and the trait method name the domain type
@@ -136,7 +139,7 @@ where
     RenderedHtml: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
     UtcInstant: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
     PostSummary: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    String: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    SerializedPostTags: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
 {
     fn from_row(row: &'r R) -> sqlx::Result<Self> {
         let post_id = row.try_get::<PostId, _>("post_id")?;
@@ -152,8 +155,8 @@ where
         let published_at = row.try_get::<Option<UtcInstant>, _>("published_at")?;
         let deleted_at = row.try_get::<Option<UtcInstant>, _>("deleted_at")?;
         let summary = row.try_get::<Option<PostSummary>, _>("summary")?;
-        let tags_json = row.try_get::<String, _>("tags")?;
-        let tags = helpers::parse_post_tags_json(&tags_json, post_id)?;
+        let tags_json = row.try_get::<SerializedPostTags, _>("tags")?;
+        let tags = tags_json.into_tags(post_id);
 
         Ok(Self {
             post_id,
@@ -1804,7 +1807,7 @@ where
     DB: PostDialect,
     PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (bool,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (Exists,): for<'r> sqlx::FromRow<'r, DB::Row>,
     PostTagRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     TagListRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (TargetKind, Option<AudienceId>): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -2819,11 +2822,11 @@ where
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        let tag_exists: bool =
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
-                .bind(tag_slug)
-                .fetch_one(&self.pool)
-                .await?;
+        let tag_exists = sqlx::query_scalar::<_, Exists>(TAG_EXISTS_SQL)
+            .bind(tag_slug)
+            .fetch_one(&self.pool)
+            .await?
+            .into_bool();
 
         if !tag_exists {
             return Err(ListByTagError::TagNotFound);
@@ -2912,11 +2915,11 @@ where
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        let tag_exists: bool =
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
-                .bind(tag_slug)
-                .fetch_one(&self.pool)
-                .await?;
+        let tag_exists = sqlx::query_scalar::<_, Exists>(TAG_EXISTS_SQL)
+            .bind(tag_slug)
+            .fetch_one(&self.pool)
+            .await?
+            .into_bool();
 
         if !tag_exists {
             return Err(ListByTagError::TagNotFound);
@@ -4259,6 +4262,18 @@ where
     Ok(row.map(|(published_at,)| published_at))
 }
 
+/// Database-provided physical identity retained only by the no-write regression.
+#[cfg(test)]
+#[derive(Debug, macros::SqlxBridge)]
+pub(crate) struct PhysicalPostTagRowId(String);
+
+#[cfg(test)]
+impl PhysicalPostTagRowId {
+    pub(crate) fn into_inner(self) -> String {
+        self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4665,7 +4680,7 @@ mod tests {
     async fn physical_row_ids(env: &TestEnv, post_id: PostId) -> Vec<String> {
         match env.base.pool() {
             CloseablePool::Postgres(pool) => {
-                sqlx::query_scalar::<_, String>(
+                sqlx::query_scalar::<_, PhysicalPostTagRowId>(
                     "SELECT ctid::text FROM post_tags WHERE post_id = $1 ORDER BY tag_id",
                 )
                 .bind(post_id)
@@ -4673,7 +4688,7 @@ mod tests {
                 .await
             }
             CloseablePool::Sqlite(pool) => {
-                sqlx::query_scalar::<_, String>(
+                sqlx::query_scalar::<_, PhysicalPostTagRowId>(
                     "SELECT CAST(rowid AS TEXT) FROM post_tags WHERE post_id = $1 ORDER BY tag_id",
                 )
                 .bind(post_id)
@@ -4682,6 +4697,9 @@ mod tests {
             }
         }
         .expect("read physical row ids")
+        .into_iter()
+        .map(PhysicalPostTagRowId::into_inner)
+        .collect()
     }
 
     /// The post's tag slugs, slug-ordered, read through the normal post read path.
@@ -5863,7 +5881,10 @@ mod tests {
             .await
             .expect_err("malformed aggregate must reject publication");
         assert!(
-            matches!(&error, UpdatePostError::Internal(sqlx::Error::Decode(_))),
+            matches!(
+                &error,
+                UpdatePostError::Internal(sqlx::Error::ColumnDecode { index, .. }) if index == "\"tags\""
+            ),
             "{error:?}"
         );
         assert_eq!(
@@ -7353,8 +7374,8 @@ mod tests {
             .await
             .expect_err("malformed aggregated tag must fail the read");
         assert!(
-            matches!(err, sqlx::Error::Decode(_)),
-            "expected an aggregate decode error, got: {err:?}"
+            matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "\"tags\""),
+            "expected a tags column-decode error, got: {err:?}"
         );
     }
 

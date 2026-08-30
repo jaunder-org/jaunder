@@ -174,6 +174,8 @@ where
     R::from_restore(row).validate(report);
 }
 
+/// A lossless textual cell from an NDJSON backup row.
+#[derive(Debug, macros::SqlxBridge)]
 struct RestoreText(String);
 
 impl RestoreText {
@@ -703,6 +705,7 @@ const BACKED_UP_DOMAIN_COLUMNS: &[(&str, &str)] = &[
 mod tests {
     use super::*;
     use crate::backup::{BackupManifest, BackupMode};
+    use crate::backup::{CatalogColumnName, CatalogTableName};
     use common::time::UtcInstant;
     use sqlx::Row;
     use std::collections::BTreeSet;
@@ -893,11 +896,15 @@ mod tests {
     }
 
     async fn backed_up_schema_columns(pool: &sqlx::SqlitePool) -> BTreeSet<String> {
-        let names =
-            sqlx::query_scalar::<_, String>("SELECT name FROM sqlite_master WHERE type = 'table'")
-                .fetch_all(pool)
-                .await
-                .expect("read current SQLite schema tables");
+        let names = sqlx::query_scalar::<_, CatalogTableName>(
+            "SELECT name FROM sqlite_master WHERE type = 'table'",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("read current SQLite schema tables")
+        .into_iter()
+        .map(CatalogTableName::into_inner)
+        .collect::<Vec<String>>();
         let tables = super::super::backup_table_set(names);
         let mut columns = BTreeSet::new();
         for table in tables {
@@ -910,7 +917,10 @@ mod tests {
                 .await
                 .expect("read current SQLite schema columns");
             for row in rows {
-                let column = row.try_get::<String, _>("name").expect("column name");
+                let column = row
+                    .try_get::<CatalogColumnName, _>("name")
+                    .expect("column name")
+                    .into_inner();
                 columns.insert(format!("{table}.{column}"));
             }
         }

@@ -2079,11 +2079,19 @@ storability capability, not a conversion — which is why `secret` drops the
 bridge by default and `no_sqlx` exists. Feature isolation keeps `sqlx` out of
 the wasm build, guarded by a `compile_error!` in `common`. Two xtask gates keep
 the bridge from being bypassed — `xtask/src/steps/sqlx_newtype_bind_check.rs` on
-the write side and `xtask/src/steps/sqlx_newtype_decode_check.rs` (syn-parsed,
-allowlist-with-reason) on the read side. Since ADR-0091 there is exactly one
-bridge implementation, `macros/src/sqlx_bridge.rs:67`, driven by a `BridgeSpec`;
-the three newtype derives, `#[derive(SqlxBridge)]`, and `#[text_enum(sqlx)]` all
-call it.
+the write side and `xtask/src/steps/sqlx_newtype_decode_check/` on the read
+side. The decode gate structurally enumerates readable targets under
+`storage/src` and accepts only declaration-backed bridge types, approved foreign
+types, or composites whose leaves it polices; it has no primitive or
+site-exception path. Intentional persisted values therefore use explicit
+role-specific types, and custom row policy decodes a fully policed intermediate
+row before conversion
+([decision record](adr/drafts/sqlx-decode-approval-is-type-only.md)). The gate
+reads no SQL, cannot prove column-to-field correspondence or types known only by
+later use, and fails unreadable inputs and incomplete macro models closed. Since
+ADR-0091 there is exactly one bridge implementation,
+`macros/src/sqlx_bridge.rs:67`, driven by a `BridgeSpec`; the three newtype
+derives, `#[derive(SqlxBridge)]`, and `#[text_enum(sqlx)]` all call it.
 
 Because `Decode` re-validates, a row written under an older grammar or corrupted
 can fail it — and on a bulk read **one bad row must not stop the scan**

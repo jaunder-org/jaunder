@@ -2,6 +2,8 @@
 //! the feed worker. Rows transition pending → claimed → done|failed; stuck
 //! claims are re-eligible after `lease_timeout` elapses (claim-lease pattern).
 
+use std::str::FromStr;
+
 use async_trait::async_trait;
 use chrono::Duration;
 use common::ids::FeedEventId;
@@ -12,12 +14,59 @@ use thiserror::Error;
 
 use crate::backend::Backend;
 
-#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+/// A nonnegative retry count stored on a feed event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::NumNewtype)]
+#[num_newtype(
+    inner = i32,
+    min = 0,
+    error = "feed event attempts must be a non-negative integer"
+)]
+struct FeedEventAttempts(i32);
+
+impl FeedEventAttempts {
+    const fn into_i32(self) -> i32 {
+        self.0
+    }
+}
+
+/// Free-form feed processing diagnostic retained exactly for the public record.
+#[derive(Debug, macros::SqlxBridge)]
+struct StoredFeedDiagnostic(String);
+
+impl StoredFeedDiagnostic {
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+/// A feed URL retained exactly until claim policy decides whether it is actionable.
+#[derive(Debug, macros::SqlxBridge)]
+struct StoredFeedUrl(String);
+
+impl StoredFeedUrl {
+    fn into_feed_path(self) -> Result<FeedPath, <FeedPath as FromStr>::Err> {
+        self.0.parse()
+    }
+}
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct ClaimedFeedEventRow {
+    id: FeedEventId,
+    feed_url: StoredFeedUrl,
+    status: FeedEventStatus,
+    attempts: FeedEventAttempts,
+    last_error: Option<StoredFeedDiagnostic>,
+    next_attempt_at: UtcInstant,
+    claimed_at: Option<UtcInstant>,
+    created_at: UtcInstant,
+    regenerated_at: Option<UtcInstant>,
+    pinged_at: Option<UtcInstant>,
+}
+
+/// A feed event after the claim query's fully typed intermediate has passed
+/// feed-URL-only policy conversion.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedEventRecord {
     pub id: FeedEventId,
-    // The column is `feed_url`; the field is the domain name. The derive binds by field
-    // name, so without this every claim fails at runtime rather than at compile time.
-    #[sqlx(rename = "feed_url")]
     pub feed_path: FeedPath,
     pub status: FeedEventStatus,
     pub attempts: i32,
@@ -35,45 +84,48 @@ pub enum FeedEventError {
     Db(#[from] sqlx::Error),
 }
 
-/// One row of a claim batch: either a decoded record, or the id of a row whose `feed_url`
-/// will not parse and which must therefore be purged.
+/// One row of a claim batch: either a converted record, or the id of a row whose
+/// feed URL will not parse and which must therefore be purged.
 ///
-/// The claim query cannot simply decode into [`FeedEventRecord`]. A `feed_url` that will
-/// not parse can only come from DB tampering or a grammar that has since been tightened;
-/// such a row names no identifiable feed, so it is an unactionable work item. Failing the
-/// whole batch on it would wedge the worker on that row forever, which is what
-/// [`purge_corrupt`](crate::postgres::feed_events) exists to prevent.
-/// A two-variant enum rather than a `Result`: [`ClaimedRow::Corrupt`] is not an error, it
-/// is a decided outcome — the row was read, understood to be unusable, and routed to the
-/// purge list. Spelling it `Err` invites the next reader to `?` it and lose the id.
+/// Claim decoding itself is strict: [`ClaimedFeedEventRow`] is derived and every
+/// leaf has a declaration-backed type. This conversion owns the sole policy
+/// exception: a lossless stored feed URL that cannot become a [`FeedPath`] is
+/// unactionable and is routed to the purge list; every other decode failure has
+/// already propagated before conversion begins.
 pub(crate) enum ClaimedRow {
     Record(Box<FeedEventRecord>),
     Corrupt(FeedEventId),
 }
 
-/// **The diversion is column-scoped, and that is the whole point of this impl**
-/// (docs/adr/0122-one-bad-row-must-not-stop-the-scan.md): `purge_corrupt`
-/// DELETEs, so only a `feed_url` decode failure may divert a row — re-checked
-/// specifically here — and anything else propagates (#728).
-///
-/// If `id` itself will not decode there is no third state: the error propagates and the
-/// batch fails. Stated so it is a decision rather than an accident.
-impl<'r, R> sqlx::FromRow<'r, R> for ClaimedRow
-where
-    R: sqlx::Row,
-    &'r str: sqlx::ColumnIndex<R>,
-    FeedEventRecord: sqlx::FromRow<'r, R>,
-    FeedPath: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    FeedEventId: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-{
-    fn from_row(row: &'r R) -> sqlx::Result<Self> {
-        match FeedEventRecord::from_row(row) {
-            Ok(record) => Ok(Self::Record(Box::new(record))),
-            Err(_) if row.try_get::<FeedPath, _>("feed_url").is_err() => {
-                Ok(Self::Corrupt(row.try_get::<FeedEventId, _>("id")?))
-            }
-            Err(e) => Err(e),
-        }
+impl From<ClaimedFeedEventRow> for ClaimedRow {
+    fn from(row: ClaimedFeedEventRow) -> Self {
+        let ClaimedFeedEventRow {
+            id,
+            feed_url,
+            status,
+            attempts,
+            last_error,
+            next_attempt_at,
+            claimed_at,
+            created_at,
+            regenerated_at,
+            pinged_at,
+        } = row;
+        let Ok(feed_path) = feed_url.into_feed_path() else {
+            return Self::Corrupt(id);
+        };
+        Self::Record(Box::new(FeedEventRecord {
+            id,
+            feed_path,
+            status,
+            attempts: attempts.into_i32(),
+            last_error: last_error.map(StoredFeedDiagnostic::into_inner),
+            next_attempt_at,
+            claimed_at,
+            created_at,
+            regenerated_at,
+            pinged_at,
+        }))
     }
 }
 
@@ -173,10 +225,12 @@ pub trait FeedEventStorage: Send + Sync {
 /// Backend-specific divergence for [`FeedEventStore`].
 ///
 /// [`claim_pending_batch`][FeedEventDialect::claim_pending_batch] diverges in SQL
-/// shape: both backends claim in a single `UPDATE … RETURNING` statement, but
-/// Postgres uses a `FOR UPDATE SKIP LOCKED` CTE for inter-worker skip-locking,
-/// while `SQLite` (which lacks `SKIP LOCKED`) drives the same write from an
-/// `id IN (SELECT … LIMIT …)` subquery. `SQLite` must avoid the earlier
+/// shape: both backends execute one atomic `UPDATE … RETURNING` claim, then keep
+/// its short transaction open only until decoding and feed-URL partitioning
+/// complete. A non-URL decode failure therefore rolls the claim back.
+/// Postgres uses a `FOR UPDATE SKIP LOCKED` CTE for inter-worker
+/// skip-locking, while `SQLite` (which lacks `SKIP LOCKED`) drives the same write
+/// from an `id IN (SELECT … LIMIT …)` subquery. `SQLite` must avoid the earlier
 /// read-then-write transaction (SELECT ids → UPDATE → SELECT rows), which is
 /// `SQLITE_BUSY`-prone under concurrency; see ADR-0021.
 ///
@@ -670,6 +724,75 @@ mod tests {
             remaining, 1,
             "a decode failure outside feed_url must never delete the row"
         );
+
+        // A failed decode must roll the UPDATE … RETURNING claim back, not only
+        // avoid the corrupt-URL purge path.
+        let untouched = env
+            .base
+            .pool()
+            .scalar_i64(
+                "SELECT COUNT(*) FROM feed_events \
+                 WHERE status = 'pending' AND claimed_at IS NULL",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            untouched, 1,
+            "a non-feed_url decode failure must retain pending status and null claimed_at"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn negative_attempts_propagate_and_leave_the_claimed_row_untouched(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        env.state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
+        env.base
+            .pool()
+            .execute("UPDATE feed_events SET attempts = -1")
+            .await
+            .unwrap();
+
+        let err = env
+            .state
+            .feed_events
+            .claim_pending_batch(50, chrono::Duration::minutes(5))
+            .await
+            .expect_err("negative attempts must fail decode rather than divert");
+        assert!(
+            matches!(err, FeedEventError::Db(sqlx::Error::ColumnDecode { .. })),
+            "expected a column-decode error, got {err:?}"
+        );
+
+        let remaining = env
+            .base
+            .pool()
+            .scalar_i64("SELECT COUNT(*) FROM feed_events")
+            .await
+            .unwrap();
+        assert_eq!(remaining, 1, "negative attempts must not delete the row");
+
+        // A failed decode must roll the UPDATE … RETURNING claim back, not merely
+        // avoid deleting the row.
+        let untouched = env
+            .base
+            .pool()
+            .scalar_i64(
+                "SELECT COUNT(*) FROM feed_events \
+                 WHERE status = 'pending' AND claimed_at IS NULL",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            untouched, 1,
+            "negative attempts must retain pending status and null claimed_at"
+        );
     }
 
     #[apply(backends)]
@@ -1038,7 +1161,7 @@ mod tests {
             ),
         ];
 
-        let rows = crate::with_closeable_pool!(env.base.pool(), pool, {
+        let claimed_rows = crate::with_closeable_pool!(env.base.pool(), pool, {
             for fixture in &fixtures {
                 sqlx::query(
                     "INSERT INTO feed_events \
@@ -1059,14 +1182,20 @@ mod tests {
                 .unwrap();
             }
 
-            sqlx::query_as::<_, FeedEventRecord>(
+            sqlx::query_as::<_, ClaimedFeedEventRow>(
                 "SELECT id, feed_url, status, attempts, last_error, next_attempt_at, claimed_at, \
                  created_at, regenerated_at, pinged_at FROM feed_events ORDER BY id",
             )
             .fetch_all(pool)
             .await
             .unwrap()
+            .into_iter()
+            .map(ClaimedRow::from)
+            .collect::<Vec<ClaimedRow>>()
         });
+
+        let (rows, corrupt_ids) = partition_claimed(claimed_rows);
+        assert!(corrupt_ids.is_empty());
 
         assert_eq!(rows.len(), fixtures.len());
 

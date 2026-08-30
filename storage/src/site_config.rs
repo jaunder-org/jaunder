@@ -41,7 +41,6 @@ pub trait SiteConfigStorage: Send + Sync {
     /// default: a `vec![]` default would silently under-report for any
     /// implementor). Backs `jaunder site-config list`.
     async fn list(&self) -> sqlx::Result<Vec<(String, String)>>;
-
     /// Deletes a `site_config` entry, returning whether a row was removed.
     ///
     /// Idempotent: deleting an absent key is a no-op that returns `false`. Backs
@@ -306,7 +305,27 @@ impl<DB: Database> SiteConfigStore<DB> {
 /// gate reads are worth more than one abstraction it cannot.
 const SELECT_VALUE_SQL: &str = "SELECT value FROM site_config WHERE key = $1";
 
-type SiteConfigExportRow = (String, String);
+/// A site-config value preserved exactly until its key-specific read policy parses it.
+#[derive(Debug, macros::SqlxBridge)]
+struct StoredSiteConfigValue(String);
+
+impl StoredSiteConfigValue {
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+/// A physically stored site-config key, including an unknown or orphan key.
+#[derive(Debug, macros::SqlxBridge)]
+struct StoredSiteConfigKey(String);
+
+impl StoredSiteConfigKey {
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+type SiteConfigExportRow = (StoredSiteConfigKey, StoredSiteConfigValue);
 
 /// Re-labels a decode failure with the **key** it came from.
 ///
@@ -330,7 +349,8 @@ fn label_decode_error(key: SiteConfigKey, error: sqlx::Error) -> sqlx::Error {
 impl<DB> SiteConfigStorage for SiteConfigStore<DB>
 where
     DB: Backend,
-    (String,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (StoredSiteConfigValue,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (StoredSiteConfigKey,): for<'r> sqlx::FromRow<'r, DB::Row>,
     SiteConfigExportRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     // The SMTP value types decode from the `value` column via their validating sqlx
     // bridges (#438, #687); these bounds make the bridges available on the generic
@@ -349,11 +369,13 @@ where
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     async fn get_raw(&self, key: SiteConfigKey) -> sqlx::Result<Option<String>> {
-        let row = sqlx::query_as::<_, (String,)>("SELECT value FROM site_config WHERE key = $1")
-            .bind(key)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.map(|(value,)| value))
+        let row = sqlx::query_as::<_, (StoredSiteConfigValue,)>(
+            "SELECT value FROM site_config WHERE key = $1",
+        )
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(value,)| value.into_inner()))
     }
 
     #[tracing::instrument(
@@ -441,18 +463,22 @@ where
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows)
+        Ok(rows
+            .into_iter()
+            .map(|(key, value)| (key.into_inner(), value.into_inner()))
+            .collect())
     }
 
     async fn delete(&self, key: SiteConfigKey) -> sqlx::Result<bool> {
         // `RETURNING` + `fetch_optional` detects a no-match generically (a `None`),
         // avoiding `rows_affected()` which sqlx exposes only on concrete results
         // (mirrors `audiences::rename_audience`). Both backends support RETURNING.
-        let removed =
-            sqlx::query_as::<_, (String,)>("DELETE FROM site_config WHERE key = $1 RETURNING key")
-                .bind(key)
-                .fetch_optional(&self.pool)
-                .await?;
+        let removed = sqlx::query_as::<_, (StoredSiteConfigKey,)>(
+            "DELETE FROM site_config WHERE key = $1 RETURNING key",
+        )
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(removed.is_some())
     }
 }
@@ -501,6 +527,35 @@ mod tests {
         assert!(store.delete(SiteConfigKey::SiteTitle).await.unwrap());
         assert!(!store.delete(SiteConfigKey::SiteTitle).await.unwrap());
         assert_eq!(store.get_raw(SiteConfigKey::SiteTitle).await.unwrap(), None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_preserves_unknown_keys_for_export_and_raw_cleanup(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        let unknown_key = "legacy.unregistered_key";
+        let opaque_value = "value retained verbatim";
+        env.base
+            .pool()
+            .execute(
+                "INSERT INTO site_config (key, value) \
+                 VALUES ('legacy.unregistered_key', 'value retained verbatim')",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.list().await.unwrap(),
+            vec![(unknown_key.to_owned(), opaque_value.to_owned())]
+        );
+
+        env.base
+            .pool()
+            .execute("DELETE FROM site_config WHERE key = 'legacy.unregistered_key'")
+            .await
+            .unwrap();
+        assert!(store.list().await.unwrap().is_empty());
     }
 
     #[apply(backends)]

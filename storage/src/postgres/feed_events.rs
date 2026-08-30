@@ -6,8 +6,10 @@ use host::feed::FeedEventClaimLimit;
 use sqlx::{Pool, Postgres};
 
 use crate::feed_events::{
-    self, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
+    self, ClaimedFeedEventRow, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord,
+    FeedEventStore,
 };
+use crate::sql::RowCount;
 
 /// Postgres-backed feed-event storage.
 pub type PostgresFeedEventStorage = FeedEventStore<Postgres>;
@@ -40,9 +42,12 @@ impl FeedEventDialect for Postgres {
         lease_cutoff: UtcInstant,
         limit: FeedEventClaimLimit,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
-        // Postgres can express the whole claim atomically with FOR UPDATE
-        // SKIP LOCKED + UPDATE … RETURNING in a single statement.
-        let rows = sqlx::query_as::<_, ClaimedRow>(
+        // Keep the atomic UPDATE … RETURNING claim inside a transaction until every
+        // returned row decodes and conversion partitions feed-URL purge candidates.
+        // Dropping the transaction rolls the claim back on any non-URL decode error;
+        // commit before purge so an unparseable URL retains its existing diversion.
+        let mut tx = pool.begin().await?;
+        let rows = sqlx::query_as::<_, ClaimedFeedEventRow>(
             "WITH eligible AS ( \
                 SELECT id FROM feed_events \
                 WHERE (status = 'pending' AND next_attempt_at <= $1) \
@@ -59,10 +64,14 @@ impl FeedEventDialect for Postgres {
         .bind(now)
         .bind(lease_cutoff)
         .bind(limit)
-        .fetch_all(pool)
-        .await?;
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(ClaimedRow::from)
+        .collect();
 
         let (records, corrupt) = feed_events::partition_claimed(rows);
+        tx.commit().await?;
         let purge = purge_corrupt(pool, &corrupt).await;
         Ok(finish_purge(records, purge))
     }
@@ -72,7 +81,7 @@ impl FeedEventDialect for Postgres {
         now: UtcInstant,
         lease_cutoff: UtcInstant,
     ) -> Result<u64, FeedEventError> {
-        let count = sqlx::query_scalar::<_, i64>(
+        let count = sqlx::query_scalar::<_, RowCount>(
             "SELECT COUNT(*) FROM feed_events \
              WHERE (status = 'pending' AND next_attempt_at <= $1) \
                 OR (status = 'claimed' AND claimed_at < $2)",
@@ -81,7 +90,7 @@ impl FeedEventDialect for Postgres {
         .bind(lease_cutoff)
         .fetch_one(pool)
         .await?;
-        Ok(u64::try_from(count).unwrap_or(0))
+        Ok(count.into_u64())
     }
 
     async fn mark_regenerated(

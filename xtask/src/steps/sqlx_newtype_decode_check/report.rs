@@ -1,30 +1,21 @@
 use std::path::Path;
 
-use super::allowlist::{ALLOWLIST, Allowed, Category, allowlist_self_problems, entry_matches};
 use super::approve_set::{
     APPROVED_FOREIGN, ApproveSet, DECLARATION_ROOTS, Root, collect_declarations,
 };
 use super::macros_audit::{MACROS_LIB, macro_enumeration_problems};
-use super::scan::{DecodeSite, decodes};
+use super::scan::decodes;
 use crate::files;
 use crate::result::{CommandResult, StepResult};
 
 /// Source root scanned recursively for `.rs` files.
 pub(super) const POLICED_ROOT: &str = "storage/src";
 
-/// The failure detail for every unjustified decode and every allowlist entry whose
-/// declared count no longer matches the tree, or `None` when the population is exactly
-/// accounted for. Pure given the `(path, source)` pairs, so it is unit-tested directly.
+/// The failure detail for structurally found decodes whose leaves are not declaration-backed
+/// approvals, or `None` when every readable target is approved. Pure given the `(path, source)`
+/// pairs, so it is unit-tested directly.
 fn problems(scanned: &[(String, String)], approve: &ApproveSet) -> Option<String> {
-    problems_with_allowlist(scanned, approve, ALLOWLIST)
-}
-
-fn problems_with_allowlist(
-    scanned: &[(String, String)],
-    approve: &ApproveSet,
-    allowlist: &[Allowed],
-) -> Option<String> {
-    let mut found: Vec<(String, DecodeSite)> = Vec::new();
+    let mut found = Vec::new();
     let mut lines = Vec::new();
     for (path, source) in scanned {
         match decodes(source, approve) {
@@ -47,79 +38,21 @@ fn problems_with_allowlist(
         }
     }
 
-    // Unjustified decodes: nothing in the allowlist names them.
     for (path, d) in &found {
-        if !allowlist.iter().any(|e| entry_matches(e, path, d)) {
-            lines.push(format!(
-                "{path}:{}: `{}` decodes into `{}`, whose leaf type(s) {} are not approved column \
-                 types. If the column holds a domain value, decode it straight into its type — the \
-                 ADR-0071 bridge makes `query_scalar::<_, PostId>` work — and delete any hand \
-                 re-wrap. If it is genuinely untyped, add an ALLOWLIST entry with a written \
-                 reason. This gate reads no SQL, so it cannot tell which; that judgement is yours \
-                 to record.",
-                d.line,
-                d.what,
-                d.target,
-                d.unapproved.join(", ")
-            ));
-        }
+        lines.push(format!(
+            "{path}:{}: `{}` decodes into `{}`, whose leaf type(s) {} are not approved column \
+             types. Decode it into a declaration-backed type: the ADR-0071 bridge makes \
+             `query_scalar::<_, PostId>` work, and explicit persisted role types make raw \
+             storage values equally visible. This gate reads no SQL and has no site exemption; \
+             its only recovery is an approved target type.",
+            d.line,
+            d.what,
+            d.target,
+            d.unapproved.join(", ")
+        ));
     }
 
-    // Stale or drifted entries: an allowlist that stops tracking the tree is an
-    // allowlist that has silently become a region exemption.
-    for e in allowlist {
-        let seen = found
-            .iter()
-            .filter(|(path, d)| entry_matches(e, path, d))
-            .count();
-        if seen != e.count {
-            lines.push(format!(
-                "{}::{}: allowlist entry for `{}` declares {} site(s), the tree has {}. {}",
-                e.file,
-                e.function,
-                e.target,
-                e.count,
-                seen,
-                if seen == 0 {
-                    "The decode is gone — delete the entry."
-                } else {
-                    "Re-justify each site, then update the count."
-                }
-            ));
-        }
-    }
-
-    lines.extend(allowlist_self_problems(allowlist));
-
-    if lines.is_empty() {
-        return None;
-    }
-    lines.push(
-        "  recovery: this gate enumerates rather than searching — it has no idea which columns \
-         hold domain values, and deliberately so, because every audit that searched for the \
-         id-ish spelling missed the sites spelled another way (#686, #715). So a decode passes \
-         only when every leaf of its target is an APPROVED type — one declared with a \
-         bridge-emitting macro, or a composite whose fields this gate polices — and every other \
-         decode is either typed or listed below. Currently exempt, by rationale:"
-            .to_string(),
-    );
-    for category in Category::ALL {
-        let mut group = allowlist
-            .iter()
-            .filter(|a| a.category == *category)
-            .peekable();
-        if group.peek().is_none() {
-            continue;
-        }
-        lines.push(format!("    [{}]", category.label()));
-        for a in group {
-            lines.push(format!(
-                "      - {}::{} `{}` ×{}: {}",
-                a.file, a.function, a.target, a.count, a.reason
-            ));
-        }
-    }
-    Some(lines.join("\n"))
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 /// Scan every Rust file under [`POLICED_ROOT`] and push the result step. A missing
@@ -240,118 +173,21 @@ mod tests {
         problems(scanned, &approve())
     }
 
-    fn problems_of_with_allowlist(
-        scanned: &[(String, String)],
-        allowlist: &[Allowed],
-    ) -> Option<String> {
-        problems_with_allowlist(scanned, &approve(), allowlist)
-    }
-
-    /// A source with `n` identical allowlisted `COUNT(*)` decodes.
-    fn identical_sites(n: usize) -> String {
-        let decodes: String = (0..n)
-            .map(|_| {
-                r#"sqlx::query_scalar::<_, i64>(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-                )
-                .fetch_one(pool)
-                .await?;
-"#
-                .to_string()
-            })
-            .collect();
-        format!(
-            "async fn backup_covers_every_table_or_deliberately_excludes_it() -> Result<(), sqlx::Error> {{ {decodes} Ok(()) }}"
-        )
-    }
-
-    fn backup_count_entry() -> Allowed {
-        Allowed {
-            file: "backup.rs",
-            function: "backup_covers_every_table_or_deliberately_excludes_it",
-            target: "i64",
-            what: "\"SELECTCOUNT(*)FROMsqlite_masterWHEREtype='table'ANDnameNOTLIKE'sqlite_%'\"",
-            count: 1,
-            category: Category::CountOrExists,
-            reason: "COUNT(*) of live SQLite tables, checked against the backup manifest",
-        }
-    }
-
     #[test]
-    fn an_entry_count_passes_on_one_and_fails_on_two() {
-        // The property that stops an entry becoming a region exemption. The real
-        // backup-manifest entry declares 1; a second identical decode must NOT be
-        // silently absorbed by it.
-        //
-        // Scanning one file in isolation legitimately makes the other nine entries
-        // stale, so the assertion is scoped to this entry's own message rather than to
-        // `problems` returning `None`.
-        let one = vec![("storage/src/backup.rs".to_string(), identical_sites(1))];
-        let allowlist = [backup_count_entry()];
-        let one_detail = problems_of_with_allowlist(&one, &allowlist).unwrap_or_default();
-        // Match the failure phrasing, not the bare key — the recovery footer lists
-        // every entry by key, including this one.
-        assert!(
-            !one_detail.contains(
-                "backup.rs::backup_covers_every_table_or_deliberately_excludes_it: allowlist entry"
-            ),
-            "one site matches the declared count, so this entry must not complain: {one_detail}"
-        );
-
-        let two = vec![("storage/src/backup.rs".to_string(), identical_sites(2))];
-        let detail = problems_of_with_allowlist(&two, &allowlist)
-            .expect("a second identical decode must fail");
-        assert!(
-            detail.contains("declares 1 site(s), the tree has 2"),
-            "{detail}"
-        );
-    }
-
-    #[test]
-    fn an_entry_exempts_only_the_decode_it_names() {
-        // A different `i64` decode in the same allowlisted function is still a failure —
-        // the entry covers one decode, never a region.
-        let src = format!(
-            "{} {}",
-            identical_sites(1),
-            "async fn backup_covers_every_table_or_deliberately_excludes_it_extra() -> Result<(), sqlx::Error> { \
-             let _: i64 = sqlx::query_scalar(\"SELECT owner_id FROM t\").fetch_one(pool).await?; \
-             Ok(()) \
-             }"
-        );
-        let allowlist = [backup_count_entry()];
-        let detail =
-            problems_of_with_allowlist(&[("storage/src/backup.rs".to_string(), src)], &allowlist)
-                .expect("the unlisted sibling decode must fail");
-        assert!(detail.contains("SELECTowner_idFROMt"), "{detail}");
-    }
-
-    #[test]
-    fn an_unallowlisted_id_decode_is_flagged() {
-        // The headline case: reverting any swept site must fail the gate.
+    fn a_novel_bare_primitive_decode_is_flagged_by_its_unapproved_type() {
+        // `u128` is not a type the gate anticipates. It fails solely because it has no
+        // declaration-backed approval, not because the call or SQL spelling is recognised.
         let src = r#"
-            impl S {
-                async fn create(&self) -> Result<UserId, E> {
-                    let id = sqlx::query_scalar::<_, i64>("INSERT INTO users RETURNING user_id")
-                        .fetch_one(&self.pool).await?;
-                    Ok(UserId::from(id))
-                }
+            async fn read_unanticipated_measurement(pool: &sqlx::Pool<sqlx::Sqlite>) {
+                let _: u128 = sqlx::query_scalar("SELECT unanticipated_measurement FROM t")
+                    .fetch_one(pool).await.unwrap();
             }
         "#;
-        let detail = problems_of(&[("storage/src/users.rs".to_string(), src.to_string())])
-            .expect("a bare i64 id decode must fail");
-        assert!(detail.contains("storage/src/users.rs"), "{detail}");
-        assert!(detail.contains("decodes into `i64`"), "{detail}");
-    }
-
-    #[test]
-    fn a_stale_entry_with_no_matching_site_is_reported() {
-        // An allowlist that stops tracking the tree has quietly become a region
-        // exemption, so a vanished site is a failure too, not a free pass.
-        let detail = problems_of(&[("storage/src/users.rs".to_string(), String::new())])
-            .expect("every entry is now stale");
+        let detail = problems_of(&[("storage/src/novel.rs".to_string(), src.to_string())])
+            .expect("a bare primitive without approval must fail");
+        assert!(detail.contains("decodes into `u128`"), "{detail}");
         assert!(
-            detail.contains("The decode is gone — delete the entry."),
+            detail.contains("leaf type(s) u128 are not approved"),
             "{detail}"
         );
     }

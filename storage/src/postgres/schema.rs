@@ -3,6 +3,7 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::sql::RowCount;
     use crate::test_support::{Backend, postgres_only};
 
     use rstest::*;
@@ -19,7 +20,7 @@ mod tests {
     async fn every_foreign_key_is_deferrable(#[case] backend: Backend) {
         let env = backend.setup().await;
         let pool = env.base.pool().postgres();
-        let non_deferrable: i64 = sqlx::query_scalar(
+        let non_deferrable = sqlx::query_scalar::<_, RowCount>(
             "SELECT COUNT(*) FROM pg_constraint \
              WHERE contype = 'f' AND connamespace = 'public'::regnamespace \
                AND NOT condeferrable",
@@ -28,7 +29,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            non_deferrable, 0,
+            non_deferrable.into_u64(),
+            0,
             "every foreign key must be DEFERRABLE so restore can SET CONSTRAINTS ALL DEFERRED"
         );
     }
