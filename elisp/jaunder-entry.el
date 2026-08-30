@@ -23,6 +23,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 
 (cl-defstruct (jaunder-entry (:constructor jaunder--make-entry))
               "Structured AtomPub entry mapped from a source buffer.
@@ -30,6 +31,17 @@ Holds abstract field values only; wire encoding (namespaces, media types,
 `app:draft' nesting) lives in `jaunder--atom-entry->xml'.  `body' is the
 body-only content with the metadata header block stripped."
               title categories summary draft content-type body published)
+
+(defun jaunder--valid-tag-slug-p (slug)
+  "Return non-nil when SLUG is a canonical lowercase Jaunder Tag."
+  (let ((case-fold-search nil))
+    (and (stringp slug)
+         (string-match-p "\\`[a-z0-9][a-z0-9-]*\\'" slug))))
+
+(defun jaunder--valid-tag-label-p (label)
+  "Return non-nil when LABEL satisfies Jaunder's case-preserving Tag boundary."
+  (and (stringp label)
+       (jaunder--valid-tag-slug-p (downcase (string-trim label)))))
 
 (provide 'jaunder-entry)
 ;;; jaunder-entry.el ends here

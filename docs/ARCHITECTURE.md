@@ -1874,9 +1874,20 @@ publish. Commands bind the private `jaunder--active-blog` special through
 blog is active ([ADR-0047](adr/0047-emacs-publish-orchestration.md)).
 
 The user-facing commands are `jaunder-new-post`, `jaunder-publish`, and
-`jaunder-save-draft` (publish forced to `app:draft`). Publish performs all
-network mutation before any destructive local change
-(`elisp/jaunder-publish.el:178`): map → validate (non-empty body; a `scheduled`
+`jaunder-save-draft` (publish forced to `app:draft`).
+
+`jaunder-new-post` resolves its target before creating a local Post, then
+collects title, repeated Tag labels, and publication state before writing the
+Org metadata block. Tag completion reads the Posts Collection's inline
+categories from the authenticated AtomPub Service Document; discovery failures
+remain visible but degrade to free-text entry so local authoring stays
+available. A prefix argument preserves prompt-free minimal-template creation: it
+uses the longest matching blog, rejects a nonempty configuration with no
+matching root, and falls back to `default-directory` only when the client has no
+configured blogs (`elisp/jaunder-publish.el`, `elisp/jaunder-service.el`).
+
+Publish performs all network mutation before any destructive local change
+(`elisp/jaunder-publish.el:307`): map → validate (non-empty body; a `scheduled`
 Post needs a future `#+DATE:`) → record the machine zone → media localization →
 Entry send → write-back → rename to `<slug>.org`. Media localization first
 collects candidates, then aggregates every missing, unreadable, or non-regular
@@ -1893,8 +1904,8 @@ stale-ETag, is recoverable by a plain re-publish
 applies to the sent body only; the authoring buffer is never modified.
 
 Creates go through `jaunder--create-with-retry`
-(`elisp/jaunder-publish.el:151`), which currently retries a 5xx or **any**
-signalled error — the handler is a bare `(error …)` (`:165`), so a non-transport
+(`elisp/jaunder-publish.el:280`), which currently retries a 5xx or **any**
+signalled error — the handler is a bare `(error …)` (`:294`), so a non-transport
 failure such as a missing auth-source entry is also retried twice before
 re-signalling. That credential-error retry contradicts the accepted auth-source
 boundary and is tracked in
