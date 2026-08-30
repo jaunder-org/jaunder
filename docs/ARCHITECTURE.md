@@ -1311,14 +1311,17 @@ the result of a `.location()` method call chained to `replace`, `assign`,
 `reload`, or `set_href`; there is no allowlist or exemption file. Its
 location-bearing diagnostic directs callers to `leptos_router`'s
 `use_navigate()` and [#592](https://github.com/jaunder-org/jaunder/issues/592).
+The companion `ast-grep-tests` definition runs the committed native fixtures.
 The host xtask static-check mechanism and Nix `static-checks` derivation invoke
-that same definition (`devtool check --all --sandbox-cargo` in Nix), rather than
-maintaining a host-only source scanner. The SPA user namespace is `~`-prefixed:
-the permalink route's leading segment is a custom `TildeUsername` route match
-(`web/src/route_segments.rs:13`, wired at `web/src/app/component.rs:151`) that
-matches only a `~`-leading segment, mirroring the server's literal-`~` projector
-routes. The tightening is deliberately partial — the other username-first routes
-stay plain param segments.
+both definitions (`devtool check --all --sandbox-cargo` in Nix), rather than
+maintaining a host-only source scanner
+([proposed devtool ast-grep enforcement](adr/drafts/devtool-owns-ast-grep-enforcement.md)).
+The SPA user namespace is `~`-prefixed: the permalink route's leading segment is
+a custom `TildeUsername` route match (`web/src/route_segments.rs:13`, wired at
+`web/src/app/component.rs:151`) that matches only a `~`-leading segment,
+mirroring the server's literal-`~` projector routes. The tightening is
+deliberately partial — the other username-first routes stay plain param
+segments.
 
 The style companion is `docs/web-style-guide.md`.
 
@@ -2460,19 +2463,22 @@ itself is host-only; Nix never invokes it back
 
 ### What the ladder actually runs
 
-In order, after the host `static-checks` step (`fmt`, `leptosfmt`, `prettier`,
-`tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, `clippy`,
-`web-server-clippy`, `web-no-server-clippy`, `wasm-clippy`,
-`tools-fmt`/`tools-clippy`, `no-full-reload`, `xtask-fmt`/`xtask-clippy`), both
-rungs run the same host steps (`xtask/src/lib.rs:457`-`:479`):
+In order, host `static-checks` runs source consistency (`fmt`, `leptosfmt`,
+`prettier`, `elisp-fmt`, `tools-fmt`, `ast-grep-tests`, `no-full-reload`,
+`xtask-fmt`), compile/type checks (`byte-compile`, `tsc`, `cargo-deny`,
+`clippy`, `web-server-clippy`, `web-no-server-clippy`, `wasm-clippy`,
+`tools-clippy`, `xtask-clippy`), then the `ert` runtime check. Both rungs run
+the same host steps (`xtask/src/lib.rs:457`-`:479`):
 
 **Two different things are called `static-checks`, and conflating them is
 easy.** The host _step_ above runs the listed sub-steps through host-local
 lanes. The Nix `static-checks` _derivation_ (`flake.nix:1276`) runs the shared
 `devtool check --all --sandbox-cargo` definitions hermetically with
-workspace-specific offline Cargo homes, including the ast-grep `no-full-reload`
-rule. `validate --no-e2e` builds it as `nix-static-checks` before the Nix test
-checks, so CI fails if the hermetic static-check surface drifts from the host
+workspace-specific offline Cargo homes, including `ast-grep-tests` for committed
+rule fixtures and the `no-full-reload` repository scan
+([proposed devtool ast-grep enforcement](adr/drafts/devtool-owns-ast-grep-enforcement.md)).
+`validate --no-e2e` builds it as `nix-static-checks` before the Nix test checks,
+so CI fails if the hermetic static-check surface drifts from the host
 definitions.
 
 #### Sandboxed cargo-deny
@@ -2487,18 +2493,20 @@ skips `advisories` and checks only `bans`, `licenses`, and `sources`
 The project/tool static checks live behind `devtool check` as a shared
 command-definition surface, while keeping separate host and sandbox execution
 lanes ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
-[devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md)).
-Alongside the compiling definitions, it owns the non-compiling ast-grep
-`no-full-reload` policy. The product clippy commands deliberately cover three
-distinct surfaces: generic workspace clippy is broad, feature-unified host
-coverage; the isolated `web-no-server-clippy` checks `web`'s no-default-feature
-host test targets, so workspace feature unification cannot enable `web/server`;
-and `wasm-clippy` checks wasm library targets. The wasm step deliberately omits
-`--all-targets`, because `web` test dependencies are host-oriented and cannot
-compile for `wasm32-unknown-unknown`. Host xtask lanes execute each definition
-through their existing static-check mechanism while retaining host-local Cargo
-artifacts and sccache for Rust-compiling checks; sandboxed Nix lanes execute the
-same definitions through `devtool check --all --sandbox-cargo` with
+[devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
+[proposed devtool ast-grep enforcement](adr/drafts/devtool-owns-ast-grep-enforcement.md)).
+Alongside the compiling definitions, it owns the non-compiling ast-grep rule
+fixtures (`ast-grep-tests`) and `no-full-reload` repository scan. The product
+clippy commands deliberately cover three distinct surfaces: generic workspace
+clippy is broad, feature-unified host coverage; the isolated
+`web-no-server-clippy` checks `web`'s no-default-feature host test targets, so
+workspace feature unification cannot enable `web/server`; and `wasm-clippy`
+checks wasm library targets. The wasm step deliberately omits `--all-targets`,
+because `web` test dependencies are host-oriented and cannot compile for
+`wasm32-unknown-unknown`. Host xtask lanes execute each definition through their
+existing static-check mechanism while retaining host-local Cargo artifacts and
+sccache for Rust-compiling checks; sandboxed Nix lanes execute the same
+definitions through `devtool check --all --sandbox-cargo` with
 workspace-specific offline Cargo homes. `xtask-fmt` and `xtask-clippy` remain
 native host checks because `xtask/` is excluded from the flake source.
 
@@ -2515,7 +2523,8 @@ native host checks because `xtask/` is excluded from the flake source.
 | `server-fn-coverage`                                       | static lane of the flow-coverage snapshot                                                                                                                        |
 | `traced-context`                                           | context propagation                                                                                                                                              |
 | `proffered-secret`                                         | inbound-secret directional boundary                                                                                                                              |
-| `no-full-reload`                                           | no-allowlist ast-grep policy: Rust in `web/src` and `client/src` must not chain `replace`, `assign`, `reload`, or `set_href` from `.location()`                  |
+| `ast-grep-tests`                                           | committed native ast-grep rule fixtures                                                                                                                          |
+| `no-full-reload`                                           | no-allowlist ast-grep repository scan: Rust in `web/src` and `client/src` must not chain `replace`, `assign`, `reload`, or `set_href` from `.location()`         |
 | `e2e-goto-wrapper`, `e2e-scaffold`                         | e2e harness shape; no committed `e2eSalt`                                                                                                                        |
 | `target-arch-placement`                                    | host/wasm split at module wiring only                                                                                                                            |
 | `lint-suppression`                                         | reviewed Rust lint expectation markers; no `#[allow]`                                                                                                            |
@@ -2729,17 +2738,18 @@ host-side subcommands are therefore chartered, not drift.
   `prettier`, `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, generic
   product `clippy`, `web-server-clippy`, isolated host-test
   `web-no-server-clippy`, wasm-target `wasm-clippy`, `tools-fmt`, tools
-  workspace `tools-clippy`, and ast-grep `no-full-reload` —
-  `tools/devtool/src/check.rs`). Both gates invoke the same definitions: the
-  host verify ladder delegates each through its static-check mechanism,
-  preserving host-local Cargo artifacts and sccache for Rust-compiling checks;
-  the Nix `static-checks` `runCommand` runs
+  workspace `tools-clippy`, and ast-grep `ast-grep-tests` plus the
+  `no-full-reload` repository scan — `tools/devtool/src/check.rs`). Both gates
+  invoke the same definitions: the host verify ladder delegates each through its
+  static-check mechanism, preserving host-local Cargo artifacts and sccache for
+  Rust-compiling checks; the Nix `static-checks` `runCommand` runs
   `devtool check --all --sandbox-cargo` from the prebuilt `devtoolBin` with
   offline Cargo homes. Cargo-deny keeps a split policy: host mode runs full
   `cargo deny check`, while sandbox mode skips `advisories`
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
-  [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md)).
+  [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
+  [proposed devtool ast-grep enforcement](adr/drafts/devtool-owns-ast-grep-enforcement.md)).
 
 **xtask is host-only — an enforced invariant.** Nix derivations never invoke
 xtask; the flow is strictly one-directional (host `cargo xtask` → `nix build`).

@@ -34,10 +34,13 @@ host verify ladder and the hermetic Nix static-check lane.
   unrelated churn.
 - Rule behavior is tested as rule behavior, including a call chain split across
   lines. Scanner implementation tests disappear with the scanner.
-- No ADR is added: this applies the ownership boundaries already decided by
-  ADR-0052, ADR-0076, and ADR-0146 rather than introducing a new durable
-  architecture choice. Update `docs/ARCHITECTURE.md` to project the gate's new
-  owner, matching layer, and host/Nix execution surfaces.
+- Replace the prior no-ADR decision with the proposed
+  [devtool ast-grep enforcement ADR](../../adr/drafts/devtool-owns-ast-grep-enforcement.md):
+  it amends ADR-0076's enforcement mechanism while preserving its navigation
+  policy, and records why devtool owns the native rule test and repository scan
+  across host and Nix.
+- Update `docs/ARCHITECTURE.md` to project the gate's devtool/ast-grep
+  ownership, rule self-tests, repository scan, and host/Nix execution surfaces.
 
 ## Acceptance
 

@@ -45,6 +45,7 @@ pub fn specs_for_phase(phase: Phase, mode: Mode) -> Vec<StepSpec> {
             devtool_check("prettier", mode),
             devtool_check("elisp-fmt", mode),
             devtool_check("tools-fmt", mode),
+            devtool_check("ast-grep-tests", mode),
             devtool_check("no-full-reload", mode),
             StepSpec {
                 name: "xtask-fmt",
@@ -231,6 +232,23 @@ mod tests {
             ]
         );
         assert!(!fmt.cache_rustc);
+        let ast_grep_tests = find(&s, "ast-grep-tests");
+        assert_eq!(ast_grep_tests.program, "cargo");
+        assert_eq!(
+            ast_grep_tests.args,
+            [
+                "run",
+                "--quiet",
+                "--manifest-path",
+                "tools/Cargo.toml",
+                "-p",
+                "devtool",
+                "--",
+                "check",
+                "ast-grep-tests"
+            ]
+        );
+        assert!(!ast_grep_tests.cache_rustc);
         let no_full_reload = find(&s, "no-full-reload");
         assert_eq!(no_full_reload.program, "cargo");
         assert_eq!(
@@ -307,6 +325,7 @@ mod tests {
             "prettier",
             "elisp-fmt",
             "tools-fmt",
+            "ast-grep-tests",
             "no-full-reload",
             "xtask-fmt",
             "byte-compile",
@@ -340,6 +359,7 @@ mod tests {
                 "prettier",
                 "elisp-fmt",
                 "tools-fmt",
+                "ast-grep-tests",
                 "no-full-reload",
                 "xtask-fmt"
             ]

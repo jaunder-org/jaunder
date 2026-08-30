@@ -22,6 +22,7 @@ pub const ALL: &[&str] = &[
     "prettier",
     "elisp-fmt",
     "tools-fmt",
+    "ast-grep-tests",
     "no-full-reload",
     "byte-compile",
     "tsc",
@@ -160,7 +161,7 @@ impl CheckSpec {
 
 /// Pure: the command spec for `name` in the given mode. `fix` makes the five
 /// formatters (`fmt`, `leptosfmt`, `prettier`, `elisp-fmt`, `tools-fmt`) mutate in place;
-/// `ert`/`tsc`/`byte-compile`/`no-full-reload` have no autofix and ignore it.
+/// `ert`/`tsc`/`byte-compile`/`ast-grep-tests`/`no-full-reload` have no autofix and ignore it.
 fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
     let owned = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let cargo_check = |workspace, args: &[&str]| {
@@ -227,6 +228,10 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
         "byte-compile" => CheckSpec::External {
             program: "emacs",
             args: owned(&["--batch", "-Q", "-l", "elisp/scripts/byte-compile.el"]),
+        },
+        "ast-grep-tests" => CheckSpec::External {
+            program: "ast-grep",
+            args: owned(&["test", "--config", "sgconfig.yml"]),
         },
         "no-full-reload" => CheckSpec::External {
             program: "ast-grep",
@@ -906,6 +911,22 @@ mod tests {
     }
 
     #[test]
+    fn ast_grep_tests_run_committed_rule_fixtures() {
+        assert_eq!(
+            build_host("ast-grep-tests", false),
+            BuiltCommand {
+                program: "ast-grep",
+                args: vec!["test".into(), "--config".into(), "sgconfig.yml".into()],
+                env: vec![],
+            }
+        );
+        assert_eq!(
+            build_host("ast-grep-tests", true),
+            build_host("ast-grep-tests", false)
+        );
+    }
+
+    #[test]
     fn unknown_check_errors() {
         assert!(spec("nope", false).is_err());
     }
@@ -939,6 +960,19 @@ mod tests {
             ALL.iter().filter(|name| **name == "no-full-reload").count(),
             1
         );
+    }
+
+    #[test]
+    fn inventory_includes_ast_grep_tests_once_before_repository_scan() {
+        let ast_grep_tests = ALL
+            .iter()
+            .position(|name| *name == "ast-grep-tests")
+            .expect("ast-grep tests present");
+        assert_eq!(
+            ALL.iter().filter(|name| **name == "ast-grep-tests").count(),
+            1
+        );
+        assert_eq!(ALL[ast_grep_tests + 1], "no-full-reload");
     }
 
     #[test]
