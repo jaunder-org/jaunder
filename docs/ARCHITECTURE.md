@@ -1747,7 +1747,14 @@ owns the wire format). It lives in the top-level `elisp/` directory as a single
 live-server integration harness, `jaunder-test--with-live-server`
 ([ADR-0035](adr/0035-elisp-live-integration-harness.md)) — the testing section
 owns both. The floor is `Package-Requires: ((emacs "29.1"))`
-([ADR-0042](adr/0042-emacs-org-atom-mapping-struct-seam.md)).
+([ADR-0042](adr/0042-emacs-org-atom-mapping-struct-seam.md)). The proposed
+[Elisp stateless coverage gate](adr/drafts/elisp-stateless-coverage-gate.md)
+will census every production Protocol Client module and top-level source form
+before testing, then reconcile every executable Edebug point with exactly one
+LCOV record. A zero-stop form contributes its opening line as an uncovered
+synthetic point until instrumented or justified. Test files, helpers, runners,
+vendored/generated sources, and byte-compiled files will remain outside that
+census and denominator.
 
 `elisp/jaunder.el` is the umbrella entry point — it holds the package headers
 and nothing but `require` forms for the feature modules (`elisp/jaunder.el:30`):
@@ -2388,10 +2395,24 @@ rather than failing the check, with the JSON report still recording it
 `validate` (Check), each as a `devtool check` step in the `static-checks`
 derivation ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
 `xtask/src/steps/static_checks.rs:17-18`); one `emacsForCi` toolchain
-(`flake.nix:563`) serves both. Elisp is exempt from the Rust coverage gate,
-which cannot instrument it — so ADR-0031 rests correctness on ERT discipline, "a
-test per pure function" (`:83`). Nothing enforces that: it is a stated
-expectation, not a gate.
+(`flake.nix:563`) serves both. Elisp is currently exempt from the Rust coverage
+gate, which cannot instrument it. The proposed
+[Elisp stateless coverage gate](adr/drafts/elisp-stateless-coverage-gate.md)
+will replace that unenforced ERT expectation for production Protocol Client
+modules. Its hermetic NixOS VM producer will merge pure and live ERT
+observations, then, for every controlled outcome, realize
+`$out/elisp-coverage/{lcov.info,summary.txt,status.json}`. A separate stateless,
+strict consumer will reconcile the pre-test module/form census with LCOV — each
+executable Edebug point occurs exactly once, while a zero-stop form contributes
+an uncovered synthetic point on its opening line — and fail an uncovered point
+unless its same physical line ends in `;; cov:ignore: <reason>` with a trimmed
+non-empty reason. There is no block form; malformed markers, and markers on
+covered or non-executable census lines, fail. Edebug limitations therefore stay
+visible instead of silently narrowing the denominator. The consumer maps
+controlled producer statuses and coverage findings to the verdict; an
+uncontrolled Nix or VM infrastructure failure remains an ordinary derivation
+failure. The check runs once in `validate --no-e2e` and the CI static lane; full
+`validate` inherits its verdict without rerunning the live suite.
 
 Live client behavior — transport, auth, publish and media round-trips — runs
 against a real server through the self-booting harness
@@ -2401,10 +2422,12 @@ against a real server through the self-booting harness
 the port from the `runtime.json` file `serve` writes, and provisions credentials
 via `jaunder app-password-create`. The suite
 (`elisp/test/jaunder-*-integration.el`, driven by
-`elisp/scripts/run-integration-tests.el`) runs hermetically as the
-`e2e-elisp-integration` nixosTest — which joins the `e2e-checks` aggregate and
-is also its own CI job — and host-side via `JAUNDER_TEST_BINARY` for fast
-iteration.
+`elisp/scripts/run-integration-tests.el`) remains available host-side via
+`JAUNDER_TEST_BINARY` for fast iteration. The coverage gate's combined producer
+now runs it hermetically, replacing the former `e2e-elisp-integration`
+`nixosTest`, `e2e-checks` membership, and separate CI job. This explicitly
+amends ADR-0035's gate placement while retaining its self-booting live-server
+harness as the integration boundary.
 
 ## Verification gates
 

@@ -9,6 +9,7 @@ mod census;
 mod compile_cache;
 pub mod coverage;
 mod doc_links;
+pub mod elisp_coverage;
 mod files;
 pub mod git;
 mod ids;
