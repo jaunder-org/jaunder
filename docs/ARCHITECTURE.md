@@ -1315,7 +1315,7 @@ The companion `ast-grep-tests` definition runs the committed native fixtures.
 The host xtask static-check mechanism and Nix `static-checks` derivation invoke
 both definitions (`devtool check --all --sandbox-cargo` in Nix), rather than
 maintaining a host-only source scanner
-([proposed devtool ast-grep enforcement](adr/drafts/devtool-owns-ast-grep-enforcement.md)).
+([proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 The SPA user namespace is `~`-prefixed: the permalink route's leading segment is
 a custom `TildeUsername` route match (`web/src/route_segments.rs:13`, wired at
 `web/src/app/component.rs:151`) that matches only a `~`-leading segment,
@@ -2476,7 +2476,7 @@ lanes. The Nix `static-checks` _derivation_ (`flake.nix:1276`) runs the shared
 `devtool check --all --sandbox-cargo` definitions hermetically with
 workspace-specific offline Cargo homes, including `ast-grep-tests` for committed
 rule fixtures and the `no-full-reload` repository scan
-([proposed devtool ast-grep enforcement](adr/drafts/devtool-owns-ast-grep-enforcement.md)).
+([proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 `validate --no-e2e` builds it as `nix-static-checks` before the Nix test checks,
 so CI fails if the hermetic static-check surface drifts from the host
 definitions.
@@ -2494,7 +2494,7 @@ The project/tool static checks live behind `devtool check` as a shared
 command-definition surface, while keeping separate host and sandbox execution
 lanes ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
 [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
-[proposed devtool ast-grep enforcement](adr/drafts/devtool-owns-ast-grep-enforcement.md)).
+[proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 Alongside the compiling definitions, it owns the non-compiling ast-grep rule
 fixtures (`ast-grep-tests`) and `no-full-reload` repository scan. The product
 clippy commands deliberately cover three distinct surfaces: generic workspace
@@ -2749,7 +2749,7 @@ host-side subcommands are therefore chartered, not drift.
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
-  [proposed devtool ast-grep enforcement](adr/drafts/devtool-owns-ast-grep-enforcement.md)).
+  [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
 **xtask is host-only — an enforced invariant.** Nix derivations never invoke
 xtask; the flow is strictly one-directional (host `cargo xtask` → `nix build`).

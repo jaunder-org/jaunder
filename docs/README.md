@@ -186,6 +186,7 @@ convention). See the Status column below for each ADR's current status.
 | [0158](adr/0158-peripheral-process-configuration.md)                | Process environment is resolved at the periphery                                                             | accepted   |
 | [0159](adr/0159-common-host-target-closure.md)                      | Close `common` and `host` by target reachability                                                             | accepted   |
 | [0160](adr/0160-emacs-pulled-media-local-copies.md)                 | Emacs pull stores durable local media copies                                                                 | accepted   |
+| [0161](adr/0161-devtool-owns-ast-grep-enforcement.md)               | devtool owns ast-grep rule enforcement                                                                       | accepted   |
 
 <!-- adr-table:end -->
 

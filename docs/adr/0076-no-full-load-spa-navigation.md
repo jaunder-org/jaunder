@@ -6,7 +6,7 @@
 
 > **Amended 2026-08-29 (#893).** The navigation policy and scope below remained
 > unchanged; the proposed
-> [devtool ast-grep enforcement decision](drafts/devtool-owns-ast-grep-enforcement.md)
+> [devtool ast-grep enforcement decision](0161-devtool-owns-ast-grep-enforcement.md)
 > replaced the xtask line scanner with shared syntax-aware host/Nix enforcement.
 
 ## Context

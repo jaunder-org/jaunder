@@ -35,7 +35,7 @@ host verify ladder and the hermetic Nix static-check lane.
 - Rule behavior is tested as rule behavior, including a call chain split across
   lines. Scanner implementation tests disappear with the scanner.
 - Replace the prior no-ADR decision with the proposed
-  [devtool ast-grep enforcement ADR](../adr/drafts/devtool-owns-ast-grep-enforcement.md):
+  [devtool ast-grep enforcement ADR](../adr/0161-devtool-owns-ast-grep-enforcement.md):
   it amends ADR-0076's enforcement mechanism while preserving its navigation
   policy, and records why devtool owns the native rule test and repository scan
   across host and Nix.
