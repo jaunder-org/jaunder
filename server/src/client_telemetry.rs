@@ -22,7 +22,7 @@ use common::{
     ids::UserId,
 };
 use host::error::{ErrorClass, ErrorKind};
-use storage::{SessionAuthError, SessionStorage};
+use storage::{SessionAuthError, SessionStorage, WriteScope, WriteScopeError};
 
 const MAX_BODY_BYTES: usize = 1_024;
 const BURST: u8 = 5;
@@ -193,25 +193,42 @@ where
         let sessions = parts
             .extensions
             .get::<Arc<dyn SessionStorage>>()
+            .cloned()
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        let write_scope = parts
+            .extensions
+            .get::<WriteScope>()
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        match sessions.authenticate(&token).await {
-            Ok(record) => Ok(Self {
-                user_id: record.user_id,
+        match write_scope
+            .run(move |transaction| {
+                Box::pin(async move { sessions.authenticate(transaction, &token).await })
+            })
+            .await
+        {
+            Ok(outcome) => Ok(Self {
+                user_id: outcome.value().user_id,
             }),
-            Err(SessionAuthError::InvalidToken | SessionAuthError::SessionNotFound) => {
-                Err(StatusCode::UNAUTHORIZED)
-            }
-            Err(SessionAuthError::Internal(_)) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+            Err(WriteScopeError::Operation(
+                SessionAuthError::InvalidToken | SessionAuthError::SessionNotFound,
+            )) => Err(StatusCode::UNAUTHORIZED),
+            Err(
+                WriteScopeError::Operation(SessionAuthError::Internal(_))
+                | WriteScopeError::Begin(_),
+            ) => Err(StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
 }
 
-/// Builds the raw intake route with exactly its two injected dependencies.
-pub fn router(sessions: Arc<dyn SessionStorage>, limiter: Arc<ClientTelemetryLimiter>) -> Router {
+pub fn router(
+    sessions: Arc<dyn SessionStorage>,
+    write_scope: WriteScope,
+    limiter: Arc<ClientTelemetryLimiter>,
+) -> Router {
     Router::new()
         .route("/api/client-telemetry", post(intake))
         .layer(Extension(limiter))
+        .layer(Extension(write_scope))
         .layer(Extension(sessions))
 }
 

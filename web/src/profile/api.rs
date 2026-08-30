@@ -5,20 +5,19 @@
 //! lives here. Re-exported from `mod.rs` so `crate::profile::…` paths stay stable.
 
 use crate::error::WebResult;
-use common::bio::Bio;
-use common::display_name::DisplayName;
-use common::email::Email;
-use common::render::PostFormat;
-use common::username::Username;
+use common::{
+    MutationOutcome, bio::Bio, display_name::DisplayName, email::Email, render::PostFormat,
+    username::Username,
+};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "server")]
 use {
     crate::auth,
-    crate::error::InternalError,
+    crate::error::{InternalError, from_write_scope_error},
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{ProfileUpdate, UserConfigStorage, UserStorage},
+    storage::{ProfileUpdate, UserConfigStorage, UserStorage, WriteScope},
 };
 
 /// Profile data returned by [`get`].
@@ -56,19 +55,31 @@ pub async fn get() -> WebResult<Data> {
 /// trimmed/bounded. Both `Option`s model presence, so no `non_empty` shim is
 /// needed — an empty wire value is rejected at decode, clearing goes via omission.
 #[macros::server(skip_all)]
-pub async fn update(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebResult<()> {
+pub async fn update(
+    display_name: Option<DisplayName>,
+    bio: Option<Bio>,
+) -> WebResult<MutationOutcome<()>> {
     let auth = auth::require_auth().await?;
+    let write_scope = expect_context::<WriteScope>();
     let users = expect_context::<Arc<dyn UserStorage>>();
-    users
-        .update_profile(
-            auth.user_id,
-            &ProfileUpdate {
-                display_name: display_name.as_ref(),
-                bio: bio.as_ref(),
-            },
-        )
+    write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                users
+                    .update_profile(
+                        transaction,
+                        auth.user_id,
+                        &ProfileUpdate {
+                            display_name: display_name.as_ref(),
+                            bio: bio.as_ref(),
+                        },
+                    )
+                    .await
+                    .map_err(InternalError::storage)
+            })
+        })
         .await
-        .map_err(InternalError::storage)
+        .map_err(from_write_scope_error)
 }
 
 /// Retrieves the authenticated user's default post format preference.

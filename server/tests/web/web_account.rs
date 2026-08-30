@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use common::MutationOutcome;
 use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::{
     parse_bio, parse_display_name, parse_email, parse_invite_ttl_hours, parse_session_label,
@@ -33,17 +34,28 @@ struct CreateInviteDecodeFixture<'a> {
 async fn get_profile_returns_display_name_and_bio(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
-    state
-        .users
-        .update_profile(
-            session.user_id,
-            &ProfileUpdate {
-                display_name: Some(&parse_display_name("Alice Smith")),
-                bio: Some(&parse_bio("Hello world")),
-            },
-        )
+    let users = Arc::clone(&state.users);
+    let display_name = parse_display_name("Alice Smith");
+    let bio = parse_bio("Hello world");
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                users
+                    .update_profile(
+                        transaction,
+                        session.user_id,
+                        &ProfileUpdate {
+                            display_name: Some(&display_name),
+                            bio: Some(&bio),
+                        },
+                    )
+                    .await
+            })
+        })
         .await
         .unwrap();
+    assert!(matches!(outcome, MutationOutcome::Confirmed(())));
     let cookie = session.cookie();
 
     let (status, body) = post_form(
@@ -66,12 +78,20 @@ async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
 
     // Create user with email and session
     let session = create_user_and_session(&state).await;
-    let email = "user@example.com".parse().unwrap();
-    state
-        .users
-        .set_email(session.user_id, Some(&email), true)
+    let users = Arc::clone(&state.users);
+    let email = parse_email("user@example.com");
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                users
+                    .set_email(transaction, session.user_id, Some(&email), true)
+                    .await
+            })
+        })
         .await
         .unwrap();
+    assert!(matches!(outcome, MutationOutcome::Confirmed(())));
 
     let cookie_header = session.cookie();
 
@@ -128,17 +148,40 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
     let user1_id = SeedUser::new().seed(&state).await.user_id;
     let user2_id = SeedUser::new().seed(&state).await.user_id;
 
-    let token1 = state
-        .sessions
-        .create_session(user1_id, &parse_session_label("carol-session"))
+    let sessions = Arc::clone(&state.sessions);
+    let user1_label = parse_session_label("carol-session");
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                sessions
+                    .create_session(transaction, user1_id, &user1_label)
+                    .await
+            })
+        })
         .await
         .unwrap();
+    let token1 = match outcome {
+        MutationOutcome::Confirmed(token) => token,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("session fixture setup requires a confirmed commit")
+        }
+    };
     // Create a session for user2 — should NOT appear in user1's list.
-    state
-        .sessions
-        .create_session(user2_id, &parse_session_label("dave-session"))
+    let sessions = Arc::clone(&state.sessions);
+    let user2_label = parse_session_label("dave-session");
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                sessions
+                    .create_session(transaction, user2_id, &user2_label)
+                    .await
+            })
+        })
         .await
         .unwrap();
+    assert!(matches!(outcome, MutationOutcome::Confirmed(_)));
 
     let cookie = session_cookie(&token1);
     let (status, body) = post_form(
@@ -171,7 +214,25 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
     let token_b = create_session_for(&state, session.user_id).await.token;
 
     // Authenticate token_b to get its hash from the session record.
-    let record_b = state.sessions.authenticate(&token_b).await.unwrap();
+    let token_b_for_authentication = token_b.clone();
+    let sessions = Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &token_b_for_authentication)
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    let record_b = match outcome {
+        MutationOutcome::Confirmed(record) => record,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("session authentication requires a confirmed commit")
+        }
+    };
     let hash_b = record_b.token_hash;
 
     let cookie_a = session.cookie();
@@ -198,7 +259,13 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
     assert_eq!(status, StatusCode::OK);
 
     // Re-authenticate with token_b should fail (session revoked).
-    let result = state.sessions.authenticate(&token_b).await;
+    let sessions = Arc::clone(&state.sessions);
+    let result = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &token_b).await })
+        })
+        .await;
     assert!(result.is_err(), "revoked session should not authenticate");
 }
 
@@ -527,7 +594,21 @@ async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) 
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie1 = create_user_and_session(&state).await.cookie();
     let user2 = create_user_and_session(&state).await;
-    let record2 = state.sessions.authenticate(&user2.token).await.unwrap();
+    let sessions = Arc::clone(&state.sessions);
+    let token = user2.token.clone();
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &token).await })
+        })
+        .await
+        .unwrap();
+    let record2 = match outcome {
+        MutationOutcome::Confirmed(record) => record,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("session authentication requires a confirmed commit")
+        }
+    };
 
     let (status, _) = post_form(
         &state,
@@ -597,17 +678,28 @@ async fn update_profile_with_empty_fields_sets_to_none(#[case] backend: Backend)
         .seed(&state)
         .await
         .user_id;
-    state
-        .users
-        .update_profile(
-            user_id,
-            &ProfileUpdate {
-                display_name: Some(&parse_display_name("Initial")),
-                bio: Some(&parse_bio("Initial Bio")),
-            },
-        )
+    let users = Arc::clone(&state.users);
+    let display_name = parse_display_name("Initial");
+    let bio = parse_bio("Initial Bio");
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                users
+                    .update_profile(
+                        transaction,
+                        user_id,
+                        &ProfileUpdate {
+                            display_name: Some(&display_name),
+                            bio: Some(&bio),
+                        },
+                    )
+                    .await
+            })
+        })
         .await
         .unwrap();
+    assert!(matches!(outcome, MutationOutcome::Confirmed(())));
 
     let cookie_header = create_session_for(&state, user_id).await.cookie();
 

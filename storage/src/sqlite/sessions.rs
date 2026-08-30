@@ -1,9 +1,10 @@
 use async_trait::async_trait;
-use sqlx::{Pool, Sqlite};
+use sqlx::Sqlite;
 
 use common::time::UtcInstant;
 use common::token::TokenHash;
 
+use crate::WriteTransaction;
 use crate::helpers::SessionRow;
 use crate::sessions::{SessionDialect, SessionStore};
 
@@ -13,11 +14,12 @@ pub type SqliteSessionStorage = SessionStore<Sqlite>;
 #[async_trait]
 impl SessionDialect for Sqlite {
     async fn touch_and_load(
-        pool: &Pool<Sqlite>,
+        transaction: &mut WriteTransaction,
         token_hash: &TokenHash,
         now: UtcInstant,
         stale_before: UtcInstant,
     ) -> sqlx::Result<Option<SessionRow>> {
+        let connection = <Sqlite as crate::backend::Backend>::write_connection(transaction)?;
         let row = sqlx::query_as::<_, SessionRow>(
             "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
              FROM sessions s
@@ -25,7 +27,7 @@ impl SessionDialect for Sqlite {
              WHERE s.token_hash = $1",
         )
         .bind(token_hash)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *connection)
         .await?;
 
         let Some(row) = row else {
@@ -44,7 +46,7 @@ impl SessionDialect for Sqlite {
         .bind(now)
         .bind(token_hash)
         .bind(stale_before)
-        .execute(pool)
+        .execute(&mut *connection)
         .await?;
 
         sqlx::query_as::<_, SessionRow>(
@@ -54,7 +56,7 @@ impl SessionDialect for Sqlite {
              WHERE s.token_hash = $1",
         )
         .bind(token_hash)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *connection)
         .await
     }
 }

@@ -6,7 +6,7 @@ use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::profile;
 use crate::topbar::Topbar;
-use common::email::Email;
+use common::{MutationOutcome, email::Email};
 use leptos::prelude::*;
 
 /// Email settings page — shows current email and verification status;
@@ -57,9 +57,17 @@ pub fn EmailPage() -> impl IntoView {
                     request_action
                         .value()
                         .get()
-                        .map(|r: Result<(), WebError>| match r {
-                            Ok(()) => {
+                        .map(|r: Result<MutationOutcome<()>, WebError>| match r {
+                            Ok(MutationOutcome::Confirmed(())) => {
                                 view! { <p>"Check your email for a verification link."</p> }
+                                    .into_any()
+                            }
+                            Ok(MutationOutcome::CommitIndeterminate(())) => {
+                                view! {
+                                    <p class="error">
+                                        "The verification email may have been requested, but its status could not be confirmed. Refresh to check."
+                                    </p>
+                                }
                                     .into_any()
                             }
                             Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
@@ -95,8 +103,16 @@ pub fn VerifyEmailPage() -> impl IntoView {
                 }>
                     {move || Suspend::new(async move {
                         match result.await {
-                            Ok(()) => {
+                            Ok(MutationOutcome::Confirmed(())) => {
                                 view! { <p>"Your email address has been verified."</p> }.into_any()
+                            }
+                            Ok(MutationOutcome::CommitIndeterminate(())) => {
+                                view! {
+                                    <p class="error">
+                                        "Your email may have been verified, but its status could not be confirmed. Refresh to check."
+                                    </p>
+                                }
+                                    .into_any()
                             }
                             Err(e) => {
                                 let msg = e.to_string();

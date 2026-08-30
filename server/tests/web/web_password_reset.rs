@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use common::MutationOutcome;
 use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
 use common::time::UtcInstant;
@@ -26,11 +27,20 @@ use rstest_reuse::*;
 /// Creates a user with a verified email address and an authenticated session.
 async fn create_user_with_verified_email(state: &Arc<AppState>, email: &str) -> SeededSession {
     let session = create_user_and_session(state).await;
-    state
-        .users
-        .set_email(session.user_id, Some(&parse_email(email)), true)
+    let email = parse_email(email);
+    let users = Arc::clone(&state.users);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                users
+                    .set_email(transaction, session.user_id, Some(&email), true)
+                    .await
+            })
+        })
         .await
         .expect("set verified email");
+    assert!(matches!(outcome, MutationOutcome::Confirmed(())));
     session
 }
 
@@ -155,11 +165,24 @@ async fn confirm_nested_request_maps_token_and_password(#[case] backend: Backend
     create_session_for(&state, user_id).await;
 
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-    let raw_token = state
-        .password_resets
-        .create_password_reset(user_id, expires_at)
+    let password_resets = Arc::clone(&state.password_resets);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                password_resets
+                    .create_password_reset(transaction, user_id, expires_at)
+                    .await
+            })
+        })
         .await
         .unwrap();
+    let raw_token = match outcome {
+        MutationOutcome::Confirmed(raw_token) => raw_token,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("password-reset fixture setup requires a confirmed commit")
+        }
+    };
 
     let (status, _body) = post_server_fn_with_mailer(
         &state,
@@ -177,18 +200,28 @@ async fn confirm_nested_request_maps_token_and_password(#[case] backend: Backend
     assert_eq!(status, StatusCode::OK);
 
     // Old password should fail authentication
-    let old_auth = state
-        .users
-        .authenticate(&session.username, &"password123".parse().unwrap())
-        .await;
+    let users = Arc::clone(&state.users);
+    let username = session.username.clone();
+    let password = "password123".parse().unwrap();
+    let old_auth = users.prepare_authentication(&username, &password).await;
     assert!(old_auth.is_err(), "old password should no longer work");
 
     // New password should succeed
-    let new_auth = state
-        .users
-        .authenticate(&session.username, &"newpassword456".parse().unwrap())
-        .await;
-    assert!(new_auth.is_ok(), "new password should work");
+    let users = Arc::clone(&state.users);
+    let username = session.username.clone();
+    let password = "newpassword456".parse().unwrap();
+    let authentication = users
+        .prepare_authentication(&username, &password)
+        .await
+        .unwrap();
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { users.authenticate(transaction, authentication).await })
+        })
+        .await
+        .unwrap();
+    assert!(matches!(outcome, MutationOutcome::Confirmed(_)));
 
     // All sessions should be revoked
     let sessions = state.sessions.list_sessions(user_id).await.unwrap();
@@ -207,11 +240,24 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
         .user_id;
 
     let expires_at: UtcInstant = "2000-01-02T03:04:05.123456Z".parse().unwrap();
-    let raw_token = state
-        .password_resets
-        .create_password_reset(user_id, expires_at)
+    let password_resets = Arc::clone(&state.password_resets);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                password_resets
+                    .create_password_reset(transaction, user_id, expires_at)
+                    .await
+            })
+        })
         .await
         .unwrap();
+    let raw_token = match outcome {
+        MutationOutcome::Confirmed(raw_token) => raw_token,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("password-reset fixture setup requires a confirmed commit")
+        }
+    };
 
     let (status, _body) = post_server_fn_with_mailer(
         &state,
@@ -278,12 +324,22 @@ async fn confirm_nested_request_rejects_malformed_token_before_handler(#[case] b
         response_body.contains("server_function"),
         "expected a server-fn decode rejection; body: {response_body}"
     );
+    let users = Arc::clone(&state.users);
+    let username = session.username.clone();
+    let password = "password123".parse().unwrap();
+    let authentication = users
+        .prepare_authentication(&username, &password)
+        .await
+        .unwrap();
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { users.authenticate(transaction, authentication).await })
+        })
+        .await
+        .unwrap();
     assert!(
-        state
-            .users
-            .authenticate(&session.username, &"password123".parse().unwrap())
-            .await
-            .is_ok(),
+        matches!(outcome, MutationOutcome::Confirmed(_)),
         "a malformed token must not change the password"
     );
     assert_eq!(
@@ -310,11 +366,24 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
         .user_id;
 
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-    let raw_token = state
-        .password_resets
-        .create_password_reset(user_id, expires_at)
+    let password_resets = Arc::clone(&state.password_resets);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                password_resets
+                    .create_password_reset(transaction, user_id, expires_at)
+                    .await
+            })
+        })
         .await
         .unwrap();
+    let raw_token = match outcome {
+        MutationOutcome::Confirmed(raw_token) => raw_token,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("password-reset fixture setup requires a confirmed commit")
+        }
+    };
 
     let request = web::password_reset::Confirm {
         request: web::password_reset::ConfirmPasswordResetRequest {
@@ -342,12 +411,25 @@ async fn confirm_nested_request_rejects_short_password_before_handler(#[case] ba
 
     let session = create_user_with_verified_email(&state, "frank@example.com").await;
 
+    let password_resets = Arc::clone(&state.password_resets);
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-    let raw_token = state
-        .password_resets
-        .create_password_reset(session.user_id, expires_at)
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                password_resets
+                    .create_password_reset(transaction, session.user_id, expires_at)
+                    .await
+            })
+        })
         .await
         .unwrap();
+    let raw_token = match outcome {
+        MutationOutcome::Confirmed(raw_token) => raw_token,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("password-reset fixture setup requires a confirmed commit")
+        }
+    };
 
     let (status, response_body) =
         post_server_fn_request_fixture_with_mailer::<web::password_reset::Confirm, _, _>(
@@ -372,12 +454,22 @@ async fn confirm_nested_request_rejects_short_password_before_handler(#[case] ba
     );
 
     // The reset must not have been applied: the original password still authenticates.
-    let auth = state
-        .users
-        .authenticate(&session.username, &"password123".parse().unwrap())
-        .await;
+    let users = Arc::clone(&state.users);
+    let username = session.username.clone();
+    let password = "password123".parse().unwrap();
+    let authentication = users
+        .prepare_authentication(&username, &password)
+        .await
+        .unwrap();
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { users.authenticate(transaction, authentication).await })
+        })
+        .await
+        .unwrap();
     assert!(
-        auth.is_ok(),
+        matches!(outcome, MutationOutcome::Confirmed(_)),
         "a too-short new password must be rejected without applying the reset"
     );
     assert_eq!(

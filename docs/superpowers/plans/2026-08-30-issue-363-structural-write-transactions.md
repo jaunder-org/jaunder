@@ -81,7 +81,7 @@ pool-backed or independently committing compatibility form behind.
     the ADR-0147 bounded determinant; post-tag locking/error suites retain their
     existing focused coverage.
 
-- [ ] **Task 3: Compose identity, credential, registration, and session
+- [x] **Task 3: Compose identity, credential, registration, and session
       writes.**
   - Cutover: all mutations on `EmailVerificationStorage`, `InviteStorage`,
     `PasswordResetStorage`, `SessionStorage`, `UserStorage`, and the two

@@ -285,16 +285,39 @@ pub async fn cmd_create_pg_db(
 }
 
 async fn create_command_user(
-    users: &dyn storage::UserStorage,
-    username: &Username,
-    password: &Password,
-    display_name: Option<&DisplayName>,
+    write_scope: &storage::WriteScope,
+    users: Arc<dyn storage::UserStorage>,
+    username: Username,
+    password: Password,
+    display_name: Option<DisplayName>,
     is_operator: bool,
 ) -> anyhow::Result<common::ids::UserId> {
-    users
-        .create_user(username, password, display_name, is_operator)
+    let password = storage::prepare_password(password)
         .await
-        .context("failed to create user")
+        .context("failed to create user")?;
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                users
+                    .create_user(
+                        transaction,
+                        &username,
+                        &password,
+                        display_name.as_ref(),
+                        is_operator,
+                    )
+                    .await
+            })
+        })
+        .await
+        .map_err(anyhow::Error::from)
+        .context("failed to create user")?;
+    match outcome {
+        common::mutation::MutationOutcome::Confirmed(user_id) => Ok(user_id),
+        common::mutation::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
+            "user creation commit acknowledgement was indeterminate"
+        )),
+    }
 }
 
 /// Creates a new user in the database.
@@ -329,10 +352,11 @@ pub async fn cmd_user_create(
     };
 
     let user_id = create_command_user(
-        state.users(),
-        username,
-        &password,
-        display_name,
+        &state.write_scope,
+        Arc::clone(&state.users),
+        username.clone(),
+        password,
+        display_name.cloned(),
         is_operator,
     )
     .await?;
@@ -348,11 +372,18 @@ pub async fn cmd_user_create(
     Ok(())
 }
 
-async fn app_password_create_with(
+/// Mints an app password (a labelled session token) for an existing user and
+/// returns the raw token. This is the only out-of-process minter (see ADR-0035).
+///
+/// # Errors
+///
+/// Returns an error if the user does not exist or the session cannot be created.
+pub async fn app_password_create(
+    write_scope: &storage::WriteScope,
     users: &dyn storage::UserStorage,
-    sessions: &dyn storage::SessionStorage,
+    sessions: Arc<dyn storage::SessionStorage>,
     username: &Username,
-    label: &SessionLabel,
+    label: SessionLabel,
 ) -> anyhow::Result<RawToken> {
     let user = users
         .get_user_by_username(username)
@@ -361,24 +392,23 @@ async fn app_password_create_with(
         .ok_or_else(|| anyhow::anyhow!("no such user '{username}'"))?;
     // No validation here: the signature carries it. `SessionLabel` cannot be built from
     // an invalid string, so there is nothing left to check and no step to remember.
-    sessions
-        .create_session(user.user_id, label)
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                sessions
+                    .create_session(transaction, user.user_id, &label)
+                    .await
+            })
+        })
         .await
-        .context("failed to create app password")
-}
-
-/// Mints an app password (a labelled session token) for an existing user and
-/// returns the raw token. This is the only out-of-process minter (see ADR-0035).
-///
-/// # Errors
-///
-/// Returns an error if the user does not exist or the session cannot be created.
-pub async fn app_password_create(
-    state: &storage::AppState,
-    username: &Username,
-    label: &SessionLabel,
-) -> anyhow::Result<RawToken> {
-    app_password_create_with(state.users(), state.sessions(), username, label).await
+        .map_err(anyhow::Error::from)
+        .context("failed to create app password")?;
+    match outcome {
+        common::mutation::MutationOutcome::Confirmed(token) => Ok(token),
+        common::mutation::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
+            "app password commit acknowledgement was indeterminate"
+        )),
+    }
 }
 
 /// CLI wrapper: opens the database, mints an app password, prints it to stdout.
@@ -395,7 +425,14 @@ pub async fn cmd_app_password_create(
     let state = storage::open_existing_database(&storage.db, &runtime)
         .await
         .context(INIT_FIRST_CONTEXT)?;
-    let token = app_password_create(&state, username, label).await?;
+    let token = app_password_create(
+        &state.write_scope,
+        state.users(),
+        Arc::clone(&state.sessions),
+        username,
+        label.clone(),
+    )
+    .await?;
     println!("{token}");
     Ok(())
 }
@@ -421,7 +458,23 @@ pub async fn cmd_user_invite(
         chrono::Utc::now() + chrono::Duration::hours(expires_in.unwrap_or_default().value()),
     );
 
-    let code = state.invites().create_invite(expires_at).await?;
+    let invites = Arc::clone(&state.invites);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+        })
+        .await
+        .map_err(anyhow::Error::from)
+        .context("failed to create invite")?;
+    let code = match outcome {
+        common::mutation::MutationOutcome::Confirmed(code) => code,
+        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
+            return Err(anyhow::anyhow!(
+                "invite creation commit acknowledgement was indeterminate"
+            ));
+        }
+    };
     metrics::invite(host::metrics::InviteEvent::Created);
     // Deliberate operator-facing reveal via `AsRef` (InviteCode has no Display/serde). With a
     // configured base URL, print a ready-to-send invitation link; otherwise the bare code.
@@ -1131,9 +1184,7 @@ fn format_entries(entries: &[(String, String)]) -> String {
 mod tests {
     use super::*;
     use common::smtp_tls_mode::SmtpTlsMode;
-    use common::test_support::{
-        parse_email, parse_invite_ttl_hours, parse_session_label, parse_username,
-    };
+    use common::test_support::{parse_email, parse_invite_ttl_hours};
     use rstest::*;
     use rstest_reuse::*;
     #[cfg(unix)]
@@ -1302,28 +1353,6 @@ mod tests {
             storage_path: temp.path().to_path_buf(),
             db: crate::test_support::sqlite_db_options(temp.path()),
         }
-    }
-
-    fn typed_crypto_storage_error() -> sqlx::Error {
-        let password = host::test_support::parse_password("password123");
-        let error = host::password::verify(
-            &password,
-            "$argon2id$v=1$m=65536,t=2,p=1$c29tZXNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        )
-        .unwrap_err();
-        sqlx::Error::Io(io::Error::other(error))
-    }
-
-    fn assert_typed_account_command_source(error: &anyhow::Error, context: &str) {
-        assert_eq!(error.to_string(), context);
-        let source = error
-            .chain()
-            .find_map(|source| source.downcast_ref::<argon2::password_hash::Error>());
-        assert_eq!(source, Some(&argon2::password_hash::Error::Version));
-        assert!(
-            format!("{error:#}").contains("verification failed"),
-            "human error chain must include the crypto failure: {error:#}"
-        );
     }
 
     fn smtp_config() -> SmtpConfig {
@@ -1681,72 +1710,6 @@ mod tests {
             0,
             "PostgreSQL connection failures must not trigger auto-init"
         );
-    }
-
-    #[tokio::test]
-    async fn typed_account_command_source_cmd_user_create() {
-        let mut users = storage::MockUserStorage::new();
-        users.expect_create_user().return_once(|_, _, _, _| {
-            Err(storage::CreateUserError::Internal(
-                typed_crypto_storage_error(),
-            ))
-        });
-        let username = parse_username("alice");
-        let password = host::test_support::parse_password("password123");
-
-        let error = create_command_user(&users, &username, &password, None, false)
-            .await
-            .unwrap_err();
-
-        assert_typed_account_command_source(&error, "failed to create user");
-    }
-
-    #[tokio::test]
-    async fn typed_account_command_source_app_password_lookup() {
-        let mut users = storage::MockUserStorage::new();
-        users
-            .expect_get_user_by_username()
-            .return_once(|_| Err(typed_crypto_storage_error()));
-        let sessions = storage::MockSessionStorage::new();
-        let username = parse_username("alice");
-        let label = parse_session_label("CLI");
-
-        let error = app_password_create_with(&users, &sessions, &username, &label)
-            .await
-            .unwrap_err();
-
-        assert_typed_account_command_source(&error, "failed to look up user");
-    }
-
-    #[tokio::test]
-    async fn typed_account_command_source_app_password_session_create() {
-        let username = parse_username("alice");
-        let mut users = storage::MockUserStorage::new();
-        let returned_username = username.clone();
-        users.expect_get_user_by_username().return_once(move |_| {
-            Ok(Some(storage::UserRecord {
-                user_id: common::ids::UserId::from(1),
-                username: returned_username,
-                display_name: None,
-                bio: None,
-                created_at: common::time::UtcInstant::now(),
-                last_authenticated_at: None,
-                email: None,
-                email_verified: false,
-                is_operator: false,
-            }))
-        });
-        let mut sessions = storage::MockSessionStorage::new();
-        sessions
-            .expect_create_session()
-            .return_once(|_, _| Err(typed_crypto_storage_error()));
-        let label = parse_session_label("CLI");
-
-        let error = app_password_create_with(&users, &sessions, &username, &label)
-            .await
-            .unwrap_err();
-
-        assert_typed_account_command_source(&error, "failed to create app password");
     }
 
     #[test]

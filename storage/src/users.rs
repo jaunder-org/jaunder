@@ -1,5 +1,6 @@
 //! User account and profile storage.
 
+use crate::WriteTransaction;
 use async_trait::async_trait;
 
 use sqlx::{Database, Pool};
@@ -43,6 +44,30 @@ pub struct UserRecord {
     pub email_verified: bool,
     /// Whether the user has site-wide administrative privileges.
     pub is_operator: bool,
+}
+/// An Argon2-hashed password ready for a capability-guarded user mutation.
+///
+/// Construct this with [`prepare_password`] before acquiring a [`WriteTransaction`].
+/// Invite and password-reset flows may construct it after their high-entropy
+/// capability claim.
+pub struct PreparedPassword(StoredPasswordHash);
+
+/// A successfully verified login ready to record its authentication timestamp.
+///
+/// Password verification and the account lookup happen before the write scope;
+/// consuming this value requires the sealed write capability.
+#[derive(Debug)]
+pub struct PreparedAuthentication(UserRecord);
+
+/// Hashes a password without acquiring a write transaction.
+///
+/// # Errors
+///
+/// Returns an I/O error if the blocking hashing task fails or Argon2 rejects
+/// the password.
+#[tracing::instrument(name = "storage.user.prepare_password", skip(password))]
+pub async fn prepare_password(password: Password) -> std::io::Result<PreparedPassword> {
+    helpers::hash_password(password).await.map(PreparedPassword)
 }
 
 /// Errors that can occur when creating a user.
@@ -129,37 +154,31 @@ pub struct ProfileUpdate<'a> {
 #[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait UserStorage: Send + Sync {
-    /// Creates a new user account.
+    /// Inserts a user whose password has already been prepared.
     ///
-    /// The password will be hashed using a cryptographically secure algorithm
-    /// (e.g., bcrypt) before being stored.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CreateUserError::UsernameTaken`] if the username exists, or
-    /// [`CreateUserError::Internal`] on database failure.
-    // Explicit `'a` for `mockall::automock` — see
-    // `PostStorage::list_published_by_user`.
+    /// Ordinary callers construct `password` before acquiring the write scope.
+    /// Capability-claiming flows may prepare it after their claim.
     async fn create_user<'a>(
         &self,
+        transaction: &mut WriteTransaction,
         username: &Username,
-        password: &Password,
+        password: &PreparedPassword,
         display_name: Option<&'a DisplayName>,
         is_operator: bool,
     ) -> Result<UserId, CreateUserError>;
 
-    /// Authenticates a user by username and password.
-    ///
-    /// On success, updates `last_authenticated_at` for the user.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`UserAuthError::InvalidCredentials`] if the credentials don't match,
-    /// or [`UserAuthError::Internal`] on unexpected failures.
-    async fn authenticate(
+    /// Looks up and verifies login credentials without acquiring a write transaction.
+    async fn prepare_authentication(
         &self,
         username: &Username,
         password: &Password,
+    ) -> Result<PreparedAuthentication, UserAuthError>;
+
+    /// Records a previously verified login.
+    async fn authenticate(
+        &self,
+        transaction: &mut WriteTransaction,
+        authentication: PreparedAuthentication,
     ) -> Result<UserRecord, UserAuthError>;
 
     /// Fetches a user record by its internal ID.
@@ -173,6 +192,7 @@ pub trait UserStorage: Send + Sync {
     // `PostStorage::list_published_by_user`.
     async fn update_profile<'a>(
         &self,
+        transaction: &mut WriteTransaction,
         user_id: UserId,
         update: &ProfileUpdate<'a>,
     ) -> sqlx::Result<()>;
@@ -182,16 +202,22 @@ pub trait UserStorage: Send + Sync {
     // `PostStorage::list_published_by_user`.
     async fn set_email<'a>(
         &self,
+        transaction: &mut WriteTransaction,
         user_id: UserId,
         email: Option<&'a Email>,
         verified: bool,
     ) -> sqlx::Result<()>;
 
-    /// Replaces the stored password hash for `user_id` with a hash of `new_password`.
+    /// Replaces the stored password hash for `user_id` with a prepared hash.
     ///
-    /// This is typically used during password resets. Hashing is performed
-    /// asynchronously on a blocking thread.
-    async fn set_password(&self, user_id: UserId, new_password: &Password) -> sqlx::Result<()>;
+    /// Callers prepare ordinary password changes before acquiring their write
+    /// scope. Password-reset flows prepare only after claiming the reset code.
+    async fn set_password(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        password: &PreparedPassword,
+    ) -> sqlx::Result<()>;
 }
 
 /// Generic [`UserStorage`] backed by any [`Backend`] database.
@@ -208,12 +234,12 @@ impl<DB: Database> UserStore<DB> {
         Self { pool }
     }
 
-    pub(crate) async fn authenticate_with(
+    pub(crate) async fn prepare_authentication_with(
         &self,
         username: &Username,
         password: &Password,
         verify_operation: helpers::VerifyPasswordOperation,
-    ) -> Result<UserRecord, UserAuthError>
+    ) -> Result<PreparedAuthentication, UserAuthError>
     where
         DB: Backend,
         (
@@ -235,6 +261,7 @@ impl<DB: Database> UserStore<DB> {
         for<'q> String: sqlx::Encode<'q, DB>,
         for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
         for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+        for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
         for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
     {
         let row = sqlx::query_as::<
@@ -310,30 +337,19 @@ impl<DB: Database> UserStore<DB> {
             return Err(UserAuthError::InvalidCredentials);
         }
 
-        let now = UtcInstant::now();
-
-        sqlx::query("UPDATE users SET last_authenticated_at = $1 WHERE user_id = $2")
-            .bind(now)
-            .bind(user_id)
-            .execute(&self.pool)
-            .instrument(tracing::info_span!(
-                "storage.user.authenticate.update_last_authenticated_at",
-                db.system = DB::DB_SYSTEM
-            ))
-            .await
-            .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
-
-        Ok(helpers::build_user_record(helpers::UserRecordParts {
-            user_id,
-            username,
-            display_name,
-            bio,
-            created_at,
-            last_authenticated_at: Some(now),
-            email,
-            email_verified: email_verified.value(),
-            is_operator: is_operator.value(),
-        }))
+        Ok(PreparedAuthentication(helpers::build_user_record(
+            helpers::UserRecordParts {
+                user_id,
+                username,
+                display_name,
+                bio,
+                created_at,
+                last_authenticated_at: None,
+                email,
+                email_verified: email_verified.value(),
+                is_operator: is_operator.value(),
+            },
+        )))
     }
 }
 
@@ -373,29 +389,23 @@ where
     for<'q> bool: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     #[tracing::instrument(
-        name = "storage.user.create_user",
-        skip(self, password, display_name),
+        skip(self, transaction, password, display_name),
         fields(username = %username, db.system = DB::DB_SYSTEM)
     )]
     async fn create_user<'a>(
         &self,
+        transaction: &mut WriteTransaction,
         username: &Username,
-        password: &Password,
+        password: &PreparedPassword,
         display_name: Option<&'a DisplayName>,
         is_operator: bool,
     ) -> Result<UserId, CreateUserError> {
-        let password_hash = helpers::hash_password(password.clone())
-            .instrument(tracing::info_span!(
-                "storage.user.create_user.hash_password",
-                db.system = DB::DB_SYSTEM
-            ))
-            .await
-            .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(e)))?;
-
         let now = UtcInstant::now();
+        let connection = DB::write_connection(transaction).map_err(CreateUserError::Internal)?;
 
         let result = sqlx::query_scalar::<_, UserId>(
             "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
@@ -403,12 +413,12 @@ where
              RETURNING user_id",
         )
         .bind(username)
-        .bind(&password_hash)
+        .bind(&password.0)
         .bind(display_name)
         .bind(now)
         // sqlx-newtype-bind:allow permanent-primitive — boolean operator flag has no domain identity.
         .bind(is_operator)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *connection)
         .instrument(tracing::info_span!(
             "storage.user.create_user.insert_user_row",
             db.system = DB::DB_SYSTEM
@@ -424,18 +434,40 @@ where
         }
     }
 
-    #[tracing::instrument(
-        name = "storage.user.authenticate",
-        skip(self, password),
-        fields(username = %username, db.system = DB::DB_SYSTEM)
-    )]
-    async fn authenticate(
+    async fn prepare_authentication(
         &self,
         username: &Username,
         password: &Password,
-    ) -> Result<UserRecord, UserAuthError> {
-        self.authenticate_with(username, password, host::password::verify)
+    ) -> Result<PreparedAuthentication, UserAuthError> {
+        self.prepare_authentication_with(username, password, host::password::verify)
             .await
+    }
+
+    #[tracing::instrument(
+        name = "storage.user.authenticate",
+        skip(self, transaction, authentication),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn authenticate(
+        &self,
+        transaction: &mut WriteTransaction,
+        mut authentication: PreparedAuthentication,
+    ) -> Result<UserRecord, UserAuthError> {
+        let now = UtcInstant::now();
+        let connection = DB::write_connection(transaction)
+            .map_err(|error| UserAuthError::Internal(Box::new(error)))?;
+        sqlx::query("UPDATE users SET last_authenticated_at = $1 WHERE user_id = $2")
+            .bind(now)
+            .bind(authentication.0.user_id)
+            .execute(&mut *connection)
+            .instrument(tracing::info_span!(
+                "storage.user.authenticate.update_last_authenticated_at",
+                db.system = DB::DB_SYSTEM
+            ))
+            .await
+            .map_err(|error| UserAuthError::Internal(Box::new(error)))?;
+        authentication.0.last_authenticated_at = Some(now);
+        Ok(authentication.0)
     }
 
     async fn get_user(&self, user_id: UserId) -> sqlx::Result<Option<UserRecord>> {
@@ -464,43 +496,50 @@ where
 
     async fn update_profile<'a>(
         &self,
+        transaction: &mut WriteTransaction,
         user_id: UserId,
         update: &ProfileUpdate<'a>,
     ) -> sqlx::Result<()> {
+        let connection = DB::write_connection(transaction)?;
         sqlx::query("UPDATE users SET display_name = $1, bio = $2 WHERE user_id = $3")
             .bind(update.display_name)
             .bind(update.bio)
             .bind(user_id)
-            .execute(&self.pool)
+            .execute(&mut *connection)
             .await?;
         Ok(())
     }
 
     async fn set_email<'a>(
         &self,
+        transaction: &mut WriteTransaction,
         user_id: UserId,
         email: Option<&'a Email>,
         verified: bool,
     ) -> sqlx::Result<()> {
+        let connection = DB::write_connection(transaction)?;
         sqlx::query("UPDATE users SET email = $1, email_verified = $2 WHERE user_id = $3")
             .bind(email)
             // sqlx-newtype-bind:allow permanent-primitive — email verification is a boolean storage fact with no domain identity.
             .bind(verified)
             .bind(user_id)
-            .execute(&self.pool)
+            .execute(&mut *connection)
             .await?;
         Ok(())
     }
 
-    async fn set_password(&self, user_id: UserId, new_password: &Password) -> sqlx::Result<()> {
-        let password_hash = helpers::hash_password(new_password.clone())
-            .await
-            .map_err(sqlx::Error::Io)?;
+    async fn set_password(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        password: &PreparedPassword,
+    ) -> sqlx::Result<()> {
+        let connection = DB::write_connection(transaction)?;
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
-            .bind(&password_hash)
+            .bind(&password.0)
             .bind(user_id)
-            .execute(&self.pool)
+            .execute(&mut *connection)
             .await?;
         Ok(())
     }
@@ -513,6 +552,67 @@ mod tests {
     use common::test_support::{parse_bio, parse_display_name, parse_email, parse_username};
     use rstest::*;
     use rstest_reuse::*;
+    use std::sync::Arc;
+
+    async fn create_user_confirmed(
+        state: &Arc<crate::AppState>,
+        username: Username,
+        password: host::password::Password,
+        display_name: Option<DisplayName>,
+        is_operator: bool,
+    ) -> UserId {
+        let users = Arc::clone(&state.users);
+        let password = prepare_password(password)
+            .await
+            .expect("user fixture password preparation should succeed");
+        let outcome = state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    users
+                        .create_user(
+                            transaction,
+                            &username,
+                            &password,
+                            display_name.as_ref(),
+                            is_operator,
+                        )
+                        .await
+                })
+            })
+            .await
+            .expect("user fixture setup should succeed");
+        match outcome {
+            common::MutationOutcome::Confirmed(user_id) => user_id,
+            common::MutationOutcome::CommitIndeterminate(_) => {
+                panic!("user fixture setup requires a confirmed commit")
+            }
+        }
+    }
+
+    async fn authenticate(
+        state: &Arc<crate::AppState>,
+        username: Username,
+        password: host::password::Password,
+    ) -> Result<UserRecord, crate::WriteScopeError<UserAuthError>> {
+        let users = Arc::clone(&state.users);
+        let authentication = users
+            .prepare_authentication(&username, &password)
+            .await
+            .map_err(crate::WriteScopeError::Operation)?;
+        let outcome = state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { users.authenticate(transaction, authentication).await })
+            })
+            .await?;
+        match outcome {
+            common::MutationOutcome::Confirmed(user) => Ok(user),
+            common::MutationOutcome::CommitIndeterminate(_) => {
+                panic!("authentication requires a confirmed commit")
+            }
+        }
+    }
 
     #[apply(backends)]
     #[tokio::test]
@@ -527,19 +627,31 @@ mod tests {
         let username: Username = parse_username("alice");
         let display_name = parse_display_name("Alice Example");
         let password = host::test_support::parse_password("password123");
-        let user_id = env
-            .state
-            .users
-            .create_user(&username, &password, Some(&display_name), true)
-            .await
-            .unwrap();
+        let user_id = create_user_confirmed(
+            &env.state,
+            username.clone(),
+            password.clone(),
+            Some(display_name.clone()),
+            true,
+        )
+        .await;
 
         let email = parse_email("alice@example.com");
-        env.state
-            .users
-            .set_email(user_id, Some(&email), true)
+        let users = Arc::clone(&env.state.users);
+        let updated_email = email.clone();
+        let outcome = env
+            .state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    users
+                        .set_email(transaction, user_id, Some(&updated_email), true)
+                        .await
+                })
+            })
             .await
             .unwrap();
+        assert!(matches!(outcome, common::MutationOutcome::Confirmed(())));
 
         let record = env.state.users.get_user(user_id).await.unwrap().unwrap();
         assert_eq!(record.username, username);
@@ -561,10 +673,7 @@ mod tests {
         assert!(by_name.email_verified);
         assert!(by_name.is_operator);
 
-        let authenticated = env
-            .state
-            .users
-            .authenticate(&username, &password)
+        let authenticated = authenticate(&env.state, username.clone(), password.clone())
             .await
             .unwrap();
         assert!(authenticated.email_verified);
@@ -577,17 +686,14 @@ mod tests {
         // The `None` decode path for `Option<DisplayName>` / `Option<Email>`.
         let env = backend.setup().await;
         let username: Username = parse_username("bob");
-        let user_id = env
-            .state
-            .users
-            .create_user(
-                &username,
-                &host::test_support::parse_password("password123"),
-                None,
-                false,
-            )
-            .await
-            .unwrap();
+        let user_id = create_user_confirmed(
+            &env.state,
+            username.clone(),
+            host::test_support::parse_password("password123"),
+            None,
+            false,
+        )
+        .await;
 
         let record = env.state.users.get_user(user_id).await.unwrap().unwrap();
         assert_eq!(record.username, username);
@@ -601,21 +707,15 @@ mod tests {
         let env = backend.setup().await;
         let username = parse_username("authenticated");
         let password = host::test_support::parse_password("password123");
-        let user_id = env
-            .state
-            .users
-            .create_user(&username, &password, None, false)
-            .await
-            .unwrap();
+        let user_id =
+            create_user_confirmed(&env.state, username.clone(), password.clone(), None, false)
+                .await;
 
         let created = env.state.users.get_user(user_id).await.unwrap().unwrap();
         assert!(created.created_at <= UtcInstant::now());
         assert_eq!(created.last_authenticated_at, None);
 
-        let authenticated = env
-            .state
-            .users
-            .authenticate(&username, &password)
+        let authenticated = authenticate(&env.state, username.clone(), password.clone())
             .await
             .unwrap();
         assert_eq!(authenticated.created_at, created.created_at);
@@ -673,31 +773,51 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
 
         let bio = parse_bio("hi");
-        env.state
-            .users
-            .update_profile(
-                user_id,
-                &ProfileUpdate {
-                    display_name: None,
-                    bio: Some(&bio),
-                },
-            )
+        let users = Arc::clone(&env.state.users);
+        let outcome = env
+            .state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    users
+                        .update_profile(
+                            transaction,
+                            user_id,
+                            &ProfileUpdate {
+                                display_name: None,
+                                bio: Some(&bio),
+                            },
+                        )
+                        .await
+                })
+            })
             .await
             .unwrap();
+        assert!(matches!(outcome, common::MutationOutcome::Confirmed(())));
         let record = env.state.users.get_user(user_id).await.unwrap().unwrap();
         assert_eq!(record.bio, Some(parse_bio("hi")));
 
-        env.state
-            .users
-            .update_profile(
-                user_id,
-                &ProfileUpdate {
-                    display_name: None,
-                    bio: None,
-                },
-            )
+        let users = Arc::clone(&env.state.users);
+        let outcome = env
+            .state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    users
+                        .update_profile(
+                            transaction,
+                            user_id,
+                            &ProfileUpdate {
+                                display_name: None,
+                                bio: None,
+                            },
+                        )
+                        .await
+                })
+            })
             .await
             .unwrap();
+        assert!(matches!(outcome, common::MutationOutcome::Confirmed(())));
         let cleared = env.state.users.get_user(user_id).await.unwrap().unwrap();
         assert_eq!(cleared.bio, None);
     }
@@ -730,23 +850,21 @@ mod tests {
     async fn authenticate_with_closed_pool_returns_internal_error(#[case] backend: Backend) {
         let env = backend.setup().await;
         env.base.close_pool().await;
-        let result = env
-            .state
-            .users
-            .authenticate(
-                &parse_username("alice"),
-                &host::test_support::parse_password("password123"),
-            )
-            .await;
-        // §3.1a: the underlying sqlx::Error is preserved as a typed source
-        // (not stringified), so the boundary can classify it.
+        let result = authenticate(
+            &env.state,
+            parse_username("alice"),
+            host::test_support::parse_password("password123"),
+        )
+        .await;
+        let Err(crate::WriteScopeError::Operation(UserAuthError::Internal(source))) = result else {
+            panic!("expected authentication preparation to fail against the closed pool");
+        };
         assert!(
             matches!(
-                result,
-                Err(UserAuthError::Internal(ref source))
-                    if source.downcast_ref::<sqlx::Error>().is_some()
+                source.downcast_ref::<sqlx::Error>(),
+                Some(sqlx::Error::PoolClosed)
             ),
-            "expected Internal carrying a sqlx::Error source"
+            "expected the closed-pool error to remain in the source chain"
         );
     }
 
@@ -760,15 +878,18 @@ mod tests {
             user.username
         );
         env.base.pool().execute(sql.as_str()).await.unwrap();
-        let result = env
-            .state
-            .users
-            .authenticate(
-                &user.username,
-                &host::test_support::parse_password("password123"),
-            )
-            .await;
-        assert!(matches!(result, Err(UserAuthError::Internal(_))));
+        let result = authenticate(
+            &env.state,
+            user.username,
+            host::test_support::parse_password("password123"),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Operation(UserAuthError::Internal(
+                _
+            )))
+        ));
     }
 
     #[apply(backends)]
@@ -783,15 +904,18 @@ mod tests {
             user.username
         );
         env.base.pool().execute(sql.as_str()).await.unwrap();
-        let result = env
-            .state
-            .users
-            .authenticate(
-                &user.username,
-                &host::test_support::parse_password("password123"),
-            )
-            .await;
-        assert!(matches!(result, Err(UserAuthError::Internal(_))));
+        let result = authenticate(
+            &env.state,
+            user.username,
+            host::test_support::parse_password("password123"),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Operation(UserAuthError::Internal(
+                _
+            )))
+        ));
     }
 
     #[apply(backends)]
@@ -811,15 +935,18 @@ mod tests {
             user.username
         );
         env.base.pool().execute(sql.as_str()).await.unwrap();
-        let result = env
-            .state
-            .users
-            .authenticate(
-                &user.username,
-                &host::test_support::parse_password("password123"),
-            )
-            .await;
-        assert!(matches!(result, Err(UserAuthError::Internal(_))));
+        let result = authenticate(
+            &env.state,
+            user.username,
+            host::test_support::parse_password("password123"),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Operation(UserAuthError::Internal(
+                _
+            )))
+        ));
     }
 
     #[apply(backends)]
@@ -861,32 +988,26 @@ mod tests {
                     .unwrap();
             }
         }
-        let result = env
-            .state
-            .users
-            .authenticate(
-                &user.username,
-                &host::test_support::parse_password("password123"),
-            )
-            .await;
-        assert!(matches!(result, Err(UserAuthError::Internal(_))));
+        let result = authenticate(
+            &env.state,
+            user.username,
+            host::test_support::parse_password("password123"),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Operation(UserAuthError::Internal(
+                _
+            )))
+        ));
     }
 
-    #[apply(backends)]
+    // guard:no-backend — injected password hashing failure; no database
     #[tokio::test]
-    async fn create_user_with_hash_error_returns_internal_error(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let result = env
-            .state
-            .users
-            .create_user(
-                &parse_username("alice"),
-                &host::test_support::parse_password("force-hash-error-for-test-coverage"),
-                None,
-                false,
-            )
-            .await;
-        assert!(matches!(result, Err(CreateUserError::Internal(_))));
+    async fn create_user_with_hash_error_returns_internal_error() {
+        let password = host::test_support::parse_password("force-hash-error-for-test-coverage");
+        let result = prepare_password(password).await;
+        assert!(result.is_err());
     }
 
     #[apply(backends)]
@@ -895,20 +1016,23 @@ mod tests {
         let env = backend.setup().await;
         let username = parse_username("alice");
         let password = host::test_support::parse_password("password123");
-        env.state
-            .users
-            .create_user(&username, &password, None, false)
-            .await
-            .unwrap();
+        create_user_confirmed(&env.state, username.clone(), password.clone(), None, false).await;
         let expected = crate::helpers::forced_verify_failure(
             &password,
             crate::helpers::dummy_password_hash().as_ref(),
         )
         .unwrap_err();
 
+        let username_for_auth = username.clone();
+        let password_for_auth = password.clone();
         let result = crate::with_closeable_pool!(env.base.pool(), pool, {
-            UserStore::new(pool.clone())
-                .authenticate_with(&username, &password, crate::helpers::forced_verify_failure)
+            let users = UserStore::new((*pool).clone());
+            users
+                .prepare_authentication_with(
+                    &username_for_auth,
+                    &password_for_auth,
+                    crate::helpers::forced_verify_failure,
+                )
                 .await
         });
 
@@ -942,12 +1066,30 @@ mod tests {
         let env = backend.setup().await;
         let username = parse_username("absent");
         let password = host::test_support::parse_password("password123");
-        let operation = async {
-            crate::with_closeable_pool!(env.base.pool(), pool, {
-                UserStore::new(pool.clone())
-                    .authenticate_with(&username, &password, crate::helpers::forced_verify_failure)
-                    .await
-            })
+        let base = env.base;
+        let operation = async move {
+            match base.pool() {
+                crate::test_support::CloseablePool::Sqlite(pool) => {
+                    let users = UserStore::new(pool.clone());
+                    users
+                        .prepare_authentication_with(
+                            &username,
+                            &password,
+                            crate::helpers::forced_verify_failure,
+                        )
+                        .await
+                }
+                crate::test_support::CloseablePool::Postgres(pool) => {
+                    let users = UserStore::new(pool.clone());
+                    users
+                        .prepare_authentication_with(
+                            &username,
+                            &password,
+                            crate::helpers::forced_verify_failure,
+                        )
+                        .await
+                }
+            }
         };
         let (result, trace) = crate::helpers::swallowed_test::capture_async(operation).await;
         assert!(matches!(result, Err(UserAuthError::InvalidCredentials)));

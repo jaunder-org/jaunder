@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use common::mutation::MutationOutcome;
 use futures_util::future::BoxFuture;
 use sqlx::{PgPool, SqlitePool, Transaction};
 use tracing::Instrument;
@@ -10,6 +11,8 @@ use tracing::Instrument;
 enum HeldTransaction {
     Sqlite(Transaction<'static, sqlx::Sqlite>),
     Postgres(Transaction<'static, sqlx::Postgres>),
+    #[cfg(any(test, feature = "test-utils"))]
+    Mock,
 }
 
 /// A backend-erased mutable capability for one application write transaction.
@@ -18,26 +21,6 @@ enum HeldTransaction {
 /// Storage traits consume it to join the caller-owned [`WriteScope`].
 pub struct WriteTransaction {
     transaction: HeldTransaction,
-}
-
-/// Result observed after a write callback completes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MutationOutcome<T> {
-    /// The database acknowledged the commit.
-    Confirmed(T),
-    /// The callback completed, but commit acknowledgement failed; the database
-    /// may already contain the mutation.
-    CommitIndeterminate(T),
-}
-
-impl<T> MutationOutcome<T> {
-    /// Borrows the callback value irrespective of commit acknowledgement.
-    #[must_use]
-    pub fn value(&self) -> &T {
-        match self {
-            Self::Confirmed(value) | Self::CommitIndeterminate(value) => value,
-        }
-    }
 }
 
 /// A failure before a callback can begin, or a callback failure whose transaction
@@ -59,7 +42,14 @@ impl<E: fmt::Display> fmt::Display for WriteScopeError<E> {
     }
 }
 
-impl<E: std::error::Error + 'static> std::error::Error for WriteScopeError<E> {}
+impl<E: std::error::Error + 'static> std::error::Error for WriteScopeError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Operation(error) => Some(error),
+            Self::Begin(error) => Some(error),
+        }
+    }
+}
 
 /// A concrete transaction factory selected at the composition root.
 ///
@@ -75,6 +65,8 @@ pub struct WriteScope {
 enum ScopeBackend {
     Sqlite(SqlitePool),
     Postgres(PgPool),
+    #[cfg(any(test, feature = "test-utils"))]
+    Mock,
 }
 
 impl WriteTransaction {
@@ -82,6 +74,8 @@ impl WriteTransaction {
         match &mut self.transaction {
             HeldTransaction::Sqlite(transaction) => Some(&mut **transaction),
             HeldTransaction::Postgres(_) => None,
+            #[cfg(any(test, feature = "test-utils"))]
+            HeldTransaction::Mock => None,
         }
     }
 
@@ -89,6 +83,8 @@ impl WriteTransaction {
         match &mut self.transaction {
             HeldTransaction::Sqlite(_) => None,
             HeldTransaction::Postgres(transaction) => Some(&mut **transaction),
+            #[cfg(any(test, feature = "test-utils"))]
+            HeldTransaction::Mock => None,
         }
     }
 }
@@ -136,6 +132,15 @@ impl WriteScope {
         }
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(crate) fn mock() -> Self {
+        Self {
+            backend: ScopeBackend::Mock,
+            #[cfg(test)]
+            lose_commit_acknowledgement_after_commit: false,
+        }
+    }
+
     /// Executes one coherent mutation and makes its commit boundary explicit.
     ///
     /// A callback error drops the tracked transaction without committing it. A
@@ -155,6 +160,8 @@ impl WriteScope {
         let db_system = match self.backend {
             ScopeBackend::Sqlite(_) => "sqlite",
             ScopeBackend::Postgres(_) => "postgres",
+            #[cfg(any(test, feature = "test-utils"))]
+            ScopeBackend::Mock => "mock",
         };
         let span = tracing::info_span!(
             "storage.write_scope",
@@ -172,6 +179,8 @@ impl WriteScope {
                 ScopeBackend::Postgres(pool) => {
                     HeldTransaction::Postgres(pool.begin().await.map_err(WriteScopeError::Begin)?)
                 }
+                #[cfg(any(test, feature = "test-utils"))]
+                ScopeBackend::Mock => HeldTransaction::Mock,
             };
             let mut capability = WriteTransaction { transaction };
             let value = match callback(&mut capability).await {
@@ -184,6 +193,8 @@ impl WriteScope {
             let commit = match capability.transaction {
                 HeldTransaction::Sqlite(transaction) => transaction.commit().await,
                 HeldTransaction::Postgres(transaction) => transaction.commit().await,
+                #[cfg(any(test, feature = "test-utils"))]
+                HeldTransaction::Mock => Ok(()),
             };
             match commit {
                 Ok(()) => {
@@ -198,7 +209,15 @@ impl WriteScope {
                 }
                 Err(error) => {
                     span.record("write_scope.outcome", "commit_indeterminate");
-                    tracing::warn!(error = %error, "write commit acknowledgement failed");
+                    // The server must return the mutation value as indeterminate because the
+                    // database may have committed before acknowledgement failed. Report the
+                    // suppressed commit error through the owning runtime's structured seam.
+                    host::error::report_swallowed(
+                        host::error::ErrorKind::Storage,
+                        host::error::ErrorClass::Transient,
+                        "storage.write_scope.commit_acknowledgement",
+                        host::error::SwallowedSource::Error(&error),
+                    );
                     Ok(MutationOutcome::CommitIndeterminate(value))
                 }
             }
@@ -466,6 +485,28 @@ mod tests {
                 "confirmed_commit",
                 "commit_indeterminate"
             ]
+        );
+    }
+
+    #[test]
+    fn operation_error_exposes_its_source() {
+        let error = WriteScopeError::Operation(std::io::Error::other("operation failure"));
+
+        assert!(
+            std::error::Error::source(&error)
+                .is_some_and(|source| source.downcast_ref::<std::io::Error>().is_some())
+        );
+    }
+
+    #[test]
+    fn begin_error_exposes_its_source() {
+        let error = WriteScopeError::<std::io::Error>::Begin(sqlx::Error::Io(
+            std::io::Error::other("begin failure"),
+        ));
+
+        assert!(
+            std::error::Error::source(&error)
+                .is_some_and(|source| source.downcast_ref::<sqlx::Error>().is_some())
         );
     }
 }

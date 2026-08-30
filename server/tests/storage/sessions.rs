@@ -1,11 +1,14 @@
+use std::sync::Arc;
+
 use chrono::{Duration, Utc};
+use common::MutationOutcome;
 use common::test_support::{parse_raw_token, parse_session_label};
 use common::time::UtcInstant;
 use common::token::TokenHash;
 use rstest::*;
 use rstest_reuse::*;
-use storage::SessionAuthError;
 use storage::test_support::{Backend, CloseablePool, SeedUser, TestEnv, backends, seed_users};
+use storage::{AppState, SessionAuthError, WriteScopeError};
 
 use crate::helpers::create_session_for;
 #[apply(backends)]
@@ -16,12 +19,8 @@ async fn create_session_then_authenticate_returns_correct_record(#[case] backend
 
     let user = SeedUser::new().seed(state).await;
 
-    let raw_token = state
-        .sessions
-        .create_session(user.user_id, &parse_session_label("test"))
-        .await
-        .unwrap();
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let raw_token = create_session(state, user.user_id, parse_session_label("test")).await;
+    let record = authenticate(state, raw_token.clone()).await;
 
     assert_eq!(record.user_id, user.user_id);
     assert_eq!(record.username, user.username);
@@ -38,7 +37,7 @@ async fn authenticate_returns_session_record_for_valid_token(#[case] backend: Ba
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let raw_token = create_session_for(state, user_id).await.token;
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let record = authenticate(state, raw_token).await;
 
     assert_eq!(record.user_id, user_id);
 }
@@ -48,17 +47,14 @@ async fn authenticate_returns_session_record_for_valid_token(#[case] backend: Ba
 async fn fresh_authenticate_returns_the_persisted_last_used_at(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let user_id = SeedUser::new().seed(&state).await.user_id;
-    let raw_token = state
-        .sessions
-        .create_session(user_id, &parse_session_label("test session"))
-        .await
-        .unwrap();
+    let raw_token =
+        create_session(state.as_ref(), user_id, parse_session_label("test session")).await;
 
     let token_hash = host::token::hash(&raw_token).unwrap();
-    let first_record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let first_record = authenticate(state.as_ref(), raw_token.clone()).await;
     let stored = first_record.last_used_at;
 
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let record = authenticate(state.as_ref(), raw_token).await;
     let persisted_after_auth = load_last_used_at(base.pool(), &token_hash).await;
 
     assert_eq!(record.last_used_at, stored);
@@ -70,17 +66,14 @@ async fn fresh_authenticate_returns_the_persisted_last_used_at(#[case] backend: 
 async fn stale_authenticate_refreshes_the_persisted_last_used_at(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let user_id = SeedUser::new().seed(&state).await.user_id;
-    let raw_token = state
-        .sessions
-        .create_session(user_id, &parse_session_label("test session"))
-        .await
-        .unwrap();
+    let raw_token =
+        create_session(state.as_ref(), user_id, parse_session_label("test session")).await;
 
     let token_hash = host::token::hash(&raw_token).unwrap();
     let stale = UtcInstant::from(Utc::now() - Duration::seconds(120));
     set_last_used_at(base.pool(), &token_hash, stale).await;
 
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let record = authenticate(state.as_ref(), raw_token).await;
     let persisted_after_auth = load_last_used_at(base.pool(), &token_hash).await;
     let freshness_cutoff_after_auth = UtcInstant::from(Utc::now() - Duration::seconds(60));
 
@@ -98,15 +91,14 @@ async fn revoke_session_then_authenticate_returns_session_not_found(#[case] back
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let raw_token = create_session_for(state, user_id).await.token;
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let record = authenticate(state, raw_token.clone()).await;
 
-    state
-        .sessions
-        .revoke_session(&record.token_hash)
-        .await
-        .unwrap();
+    revoke_session(state, record.token_hash).await;
 
-    let err = state.sessions.authenticate(&raw_token).await.unwrap_err();
+    let err = authenticate_result(state, raw_token).await.unwrap_err();
+    let WriteScopeError::Operation(err) = err else {
+        panic!("expected session authentication operation error, got {err:?}");
+    };
     assert!(matches!(err, SessionAuthError::SessionNotFound));
 }
 
@@ -119,11 +111,12 @@ async fn authenticate_with_invalid_base64_token_returns_invalid_token(#[case] ba
     // In-charset (base64url) but an invalid length that cannot decode, so hashing
     // fails and `authenticate` reports InvalidToken. (A non-charset string like
     // "not-base64!" can no longer be constructed as a `RawToken`.)
-    let err = state
-        .sessions
-        .authenticate(&parse_raw_token("a"))
+    let err = authenticate_result(state, parse_raw_token("a"))
         .await
         .unwrap_err();
+    let WriteScopeError::Operation(err) = err else {
+        panic!("expected session authentication operation error, got {err:?}");
+    };
     assert!(matches!(err, SessionAuthError::InvalidToken));
 }
 
@@ -135,21 +128,9 @@ async fn list_sessions_returns_only_sessions_for_given_user(#[case] backend: Bac
 
     let [alice_id, bob_id] = seed_users(state).await;
 
-    state
-        .sessions
-        .create_session(alice_id, &parse_session_label("alice-1"))
-        .await
-        .unwrap();
-    state
-        .sessions
-        .create_session(alice_id, &parse_session_label("alice-2"))
-        .await
-        .unwrap();
-    state
-        .sessions
-        .create_session(bob_id, &parse_session_label("bob-1"))
-        .await
-        .unwrap();
+    create_session(state, alice_id, parse_session_label("alice-1")).await;
+    create_session(state, alice_id, parse_session_label("alice-2")).await;
+    create_session(state, bob_id, parse_session_label("bob-1")).await;
 
     let alice_sessions = state.sessions.list_sessions(alice_id).await.unwrap();
     assert_eq!(alice_sessions.len(), 2);
@@ -166,23 +147,11 @@ async fn session_list_operations(#[case] backend: Backend) {
     let state = &env.state;
     let user = SeedUser::new().seed(state).await.user_id;
 
-    let session1 = state
-        .sessions
-        .create_session(user, &parse_session_label("session 1"))
-        .await
-        .expect("create_session 1 failed");
+    let session1 = create_session(state, user, parse_session_label("session 1")).await;
 
-    let _session2 = state
-        .sessions
-        .create_session(user, &parse_session_label("session 2"))
-        .await
-        .expect("create_session 2 failed");
+    let _session2 = create_session(state, user, parse_session_label("session 2")).await;
 
-    let _session3 = state
-        .sessions
-        .create_session(user, &parse_session_label("test session"))
-        .await
-        .expect("create_session 3 failed");
+    let _session3 = create_session(state, user, parse_session_label("test session")).await;
 
     let sessions = state
         .sessions
@@ -197,11 +166,7 @@ async fn session_list_operations(#[case] backend: Backend) {
     assert!(labels.contains(&"session 2"));
     assert!(labels.contains(&"test session"));
 
-    let record = state
-        .sessions
-        .authenticate(&session1)
-        .await
-        .expect("authenticate failed");
+    let record = authenticate(state, session1).await;
     assert_eq!(record.user_id, user);
 }
 
@@ -224,4 +189,67 @@ async fn load_last_used_at(pool: &CloseablePool, token_hash: &TokenHash) -> UtcI
             .await
             .unwrap()
     })
+}
+
+async fn create_session(
+    state: &AppState,
+    user_id: common::ids::UserId,
+    label: common::session_label::SessionLabel,
+) -> common::token::RawToken {
+    let sessions = Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
+        })
+        .await
+        .expect("session fixture setup should succeed");
+    match outcome {
+        MutationOutcome::Confirmed(token) => token,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("session fixture setup requires a confirmed commit")
+        }
+    }
+}
+
+async fn authenticate(
+    state: &AppState,
+    raw_token: common::token::RawToken,
+) -> storage::SessionRecord {
+    let outcome = authenticate_result(state, raw_token)
+        .await
+        .expect("session authentication should succeed");
+    match outcome {
+        MutationOutcome::Confirmed(record) => record,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("session authentication requires a confirmed commit")
+        }
+    }
+}
+
+async fn authenticate_result(
+    state: &AppState,
+    raw_token: common::token::RawToken,
+) -> Result<MutationOutcome<storage::SessionRecord>, WriteScopeError<SessionAuthError>> {
+    let sessions = Arc::clone(&state.sessions);
+    state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+        })
+        .await
+}
+
+async fn revoke_session(state: &AppState, token_hash: common::token::TokenHash) {
+    let sessions = Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.revoke_session(transaction, &token_hash).await })
+        })
+        .await
+        .expect("session revocation should succeed");
+    if matches!(outcome, MutationOutcome::CommitIndeterminate(())) {
+        panic!("session revocation requires a confirmed commit");
+    }
 }

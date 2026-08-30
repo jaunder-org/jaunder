@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use host::invite::InviteCode;
 use sqlx::{Database, Pool};
 
+use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::helpers;
 use common::ids::UserId;
@@ -33,7 +34,11 @@ pub trait InviteStorage: Send + Sync {
     /// Generates and stores a new invite code.
     ///
     /// Returns the generated [`InviteCode`].
-    async fn create_invite(&self, expires_at: UtcInstant) -> sqlx::Result<InviteCode>;
+    async fn create_invite(
+        &self,
+        transaction: &mut WriteTransaction,
+        expires_at: UtcInstant,
+    ) -> sqlx::Result<InviteCode>;
 
     /// Returns a list of all invite codes in the system.
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>>;
@@ -68,18 +73,23 @@ where
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
-    async fn create_invite(&self, expires_at: UtcInstant) -> sqlx::Result<InviteCode> {
+    async fn create_invite(
+        &self,
+        transaction: &mut WriteTransaction,
+        expires_at: UtcInstant,
+    ) -> sqlx::Result<InviteCode> {
         // Mint a typed `InviteCode` up front (infallible trusted door) and bind it
         // directly, so the code is a domain value end-to-end with no raw-`String` bind
         // and no fallible re-parse on the return (#438).
         let code = host::invite::generate();
         let now = UtcInstant::now();
+        let connection = DB::write_connection(transaction)?;
 
         sqlx::query("INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)")
             .bind(&code)
             .bind(now)
             .bind(expires_at)
-            .execute(&self.pool)
+            .execute(&mut *connection)
             .await?;
 
         Ok(code)
@@ -109,6 +119,7 @@ mod tests {
     use chrono::Utc;
     use rstest::*;
     use rstest_reuse::*;
+    use std::sync::Arc;
 
     #[apply(backends)]
     #[tokio::test]
@@ -121,7 +132,21 @@ mod tests {
         // `create_invite` binds a typed `InviteCode`; `list_invites` decodes the
         // `code` column straight back into `InviteCode` — exercising both bridge
         // directions.
-        let code = env.state.invites.create_invite(expires_at).await.unwrap();
+        let invites = Arc::clone(&env.state.invites);
+        let outcome = env
+            .state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+            })
+            .await
+            .unwrap();
+        let code = match outcome {
+            common::MutationOutcome::Confirmed(code) => code,
+            common::MutationOutcome::CommitIndeterminate(_) => {
+                panic!("invite fixture setup requires a confirmed commit")
+            }
+        };
         let invites = env.state.invites.list_invites().await.unwrap();
 
         assert_eq!(invites.len(), 1);
@@ -166,8 +191,17 @@ mod tests {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
         let expires_at = UtcInstant::now();
-        let result = state.invites.create_invite(expires_at).await;
-        assert!(result.is_err());
+        let invites = Arc::clone(&state.invites);
+        let result = state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Begin(sqlx::Error::PoolClosed))
+        ));
     }
 
     #[apply(backends)]

@@ -4,39 +4,23 @@
 //! server-fn registrar keep the stable `crate::auth::…` paths.
 
 use crate::error::WebResult;
-// `Username` / `ProfferedPassword` / `SessionLabel` are ungated: they are wire-arg
-// types of `login`, so the `#[server]`-generated arg struct references them on both
-// the client and server builds. `RawToken` is deliberately *not* here: the session
-// token does not cross the wire (#533), so it is a server-only value that the
-// `#[server]` body infers from `create_session`. The rule is recorded in
-// docs/adr/0107-web-session-establishment-is-cookie-only.md.
-use common::password::ProfferedPassword;
-use common::session_label::SessionLabel;
-use common::username::Username;
+// `Username` / `SessionLabel` are ordinary typed wire arguments; the password
+// secret stays confined to the server boundary (ADR-0063).
+use common::{MutationOutcome, session_label::SessionLabel, username::Username};
 
 // One grouped `feature = "server"` support block for the `#[server]` bodies: the
 // sibling `server` module's helpers plus the crate-level server-only dependencies.
 #[cfg(feature = "server")]
 use {
     super::server,
+    crate::error::{InternalError, from_write_scope_error},
     host::metrics::{self, LoginOutcome},
     host::password::Password,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{SessionStorage, UserStorage},
+    storage::{SessionStorage, UserStorage, WriteScope},
     tracing::Instrument,
 };
-
-/// Caller-supplied credentials and optional device label for one login attempt.
-///
-/// Keeping the cohesive request together makes username/password transposition a
-/// compile error and lets the CSR form dispatch values it has already parsed.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct LoginRequest {
-    pub username: Username,
-    pub password: ProfferedPassword,
-    pub label: Option<SessionLabel>,
-}
 
 /// Authenticates a user. Sets the `HttpOnly` `session` cookie and returns the
 /// authenticated viewer's [`super::SessionUser`] — deliberately not the session token
@@ -52,44 +36,23 @@ pub struct LoginRequest {
 /// `label` decodes to `None`: the `Option` form layer absorbs a present-but-empty
 /// field before `SessionLabel`'s deserializer runs.
 #[macros::server(skip_all)]
-pub async fn login(request: LoginRequest) -> WebResult<super::SessionUser> {
-    let LoginRequest {
-        username,
-        password,
-        label,
-    } = request;
+pub async fn login(
+    username: Username,
+    password: common::password::ProfferedPassword,
+    label: Option<SessionLabel>,
+) -> WebResult<MutationOutcome<super::SessionUser>> {
+    let write_scope = expect_context::<WriteScope>();
     let users = expect_context::<Arc<dyn UserStorage>>();
     let sessions = expect_context::<Arc<dyn SessionStorage>>();
-    // `username` / `password` arrive already validated: typed wire args whose serde
-    // bridge routes through their validating `FromStr`, client-pre-validated via
-    // `<ValidatedInput<_>>` (ADR-0065). `ProfferedPassword` is the inbound-secret
-    // twin of the serde-free `Password` (ADR-0063); convert into it here.
+    // `username` arrives as a validated typed wire arg. The proffered password is
+    // accepted only at this boundary and immediately converted to the serde-free
+    // domain secret (ADR-0063).
     let password = Password::try_from(password)?;
-    let record = match users
-        .authenticate(&username, &password)
-        .instrument(tracing::info_span!("web.auth.login.authenticate_user"))
-        .await
-    {
-        Ok(record) => {
-            metrics::login(LoginOutcome::Success);
-            record
-        }
-        Err(error) => {
-            metrics::login(storage::login_outcome(&error));
-            return Err(error.into());
-        }
-    };
-
     // An explicit client-supplied label arrives already validated (typed wire arg),
     // so it is used as-is; otherwise derive a device name from the User-Agent.
     let session_label = if let Some(label) = label {
         label
     } else {
-        // The User-Agent is an internally derived hint, not submitted input, so it
-        // goes through the lossy door (ADR-0063 §2): `from_lossy` trims, bounds it at
-        // MAX_SESSION_LABEL_CHARS, and supplies its own fallback label when there is
-        // no usable header. Both the cap and the default live in `SessionLabel` —
-        // never duplicated here, not even as a comment that could go stale.
         let ua = leptos_axum::extract::<axum::http::HeaderMap>()
             .await
             .ok()
@@ -102,35 +65,86 @@ pub async fn login(request: LoginRequest) -> WebResult<super::SessionUser> {
             .unwrap_or_default();
         SessionLabel::from_lossy(&ua)
     };
+    let authentication = match users
+        .prepare_authentication(&username, &password)
+        .instrument(tracing::info_span!("web.auth.login.prepare_authentication"))
+        .await
+    {
+        Ok(authentication) => authentication,
+        Err(error) => {
+            metrics::login(storage::login_outcome(&error));
+            return Err(error.into());
+        }
+    };
+    let outcome = write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                let record = users
+                    .authenticate(transaction, authentication)
+                    .instrument(tracing::info_span!("web.auth.login.authenticate_user"))
+                    .await
+                    .map_err(InternalError::from)?;
+                let raw_token = sessions
+                    .create_session(transaction, record.user_id, &session_label)
+                    .instrument(tracing::info_span!("web.auth.login.create_session"))
+                    .await
+                    .map_err(InternalError::storage)?;
+                Ok((
+                    raw_token,
+                    super::SessionUser {
+                        username: record.username,
+                        is_operator: record.is_operator,
+                    },
+                ))
+            })
+        })
+        .await
+        .map_err(|error| {
+            metrics::login(LoginOutcome::InternalError);
+            from_write_scope_error(error)
+        })?;
 
-    let raw_token = sessions
-        .create_session(record.user_id, &session_label)
-        .instrument(tracing::info_span!("web.auth.login.create_session"))
-        .await?;
-
-    server::set_session_cookie(&raw_token);
-    leptos_axum::redirect("/");
-    // The session travels only in the HttpOnly cookie set above (#533) — `raw_token`
-    // is never returned. The authenticated `UserRecord` supplies the complete marker
-    // seed without another query.
-    Ok(super::SessionUser {
-        username: record.username,
-        is_operator: record.is_operator,
-    })
+    match outcome {
+        MutationOutcome::Confirmed((raw_token, session)) => {
+            metrics::login(LoginOutcome::Success);
+            server::set_session_cookie(&raw_token);
+            leptos_axum::redirect("/");
+            Ok(MutationOutcome::Confirmed(session))
+        }
+        MutationOutcome::CommitIndeterminate((raw_token, session)) => {
+            server::set_session_cookie(&raw_token);
+            leptos_axum::redirect("/");
+            Ok(MutationOutcome::CommitIndeterminate(session))
+        }
+    }
 }
 
 /// Revokes the current session and clears the `session` cookie. Missing or stale
 /// cookie-only credentials still clear the cookie; explicit Authorization failures
 /// reject without clearing it.
 #[macros::server]
-pub async fn logout() -> WebResult<()> {
+pub async fn logout() -> WebResult<MutationOutcome<()>> {
     if let Some(auth) = server::optional_auth().await? {
+        let write_scope = expect_context::<WriteScope>();
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
-        sessions.revoke_session(&auth.token_hash).await?;
+        let outcome = write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    sessions
+                        .revoke_session(transaction, &auth.token_hash)
+                        .await
+                        .map_err(InternalError::storage)
+                })
+            })
+            .await
+            .map_err(from_write_scope_error)?;
+        server::clear_session_cookie();
+        leptos_axum::redirect("/");
+        return Ok(outcome);
     }
     server::clear_session_cookie();
     leptos_axum::redirect("/");
-    Ok(())
+    Ok(MutationOutcome::Confirmed(()))
 }
 
 /// The viewer's session identity — username + operator flag — or `None` for

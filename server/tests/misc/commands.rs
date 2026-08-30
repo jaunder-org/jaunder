@@ -1,5 +1,4 @@
-use std::fmt::Write as _;
-use std::net::SocketAddr;
+use std::{fmt::Write as _, net::SocketAddr, sync::Arc};
 
 use axum::{
     body::Body,
@@ -484,9 +483,15 @@ async fn typed_account_command_source_app_password_lookup(#[case] backend: Backe
     let username: Username = "alice".parse().expect("valid username");
     let label = parse_session_label("CLI");
 
-    let error = app_password_create(&env.state, &username, &label)
-        .await
-        .unwrap_err();
+    let error = app_password_create(
+        &env.state.write_scope,
+        env.state.users(),
+        Arc::clone(&env.state.sessions),
+        &username,
+        label,
+    )
+    .await
+    .unwrap_err();
 
     assert_eq!(error.to_string(), "failed to look up user");
     assert!(
@@ -508,9 +513,15 @@ async fn typed_account_command_source_app_password_session_create(#[case] backen
         .unwrap();
     let label = parse_session_label("CLI");
 
-    let error = app_password_create(&env.state, &user.username, &label)
-        .await
-        .unwrap_err();
+    let error = app_password_create(
+        &env.state.write_scope,
+        env.state.users(),
+        Arc::clone(&env.state.sessions),
+        &user.username,
+        label,
+    )
+    .await
+    .unwrap_err();
 
     assert_eq!(error.to_string(), "failed to create app password");
     assert!(

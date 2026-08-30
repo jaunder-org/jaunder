@@ -121,6 +121,7 @@ pub fn create_router_with_media_reference_ownership_resolver(
     // bearer token, so the raw HTTP handlers and the Leptos request `Parts`
     // need the session store reachable as a request extension.
     let sessions_ext = state.sessions.clone();
+    let write_scope_ext = state.write_scope.clone();
     let instance_header = instance_id.to_string().parse::<HeaderValue>()?;
     let server_fn_instance_id = instance_id.clone();
     let server_fn_media_ownership_resolver = media_ownership_resolver.clone();
@@ -130,6 +131,7 @@ pub fn create_router_with_media_reference_ownership_resolver(
     let storage_path_ext = Arc::new(storage_path);
     let client_telemetry = crate::client_telemetry::router(
         sessions_ext.clone(),
+        write_scope_ext.clone(),
         Arc::new(crate::client_telemetry::ClientTelemetryLimiter::new()),
     );
     let app = Router::new()
@@ -206,6 +208,7 @@ pub fn create_router_with_media_reference_ownership_resolver(
         .layer(axum::Extension(media_ext))
         .layer(axum::Extension(feed_cache_ext))
         .layer(axum::Extension(sessions_ext))
+        .layer(axum::Extension(write_scope_ext))
         .layer(axum::middleware::from_fn_with_state(
             secure_cookies,
             retire_session_cookie,

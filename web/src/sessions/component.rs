@@ -1,6 +1,6 @@
 use crate::forms::{self, Field, ValidatedBareInput};
 use crate::topbar::Topbar;
-use common::session_label::SessionLabel;
+use common::{MutationOutcome, session_label::SessionLabel};
 use leptos::prelude::*;
 
 use super::api::{self, CreateAppPassword, Revoke};
@@ -20,6 +20,27 @@ pub fn SessionsPage() -> impl IntoView {
         <div class="j-scroll">
             <div class="j-page">
                 <AppPasswordCreator create_action=create_action />
+                {move || {
+                    revoke_action
+                        .value()
+                        .get()
+                        .and_then(|result| match result {
+                            Ok(MutationOutcome::Confirmed(())) => None,
+                            Ok(MutationOutcome::CommitIndeterminate(())) => {
+                                Some(
+                                    view! {
+                                        <p class="error">
+                                            "The session may have been revoked, but its status could not be confirmed. Refresh to check."
+                                        </p>
+                                    }
+                                        .into_any(),
+                                )
+                            }
+                            Err(error) => {
+                                Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
+                            }
+                        })
+                }}
                 <Suspense fallback=|| {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
@@ -111,11 +132,22 @@ fn AppPasswordCreator(create_action: ServerAction<CreateAppPassword>) -> impl In
                     .value()
                     .get()
                     .map(|result| match result {
-                        Ok(pw) => {
+                        Ok(MutationOutcome::Confirmed(pw)) => {
                             view! {
                                 <div class="j-app-password-token">
                                     <p>
                                         "Copy this app password now \u{2014} it will not be shown again:"
+                                    </p>
+                                    <code>{pw.token.to_string()}</code>
+                                </div>
+                            }
+                                .into_any()
+                        }
+                        Ok(MutationOutcome::CommitIndeterminate(pw)) => {
+                            view! {
+                                <div class="j-app-password-token">
+                                    <p class="error">
+                                        "The app password may have been created, but its status could not be confirmed. Copy it now and refresh to check."
                                     </p>
                                     <code>{pw.token.to_string()}</code>
                                 </div>

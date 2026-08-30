@@ -118,11 +118,35 @@ pub async fn create_user(
     let pw = password
         .parse::<host::password::Password>()
         .map_err(|e| anyhow::anyhow!("invalid password: {e}"))?;
-    let id = state
-        .users
-        .create_user(&uname, &pw, display_name, operator)
-        .await?;
-    Ok(id)
+    let prepared = storage::prepare_password(pw)
+        .await
+        .map_err(|error| anyhow::anyhow!("fixture password preparation failed: {error}"))?;
+    let display_name = display_name.cloned();
+    let users = Arc::clone(&state.users);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            let users = Arc::clone(&users);
+            Box::pin(async move {
+                users
+                    .create_user(
+                        transaction,
+                        &uname,
+                        &prepared,
+                        display_name.as_ref(),
+                        operator,
+                    )
+                    .await
+            })
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("fixture user creation failed: {error}"))?;
+    match outcome {
+        common::mutation::MutationOutcome::Confirmed(user_id) => Ok(user_id),
+        common::mutation::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
+            "fixture user creation commit acknowledgement was indeterminate"
+        )),
+    }
 }
 
 /// Reset the mail-capture file: delete `path` if it exists. A missing file is
@@ -174,7 +198,23 @@ async fn session_record(
         .unwrap_or(DEFAULT_SEED_LABEL)
         .parse::<common::session_label::SessionLabel>()
         .map_err(|e| anyhow::anyhow!("invalid session label: {e}"))?;
-    let token = state.sessions.create_session(user_id, &label).await?;
+    let sessions = Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            let sessions = Arc::clone(&sessions);
+            Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("fixture session creation failed: {error}"))?;
+    let token = match outcome {
+        common::mutation::MutationOutcome::Confirmed(token) => token,
+        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
+            return Err(anyhow::anyhow!(
+                "fixture session creation commit acknowledgement was indeterminate"
+            ));
+        }
+    };
     Ok(SeedRecord {
         username: username.to_string(),
         user_id: i64::from(user_id),
@@ -374,6 +414,28 @@ mod seed_session_tests {
             .expect("token parses")
     }
 
+    async fn authenticate_session(
+        state: &Arc<AppState>,
+        token: &RawToken,
+    ) -> anyhow::Result<storage::SessionRecord> {
+        let token = token.clone();
+        let sessions = Arc::clone(&state.sessions);
+        let outcome = state
+            .write_scope
+            .run(move |transaction| {
+                let sessions = Arc::clone(&sessions);
+                Box::pin(async move { sessions.authenticate(transaction, &token).await })
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!("fixture session authentication failed: {error}"))?;
+        match outcome {
+            common::mutation::MutationOutcome::Confirmed(session) => Ok(session),
+            common::mutation::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
+                "fixture session authentication commit acknowledgement was indeterminate"
+            )),
+        }
+    }
+
     #[tokio::test]
     async fn seed_user_returns_a_session_that_authenticates() {
         let test_support::TestEnv { state, base: _base } =
@@ -384,9 +446,8 @@ mod seed_session_tests {
             .expect("seed ok");
 
         // The cookie's token authenticates and resolves to the seeded user.
-        let session = state
-            .sessions
-            .authenticate(&cookie_token(&record))
+        let token = cookie_token(&record);
+        let session = authenticate_session(&state, &token)
             .await
             .expect("token authenticates");
         assert_eq!(session.user_id, UserId::from(record.user_id));
@@ -437,9 +498,8 @@ mod seed_session_tests {
             .expect("session ok");
         let marker = decode_marker(&record.marker).expect("marker decodes");
         assert!(marker.is_operator, "operator user's marker must say so");
-        state
-            .sessions
-            .authenticate(&cookie_token(&record))
+        let token = cookie_token(&record);
+        authenticate_session(&state, &token)
             .await
             .expect("token authenticates");
     }

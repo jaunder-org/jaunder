@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use chrono::Utc;
+use common::MutationOutcome;
 use common::session_label::MAX_SESSION_LABEL_CHARS;
 use common::time::UtcInstant;
 use common::token::RawToken;
@@ -61,21 +62,17 @@ fn register_input(
     invite_code: Option<&str>,
 ) -> web::registration::Register {
     web::registration::Register {
-        request: web::registration::RegistrationRequest {
-            username: username.parse().expect("valid test username"),
-            password: password.parse().expect("valid test password"),
-            invite_code: invite_code.map(|code| code.parse().expect("valid test invite code")),
-        },
+        username: username.parse().expect("valid test username"),
+        password: password.parse().expect("valid test password"),
+        invite_code: invite_code.map(|code| code.parse().expect("valid test invite code")),
     }
 }
 
 fn login_input(username: &str, password: &str, label: Option<&str>) -> web::auth::Login {
     web::auth::Login {
-        request: web::auth::LoginRequest {
-            username: username.parse().expect("valid test username"),
-            password: password.parse().expect("valid test password"),
-            label: label.map(|label| label.parse().expect("valid test session label")),
-        },
+        username: username.parse().expect("valid test username"),
+        password: password.parse().expect("valid test password"),
+        label: label.map(|label| label.parse().expect("valid test session label")),
     }
 }
 
@@ -160,6 +157,24 @@ async fn post_register(
     status
 }
 
+async fn create_registration_invite(state: &storage::AppState) -> host::invite::InviteCode {
+    let invites = std::sync::Arc::clone(&state.invites);
+    let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
+    match state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+        })
+        .await
+        .expect("create registration fixture invite")
+    {
+        MutationOutcome::Confirmed(code) => code,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("registration fixture setup requires a confirmed commit")
+        }
+    }
+}
+
 // guard:low-level-db — observes one sqlite-backed server-fn span directly.
 #[tokio::test]
 async fn register_records_decision_determinants_on_the_server_fn_span() {
@@ -176,11 +191,7 @@ async fn register_records_decision_determinants_on_the_server_fn_span() {
         .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
-    let ignored_open_code = state
-        .invites
-        .create_invite(UtcInstant::from(Utc::now() + chrono::Duration::hours(24)))
-        .await
-        .unwrap();
+    let ignored_open_code = create_registration_invite(&state).await;
     assert_eq!(
         post_register(&state, "detopen", Some(ignored_open_code.as_ref())).await,
         StatusCode::OK
@@ -191,11 +202,7 @@ async fn register_records_decision_determinants_on_the_server_fn_span() {
         .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
-    let code = state
-        .invites
-        .create_invite(UtcInstant::from(Utc::now() + chrono::Duration::hours(24)))
-        .await
-        .unwrap();
+    let code = create_registration_invite(&state).await;
     assert_eq!(
         post_register(&state, "detinvite", Some(code.as_ref())).await,
         StatusCode::OK
@@ -287,24 +294,45 @@ async fn register_nested_request_maps_open_fields(#[case] backend: Backend) {
         .await
         .unwrap()
         .expect("user should exist after registration");
-    let authenticated = state
-        .users
-        .authenticate(
-            &"alice".parse::<Username>().unwrap(),
-            &"password123".parse::<Password>().unwrap(),
-        )
+    let users = std::sync::Arc::clone(&state.users);
+    let username = "alice".parse::<Username>().unwrap();
+    let password = "password123".parse::<Password>().unwrap();
+    let authentication = users
+        .prepare_authentication(&username, &password)
+        .await
+        .unwrap();
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { users.authenticate(transaction, authentication).await })
+        })
         .await
         .expect("registration password should authenticate");
+    let authenticated = match outcome {
+        MutationOutcome::Confirmed(user) => user,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("registration authentication requires a confirmed commit")
+        }
+    };
     assert_eq!(authenticated.user_id, user.user_id);
 
     // …and the cookie actually establishes a session for that user. A
     // `starts_with("session=")` check alone would pass against a cookie carrying a
     // token that authenticates nothing.
-    let record = state
-        .sessions
-        .authenticate(&cookie_token)
+    let sessions = std::sync::Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &cookie_token).await })
+        })
         .await
         .expect("the register cookie authenticates");
+    let record = match outcome {
+        MutationOutcome::Confirmed(record) => record,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("session authentication requires a confirmed commit")
+        }
+    };
     assert_eq!(record.user_id, user.user_id);
 }
 
@@ -350,8 +378,21 @@ async fn register_nested_request_maps_invite_code(#[case] backend: Backend) {
         .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
+    let invites = std::sync::Arc::clone(&state.invites);
     let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
-    let code = state.invites.create_invite(expires_at).await.unwrap();
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+        })
+        .await
+        .unwrap();
+    let code = match outcome {
+        MutationOutcome::Confirmed(code) => code,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("invite fixture setup requires a confirmed commit")
+        }
+    };
 
     let (status, set_cookie, _body) = post_server_fn_with_secure_flag(
         &state,
@@ -371,14 +412,26 @@ async fn register_nested_request_maps_invite_code(#[case] backend: Backend) {
         .await
         .unwrap();
     let user = user.expect("user should exist after invite registration");
-    let authenticated = state
-        .users
-        .authenticate(
-            &"bob".parse::<Username>().unwrap(),
-            &"password123".parse::<Password>().unwrap(),
-        )
+    let users = std::sync::Arc::clone(&state.users);
+    let username = "bob".parse::<Username>().unwrap();
+    let password = "password123".parse::<Password>().unwrap();
+    let authentication = users
+        .prepare_authentication(&username, &password)
+        .await
+        .unwrap();
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { users.authenticate(transaction, authentication).await })
+        })
         .await
         .expect("invite registration password should authenticate");
+    let authenticated = match outcome {
+        MutationOutcome::Confirmed(user) => user,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("invite registration authentication requires a confirmed commit")
+        }
+    };
     assert_eq!(authenticated.user_id, user.user_id);
 
     let invites = state.invites.list_invites().await.unwrap();
@@ -387,6 +440,142 @@ async fn register_nested_request_maps_invite_code(#[case] backend: Backend) {
         .find(|i| i.code.as_ref() == code.as_ref())
         .unwrap();
     assert!(invite.used_at.is_some(), "invite should be marked as used");
+}
+
+/// A later session insert failure rolls back every open-registration mutation.
+#[apply(backends)]
+#[tokio::test]
+async fn register_open_session_failure_rolls_back_user(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    state
+        .site_config
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+        .await
+        .unwrap();
+    match backend {
+        Backend::Sqlite => {
+            base.pool()
+                .execute(
+                    "CREATE TRIGGER fail_session_insert BEFORE INSERT ON sessions \
+                     BEGIN SELECT RAISE(FAIL, 'blocked'); END",
+                )
+                .await
+                .unwrap();
+        }
+        Backend::Postgres => {
+            base.pool()
+                .execute(
+                    "CREATE FUNCTION fail_session_insert() RETURNS trigger AS $$ \
+                     BEGIN RAISE EXCEPTION 'blocked'; END; $$ LANGUAGE plpgsql",
+                )
+                .await
+                .unwrap();
+            base.pool()
+                .execute(
+                    "CREATE TRIGGER fail_session_insert BEFORE INSERT ON sessions \
+                     FOR EACH ROW EXECUTE FUNCTION fail_session_insert()",
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    let (status, _, _) = post_server_fn_with_secure_flag(
+        &state,
+        &register_input("rolledback", "password123", None),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        state
+            .users
+            .get_user_by_username(&"rolledback".parse().unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// A later session insert failure rolls back both invite consumption and user creation.
+#[apply(backends)]
+#[tokio::test]
+async fn register_invite_session_failure_rolls_back_user_and_invite(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    state
+        .site_config
+        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
+        .await
+        .unwrap();
+    let invites = std::sync::Arc::clone(&state.invites);
+    let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
+    let code = match state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+        })
+        .await
+        .unwrap()
+    {
+        MutationOutcome::Confirmed(code) => code,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("invite fixture requires a confirmed commit")
+        }
+    };
+    match backend {
+        Backend::Sqlite => {
+            base.pool()
+                .execute(
+                    "CREATE TRIGGER fail_session_insert BEFORE INSERT ON sessions \
+                     BEGIN SELECT RAISE(FAIL, 'blocked'); END",
+                )
+                .await
+                .unwrap();
+        }
+        Backend::Postgres => {
+            base.pool()
+                .execute(
+                    "CREATE FUNCTION fail_session_insert() RETURNS trigger AS $$ \
+                     BEGIN RAISE EXCEPTION 'blocked'; END; $$ LANGUAGE plpgsql",
+                )
+                .await
+                .unwrap();
+            base.pool()
+                .execute(
+                    "CREATE TRIGGER fail_session_insert BEFORE INSERT ON sessions \
+                     FOR EACH ROW EXECUTE FUNCTION fail_session_insert()",
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    let (status, _, _) = post_server_fn_with_secure_flag(
+        &state,
+        &register_input("inviterolledback", "password123", Some(code.as_ref())),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        state
+            .users
+            .get_user_by_username(&"inviterolledback".parse().unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let invite = state
+        .invites
+        .list_invites()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|invite| invite.code.as_ref() == code.as_ref())
+        .unwrap();
+    assert!(invite.used_at.is_none());
 }
 
 // M2.9.10: `register` with InviteOnly policy and missing code returns error.
@@ -455,8 +644,21 @@ async fn register_invite_only_expired_code_returns_error(#[case] backend: Backen
         .unwrap();
 
     // Create an already-expired invite.
-    let expires_at = UtcInstant::from(Utc::now() - chrono::Duration::hours(1));
-    let code = state.invites.create_invite(expires_at).await.unwrap();
+    let invites = std::sync::Arc::clone(&state.invites);
+    let expires_at = UtcInstant::from(Utc::now() - chrono::Duration::hours(24));
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+        })
+        .await
+        .unwrap();
+    let code = match outcome {
+        MutationOutcome::Confirmed(code) => code,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("invite fixture setup requires a confirmed commit")
+        }
+    };
 
     let (status, _, _) = post_server_fn_with_secure_flag(
         &state,
@@ -565,7 +767,7 @@ async fn login_returns_session_user_without_token(#[case] backend: Backend) {
     assert_body_carries_no_token("login", &body, &token);
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(body.trim()).expect("valid login JSON body"),
-        serde_json::json!({"username": "alice", "is_operator": false}),
+        serde_json::json!({"Confirmed": {"username": "alice", "is_operator": false}}),
     );
 }
 
@@ -612,7 +814,20 @@ async fn login_nested_request_maps_distinct_fields(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
     let raw_token = session_token_of(set_cookie);
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let sessions = std::sync::Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+        })
+        .await
+        .unwrap();
+    let record = match outcome {
+        MutationOutcome::Confirmed(record) => record,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("session authentication requires a confirmed commit")
+        }
+    };
     assert_eq!(record.label, "Issue 417 device");
 }
 
@@ -644,7 +859,20 @@ async fn login_nested_request_without_label_uses_user_agent(#[case] backend: Bac
 
     assert_eq!(status, StatusCode::OK);
     let raw_token = session_token_of(set_cookie);
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let sessions = std::sync::Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+        })
+        .await
+        .unwrap();
+    let record = match outcome {
+        MutationOutcome::Confirmed(record) => record,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("session authentication requires a confirmed commit")
+        }
+    };
     assert_eq!(record.label, "Issue 417 browser");
 }
 
@@ -754,7 +982,20 @@ async fn login_bounds_long_user_agent_at_session_label_cap(#[case] backend: Back
 
     assert_eq!(status, StatusCode::OK);
     let raw_token = session_token_of(set_cookie);
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let sessions = std::sync::Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+        })
+        .await
+        .unwrap();
+    let record = match outcome {
+        MutationOutcome::Confirmed(record) => record,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("session authentication requires a confirmed commit")
+        }
+    };
     assert_eq!(record.label, "a".repeat(250).as_str());
 }
 
@@ -790,7 +1031,20 @@ async fn login_truncates_user_agent_past_session_label_cap(#[case] backend: Back
 
     assert_eq!(status, StatusCode::OK);
     let raw_token = session_token_of(set_cookie);
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let sessions = std::sync::Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+        })
+        .await
+        .unwrap();
+    let record = match outcome {
+        MutationOutcome::Confirmed(record) => record,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("session authentication requires a confirmed commit")
+        }
+    };
     assert_eq!(record.label.chars().count(), MAX_SESSION_LABEL_CHARS);
 }
 

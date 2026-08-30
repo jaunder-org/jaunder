@@ -1,13 +1,16 @@
 //! Password reset token storage.
 
+use std::marker::PhantomData;
+
 use async_trait::async_trait;
 
-use sqlx::{Database, Pool};
+use sqlx::Database;
 use thiserror::Error;
 
 use common::time::UtcInstant;
 use common::token::RawToken;
 
+use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::helpers::TokenStateRow;
 use common::ids::UserId;
@@ -41,6 +44,7 @@ pub trait PasswordResetStorage: Send + Sync {
     /// Returns the raw (un-hashed) token to be delivered to the user.
     async fn create_password_reset(
         &self,
+        transaction: &mut WriteTransaction,
         user_id: UserId,
         expires_at: UtcInstant,
     ) -> sqlx::Result<RawToken>;
@@ -55,6 +59,7 @@ pub trait PasswordResetStorage: Send + Sync {
     /// or already used.
     async fn use_password_reset(
         &self,
+        transaction: &mut WriteTransaction,
         raw_token: &RawToken,
     ) -> Result<UserId, UsePasswordResetError>;
 }
@@ -62,15 +67,16 @@ pub trait PasswordResetStorage: Send + Sync {
 /// Generic [`PasswordResetStorage`] backed by any [`Backend`] database.
 ///
 /// Zero backend divergence (identical SQL across `SQLite` and Postgres),
-/// so it is implemented once here; see ADR-0019.
 pub struct PasswordResetStore<DB: Database> {
-    pool: Pool<DB>,
+    _database: PhantomData<fn() -> DB>,
 }
 
 impl<DB: Database> PasswordResetStore<DB> {
     #[must_use]
-    pub fn new(pool: Pool<DB>) -> Self {
-        Self { pool }
+    pub fn new(_pool: sqlx::Pool<DB>) -> Self {
+        Self {
+            _database: PhantomData,
+        }
     }
 }
 
@@ -85,16 +91,18 @@ where
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     async fn create_password_reset(
         &self,
+        transaction: &mut WriteTransaction,
         user_id: UserId,
         expires_at: UtcInstant,
     ) -> sqlx::Result<RawToken> {
         let (raw_token, token_hash) = token::generate_hashed();
         let now = UtcInstant::now();
+        let connection = DB::write_connection(transaction)?;
 
         sqlx::query(
             "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)
@@ -104,7 +112,7 @@ where
         .bind(user_id)
         .bind(now)
         .bind(expires_at)
-        .execute(&self.pool)
+        .execute(&mut *connection)
         .await?;
 
         Ok(raw_token)
@@ -112,11 +120,13 @@ where
 
     async fn use_password_reset(
         &self,
+        transaction: &mut WriteTransaction,
         raw_token: &RawToken,
     ) -> Result<UserId, UsePasswordResetError> {
         let token_hash = token::hash(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
 
         let now = UtcInstant::now();
+        let connection = DB::write_connection(transaction)?;
 
         // Atomically claim the token in one statement: the UPDATE succeeds only
         // when it exists, is unused, and is unexpired, so two concurrent requests
@@ -130,7 +140,7 @@ where
         .bind(now)
         .bind(&token_hash)
         .bind(now)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *connection)
         .await?;
 
         if let Some((user_id,)) = claimed {
@@ -141,7 +151,7 @@ where
             "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
         )
         .bind(&token_hash)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *connection)
         .await?;
 
         Err(crate::helpers::password_reset_claim_error(row, now))
@@ -155,6 +165,7 @@ mod tests {
     use common::test_support::parse_raw_token;
     use rstest::*;
     use rstest_reuse::*;
+    use std::sync::Arc;
 
     #[apply(backends)]
     #[tokio::test]
@@ -168,18 +179,44 @@ mod tests {
         // `create_password_reset` binds the `TokenHash`; `use_password_reset`
         // re-binds the hash of the same raw token to atomically claim the stored
         // row — a round trip through the `token_hash` column's sqlx bridge (#438).
-        let raw_token = env
+        let password_resets = Arc::clone(&env.state.password_resets);
+        let outcome = env
             .state
-            .password_resets
-            .create_password_reset(user_id, expires_at)
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    password_resets
+                        .create_password_reset(transaction, user_id, expires_at)
+                        .await
+                })
+            })
             .await
             .unwrap();
-        let claimed = env
+        let raw_token = match outcome {
+            common::MutationOutcome::Confirmed(raw_token) => raw_token,
+            common::MutationOutcome::CommitIndeterminate(_) => {
+                panic!("password-reset fixture setup requires a confirmed commit")
+            }
+        };
+        let password_resets = Arc::clone(&env.state.password_resets);
+        let outcome = env
             .state
-            .password_resets
-            .use_password_reset(&raw_token)
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    password_resets
+                        .use_password_reset(transaction, &raw_token)
+                        .await
+                })
+            })
             .await
             .unwrap();
+        let claimed = match outcome {
+            common::MutationOutcome::Confirmed(claimed) => claimed,
+            common::MutationOutcome::CommitIndeterminate(_) => {
+                panic!("password reset requires a confirmed commit")
+            }
+        };
         assert_eq!(claimed, user_id);
     }
 
@@ -189,11 +226,21 @@ mod tests {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
         let expires_at = UtcInstant::now();
+        let password_resets = Arc::clone(&state.password_resets);
         let result = state
-            .password_resets
-            .create_password_reset(UserId::from(1), expires_at)
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    password_resets
+                        .create_password_reset(transaction, UserId::from(1), expires_at)
+                        .await
+                })
+            })
             .await;
-        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Begin(sqlx::Error::PoolClosed))
+        ));
     }
 
     #[apply(backends)]
@@ -201,10 +248,21 @@ mod tests {
     async fn use_password_reset_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
+        let password_resets = Arc::clone(&state.password_resets);
         let result = state
-            .password_resets
-            .use_password_reset(&parse_raw_token("dGVzdA"))
+            .write_scope
+            .run(|transaction| {
+                let token = parse_raw_token("dGVzdA");
+                Box::pin(async move {
+                    password_resets
+                        .use_password_reset(transaction, &token)
+                        .await
+                })
+            })
             .await;
-        assert!(matches!(result, Err(UsePasswordResetError::Internal(_))));
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Begin(sqlx::Error::PoolClosed))
+        ));
     }
 }

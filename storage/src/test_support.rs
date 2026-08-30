@@ -21,7 +21,7 @@ use crate::posts::{
 };
 use crate::sql::{Exists, quote_identifier};
 use crate::{
-    AppState, DbConnectOptions, PostFormat, PostRecord, StorageRuntimeConfig,
+    AppState, DbConnectOptions, PostFormat, PostRecord, StorageRuntimeConfig, WriteScope,
     resolved_postgres_options,
 };
 
@@ -64,6 +64,16 @@ use tempfile::TempDir;
 // `rstest`/`case` attributes the expansion emits are resolved at the *apply* site
 // in consumer crates, not here.
 use rstest_reuse::template;
+
+#[cfg(any(test, feature = "test-utils"))]
+/// Creates the mock write scope used by downstream storage-trait unit tests.
+///
+/// The scope is minted here at the storage test composition root so test callers
+/// cannot choose a backend or construct its transaction capability.
+#[must_use]
+pub fn mock_write_scope() -> WriteScope {
+    WriteScope::mock()
+}
 
 /// The storage backend a test runs against. Backend-parametrized tests take a
 /// `#[case] backend: Backend` and call [`Backend::setup`].
@@ -472,8 +482,8 @@ pub async fn set_post_tags_confirmed(
         })
         .await?;
     match outcome {
-        crate::MutationOutcome::Confirmed(()) => Ok(()),
-        crate::MutationOutcome::CommitIndeterminate(()) => {
+        common::MutationOutcome::Confirmed(()) => Ok(()),
+        common::MutationOutcome::CommitIndeterminate(()) => {
             panic!("tag fixture setup requires a confirmed commit")
         }
     }
@@ -1145,16 +1155,34 @@ impl<'a> SeedUser<'a> {
         let n = SEED_SEQ.fetch_add(1, Ordering::Relaxed);
         let username = parse_username(&format!("user{n}"));
         let display_name = self.display_name.map(parse_display_name);
-        let user_id = state
-            .users
-            .create_user(
-                &username,
-                &host::test_support::parse_password(self.password),
-                display_name.as_ref(),
-                self.is_operator,
-            )
+        let users = Arc::clone(&state.users);
+        let create_username = username.clone();
+        let password = crate::prepare_password(host::test_support::parse_password(self.password))
+            .await
+            .expect("user fixture password preparation should succeed");
+        let outcome = state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    users
+                        .create_user(
+                            transaction,
+                            &create_username,
+                            &password,
+                            display_name.as_ref(),
+                            self.is_operator,
+                        )
+                        .await
+                })
+            })
             .await
             .expect("seed user should be created");
+        let user_id = match outcome {
+            common::MutationOutcome::Confirmed(user_id) => user_id,
+            common::MutationOutcome::CommitIndeterminate(_) => {
+                panic!("seed user requires a confirmed commit")
+            }
+        };
         SeededUser { user_id, username }
     }
 }
@@ -1805,6 +1833,7 @@ mod tests {
     use host::render::render;
     use rstest::*;
     use rstest_reuse::*;
+    use std::sync::Arc;
 
     #[apply(backends)]
     #[tokio::test]
@@ -1822,14 +1851,21 @@ mod tests {
         assert!(!u.is_operator);
         assert!(u.display_name.is_none());
         // The default password authenticates — proves `seed` used `password123`.
-        state
-            .users
-            .authenticate(
-                &user.username,
-                &host::test_support::parse_password("password123"),
-            )
+        let users = Arc::clone(&state.users);
+        let username = user.username.clone();
+        let password = host::test_support::parse_password("password123");
+        let authentication = users
+            .prepare_authentication(&username, &password)
+            .await
+            .expect("default password prepares authentication");
+        let outcome = state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { users.authenticate(transaction, authentication).await })
+            })
             .await
             .expect("default password authenticates");
+        assert!(matches!(outcome, common::MutationOutcome::Confirmed(_)));
     }
 
     #[apply(backends)]
@@ -1854,14 +1890,21 @@ mod tests {
         assert!(u.is_operator);
         assert_eq!(u.display_name.expect("display name set"), "Bob B");
         // The overridden password authenticates — not the default.
-        state
-            .users
-            .authenticate(
-                &user.username,
-                &host::test_support::parse_password("hunter2xyz"),
-            )
+        let users = Arc::clone(&state.users);
+        let username = user.username.clone();
+        let password = host::test_support::parse_password("hunter2xyz");
+        let authentication = users
+            .prepare_authentication(&username, &password)
+            .await
+            .expect("overridden password prepares authentication");
+        let outcome = state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { users.authenticate(transaction, authentication).await })
+            })
             .await
             .expect("overridden password authenticates");
+        assert!(matches!(outcome, common::MutationOutcome::Confirmed(_)));
     }
 
     #[apply(backends)]

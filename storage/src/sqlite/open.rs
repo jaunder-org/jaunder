@@ -18,12 +18,13 @@ use crate::sql::Exists;
 use crate::{AppState, WriteScope, instance_identity, posts};
 
 fn make_sqlite_app_state(pool: SqlitePool) -> Arc<AppState> {
+    let users: Arc<dyn crate::UserStorage> = Arc::new(SqliteUserStorage::new(pool.clone()));
     Arc::new(AppState {
         site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
-        users: Arc::new(SqliteUserStorage::new(pool.clone())),
+        users: Arc::clone(&users),
         sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
         invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
-        atomic: Arc::new(SqliteAtomicOps::new(pool.clone())),
+        atomic: Arc::new(SqliteAtomicOps::new(users)),
         email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
         password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
         posts: Arc::new(SqlitePostStorage::new(pool.clone())),

@@ -75,11 +75,21 @@ impl SeededSession {
 /// session label lives, so a `create_session`-signature change (#325) touches
 /// only here.
 async fn issue_session(state: &Arc<storage::AppState>, user_id: UserId) -> RawToken {
-    state
-        .sessions
-        .create_session(user_id, &parse_session_label("test session"))
+    let sessions = Arc::clone(&state.sessions);
+    let label = parse_session_label("test session");
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
+        })
         .await
-        .expect("create session")
+        .expect("create session");
+    match outcome {
+        common::mutation::MutationOutcome::Confirmed(token) => token,
+        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
+            panic!("test session requires a confirmed commit")
+        }
+    }
 }
 
 /// A session on an already-seeded `user_id`. Looks the username up so the

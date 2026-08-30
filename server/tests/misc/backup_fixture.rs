@@ -56,16 +56,34 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         .expect("open database");
     let username: Username = "backupuser".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
-    let author = state
-        .users
-        .create_user(
-            &username,
-            &password,
-            Some(&parse_display_name("Backup User")),
-            true,
-        )
+    let users = Arc::clone(&state.users);
+    let display_name = parse_display_name("Backup User");
+    let password_for_author = storage::prepare_password(password.clone())
+        .await
+        .expect("prepare author password");
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                users
+                    .create_user(
+                        transaction,
+                        &username,
+                        &password_for_author,
+                        Some(&display_name),
+                        true,
+                    )
+                    .await
+            })
+        })
         .await
         .expect("create user");
+    let author = match outcome {
+        common::mutation::MutationOutcome::Confirmed(user_id) => user_id,
+        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
+            panic!("backup fixture user requires a confirmed commit")
+        }
+    };
     let public = SeedRawPost::new(author)
         .published_at(fixture_published_at())
         .tags(["Backup-Test"])
@@ -97,16 +115,34 @@ async fn seed_named_audience_post(
     password: &Password,
 ) -> (UserId, PostId) {
     let viewer_name: Username = "viewer".parse().expect("valid username");
-    let viewer = state
-        .users
-        .create_user(
-            &viewer_name,
-            password,
-            Some(&parse_display_name("Viewer")),
-            false,
-        )
+    let users = Arc::clone(&state.users);
+    let display_name = parse_display_name("Viewer");
+    let password = storage::prepare_password(password.clone())
+        .await
+        .expect("prepare viewer password");
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                users
+                    .create_user(
+                        transaction,
+                        &viewer_name,
+                        &password,
+                        Some(&display_name),
+                        false,
+                    )
+                    .await
+            })
+        })
         .await
         .expect("create viewer");
+    let viewer = match outcome {
+        common::mutation::MutationOutcome::Confirmed(user_id) => user_id,
+        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
+            panic!("backup fixture viewer requires a confirmed commit")
+        }
+    };
     let local = state
         .subscriptions
         .local_channel_id()

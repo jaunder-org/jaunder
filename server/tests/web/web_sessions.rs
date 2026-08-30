@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use axum::http::StatusCode;
 
 use rstest::*;
 use rstest_reuse::*;
 
+use common::MutationOutcome;
 use common::test_support::parse_session_label;
 use server_fn::ServerFn;
 
@@ -19,11 +22,20 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
     // Create a second session with a label.
-    state
-        .sessions
-        .create_session(session.user_id, &parse_session_label("mobile"))
+    let sessions = Arc::clone(&state.sessions);
+    let label = parse_session_label("mobile");
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                sessions
+                    .create_session(transaction, session.user_id, &label)
+                    .await
+            })
+        })
         .await
         .unwrap();
+    assert!(matches!(outcome, MutationOutcome::Confirmed(_)));
 
     let (status, body) = post_form(
         &state,
@@ -189,12 +201,20 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
     let cookie1 = session.cookie();
     // Create a second session to revoke.
     let raw_token2 = create_session_for(&state, session.user_id).await.token;
-    let token_hash2 = state
-        .sessions
-        .authenticate(&raw_token2)
+    let sessions = Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &raw_token2).await })
+        })
         .await
-        .unwrap()
-        .token_hash;
+        .unwrap();
+    let token_hash2 = match outcome {
+        MutationOutcome::Confirmed(record) => record.token_hash,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("session authentication requires a confirmed commit")
+        }
+    };
 
     let body = format!("token_hash={token_hash2}");
     let (status, _) = post_form(
@@ -215,8 +235,17 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
         "revoked session should not appear"
     );
     // The requesting session should still be valid.
+    let sessions = Arc::clone(&state.sessions);
+    let token = session.token.clone();
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &token).await })
+        })
+        .await
+        .unwrap();
     assert!(
-        state.sessions.authenticate(&session.token).await.is_ok(),
+        matches!(outcome, MutationOutcome::Confirmed(_)),
         "requesting session should still be valid"
     );
 }
@@ -227,12 +256,21 @@ async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backen
     let TestEnv { state, base: _base } = backend.setup().await;
     let alice_cookie = create_user_and_session(&state).await.cookie();
     let bob = create_user_and_session(&state).await;
-    let bob_token_hash = state
-        .sessions
-        .authenticate(&bob.token)
+    let sessions = Arc::clone(&state.sessions);
+    let token = bob.token.clone();
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &token).await })
+        })
         .await
-        .unwrap()
-        .token_hash;
+        .unwrap();
+    let bob_token_hash = match outcome {
+        MutationOutcome::Confirmed(record) => record.token_hash,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("session authentication requires a confirmed commit")
+        }
+    };
 
     // Alice tries to revoke Bob's session.
     let body = format!("token_hash={bob_token_hash}");

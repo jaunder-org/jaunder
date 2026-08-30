@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
+use common::MutationOutcome;
 use common::test_support::parse_raw_token;
 use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, backends};
-use storage::{ConfirmPasswordResetError, UsePasswordResetError};
+use storage::{AppState, ConfirmPasswordResetError, UsePasswordResetError, WriteScopeError};
 
 use super::fixtures::password;
 #[apply(backends)]
@@ -12,26 +15,25 @@ async fn confirm_password_reset_hash_failure_returns_internal(#[case] backend: B
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
-    let reset_token = state
-        .password_resets
-        .create_password_reset(
-            user_id,
-            "2099-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap(),
-        )
-        .await
-        .unwrap();
+    let reset_token = create_password_reset(
+        state,
+        user_id,
+        "2099-01-02T03:04:05.123456Z".parse().unwrap(),
+    )
+    .await;
     // Valid token → the claim succeeds, then hashing the new password fails → Internal
     // (success-path hash failure; the failed hash rolls the claim back).
-    let result = state
-        .atomic
-        .confirm_password_reset(
-            &reset_token,
-            &password("force-hash-error-for-test-coverage"),
-        )
-        .await;
+    let result = confirm_password_reset_result(
+        state,
+        reset_token,
+        password("force-hash-error-for-test-coverage"),
+    )
+    .await;
     assert!(matches!(
         result,
-        Err(ConfirmPasswordResetError::Internal(_))
+        Err(WriteScopeError::Operation(
+            ConfirmPasswordResetError::Internal(_)
+        ))
     ));
 }
 
@@ -41,26 +43,35 @@ async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user = SeedUser::new().seed(state).await;
-    let reset_token = state
-        .password_resets
-        .create_password_reset(
-            user.user_id,
-            "2099-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap(),
-        )
-        .await
-        .unwrap();
+    let reset_token = create_password_reset(
+        state,
+        user.user_id,
+        "2099-01-02T03:04:05.123456Z".parse().unwrap(),
+    )
+    .await;
 
-    state
-        .atomic
-        .confirm_password_reset(&reset_token, &password("new_password123"))
-        .await
-        .unwrap();
+    confirm_password_reset(state, reset_token, password("new_password123")).await;
 
-    let authenticated = state
-        .users
-        .authenticate(&user.username, &password("new_password123"))
+    let users = Arc::clone(&state.users);
+    let username = user.username.clone();
+    let password = password("new_password123");
+    let authentication = users
+        .prepare_authentication(&username, &password)
         .await
         .unwrap();
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { users.authenticate(transaction, authentication).await })
+        })
+        .await
+        .unwrap();
+    let authenticated = match outcome {
+        MutationOutcome::Confirmed(user) => user,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("authentication requires a confirmed commit")
+        }
+    };
     assert_eq!(authenticated.user_id, user.user_id);
 }
 
@@ -74,14 +85,18 @@ async fn confirm_password_reset_bogus_token_returns_not_found_without_hashing(
     // No password_resets row matches this token. A hash-failing new password proves the
     // hash is NOT attempted: the claim rejects the token first -> NotFound, not Internal
     // (ADR-0022).
-    let result = state
-        .atomic
-        .confirm_password_reset(
-            &parse_raw_token("dGVzdA"),
-            &password("force-hash-error-for-test-coverage"),
-        )
-        .await;
-    assert!(matches!(result, Err(ConfirmPasswordResetError::NotFound)));
+    let result = confirm_password_reset_result(
+        state,
+        parse_raw_token("dGVzdA"),
+        password("force-hash-error-for-test-coverage"),
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(WriteScopeError::Operation(
+            ConfirmPasswordResetError::NotFound
+        ))
+    ));
 }
 #[apply(backends)]
 #[tokio::test]
@@ -92,17 +107,9 @@ async fn create_password_reset_and_use_returns_user_id(#[case] backend: Backend)
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-    let raw_token = state
-        .password_resets
-        .create_password_reset(user_id, expires_at)
-        .await
-        .unwrap();
+    let raw_token = create_password_reset(state, user_id, expires_at).await;
 
-    let returned_user_id = state
-        .password_resets
-        .use_password_reset(&raw_token)
-        .await
-        .unwrap();
+    let returned_user_id = use_password_reset(state, raw_token).await;
     assert_eq!(returned_user_id, user_id);
 }
 
@@ -115,23 +122,16 @@ async fn use_password_reset_already_used_returns_already_used(#[case] backend: B
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-    let raw_token = state
-        .password_resets
-        .create_password_reset(user_id, expires_at)
-        .await
-        .unwrap();
+    let raw_token = create_password_reset(state, user_id, expires_at).await;
 
-    state
-        .password_resets
-        .use_password_reset(&raw_token)
-        .await
-        .unwrap();
+    use_password_reset(state, raw_token.clone()).await;
 
-    let err = state
-        .password_resets
-        .use_password_reset(&raw_token)
+    let err = use_password_reset_result(state, raw_token)
         .await
         .unwrap_err();
+    let WriteScopeError::Operation(err) = err else {
+        panic!("expected password reset operation error, got {err:?}");
+    };
     assert!(
         matches!(err, UsePasswordResetError::AlreadyUsed),
         "expected AlreadyUsed, got {err:?}"
@@ -147,17 +147,14 @@ async fn use_password_reset_expired_returns_expired(#[case] backend: Backend) {
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let expires_at: UtcInstant = "2000-01-02T03:04:05.123456Z".parse().unwrap();
-    let raw_token = state
-        .password_resets
-        .create_password_reset(user_id, expires_at)
-        .await
-        .unwrap();
+    let raw_token = create_password_reset(state, user_id, expires_at).await;
 
-    let err = state
-        .password_resets
-        .use_password_reset(&raw_token)
+    let err = use_password_reset_result(state, raw_token)
         .await
         .unwrap_err();
+    let WriteScopeError::Operation(err) = err else {
+        panic!("expected password reset operation error, got {err:?}");
+    };
     assert!(
         matches!(err, UsePasswordResetError::Expired),
         "expected Expired, got {err:?}"
@@ -170,13 +167,105 @@ async fn use_password_reset_unknown_token_returns_not_found(#[case] backend: Bac
     let env = backend.setup().await;
     let state = &env.state;
 
-    let err = state
-        .password_resets
-        .use_password_reset(&parse_raw_token("not-a-real-token"))
+    let err = use_password_reset_result(state, parse_raw_token("not-a-real-token"))
         .await
         .unwrap_err();
+    let WriteScopeError::Operation(err) = err else {
+        panic!("expected password reset operation error, got {err:?}");
+    };
     assert!(
         matches!(err, UsePasswordResetError::NotFound),
         "expected NotFound, got {err:?}"
     );
+}
+
+async fn create_password_reset(
+    state: &AppState,
+    user_id: common::ids::UserId,
+    expires_at: UtcInstant,
+) -> common::token::RawToken {
+    let password_resets = Arc::clone(&state.password_resets);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                password_resets
+                    .create_password_reset(transaction, user_id, expires_at)
+                    .await
+            })
+        })
+        .await
+        .expect("password-reset fixture setup should succeed");
+    match outcome {
+        MutationOutcome::Confirmed(raw_token) => raw_token,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("password-reset fixture setup requires a confirmed commit")
+        }
+    }
+}
+
+async fn use_password_reset(
+    state: &AppState,
+    raw_token: common::token::RawToken,
+) -> common::ids::UserId {
+    let outcome = use_password_reset_result(state, raw_token)
+        .await
+        .expect("password reset should succeed");
+    match outcome {
+        MutationOutcome::Confirmed(user_id) => user_id,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("password reset requires a confirmed commit")
+        }
+    }
+}
+
+async fn use_password_reset_result(
+    state: &AppState,
+    raw_token: common::token::RawToken,
+) -> Result<MutationOutcome<common::ids::UserId>, WriteScopeError<UsePasswordResetError>> {
+    let password_resets = Arc::clone(&state.password_resets);
+    state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                password_resets
+                    .use_password_reset(transaction, &raw_token)
+                    .await
+            })
+        })
+        .await
+}
+
+async fn confirm_password_reset(
+    state: &AppState,
+    raw_token: common::token::RawToken,
+    password: host::password::Password,
+) {
+    let outcome = confirm_password_reset_result(state, raw_token, password)
+        .await
+        .expect("password reset confirmation should succeed");
+    match outcome {
+        MutationOutcome::Confirmed(()) => {}
+        MutationOutcome::CommitIndeterminate(()) => {
+            panic!("password reset confirmation requires a confirmed commit")
+        }
+    }
+}
+
+async fn confirm_password_reset_result(
+    state: &AppState,
+    raw_token: common::token::RawToken,
+    password: host::password::Password,
+) -> Result<MutationOutcome<()>, WriteScopeError<ConfirmPasswordResetError>> {
+    let atomic = Arc::clone(&state.atomic);
+    state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                atomic
+                    .confirm_password_reset(transaction, &raw_token, &password)
+                    .await
+            })
+        })
+        .await
 }

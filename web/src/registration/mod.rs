@@ -19,6 +19,6 @@ mod component;
 
 // The API surface — re-exported so external call sites and the server-fn registrar
 // keep the stable `crate::registration::…` paths despite living in `api.rs`.
-pub use api::{GetPolicy, Register, RegistrationRequest, get_policy, register};
+pub use api::{GetPolicy, Register, get_policy, register};
 #[cfg(target_arch = "wasm32")]
 pub use component::RegisterPage;

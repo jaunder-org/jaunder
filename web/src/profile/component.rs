@@ -1,9 +1,7 @@
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput, ValidatedTextarea};
 use crate::topbar::Topbar;
-use common::bio::Bio;
-use common::display_name::DisplayName;
-use common::render::PostFormat;
+use common::{MutationOutcome, bio::Bio, display_name::DisplayName, render::PostFormat};
 use leptos::prelude::*;
 
 use super::DefaultPostFormatState;
@@ -97,8 +95,22 @@ pub fn ProfilePage() -> impl IntoView {
                     update_action
                         .value()
                         .get()
-                        .and_then(|r: Result<(), WebError>| r.err())
-                        .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                        .and_then(|result: Result<MutationOutcome<()>, WebError>| match result {
+                            Ok(MutationOutcome::Confirmed(())) => None,
+                            Ok(MutationOutcome::CommitIndeterminate(())) => {
+                                Some(
+                                    view! {
+                                        <p class="error">
+                                            "Your profile may have been updated, but its status could not be confirmed. Refresh to check."
+                                        </p>
+                                    }
+                                        .into_any(),
+                                )
+                            }
+                            Err(error) => {
+                                Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
+                            }
+                        })
                 }}
             </div>
         </div>

@@ -5,9 +5,7 @@ use super::{Confirm, ConfirmPasswordResetRequest, Request};
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
 use crate::topbar::Topbar;
-use common::password::ProfferedPassword;
-use common::token::RawToken;
-use common::username::Username;
+use common::{MutationOutcome, password::ProfferedPassword, token::RawToken, username::Username};
 use leptos::prelude::*;
 use leptos_router::components::Redirect;
 
@@ -44,11 +42,19 @@ pub fn ForgotPasswordPage() -> impl IntoView {
                     request_action
                         .value()
                         .get()
-                        .map(|r: Result<(), WebError>| match r {
-                            Ok(()) => {
+                        .map(|r: Result<MutationOutcome<()>, WebError>| match r {
+                            Ok(MutationOutcome::Confirmed(())) => {
                                 view! {
                                     <p>
                                         "If there is a verified email address on file, a reset link has been sent. Check your email."
+                                    </p>
+                                }
+                                    .into_any()
+                            }
+                            Ok(MutationOutcome::CommitIndeterminate(())) => {
+                                view! {
+                                    <p class="error">
+                                        "The reset link may have been requested, but its status could not be confirmed. Refresh to check."
                                     </p>
                                 }
                                     .into_any()
@@ -112,8 +118,18 @@ pub fn ResetPasswordPage() -> impl IntoView {
                     confirm_action
                         .value()
                         .get()
-                        .map(|r: Result<(), WebError>| match r {
-                            Ok(()) => view! { <Redirect path="/login" /> }.into_any(),
+                        .map(|r: Result<MutationOutcome<()>, WebError>| match r {
+                            Ok(MutationOutcome::Confirmed(())) => {
+                                view! { <Redirect path="/login" /> }.into_any()
+                            }
+                            Ok(MutationOutcome::CommitIndeterminate(())) => {
+                                view! {
+                                    <p class="error">
+                                        "Your password may have been reset, but its status could not be confirmed. Refresh to check."
+                                    </p>
+                                }
+                                    .into_any()
+                            }
                             Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                         })
                 }}

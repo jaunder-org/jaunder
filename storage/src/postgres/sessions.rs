@@ -1,9 +1,10 @@
 use async_trait::async_trait;
-use sqlx::{Pool, Postgres};
+use sqlx::Postgres;
 
 use common::time::UtcInstant;
 use common::token::TokenHash;
 
+use crate::WriteTransaction;
 use crate::helpers::SessionRow;
 use crate::sessions::{SessionDialect, SessionStore};
 
@@ -13,11 +14,12 @@ pub type PostgresSessionStorage = SessionStore<Postgres>;
 #[async_trait]
 impl SessionDialect for Postgres {
     async fn touch_and_load(
-        pool: &Pool<Postgres>,
+        transaction: &mut WriteTransaction,
         token_hash: &TokenHash,
         now: UtcInstant,
         stale_before: UtcInstant,
     ) -> sqlx::Result<Option<SessionRow>> {
+        let connection = <Postgres as crate::backend::Backend>::write_connection(transaction)?;
         let updated = sqlx::query_as::<_, SessionRow>(
             "WITH updated AS (
                  UPDATE sessions
@@ -33,7 +35,7 @@ impl SessionDialect for Postgres {
         .bind(now)
         .bind(token_hash)
         .bind(stale_before)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *connection)
         .await?;
 
         if updated.is_some() {
@@ -47,7 +49,7 @@ impl SessionDialect for Postgres {
              WHERE s.token_hash = $1",
         )
         .bind(token_hash)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *connection)
         .await
     }
 }

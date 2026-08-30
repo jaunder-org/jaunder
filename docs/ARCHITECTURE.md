@@ -157,21 +157,22 @@ be a thin shell over a near-total dialect
 ### Dependency injection and AppState
 
 `storage::AppState` (`storage/src/app_state.rs`) is a bundle of fourteen trait
-handles — thirteen `Arc<dyn *Storage>` plus `Arc<dyn AtomicOps>` — built by
-`open_database` at the composition root. It holds storage only; services
-(mailer, WebSub client, background workers) are constructed in `server` and
-injected per-consumer as constructor parameters, and there is no services
-bundle. The durable invariant: no type may be both a heterogeneous dependency
-holder and passed beyond the composition root
-([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
+handles — thirteen `Arc<dyn *Storage>` plus `Arc<dyn AtomicOps>` — and the
+factory-minted `WriteScope`, all built by `open_database` at the composition
+root. It holds storage dependencies only; services (mailer, WebSub client,
+background workers) are constructed in `server` and injected per-consumer as
+constructor parameters, and there is no services bundle. The durable invariant:
+no type may be both a heterogeneous dependency holder and passed beyond the
+composition root ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
 
-The web layer takes its dependencies per-trait via Leptos context.
-`server::provide_app_state_contexts` (`server/src/context.rs:25`) publishes
-thirteen of the handles (all but `feed_cache`, which no `#[server]` fn needs),
-and each server fn fetches exactly what it uses —
-`expect_context::<Arc<dyn UserStorage>>()`. The helper lives in `server`, not
-`storage`, because using Leptos context as the DI mechanism is an
-application-wiring decision
+The web layer takes its dependencies per-trait via Leptos context and receives
+`WriteScope` as a separate context value. `server::provide_app_state_contexts`
+(`server/src/context.rs:25`) publishes thirteen of the handles (all but
+`feed_cache`, which no `#[server]` fn needs) plus that separately injected
+scope, and each server fn fetches exactly what it uses —
+`expect_context::<Arc<dyn UserStorage>>()` or `expect_context::<WriteScope>()`.
+The helper lives in `server`, not `storage`, because using Leptos context as the
+DI mechanism is an application-wiring decision
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)). Nothing in the
 codebase now pins reactive-owner lifetime for this: `server_boundary`
 (`web/src/error/server.rs:99`) is a thin error-projection wrapper that awaits
@@ -335,18 +336,18 @@ Details in the testing section.
   exists in `storage`, and every non-serve CLI command still constructs the full
   `AppState` via `open_existing_database` (`server/src/commands.rs`).
 
-- **Structural write scopes and mutation outcomes.** The approved direction is a
-  factory-minted, backend-erased `WriteScope`, injected separately beside the
-  exact storage traits. Its explicit `run` boundary supplies a sealed mutable
-  write capability rather than storage lookup or arbitrary SQL; audited
-  application mutations will require that capability. Callback failure is
+- **Structural write scopes and mutation outcomes.** A factory-minted,
+  backend-erased `WriteScope` is injected separately beside the exact storage
+  traits. Its explicit `run` boundary supplies a sealed mutable write capability
+  rather than storage lookup or arbitrary SQL. The landed post-tag plus
+  identity, credential, registration, and session cutovers consume that
+  capability (Tasks 1–3); Tasks 4–6 remain. Callback failure is
   rollback-confirmed, whereas an unsuccessful commit acknowledgement is
-  commit-indeterminate. Typed `MutationOutcome<T>` will preserve that
-  distinction through server responses and client revalidation, and the owning
-  scope span will record the bounded outcome. SQLite scopes will retain
-  `BEGIN IMMEDIATE`, PostgreSQL operations their required row locks, and both
-  backends their rollback-on-drop behaviour. The post-tag proving slice is the
-  first implementation; the remaining mutation cutovers are not yet built
+  commit-indeterminate. Typed `MutationOutcome<T>` preserves that distinction
+  through server responses and client revalidation, and the owning scope span
+  records the bounded outcome. SQLite scopes retain `BEGIN IMMEDIATE`,
+  PostgreSQL operations their required row locks, and both backends their
+  rollback-on-drop behaviour
   ([structural write scopes and mutation outcomes](adr/drafts/structural-write-scopes-and-mutation-outcomes.md)).
 
 ## Content model
