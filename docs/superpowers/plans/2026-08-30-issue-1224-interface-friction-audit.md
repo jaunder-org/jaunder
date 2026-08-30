@@ -62,7 +62,7 @@ Out:
     #1178/#1248 and current #1227 records are cited where relevant; high-signal
     rejections retain enough evidence to prevent repeat investigation.
 
-- [ ] Task 4: Publish accepted findings and the exhaustive completion record.
+- [x] Task 4: Publish accepted findings and the exhaustive completion record.
   - Contract: each accepted group becomes one non-overlapping milestone-17 issue
     using `docs/codebase-audits.md` fields, explicit type/labels/priority/native
     coordination, and #1224 provenance. After issue readback, the integration
