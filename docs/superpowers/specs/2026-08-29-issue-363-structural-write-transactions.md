@@ -48,6 +48,9 @@ semantics.
   exactly one commit attempt. A commit acknowledgement failure is indeterminate
   because PostgreSQL may have committed before the connection failure became
   observable; it is never reported as a rollback-confirmed operation error.
+- `WriteScope` records its bounded outcome—rollback-confirmed operation failure,
+  confirmed commit, or commit-indeterminate—on the narrowest span that owns the
+  decision, as required by ADR-0147.
 - Server mutation wire outputs map confirmed and indeterminate commits to
   successful typed `MutationOutcome<T>` variants. Only rollback-confirmed
   operation failure remains an ordinary error. Clients invalidate and revalidate
@@ -73,9 +76,9 @@ semantics.
 - Database/filesystem composition does not pretend to be a distributed
   transaction. Upload removes a newly created file on callback failure but
   retains it after confirmed or indeterminate commit. Delete reclaims only after
-  confirmed commit; failure or indeterminate commit retains the file for retry
-  after a fresh reference check. Safe orphan retention wins over a missing
-  referenced file; durable crash cleanup remains separate.
+  confirmed commit; failure or indeterminate commit retains the file as a safe
+  orphan rather than risk removing a possibly referenced file. Durable orphan
+  reconciliation and crash cleanup remain separate.
 - No macros, generic operation-command framework, public generic executor, or
   effect system. Explicit `WriteScope::run` is the visible commit boundary.
 
@@ -116,7 +119,8 @@ semantics.
   for upload and delete: they never remove a possibly referenced file, and
   post-commit reclamation cannot change the handler result to an ordinary error.
 - Commit failure is observable as an indeterminate outcome distinct from an
-  operation error, and the revalidation decision covers that outcome.
+  operation error, the owning scope span records the bounded outcome
+  determinant, and the revalidation decision covers the indeterminate outcome.
 - Server and client tests exercise both typed `MutationOutcome<T>` variants:
   confirmed and indeterminate both invalidate relevant data, while indeterminate
   remains visibly error-like rather than a confirmed result.
