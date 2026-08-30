@@ -70,7 +70,6 @@ mod tests {
     use super::*;
     use common::{
         ids::PostId,
-        render::RenderedHtml,
         test_support::{parse_post_title, parse_url},
     };
 
@@ -92,7 +91,7 @@ mod tests {
             title: title.map(parse_post_title),
             permalink: parse_url("https://example.com/~alice/posts/1"),
             summary: None,
-            content_html: RenderedHtml::from_trusted("<p>hi</p>"),
+            content_html: common::test_support::rendered_html("<p>hi</p>"),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             tags: vec![],

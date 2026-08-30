@@ -6,7 +6,6 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-ammonia.workspace = true
 atom_syndication = { version = "0.12.10", default-features = false }
 argon2.workspace = true
 base64.workspace = true
@@ -32,7 +31,7 @@ tracing-error.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
 thiserror.workspace = true
-common = { path = "../common" }
+common = { path = "../common", features = ["sanitize"] }
 macros = { path = "../macros" }
 
 [dev-dependencies]
@@ -51,7 +50,7 @@ default = ["sqlx"]
 sqlx = []
 test-utils = ["cheap-kdf"]
 cheap-kdf = []
-test-support = []
+test-support = ["common/test-support"]
 
 [lints]
 workspace = true

@@ -86,7 +86,6 @@ mod tests {
     use crate::feed::metadata::{FeedItem, FeedMetadata};
     use common::{
         ids::PostId,
-        render::RenderedHtml,
         test_support::{parse_post_summary, parse_post_title, parse_url},
     };
 
@@ -108,7 +107,7 @@ mod tests {
             title: Some(parse_post_title("Hello")),
             permalink: parse_url("https://example.com/~alice/posts/1"),
             summary: Some(parse_post_summary("hi")),
-            content_html: RenderedHtml::from_trusted("<p>hi</p>"),
+            content_html: common::test_support::rendered_html("<p>hi</p>"),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             tags: vec!["rust".parse().unwrap()],

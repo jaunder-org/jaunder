@@ -164,13 +164,12 @@ is free to work around is a gate that reports green.
   those named residuals with row structs and distinct timestamp role types,
   while leaving this gate's no-SQL-column-order boundary intact.
 
-- **`raw-html-door`, `html-sink` and `rendered-html-from-trusted`** (#333, #398,
-  #445, #778) conform. Each reads its population structurally — an ident under
-  the production roots, in ordinary code and inside macro token streams — and
-  denies every member unless the line immediately above it carries a
-  `// <gate-step>:allow <reason>` marker. They share one scan
-  (`xtask/src/steps/ident_gate.rs`), so a fix to the test-code exemption or the
-  macro walk cannot land in two of three.
+- **`raw-html-door` and `html-sink`** (#333, #445, #778) conform. Each reads its
+  population structurally — an ident under the production roots, in ordinary
+  code and inside macro token streams — and denies every member unless the line
+  immediately above it carries a `// <gate-step>:allow <reason>` marker. They
+  share one scan (`xtask/src/steps/ident_gate.rs`), so a fix to the test-code
+  exemption or the macro walk cannot drift.
 
   They satisfy principle 4 by a different route than `sqlx-newtype-decode`: the
   exemption is keyed to a line rather than to a name plus a count, so there is

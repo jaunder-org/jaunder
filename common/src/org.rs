@@ -31,7 +31,6 @@ use crate::{
 pub enum Presence<T> {
     #[default]
     Absent,
-    // rendered-html-from-trusted:allow generic presence holds caller-validated values and never mints or decodes HTML (#77)
     Present(T),
 }
 

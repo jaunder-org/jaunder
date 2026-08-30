@@ -30,6 +30,9 @@ use std::future::Future;
 use leptos::prelude::*;
 
 use common::ids::PostId;
+use common::revision_history::{
+    RevisionHistoryAudience, RevisionHistoryDetail, RevisionHistoryTag,
+};
 use common::root_relative_url::RootRelativeUrl;
 use common::seed::{Page, PageSeed, RenderedPost};
 use common::tag::Tag;
@@ -39,8 +42,8 @@ use common::visibility::AudienceSelection;
 use crate::audiences;
 use crate::error::{WebError, WebResult};
 use crate::posts::{
-    CurrentPostHistory, RevisionHistoryAudience, RevisionHistoryCursor, RevisionHistoryDetail,
-    RevisionHistoryMetadata, RevisionHistoryPage, RevisionHistoryTag, RevisionLifecycle, SavedPost,
+    CurrentPostHistory, RevisionHistoryCursor, RevisionHistoryMetadata, RevisionHistoryPage,
+    RevisionLifecycle, SavedPost,
 };
 
 /// Resolution state for the named audiences offered by the post editor.
@@ -384,7 +387,6 @@ pub enum AuthenticatedHistoryState<T> {
     /// Reconciliation confirmed there is no authenticated viewer.
     AuthRequired,
     /// The authenticated route fetch completed successfully.
-    // rendered-html-from-trusted:allow history paint state may carry server-sanitized revision DTO HTML (#1055)
     Ready(T),
     /// Session reconciliation or the route fetch failed.
     Failed(WebError),
@@ -1124,7 +1126,7 @@ mod tests {
             slug: parse_slug("history-post"),
             body: parse_post_body("body"),
             format: common::render::PostFormat::Org,
-            rendered_html: common::render::RenderedHtml::from_trusted("<p>body</p>"),
+            rendered_html: common::test_support::rendered_html("<p>body</p>"),
             summary: Some(common::test_support::parse_post_summary("Snapshot summary")),
             created_at: at,
             updated_at: at,

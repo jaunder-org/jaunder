@@ -928,10 +928,8 @@ impl ContentType {
     ///
     /// Grepping `ContentType::from_trusted` enumerates every mint site, and each is
     /// pinned by a test that the value is valid (`detect_content_type_outputs_are_valid`,
-    /// `feed_path::…::format_content_types`). That is a **convention backed by those
-    /// tests**, not a build-time guarantee: nothing fails if a new mint site arrives
-    /// without one — the `rendered-html-from-trusted` gate reads the qualifier (#790),
-    /// so this door is outside its population.
+    /// `feed_path::…::format_content_types`). That is a convention backed by those
+    /// tests, not a build-time guarantee.
     #[must_use]
     pub(crate) fn from_trusted(content_type: impl Into<String>) -> Self {
         Self(content_type.into())

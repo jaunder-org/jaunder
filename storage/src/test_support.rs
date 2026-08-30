@@ -1240,7 +1240,6 @@ pub struct SeededPost {
     pub slug: Slug,
     pub title: PostTitle,
     pub published_at: Option<UtcInstant>,
-    // rendered-html-from-trusted:allow over-included test-support seed carries render(body) output for assertions (#701)
     pub rendered_html: RenderedHtml,
 }
 

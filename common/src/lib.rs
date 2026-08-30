@@ -33,6 +33,7 @@ pub mod post_summary;
 pub mod post_title;
 pub mod registration;
 pub mod render;
+pub mod revision_history;
 pub mod root_relative_url;
 pub mod seed;
 pub mod session_label;

@@ -110,7 +110,6 @@ pub struct FeedItem {
     pub title: Option<PostTitle>,
     pub permalink: PermalinkUrl,
     pub summary: Option<PostSummary>,
-    // rendered-html-from-trusted:allow Syndication Feed item carries already-rendered post HTML (#701)
     pub content_html: RenderedHtml,
     pub published_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -190,7 +189,7 @@ mod tests {
             title: Some(parse_post_title("t")),
             permalink: parse_url("https://ex.com/p"),
             summary: None,
-            content_html: RenderedHtml::from_trusted("<p>c</p>"),
+            content_html: common::test_support::rendered_html("<p>c</p>"),
             published_at: ts,
             updated_at: ts,
             tags: vec![],

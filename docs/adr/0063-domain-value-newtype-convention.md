@@ -298,10 +298,10 @@ actually a removal.
 `truncated(&str) -> Self` on a length-bounded `str`-newtype: it trims and
 truncates to the cap, yielding an infallible **validated** door that cannot
 exceed the length bound (so it does not weaken that half of the invariant) for
-values **derived internally** rather than submitted — the way
-`RenderedHtml::from_trusted` is a trusted rebuild door. Unlike `clamped` it is
-per-type (not a macro flag) and not `const` (trim/char-boundary aren't const),
-and it is a **trust** door for the non-length half of the invariant: a
+values **derived internally** rather than submitted. `RenderedHtml` instead has
+no public trusted rebuild door: common-private reconstruction preserves its
+sanitization invariant. Unlike `clamped`, `truncated` is per-type (not a macro
+flag) and not `const` (trim/char-boundary aren't const); it is a **trust** door
 `truncated` on a non-empty-plus-cap type guarantees only the cap, not
 non-emptiness, so its callers must supply non-empty input (pinned by a
 `debug_assert!`). Reach for it only when a value is minted from a known-valid

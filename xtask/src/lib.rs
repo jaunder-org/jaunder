@@ -48,7 +48,7 @@ mod steps {
     pub mod nix;
     pub mod proffered_secret_check;
     pub mod raw_html_door_check;
-    pub mod rendered_html_from_trusted_check;
+    pub mod rendered_html_compiler_boundary;
     pub mod scan;
     pub mod sequence_check;
     pub mod server_fn_coverage_check;
@@ -647,8 +647,8 @@ const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
         run: steps::doctest_fences::run,
     },
     HostGateStep::ResultOnly {
-        name: "rendered-html-from-trusted",
-        run: steps::rendered_html_from_trusted_check::run,
+        name: "rendered-html-compiler-boundary",
+        run: steps::rendered_html_compiler_boundary::run,
     },
     HostGateStep::ResultOnly {
         name: "raw-html-door",

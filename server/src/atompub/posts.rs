@@ -669,7 +669,7 @@ mod etag_tests {
     use common::test_support::{
         parse_post_body, parse_post_summary, parse_post_title, parse_utc_instant,
     };
-    use storage::{MockAudienceStorage, PostFormat, PostTag, PublishUpdate, RenderedHtml};
+    use storage::{MockAudienceStorage, PostFormat, PostTag, PublishUpdate};
 
     fn mk_tag(post_id: PostId, tag_id: TagId, slug: Tag, display: TagLabel) -> PostTag {
         PostTag {
@@ -693,7 +693,7 @@ mod etag_tests {
             slug: "my-post".parse().expect("parse slug"),
             body: parse_post_body("Body text."),
             format: PostFormat::Org,
-            rendered_html: RenderedHtml::from_trusted("<p>Body text.</p>"),
+            rendered_html: common::test_support::rendered_html("<p>Body text.</p>"),
             created_at: UtcInstant::from(t),
             updated_at: UtcInstant::from(t),
             published_at: Some(UtcInstant::from(t)),
@@ -751,7 +751,7 @@ mod etag_tests {
         p.created_at = UtcInstant::from(later);
         p.updated_at = UtcInstant::from(later);
         p.published_at = Some(UtcInstant::from(later));
-        p.rendered_html = RenderedHtml::from_trusted("<p>totally different</p>");
+        p.rendered_html = common::test_support::rendered_html("<p>totally different</p>");
         p.tags = vec![
             mk_tag(
                 PostId::from(999),

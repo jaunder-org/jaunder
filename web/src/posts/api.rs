@@ -15,7 +15,8 @@ use common::{
     post_body::PostBody,
     post_summary::PostSummary,
     post_title::PostTitle,
-    render::{PostFormat, RenderedHtml},
+    render::PostFormat,
+    revision_history::RevisionHistoryDetail,
     root_relative_url::RootRelativeUrl,
     slug::Slug,
     tag::TagLabel,
@@ -29,20 +30,13 @@ use common::seed::{AuthoredPost, Page, PageCursor};
 use crate::error::WebResult;
 use common::trace_field::TraceField;
 
-fn deserialize_revision_rendered_html<'de, D>(deserializer: D) -> Result<RenderedHtml, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::Deserialize as _;
-    // rendered-html-from-trusted:allow revision wire content was serialized by this server (#1055)
-    String::deserialize(deserializer).map(RenderedHtml::from_trusted)
-}
-
 // The audience-picker DTO and its converters live in `common::visibility` (beside
 // `AudienceBase`/`AudienceTarget`); the server fn bodies below use these two to
 // translate the wire `AudienceSelection` to/from the domain `AudienceTarget`s. The
 // calls are server-only (inside the macro-supplied boundary), so the import is
 // gated to match.
+#[cfg(feature = "server")]
+use common::revision_history::{RevisionHistoryAudience, RevisionHistoryTag};
 #[cfg(feature = "server")]
 use common::visibility::{
     AudienceTarget, audience_targets_or_public, targets_to_audience_selection,
@@ -360,44 +354,6 @@ pub struct CurrentPostHistory {
     pub published_at: Option<UtcInstant>,
     pub deleted_at: Option<UtcInstant>,
     pub lifecycle: RevisionLifecycle,
-}
-/// One normalized tag captured with a revision.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RevisionHistoryTag {
-    pub tag: common::tag::Tag,
-    pub display: TagLabel,
-}
-
-/// One captured audience target; `audience_id` is present only for `named`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RevisionHistoryAudience {
-    pub kind: String,
-    pub audience_id: Option<common::ids::AudienceId>,
-}
-
-/// The complete immutable scalar snapshot. Child collections stay explicit so
-/// the client cannot mistake current tag/audience/media state for historical
-/// state.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RevisionHistoryDetail {
-    pub revision_id: RevisionId,
-    pub post_id: PostId,
-    pub title: Option<PostTitle>,
-    pub slug: Slug,
-    pub body: PostBody,
-    pub format: PostFormat,
-    #[serde(deserialize_with = "deserialize_revision_rendered_html")]
-    // rendered-html-from-trusted:allow revision DTO rebuilds HTML serialized by Jaunder's own server (#1055)
-    pub rendered_html: RenderedHtml,
-    pub summary: Option<PostSummary>,
-    pub created_at: UtcInstant,
-    pub updated_at: UtcInstant,
-    pub published_at: Option<UtcInstant>,
-    pub deleted_at: Option<UtcInstant>,
-    pub captured_at: UtcInstant,
-    pub tags: Vec<RevisionHistoryTag>,
-    pub audiences: Vec<RevisionHistoryAudience>,
-    pub media: Vec<String>,
 }
 
 /// The current heading and immutable list for one owner's Post.
@@ -1057,25 +1013,22 @@ mod tests {
     use common::slug::Slug;
     use common::test_support::{parse_post_body, parse_username};
     use storage::candidate_slug;
-
     // A wire DTO's `rendered_html` survives a serde round-trip: `Serialize` writes
     // the raw string, and the `deserialize_with` trusted-rebuild reconstructs a
     // `RenderedHtml` (the type has no blanket `Deserialize`). Covers the sole wire
     // reconstruction door.
     #[test]
-    fn rendered_post_round_trips_rendered_html_via_trusted_rebuild() {
+    fn rendered_post_round_trips_rendered_html_via_server_rebuild() {
         use common::ids::PostId;
-        use common::render::RenderedHtml;
         use common::seed::RenderedPost;
         use common::test_support::{parse_root_relative_url, parse_utc_instant};
-
         let original = RenderedPost {
             post_id: PostId::from(1),
             username: parse_username("alice"),
             title: Some(common::test_support::parse_post_title("T")),
             summary: None,
             slug: "hello".parse::<Slug>().unwrap(),
-            rendered_html: RenderedHtml::from_trusted("<p>hi</p>"),
+            rendered_html: common::test_support::rendered_html("<p>hi</p>"),
             created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
             published_at: Some(parse_utc_instant("2026-01-01T00:00:00Z")),
             permalink: Some(parse_root_relative_url("/~alice/2026/01/01/hello")),
@@ -1204,7 +1157,7 @@ mod tests {
             ids::{PostId, UserId},
             slug::Slug,
         };
-        use storage::{PostFormat, PostRecord, RenderedHtml};
+        use storage::{PostFormat, PostRecord};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let slug = "titleless-note".parse::<Slug>().unwrap();
@@ -1218,7 +1171,7 @@ mod tests {
                 slug,
                 body: parse_post_body("Titleless note"),
                 format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>Titleless note</p>"),
+                rendered_html: common::test_support::rendered_html("<p>Titleless note</p>"),
                 created_at: common::time::UtcInstant::from(base_time),
                 updated_at: common::time::UtcInstant::from(base_time),
                 published_at: Some(common::time::UtcInstant::from(base_time)),
@@ -1247,7 +1200,7 @@ mod tests {
             ids::{PostId, UserId},
             slug::Slug,
         };
-        use storage::{PostFormat, PostRecord, RenderedHtml};
+        use storage::{PostFormat, PostRecord};
 
         let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
         let author_username = parse_username("author");
@@ -1262,7 +1215,7 @@ mod tests {
                 slug: slug.clone(),
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+                rendered_html: common::test_support::rendered_html("<p>body</p>"),
                 created_at: common::time::UtcInstant::from(base_time),
                 updated_at: common::time::UtcInstant::from(base_time),
                 published_at: None,
@@ -1285,7 +1238,7 @@ mod tests {
                 slug,
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+                rendered_html: common::test_support::rendered_html("<p>body</p>"),
                 created_at: common::time::UtcInstant::from(base_time),
                 updated_at: common::time::UtcInstant::from(base_time),
                 published_at: Some(common::time::UtcInstant::from(base_time)),
@@ -1314,6 +1267,7 @@ mod server_tests {
     use crate::test_support::auth_parts;
     use common::ids::{PostId, UserId};
     use common::pagination::PageSize;
+    use common::revision_history::{RevisionHistoryAudience, RevisionHistoryTag};
     use common::slug::Slug;
     use common::tag::TagLabel;
     use common::test_support::{parse_post_body, parse_tag_label, parse_username};
@@ -1324,9 +1278,8 @@ mod server_tests {
     use storage::{
         AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MockAudienceStorage,
         MockFeedEventStorage, MockPostStorage, PostFormat, PostRecord, PostRevisionMetadata,
-        PostRevisionPage, PostStorage, RenderedHtml, UpdatePostError,
+        PostRevisionPage, PostStorage, UpdatePostError,
     };
-
     fn owned_post(user_id: UserId) -> PostRecord {
         let now = UtcInstant::now();
         PostRecord {
@@ -1337,7 +1290,7 @@ mod server_tests {
             slug: "hello-world".parse::<Slug>().unwrap(),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
+            rendered_html: common::test_support::rendered_html("<p>body</p>"),
             created_at: now,
             updated_at: now,
             published_at: None,
@@ -1467,7 +1420,7 @@ mod server_tests {
                 slug: "snapshot".parse().expect("valid slug"),
                 body: parse_post_body("Snapshot body"),
                 format: PostFormat::Markdown,
-                rendered_html: RenderedHtml::from_trusted("<p>Snapshot body</p>"),
+                rendered_html: common::test_support::rendered_html("<p>Snapshot body</p>"),
                 summary: Some(parse_post_summary("Snapshot summary")),
                 created_at: at,
                 updated_at: at,
@@ -1507,7 +1460,7 @@ mod server_tests {
         );
         assert_eq!(
             detail.tags,
-            vec![super::RevisionHistoryTag {
+            vec![RevisionHistoryTag {
                 tag: parse_tag("rust"),
                 display: parse_tag_label("Rust")
             }]
@@ -1515,22 +1468,22 @@ mod server_tests {
         assert_eq!(
             detail.audiences,
             vec![
-                super::RevisionHistoryAudience {
+                RevisionHistoryAudience {
                     kind: "public".to_owned(),
                     audience_id: None
                 },
-                super::RevisionHistoryAudience {
+                RevisionHistoryAudience {
                     kind: "private".to_owned(),
                     audience_id: None
                 },
-                super::RevisionHistoryAudience {
+                RevisionHistoryAudience {
                     kind: "subscribers".to_owned(),
                     audience_id: None
                 },
-                super::RevisionHistoryAudience {
+                RevisionHistoryAudience {
                     kind: "named".to_owned(),
                     audience_id: Some(common::ids::AudienceId::from(9))
-                },
+                }
             ]
         );
         assert_eq!(detail.media, vec!["/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/photo.jpg".to_owned()]);

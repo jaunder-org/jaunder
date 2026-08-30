@@ -754,7 +754,7 @@ mod tests {
             slug,
             body,
             format,
-            rendered_html: storage::RenderedHtml::from_trusted("<p>html</p>"),
+            rendered_html: common::test_support::rendered_html("<p>html</p>"),
             created_at: UtcInstant::now(),
             updated_at: UtcInstant::now(),
             published_at,

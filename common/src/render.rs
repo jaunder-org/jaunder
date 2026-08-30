@@ -1,7 +1,7 @@
 //! Dual-target post format, rendered-HTML value, and naming normalization.
 //!
-//! Host-only rendering and sanitization live in `host::render`; this module
-//! retains the values and pure transformations reached by CSR and host callers.
+//! Host-only sanitization lives here behind the optional `sanitize` feature;
+//! pure transformations remain available to both CSR and host callers.
 
 use crate::post_summary::truncate_at_text_boundary;
 use std::fmt;
@@ -52,59 +52,105 @@ pub enum PostFormat {
 /// view sink accepts only `RenderedHtml`, so a raw `String`/body cannot reach it
 /// by accident.
 ///
-/// The host-owned [`host::render::sanitize`] function **establishes** this
-/// invariant by scrubbing outside input. [`RenderedHtml::from_trusted`]
-/// **inherits** it when rebuilding output already sanitized and round-tripped
-/// through our own storage or wire. The `rendered-html-from-trusted` static
-/// check confines that reconstruction door to reviewed call sites, so an inbound
-/// path cannot quietly substitute it for host sanitization.
+/// The feature-gated [`sanitize`] function is the only public production door:
+/// it establishes this invariant by scrubbing outside input. Common-private `SQLx`
+/// decoding and field-specific server DTO deserialization reconstruct persisted
+/// Jaunder-owned representations without re-sanitizing them. Exact fixtures use
+/// [`crate::test_support::rendered_html`] only when that test-only surface is
+/// enabled.
 ///
-/// Reading *out* is convenient —
-/// `Display`, `AsRef<str>`, `Borrow<str>`, `Deref<Target = str>`, `PartialEq<str>`,
-/// and `From<RenderedHtml> for String` (an *outbound* move of the inner) — but there
-/// is deliberately no *inbound constructor*: no `From<String>`/`TryFrom`/`FromStr`/
-/// `Deserialize`, so a raw `String` can never become a `RenderedHtml` (deref coercion
-/// is one-way — it reads out, never in).
+/// Reading *out* is convenient — `Display`, `AsRef<str>`, `Borrow<str>`,
+/// `Deref<Target = str>`, `PartialEq<str>`, and `From<RenderedHtml> for String`
+/// (an *outbound* move of the inner) — but there is deliberately no public
+/// *inbound constructor*: no tuple syntax, `From<String>`, `TryFrom`, `FromStr`,
+/// `Deserialize`, or trusted-string constructor.
 ///
-/// The positive companion shows the identical fixture compiles — the path resolves
-/// and a trusted door does produce one — so each `compile_fail` below fails for the
-/// missing inbound constructor, not for a moved path. (Fixture lines are hidden
-/// with `#`.)
-///
+/// Positive companion: the public type resolves and remains readable.
 /// ```
-/// use common::render::RenderedHtml;
-/// let html = RenderedHtml::from_trusted("<p>x</p>");
-/// let _read: &str = html.as_ref();
+/// # use common::render::RenderedHtml;
+/// fn reads(html: &RenderedHtml) -> &str {
+///     html.as_ref()
+/// }
 /// ```
 ///
-/// No public constructor:
+/// No public tuple construction:
 /// ```compile_fail
 /// # use common::render::RenderedHtml;
 /// let _ = RenderedHtml("<p>x</p>".to_string()); // private field
 /// ```
 ///
-/// No inbound `From<String>` (only the outbound `From<RenderedHtml> for String`):
+/// No public raw-string conversion (only the outbound `From<RenderedHtml> for
+/// String`):
 /// ```compile_fail
 /// # use common::render::RenderedHtml;
 /// let _: RenderedHtml = "<p>x</p>".to_string().into();
 /// ```
+///
+/// No blanket deserialization:
+/// ```compile_fail
+/// # use common::render::RenderedHtml;
+/// let _: RenderedHtml = serde_json::from_str("\"<p>x</p>\"").unwrap();
+/// ```
+///
 #[derive(Clone, Debug, PartialEq, Eq, macros::SqlxBridge)]
-pub struct RenderedHtml(String);
-impl RenderedHtml {
-    /// Rebuild a `RenderedHtml` already sanitized and round-tripped through our
-    /// own store or wire. This door **inherits** the invariant rather than
-    /// establishing it; outside input must use [`host::render::sanitize`].
-    ///
-    /// The `rendered-html-from-trusted` static check confines this door to
-    /// reviewed call sites, so a new inbound path cannot quietly substitute it
-    /// for host sanitization.
-    ///
-    /// Takes `impl Into<String>` so callers (esp. fixtures) don't need `.to_string()`.
-    #[must_use]
-    // rendered-html-from-trusted:allow the door's own definition; the gate pins its uses
-    pub fn from_trusted(html: impl Into<String>) -> Self {
-        Self(html.into())
-    }
+pub struct RenderedHtml(pub(crate) String);
+
+/// The single allowlist every [`sanitize`] call scrubs against. It is ammonia's
+/// audited default, widened only to retain fenced-code language markers.
+///
+/// Re-admitting `class` without narrowing its values would let attacker-supplied
+/// markup borrow application CSS. Only `language-*` tokens survive on `<pre>` and
+/// `<code>`; expanding this policy is a security decision.
+#[cfg(feature = "sanitize")]
+static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::LazyLock::new(|| {
+    let mut builder = ammonia::Builder::default();
+    builder.add_tag_attributes("code", ["class"]);
+    builder.add_tag_attributes("pre", ["class"]);
+    builder.attribute_filter(|_element, attribute, value| {
+        if attribute != "class" {
+            return Some(value.into());
+        }
+        // Only reachable for `pre`/`code`: ammonia runs this filter solely for
+        // allowlisted tag/attribute pairs, and `class` is permitted nowhere else.
+        let kept = value
+            .split_whitespace()
+            .filter(|token| token.starts_with("language-"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        (!kept.is_empty()).then_some(kept.into())
+    });
+    builder
+});
+
+/// Sanitizes untrusted HTML into a [`RenderedHtml`].
+///
+/// This is the only public production door that establishes the type's safety
+/// invariant. It is feature-gated because client-side builds do not process
+/// outside HTML and must not acquire the sanitizer dependency.
+#[cfg(feature = "sanitize")]
+#[must_use]
+pub fn sanitize(raw: &str) -> RenderedHtml {
+    RenderedHtml(SANITIZER.clean(raw).to_string())
+}
+/// The sanitizer's complete permitted `(element, attribute)` surface.
+///
+/// This test-only inspection seam lets host media-reference coverage classify
+/// common's policy without exposing a mutable builder or allocating in production.
+#[cfg(all(feature = "sanitize", any(test, feature = "test-support")))]
+#[must_use]
+pub fn sanitizer_permitted_attribute_pairs() -> Vec<(&'static str, &'static str)> {
+    let tags = SANITIZER.clone_tags();
+    let generic_attributes = SANITIZER.clone_generic_attributes();
+    let tag_attributes = SANITIZER.clone_tag_attributes();
+
+    tags.iter()
+        .flat_map(|tag| generic_attributes.iter().map(move |attr| (*tag, *attr)))
+        .chain(
+            tag_attributes
+                .iter()
+                .flat_map(|(tag, attrs)| attrs.iter().map(move |attr| (*tag, *attr))),
+        )
+        .collect()
 }
 
 impl fmt::Display for RenderedHtml {
@@ -129,27 +175,26 @@ impl std::ops::Deref for RenderedHtml {
     }
 }
 
-// Reading out is always safe; deliberately NO `Deserialize` — the wire uses a
-// `deserialize_with` helper that routes through `from_trusted`.
+// Reading out is always safe; deliberately NO `Deserialize` on the type itself.
+// Server-authored wire DTOs opt into the field-specific helper below instead.
 impl serde::Serialize for RenderedHtml {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.0)
     }
 }
-
-/// Deserializes a wire `String` into a `RenderedHtml` via `from_trusted` — the
-/// deserialize counterpart to `RenderedHtml`'s deliberate lack of a `Deserialize`
-/// impl (it is server-rendered, trusted output; see the note above). Used by the
-/// seed DTOs' `#[serde(deserialize_with = ...)]`.
+/// Rebuilds a server-authored rendered-HTML field during common-owned DTO
+/// deserialization.
+///
+/// This field-specific serde hook deliberately does not make `RenderedHtml`
+/// generally deserializable: only common wire models opt into it. It reconstructs
+/// without sanitizing or rewriting the rendered bytes.
 pub(crate) fn deserialize_rendered_html<'de, D>(deserializer: D) -> Result<RenderedHtml, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     use serde::Deserialize as _;
-    // rendered-html-from-trusted:allow rebuilds RenderedHtml from a wire DTO field our own server serialized (#445)
-    String::deserialize(deserializer).map(RenderedHtml::from_trusted)
+    String::deserialize(deserializer).map(RenderedHtml)
 }
-
 // The rest of the StrNewtype read-out trailer (#502), hand-written to preserve the
 // carve-outs: `Borrow`/`PartialEq` are read-only, and `From<Self> for String` moves the
 // inner out (it does not turn a `String` *into* a `RenderedHtml`), so the trust boundary
@@ -447,21 +492,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rendered_html_test_fixture_preserves_exact_bytes() {
+        let raw = "<script>fixture markup</script>";
+        assert_eq!(crate::test_support::rendered_html(raw).as_ref(), raw);
+    }
+
+    // The sanitizer is a public feature-gated seam. Assert only its observable
+    // policy, not ammonia's incidental escaping and attribute serialization.
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_removes_active_markup() {
+        let html = sanitize(r#"<p>safe</p><script>alert(1)</script><img src="x" onerror="x">"#);
+        assert!(!html.contains("<script"), "{html}");
+        assert!(!html.contains("alert(1)"), "{html}");
+        assert!(!html.contains("onerror"), "{html}");
+        assert!(html.contains("<p>safe</p>"), "{html}");
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_preserves_allowed_safe_markup() {
+        let html = sanitize(
+            "<h2>Heading</h2><p><em>em</em> <strong>strong</strong></p>\
+             <ul><li>item</li></ul>\
+             <table><thead><tr><th>h</th></tr></thead>\
+             <tbody><tr><td>c</td></tr></tbody></table>\
+             <blockquote><p>quoted</p></blockquote>\
+             <a href=\"https://example.com\">link</a>\
+             <img src=\"https://example.com/a.png\">",
+        );
+        for expected in [
+            "<h2>",
+            "<em>",
+            "<strong>",
+            "<ul>",
+            "<li>",
+            "<table>",
+            "<thead>",
+            "<th>",
+            "<td>",
+            "<blockquote>",
+            "https://example.com",
+            "<a ",
+            "<img",
+        ] {
+            assert!(
+                html.contains(expected),
+                "{expected} was stripped from: {html}"
+            );
+        }
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_keeps_only_language_classes_on_code_blocks() {
+        let html = sanitize(r#"<pre><code class="language-rust j-anon-only">x</code></pre>"#);
+        assert!(html.contains("language-rust"), "{html}");
+        assert!(!html.contains("j-anon-only"), "{html}");
+
+        let non_code = sanitize(r#"<p class="j-anon-only">x</p>"#);
+        assert!(!non_code.contains("j-anon-only"), "{non_code}");
+
+        let no_language = sanitize(r#"<code class="j-anon-only">x</code>"#);
+        assert!(!no_language.contains("j-anon-only"), "{no_language}");
+        assert!(!no_language.contains("class"), "{no_language}");
+    }
+
+    #[test]
     fn rendered_html_display_and_as_ref_expose_inner() {
-        let h = RenderedHtml::from_trusted("<p>hi</p>");
+        let h = crate::test_support::rendered_html("<p>hi</p>");
         assert_eq!(h.to_string(), "<p>hi</p>");
         assert_eq!(h.as_ref(), "<p>hi</p>");
     }
 
     #[test]
     fn rendered_html_serializes_as_the_raw_string() {
-        let h = RenderedHtml::from_trusted("<b>x</b>");
+        let h = crate::test_support::rendered_html("<b>x</b>");
         assert_eq!(serde_json::to_string(&h).unwrap(), "\"<b>x</b>\"");
     }
 
     #[test]
     fn rendered_html_into_string_moves_inner() {
-        let h = RenderedHtml::from_trusted("<p>move me</p>");
+        let h = crate::test_support::rendered_html("<p>move me</p>");
         let s: String = h.into();
         assert_eq!(s, "<p>move me</p>");
     }
@@ -471,13 +583,13 @@ mod tests {
         fn takes_borrow<T: std::borrow::Borrow<str>>(t: &T) -> &str {
             t.borrow()
         }
-        let h = RenderedHtml::from_trusted("<p>b</p>");
+        let h = crate::test_support::rendered_html("<p>b</p>");
         assert_eq!(takes_borrow(&h), "<p>b</p>");
     }
 
     #[test]
     fn rendered_html_partial_eq_str_and_ref() {
-        let h = RenderedHtml::from_trusted("<p>x</p>");
+        let h = crate::test_support::rendered_html("<p>x</p>");
         assert_eq!(h, "<p>x</p>"); // PartialEq<&str>
         assert_eq!(h, *"<p>x</p>"); // PartialEq<str>
         assert!(h != "<p>y</p>"); // PartialEq<&str>, unequal

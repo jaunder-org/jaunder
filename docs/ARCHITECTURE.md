@@ -47,17 +47,17 @@ application domain types. `web` and `csr` depend on `client`, never the reverse
 from all three, in `macros`
 ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).
 
-| Crate          | Target      | Responsibility                                                                                                                                                                                                                                                                                                                                                          |
-| -------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `common`       | host + wasm | Dual-target domain types and operations reached by CSR or another dual-target consumer: validated newtypes including `ProfferedPassword`, `RenderedHtml`, `PostFormat`, ETag, Org normalization, croner, `BackupSchedule`, and the Syndication Feed grammar (`FeedFormat`, `FeedSurface`, `canonicalize`).                                                              |
-| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).                                                                                                                                                                                                                         |
-| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                                                                                                                                                                                          |
-| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                                                                                                                                                                                         |
-| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                                                                                                                                                                                           |
-| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, `Password`/`StoredPasswordHash` and hash operations, render/sanitize/`RenderOutput`/media extraction/ETag construction, AtomPub wholesale, host-only Syndication Feed machinery, `SiteConfigKey`/`UserConfigKey`, invites, process telemetry, metrics, and SMTP relay configuration. |
-| `client`       | host + wasm | Browser infrastructure: `localStorage`, dialogs, DOM/file-upload glue, reactive revalidation, CSR performance marks, and bounded client telemetry ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)).                                                                                                                                                                |
-| `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                                                                                                                                                                                        |
-| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                                                                                                                                                                                      |
+| Crate          | Target      | Responsibility                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `common`       | host + wasm | Dual-target domain types and operations reached by CSR or another dual-target consumer: validated newtypes including `ProfferedPassword`, `RenderedHtml`, `PostFormat`, ETag, Org normalization, croner, `BackupSchedule`, and the Syndication Feed grammar (`FeedFormat`, `FeedSurface`, `canonicalize`); its optional host-only `sanitize` capability establishes the `RenderedHtml` invariant without entering the CSR closure. |
+| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).                                                                                                                                                                                                                                                                                    |
+| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                                                                                                                                                                                                                                                     |
+| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                                                                                                                                                                                                                                                    |
+| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                                                                                                                                                                                                                                                      |
+| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, `Password`/`StoredPasswordHash` and hash operations, rendering/`RenderOutput`/media extraction/ETag construction, AtomPub wholesale, host-only Syndication Feed machinery, `SiteConfigKey`/`UserConfigKey`, invites, process telemetry, metrics, and SMTP relay configuration.                                                                  |
+| `client`       | host + wasm | Browser infrastructure: `localStorage`, dialogs, DOM/file-upload glue, reactive revalidation, CSR performance marks, and bounded client telemetry ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)).                                                                                                                                                                                                                           |
+| `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                                                                                                                                                                                                                                                   |
+| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                                                                                                                                                                                                                                                 |
 
 Every `client` module that touches the browser carries
 `#[cfg(target_arch = "wasm32")]`, so a host build of the crate is an
@@ -394,24 +394,22 @@ its canonical result, with module-qualified host free-function ETag construction
 and SQLite/PostgreSQL checking final slug/format/time inside the write
 transaction before commit or revision creation.
 
-**`RenderedHtml` guarantees "contains no active markup", through a host
-sanitization boundary** ([ADR-0079](adr/0079-rendered-html-sanitization.md)).
-Host-owned module-qualified rendering and sanitization free functions establish
-the invariant with one module-level `ammonia` `SANITIZER`. The private field
-prevents direct construction: the host sanitizer is the establishment door, and
-outside-module minting is possible only through the explicitly gate-policed
-trusted reconstruction door. There is no `Deserialize` (seed DTOs go through
-`deserialize_with`), no `From<String>`, no `Default`, and no `pub(crate)`
-constructor. The `sqlx::Decode` from the derived `#[derive(SqlxBridge)]` bridge
-is the one in-module path that fills the field without a public construction
-door: a `rendered_html` column decodes straight into the type, like every other
-domain column, and deliberately does **not** sanitize on read
-([ADR-0123](adr/0123-rendered-html-storage-decode.md)). Its **blessing risk is
-real and accepted**: decoding some other text column into this type would bless
-it too. The `rendered-html-from-trusted` check covers trusted reconstruction
-uses and direct production struct fields typed `RenderedHtml`, including
-`FromRow` decode fields, each requiring a local
-`rendered-html-from-trusted:allow <reason>` marker
+**`RenderedHtml` guarantees "contains no active markup", through a common-owned,
+host-only sanitization boundary**
+([ADR-0079](adr/0079-rendered-html-sanitization.md)). `common::render::sanitize`
+is the only public production API that establishes the invariant; the optional
+`sanitize` feature keeps `ammonia` out of CSR/wasm builds. Its field is
+crate-private: ordinary application crates have no raw constructor, conversion,
+blanket `Deserialize`, or trusted-string rebuild door. Common-private SQLx
+decode and field-specific seed/revision DTO deserialization reconstruct the
+field directly from Jaunder-owned representations, without re-sanitizing,
+copying, or changing stored/rendered bytes. Exact fixtures are available only
+through `common::test_support` under `cfg(test)` or `test-support`. The
+compiler-backed `rendered-html-compiler-boundary` step uses an isolated
+downstream dependency to prove raw construction and that fixture API remain
+unavailable in production. SQLx decoding's **wrong-column blessing risk is real
+and accepted**: a reviewer must ensure every `RenderedHtml` decode is from the
+rendered-HTML column; no spelling marker enforces that judgement
 ([ADR-0123](adr/0123-rendered-html-storage-decode.md)). `RenderedHtml` stays
 common because dual-target consumers reach it; ammonia stays host-only.
 
@@ -606,9 +604,8 @@ holds fetched remote content.
   sources", "when an update is received" — so the local `post_revisions`
   snapshot above implements nothing it decided, despite the resemblance.
 - **Sanitization of foreign HTML** on arrival
-  ([ADR-0079](adr/0079-rendered-html-sanitization.md)): host-owned
-  module-qualified sanitization establishes the invariant before the existing
-  gate-policed trusted reconstruction seam mints `RenderedHtml`; no inbound
+  ([ADR-0079](adr/0079-rendered-html-sanitization.md)):
+  `common::render::sanitize` establishes the invariant on the host; no inbound
   producer exists yet.
 - **Visibility Layers B/C**
   ([ADR-0020](adr/0020-content-visibility-and-subscription-model.md)):
@@ -1050,12 +1047,10 @@ Markup is built with **maud's `html!`**
 is carried by one crate-local newtype, `web::html::Markup` (`web/src/html.rs`),
 which shadows `maud::Markup` inside `web`. The single raw door is
 `Markup::from_rendered_html`, which takes a `&RenderedHtml`
-(`web/src/html.rs:59`) so the sanitization invariant is what opens it. Three
-xtask gates gate the area — `html_sink_check`, `raw_html_door_check`, and
-`rendered_html_from_trusted_check` — all three read inside macro bodies, and
-`rendered_html_from_trusted_check` also enumerates direct `RenderedHtml` fields,
-so a hand-built `String` cannot reach a sink unescaped and a new trust-carrying
-field cannot appear without a local review marker.
+(`web/src/html.rs:59`) so the sanitization invariant is what opens it. The
+`html-sink` and `raw-html-door` gates read inside macro bodies; compiler privacy
+prevents a hand-built `String` from becoming `RenderedHtml` before that raw
+door.
 
 The authenticated owner stays flash-free by _enhancement_
 ([ADR-0044](adr/0044-authenticated-owner-flash-free-enhancement.md)): an
@@ -1076,6 +1071,31 @@ and `server` (the server-side data-API build; renamed from `ssr`)
 ([ADR-0041](adr/0041-public-projector-and-csr-client.md)) — declared at
 `web/Cargo.toml:50-64`. The `csr` crate is the wasm entry point and owns its own
 `mount()`/`main()` (`csr/src/lib.rs:34,54`); there is no `web::mount_csr`.
+
+Cargo features select capabilities; target `cfg`s select platform code. Features
+unify within one resolved Cargo graph, so a downstream or dev dependency may
+activate a capability for every copy of that crate in that build. The production
+boundary is therefore the resolved target graph, not one manifest viewed alone.
+
+| Capability                                     | Enabled by                                                                                           | Build where it belongs        | Purpose                                                                                 | Enforcement                                                                                                             |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `web/csr` → `client/csr`                       | `csr`                                                                                                | wasm                          | Browser UI and Leptos client plumbing.                                                  | CSR build, wasm clippy/tests, size gate.                                                                                |
+| `web/server`                                   | `server`                                                                                             | host                          | Server-function bodies and their Axum/storage dependencies; this is not SSR.            | Host clippy/tests and server-function gates.                                                                            |
+| `common/sanitize`                              | `host`                                                                                               | host production               | Adds `ammonia`; establishes the `RenderedHtml` invariant.                               | CSR resolved graph plus wasm build/budget; `rendered-html-compiler-boundary` checks the production constructor surface. |
+| `common/sqlx`                                  | `storage`                                                                                            | host production               | Adds common-owned `SQLx` bridges required by trait ownership.                           | `common-host-target-closure` rejects it in CSR.                                                                         |
+| `host/sqlx`, `storage/sqlx`                    | Their default features                                                                               | host production               | Enable derive-generated bridge impls; their `SQLx` dependencies are already host-owned. | Host clippy and dual-backend tests.                                                                                     |
+| `common/{test-support,test-utils}`             | Downstream dev-dependencies                                                                          | tests only                    | Expose shared fixtures and cross-crate test hooks.                                      | Consumer test builds; compiler boundary keeps fixtures out of default production dependencies.                          |
+| `host/{test-support,test-utils,cheap-kdf}`     | `storage`, `web`, and `server` dev-dependencies                                                      | tests only                    | Forward common fixtures and enable host test hooks or cheap password hashing.           | Host and consumer test builds; optimized-build `cheap-kdf` compile guard.                                               |
+| `storage/{test-support,test-utils,seed-posts}` | Integration-test dev-dependencies; the `test-support` binary enables only `seed-posts` in production | host tests or the seed binary | Provide the dual-backend harness, mocks/hooks, and the lightweight post-seeding recipe. | `test-local`, backend-pattern gate, and seed-binary smoke tests.                                                        |
+
+`test-support` is overloaded only lexically: the workspace **crate** is the
+out-of-process seed/capture executable, while each crate's `test-support`
+**feature** exposes that crate's in-process fixtures to downstream tests.
+`cfg(test)` exposes fixtures to a crate's own tests; the feature is needed
+across a crate boundary. `common-host-target-closure`, the host/wasm compile
+lanes, and the isolated `rendered-html-compiler-boundary` check the load-bearing
+production boundaries; test gates exercise the explicitly enabled test surfaces.
+
 `cargo xtask build-csr` compiles `csr` to wasm and hands the artifact to
 `devtool csr-bundle` (wasm-bindgen + `wasm-opt -Oz`), landing
 `jaunder.{js,wasm}` in `target/site/pkg/`
@@ -2510,30 +2530,30 @@ definitions through `devtool check --all --sandbox-cargo` with
 workspace-specific offline Cargo homes. `xtask-fmt` and `xtask-clippy` remain
 native host checks because `xtask/` is excluded from the flake source.
 
-| Step                                                       | Guards                                                                                                                                                           |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `identifier-collisions`                                    | duplicate ADR/migration number prefixes, migration parity                                                                                                        |
-| `adr-format`, `adr-readme-parity`                          | ADR front-matter shape and the README table                                                                                                                      |
-| `adr-view-parity`                                          | every accepted ADR is cited in this document                                                                                                                     |
-| `doc-links`                                                | intra-doc link targets                                                                                                                                           |
-| `flow-docs`                                                | typed CSR route/endpoint/matrix declarations in `docs/flows/`; one flow owner per endpoint; checked snapshot status                                              |
-| `test-backend-pattern`                                     | dual-backend storage test shape                                                                                                                                  |
-| `server-fn-registrar`                                      | every `web` `#[server]` fn is in the explicit test registrar                                                                                                     |
-| `server-fn-tracing`                                        | each server fn's instrumentation                                                                                                                                 |
-| `server-fn-coverage`                                       | static lane of the flow-coverage snapshot                                                                                                                        |
-| `traced-context`                                           | context propagation                                                                                                                                              |
-| `proffered-secret`                                         | inbound-secret directional boundary                                                                                                                              |
-| `ast-grep-tests`                                           | committed native ast-grep rule fixtures                                                                                                                          |
-| `no-full-reload`                                           | no-allowlist ast-grep repository scan: Rust in `web/src` and `client/src` must not chain `replace`, `assign`, `reload`, or `set_href` from `.location()`         |
-| `e2e-goto-wrapper`, `e2e-scaffold`                         | e2e harness shape; no committed `e2eSalt`                                                                                                                        |
-| `target-arch-placement`                                    | host/wasm split at module wiring only                                                                                                                            |
-| `lint-suppression`                                         | reviewed Rust lint expectation markers; no `#[allow]`                                                                                                            |
-| `thin-components`                                          | `#[component]` control-flow budget                                                                                                                               |
-| `sqlx-newtype-bind`, `sqlx-newtype-decode`                 | newtypes at the SQL boundary                                                                                                                                     |
-| `doctest-fences`                                           | the doctest population Nix cannot reach                                                                                                                          |
-| `rendered-html-from-trusted`, `raw-html-door`, `html-sink` | the three XSS doors                                                                                                                                              |
-| `xlang-literal`                                            | Rust/TypeScript literal agreement                                                                                                                                |
-| `xtask-tests`, `tools-test`                                | auxiliary workspace unit tests the application coverage/Nix test gates do not execute ([workspace boundaries](adr/0141-cargo-workspace-execution-boundaries.md)) |
+| Step                                                            | Guards                                                                                                                                                           |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `identifier-collisions`                                         | duplicate ADR/migration number prefixes, migration parity                                                                                                        |
+| `adr-format`, `adr-readme-parity`                               | ADR front-matter shape and the README table                                                                                                                      |
+| `adr-view-parity`                                               | every accepted ADR is cited in this document                                                                                                                     |
+| `doc-links`                                                     | intra-doc link targets                                                                                                                                           |
+| `flow-docs`                                                     | typed CSR route/endpoint/matrix declarations in `docs/flows/`; one flow owner per endpoint; checked snapshot status                                              |
+| `test-backend-pattern`                                          | dual-backend storage test shape                                                                                                                                  |
+| `server-fn-registrar`                                           | every `web` `#[server]` fn is in the explicit test registrar                                                                                                     |
+| `server-fn-tracing`                                             | each server fn's instrumentation                                                                                                                                 |
+| `server-fn-coverage`                                            | static lane of the flow-coverage snapshot                                                                                                                        |
+| `traced-context`                                                | context propagation                                                                                                                                              |
+| `proffered-secret`                                              | inbound-secret directional boundary                                                                                                                              |
+| `ast-grep-tests`                                                | committed native ast-grep rule fixtures                                                                                                                          |
+| `no-full-reload`                                                | no-allowlist ast-grep repository scan: Rust in `web/src` and `client/src` must not chain `replace`, `assign`, `reload`, or `set_href` from `.location()`         |
+| `e2e-goto-wrapper`, `e2e-scaffold`                              | e2e harness shape; no committed `e2eSalt`                                                                                                                        |
+| `target-arch-placement`                                         | host/wasm split at module wiring only                                                                                                                            |
+| `lint-suppression`                                              | reviewed Rust lint expectation markers; no `#[allow]`                                                                                                            |
+| `thin-components`                                               | `#[component]` control-flow budget                                                                                                                               |
+| `sqlx-newtype-bind`, `sqlx-newtype-decode`                      | newtypes at the SQL boundary                                                                                                                                     |
+| `doctest-fences`                                                | the doctest population Nix cannot reach                                                                                                                          |
+| `rendered-html-compiler-boundary`, `raw-html-door`, `html-sink` | compiler privacy for trusted HTML plus the two XSS DOM doors                                                                                                     |
+| `xlang-literal`                                                 | Rust/TypeScript literal agreement                                                                                                                                |
+| `xtask-tests`, `tools-test`                                     | auxiliary workspace unit tests the application coverage/Nix test gates do not execute ([workspace boundaries](adr/0141-cargo-workspace-execution-boundaries.md)) |
 
 ### How a gate is built
 
@@ -2780,13 +2800,15 @@ reached by CSR or another dual-target consumer, while `host` owns the unconsumed
 code. `client` is the browser-infrastructure peer
 ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). `host` has no runtime
 workspace dependency other than `common`; `macros` is its existing build-time
-exception. The optional `common/sqlx` bridge is instead the sole
-ownership-forced exception to `common`'s otherwise dual-target dependency
-purity, required by orphan-rule trait ownership. External dependencies remain
-allowed. A cargo-metadata gate enforces that host invariant and that the exact
-target/feature-resolved CSR closure excludes `host`, `storage`, `server`, and
-`common/sqlx`; the existing wasm build proves that closure compiles. The graph
-check cannot classify semantics, so review owns the host-only judgement. The
+exception. Two optional `common` capabilities are deliberate host-only
+exceptions to its otherwise dual-target dependency purity: `common/sqlx`,
+required by orphan-rule trait ownership, and `common/sanitize`, which keeps
+`ammonia` behind the host rendering path. External dependencies remain allowed.
+A cargo-metadata gate enforces the host invariant and rejects `common/sqlx` in
+the exact target/feature-resolved CSR closure. That closure is also expected to
+omit `common/sanitize` and `ammonia`; the wasm build and size gate exercise the
+resulting browser artifact. The graph gate cannot classify an external
+dependency's semantics, so review owns keeping sanitization host-only. The
 `macros` proc-macro crate is orthogonal to that runtime trio — build-time
 tooling compiled for the compiler host, home to all workspace proc-macros
 including the three newtype derives `StrNewtype`, `IdNewtype` and `NumNewtype`

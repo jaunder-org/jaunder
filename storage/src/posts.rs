@@ -65,7 +65,6 @@ pub struct PostRecord {
     pub format: PostFormat,
     /// HTML produced by `render()` from the `body`, sanitized at that mint point —
     /// safe to emit unescaped (#445).
-    // rendered-html-from-trusted:allow post read model carries render-sanitized HTML from storage (#701)
     pub rendered_html: RenderedHtml,
     /// When the post was first created.
     pub created_at: UtcInstant,
@@ -152,7 +151,6 @@ where
         let slug = row.try_get::<Slug, _>("slug")?;
         let body = row.try_get::<PostBody, _>("body")?;
         let format = row.try_get::<PostFormat, _>("format")?;
-        // rendered-html-from-trusted:allow post row decodes render-sanitized HTML from rendered_html (#619)
         let rendered_html = row.try_get::<RenderedHtml, _>("rendered_html")?;
         let created_at = row.try_get::<UtcInstant, _>("created_at")?;
         let updated_at = row.try_get::<UtcInstant, _>("updated_at")?;
@@ -203,7 +201,6 @@ pub struct PostRevisionRecord {
     /// Interpretation of the authored source at capture time.
     pub format: PostFormat,
     /// Sanitized rendered representation produced from the captured source.
-    // rendered-html-from-trusted:allow revision read model carries render-sanitized HTML from storage (#1055)
     pub rendered_html: RenderedHtml,
     /// Optional authored summary at capture time.
     pub summary: Option<PostSummary>,
@@ -576,7 +573,6 @@ pub(crate) struct PostBookkeepingRow {
     pub slug: Slug,
     pub body: PostBody,
     pub format: PostFormat,
-    // rendered-html-from-trusted:allow bookkeeping row carries render-sanitized HTML from storage (#1055)
     pub rendered_html: RenderedHtml,
     pub summary: Option<PostSummary>,
     pub published_at: Option<UtcInstant>,
@@ -1703,7 +1699,6 @@ struct RevisionDetailRow {
     slug: Slug,
     body: PostBody,
     format: PostFormat,
-    // rendered-html-from-trusted:allow revision SQL row carries render-sanitized HTML from storage (#1055)
     rendered_html: RenderedHtml,
     summary: Option<PostSummary>,
     created_at: UtcInstant,
@@ -1755,7 +1750,6 @@ where
             slug: row.try_get::<Slug, _>("slug")?,
             body: row.try_get::<PostBody, _>("body")?,
             format: row.try_get::<PostFormat, _>("format")?,
-            // rendered-html-from-trusted:allow revision decoder reads render-sanitized HTML from storage (#1055)
             rendered_html: row.try_get::<RenderedHtml, _>("rendered_html")?,
             summary: row.try_get::<Option<PostSummary>, _>("summary")?,
             created_at: row.try_get::<UtcInstant, _>("created_at")?,
@@ -4733,7 +4727,6 @@ mod tests {
         slug: Slug,
         body: PostBody,
         format: PostFormat,
-        // rendered-html-from-trusted:allow revision assertion row carries render-sanitized HTML from storage (#1055)
         rendered_html: RenderedHtml,
         summary: Option<PostSummary>,
         created_at: UtcInstant,
@@ -4755,21 +4748,14 @@ mod tests {
                     slug: row.try_get::<Slug, _>("slug").unwrap(),
                     body: row.try_get::<PostBody, _>("body").unwrap(),
                     format: row.try_get::<PostFormat, _>("format").unwrap(),
-                    // rendered-html-from-trusted:allow revision test decodes render-sanitized HTML from storage (#1055)
-                    rendered_html: row
-                        .try_get::<RenderedHtml, _>("rendered_html")
-                        .unwrap(),
-                    summary: row
-                        .try_get::<Option<PostSummary>, _>("summary")
-                        .unwrap(),
+                    rendered_html: row.try_get::<RenderedHtml, _>("rendered_html").unwrap(),
+                    summary: row.try_get::<Option<PostSummary>, _>("summary").unwrap(),
                     created_at: row.try_get::<UtcInstant, _>("created_at").unwrap(),
                     updated_at: row.try_get::<UtcInstant, _>("updated_at").unwrap(),
                     published_at: row
                         .try_get::<Option<UtcInstant>, _>("published_at")
                         .unwrap(),
-                    deleted_at: row
-                        .try_get::<Option<UtcInstant>, _>("deleted_at")
-                        .unwrap(),
+                    deleted_at: row.try_get::<Option<UtcInstant>, _>("deleted_at").unwrap(),
                     captured_at: row.try_get::<UtcInstant, _>("captured_at").unwrap(),
                 }
             }};
@@ -6008,7 +5994,7 @@ mod tests {
                 "\n\n   The first non-empty line of the body is here. \n\n Another line.",
             ),
             format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted(
+            rendered_html: common::test_support::rendered_html(
                 "<p>The first non-empty line of the body is here.</p>",
             ),
             created_at: UtcInstant::now(),
@@ -6040,7 +6026,7 @@ mod tests {
             slug: parse_slug("hello-world"),
             body: parse_post_body("My body"),
             format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
+            rendered_html: common::test_support::rendered_html("<p>My body</p>"),
             created_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
             updated_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
             published_at: Some(UtcInstant::from(
@@ -6064,7 +6050,7 @@ mod tests {
             slug: parse_slug("hello-world"),
             body: parse_post_body("My body"),
             format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
+            rendered_html: common::test_support::rendered_html("<p>My body</p>"),
             created_at: UtcInstant::now(),
             updated_at: UtcInstant::now(),
             published_at: None,

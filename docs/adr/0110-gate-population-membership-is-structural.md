@@ -15,26 +15,11 @@ exemptions in-source markers.
 Neither says how a gate decides **who is in the population in the first place**,
 and #778 showed that the omission matters.
 
-`rendered-html-from-trusted` (#398) guards `RenderedHtml::from_trusted`, the
-door that lets HTML reach the DOM unescaped. It matched the bare leaf ident
-`from_trusted`, so its population held every `from_trusted` in policed code —
-including `ContentType::from_trusted`, which mints a media type and can never
-reach the unescaped sink. Before #778 a qualifier-keyed `EXEMPT_QUALIFIERS` list
-absorbed that. #778 deleted the list, correctly: it granted exemptions by
-pattern, and it failed **open** on an aliased qualifier
-(`use RenderedHtml as ContentType`).
-
-But #778 read the qualifier check as an _exemption mechanism_ and removed it,
-leaving the over-approximation in place. The cost landed on the codebase: four
-marker comments whose entire content was "this is a different door", one more
-for every future mint site, and — structurally — a rule that no other type in
-the repo may give a function a sensible name that this gate happens to police.
-
-The justification for matching the leaf rather than the path was that path
-matching fails open under aliasing. That does not survive scrutiny. A `use`
-alias is the most syntactically visible thing in a file; the gate already parses
-those files with `syn`; and the specific hole #778 cited is itself a `use`
-alias. The gate over-approximated by choice, not by necessity.
+The retired trusted-HTML spelling policy exposed the omission: a gate that
+matched a bare method name also captured unrelated domain types that used the
+same conventional name. A qualifier-pattern exemption tried to compensate, but
+that exemption failed open under an alias. The incident showed that membership
+must be derived from syntax, rather than widened and then forgiven by policy.
 
 ## Decision
 
@@ -49,13 +34,8 @@ gate correctly identifying the door it guards, before any question of exempting
 anything arises.
 
 **A gate that cannot determine membership must fail closed** — keep the site in
-the population and report it. That requirement is what makes narrowing safe, and
-it is not optional: it is the whole reason reading the qualifier is legitimate
-rather than a hole. Concretely, in `rendered-html-from-trusted`: a qualifier
-resolving to the owner is the door; one resolving to another named type is not;
-one that cannot be resolved at all — a glob import, a generic parameter, an
-unqualified call, a macro body — stays in the population. Obscuring a qualifier
-buys a gate failure, not an exemption.
+the population and report it. That requirement is what makes narrowing safe:
+obscuring a qualifier must buy a gate failure, not an exemption.
 
 The goal is not to interpret all of Rust; that is unworkable and unnecessary.
 The goal is that a gate stop restricting people from naming a function
@@ -65,11 +45,8 @@ resolves, and the hard cases are pushed back onto whoever wrote them.
 
 ## Consequences
 
-- A gate may police a name another type also legitimately uses, without taxing
-  that type. `ContentType::from_trusted` and `RenderedHtml::from_trusted`
-  coexist, both keeping the name their conventions call for
-  ([ADR-0063](0063-domain-value-newtype-convention.md)'s door taxonomy), and no
-  future type inherits the friction.
+- A gate may police a name another type also legitimately uses without taxing
+  that type, provided its structural membership logic can distinguish the owner.
 - ADR-0085 principle 3 is unchanged, and now applies only to exemptions — which
   is what it was always about. #778's deletion of `EXEMPT_QUALIFIERS` remains
   correct on its own terms; what was wrong was concluding that the qualifier

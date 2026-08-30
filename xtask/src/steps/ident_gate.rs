@@ -1,14 +1,11 @@
-//! The shared machinery behind the ident-keyed XSS gates — [`raw-html-door`],
-//! [`html-sink`] and [`rendered-html-from-trusted`].
+//! The shared machinery behind the ident-keyed XSS gates — [`raw-html-door`] and
+//! [`html-sink`].
 //!
-//! Those three gates guard one invariant from three sides (mint trust, inherit
-//! trust, spend trust at the DOM), and they were written three times. That is worse
-//! than ordinary duplication: a fix to the test-code exemption or the macro-token
-//! walk that lands in two copies out of three leaves a gate that still reports
-//! green, for the wrong reason — the exact failure ADR-0085 was written about. So
-//! the traversal lives here once, and a gate supplies only what is genuinely its
-//! own: the roots it scans, the [`population`] it recognises, and the words it
-//! fails in.
+//! Those gates guard the unescaped DOM boundary from two sides (mint trust and spend
+//! trust at the DOM). The traversal lives here once so a fix to the test-code
+//! exemption or macro-token walk cannot leave one gate green for the wrong reason.
+//! A gate supplies only what is genuinely its own: the roots it scans, the
+//! [`population`] it recognises, and the words it fails in.
 //!
 //! Two layers:
 //!
@@ -114,7 +111,6 @@
 //! [`population`]: Gate::population
 //! [`raw-html-door`]: crate::steps::raw_html_door_check
 //! [`html-sink`]: crate::steps::html_sink_check
-//! [`rendered-html-from-trusted`]: crate::steps::rendered_html_from_trusted_check
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -200,10 +196,6 @@ pub enum MentionContext {
     Module,
     /// Nearest enclosing fn name.
     Function(String),
-    /// Direct struct field, rendered as `Struct.field`.
-    Field(String),
-    /// Explicit row decoder, rendered as `fn.method`.
-    RowDecode(String),
 }
 
 impl MentionContext {
@@ -211,17 +203,15 @@ impl MentionContext {
     pub fn legacy_label(&self) -> String {
         match self {
             Self::Module => String::new(),
-            Self::Function(name) | Self::Field(name) | Self::RowDecode(name) => name.clone(),
+            Self::Function(name) => name.clone(),
         }
     }
 }
 
 fn mention_where(context: &MentionContext) -> String {
     match context {
-        MentionContext::Module => "at module scope".to_string(),
+        MentionContext::Module => "at module scope".to_owned(),
         MentionContext::Function(name) => format!("in fn `{name}`"),
-        MentionContext::Field(name) => format!("at field `{name}`"),
-        MentionContext::RowDecode(name) => format!("at row decoder `{name}`"),
     }
 }
 
@@ -371,67 +361,6 @@ impl Resolver {
         }
         Membership::Unknown
     }
-
-    /// Classify a direct struct-field type against an owner set.
-    ///
-    /// This is deliberately shallower than Rust type resolution. A plain path whose
-    /// leaf is a known owner alias is the guarded type. A plain single-ident path
-    /// that is neither imported nor locally defined is unknown and therefore remains
-    /// guarded. Containers, borrowed types and qualified non-owner paths are outside
-    /// the direct-field population.
-    pub fn direct_type_membership(&self, ty: &syn::Type, owners: &BTreeSet<String>) -> Membership {
-        let syn::Type::Path(p) = ty else {
-            return Membership::OtherType;
-        };
-        if p.qself.is_some() {
-            return Membership::OtherType;
-        }
-        let Some(final_segment) = p.path.segments.last() else {
-            return Membership::Unknown;
-        };
-        if !matches!(final_segment.arguments, syn::PathArguments::None) {
-            return Membership::OtherType;
-        }
-
-        let name = final_segment.ident.to_string();
-        if owners.contains(&name) {
-            return Membership::Door;
-        }
-        if is_known_non_owner_direct_type(&name) {
-            return Membership::OtherType;
-        }
-        if p.path.segments.len() > 1
-            || self.imported.contains(&name)
-            || self.defined.contains(&name)
-        {
-            return Membership::OtherType;
-        }
-        Membership::Unknown
-    }
-}
-
-fn is_known_non_owner_direct_type(name: &str) -> bool {
-    matches!(
-        name,
-        "String"
-            | "str"
-            | "bool"
-            | "char"
-            | "f32"
-            | "f64"
-            | "i8"
-            | "i16"
-            | "i32"
-            | "i64"
-            | "i128"
-            | "isize"
-            | "u8"
-            | "u16"
-            | "u32"
-            | "u64"
-            | "u128"
-            | "usize"
-    )
 }
 
 /// Every ident a non-glob `use` tree brings into scope, by the name it is bound to.
