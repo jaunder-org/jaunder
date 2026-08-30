@@ -16,15 +16,16 @@
 ;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 ;;; Commentary:
-;; Probe the AtomPub service document for advertised capabilities and warn at
-;; publish when the server does not advertise the `format-media-type' extension
-;; feature — a vanilla server would store the post's org source verbatim instead
-;; of rendering it.  The capability is fetched at most once per base-url per
-;; session (cached), and the check is best-effort: any failure skips silently.
+;; Read the AtomPub Service Document for capabilities used by the Emacs Protocol
+;; Client.  Publish probes and caches the `format-media-type' extension feature.
+;; New Post creation separately reads the Posts Collection's inline categories
+;; for best-effort Tag completion without caching the server's catalog.
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'dom)
+(require 'subr-x)
 (require 'jaunder-config)
 (require 'jaunder-transport)
 (require 'jaunder-warn)
@@ -33,6 +34,9 @@
   "Session-scoped alist of BASE-URL -> list of advertised feature tokens.
 Populated on the first successful service-doc fetch per base-url; failures are
 not cached, so a later publish may retry.  Reset only by restarting Emacs.")
+
+(defconst jaunder--entry-content-type "application/atom+xml;type=entry"
+  "AtomPub media type accepted by Jaunder's Posts Collection.")
 
 (defun jaunder--parse-service-features (body)
   "Parse service-doc BODY into its advertised feature tokens.
@@ -51,6 +55,52 @@ attribute is split on whitespace."
         (let* ((ext (car (dom-by-tag dom 'extension)))
                (features (and ext (dom-attr ext 'features))))
           (if features (split-string features) '()))))))
+
+(defun jaunder--parse-service-tags (body)
+  "Return BODY's Posts Collection Tag slugs, or `unknown'.
+The Posts Collection is the unique collection accepting
+`jaunder--entry-content-type'.  Only its inline category terms are returned;
+categories from other collections are ignored.  A valid document with no
+categories returns `()'."
+  (with-temp-buffer
+    (insert (or body ""))
+    (let ((dom (libxml-parse-xml-region (point-min) (point-max))))
+      (if (or (null dom) (not (eq (dom-tag dom) 'service)))
+          'unknown
+        (let ((posts
+               (cl-remove-if-not
+                (lambda (collection)
+                  (cl-some
+                   (lambda (accept)
+                     (equal (string-trim (dom-text accept))
+                            jaunder--entry-content-type))
+                   (dom-by-tag collection 'accept)))
+                (dom-by-tag dom 'collection))))
+          (if (/= (length posts) 1)
+              'unknown
+            (let ((terms
+                   (mapcar (lambda (category) (dom-attr category 'term))
+                           (dom-by-tag (car posts) 'category))))
+              (if (cl-every
+                   (lambda (term)
+                     (and (stringp term) (not (string-empty-p term))))
+                   terms)
+                  terms
+                'unknown))))))))
+
+(defun jaunder--fetch-service-tags (base-url)
+  "Fetch BASE-URL's Service Document and return Posts Collection Tags.
+Returns `unknown' on a transport, HTTP, or parse failure.  Failures never
+signal because Tag completion is optional for local Post creation."
+  (condition-case nil
+      (let* ((response
+              (jaunder--http-request
+               "GET" (jaunder--build-url base-url "atompub" "service")))
+             (status (plist-get response :status)))
+        (if (and (integerp status) (<= 200 status 299))
+            (jaunder--parse-service-tags (plist-get response :body))
+          'unknown))
+    (error 'unknown)))
 
 (defun jaunder--fetch-service-features (base-url)
   "Fetch and parse BASE-URL's AtomPub service document.

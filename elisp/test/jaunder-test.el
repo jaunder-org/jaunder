@@ -1544,6 +1544,240 @@ Lets the warning tests assert on emitted warnings without touching the real
     (should-error (jaunder-publish) :type 'error)
     (should-error (jaunder--rename-to-slug "post") :type 'error)))
 
+(ert-deftest jaunder-new-post-collects-metadata-before-creating-file ()
+  "The interactive command writes one coherent template from all prompt answers."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-new-post-" t)))
+         (jaunder-blogs
+          (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (default-directory root)
+         (tag-answers '("Rust" "rust" "emacs" ""))
+         tag-collections
+         created)
+    (unwind-protect
+        (cl-letf
+         (((symbol-function 'read-string) (lambda (&rest _) "Prompted Post"))
+          ((symbol-function 'completing-read)
+           (lambda (prompt collection &rest _)
+             (cond
+              ((string-prefix-p "Tag" prompt)
+               (push collection tag-collections)
+               (pop tag-answers))
+              ((string-prefix-p "Status" prompt) "published")
+              (t (error "unexpected prompt: %s" prompt)))))
+          ((symbol-function 'jaunder--http-request)
+           (lambda (method url &rest _)
+             (should (equal method "GET"))
+             (should (equal url "https://blog/atompub/service"))
+             (list
+              :status 200
+              :body
+              (concat
+               "<app:service xmlns:app=\"http://www.w3.org/2007/app\""
+               " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
+               "<app:workspace>"
+               "<app:collection href=\"https://blog/atompub/alice/posts\">"
+               "<app:accept>application/atom+xml;type=entry</app:accept>"
+               "<app:categories><atom:category term=\"rust\"/>"
+               "<atom:category term=\"emacs\"/></app:categories>"
+               "</app:collection>"
+               "<app:collection href=\"https://blog/atompub/alice/media\">"
+               "<app:accept>image/*</app:accept>"
+               "<app:categories><atom:category term=\"ignored\"/></app:categories>"
+               "</app:collection></app:workspace></app:service>")))))
+         (jaunder-new-post nil)
+         (setq created (current-buffer))
+         (should (equal (jaunder--buffer-keyword "TITLE") "Prompted Post"))
+         (should (equal (jaunder--buffer-keyword "KEYWORDS") "Rust, emacs"))
+         (should (equal (jaunder--buffer-property "JAUNDER_STATUS") "published"))
+         (should-not (jaunder--buffer-property "JAUNDER_FORMAT"))
+         (should (= (length tag-collections) 4))
+         (dolist (collection tag-collections)
+           (should (equal collection '("rust" "emacs")))))
+      (when (buffer-live-p created) (kill-buffer created))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-new-post-cancellation-leaves-no-file ()
+  "Cancelling metadata collection cannot leave a partial local Post."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-cancel-" t)))
+         (jaunder-blogs
+          (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (default-directory root))
+    (unwind-protect
+        (cl-letf
+         (((symbol-function 'read-string) (lambda (&rest _) "Cancelled"))
+          ((symbol-function 'completing-read)
+           (lambda (prompt &rest _)
+             (cond
+              ((string-prefix-p "Tag" prompt) "")
+              ((string-prefix-p "Status" prompt) (signal 'quit nil))
+              (t (error "unexpected prompt: %s" prompt)))))
+          ((symbol-function 'jaunder--http-request)
+           (lambda (&rest _)
+             '(:status 200
+                       :body
+                       "<service><workspace><collection><accept>application/atom+xml;type=entry</accept></collection></workspace></service>"))))
+         (should
+          (eq (condition-case nil
+                  (jaunder-new-post nil)
+                (quit 'cancelled))
+              'cancelled))
+         (should-not
+          (directory-files root nil "\\`draft-[^.]+\\.org\\'")))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-new-post-falls-back-to-valid-free-text-tags ()
+  "Unavailable completion stays visible without blocking new valid Tag labels."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-tags-" t)))
+         (jaunder-blogs
+          (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (default-directory root)
+         (tag-answers '("bad tag" "NewTag" ""))
+         messages
+         created)
+    (unwind-protect
+        (cl-letf
+         (((symbol-function 'read-string) (lambda (&rest _) ""))
+          ((symbol-function 'completing-read)
+           (lambda (prompt &rest _)
+             (cond
+              ((string-prefix-p "Tag" prompt) (pop tag-answers))
+              ((string-prefix-p "Status" prompt) "draft")
+              (t (error "unexpected prompt: %s" prompt)))))
+          ((symbol-function 'jaunder--http-request)
+           (lambda (&rest _) '(:status 503)))
+          ((symbol-function 'message)
+           (lambda (format-string &rest args)
+             (push (apply #'format format-string args) messages))))
+         (jaunder-new-post nil)
+         (setq created (current-buffer))
+         (should (equal (jaunder--buffer-keyword "KEYWORDS") "NewTag"))
+         (should
+          (cl-some
+           (lambda (text)
+             (string-match-p "Tag completion unavailable" text))
+           messages))
+         (should
+          (cl-some
+           (lambda (text)
+             (string-match-p "Tag must match" text))
+           messages)))
+      (when (buffer-live-p created) (kill-buffer created))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-new-post-reprompts-until-schedule-is-future ()
+  "Scheduled creation never writes a file from invalid or non-future input."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-scheduled-" t)))
+         (jaunder-blogs
+          (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (default-directory root)
+         (now (encode-time 0 0 12 30 8 2026))
+         (past (time-subtract now (seconds-to-time 60)))
+         (future (time-add now (seconds-to-time 3600)))
+         (date-answers (list 'invalid now past future))
+         (date-prompts 0)
+         created)
+    (unwind-protect
+        (cl-letf
+         (((symbol-function 'read-string) (lambda (&rest _) ""))
+          ((symbol-function 'completing-read)
+           (lambda (prompt &rest _)
+             (cond
+              ((string-prefix-p "Tag" prompt) "")
+              ((string-prefix-p "Status" prompt) "scheduled")
+              (t (error "unexpected prompt: %s" prompt)))))
+          ((symbol-function 'jaunder--http-request)
+           (lambda (&rest _)
+             '(:status 200
+                       :body
+                       "<service><workspace><collection><accept>application/atom+xml;type=entry</accept></collection></workspace></service>")))
+          ((symbol-function 'current-time) (lambda () now))
+          ((symbol-function 'org-read-date)
+           (lambda (&rest _)
+             (cl-incf date-prompts)
+             (should-not
+              (directory-files root nil "\\`draft-[^.]+\\.org\\'"))
+             (let ((answer (pop date-answers)))
+               (if (eq answer 'invalid)
+                   (error "invalid date")
+                 answer)))))
+         (jaunder-new-post nil)
+         (setq created (current-buffer))
+         (should (= date-prompts 4))
+         (should
+          (equal
+           (jaunder--buffer-keyword "DATE")
+           (format-time-string "[%Y-%m-%d %a %H:%M]" future))))
+      (when (buffer-live-p created) (kill-buffer created))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-new-post-prefix-creates-minimal-post-without-prompts ()
+  "The prefix path preserves minimal local creation without server dependency."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-minimal-" t)))
+         (jaunder-blogs
+          (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (default-directory root)
+         created)
+    (unwind-protect
+        (cl-letf
+         (((symbol-function 'read-string)
+           (lambda (&rest _) (error "unexpected title prompt")))
+          ((symbol-function 'completing-read)
+           (lambda (&rest _) (error "unexpected completion prompt")))
+          ((symbol-function 'jaunder--http-request)
+           (lambda (&rest _) (error "unexpected server request"))))
+         (jaunder-new-post '(4))
+         (setq created (current-buffer))
+         (should (equal (jaunder--buffer-keyword "TITLE") ""))
+         (should (equal (jaunder--buffer-keyword "KEYWORDS") ""))
+         (should (equal (jaunder--buffer-property "JAUNDER_STATUS") "draft"))
+         (should (= (point) (point-max))))
+      (when (buffer-live-p created) (kill-buffer created))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-new-post-prefix-rejects-unmatched-configured-location ()
+  "Prompt-free creation fails rather than guessing among configured blogs."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-configured-" t)))
+         (other (file-name-as-directory (make-temp-file "jaunder-unmatched-" t)))
+         (jaunder-blogs
+          (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (default-directory other))
+    (unwind-protect
+        (cl-letf
+         (((symbol-function 'read-string)
+           (lambda (&rest _) (error "unexpected title prompt")))
+          ((symbol-function 'completing-read)
+           (lambda (&rest _) (error "unexpected completion prompt")))
+          ((symbol-function 'jaunder--http-request)
+           (lambda (&rest _) (error "unexpected server request"))))
+         (should-error (jaunder-new-post '(4)) :type 'user-error)
+         (should-not
+          (directory-files root nil "\\`draft-[^.]+\\.org\\'"))
+         (should-not
+          (directory-files other nil "\\`draft-[^.]+\\.org\\'")))
+      (delete-directory root t)
+      (delete-directory other t))))
+
+(ert-deftest jaunder-new-post-prefix-uses-directory-when-unconfigured ()
+  "A wholly unconfigured client still has a deterministic prompt-free target."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-unconfigured-" t)))
+         (jaunder-blogs nil)
+         (default-directory root)
+         created)
+    (unwind-protect
+        (cl-letf
+         (((symbol-function 'read-string)
+           (lambda (&rest _) (error "unexpected title prompt")))
+          ((symbol-function 'completing-read)
+           (lambda (&rest _) (error "unexpected completion prompt")))
+          ((symbol-function 'jaunder--http-request)
+           (lambda (&rest _) (error "unexpected server request"))))
+         (jaunder-new-post '(4))
+         (setq created (current-buffer))
+         (should
+          (equal (file-name-directory (buffer-file-name)) root)))
+      (when (buffer-live-p created) (kill-buffer created))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-new-post-prompts-for-a-blog-when-directory-is-unmapped ()
   "New-post selects an explicit configured blog rather than using an unrelated cwd."
   (let* ((root (make-temp-file "jaunder-new-post-" t))
@@ -1553,9 +1787,19 @@ Lets the warning tests assert on emitted warnings without touching the real
          (default-directory other)
          selected)
     (unwind-protect
-        (cl-letf (((symbol-function 'completing-read)
-                   (lambda (&rest _) (setq selected (file-name-as-directory root))))
-                  ((symbol-function 'format-time-string) (lambda (&rest _) "20260829T000000")))
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) ""))
+                  ((symbol-function 'completing-read)
+                   (lambda (prompt &rest _)
+                     (cond
+                      ((string-prefix-p "Blog" prompt)
+                       (setq selected (file-name-as-directory root)))
+                      ((string-prefix-p "Tag" prompt) "")
+                      ((string-prefix-p "Status" prompt) "draft")
+                      (t (error "unexpected prompt: %s" prompt)))))
+                  ((symbol-function 'jaunder--http-request)
+                   (lambda (&rest _) '(:status 503)))
+                  ((symbol-function 'format-time-string)
+                   (lambda (&rest _) "20260829T000000")))
                  (jaunder-new-post)
                  (should (equal selected (file-name-as-directory root)))
                  (should (equal (buffer-file-name)
@@ -1571,7 +1815,14 @@ Lets the warning tests assert on emitted warnings without touching the real
          (jaunder-blogs nil)
          created)
     (unwind-protect
-        (cl-letf (((symbol-function 'format-time-string)
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) ""))
+                  ((symbol-function 'completing-read)
+                   (lambda (prompt &rest _)
+                     (cond
+                      ((string-prefix-p "Tag" prompt) "")
+                      ((string-prefix-p "Status" prompt) "draft")
+                      (t (error "unexpected prompt: %s" prompt)))))
+                  ((symbol-function 'format-time-string)
                    (lambda (&rest _) "20260829T000001")))
                  (jaunder-new-post)
                  (setq created (current-buffer))

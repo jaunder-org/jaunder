@@ -132,21 +132,145 @@ DESCRIPTION, JAUNDER_STATUS draft) and leaves point in the body."
       (save-buffer))
     path))
 
-(defun jaunder-new-post ()
-  "Create a new draft in the blog whose directory contains `default-directory'.
-When no blog matches, prompt to choose one from `jaunder-blogs'.  Inserts the
-minimal template and visits the file."
-  (interactive)
-  (let* ((dir (or (car (jaunder--blog-entry-for default-directory))
-                  (if jaunder-blogs
-                      (completing-read "Blog directory: " (mapcar #'car jaunder-blogs) nil t)
-                    default-directory)))
-         (path (jaunder--new-post-in dir (format-time-string "%Y%m%dT%H%M%S"))))
-    (switch-to-buffer (find-file-noselect path))
-    (goto-char (point-max))))
+(defun jaunder--select-new-post-blog ()
+  "Return the configured blog entry selected for ordinary Post creation.
+Uses the longest matching root, prompts among configured blogs when none
+matches, and returns (`default-directory' . nil) when no blogs are configured."
+  (let ((entry (jaunder--blog-entry-for default-directory)))
+    (cond
+     (entry entry)
+     (jaunder-blogs
+      (let ((selected
+             (completing-read
+              "Blog directory: " (mapcar #'car jaunder-blogs) nil t)))
+        (or (assoc selected jaunder-blogs)
+            (error "jaunder: selected blog is no longer configured"))))
+     (t (cons default-directory nil)))))
 
-(defconst jaunder--entry-content-type "application/atom+xml;type=entry"
-  "Request Content-Type for an AtomPub <entry> POST/PUT.")
+(defun jaunder--select-minimal-new-post-blog ()
+  "Return the unambiguous blog entry for prompt-free Post creation.
+Uses the longest matching configured root.  An unconfigured client uses
+`default-directory'; a nonempty configuration with no matching root is an
+error rather than a hidden blog-choice prompt."
+  (or (jaunder--blog-entry-for default-directory)
+      (if jaunder-blogs
+          (user-error
+           "jaunder: no configured blog contains %s" default-directory)
+        (cons default-directory nil))))
+
+(defun jaunder--new-post-tag-candidates (entry)
+  "Return the Posts Collection Tag candidates for configured blog ENTRY.
+Failures emit one message and return nil so local Post creation remains
+available without server completion."
+  (if (null (cdr entry))
+      (progn
+        (message "jaunder: Tag completion unavailable; no blog is configured")
+        nil)
+    (condition-case err
+        (let ((tags
+               (jaunder--call-with-blog
+                (car entry)
+                (lambda ()
+                  (jaunder--fetch-service-tags
+                   (jaunder--active-base-url))))))
+          (if (eq tags 'unknown)
+              (progn
+                (message
+                 "jaunder: Tag completion unavailable; using free-text entry")
+                nil)
+            tags))
+      (error
+       (message "jaunder: Tag completion unavailable: %s"
+                (error-message-string err))
+       nil))))
+
+(defun jaunder--valid-tag-label-p (label)
+  "Return non-nil when LABEL satisfies Jaunder's case-preserving Tag boundary."
+  (let ((case-fold-search nil))
+    (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9-]*\\'" label)))
+
+(defun jaunder--read-new-post-tags (candidates)
+  "Prompt for Tags using CANDIDATES until empty input; return accepted labels.
+New valid labels are allowed.  Invalid labels re-prompt, and duplicate
+canonical slugs are omitted while preserving first-entry order."
+  (let (labels seen done)
+    (while (not done)
+      (let* ((answer
+              (completing-read
+               "Tag (empty to finish): " candidates nil nil))
+             (label (string-trim answer))
+             (slug (downcase label)))
+        (cond
+         ((string-empty-p label) (setq done t))
+         ((not (jaunder--valid-tag-label-p label))
+          (message
+           "jaunder: Tag must match [a-z0-9][a-z0-9-]* (case preserved)"))
+         ((member slug seen))
+         (t
+          (push slug seen)
+          (push label labels)))))
+    (nreverse labels)))
+
+(defun jaunder--read-new-post-schedule ()
+  "Prompt until the Org date reader returns a future instant.
+Invalid or non-future answers re-prompt.  `quit' remains uncaught so cancelling
+the command before file creation has no filesystem side effect."
+  (let (future)
+    (while (null future)
+      (condition-case err
+          (let ((candidate
+                 (org-read-date nil t nil "Scheduled date: ")))
+            (if (time-less-p (current-time) candidate)
+                (setq future candidate)
+              (message "jaunder: scheduled date must be in the future")))
+        (error
+         (message "jaunder: invalid scheduled date: %s"
+                  (error-message-string err)))))
+    (format-time-string "[%Y-%m-%d %a %H:%M]" future)))
+
+(defun jaunder--write-new-post-metadata (path title tags status scheduled-date)
+  "Write TITLE, TAGS, STATUS, and SCHEDULED-DATE into the Post at PATH."
+  (with-current-buffer (find-file-noselect path)
+    (jaunder--set-keyword "TITLE" title)
+    (jaunder--set-keyword "KEYWORDS" (mapconcat #'identity tags ", "))
+    (jaunder--set-property "JAUNDER_STATUS" status)
+    (when scheduled-date
+      (jaunder--set-keyword "DATE" scheduled-date))
+    (save-buffer)))
+
+(defun jaunder-new-post (&optional prefix)
+  "Create an Org Post and visit its body.
+Ordinary invocation resolves the target blog and collects title, Tags, and
+status before creating the file.  With PREFIX, preserve minimal-template
+creation without prompts; an unmatched nonempty `jaunder-blogs' is then an
+error rather than an implicit target choice."
+  (interactive "P")
+  (if prefix
+      (let* ((entry (jaunder--select-minimal-new-post-blog))
+             (path
+              (jaunder--new-post-in
+               (car entry) (format-time-string "%Y%m%dT%H%M%S"))))
+        (switch-to-buffer (find-file-noselect path))
+        (goto-char (point-max)))
+    (let* ((entry (jaunder--select-new-post-blog))
+           (dir (car entry))
+           (title (read-string "Title: "))
+           (tags
+            (jaunder--read-new-post-tags
+             (jaunder--new-post-tag-candidates entry)))
+           (status
+            (completing-read
+             "Status: " '("draft" "published" "scheduled") nil t nil nil "draft"))
+           (scheduled-date
+            (when (equal status "scheduled")
+              (jaunder--read-new-post-schedule)))
+           (path
+            (jaunder--new-post-in dir (format-time-string "%Y%m%dT%H%M%S"))))
+      (jaunder--write-new-post-metadata
+       path title tags status scheduled-date)
+      (switch-to-buffer (find-file-noselect path))
+      (goto-char (point-max)))))
+
 
 (defun jaunder--idempotency-key ()
   "Return a fresh opaque idempotency key.
