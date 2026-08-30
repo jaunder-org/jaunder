@@ -27,6 +27,7 @@
 (require 'dom)
 (require 'subr-x)
 (require 'jaunder-config)
+(require 'jaunder-entry)
 (require 'jaunder-transport)
 (require 'jaunder-warn)
 
@@ -38,83 +39,89 @@ not cached, so a later publish may retry.  Reset only by restarting Emacs.")
 (defconst jaunder--entry-content-type "application/atom+xml;type=entry"
   "AtomPub media type accepted by Jaunder's Posts Collection.")
 
+(defun jaunder--parse-service-document (body)
+  "Parse BODY into an AtomPub Service Document DOM, or return `unknown'."
+  (condition-case nil
+      (with-temp-buffer
+        (insert (or body ""))
+        (let ((dom (libxml-parse-xml-region (point-min) (point-max))))
+          (if (and dom (eq (dom-tag dom) 'service))
+              dom
+            'unknown)))
+    (error 'unknown)))
+
+(defun jaunder--service-features (dom)
+  "Return the extension feature tokens advertised by service DOM."
+  (let* ((extension (car (dom-by-tag dom 'extension)))
+         (features (and extension (dom-attr extension 'features))))
+    (if features (split-string features) '())))
+
 (defun jaunder--parse-service-features (body)
   "Parse service-doc BODY into its advertised feature tokens.
 Returns the list of tokens, `()' when the service document parses but advertises
-none, or the symbol `unknown' when BODY is not a parseable AtomPub service
-document.  libxml returns nil on a garbage body, and a 2xx HTML/error page from
-a proxy parses to another root element; neither is a real probe, so both map to
-`unknown' (skip, no cache) rather than a false negative.  The extension element
-is matched by local name (libxml folds the `j:' prefix), and its `features'
-attribute is split on whitespace."
-  (with-temp-buffer
-    (insert (or body ""))
-    (let ((dom (libxml-parse-xml-region (point-min) (point-max))))
-      (if (or (null dom) (not (eq (dom-tag dom) 'service)))
-          'unknown
-        (let* ((ext (car (dom-by-tag dom 'extension)))
-               (features (and ext (dom-attr ext 'features))))
-          (if features (split-string features) '()))))))
+none, or the symbol `unknown' when BODY is not an AtomPub Service Document."
+  (let ((dom (jaunder--parse-service-document body)))
+    (if (eq dom 'unknown)
+        'unknown
+      (jaunder--service-features dom))))
+
+(defun jaunder--service-tags (dom)
+  "Return DOM's Posts Collection Tag slugs, or `unknown'.
+The Posts Collection is the unique collection accepting
+`jaunder--entry-content-type'.  Only valid canonical Tag slugs from its inline
+categories are returned; categories from other Collections are ignored."
+  (let ((posts
+         (cl-remove-if-not
+          (lambda (collection)
+            (cl-some
+             (lambda (accept)
+               (equal (string-trim (dom-text accept))
+                      jaunder--entry-content-type))
+             (dom-by-tag collection 'accept)))
+          (dom-by-tag dom 'collection))))
+    (if (/= (length posts) 1)
+        'unknown
+      (let ((terms
+             (mapcar (lambda (category) (dom-attr category 'term))
+                     (dom-by-tag (car posts) 'category))))
+        (if (cl-every #'jaunder--valid-tag-slug-p terms)
+            terms
+          'unknown)))))
 
 (defun jaunder--parse-service-tags (body)
   "Return BODY's Posts Collection Tag slugs, or `unknown'.
-The Posts Collection is the unique collection accepting
-`jaunder--entry-content-type'.  Only its inline category terms are returned;
-categories from other collections are ignored.  A valid document with no
-categories returns `()'."
-  (with-temp-buffer
-    (insert (or body ""))
-    (let ((dom (libxml-parse-xml-region (point-min) (point-max))))
-      (if (or (null dom) (not (eq (dom-tag dom) 'service)))
-          'unknown
-        (let ((posts
-               (cl-remove-if-not
-                (lambda (collection)
-                  (cl-some
-                   (lambda (accept)
-                     (equal (string-trim (dom-text accept))
-                            jaunder--entry-content-type))
-                   (dom-by-tag collection 'accept)))
-                (dom-by-tag dom 'collection))))
-          (if (/= (length posts) 1)
-              'unknown
-            (let ((terms
-                   (mapcar (lambda (category) (dom-attr category 'term))
-                           (dom-by-tag (car posts) 'category))))
-              (if (cl-every
-                   (lambda (term)
-                     (and (stringp term) (not (string-empty-p term))))
-                   terms)
-                  terms
-                'unknown))))))))
+A valid Service Document with no inline categories returns `()'."
+  (let ((dom (jaunder--parse-service-document body)))
+    (if (eq dom 'unknown)
+        'unknown
+      (jaunder--service-tags dom))))
 
-(defun jaunder--fetch-service-tags (base-url)
-  "Fetch BASE-URL's Service Document and return Posts Collection Tags.
-Returns `unknown' on a transport, HTTP, or parse failure.  Failures never
-signal because Tag completion is optional for local Post creation."
+(defun jaunder--fetch-service-document (base-url)
+  "Fetch BASE-URL's AtomPub Service Document DOM, or return `unknown'.
+Transport errors, non-2xx responses, and invalid documents never signal."
   (condition-case nil
       (let* ((response
               (jaunder--http-request
                "GET" (jaunder--build-url base-url "atompub" "service")))
              (status (plist-get response :status)))
         (if (and (integerp status) (<= 200 status 299))
-            (jaunder--parse-service-tags (plist-get response :body))
+            (jaunder--parse-service-document (plist-get response :body))
           'unknown))
     (error 'unknown)))
 
+(defun jaunder--fetch-service-tags (base-url)
+  "Fetch BASE-URL's Posts Collection Tags, or return `unknown'."
+  (let ((dom (jaunder--fetch-service-document base-url)))
+    (if (eq dom 'unknown)
+        'unknown
+      (jaunder--service-tags dom))))
+
 (defun jaunder--fetch-service-features (base-url)
-  "Fetch and parse BASE-URL's AtomPub service document.
-Returns a list of feature tokens, `()', or the symbol `unknown' on any
-transport, non-2xx, or parse failure.  Never signals, so a probe can never
-abort a publish."
-  (condition-case nil
-      (let* ((resp (jaunder--http-request
-                    "GET" (jaunder--build-url base-url "atompub" "service")))
-             (status (plist-get resp :status)))
-        (if (and (integerp status) (<= 200 status 299))
-            (jaunder--parse-service-features (plist-get resp :body))
-          'unknown))
-    (error 'unknown)))
+  "Fetch BASE-URL's extension feature tokens, or return `unknown'."
+  (let ((dom (jaunder--fetch-service-document base-url)))
+    (if (eq dom 'unknown)
+        'unknown
+      (jaunder--service-features dom))))
 
 (defun jaunder--warn-missing-format-media-type (base-url)
   "Warn once per session per BASE-URL when format-media-type is unadvertised.

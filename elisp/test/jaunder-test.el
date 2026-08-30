@@ -1644,7 +1644,10 @@ Lets the warning tests assert on emitted warnings without touching the real
               ((string-prefix-p "Status" prompt) "draft")
               (t (error "unexpected prompt: %s" prompt)))))
           ((symbol-function 'jaunder--http-request)
-           (lambda (&rest _) '(:status 503)))
+           (lambda (&rest _)
+             '(:status 200
+                       :body
+                       "<service><workspace><collection><accept>application/atom+xml;type=entry</accept><categories><category term=\"bad tag\"/></categories></collection></workspace></service>")))
           ((symbol-function 'message)
            (lambda (format-string &rest args)
              (push (apply #'format format-string args) messages))))
@@ -1672,8 +1675,9 @@ Lets the warning tests assert on emitted warnings without touching the real
          (default-directory root)
          (now (encode-time 0 0 12 30 8 2026))
          (past (time-subtract now (seconds-to-time 60)))
+         (same-minute-future (time-add now (seconds-to-time 30)))
          (future (time-add now (seconds-to-time 3600)))
-         (date-answers (list 'invalid now past future))
+         (date-answers (list 'invalid now past same-minute-future future))
          (date-prompts 0)
          created)
     (unwind-protect
@@ -1702,7 +1706,7 @@ Lets the warning tests assert on emitted warnings without touching the real
                  answer)))))
          (jaunder-new-post nil)
          (setq created (current-buffer))
-         (should (= date-prompts 4))
+         (should (= date-prompts 5))
          (should
           (equal
            (jaunder--buffer-keyword "DATE")

@@ -184,10 +184,6 @@ available without server completion."
                 (error-message-string err))
        nil))))
 
-(defun jaunder--valid-tag-label-p (label)
-  "Return non-nil when LABEL satisfies Jaunder's case-preserving Tag boundary."
-  (let ((case-fold-search nil))
-    (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9-]*\\'" label)))
 
 (defun jaunder--read-new-post-tags (candidates)
   "Prompt for Tags using CANDIDATES until empty input; return accepted labels.
@@ -215,18 +211,21 @@ canonical slugs are omitted while preserving first-entry order."
   "Prompt until the Org date reader returns a future instant.
 Invalid or non-future answers re-prompt.  `quit' remains uncaught so cancelling
 the command before file creation has no filesystem side effect."
-  (let (future)
-    (while (null future)
+  (let (scheduled-date)
+    (while (null scheduled-date)
       (condition-case err
-          (let ((candidate
-                 (org-read-date nil t nil "Scheduled date: ")))
-            (if (time-less-p (current-time) candidate)
-                (setq future candidate)
+          (let* ((candidate
+                  (org-read-date nil t nil "Scheduled date: "))
+                 (rendered
+                  (format-time-string "[%Y-%m-%d %a %H:%M]" candidate))
+                 (persisted (org-time-string-to-time rendered)))
+            (if (time-less-p (current-time) persisted)
+                (setq scheduled-date rendered)
               (message "jaunder: scheduled date must be in the future")))
         (error
          (message "jaunder: invalid scheduled date: %s"
                   (error-message-string err)))))
-    (format-time-string "[%Y-%m-%d %a %H:%M]" future)))
+    scheduled-date))
 
 (defun jaunder--write-new-post-metadata (path title tags status scheduled-date)
   "Write TITLE, TAGS, STATUS, and SCHEDULED-DATE into the Post at PATH."
