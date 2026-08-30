@@ -194,7 +194,7 @@ where
 {
     use serde::Deserialize;
     // rendered-html-from-trusted:allow rebuilds RenderedHtml from a wire DTO field our own server serialized (#445)
-    String::deserialize(deserializer).map(RenderedHtml::from_trusted)
+    String::deserialize(deserializer).map(RenderedHtml)
 }
 // The rest of the StrNewtype read-out trailer (#502), hand-written to preserve the
 // carve-outs: `Borrow`/`PartialEq` are read-only, and `From<Self> for String` moves the

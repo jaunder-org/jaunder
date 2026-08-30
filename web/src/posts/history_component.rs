@@ -14,9 +14,7 @@ use common::revision_history::RevisionHistoryDetail;
 use super::{
     AuthenticatedHistoryState, CurrentPostHistory, HistoryCollectionDisplay, HistoryDisplayRow,
     HistoryListState, PostRevisionHistory, RevisionHistoryCursor, RevisionHistoryMetadata,
-    RevisionHistoryPage, RevisionLifecycle, authenticated_history_state, current_history_rows,
-    get_post_history, get_revision_history_detail, list_history, load_authenticated_history,
-    revision_collection_displays, revision_history_rows,
+    RevisionHistoryPage, RevisionLifecycle,
 };
 use crate::auth;
 use crate::topbar::Topbar;
