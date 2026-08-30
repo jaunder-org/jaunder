@@ -246,7 +246,6 @@ pub struct RenderOutput {
     /// `media` is: a `pub` field here would let a caller assign a *different* HTML over
     /// the references derived from the original, which is the same desynchronisation the
     /// private `media` field exists to prevent — reached from the other side.
-    // rendered-html-from-trusted:allow RenderOutput is minted only by render/sanitize before pairing media refs (#701)
     html: RenderedHtml,
     /// What that HTML points a reader at. Private — see the type's docs.
     media: Vec<MediaReference>,

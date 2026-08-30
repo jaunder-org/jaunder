@@ -43,7 +43,6 @@ pub struct RenderedPost {
     pub summary: Option<PostSummary>,
     pub slug: Slug,
     #[serde(deserialize_with = "deserialize_rendered_html")]
-    // rendered-html-from-trusted:allow seed DTO rebuilds HTML serialized by Jaunder's own server (#701)
     pub rendered_html: RenderedHtml,
     pub created_at: UtcInstant,
     /// `None` for an unpublished draft.

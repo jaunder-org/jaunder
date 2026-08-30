@@ -72,11 +72,8 @@ definition of the layout.**
 - `media_url` returns `RootRelativeUrl` **infallibly**. Every segment is a hex
   digest, a bounded enum token, or percent-encoded, so the parse cannot fail;
   the `unreachable!` arm follows `AbsoluteUrl::compose`. **No trusted-minting
-  door is added** — the encoding provides by construction what a `from_trusted`
-  door would merely have asserted, so the `rendered-html-from-trusted` gate has
-  nothing new to exempt. (That gate's `EXEMPT_QUALIFIERS` list, named here
-  before #778, no longer exists: exemptions are in-source markers now, and a
-  door added here would have cost one.)
+  door is added** — the encoding provides by construction the validity a raw
+  constructor would merely have asserted.
 
 So there are three spellings of a filename, and exactly one derivation between
 them:

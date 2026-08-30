@@ -16,31 +16,29 @@ can bless ANY text column decoded into it — e.g. a raw, un-rendered `body`.
 
 ## Decision
 
-The column decodes straight into `RenderedHtml` (#445), like every other domain
-column, through a plain bridge that constructs the private field directly.
-Neither door is involved: this is not new outside data (so not `sanitize`), and
-routing it through `from_trusted` would put a gate-policed door on a path the
-gate cannot inspect.
+The `rendered_html` column decodes straight into `RenderedHtml` (#445), like
+every other domain column, through a common-private bridge that constructs the
+crate-private field directly. This is not new outside data, so it does not call
+`sanitize`; reading must preserve persisted rendered bytes without a second
+parse, allocation, or failure path.
 
 **The blessing risk is real and is accepted**: decoding some other column into
-this type would still bless it. The decision rests on one argument only — typing
-a column as `RenderedHtml` is a deliberate, reviewable act. Since #701, the
-`rendered-html-from-trusted` gate mechanically enforces that review point for
-direct `RenderedHtml` struct fields as well as `from_trusted` call sites. A
-`FromRow` field typed `RenderedHtml` over the wrong column still names no
-sanitizing door; it now fails the gate unless it carries a local reason marker.
+this type would still bless it. Typing a column as `RenderedHtml` is therefore a
+deliberate, security-relevant review responsibility. The retired spelling gate
+and its allowance markers cannot prove SQLx column correspondence; reviewers
+must ensure every decode targets the rendered-HTML column.
 
 ## Rejected alternative
 
-A _sanitizing_ decode would remove the risk outright and heal any pre-#445 row
-on read. Rejected: no deployed instance holds data, so it would guard only
-against a write path that forgot to sanitize — which the gate already catches —
-at the cost of an html5ever parse on every post read, forever. Revisit only if
-an instance ever accumulates rows written by a pre-#445 build.
+A _sanitizing_ decode would remove the wrong-column risk outright and heal any
+pre-#445 row on read. Rejected: no deployed instance holds data, and a parse on
+every post read would silently rewrite a representation that storage must return
+verbatim. Revisit only if an instance ever accumulates rows written by a
+pre-#445 build.
 
 ## Consequences
 
-- `build_post_record` needs no `from_trusted` rebuild.
-- Any new direct `RenderedHtml`-typed production field, including a `FromRow`
-  field, is a security-relevant review point enforced by
-  `rendered-html-from-trusted:allow <reason>`.
+- `build_post_record` needs no raw-string reconstruction.
+- Any new direct `RenderedHtml` decode or field remains a security-relevant
+  review point: verify the SQL projection supplies rendered HTML, not a raw body
+  or another text column.

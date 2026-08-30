@@ -53,10 +53,11 @@ pub enum PostFormat {
 /// by accident.
 ///
 /// The feature-gated [`sanitize`] function is the only public production door:
-/// it establishes this invariant by scrubbing outside input. Trusted
-/// reconstruction for persisted values and server-produced seed DTOs is confined
-/// to this crate; exact test fixtures use [`crate::test_support::rendered_html`]
-/// only when that test-only surface is enabled.
+/// it establishes this invariant by scrubbing outside input. Common-private `SQLx`
+/// decoding and field-specific server DTO deserialization reconstruct persisted
+/// Jaunder-owned representations without re-sanitizing them. Exact fixtures use
+/// [`crate::test_support::rendered_html`] only when that test-only surface is
+/// enabled.
 ///
 /// Reading *out* is convenient — `Display`, `AsRef<str>`, `Borrow<str>`,
 /// `Deref<Target = str>`, `PartialEq<str>`, and `From<RenderedHtml> for String`
@@ -83,12 +84,6 @@ pub enum PostFormat {
 /// ```compile_fail
 /// # use common::render::RenderedHtml;
 /// let _: RenderedHtml = "<p>x</p>".to_string().into();
-/// ```
-///
-/// No public trusted-string constructor:
-/// ```compile_fail
-/// # use common::render::RenderedHtml;
-/// let _ = RenderedHtml::from_trusted("<p>x</p>");
 /// ```
 ///
 /// No blanket deserialization:

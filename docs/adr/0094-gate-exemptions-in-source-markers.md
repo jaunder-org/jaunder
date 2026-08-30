@@ -14,18 +14,14 @@ between them.
 `// cov:ignore`, line form or block form, with roughly fifty live markers across
 the tree.
 
-**The static gates** — `sqlx-newtype-decode`, and the three ident-keyed XSS
-gates `raw-html-door` / `html-sink` / `rendered-html-from-trusted` — exempt by a
-central allowlist in the gate's own source file, keyed by enclosing function
-name, each entry carrying a written reason and (in two of the three XSS gates) a
-multiplicity.
+**The static gates** — `sqlx-newtype-decode` and the two ident-keyed XSS gates
+`raw-html-door` / `html-sink` — exempt by a central allowlist in the gate's own
+source file, keyed by enclosing function name, each entry carrying a written
+reason and multiplicity.
 
-The second mechanism was not chosen over the first. It was inherited: each new
-gate copied the previous one. So when #778 found `rendered-html-from-trusted`'s
-allowlist to be a bare list of function names — an
-[ADR-0085](0085-static-type-safety-gates-enumerate.md) principle-4 region
-exemption — the obvious fix was to make it look like its siblings and add a
-multiplicity.
+That inherited mechanism was not chosen over coverage markers. Its region-scoped
+keys could transfer, disappear, or cover a swapped site without making the
+review decision explicit.
 
 **That fix is the wrong key, not a smaller version of the right one.** Principle
 4's rule is _"scopes each allowlist entry to a single site, never to a region."_
@@ -46,7 +42,7 @@ was the one the gates had standardised on.
 
 **A gate expresses an exemption as a marker comment on the line immediately
 above the exempt site, read by the gate — not as an entry in a central list.**
-The three XSS gates adopt this; coverage already had it (trailing, which its
+The two XSS gates adopt this; coverage already had it (trailing, which its
 line-oriented report format makes safe).
 
 The marker is `// <gate-step-name>:allow <reason>`, anchored as the comment's
@@ -92,10 +88,9 @@ the block; `leptosfmt` lifts or drops one depending on where it sits in a
 some below, deterministic per syntactic context but not predictable by any rule
 an author could hold in their head.
 
-Written as a standalone comment line directly above the site, all twelve stayed
-put across repeated formatting runs, including the two `fn from_trusted`
-signatures (the marker sitting between `#[must_use]` and `pub fn`) and every
-`view!`-embedded sink.
+Written as a standalone comment line directly above the site, markers remained
+stable across repeated formatting runs, including raw-door and `view!`-embedded
+sink sites.
 
 So the rule is: **put the marker where the formatter will keep it, and read it
 there.** Trailing is deliberately not accepted — it is precisely the form that
@@ -109,31 +104,6 @@ line the marker points at". That line must hold exactly one site, so the binding
 is still 1 marker : 1 site and still never a region — but it is one level of
 indirection off the strongest claim, and calling it site-scoped without that
 caveat would be overselling it.
-
-### Pattern-shaped exemptions go too
-
-`rendered-html-from-trusted` also skipped every `ContentType::from_trusted` site
-tree-wide, decided by a **pattern on the path qualifier**. That is ADR-0085
-principle 3 — _"Grants no automatic exemption from a pattern. Nothing
-self-exempts"_ — and it failed **open** asymmetrically: the gate deliberately
-keeps guarding a leaf name that has been aliased (`use … as`), but aliasing the
-_qualifier_ (`use RenderedHtml as ContentType`) handed out the exemption.
-
-It is deleted. A pattern exemption is only ever a bulk discount on writing
-entries, and markers make an entry nearly free, so the discount buys nothing and
-costs a fail-open. The affected sites took ordinary markers like anything else.
-
-**Amended by [#790](https://github.com/jaunder-org/jaunder/issues/790).**
-Deleting the exemption was right; concluding that the qualifier must therefore
-go _unread_ was not. Reading it decides **membership**, which is structural,
-rather than granting an exemption — see
-[ADR-0110](0110-gate-population-membership-is-structural.md). So as of #790 the
-gate resolved the qualifier and those four markers went. Note the consequence
-for the sentence this section used to end on: with `ContentType`'s door out of
-the population, the "grep `ContentType::from_trusted` to enumerate every mint
-site" instruction in its doc comment became once again a convention backed by
-tests, not something the gate enforces — and that doc comment was updated to say
-so.
 
 ### Inferred exemptions are tripwired; written exemptions are keyed
 
@@ -240,17 +210,10 @@ investigation context; a clean gate prints only its terse success line. The
 census remains derived from every scan, so the decision's no-drift invariant is
 unchanged.
 
-**What it creates.** Twelve in-source markers — seven replacing the three
-allowlists' entries, and five more where the deleted qualifier-pattern exemption
-used to cover `ContentType::from_trusted` sites for free. (Four of those five
-are gone again since [#790](https://github.com/jaunder-org/jaunder/issues/790),
-which recovered that coverage by _resolving_ the qualifier rather than by
-pattern; the fifth is `RenderedHtml`'s own definition, which is genuinely this
-gate's door and keeps its marker.) `ident_gate` loses `Allowed`, `unjustified`,
-the multiplicity reconciliation, and `Mention::top_level` — the last of which
-existed only so a nested fn could not borrow a fn-name-keyed entry, a problem
-markers do not have. Deleting the qualifier pattern also collapses the custom
-`Population` impl, so all three gates become the same shape.
+**What it creates.** Per-site in-source markers replace central allowlist
+entries, and `ident_gate` loses name-keyed exemption bookkeeping. The former
+trusted-HTML spelling policy and its markers were retired in favor of compiler
+privacy; the two remaining DOM gates retain this decision's marker mechanism.
 
 It collapses a duplication that was live: every sink's justification was written
 twice, once in prose beside the code and once condensed in the gate's allowlist,

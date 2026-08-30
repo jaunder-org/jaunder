@@ -5,9 +5,8 @@
 //! `Markup` is the only thing maud will splice into an `html!` without escaping it.
 //! That makes the compiler, not a scanner, the thing stopping a hand-built string
 //! from reaching the DOM — **except** at `PreEscaped`, which mints trust out of an
-//! arbitrary `String`. It is the render layer's counterpart to
-//! [`crate::steps::rendered_html_from_trusted_check`]'s `from_trusted`: one door
-//! that *asserts* an invariant nothing checked.
+//! arbitrary `String`. This is the explicit raw DOM door that still needs a
+//! source-level review marker.
 //!
 //! **Population** (read structurally, ADR-0085 principle 1): every `PreEscaped`
 //! ident under [`POLICED_ROOTS`], in ordinary code **and inside macro token
@@ -43,12 +42,10 @@
 use crate::result::CommandResult;
 use crate::steps::ident_gate::{self, Gate, Report};
 
-/// Source roots scanned recursively for `.rs` files — the same production `src`
-/// trees [`crate::steps::rendered_html_from_trusted_check`] polices, not the
-/// `tests/` integration crates (whose fixtures mint freely). The door only makes
-/// sense in `web` today, but the population is defined by the tree, not by where we
-/// expect the door to appear: a `PreEscaped` sprouting in `server` or `csr` must
-/// fail rather than sit outside the gate's reach.
+/// Source roots scanned recursively for `.rs` files. The door only makes sense in
+/// `web` today, but the population is defined by the tree, not by where we expect
+/// the door to appear: a `PreEscaped` sprouting in `server` or `csr` must fail
+/// rather than sit outside the gate's reach.
 const POLICED_ROOTS: &[&str] = &[
     "common/src",
     "host/src",
@@ -68,7 +65,7 @@ const DOORS: &[&str] = &["PreEscaped"];
 /// One door today, and the design intends it to stay that way: `Markup` is the
 /// render layer's trusted carrier and composes into `html!` unescaped by
 /// construction, so ordinary markup never needs a door. Only a value whose safety was
-/// *established* elsewhere does — a `RenderedHtml` that `host::render::sanitize`
+/// *established* elsewhere does — a `RenderedHtml` that `common::render::sanitize`
 /// scrubbed (ADR-0079). `web/src/html.rs`'s `Markup::from_rendered_html` is that
 /// door, and its marker sits beside the `// XSS SAFETY:` prose that explains it.
 const GATE: Gate = Gate {
@@ -86,7 +83,7 @@ const GATE: Gate = Gate {
                    markup already has a carrier — build it with `html!` and wrap it in `Markup`, \
                    which composes unescaped by construction and needs no door. The only value \
                    that legitimately needs the raw door is a `RenderedHtml`, whose safety \
-                   `host::render::sanitize` established; reach it through \
+                   `common::render::sanitize` established; reach it through \
                    `Markup::from_rendered_html`. If this really is a new door, say why in a \
                    `// raw-html-door:allow <reason>` comment on the line IMMEDIATELY ABOVE it — \
                    not trailing it, which the formatters move. Currently marked:",

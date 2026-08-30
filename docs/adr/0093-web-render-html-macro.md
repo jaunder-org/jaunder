@@ -36,11 +36,10 @@ paint**, and that does have a mechanical oracle: `expectNoShiftAcrossMount`
 projector's, then re-measures after mount at `tolerancePx: 0`, across the four
 projector-painted routes.
 
-The second force is ADR-0085. Moving the render layer into macro bodies collides
-with a limitation the `from_trusted` gate documents about itself: `syn` does not
-descend into macro invocations, which it calls "the most plausible residual gap,
-since the unescaped sink lives in `web`; none exists today." Converting nine
-render modules to macros is exactly what makes that gap real.
+The second force is ADR-0085. Moving the render layer into macro bodies requires
+the raw-door and sink gates to inspect macro invocations, because the unescaped
+sink lives in `web`. Converting nine render modules to macros makes that
+requirement concrete.
 
 The third force decided which library, and it only appeared once we tried to
 plan the conversion in detail. **hypertext was chosen first, then rejected on
@@ -138,14 +137,11 @@ gates that guard it able to see inside macro bodies.**
    yields the `Macro` node and `.tokens` is a walkable `TokenStream`, so a
    token-level scan sees inside `html!` and `view!` bodies — and because
    comments are not tokens, prose cannot false-positive. A **raw-door gate**
-   governs every author-written `PreEscaped` (one allowlist entry:
-   `from_rendered_html`, multiplicity 1, so a second door inside that same fn
-   fails rather than being absorbed); a **sink gate** governs every `inner_html`
-   _and_ `set_inner_html` in `web/src` — not only those written inside a
-   `view!`, so a `web_sys` or builder-API call falls inside the population
-   rather than silently outside it (five sites in four enclosing fns, each entry
-   stating its multiplicity and why its value is trusted). The existing
-   `from_trusted` gate is retrofitted with the same descent.
+   governs every author-written `PreEscaped`; a **sink gate** governs every
+   `inner_html` and `set_inner_html` in `web/src` — not only those written
+   inside a `view!`, so a `web_sys` or builder-API call falls inside the
+   population rather than silently outside it. Trusted HTML construction is
+   compiler-private in `common`, rather than a third source-scanned gate.
 
    Scanning invocation tokens rather than expansions is what keeps the raw-door
    gate honest here: `html!` expands to `PreEscaped` internally, and an
@@ -187,14 +183,10 @@ priced cost of decision 2, not an oversight to be fixed later by re-litigating
 the library.
 
 **What it creates.** [#778](https://github.com/jaunder-org/jaunder/issues/778)
-is done, and it went further than this paragraph anticipated. The `from_trusted`
-gate exempted by _function_ — an ADR-0085 principle-4 region-scoped exemption —
-and the obvious repair was to give it the multiplicity its two siblings carry.
-That turned out to be the wrong key rather than a smaller version of the right
-one, so all three gates moved to in-source per-site markers and the central
+is done: the two DOM gates use in-source per-site markers and their central
 allowlists were deleted; see
-[the marker ADR](0094-gate-exemptions-in-source-markers.md). And one soft spot
-the type system does not cover: `DISCOVERY_MARKER_ATTR` cannot be spliced as an
+[the marker ADR](0094-gate-exemptions-in-source-markers.md). One soft spot
+remains outside the type system: `DISCOVERY_MARKER_ATTR` cannot be spliced as an
 attribute _name_ under any compile-time markup macro, so the literal is written
 in the `html!` and a unit test pins it against the const, keeping the `csr`
 drift guard loud.

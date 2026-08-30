@@ -44,12 +44,12 @@ methods or unqualified imports.
 Keep `ProfferedPassword` and its validation, `RenderedHtml`, `PostFormat`, ETag,
 Org normalization, croner, `BackupSchedule`, and the feed grammar in `common`:
 client and server share their one `FromStr` validation path where applicable.
-Host-owned module-qualified rendering and sanitization free functions use
-ammonia to establish the `RenderedHtml` invariant, then use the existing
-gate-policed trusted reconstruction seam to mint the common-owned value.
-`common/sqlx` is the sole ownership-forced optional host bridge: orphan-rule
-trait ownership requires it despite `common`'s otherwise dual-target dependency
-purity, and it does not make its bridged domain types host-only.
+Host-owned module-qualified rendering calls `common::render::sanitize`, which
+uses `ammonia` behind the optional host-only `common/sanitize` feature and mints
+`RenderedHtml` without a public raw reconstruction door. `common/sqlx` remains
+the ownership-forced optional host bridge: orphan-rule trait ownership requires
+it despite `common`'s otherwise dual-target dependency purity. Both optional
+host capabilities remain absent from the exact CSR closure.
 
 There are no compatibility aliases, re-exports, or deprecated paths. Every
 caller migrates to the new qualified home in one cutover.

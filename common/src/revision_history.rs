@@ -41,7 +41,6 @@ pub struct RevisionHistoryDetail {
     pub body: PostBody,
     pub format: PostFormat,
     #[serde(deserialize_with = "deserialize_rendered_html")]
-    // rendered-html-from-trusted:allow revision DTO rebuilds HTML serialized by Jaunder's own server (#1147)
     pub rendered_html: RenderedHtml,
     pub summary: Option<PostSummary>,
     pub created_at: UtcInstant,

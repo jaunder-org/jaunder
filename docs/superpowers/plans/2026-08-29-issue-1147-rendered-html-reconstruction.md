@@ -44,7 +44,7 @@ Out:
     authoring formats, allowed code-block classes, and media-reference
     classification; the CSR/wasm dependency graph contains no sanitizer.
 
-- [ ] Task 3: Remove aftermarket policy and record the new ownership
+- [x] Task 3: Remove aftermarket policy and record the new ownership
   - Contract: delete the `rendered-html-from-trusted` xtask step, registration,
     tests, and allowance markers; amend `common/src/render.rs`, ADR-0079,
     ADR-0123, and `docs/ARCHITECTURE.md` to describe sanitizer establishment,

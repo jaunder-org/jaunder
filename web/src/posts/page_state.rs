@@ -387,7 +387,6 @@ pub enum AuthenticatedHistoryState<T> {
     /// Reconciliation confirmed there is no authenticated viewer.
     AuthRequired,
     /// The authenticated route fetch completed successfully.
-    // rendered-html-from-trusted:allow history paint state may carry server-sanitized revision DTO HTML (#1055)
     Ready(T),
     /// Session reconciliation or the route fetch failed.
     Failed(WebError),

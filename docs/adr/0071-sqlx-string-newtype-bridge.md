@@ -218,6 +218,5 @@ asymmetry is deliberate and one line to reverse.
   so it gets a hand-written bridge. That bridge was **write-only**
   (`Type`+`Encode`, no `Decode`) for as long as a `Decode` would have laundered
   an untrusted column into trusted unescaped HTML; **#445 moved sanitization
-  onto the type**, which removed that objection, so it now has a `Decode` too
-  and its column no longer needs the gated `from_trusted` rebuild on read
-  (ADR-0079).
+  onto the type**, which removed that objection, so it now has a `Decode` too.
+  Its crate-private decode preserves the rendered column verbatim (ADR-0079).

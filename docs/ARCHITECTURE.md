@@ -394,24 +394,22 @@ its canonical result, with module-qualified host free-function ETag construction
 and SQLite/PostgreSQL checking final slug/format/time inside the write
 transaction before commit or revision creation.
 
-**`RenderedHtml` guarantees "contains no active markup", through a host
-sanitization boundary** ([ADR-0079](adr/0079-rendered-html-sanitization.md)).
-Host-owned module-qualified rendering and sanitization free functions establish
-the invariant with one module-level `ammonia` `SANITIZER`. The private field
-prevents direct construction: the host sanitizer is the establishment door, and
-outside-module minting is possible only through the explicitly gate-policed
-trusted reconstruction door. There is no `Deserialize` (seed DTOs go through
-`deserialize_with`), no `From<String>`, no `Default`, and no `pub(crate)`
-constructor. The `sqlx::Decode` from the derived `#[derive(SqlxBridge)]` bridge
-is the one in-module path that fills the field without a public construction
-door: a `rendered_html` column decodes straight into the type, like every other
-domain column, and deliberately does **not** sanitize on read
-([ADR-0123](adr/0123-rendered-html-storage-decode.md)). Its **blessing risk is
-real and accepted**: decoding some other text column into this type would bless
-it too. The `rendered-html-from-trusted` check covers trusted reconstruction
-uses and direct production struct fields typed `RenderedHtml`, including
-`FromRow` decode fields, each requiring a local
-`rendered-html-from-trusted:allow <reason>` marker
+**`RenderedHtml` guarantees "contains no active markup", through a common-owned,
+host-only sanitization boundary**
+([ADR-0079](adr/0079-rendered-html-sanitization.md)). `common::render::sanitize`
+is the only public production API that establishes the invariant; the optional
+`sanitize` feature keeps `ammonia` out of CSR/wasm builds. Its field is
+crate-private: ordinary application crates have no raw constructor, conversion,
+blanket `Deserialize`, or trusted-string rebuild door. Common-private SQLx
+decode and field-specific seed/revision DTO deserialization reconstruct the
+field directly from Jaunder-owned representations, without re-sanitizing,
+copying, or changing stored/rendered bytes. Exact fixtures are available only
+through `common::test_support` under `cfg(test)` or `test-support`. The
+compiler-backed `rendered-html-compiler-boundary` step uses an isolated
+downstream dependency to prove raw construction and that fixture API remain
+unavailable in production. SQLx decoding's **wrong-column blessing risk is real
+and accepted**: a reviewer must ensure every `RenderedHtml` decode is from the
+rendered-HTML column; no spelling marker enforces that judgement
 ([ADR-0123](adr/0123-rendered-html-storage-decode.md)). `RenderedHtml` stays
 common because dual-target consumers reach it; ammonia stays host-only.
 
@@ -606,9 +604,8 @@ holds fetched remote content.
   sources", "when an update is received" — so the local `post_revisions`
   snapshot above implements nothing it decided, despite the resemblance.
 - **Sanitization of foreign HTML** on arrival
-  ([ADR-0079](adr/0079-rendered-html-sanitization.md)): host-owned
-  module-qualified sanitization establishes the invariant before the existing
-  gate-policed trusted reconstruction seam mints `RenderedHtml`; no inbound
+  ([ADR-0079](adr/0079-rendered-html-sanitization.md)):
+  `common::render::sanitize` establishes the invariant on the host; no inbound
   producer exists yet.
 - **Visibility Layers B/C**
   ([ADR-0020](adr/0020-content-visibility-and-subscription-model.md)):
@@ -1050,12 +1047,10 @@ Markup is built with **maud's `html!`**
 is carried by one crate-local newtype, `web::html::Markup` (`web/src/html.rs`),
 which shadows `maud::Markup` inside `web`. The single raw door is
 `Markup::from_rendered_html`, which takes a `&RenderedHtml`
-(`web/src/html.rs:59`) so the sanitization invariant is what opens it. Three
-xtask gates gate the area — `html_sink_check`, `raw_html_door_check`, and
-`rendered_html_from_trusted_check` — all three read inside macro bodies, and
-`rendered_html_from_trusted_check` also enumerates direct `RenderedHtml` fields,
-so a hand-built `String` cannot reach a sink unescaped and a new trust-carrying
-field cannot appear without a local review marker.
+(`web/src/html.rs:59`) so the sanitization invariant is what opens it. The
+`html-sink` and `raw-html-door` gates read inside macro bodies; compiler privacy
+prevents a hand-built `String` from becoming `RenderedHtml` before that raw
+door.
 
 The authenticated owner stays flash-free by _enhancement_
 ([ADR-0044](adr/0044-authenticated-owner-flash-free-enhancement.md)): an
@@ -2531,7 +2526,7 @@ native host checks because `xtask/` is excluded from the flake source.
 | `thin-components`                                          | `#[component]` control-flow budget                                                                                                                               |
 | `sqlx-newtype-bind`, `sqlx-newtype-decode`                 | newtypes at the SQL boundary                                                                                                                                     |
 | `doctest-fences`                                           | the doctest population Nix cannot reach                                                                                                                          |
-| `rendered-html-from-trusted`, `raw-html-door`, `html-sink` | the three XSS doors                                                                                                                                              |
+| `rendered-html-compiler-boundary`, `raw-html-door`, `html-sink` | compiler privacy for trusted HTML plus the two XSS DOM doors                                                                                                     |
 | `xlang-literal`                                            | Rust/TypeScript literal agreement                                                                                                                                |
 | `xtask-tests`, `tools-test`                                | auxiliary workspace unit tests the application coverage/Nix test gates do not execute ([workspace boundaries](adr/0141-cargo-workspace-execution-boundaries.md)) |
 

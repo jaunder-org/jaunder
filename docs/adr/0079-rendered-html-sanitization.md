@@ -1,4 +1,4 @@
-# ADR-0079: `RenderedHtml` carries a sanitization invariant, via two named doors
+# ADR-0079: `RenderedHtml` carries a common-owned sanitization invariant
 
 - Status: accepted
 - Date: 2026-07-29
@@ -14,11 +14,9 @@ affected: `Html` was a verbatim passthrough, and both `pulldown-cmark` and
 `orgize` pass embedded raw HTML through untouched, so `<script>` in a Markdown
 body reached the sink just as readily.
 
-ADR for #398 introduced `RenderedHtml` as a **provenance** marker — "came out of
-`render()`" — enforced structurally by a private field plus the
-`rendered-html-from-trusted` static check. That stopped a raw `String` reaching
-the unescaped sink, but it did not make the contents safe, because nothing
-sanitized. The type's name promised more than it delivered.
+ADR for #398 introduced `RenderedHtml` as a provenance marker. Its static
+spelling policy was later retired: compiler visibility now prevents downstream
+raw construction, which is the ownership boundary the type needs.
 
 Three constraints shaped the fix:
 
@@ -37,46 +35,33 @@ Three constraints shaped the fix:
 
 ## Decision
 
-**The guarantee lives on the `RenderedHtml` type, not inside `render()`.** Its
-invariant is "contains no active markup", and two doors carry it, meaning
-deliberately different things:
-
-| Door                            | Meaning                                    | Callers                                                 |
-| ------------------------------- | ------------------------------------------ | ------------------------------------------------------- |
-| `RenderedHtml::sanitize(raw)`   | **establishes** the invariant by scrubbing | `render()`, feed ingestion (#282), any inbound producer |
-| `RenderedHtml::from_trusted(s)` | **inherits** it from an earlier `sanitize` | the seed-DTO wire rebuild — one production call site    |
-
-Any future inbound path has exactly one usable public door. Reaching for
-`from_trusted` instead fails the `rendered-html-from-trusted` gate, which is
-extended to name `sanitize` as the correct alternative. Choosing the wrong door
-breaks the build rather than silently reopening the hole.
+**The guarantee lives on the `RenderedHtml` type, not inside a renderer.** Its
+invariant is "contains no active markup". `common::render::sanitize(raw)` is the
+only public production API that establishes it by scrubbing untrusted input.
 
 Supporting choices:
 
-- **`ammonia` sits behind a `sanitize` feature on `common`** — off by default,
-  never enabled for wasm, enabled by `storage`. This is `common`'s second
-  deliberate carve-out after the `sqlx` bridge. It is a _feature_ rather than a
-  `#[cfg(not(target_arch = "wasm32"))]` carve-out, which is the pattern ADR-0058
-  objects to.
-- **`render()` is gated on the same feature.** With it off the function does not
-  _exist_, rather than existing and silently not sanitizing — absence, never a
-  weaker guarantee. Its private helpers and the `PostBody` import are gated with
-  it.
+- **`ammonia` sits behind a `sanitize` feature on `common`** — off by default
+  and never enabled for wasm. The public sanitizer exists only when that
+  host-only feature is enabled.
 - **One allowlist, defined once**, as a module-level `SANITIZER` builder:
   ammonia's audited default, widened only to keep `class` on `<pre>`/`<code>` so
   a fenced block retains its language marker, with an attribute filter narrowing
   the surviving values to `language-*` tokens.
-- **`sqlx::Decode` constructs the private field directly** — neither door — so
-  the `rendered_html` column decodes into the newtype like every other domain
-  column, and the DB read no longer rebuilds through `from_trusted`.
-- **No sanitizing on read, and no backfill.** No deployed instance holds data,
-  so there are no pre-fix rows to heal.
-
-> **Annotation (2026-08-27).** As of #847, host-owned module-qualified rendering
-> and sanitization free functions established the ammonia-backed invariant, then
-> used the existing gate-policed trusted reconstruction seam to mint the
-> common-owned `RenderedHtml`. The invariant and trusted-reconstruction gate
-> remained unchanged. Current ownership: [ARCHITECTURE.md](../ARCHITECTURE.md).
+- **The raw field is crate-private.** No public constructor, `From<String>`,
+  `TryFrom`, `FromStr`, or blanket `Deserialize` admits already-trusted markup.
+  Common-private SQLx decode and field-specific seed/revision DTO
+  deserialization reconstruct Jaunder-owned values directly; neither
+  re-sanitizes nor rewrites rendered bytes.
+- **Exact fixtures are test-only.** `common::test_support::rendered_html` is
+  compiled only for `cfg(test)` or the `test-support` feature.
+- **The boundary is compiler-checked in an isolated dependency.** The
+  `rendered-html-compiler-boundary` xtask step resolves a standalone production
+  crate with default features disabled, proves ordinary dependency use, and
+  proves raw construction and the fixture helper are inaccessible. It does not
+  rely on workspace feature unification or source spelling.
+- **No sanitizing on read, and no backfill.** Decode preserves persisted
+  rendered HTML exactly.
 
 ## Consequences
 
@@ -88,21 +73,15 @@ Supporting choices:
   partial, per context (2) — but it depends on that premise holding. If the
   client ever receives HTML from anywhere but our own server, this must be
   revisited.
-- **A `Decode` blesses any text column decoded into `RenderedHtml`.** This was
-  the original argument against having one. Accepted on a single ground: typing
-  a column as `RenderedHtml` is a deliberate, reviewable act. The
-  `rendered-html-from-trusted` gate now covers that review point too: its
-  population is `from_trusted` on **this** type, the definition and every use
-  with the qualifier resolved since
-  [#790](https://github.com/jaunder-org/jaunder/issues/790), plus direct
-  production struct fields typed `RenderedHtml` since
-  [#701](https://github.com/jaunder-org/jaunder/issues/701). The bridge still
-  does not sanitize on decode; the mechanical guarantee is that every direct
-  trust-carrying field has a local reason marker.
-- **`from_trusted` survives, narrowed to inherited trust.** It is down to one
-  production call site, and the gate keeps it greppable and confined.
-- **#282 must use `sanitize`** for ingested entry HTML. Recorded as an addendum
-  on that issue; the gate will fail the build if it reaches for the wrong door.
+- **A `Decode` blesses any text column decoded into `RenderedHtml`.** This risk
+  is real and accepted on one ground: typing a column as `RenderedHtml` is a
+  deliberate, reviewable act. There is no marker or spelling gate for this
+  semantic correspondence; reviewers must ensure a decode reads the
+  rendered-HTML column. The bridge does not sanitize on decode.
+- **No inherited-trust public constructor survives.** Private reconstruction and
+  test-only fixtures cover their respective representations without exposing a
+  downstream raw-string door.
+- **#282 must use `common::render::sanitize`** for ingested entry HTML.
 - **`pulldown-cmark` and `orgize` remain in the wasm bundle.** With `render()`
   now host-only they are dead weight there and could become optional under the
   same feature — a genuine improvement, deliberately left out of a security fix.
