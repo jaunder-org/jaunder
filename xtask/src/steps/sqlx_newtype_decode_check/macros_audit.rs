@@ -255,6 +255,4 @@ mod tests {
             ]
         );
     }
-
-    // ---- the allowlist polices itself ----
 }

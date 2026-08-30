@@ -31,8 +31,8 @@ tabled = "0.21.0"
 url = "2.5.8"
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
-# `ToTokens`, to render a decode's target type and SQL argument back to source text
-# for the `sqlx-newtype-decode` allowlist key (#715). Already in the tree via `syn`.
+# `ToTokens`, to render structurally found decode targets and diagnostics. Already in the tree
+# via `syn`.
 quote = "1"
 oxc_allocator = "0.146.0"
 oxc_ast = "0.146.0"

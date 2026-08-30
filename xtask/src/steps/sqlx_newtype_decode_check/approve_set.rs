@@ -10,7 +10,7 @@ use super::scan::render;
 /// `host/src` is here because the *validated* halves of a few split newtypes live there,
 /// server-only and serde-free — `host::invite::InviteCode` is the one storage decodes
 /// today, and it is exactly the type `common`'s wasm-facing `ProfferedInviteCode` is not.
-/// Missing it would have cost a spurious allowlist entry for a properly typed decode.
+/// Missing it would reject a properly typed decode.
 pub(super) const DECLARATION_ROOTS: &[&str] = &["common/src", "host/src", "storage/src"];
 
 /// Generic containers walked *through* to reach leaves. Anything else is a leaf that must
@@ -33,12 +33,9 @@ pub(super) const APPROVED_FOREIGN: &[(&str, &str)] = &[(
 #[derive(Default)]
 pub(super) struct ApproveSet {
     pub(super) approved: std::collections::HashSet<String>,
-    /// `#[derive(FromRow)]` structs, tuple aliases, and narrowly-proven handwritten
-    /// `sqlx::FromRow` composites declared under a scanned root.
-    ///
-    /// Derived fields and the direct typed gets in a proven handwritten decoder are
-    /// policed independently. Other handwritten implementations require exact
-    /// allowlist entries.
+    /// `sqlx::FromRow` composites declared under the policed root. Derived fields and the
+    /// direct typed gets in a proven handwritten decoder are policed independently; every
+    /// other handwritten implementation remains unapproved.
     composites: std::collections::HashSet<String>,
     /// Type aliases, mapping the alias ident to the last path segment of its target
     /// (`HubUrl` → `TaggedUrl`).
@@ -400,7 +397,7 @@ fn handwritten_from_row_proves(item: &syn::ItemImpl) -> bool {
 /// under the policed root, where their fields or elements are checked. A hand-written
 /// `sqlx::FromRow` implementation is approved only when every matching implementation for its
 /// simple self type proves the same direct column boundary syntactically. Every other
-/// hand-written implementation needs an exact allowlist entry.
+/// hand-written implementation remains unapproved.
 ///
 /// Only top-level `file.items` are read: a declaration inside an inline `mod` is not seen.
 /// That direction is safe — an unseen declaration is an unapproved type, so the gate bites
@@ -749,12 +746,9 @@ mod tests {
 
     #[test]
     fn every_unapproved_target_is_collected_with_no_special_casing() {
-        // `bool`/`String` targets are in population and need a written reason like
-        // anything else — leaving them invisible and recorded nowhere is the defect
-        // #728 exists to close.
-        //
-        // Note there is no primitive list anywhere in the rule: `bool`, `String`, `i64`,
-        // `u32`, `char` and `Uuid` fail for one reason — nothing approved them.
+        // `bool` and `String` are in population rather than invisible. There is no primitive
+        // list: `bool`, `String`, `i64`, `u32`, `char`, and `Uuid` fail because nothing
+        // approved them.
         for target in [
             "bool",
             "String",

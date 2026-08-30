@@ -60,7 +60,7 @@ Out:
     physical-row identity tests retain meaning, and session-label repair remains
     lossless.
 
-- [ ] Task 4: Cut over the gate and its architectural record
+- [x] Task 4: Cut over the gate and its architectural record
   - Contract: after Tasks 1–3 leave no unapproved leaf, delete `Allowed`,
     `Category`, `ALLOWLIST`, exact-site/count matching, rationale reporting, and
     allowlist self-policing. Retain structural enumeration, declaration/macro
