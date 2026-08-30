@@ -1,12 +1,12 @@
-# ADR-DRAFT: devtool owns ast-grep rule enforcement
+# ADR-0161: devtool owns ast-grep rule enforcement
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-29
 - Issue: [#893](https://github.com/jaunder-org/jaunder/issues/893)
 
 ## Context
 
-[ADR-0076](../0076-no-full-load-spa-navigation.md) forbids in-app full document
+[ADR-0076](0076-no-full-load-spa-navigation.md) forbids in-app full document
 loads and originally enforced that navigation policy with an xtask-owned source
 scanner. That scanner matched source lines rather than Rust syntax, so a
 forbidden call chain could evade it when formatting split the chain across
@@ -20,8 +20,8 @@ Location inspection, `use_location()`, and the pre-paint JavaScript redirect
 remain outside the rule. A representative repository scan measured about 32 ms,
 so running the native rule tests alongside the scan adds negligible gate cost.
 
-[ADR-0052](../0052-devtool-unifies-static-checks.md) and
-[ADR-0146](../0146-devtool-owns-compiling-static-check-definitions.md) establish
+[ADR-0052](0052-devtool-unifies-static-checks.md) and
+[ADR-0146](0146-devtool-owns-compiling-static-check-definitions.md) establish
 that devtool owns static-check command definitions shared by host xtask and
 hermetic Nix lanes. Leaving ast-grep's native rule tests as fixtures without a
 caller would leave the rule's behavior unvalidated, while recreating the command
@@ -41,10 +41,10 @@ reaches the same definitions through `devtool check --all --sandbox-cargo`. Thus
 host and Nix share command definitions while retaining their established
 execution environments.
 
-This **amends [ADR-0076](../0076-no-full-load-spa-navigation.md)** only to
-replace its enforcement mechanism: a devtool-owned native ast-grep rule and its
-native rule tests supersede the xtask source scanner. ADR-0076's navigation
-policy, namespace decision, scope, and recovery guidance remain unchanged.
+This **amends [ADR-0076](0076-no-full-load-spa-navigation.md)** only to replace
+its enforcement mechanism: a devtool-owned native ast-grep rule and its native
+rule tests supersede the xtask source scanner. ADR-0076's navigation policy,
+namespace decision, scope, and recovery guidance remain unchanged.
 
 ## Consequences
 
