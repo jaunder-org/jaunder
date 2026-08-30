@@ -2085,12 +2085,13 @@ side. The decode gate structurally enumerates readable targets under
 types, or composites whose leaves it polices; it has no primitive or
 site-exception path. Intentional persisted values therefore use explicit
 role-specific types, and custom row policy decodes a fully policed intermediate
-row before conversion. The gate reads no SQL, cannot prove column-to-field
-correspondence or types known only by later use, and fails unreadable inputs and
-incomplete macro models closed. Since ADR-0091 there is exactly one bridge
-implementation, `macros/src/sqlx_bridge.rs:67`, driven by a `BridgeSpec`; the
-three newtype derives, `#[derive(SqlxBridge)]`, and `#[text_enum(sqlx)]` all
-call it.
+row before conversion
+([decision record](adr/drafts/sqlx-decode-approval-is-type-only.md)). The gate
+reads no SQL, cannot prove column-to-field correspondence or types known only by
+later use, and fails unreadable inputs and incomplete macro models closed. Since
+ADR-0091 there is exactly one bridge implementation,
+`macros/src/sqlx_bridge.rs:67`, driven by a `BridgeSpec`; the three newtype
+derives, `#[derive(SqlxBridge)]`, and `#[text_enum(sqlx)]` all call it.
 
 Because `Decode` re-validates, a row written under an older grammar or corrupted
 can fail it — and on a bulk read **one bad row must not stop the scan**

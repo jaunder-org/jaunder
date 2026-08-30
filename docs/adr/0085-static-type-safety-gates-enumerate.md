@@ -122,40 +122,31 @@ only valid where that second check actually runs. A composite the gate has not
 read has had no field examined, so approving it would be an unbacked promise —
 it must fail.
 
-The cost is deliberate and load-bearing where a gate genuinely permits
-exceptions: legitimate primitive use then costs a written, site-scoped allowlist
-entry, and that friction lands on common, harmless operations. We accept that
-cost for such gates: the friction is the mechanism. It does not require every
-gate to model legitimate roles as exceptions; `sqlx-newtype-decode` instead
-requires declaration-backed types for those roles.
+The cost is deliberate and load-bearing. An enumerating gate makes legitimate
+primitive use cost a written allowlist entry, and that friction lands on common,
+harmless operations. We accept it: the friction _is_ the mechanism. A gate that
+is free to work around is a gate that reports green.
 
 ### Conformance
 
-- **`sqlx-newtype-decode`** (#715, widened by #728; amended by #1201) conforms,
-  and is the worked example of the approve-by-declaration rule above. Its
-  population is every sqlx decode under `storage/src`, read from the AST at the
-  nearest place the type is _written down_ (turbofish, then `let` ascription,
-  then the enclosing `fn` return), plus every declared decode target (`FromRow`
-  struct fields, tuple aliases). A decode passes only when **every leaf** is
-  approved through a declaration-backed bridge-emitting type found by scanning
-  the declaration roots, an approved foreign type, or a composite whose parts
-  the gate polices separately. There is no primitive list or decode-exemption
-  allowlist — `String`, `bool`, `u32` and `Uuid` fail for the one reason that
-  nothing approved them.
+- **`sqlx-newtype-decode`** (#715, widened by #728) conforms, and is the worked
+  example of the approve-by-declaration rule above. Its population is every sqlx
+  decode under `storage/src`, read from the AST at the nearest place the type is
+  _written down_ (turbofish, then `let` ascription, then the enclosing `fn`
+  return), plus every declared decode target (`FromRow` struct fields, tuple
+  aliases). A decode passes only when **every leaf** of its target is approved:
+  declared with a bridge-emitting macro found by scanning the declaration roots,
+  listed in a small `APPROVED_FOREIGN`, or a composite whose parts the gate
+  polices separately. There is no primitive list — `String`, `bool`, `u32` and
+  `Uuid` fail for the one reason that nothing approved them.
 
-  #1201 made this a clean cutover: types are the only approval path. Where a raw
-  or persisted value is intentional, its role receives an explicit, lossless
-  type; shared semantic mechanics are used only where the underlying contracts
-  truly match. A handwritten decode needing custom conversion policy decodes a
-  fully policed intermediate row and then converts it, rather than receiving an
-  exemption.
-
-  It inspects no SQL; incomplete declaration models fail loudly. The gate
-  cross-checks its own model against every bridge-emitting macro the `macros`
-  crate declares, and an unreadable or unparseable file under **either** the
+  It inspects no SQL; each allowlist entry names one decode and its
+  multiplicity, with a written reason and a rationale category; two entries
+  sharing a key is a failure, as is a `deferred-newtype` entry naming no
+  tracking issue; it cross-checks its own model against every macro the `macros`
+  crate declares; and an unreadable or unparseable file under **either** the
   policed root or a declaration root is a hard failure rather than a silent
-  skip. It therefore remains macro-self-policed even though no central or
-  per-site decode allowlist remains.
+  skip.
 
   Its honesty obligation (below) is discharged in its module doc. Two constructs
   are **outside** the population because `syn` cannot resolve them — a
@@ -245,9 +236,9 @@ a site is a source line, the reason belongs on it, and the exempt set is then
 _derived_ from the tree rather than declared beside the rule: a derived set
 cannot go stale, which is exactly what the multiplicity reconciliation existed
 to detect. See [the marker ADR](0094-gate-exemptions-in-source-markers.md) for
-the discriminator. It does not displace `sqlx-newtype-decode`'s declaration
-model, which approves decoded values by their types rather than a central list
-of site exceptions.
+the discriminator. It does not displace `sqlx-newtype-decode`'s central list,
+whose entries carry a rationale category and a tracking issue that no single
+site could hold.
 
 **What it creates.** #716 is re-framed from an acknowledged gap into scheduled
 work. Rebuilding `sqlx-newtype-bind` to enumerate will require an allowlist for
