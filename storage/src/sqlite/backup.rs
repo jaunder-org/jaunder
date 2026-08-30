@@ -9,9 +9,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{Row, SqliteConnection, SqlitePool, error::ErrorKind};
 
 use crate::backup::{
-    BackupError, BackupManifest, BackupMode, ColumnInfo, RestoreValidationReport, backup_table_set,
-    build_manifest, ensure_schema_version, order_by_clause, read_table_rows, restore_table_order,
-    validate_instance_identity_backup, validate_restore_row,
+    self, BackupError, BackupManifest, BackupMode, ColumnInfo, RestoreValidationReport,
 };
 use crate::helpers;
 use crate::sql;
@@ -96,7 +94,7 @@ pub(crate) async fn export_database(
             export_table(&mut connection, destination_path, table, &columns).await?;
         }
 
-        Ok(build_manifest(
+        Ok(backup::build_manifest(
             schema_version,
             schema_checksum,
             mode,
@@ -132,8 +130,8 @@ pub(crate) async fn restore_database(
 ) -> Result<RestoreValidationReport, BackupError> {
     let mut connection = pool.acquire().await?;
     let schema_version = schema_version(&mut connection).await?;
-    ensure_schema_version(manifest, schema_version)?;
-    validate_instance_identity_backup(source_path, manifest)?;
+    backup::ensure_schema_version(manifest, schema_version)?;
+    backup::validate_instance_identity_backup(source_path, manifest)?;
     // Disable FK enforcement for the bulk import so rows need not be inserted in
     // referential order; integrity is verified once at the end via
     // `foreign_key_check`. FKs are re-enabled on every exit path below, since the
@@ -155,7 +153,7 @@ pub(crate) async fn restore_database(
                 .await
                 .map_err(map_restore_error)?;
         }
-        for table in restore_table_order(&manifest.tables) {
+        for table in backup::restore_table_order(&manifest.tables) {
             let columns = columns(&mut connection, table).await?;
             import_table(
                 &mut connection,
@@ -212,7 +210,7 @@ async fn existing_export_tables(
         .into_iter()
         .map(|row| row.try_get::<String, _>("name"))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(backup_table_set(names))
+    Ok(backup::backup_table_set(names))
 }
 
 async fn import_table(
@@ -222,7 +220,7 @@ async fn import_table(
     columns: &[ColumnInfo],
     validation_report: &mut RestoreValidationReport,
 ) -> Result<(), BackupError> {
-    let rows = read_table_rows(source_path, table)?;
+    let rows = backup::read_table_rows(source_path, table)?;
     if rows.is_empty() {
         return Ok(());
     }
@@ -235,7 +233,7 @@ async fn import_table(
     let insert = insert_sql(table, &column_names);
 
     for row in rows {
-        validate_restore_row(table, &row, validation_report);
+        backup::validate_restore_row(table, &row, validation_report);
         let mut query = sqlx::query(&insert);
         for column in &column_names {
             let value = row.get(column).ok_or_else(|| {
@@ -375,7 +373,7 @@ fn json_select(table: &str, columns: &[ColumnInfo]) -> String {
     format!(
         "SELECT json_object({json_args}) FROM {} ORDER BY {}",
         sql::quote_identifier(table),
-        order_by_clause(columns, sql::quote_identifier)
+        backup::order_by_clause(columns, sql::quote_identifier)
     )
 }
 

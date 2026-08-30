@@ -17,6 +17,7 @@ use common::seed::Page;
 // `PostSummary` and `TagSummary` in scope, and a bare `Summary` among them says
 // nothing about which one it is.
 use crate::audiences;
+use crate::auth;
 use crate::avatar::Avatar;
 use crate::error::WebError;
 use crate::feed_discovery::{FeedDiscovery, RsdDiscovery};
@@ -27,22 +28,16 @@ use crate::media::MediaUpload;
 // file's 86 `.get()`/`.update()` calls resolve through. `Update` is spelled
 // `super::Update` at its use sites; `Get` is not needed in this file at all, and
 // is named here only so a future author does not add it to the list.
+use super::render;
 use crate::posts::{
     ComposeState, Create, Delete, DraftRowDisplay, EditPublicationState, InvalidSchedule,
     ListingRoute, LoadedPublication, NamedAudienceState, PermalinkRoute, PublicationIntent,
-    Publish, SavedPost, ScheduledEditState, Unpublish, UnpublishedPost, draft_row_display,
-    edit_submit_gate, get, get_audience_selection, get_default_audience_selection, get_preview,
-    list_drafts, list_scheduled, loaded_publication, notify, notify_with_fallback,
-    parse_permalink_route, publication_from_local, publish_redirect, seeded_page, submit_gate,
-    tag_query, user_query, user_tag_query, with_post_id,
+    Publish, SavedPost, ScheduledEditState, Unpublish, UnpublishedPost,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
 use crate::tags::TagInput;
-use crate::timeline::{
-    TimelineGate, TimelineState, list_by_tag, list_by_user, list_by_user_and_tag, spawn_load_more,
-    wire_timeline_resolve,
-};
+use crate::timeline::{self, TimelineGate, TimelineState};
 use crate::topbar::Topbar;
 use common::pagination::PageSize;
 use common::post_body::PostBody;
@@ -170,12 +165,12 @@ pub fn PostDisplay<'a>(
     tag_context: &'a TagContext,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView + use<> {
-    let time_label = crate::posts::render::format_post_time(post.display_time());
+    let time_label = render::format_post_time(post.display_time());
     // Built once and shared by both arms so the authored content column is the SAME
     // pure, viewer-independent render the projector paints (#181, ADR-0044 D4) — no
     // hand-rebuilt markup and no is_author-driven content change that could diverge
     // and reintroduce a flash. The action column is layered on additively.
-    let view = crate::posts::render::PostView {
+    let view = render::PostView {
         username: &post.username,
         title: post.title.as_ref(),
         banner,
@@ -194,7 +189,7 @@ pub fn PostDisplay<'a>(
         // not the component" (ADR-0041 §4). The projector only ever renders this
         // anonymous view, so this is the only path that must coincide.
         None => {
-            let inner = crate::posts::render::render_post_inner(&view);
+            let inner = render::render_post_inner(&view);
             inner
                 .inject_into(leptos::html::article().class("j-post"))
                 .into_any()
@@ -206,7 +201,7 @@ pub fn PostDisplay<'a>(
         // `inner_html` can't) overlays it as a sibling — hand-rebuilt reactive
         // markup here would diverge from the projector and reintroduce the flash.
         Some(children) => {
-            let inner_content = crate::posts::render::render_post_content(&view);
+            let inner_content = render::render_post_content(&view);
             view! {
                 <article class="j-post">
                     <Avatar name=&post.username size=38 />
@@ -315,7 +310,7 @@ pub fn PostCard<'a>(
     // Unpublish (#23): an Unpublish column would be a no-op on an already-
     // unpublished post.
     let is_draft = post.is_draft();
-    let edit_url = crate::posts::edit_post_url(post_id);
+    let edit_url = super::edit_post_url(post_id);
     let history_url = format!("/posts/{}/history", i64::from(post_id));
     let delete_action = ServerAction::<Delete>::new();
     let unpublish_action = ServerAction::<Unpublish>::new();
@@ -326,7 +321,7 @@ pub fn PostCard<'a>(
         move || delete_action.value().get(),
         move |()| {
             deleted.set(true);
-            notify(on_mutate);
+            super::notify(on_mutate);
         },
     );
     on_settled_ok(
@@ -335,7 +330,7 @@ pub fn PostCard<'a>(
         // a per-caller policy, so it is the host-tested `notify_with_fallback` (#306).
         // The returned `SavedPost` is deliberately unread: this caller navigates to
         // /drafts regardless (#783 tracks using the moved permalink here).
-        move |_| notify_with_fallback(on_unpublish, on_mutate),
+        move |_| super::notify_with_fallback(on_unpublish, on_mutate),
     );
     // Client-only navigation side-effect (web-style-guide §9): react to the
     // resolved publish action, mirroring EditPostPage's publish redirect.
@@ -351,7 +346,7 @@ pub fn PostCard<'a>(
             // resource — otherwise a permalink page would keep showing the draft state
             // (#592). The unpublish path navigates to /drafts; this is its mirror.
             navigate(&published.permalink, NavigateOptions::default());
-            notify(on_publish);
+            super::notify(on_publish);
         },
     );
 
@@ -605,7 +600,7 @@ pub fn PostCreateForm(
     let create_action = ServerAction::<Create>::new();
     let state = ComposeState::new();
 
-    let default_audience = Resource::new(|| (), |()| get_default_audience_selection());
+    let default_audience = Resource::new(|| (), |()| super::get_default_audience_selection());
     // The site-wide default audience resolves asynchronously; the composer must
     // render immediately (no Suspense), so seed the editable `audience` signal
     // once the Resource resolves, over the Public placeholder `ComposeState::new`
@@ -661,11 +656,11 @@ fn CompactComposer(
     // The gate and the payload come from one `submit_gate` call (#860, ADR-0105), so a
     // control that cannot dispatch is disabled rather than inert. No slug in this shape,
     // so the only other blocker is the summary.
-    let (submit_disabled, dispatch) = submit_gate(
+    let (submit_disabled, dispatch) = super::submit_gate(
         state.body,
         Signal::derive(move || !state.summary_field.is_valid()),
         Callback::new(move |(body, publish): (PostBody, bool)| {
-            let publication = publication_from_local(publish, &state.publish_at.get());
+            let publication = super::publication_from_local(publish, &state.publish_at.get());
             create_action.dispatch(Create {
                 post: state.inputs(body, publication, None),
             });
@@ -726,17 +721,11 @@ fn FullComposer(
     // failed or unresolved picker cannot dispatch as though an empty list had
     // loaded. The callback repeats the pure guard so direct invocation cannot
     // bypass the disabled buttons.
-    let (submit_disabled, dispatch) = submit_gate(
+    let (submit_disabled, dispatch) = super::submit_gate(
         state.body,
-        Signal::derive(move || {
-            !slug_field.is_valid()
-                || !state.summary_field.is_valid()
-                || state.audience.with(|selection| {
-                    named.with(|state| state.selection_for_submit(selection).is_none())
-                })
-        }),
+        Signal::derive(move || !slug_field.is_valid()),
         Callback::new(move |(body, publish): (PostBody, bool)| {
-            let publication = publication_from_local(publish, &state.publish_at.get());
+            let publication = super::publication_from_local(publish, &state.publish_at.get());
             if state.audience.with(|selection| {
                 named.with(|state| state.selection_for_submit(selection).is_some())
             }) {
@@ -850,7 +839,7 @@ pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl 
 pub fn CreatePostPage() -> impl IntoView {
     // Server-confirmed gate: await the shared session reconcile (an expired cookie
     // must not show the create form) (#591).
-    let session = crate::auth::use_session();
+    let session = auth::use_session();
     let last_result: RwSignal<Option<SavedPost>> = RwSignal::new(None);
 
     view! {
@@ -930,7 +919,7 @@ fn permalink_first_paint(seed_post: Option<AuthoredPost>) -> AnyView {
             // Just the article — this fallback sits inside the reactive PostPage's
             // own `j-scroll`/`j-page`. `display:contents` keeps the host wrapper out
             // of the layout so it coincides with the projector's permalink page.
-            let html = crate::posts::render::permalink_article(&seed.post);
+            let html = render::permalink_article(&seed.post);
             html.inject_into(leptos::html::div().style("display:contents"))
                 .into_any()
         }
@@ -963,7 +952,7 @@ pub fn PostPage() -> impl IntoView {
         // Decode the permalink route params into typed values client-side so
         // `get` takes a typed `Slug`/`Username` (ADR-0063 §4). The pure
         // all-or-nothing decoder is host-tested in `super::parse`.
-        parse_permalink_route(
+        super::parse_permalink_route(
             params.get("username").as_deref(),
             params.get("year").as_deref(),
             params.get("month").as_deref(),
@@ -987,7 +976,7 @@ pub fn PostPage() -> impl IntoView {
                 // (e.g. /media/…) never reaches this page at all (#592).
                 return Err(WebError::validation("Invalid permalink"));
             };
-            get(route.username, route.date, route.slug).await
+            super::get(route.username, route.date, route.slug).await
         },
     );
 
@@ -1062,7 +1051,12 @@ pub fn UserTimelinePage() -> impl IntoView {
     let initial_page = Resource::new(
         move || (username.get(), mutate_version.get()),
         |(username, _)| async move {
-            list_by_user(user_query(username)?, None, Some(PageSize::default())).await
+            timeline::list_by_user(
+                super::user_query(username)?,
+                None,
+                Some(PageSize::default()),
+            )
+            .await
         },
     );
 
@@ -1072,17 +1066,17 @@ pub fn UserTimelinePage() -> impl IntoView {
     // Loading flash). The route guard — which keeps a client-side navigation to a
     // *different* profile from adopting the initial URL's seed — is the host-tested
     // `seeded_page` (#306); the reactive fetch still runs and takes over.
-    state.adopt_seed(seeded_page(
+    state.adopt_seed(super::seeded_page(
         use_context::<Option<PageSeed>>().flatten(),
         &ListingRoute::Profile(username.get_untracked()),
     ));
 
-    wire_timeline_resolve(state, initial_page);
+    timeline::wire_timeline_resolve(state, initial_page);
 
     let on_load_more = Callback::new(move |()| {
-        if let Ok(username) = user_query(username.get_untracked()) {
-            spawn_load_more(state, move |cursor, limit| {
-                list_by_user(username, cursor, limit)
+        if let Ok(username) = super::user_query(username.get_untracked()) {
+            timeline::spawn_load_more(state, move |cursor, limit| {
+                timeline::list_by_user(username, cursor, limit)
             });
         }
     });
@@ -1130,7 +1124,7 @@ pub fn EditPostPage() -> impl IntoView {
     // `on_settled_ok` wraps.
     let navigate = use_navigate();
     on_settled_ok(
-        move || publish_redirect(update_post_action.value().get()),
+        move || super::publish_redirect(update_post_action.value().get()),
         move |permalink: RootRelativeUrl| navigate(&permalink, NavigateOptions::default()),
     );
 
@@ -1144,7 +1138,9 @@ pub fn EditPostPage() -> impl IntoView {
             .get("post_id")
             .and_then(|v| v.parse::<PostId>().ok())
     };
-    let post = Resource::new(post_id_param, |post_id| with_post_id(post_id, get_preview));
+    let post = Resource::new(post_id_param, |post_id| {
+        super::with_post_id(post_id, super::get_preview)
+    });
     // Seeded into the editable `audience` picker inside the `Suspense` block below
     // (awaited alongside `post`, not via a standalone Effect, since the page
     // already suspends on `post`). On a fetch error the Public default survives
@@ -1152,7 +1148,7 @@ pub fn EditPostPage() -> impl IntoView {
     // comment lives here, outside `view!`, because leptosfmt relocates comments
     // inside the macro.
     let current_audience = Resource::new(post_id_param, |post_id| {
-        with_post_id(post_id, get_audience_selection)
+        super::with_post_id(post_id, super::get_audience_selection)
     });
 
     view! {
@@ -1166,7 +1162,10 @@ pub fn EditPostPage() -> impl IntoView {
                         state.seed_from(&fetched.post);
                         slug_field.value.set(fetched.post.post.slug.to_string());
                         let publication = EditPublicationState::from_loaded(
-                            loaded_publication(fetched.post.post.published_at, fetched.fetched_at),
+                            super::loaded_publication(
+                                fetched.post.post.published_at,
+                                fetched.fetched_at,
+                            ),
                             state.publish_at,
                         );
                         if let Ok(selection) = current_audience.await {
@@ -1221,7 +1220,7 @@ fn EditPostForm(
     });
     let loaded_publication = publication.loaded();
     let scheduled = publication.scheduled();
-    let (save_disabled, schedule_error, dispatch_update) = edit_submit_gate(
+    let (save_disabled, schedule_error, dispatch_update) = super::edit_submit_gate(
         state.body,
         also_blocked,
         publication,
@@ -1539,7 +1538,7 @@ pub fn DraftsPage() -> impl IntoView {
                 delete_action.version().get(),
             )
         },
-        |_| list_drafts(None, Some(PageSize::default())),
+        |_| super::list_drafts(None, Some(PageSize::default())),
     );
 
     view! {
@@ -1594,7 +1593,7 @@ pub fn DraftsPage() -> impl IntoView {
 pub fn ScheduledPage() -> impl IntoView {
     // Match the create-post gate: the scheduled listing is an authenticated management
     // surface, so wait for the server-confirmed session before calling the row API.
-    let session = crate::auth::use_session();
+    let session = auth::use_session();
 
     view! {
         <Topbar title="Scheduled" sub="Posts queued for publication" />
@@ -1606,7 +1605,10 @@ pub fn ScheduledPage() -> impl IntoView {
                     {move || Suspend::new(async move {
                         match session.reconcile.await {
                             Ok(Some(_)) => {
-                                let scheduled = list_scheduled(None, Some(PageSize::default()))
+                                let scheduled = super::list_scheduled(
+                                        None,
+                                        Some(PageSize::default()),
+                                    )
                                     .await;
                                 view! { <ScheduledList scheduled=scheduled /> }.into_any()
                             }
@@ -1666,7 +1668,7 @@ fn ScheduledList(scheduled: Result<Page<UnpublishedPost>, WebError>) -> impl Int
 }
 
 fn render_scheduled_row(scheduled: UnpublishedPost) -> impl IntoView {
-    let DraftRowDisplay { label, .. } = draft_row_display(&scheduled);
+    let DraftRowDisplay { label, .. } = super::draft_row_display(&scheduled);
     let go_live = scheduled.post.published_at.map_or_else(
         || "Scheduled time unavailable".to_owned(),
         |when| when.to_string(),
@@ -1740,7 +1742,7 @@ fn render_draft_row(
     let DraftRowDisplay {
         label,
         scheduled_badge,
-    } = draft_row_display(&draft);
+    } = super::draft_row_display(&draft);
     let scheduled_badge = scheduled_badge.map(|text| {
         view! { <span class="j-badge j-badge-scheduled">{text}</span> }
     });
@@ -1797,7 +1799,9 @@ pub fn SiteTagPage() -> impl IntoView {
 
     let initial_page = Resource::new(
         move || (tag.get(), mutate_version.get()),
-        |(tag, _)| async move { list_by_tag(tag_query(tag)?, None, Some(PageSize::default())).await },
+        |(tag, _)| async move {
+            timeline::list_by_tag(super::tag_query(tag)?, None, Some(PageSize::default())).await
+        },
     );
 
     let state = TimelineState::default();
@@ -1805,17 +1809,17 @@ pub fn SiteTagPage() -> impl IntoView {
     // tag so first paint shows content (the host-tested `seeded_page` guard keeps a
     // client-side nav to a different tag from adopting the initial URL's seed, #306);
     // the reactive fetch still runs.
-    state.adopt_seed(seeded_page(
+    state.adopt_seed(super::seeded_page(
         use_context::<Option<PageSeed>>().flatten(),
         &ListingRoute::SiteTag(tag.get_untracked()),
     ));
 
-    wire_timeline_resolve(state, initial_page);
+    timeline::wire_timeline_resolve(state, initial_page);
 
     let on_load_more = Callback::new(move |()| {
-        if let Ok(tag_value) = tag_query(tag.get_untracked()) {
-            spawn_load_more(state, move |cursor, limit| {
-                list_by_tag(tag_value, cursor, limit)
+        if let Ok(tag_value) = super::tag_query(tag.get_untracked()) {
+            timeline::spawn_load_more(state, move |cursor, limit| {
+                timeline::list_by_tag(tag_value, cursor, limit)
             });
         }
     });
@@ -1868,8 +1872,8 @@ pub fn UserTagPage() -> impl IntoView {
     let initial_page = Resource::new(
         move || (username.get(), tag.get(), mutate_version.get()),
         |(username, tag, _)| async move {
-            let (username, tag) = user_tag_query(username, tag)?;
-            list_by_user_and_tag(username, tag, None, Some(PageSize::default())).await
+            let (username, tag) = super::user_tag_query(username, tag)?;
+            timeline::list_by_user_and_tag(username, tag, None, Some(PageSize::default())).await
         },
     );
 
@@ -1877,19 +1881,19 @@ pub fn UserTagPage() -> impl IntoView {
     // Public projector seed (#178/#179): adopt the seeded posts for a matching
     // username+tag so first paint shows content; both halves of the match are the
     // host-tested `seeded_page` (#306), and the reactive fetch still runs.
-    state.adopt_seed(seeded_page(
+    state.adopt_seed(super::seeded_page(
         use_context::<Option<PageSeed>>().flatten(),
         &ListingRoute::UserTag(username.get_untracked(), tag.get_untracked()),
     ));
 
-    wire_timeline_resolve(state, initial_page);
+    timeline::wire_timeline_resolve(state, initial_page);
 
     let on_load_more = Callback::new(move |()| {
         if let Ok((username_value, tag_value)) =
-            user_tag_query(username.get_untracked(), tag.get_untracked())
+            super::user_tag_query(username.get_untracked(), tag.get_untracked())
         {
-            spawn_load_more(state, move |cursor, limit| {
-                list_by_user_and_tag(username_value, tag_value, cursor, limit)
+            timeline::spawn_load_more(state, move |cursor, limit| {
+                timeline::list_by_user_and_tag(username_value, tag_value, cursor, limit)
             });
         }
     });

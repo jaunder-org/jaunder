@@ -4,7 +4,7 @@ use macros::StrNewtype;
 use thiserror::Error;
 
 use common::{
-    feed::{FeedFormat, FeedSurface, canonicalize},
+    feed::{self, FeedFormat, FeedSurface},
     tag::Tag,
     username::Username,
 };
@@ -32,11 +32,11 @@ impl FeedPath {
     /// is *always* a valid canonical path, so this cannot fail. Used by the
     /// identity-key producers that already hold a decomposed surface
     /// ([`affected_feed_urls`], the feed handlers), so they skip the fallible
-    /// [`FromStr`] reparse. Delegates the format logic to [`canonicalize`] — its
+    /// [`FromStr`] reparse. Delegates the format logic to [`feed::canonicalize`] — its
     /// single source of truth.
     #[must_use]
     pub fn canonical(surface: &FeedSurface, format: FeedFormat) -> Self {
-        Self(canonicalize(surface, format))
+        Self(feed::canonicalize(surface, format))
     }
 
     /// The `(surface, format)` this path addresses — the inverse of
@@ -47,7 +47,7 @@ impl FeedPath {
     ///
     /// **Returns `Option` even though `None` is unreachable today.** Both construction
     /// doors guarantee a recoverable path — [`FromStr`] routes through [`parse`], and
-    /// [`canonical`] emits only what [`canonicalize`] produces, which `parse` accepts
+    /// [`canonical`] emits only what [`feed::canonicalize`] produces, which `parse` accepts
     /// (pinned by `round_trips_all_surfaces_and_formats`). But that invariant spans *two*
     /// functions rather than being enforced by the type, so widening `canonicalize`
     /// without widening `parse` would break it. Returning `Option` keeps that a value the
@@ -146,7 +146,7 @@ mod tests {
     use super::*;
 
     fn rt(surface: FeedSurface, format: FeedFormat) {
-        let path = canonicalize(&surface, format);
+        let path = feed::canonicalize(&surface, format);
         let parsed = parse(&path).expect("parses");
         assert_eq!(parsed, (surface, format));
     }
@@ -323,7 +323,7 @@ mod tests {
                     tag: tag("rust"),
                 },
             ] {
-                let canon = canonicalize(&surface, format);
+                let canon = feed::canonicalize(&surface, format);
                 let fp: FeedPath = canon.parse().expect("canonical path parses");
                 assert_eq!(fp.as_ref(), canon);
                 // `canonical` agrees with the free `canonicalize`.

@@ -16,10 +16,11 @@ use tokio::io::AsyncWriteExt;
 
 use common::ids::UserId;
 use common::media::{
-    ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaRef, MediaSource,
-    UploadedMedia, UserQuota, detect_content_type, media_path, media_url,
+    self, ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaRef, MediaSource,
+    UploadedMedia, UserQuota,
 };
 use common::time::UtcInstant;
+use host::metrics::{self, UploadOutcome};
 
 use crate::InstanceId;
 use crate::{
@@ -117,7 +118,7 @@ impl MediaManager {
     {
         let (max_file_size, user_quota) = self.get_limits().await?;
 
-        let content_type = content_type.unwrap_or_else(|| detect_content_type(filename));
+        let content_type = content_type.unwrap_or_else(|| media::detect_content_type(filename));
 
         let tmp_path = self.create_temp_file().await?;
         let (sha256_hex, size_bytes) = self
@@ -155,18 +156,18 @@ impl MediaManager {
     /// the `Err` path — keeping emission to exactly once per upload.
     fn emit_failure_metric(result: &anyhow::Result<UploadedMedia>) {
         if let Err(err) = result {
-            host::metrics::media_upload(Self::upload_outcome(err.downcast_ref::<MediaError>()));
+            metrics::media_upload(Self::upload_outcome(err.downcast_ref::<MediaError>()));
         }
     }
 
     /// Maps a failed upload to its bounded `outcome` attribute for the
     /// `jaunder.media.uploads` metric. A non-`MediaError` counts as `error`.
-    fn upload_outcome(err: Option<&MediaError>) -> host::metrics::UploadOutcome {
+    fn upload_outcome(err: Option<&MediaError>) -> UploadOutcome {
         match err {
-            Some(MediaError::BadRequest(_)) => host::metrics::UploadOutcome::Invalid,
-            Some(MediaError::PayloadTooLarge) => host::metrics::UploadOutcome::TooLarge,
-            Some(MediaError::InsufficientStorage) => host::metrics::UploadOutcome::QuotaExceeded,
-            Some(MediaError::Internal(_)) | None => host::metrics::UploadOutcome::Error,
+            Some(MediaError::BadRequest(_)) => UploadOutcome::Invalid,
+            Some(MediaError::PayloadTooLarge) => UploadOutcome::TooLarge,
+            Some(MediaError::InsufficientStorage) => UploadOutcome::QuotaExceeded,
+            Some(MediaError::Internal(_)) | None => UploadOutcome::Error,
         }
     }
 
@@ -312,7 +313,7 @@ impl MediaManager {
                 "storage.media.quota_temp_cleanup",
             );
         }
-        let relative_path = media_path(
+        let relative_path = media::media_path(
             &MediaSource::Upload,
             &metadata.sha256_hex,
             &metadata.filename,
@@ -341,13 +342,13 @@ impl MediaManager {
             metadata.size_bytes,
         )
         .await?;
-        host::metrics::media_upload_bytes(metadata.size_bytes.value().unsigned_abs());
-        host::metrics::media_upload(if deduplicated {
-            host::metrics::UploadOutcome::Deduplicated
+        metrics::media_upload_bytes(metadata.size_bytes.value().unsigned_abs());
+        metrics::media_upload(if deduplicated {
+            UploadOutcome::Deduplicated
         } else {
-            host::metrics::UploadOutcome::Stored
+            UploadOutcome::Stored
         });
-        let url = media_url(
+        let url = media::media_url(
             &MediaSource::Upload,
             &metadata.sha256_hex,
             &metadata.filename,
@@ -467,7 +468,7 @@ impl MediaManager {
             return Ok(());
         }
 
-        let file_path = storage_path.join("media").join(media_path(
+        let file_path = storage_path.join("media").join(media::media_path(
             &media.source,
             &media.sha256,
             &media.filename,
@@ -574,8 +575,11 @@ mod tests {
     }
 
     fn stored_path(root: &Path, media: &MediaRef) -> PathBuf {
-        root.join("media")
-            .join(media_path(&media.source, &media.sha256, &media.filename))
+        root.join("media").join(media::media_path(
+            &media.source,
+            &media.sha256,
+            &media.filename,
+        ))
     }
 
     #[test]
@@ -609,7 +613,7 @@ mod tests {
     fn typed_content_type_is_preserved_and_absent_is_detected_from_filename() {
         assert_eq!("image/png".parse::<ContentType>().unwrap(), "image/png");
         assert_eq!(
-            detect_content_type(&parse_filename("photo.jpg")),
+            media::detect_content_type(&parse_filename("photo.jpg")),
             "image/jpeg"
         );
     }
@@ -982,7 +986,7 @@ mod tests {
         assert_eq!(resp.content_type, "image/png");
         assert_eq!(
             resp.url,
-            media_url(&MediaSource::Upload, &expected, &filename)
+            media::media_url(&MediaSource::Upload, &expected, &filename)
         );
     }
 

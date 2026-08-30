@@ -3,8 +3,8 @@ use common::time::{self, UtcInstant};
 use leptos::prelude::*;
 use thiserror::Error;
 
+use super::compose_state::{self, PublicationIntent};
 use crate::forms::Field;
-use crate::posts::compose_state::{PublicationIntent, publication_from_local, submit_gate};
 
 /// The publication state captured when the editor response was assembled.
 ///
@@ -148,11 +148,14 @@ pub fn edit_submit_gate(
 ) {
     match publication {
         EditPublicationState::Draft(publish_at) => {
-            let (disabled, on_click) = submit_gate(
+            let (disabled, on_click) = compose_state::submit_gate(
                 body,
                 also_blocked,
                 Callback::new(move |(body, publish): (PostBody, bool)| {
-                    on_submit.run((body, publication_from_local(publish, &publish_at.get())));
+                    on_submit.run((
+                        body,
+                        compose_state::publication_from_local(publish, &publish_at.get()),
+                    ));
                 }),
             );
             (
@@ -171,7 +174,7 @@ pub fn edit_submit_gate(
             )
         }
         EditPublicationState::Live => {
-            let (disabled, on_click) = submit_gate(
+            let (disabled, on_click) = compose_state::submit_gate(
                 body,
                 also_blocked,
                 Callback::new(move |(body, _): (PostBody, bool)| {

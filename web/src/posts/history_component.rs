@@ -18,6 +18,7 @@ use super::{
     get_post_history, get_revision_history_detail, list_history, load_authenticated_history,
     revision_collection_displays, revision_history_rows,
 };
+use crate::auth;
 use crate::topbar::Topbar;
 
 #[derive(Clone, Copy)]
@@ -32,9 +33,9 @@ impl HistoryScope {
         cursor: RevisionHistoryCursor,
     ) -> crate::error::WebResult<RevisionHistoryPage> {
         match self {
-            Self::Global => list_history(Some(cursor), Some(PageSize::default())).await,
+            Self::Global => super::list_history(Some(cursor), Some(PageSize::default())).await,
             Self::Post(post_id) => {
-                get_post_history(post_id, Some(cursor), Some(PageSize::default()))
+                super::get_post_history(post_id, Some(cursor), Some(PageSize::default()))
                     .await
                     .map(|history| history.revisions)
             }
@@ -82,14 +83,14 @@ fn history_state_view(state: AuthenticatedHistoryState<AnyView>) -> AnyView {
 /// Newest-first history across every Post owned by the authenticated user.
 #[component]
 pub fn HistoryPage() -> impl IntoView {
-    let session = crate::auth::use_session();
+    let session = auth::use_session();
     let initial = Resource::new(
         || (),
         move |()| async move {
             let Some(_) = session.reconcile.await? else {
                 return Ok(None);
             };
-            list_history(None, Some(PageSize::default()))
+            super::list_history(None, Some(PageSize::default()))
                 .await
                 .map(Some)
         },
@@ -124,7 +125,7 @@ pub fn HistoryPage() -> impl IntoView {
 #[component]
 pub fn PostHistoryPage() -> impl IntoView {
     let params = use_params_map();
-    let session = crate::auth::use_session();
+    let session = auth::use_session();
     let post_id = move || {
         params
             .get()
@@ -133,10 +134,10 @@ pub fn PostHistoryPage() -> impl IntoView {
     };
     let initial = Resource::new(post_id, move |post_id| {
         let reconcile = session.reconcile;
-        load_authenticated_history(
+        super::load_authenticated_history(
             post_id,
             move || async move { reconcile.await },
-            |post_id| get_post_history(post_id, None, Some(PageSize::default())),
+            |post_id| super::get_post_history(post_id, None, Some(PageSize::default())),
         )
     });
 
@@ -148,7 +149,10 @@ pub fn PostHistoryPage() -> impl IntoView {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
                     {move || Suspend::new(async move {
-                        let state = authenticated_history_state(post_id().is_some(), initial.await)
+                        let state = super::authenticated_history_state(
+                                post_id().is_some(),
+                                initial.await,
+                            )
                             .map_ready(|history| post_history_view(history).into_any());
                         history_state_view(state)
                     })}
@@ -182,7 +186,7 @@ fn current_post_summary(current: CurrentPostHistory) -> impl IntoView {
                     <div class="j-sub">"Live server state, not a revision snapshot."</div>
                 </div>
             </div>
-            {history_fields(current_history_rows(current))}
+            {history_fields(super::current_history_rows(current))}
         </section>
     }
 }
@@ -320,7 +324,7 @@ fn history_row(revision: RevisionHistoryMetadata) -> impl IntoView {
 #[component]
 pub fn RevisionHistoryDetailPage() -> impl IntoView {
     let params = use_params_map();
-    let session = crate::auth::use_session();
+    let session = auth::use_session();
     let route_ids = move || {
         let values = params.get();
         let post_id = values
@@ -333,10 +337,10 @@ pub fn RevisionHistoryDetailPage() -> impl IntoView {
     };
     let detail = Resource::new(route_ids, move |ids| {
         let reconcile = session.reconcile;
-        load_authenticated_history(
+        super::load_authenticated_history(
             ids,
             move || async move { reconcile.await },
-            |(post_id, revision_id)| get_revision_history_detail(post_id, revision_id),
+            |(post_id, revision_id)| super::get_revision_history_detail(post_id, revision_id),
         )
     });
 
@@ -348,7 +352,10 @@ pub fn RevisionHistoryDetailPage() -> impl IntoView {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
                     {move || Suspend::new(async move {
-                        let state = authenticated_history_state(route_ids().is_some(), detail.await)
+                        let state = super::authenticated_history_state(
+                                route_ids().is_some(),
+                                detail.await,
+                            )
                             .map_ready(|detail| revision_detail_view(detail).into_any());
                         history_state_view(state)
                     })}
@@ -361,10 +368,11 @@ pub fn RevisionHistoryDetailPage() -> impl IntoView {
 fn revision_detail_view(detail: RevisionHistoryDetail) -> impl IntoView {
     let post_id_number = i64::from(detail.post_id);
     let post_history_href = format!("/posts/{post_id_number}/history");
-    let metadata = revision_history_rows(&detail);
+    let metadata = super::revision_history_rows(&detail);
     let body = detail.body.to_string();
     let rendered_html = detail.rendered_html.to_string();
-    let collections = revision_collection_displays(detail.tags, detail.audiences, &detail.media);
+    let collections =
+        super::revision_collection_displays(detail.tags, detail.audiences, &detail.media);
 
     view! {
         <p>

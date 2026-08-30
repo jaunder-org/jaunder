@@ -6,6 +6,7 @@
 /// The default theme, shared with the pure projector so the server-painted shell
 /// and this reactive `AppShell` agree on the initial `data-theme`.
 use super::DEFAULT_THEME;
+use client::telemetry;
 use common::client_telemetry::ClientErrorContext;
 
 use crate::audiences::AudiencesPage;
@@ -35,11 +36,7 @@ use leptos_router::{
 };
 fn report_storage_error(context: ClientErrorContext, error: client::storage::StorageError) {
     let source_kind = error.source_kind();
-    client::telemetry::report_swallowed(
-        client::telemetry::error_kind(source_kind),
-        context,
-        source_kind,
-    );
+    telemetry::report_swallowed(telemetry::error_kind(source_kind), context, source_kind);
 }
 fn provide_theme_context() {
     let resolution = super::theme::resolve_theme(super::theme_storage::get(), DEFAULT_THEME);

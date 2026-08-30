@@ -3,7 +3,7 @@ use crate::topbar::Topbar;
 use common::session_label::SessionLabel;
 use leptos::prelude::*;
 
-use super::api::{CreateAppPassword, Revoke, list};
+use super::api::{self, CreateAppPassword, Revoke};
 
 /// Sessions page — lists all sessions, mints app passwords, and revokes sessions.
 #[component]
@@ -12,7 +12,7 @@ pub fn SessionsPage() -> impl IntoView {
     let create_action = ServerAction::<CreateAppPassword>::new();
     let sessions = Resource::new(
         move || (revoke_action.version().get(), create_action.version().get()),
-        |_| list(),
+        |_| api::list(),
     );
 
     view! {

@@ -1,4 +1,5 @@
-use super::markup::{SIDEBAR_SOURCES, nav_items, render_sidebar};
+use super::markup::{self, SIDEBAR_SOURCES};
+use crate::auth;
 use crate::avatar::Avatar;
 use crate::icon::{Icon, Icons};
 use common::root_relative_url::RootRelativeUrl;
@@ -63,8 +64,8 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     // projector server-renders) injected via `inner_html`, so a seeded first paint
     // and the reactive re-render coincide (flash-free). `display:contents` keeps the
     // host wrapper out of the aside's layout.
-    let session = crate::auth::use_session().current;
-    let anon_html = render_sidebar(&active_key);
+    let session = auth::use_session().current;
+    let anon_html = markup::render_sidebar(&active_key);
     view! {
         <aside class="j-sidebar">
             {move || match session.get() {
@@ -101,7 +102,7 @@ fn authed_sidebar(active_key: &str, username: &Username, is_operator: bool) -> i
                 <span class="j-kbd">"⌘K"</span>
             </div>
             <nav class="j-nav">
-                {nav_items(is_operator)
+                {markup::nav_items(is_operator)
                     .map(|item| {
                         let is_active = item.key == active_key.as_str();
                         view! {

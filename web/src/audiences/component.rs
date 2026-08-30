@@ -4,13 +4,14 @@
 use super::model::{SubscriberSummary, Summary, SummaryStoreFields};
 use super::{
     AddSubscriber, AudienceMembershipRequest, Create, Delete, RemoveSubscriber, Rename,
-    RenameAudienceRequest, list_members, list_my_subscribers,
+    RenameAudienceRequest,
 };
 use crate::error::WebResult;
 use crate::forms::{self, Field as ValidatedField, ValidatedBareInput};
 use crate::icon::Icons;
 use crate::reactive::{Invalidator, invalidator_scope};
 use crate::topbar::Topbar;
+use client::reactive;
 use common::audience::AudienceName;
 use common::ids::{AudienceId, SubscriptionId};
 use common::list_state::ListState;
@@ -44,13 +45,13 @@ invalidator_scope! {
 #[component]
 pub fn AudiencesPage() -> impl IntoView {
     // The audience list: a keyed reactive store, refetched via the `AudienceList` invalidator
-    // and `patch`ed in place on success (`client::reactive::patched` owns the plumbing) — so
+    // and `patch`ed in place on success (`reactive::patched` owns the plumbing) — so
     // unchanged rows keep their DOM (and their `MemberChecklist`'s loaded members) and a rename
     // updates just that row's name. `state` drives the sibling loading/empty/error node.
     let list = AudienceList(Invalidator::new());
     provide_context(list);
     let store = Store::new(AudienceListData::default());
-    let state = client::reactive::patched(
+    let state = reactive::patched(
         move || list.track(),
         super::list_mine,
         move |rows| store.audiences().patch(rows),
@@ -63,7 +64,7 @@ pub fn AudiencesPage() -> impl IntoView {
     // never swallowed into an empty roster (#346).
     let roster = Invalidator::new();
     let subscribers: RosterSignal =
-        client::reactive::sticky(move || roster.track(), list_my_subscribers);
+        reactive::sticky(move || roster.track(), super::list_my_subscribers);
     provide_context(subscribers);
 
     view! {
@@ -146,7 +147,7 @@ pub fn AudiencesPage() -> impl IntoView {
 #[component]
 fn CreateAudienceForm() -> impl IntoView {
     let list = expect_context::<AudienceList>();
-    let create_action = client::reactive::action::<Create>(move || list.notify());
+    let create_action = reactive::action::<Create>(move || list.notify());
     // Client-side pre-validation (ADR-0065) via direct-bind: the same `AudienceName::from_str`
     // the typed `#[server]` arg decodes through gates submit (disable-until-valid), so a valid
     // name is a precondition of dispatch and the empty-name rejection never round-trips for a
@@ -216,8 +217,8 @@ fn AudienceRow(row: Field<Summary>) -> impl IntoView {
 #[component]
 fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView {
     let list = expect_context::<AudienceList>();
-    let rename_action = client::reactive::action::<Rename>(move || list.notify());
-    let delete_action = client::reactive::action::<Delete>(move || list.notify());
+    let rename_action = reactive::action::<Rename>(move || list.notify());
+    let delete_action = reactive::action::<Delete>(move || list.notify());
     // Client-side pre-validation (ADR-0065), seeded from the existing name so a pristine
     // row is already valid (submit enabled); clearing it disables Rename and — once
     // touched — shows the newtype's own message inline.
@@ -272,10 +273,12 @@ fn MemberChecklist(audience_id: AudienceId) -> impl IntoView {
     // not every audience's (and never the list). `sticky` retains the last member list across
     // that refetch so a toggle never flashes "Loading members…" (`None` until first resolve).
     let members = Invalidator::new();
-    let add_action = client::reactive::action::<AddSubscriber>(move || members.notify());
-    let remove_action = client::reactive::action::<RemoveSubscriber>(move || members.notify());
-    let member_ids =
-        client::reactive::sticky(move || members.track(), move || list_members(audience_id));
+    let add_action = reactive::action::<AddSubscriber>(move || members.notify());
+    let remove_action = reactive::action::<RemoveSubscriber>(move || members.notify());
+    let member_ids = reactive::sticky(
+        move || members.track(),
+        move || super::list_members(audience_id),
+    );
 
     view! {
         {move || {

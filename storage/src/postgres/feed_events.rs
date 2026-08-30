@@ -7,7 +7,6 @@ use sqlx::{Pool, Postgres};
 
 use crate::feed_events::{
     ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
-    partition_claimed,
 };
 
 /// Postgres-backed feed-event storage.
@@ -67,7 +66,7 @@ impl FeedEventDialect for Postgres {
         .fetch_all(pool)
         .await?;
 
-        let (records, corrupt) = partition_claimed(rows);
+        let (records, corrupt) = crate::feed_events::partition_claimed(rows);
         let purge = purge_corrupt(pool, &corrupt).await;
         Ok(finish_purge(records, purge))
     }

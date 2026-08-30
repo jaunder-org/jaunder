@@ -35,6 +35,10 @@ use {
     common::ids::UserId,
     common::session_label::SessionLabel,
     host::invite::InviteCode,
+    host::metrics::{
+        self, InviteEvent, RegistrationPolicy as MetricsRegistrationPolicy, RegistrationResult,
+        RegistrationSource,
+    },
     host::password::Password,
     leptos::prelude::*,
     std::sync::Arc,
@@ -93,9 +97,9 @@ pub async fn register(request: RegistrationRequest) -> WebResult<()> {
     span.record("registration.policy", policy.as_ref());
 
     let metric_policy = match &policy {
-        RegistrationPolicy::Open => host::metrics::RegistrationPolicy::Open,
-        RegistrationPolicy::InviteOnly => host::metrics::RegistrationPolicy::InviteOnly,
-        RegistrationPolicy::Closed => host::metrics::RegistrationPolicy::Closed,
+        RegistrationPolicy::Open => MetricsRegistrationPolicy::Open,
+        RegistrationPolicy::InviteOnly => MetricsRegistrationPolicy::InviteOnly,
+        RegistrationPolicy::Closed => MetricsRegistrationPolicy::Closed,
     };
     let user_id_result: Result<UserId, InternalError> = match policy {
         RegistrationPolicy::Open => {
@@ -122,7 +126,7 @@ pub async fn register(request: RegistrationRequest) -> WebResult<()> {
                     .map_err(Into::into);
                 // A successful invite registration redeems the code.
                 if result.is_ok() {
-                    host::metrics::invite(host::metrics::InviteEvent::Redeemed);
+                    metrics::invite(InviteEvent::Redeemed);
                 }
                 result
             } else {
@@ -135,13 +139,13 @@ pub async fn register(request: RegistrationRequest) -> WebResult<()> {
             Err(InternalError::validation("registration is closed"))
         }
     };
-    host::metrics::registration(
-        host::metrics::RegistrationSource::Web,
+    metrics::registration(
+        RegistrationSource::Web,
         metric_policy,
         if user_id_result.is_ok() {
-            host::metrics::RegistrationResult::Ok
+            RegistrationResult::Ok
         } else {
-            host::metrics::RegistrationResult::Rejected
+            RegistrationResult::Rejected
         },
     );
     let user_id = user_id_result?;

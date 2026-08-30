@@ -5,6 +5,7 @@
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
+    crate::mail,
     common::mailer::{EmailMessage, MailSender},
     common::tagged_url::{MailConfirmUrl, compose},
     common::time::UtcInstant,
@@ -36,7 +37,7 @@ pub async fn request_verification(email: Email) -> WebResult<()> {
 
     // Fetch the site's absolute base URL before minting a token so a
     // misconfigured site fails rather than mailing a dead relative link.
-    let base_url = crate::mail::require_base_url(&*site_config).await?;
+    let base_url = mail::require_base_url(&*site_config).await?;
 
     let expires_at = UtcInstant::from(chrono::Utc::now() + chrono::Duration::hours(24));
     let raw_token = email_verifications
@@ -54,7 +55,7 @@ pub async fn request_verification(email: Email) -> WebResult<()> {
         ),
     };
 
-    crate::mail::send_recording_metrics(&*mailer, &message, host::metrics::EmailKind::Verification)
+    mail::send_recording_metrics(&*mailer, &message, host::metrics::EmailKind::Verification)
         .await?;
 
     Ok(())

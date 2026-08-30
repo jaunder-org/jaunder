@@ -18,7 +18,8 @@ use common::username::Username;
 // sibling `server` module's helpers plus the crate-level server-only dependencies.
 #[cfg(feature = "server")]
 use {
-    super::server::{clear_session_cookie, optional_auth, set_session_cookie},
+    super::server,
+    host::metrics::{self, LoginOutcome},
     host::password::Password,
     leptos::prelude::*,
     std::sync::Arc,
@@ -70,11 +71,11 @@ pub async fn login(request: LoginRequest) -> WebResult<super::SessionUser> {
         .await
     {
         Ok(record) => {
-            host::metrics::login(host::metrics::LoginOutcome::Success);
+            metrics::login(LoginOutcome::Success);
             record
         }
         Err(error) => {
-            host::metrics::login(storage::login_outcome(&error));
+            metrics::login(storage::login_outcome(&error));
             return Err(error.into());
         }
     };
@@ -107,7 +108,7 @@ pub async fn login(request: LoginRequest) -> WebResult<super::SessionUser> {
         .instrument(tracing::info_span!("web.auth.login.create_session"))
         .await?;
 
-    set_session_cookie(&raw_token);
+    server::set_session_cookie(&raw_token);
     leptos_axum::redirect("/");
     // The session travels only in the HttpOnly cookie set above (#533) — `raw_token`
     // is never returned. The authenticated `UserRecord` supplies the complete marker
@@ -123,11 +124,11 @@ pub async fn login(request: LoginRequest) -> WebResult<super::SessionUser> {
 /// reject without clearing it.
 #[macros::server]
 pub async fn logout() -> WebResult<()> {
-    if let Some(auth) = optional_auth().await? {
+    if let Some(auth) = server::optional_auth().await? {
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         sessions.revoke_session(&auth.token_hash).await?;
     }
-    clear_session_cookie();
+    server::clear_session_cookie();
     leptos_axum::redirect("/");
     Ok(())
 }
@@ -138,7 +139,7 @@ pub async fn logout() -> WebResult<()> {
 /// `current_user` + the reactive `current_user_is_operator`.
 #[macros::server]
 pub async fn get_session() -> WebResult<Option<super::SessionUser>> {
-    let Some(auth) = optional_auth().await? else {
+    let Some(auth) = server::optional_auth().await? else {
         return Ok(None);
     };
     let users = expect_context::<Arc<dyn UserStorage>>();

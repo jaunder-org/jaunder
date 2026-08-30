@@ -5,12 +5,12 @@ use common::{
 use leptos::prelude::*;
 use leptos_meta::Link;
 
-use super::labels::{rsd_href, surface_label};
+use super::labels;
 /// Renders feed auto-discovery link tags for RSS, Atom, and JSON Feed.
 /// The component itself is invisible; it hoists `<link>` tags into the document head.
 #[component]
 pub fn FeedDiscovery<'a>(surface: &'a FeedSurface) -> impl IntoView + use<> {
-    let label = surface_label(surface);
+    let label = labels::surface_label(surface);
 
     view! {
         <Link
@@ -44,7 +44,7 @@ pub fn RsdDiscovery<'a>(username: &'a Username) -> impl IntoView + use<> {
             rel="EditURI"
             type_="application/rsd+xml"
             title="AtomPub (RSD)"
-            href=rsd_href(username)
+            href=labels::rsd_href(username)
         />
     }
 }

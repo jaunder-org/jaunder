@@ -17,6 +17,7 @@ use common::tagged_url::MediaSourceUrl;
 use common::time::UtcInstant;
 use common::token::TokenHash;
 use common::username::Username;
+use host::error as host_error;
 use host::invite::InviteCode;
 use host::stored_password_hash::StoredPasswordHash;
 
@@ -58,7 +59,7 @@ where
     E: std::error::Error + 'static,
 {
     if let Err(error) = secondary {
-        host::error::report_swallowed(
+        host_error::report_swallowed(
             kind,
             class,
             context,
@@ -530,7 +531,7 @@ fn dummy_password_hash_with(
 }
 
 fn report_dummy_password_hash_failure(error: &(dyn std::error::Error + 'static)) {
-    host::error::report_swallowed(
+    host_error::report_swallowed(
         host::error::ErrorKind::Internal,
         host::error::ErrorClass::Bug,
         "storage.auth.dummy_password_hash",

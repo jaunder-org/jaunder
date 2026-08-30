@@ -9,6 +9,7 @@ use common::session_label::SessionLabel;
 use common::time::UtcInstant;
 use common::token::{RawToken, TokenHash};
 use common::username::Username;
+use host::token;
 
 /// A session record returned by [`SessionStorage`] queries.
 #[derive(Clone, Debug)]
@@ -97,7 +98,7 @@ pub trait SessionStorage: Send + Sync {
 // ---------------------------------------------------------------------------
 
 use crate::backend::Backend;
-use crate::helpers::{SessionRow, session_record_from_row};
+use crate::helpers::{self, SessionRow};
 use sqlx::{Database, Pool};
 
 const SESSION_TOUCH_FRESHNESS_SECONDS: i64 = 60;
@@ -169,7 +170,7 @@ where
         user_id: UserId,
         label: &SessionLabel,
     ) -> sqlx::Result<RawToken> {
-        let (raw_token, token_hash) = host::token::generate_hashed();
+        let (raw_token, token_hash) = token::generate_hashed();
         let now = UtcInstant::now();
 
         sqlx::query(
@@ -193,8 +194,7 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn authenticate(&self, raw_token: &RawToken) -> Result<SessionRecord, SessionAuthError> {
-        let token_hash =
-            host::token::hash(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
+        let token_hash = token::hash(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
 
         let now = UtcInstant::now();
         let stale_before = session_touch_cutoff(now);
@@ -203,7 +203,7 @@ where
             .await?
             .ok_or(SessionAuthError::SessionNotFound)?;
 
-        let record = session_record_from_row(row);
+        let record = helpers::session_record_from_row(row);
         Ok(record)
     }
 
@@ -233,7 +233,10 @@ where
         // A corrupt/migrated `token_hash` or `username` column is rejected as a
         // decode error by the `query_as` above (the sqlx bridge validates through
         // `FromStr`), so building the records here is infallible.
-        Ok(rows.into_iter().map(session_record_from_row).collect())
+        Ok(rows
+            .into_iter()
+            .map(helpers::session_record_from_row)
+            .collect())
     }
 }
 
@@ -274,7 +277,7 @@ mod tests {
             .create_session(user_id, &parse_session_label("Test Device"))
             .await
             .unwrap();
-        let expected_hash = host::token::hash(&raw_token).unwrap();
+        let expected_hash = token::hash(&raw_token).unwrap();
 
         let record = env.state.sessions.authenticate(&raw_token).await.unwrap();
         assert_eq!(record.token_hash, expected_hash);
@@ -330,7 +333,7 @@ mod tests {
             .create_session(user_id, &parse_session_label("Test Device"))
             .await
             .unwrap();
-        let token_hash = host::token::hash(&raw_token).unwrap();
+        let token_hash = token::hash(&raw_token).unwrap();
         let created_at = "2026-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap();
         let last_used_at = "2026-03-04T05:06:07.654321Z".parse::<UtcInstant>().unwrap();
 
@@ -380,7 +383,7 @@ mod tests {
                 .create_session(user_id, &parse_session_label(label))
                 .await
                 .unwrap();
-            let token_hash = host::token::hash(&raw_token).unwrap();
+            let token_hash = token::hash(&raw_token).unwrap();
             crate::with_closeable_pool!(env.base.pool(), pool, {
                 sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")
                     .bind(stored_last_used_at)

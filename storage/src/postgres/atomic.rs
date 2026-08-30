@@ -2,10 +2,7 @@ use async_trait::async_trait;
 
 use sqlx::PgPool;
 
-use crate::helpers::{
-    self, InviteTokenStateRow, TokenState, TokenStateRow, classify_invite_token_state,
-    classify_token_state,
-};
+use crate::helpers::{self, InviteTokenStateRow, TokenState, TokenStateRow};
 use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::display_name::DisplayName;
 use common::ids::UserId;
@@ -72,7 +69,7 @@ impl PostgresAtomicOps {
             .fetch_optional(&mut *tx)
             .await?;
 
-            let primary = match classify_token_state(row, now) {
+            let primary = match helpers::classify_token_state(row, now) {
                 TokenState::Missing => Err(ConfirmPasswordResetError::NotFound),
                 TokenState::AlreadyUsed => Err(ConfirmPasswordResetError::AlreadyUsed),
                 TokenState::Expired | TokenState::Claimable => {
@@ -129,7 +126,7 @@ impl AtomicOps for PostgresAtomicOps {
         .await?;
 
         let now = UtcInstant::now();
-        match classify_invite_token_state(row, now) {
+        match helpers::classify_invite_token_state(row, now) {
             TokenState::Missing => return Err(RegisterWithInviteError::InviteNotFound),
             TokenState::AlreadyUsed => return Err(RegisterWithInviteError::InviteAlreadyUsed),
             TokenState::Expired => return Err(RegisterWithInviteError::InviteExpired),

@@ -29,9 +29,9 @@ use {
     std::sync::Arc,
     std::{collections::BTreeSet, path::PathBuf},
     storage::{
-        DeleteMediaError, InstanceId, MediaError, MediaManager, MediaReferenceOwnershipResolver,
-        MediaStorage, PostStorage, SiteConfigStorage, TryDeleteOutcome,
-        resolve_media_reference_ownership,
+        self, DeleteMediaError, InstanceId, MediaError, MediaManager,
+        MediaReferenceOwnershipResolver, MediaStorage, PostStorage, SiteConfigStorage,
+        TryDeleteOutcome,
     },
 };
 
@@ -165,7 +165,7 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MediaDeletion> {
     let references = posts.list_media_references(&media_ref).await?;
     let resolver = expect_context::<Arc<dyn MediaReferenceOwnershipResolver>>();
     let instance_id = expect_context::<InstanceId>();
-    let evidence = resolve_media_reference_ownership(
+    let evidence = storage::resolve_media_reference_ownership(
         resolver.as_ref(),
         references.references(),
         &instance_id,

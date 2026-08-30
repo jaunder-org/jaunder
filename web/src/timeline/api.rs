@@ -22,16 +22,12 @@ use crate::error::WebResult;
 // Server-only imports for the `#[server]` fn bodies (gated on `feature = "server"`).
 #[cfg(feature = "server")]
 use {
-    super::server::{
-        fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
-        page_from_rows,
-    },
-    crate::auth::require_auth,
-    crate::viewer::viewer_identity,
+    super::server,
+    crate::{auth, viewer},
     common::time::UtcInstant,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{PostStorage, UserStorage, keyset_cursor},
+    storage::{self, PostStorage, UserStorage},
 };
 
 /// Lists published, non-deleted posts for a user using cursor pagination.
@@ -42,12 +38,12 @@ pub async fn list_by_user(
     limit: Option<PageSize>,
 ) -> WebResult<Page<RenderedPost>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
-    let viewer = viewer_identity().await?;
-    fetch_user_posts(
+    let viewer = viewer::viewer_identity().await?;
+    server::fetch_user_posts(
         posts.as_ref(),
         &viewer,
         &username,
-        keyset_cursor(cursor),
+        storage::keyset_cursor(cursor),
         limit,
     )
     .await
@@ -60,8 +56,14 @@ pub async fn list_local_timeline(
     limit: Option<PageSize>,
 ) -> WebResult<Page<RenderedPost>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
-    let viewer = viewer_identity().await?;
-    fetch_local_timeline(posts.as_ref(), &viewer, keyset_cursor(cursor), limit).await
+    let viewer = viewer::viewer_identity().await?;
+    server::fetch_local_timeline(
+        posts.as_ref(),
+        &viewer,
+        storage::keyset_cursor(cursor),
+        limit,
+    )
+    .await
 }
 
 /// Lists published, non-deleted posts by the authenticated user using cursor pagination.
@@ -70,11 +72,11 @@ pub async fn list_home_feed(
     cursor: Option<PageCursor>,
     limit: Option<PageSize>,
 ) -> WebResult<Page<RenderedPost>> {
-    let auth = require_auth().await?;
+    let auth = auth::require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
-    let cursor = keyset_cursor(cursor);
-    let viewer = viewer_identity().await?;
+    let cursor = storage::keyset_cursor(cursor);
+    let viewer = viewer::viewer_identity().await?;
     let page_size = limit.unwrap_or_default();
 
     let rows = posts
@@ -88,7 +90,7 @@ pub async fn list_home_feed(
         .await?;
 
     // Via the shared `page_from_rows`, so the has-more rule is spelled once (#696).
-    Ok(page_from_rows(rows, page_size, Some(auth.user_id)))
+    Ok(server::page_from_rows(rows, page_size, Some(auth.user_id)))
 }
 
 /// Lists published, non-deleted posts site-wide carrying `tag`.
@@ -99,8 +101,15 @@ pub async fn list_by_tag(
     limit: Option<PageSize>,
 ) -> WebResult<Page<RenderedPost>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
-    let viewer = viewer_identity().await?;
-    fetch_posts_by_tag(posts.as_ref(), &viewer, &tag, keyset_cursor(cursor), limit).await
+    let viewer = viewer::viewer_identity().await?;
+    server::fetch_posts_by_tag(
+        posts.as_ref(),
+        &viewer,
+        &tag,
+        storage::keyset_cursor(cursor),
+        limit,
+    )
+    .await
 }
 
 /// Lists published, non-deleted posts by `username` carrying `tag`.
@@ -113,14 +122,14 @@ pub async fn list_by_user_and_tag(
 ) -> WebResult<Page<RenderedPost>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let users = expect_context::<Arc<dyn UserStorage>>();
-    let viewer = viewer_identity().await?;
-    fetch_user_posts_by_tag(
+    let viewer = viewer::viewer_identity().await?;
+    server::fetch_user_posts_by_tag(
         posts.as_ref(),
         users.as_ref(),
         &viewer,
         &username,
         &tag,
-        keyset_cursor(cursor),
+        storage::keyset_cursor(cursor),
         limit,
     )
     .await

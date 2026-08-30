@@ -13,7 +13,6 @@ use common::root_relative_url::RootRelativeUrl;
 
 use super::{
     Delete, DeleteMediaRequest, Item, MediaDeletion, UploadCallbacks, UploadState, UsageData,
-    format_bytes, get_usage, list_mine, storage_usage_percent, upload,
 };
 use crate::error::{WebError, WebResult};
 use crate::forms;
@@ -72,7 +71,7 @@ pub fn MediaUpload(
 
         spawn_local(async move {
             state.settle(
-                upload(form_data).await,
+                super::upload(form_data).await,
                 UploadCallbacks {
                     on_uploaded,
                     on_error,
@@ -158,12 +157,14 @@ pub fn MediaPage() -> impl IntoView {
 
     let usage = Resource::new(
         move || (successful_deletes.get(), upload_version.get()),
-        |_: (u32, u32)| get_usage(),
+        |_: (u32, u32)| super::get_usage(),
     );
 
     let media_list = Resource::new(
         move || (successful_deletes.get(), upload_version.get()),
-        |_: (u32, u32)| list_mine(None, Some(PageSize::default()), Some(PageOffset::default())),
+        |_: (u32, u32)| {
+            super::list_mine(None, Some(PageSize::default()), Some(PageOffset::default()))
+        },
     );
 
     view! {
@@ -205,7 +206,7 @@ fn MediaUsagePanel(usage: Resource<WebResult<UsageData>>) -> impl IntoView {
             {move || Suspend::new(async move {
                 match usage.await {
                     Ok(u) => {
-                        let pct = storage_usage_percent(
+                        let pct = super::storage_usage_percent(
                             u.used_bytes.value(),
                             u.quota_bytes.value(),
                         );
@@ -219,9 +220,9 @@ fn MediaUsagePanel(usage: Resource<WebResult<UsageData>>) -> impl IntoView {
                             <p>
                                 {format!(
                                     "{} used of {} quota (max file size: {})",
-                                    format_bytes(u.used_bytes),
-                                    format_bytes(u.quota_bytes),
-                                    format_bytes(u.max_file_size_bytes),
+                                    super::format_bytes(u.used_bytes),
+                                    super::format_bytes(u.quota_bytes),
+                                    super::format_bytes(u.max_file_size_bytes),
                                 )}
                             </p>
                             <div style="background:#eee;border-radius:4px;height:8px;width:300px;margin:8px 0 16px">
@@ -363,7 +364,7 @@ fn render_media_row(item: &Item, delete_action: ServerAction<Delete>) -> impl In
     let url = item.url.to_string();
     let display_name = item.filename.decoded().into_owned();
     let source = item.source.to_string();
-    let size_label = format_bytes(item.size_bytes);
+    let size_label = super::format_bytes(item.size_bytes);
     let created_at = item.created_at.to_string();
     let content_type = item.content_type.to_string();
     let request = DeleteMediaRequest {
