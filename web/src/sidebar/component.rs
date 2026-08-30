@@ -64,13 +64,14 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     // and the reactive re-render coincide (flash-free). `display:contents` keeps the
     // host wrapper out of the aside's layout.
     let session = crate::auth::use_session().current;
-    let anon_html = render_sidebar(&active_key).into_string();
+    let anon_html = render_sidebar(&active_key);
     view! {
         <aside class="j-sidebar">
             {move || match session.get() {
                 None => {
-                    // html-sink:allow sidebar::markup::render_sidebar output — the anonymous paint the projector emits
-                    view! { <div style="display:contents" inner_html=anon_html.clone()></div> }
+                    anon_html
+                        .clone()
+                        .inject_into(leptos::html::div().style("display:contents"))
                         .into_any()
                 }
                 Some(user) => {
