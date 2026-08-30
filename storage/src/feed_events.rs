@@ -225,10 +225,12 @@ pub trait FeedEventStorage: Send + Sync {
 /// Backend-specific divergence for [`FeedEventStore`].
 ///
 /// [`claim_pending_batch`][FeedEventDialect::claim_pending_batch] diverges in SQL
-/// shape: both backends claim in a single `UPDATE … RETURNING` statement, but
-/// Postgres uses a `FOR UPDATE SKIP LOCKED` CTE for inter-worker skip-locking,
-/// while `SQLite` (which lacks `SKIP LOCKED`) drives the same write from an
-/// `id IN (SELECT … LIMIT …)` subquery. `SQLite` must avoid the earlier
+/// shape: both backends execute one atomic `UPDATE … RETURNING` claim, then keep
+/// its short transaction open only until decoding and feed-URL partitioning
+/// complete. A non-URL decode failure therefore rolls the claim back.
+/// Postgres uses a `FOR UPDATE SKIP LOCKED` CTE for inter-worker
+/// skip-locking, while `SQLite` (which lacks `SKIP LOCKED`) drives the same write
+/// from an `id IN (SELECT … LIMIT …)` subquery. `SQLite` must avoid the earlier
 /// read-then-write transaction (SELECT ids → UPDATE → SELECT rows), which is
 /// `SQLITE_BUSY`-prone under concurrency; see ADR-0021.
 ///
@@ -722,6 +724,22 @@ mod tests {
             remaining, 1,
             "a decode failure outside feed_url must never delete the row"
         );
+
+        // A failed decode must roll the UPDATE … RETURNING claim back, not only
+        // avoid the corrupt-URL purge path.
+        let untouched = env
+            .base
+            .pool()
+            .scalar_i64(
+                "SELECT COUNT(*) FROM feed_events \
+                 WHERE status = 'pending' AND claimed_at IS NULL",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            untouched, 1,
+            "a non-feed_url decode failure must retain pending status and null claimed_at"
+        );
     }
 
     #[apply(backends)]
@@ -759,6 +777,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, 1, "negative attempts must not delete the row");
+
+        // A failed decode must roll the UPDATE … RETURNING claim back, not merely
+        // avoid deleting the row.
+        let untouched = env
+            .base
+            .pool()
+            .scalar_i64(
+                "SELECT COUNT(*) FROM feed_events \
+                 WHERE status = 'pending' AND claimed_at IS NULL",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            untouched, 1,
+            "negative attempts must retain pending status and null claimed_at"
+        );
     }
 
     #[apply(backends)]

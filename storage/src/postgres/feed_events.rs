@@ -42,8 +42,11 @@ impl FeedEventDialect for Postgres {
         lease_cutoff: UtcInstant,
         limit: FeedEventClaimLimit,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
-        // Postgres can express the whole claim atomically with FOR UPDATE
-        // SKIP LOCKED + UPDATE … RETURNING in a single statement.
+        // Keep the atomic UPDATE … RETURNING claim inside a transaction until every
+        // returned row decodes and conversion partitions feed-URL purge candidates.
+        // Dropping the transaction rolls the claim back on any non-URL decode error;
+        // commit before purge so an unparseable URL retains its existing diversion.
+        let mut tx = pool.begin().await?;
         let rows = sqlx::query_as::<_, ClaimedFeedEventRow>(
             "WITH eligible AS ( \
                 SELECT id FROM feed_events \
@@ -61,13 +64,14 @@ impl FeedEventDialect for Postgres {
         .bind(now)
         .bind(lease_cutoff)
         .bind(limit)
-        .fetch_all(pool)
+        .fetch_all(&mut *tx)
         .await?
         .into_iter()
         .map(ClaimedRow::from)
         .collect();
 
         let (records, corrupt) = feed_events::partition_claimed(rows);
+        tx.commit().await?;
         let purge = purge_corrupt(pool, &corrupt).await;
         Ok(finish_purge(records, purge))
     }

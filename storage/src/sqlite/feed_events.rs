@@ -49,9 +49,11 @@ impl FeedEventDialect for Sqlite {
         lease_cutoff: UtcInstant,
         limit: FeedEventClaimLimit,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
-        // Single autocommit statement: SQLite takes the write lock immediately,
-        // so there is no deferred read-then-write lock upgrade (ADR-0021) and the
-        // 5s busy_timeout applies cleanly. Mirrors the Postgres CTE claim.
+        // The write-first transaction retains SQLite's immediate write-lock behavior
+        // (ADR-0021) while holding the atomic UPDATE … RETURNING claim until every
+        // row decodes and conversion partitions feed-URL purge candidates. Dropping
+        // it rolls back any non-URL decode error; commit precedes existing URL purge.
+        let mut tx = pool.begin().await?;
         let rows = sqlx::query_as::<_, ClaimedFeedEventRow>(
             "UPDATE feed_events SET status = 'claimed', claimed_at = $1 \
              WHERE id IN ( \
@@ -68,13 +70,14 @@ impl FeedEventDialect for Sqlite {
         .bind(now)
         .bind(lease_cutoff)
         .bind(limit)
-        .fetch_all(pool)
+        .fetch_all(&mut *tx)
         .await?
         .into_iter()
         .map(ClaimedRow::from)
         .collect();
 
         let (records, corrupt) = feed_events::partition_claimed(rows);
+        tx.commit().await?;
         let purge = purge_corrupt(pool, &corrupt).await;
         Ok(finish_purge(records, purge))
     }
