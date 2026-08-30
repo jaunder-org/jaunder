@@ -1,12 +1,12 @@
-# ADR-DRAFT: SQLx decode approval is type-only
+# ADR-0163: SQLx decode approval is type-only
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-30
 - Issue: [#1201](https://github.com/jaunder-org/jaunder/issues/1201)
 
 ## Context
 
-[ADR-0085](../0085-static-type-safety-gates-enumerate.md) requires static
+[ADR-0085](0085-static-type-safety-gates-enumerate.md) requires static
 type-safety gates to enumerate their population, deny unknown members, and fail
 closed. Its `sqlx-newtype-decode` worked example approved declaration-backed
 types but retained a second path: an exact, counted, reason-bearing allowlist

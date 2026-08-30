@@ -2086,7 +2086,7 @@ types, or composites whose leaves it polices; it has no primitive or
 site-exception path. Intentional persisted values therefore use explicit
 role-specific types, and custom row policy decodes a fully policed intermediate
 row before conversion
-([decision record](adr/drafts/sqlx-decode-approval-is-type-only.md)). The gate
+([decision record](adr/0163-sqlx-decode-approval-is-type-only.md)). The gate
 reads no SQL, cannot prove column-to-field correspondence or types known only by
 later use, and fails unreadable inputs and incomplete macro models closed. Since
 ADR-0091 there is exactly one bridge implementation,
