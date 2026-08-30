@@ -375,9 +375,11 @@ returned."
 
 (defun jaunder--inventory-for-root (root)
   "Return a side-effect-free inventory of configured ROOT and its Collection."
-  (jaunder--with-blog root
-                      (jaunder--join-inventory (jaunder--scan-root-locals root)
-                                               (jaunder--fetch-collection-members))))
+  (jaunder--call-with-blog
+   root
+   (lambda ()
+     (jaunder--join-inventory (jaunder--scan-root-locals root)
+                              (jaunder--fetch-collection-members)))))
 (cl-defstruct (jaunder-reconcile-row
                (:constructor jaunder--make-reconcile-row))
               "One immutable classification in a reconciliation report."
@@ -560,22 +562,23 @@ hide otherwise valid synchronization markers."
 (defun jaunder-reconcile (root)
   "Reconcile ROOT with its configured AtomPub Collection without resolving it."
   (interactive (list default-directory))
-  (jaunder--with-blog
+  (jaunder--call-with-blog
    root
-   (let* ((configured-root (car (jaunder--blog-entry-for root)))
-          (inventory (jaunder--inventory-for-root configured-root))
-          (report (jaunder--reconcile-build-report configured-root inventory))
-          (preview (jaunder-inventory-server-only inventory))
-          (buffer (jaunder--render-reconcile-report report)))
-     (display-buffer buffer)
-     (when (and preview
-                (y-or-n-p (format "Pull %d server-only Post%s? "
-                                  (length preview) (if (= (length preview) 1) "" "s"))))
-       (require 'jaunder-pull)
-       (dolist (member preview)
-         (jaunder--pull-member configured-root member))
-       (jaunder--render-reconcile-report report))
-     report)))
+   (lambda ()
+     (let* ((configured-root (car (jaunder--blog-entry-for root)))
+            (inventory (jaunder--inventory-for-root configured-root))
+            (report (jaunder--reconcile-build-report configured-root inventory))
+            (preview (jaunder-inventory-server-only inventory))
+            (buffer (jaunder--render-reconcile-report report)))
+       (display-buffer buffer)
+       (when (and preview
+                  (y-or-n-p (format "Pull %d server-only Post%s? "
+                                    (length preview) (if (= (length preview) 1) "" "s"))))
+         (require 'jaunder-pull)
+         (dolist (member preview)
+           (jaunder--pull-member configured-root member))
+         (jaunder--render-reconcile-report report))
+       report))))
 
 
 

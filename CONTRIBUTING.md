@@ -116,9 +116,9 @@ and untracked files stay unstaged and tolerated. Bypass with
 
 **`pre-push`** runs `cargo xtask prepush`: the fast verify-only host surface
 plus the host-native product Rust test lane, with the same clean-tree refusal as
-`validate`. The e2e VM checks and hermetic Nix coverage/wasm/doctest checks are
-not run here — they run in CI, or locally via `cargo xtask validate`. Bypass
-with `SKIP_PRE_PUSH=1 git push` for WIP.
+`validate`. The browser E2E VM checks and hermetic Nix Rust
+coverage/wasm/doctest checks are not run here — they run in CI, or locally via
+`cargo xtask validate`. Bypass with `SKIP_PRE_PUSH=1 git push` for WIP.
 
 ## Development workflow
 
@@ -407,14 +407,14 @@ proof that the regression moved from red to green. Escalate only at boundaries:
 through the push hook, and CI/`validate --no-e2e` when hermetic confidence is
 the question. Focused `test-local` is an accelerator, not a certification gate.
 
-| Command                         | Runs                                                                                                                                                                                                | Formatting    |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                                                                                | auto-fixes    |
-| `cargo xtask check`             | + `test-local` for root-workspace Rust tests, plus the Nix `wasm-tests` and `doctests`/`doctests-gate` checks                                                                                       | auto-fixes    |
-| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path                                                                  | auto-fixes    |
-| `cargo xtask prepush`           | verify-only host surface + `test-local`, with clean-tree refusal — the `.githooks/pre-push` hook runs this path                                                                                     | never mutates |
-| `cargo xtask validate --no-e2e` | static + clippy + host tests + the Nix `wasm-tests`, `coverage`/`coverage-gate`, and `doctests`/`doctests-gate` checks — the hermetic CI/static confidence gate                                     | never mutates |
-| `cargo xtask validate`          | + all four `{sqlite,postgres}×{chromium,firefox}` E2E combinations, authoritative SQLite/Chromium server-function coverage verification, and the live elisp integration suite — the full local gate | never mutates |
+| Command                         | Runs                                                                                                                                                                                                                       | Formatting    |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                                                                                                       | auto-fixes    |
+| `cargo xtask check`             | + `test-local` for root-workspace Rust tests, plus the Nix `wasm-tests` and `doctests`/`doctests-gate` checks                                                                                                              | auto-fixes    |
+| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path                                                                                         | auto-fixes    |
+| `cargo xtask prepush`           | verify-only host surface + `test-local`, with clean-tree refusal — the `.githooks/pre-push` hook runs this path                                                                                                            | never mutates |
+| `cargo xtask validate --no-e2e` | static + clippy + host tests + the Nix `wasm-tests`, Rust `coverage`/`coverage-gate`, `doctests`/`doctests-gate`, and authoritative `elisp-coverage-producer` plus host consumer — the hermetic CI/static confidence gate  | never mutates |
+| `cargo xtask validate`          | inherits the authoritative Emacs verdict, then adds all four `{sqlite,postgres}×{chromium,firefox}` browser E2E combinations and authoritative SQLite/Chromium server-function coverage verification — the full local gate | never mutates |
 
 `cargo xtask check` is the normal agent/developer feedback command. Its product
 Rust test portion is implemented through the same host-native lane exposed as
@@ -509,10 +509,25 @@ through `devtool check` — the same implementation the `static-checks` Nix chec
 runs, so `nix flake check` covers them too, with no duplicated sibling to drift
 (#188). prettier cannot format Emacs Lisp, so `elisp-fmt` uses built-in
 `emacs-lisp-mode` indentation (auto-fix under `check`, verify under `validate`).
-elisp is interim-exempt from the Rust coverage gate (cargo-llvm-cov is
-Rust-only; follow-on #82) — instead, write an ERT test for every pure
-mapping/transform function. Rationale:
-[ADR-0031](docs/adr/0031-elisp-separately-tested-subproject.md).
+
+`validate --no-e2e` builds `elisp-coverage-producer`, which runs the pure and
+self-booting live ERT populations once in a hermetic VM. Its fixed
+`$out/elisp-coverage/{lcov.info,summary.txt,status.json}` artifact set is
+consumed on the host: the source-derived module/form census must reconcile with
+LCOV, and each ordinary point must have exactly one LCOV record. The consumer
+automatically counts as ignored/exempt, without a source marker, only a
+zero-stop form with exactly one synthetic opening-line point that is `require`,
+`provide`, `declare-function`, `defgroup`, or `cl-defstruct`, or that is
+`defvar`, `defconst`, or `defcustom` with an absent, `nil`/`t`, number, string,
+character, keyword, quote/function-quote, or literal vector initializer.
+Computed calls, variable references, backquote/unquote, and all other evaluated
+or unknown initializers remain measurable or need a trailing same-line
+`;; cov:ignore: <reason>` with a non-empty trimmed reason. An ordinary point or
+LCOV observation on a structural candidate is a guard violation. Controlled
+producer outcomes (`ert-failure`, `instrumentation-failure`, and
+`invalid-report`) and coverage findings fail the consumer; an uncontrolled Nix
+or VM failure remains a failed build. Full `validate` inherits this verdict and
+does not rerun live ERT.
 
 ### Observability and Performance Analysis
 
@@ -970,6 +985,13 @@ request; it is deliberately **not** part of per-commit `check`/`validate`
   suite (SQLite and PostgreSQL together under an ephemeral PostgreSQL) and the
   verdict over its report. **This is where the Rust test suite runs**; there is
   no separate `nextest` check.
+- `checks.x86_64-linux.elisp-coverage-producer` — one hermetic NixOS VM runs
+  both ERT populations and realizes
+  `$out/elisp-coverage/{lcov.info,summary.txt,status.json}` for controlled
+  outcomes. `cargo xtask validate --no-e2e` lifts those artifacts and invokes
+  the authoritative host consumer, which reconciles the production module/form
+  census with LCOV and accepts only trailing same-line `;; cov:ignore: <reason>`
+  markers with non-empty trimmed reasons.
 - `checks.x86_64-linux.doctests` and `.doctests-gate` — the root workspace's
   doctests and the fence reconciliation over them
 - `checks.x86_64-linux.e2e-sqlite-chromium` — Playwright end-to-end flow against
@@ -980,11 +1002,8 @@ request; it is deliberately **not** part of per-commit `check`/`validate`
   against PostgreSQL on Chromium
 - `checks.x86_64-linux.e2e-postgres-firefox` — Playwright end-to-end flow
   against PostgreSQL on Firefox
-- `checks.x86_64-linux.e2e-elisp-integration` — the live elisp integration suite
-  in a NixOS VM with Emacs and the `jaunder` binary
-  ([ADR-0035](docs/adr/0035-elisp-live-integration-harness.md))
-- `checks.x86_64-linux.e2e` — the aggregate `cargo xtask validate` builds; it
-  fans out to every `e2e-*` check above
+- `checks.x86_64-linux.e2e` — the browser-only aggregate `cargo xtask validate`
+  builds; it fans out to the four browser/backend checks above
 
 Additional Nix-backed checks available as packages (not run by default):
 
@@ -1038,7 +1057,7 @@ nix build .#checks.x86_64-linux.e2e-sqlite-chromium
 nix build .#checks.x86_64-linux.e2e-postgres-firefox
 nix build .#packages.x86_64-linux.e2e-sqlite-firefox-single-worker
 nix build .#packages.x86_64-linux.e2e-postgres-firefox-single-worker
-nix build .#checks.x86_64-linux.e2e-elisp-integration
+nix build .#checks.x86_64-linux.elisp-coverage-producer
 ```
 
 ## Code conventions

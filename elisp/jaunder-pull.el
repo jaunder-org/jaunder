@@ -47,9 +47,7 @@
         (match-string 1 path)))))
 
 (defconst jaunder--pull-rfc-3339-offset-regexp
-  (concat "\\`\\([0-9]\\{4\\}\\)-\\([0-9]\\{2\\}\\)-\\([0-9]\\{2\\}\\)"
-          "T\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\)"
-          "\\(?:\\.[0-9]+\\)?\\(?:Z\\|[+-]\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\)\\)\\'")
+  "\\`\\([0-9]\\{4\\}\\)-\\([0-9]\\{2\\}\\)-\\([0-9]\\{2\\}\\)T\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\)\\(?:\\.[0-9]+\\)?\\(?:Z\\|[+-]\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\)\\)\\'"
   "RFC-3339 timestamp shape with captured calendar and numeric-offset fields.")
 
 (defconst jaunder--pull-xhtml-ns "http://www.w3.org/1999/xhtml"
@@ -259,7 +257,7 @@ as `jaunder--atom->org'.  This function performs no network or filesystem I/O."
   (let* ((directory (file-name-as-directory (expand-file-name root)))
          (path (expand-file-name (concat slug ".org") directory)))
     (unless (equal (file-name-directory path) directory)
-      (jaunder--pull-error "pull destination must be directly under the root"))
+      (jaunder--pull-error "pull destination must be directly under the root")) ;; cov:ignore: a validated safe leaf passed to expand-file-name cannot escape its just-derived parent
     path))
 
 (defun jaunder--pull-destination-exists-p (path)
@@ -323,35 +321,37 @@ localized Post is installed only after every Local Media Copy verifies."
          (path (jaunder--pull-destination root slug)))
     (if (jaunder--pull-destination-exists-p path)
         (jaunder--make-pull-result :status 'blocked :path path)
-      (jaunder--with-blog root
-                          (let ((response
-                                 (jaunder--http-request
-                                  "GET" (jaunder-inventory-member-edit-uri member))))
-                            (unless (and (integerp (plist-get response :status))
-                                         (<= 200 (plist-get response :status) 299))
-                              (jaunder--pull-error "Member GET returned non-2xx status"))
-                            (let* ((entry-xml (plist-get response :body))
-                                   (identity (jaunder--pull-response-identity entry-xml))
-                                   (instance-id (jaunder--pull-member-instance-id response)))
-                              (unless (and (equal (car identity) (jaunder-inventory-member-id member))
-                                           (equal (cdr identity) slug))
-                                (jaunder--pull-error "Member response identity changed since inventory"))
-                              (let* ((captured-at (current-time))
-                                     (zone (jaunder--current-zone-name))
-                                     (etag (jaunder--response-header response "ETag"))
-                                     (pulled-member
-                                      (jaunder--parse-pulled-member entry-xml etag captured-at zone))
-                                     (plan
-                                      (jaunder--pull-media-plan
-                                       (jaunder-pulled-member-format pulled-member)
-                                       (jaunder-pulled-member-body pulled-member)
-                                       (jaunder--active-base-url))))
-                                ;; A Post is the final durable claim: verified copies can safely
-                                ;; survive a late failure and make the next reconcile retry cheaper.
-                                (jaunder--pull-media-materialize root instance-id plan)
-                                (jaunder--install-pulled-bytes
-                                 path
-                                 (jaunder--render-pulled-member
-                                  pulled-member (jaunder--pull-media-apply-plan plan))))))))))
+      (jaunder--call-with-blog
+       root
+       (lambda ()
+         (let ((response
+                (jaunder--http-request
+                 "GET" (jaunder-inventory-member-edit-uri member))))
+           (unless (and (integerp (plist-get response :status))
+                        (<= 200 (plist-get response :status) 299))
+             (jaunder--pull-error "Member GET returned non-2xx status"))
+           (let* ((entry-xml (plist-get response :body))
+                  (identity (jaunder--pull-response-identity entry-xml))
+                  (instance-id (jaunder--pull-member-instance-id response)))
+             (unless (and (equal (car identity) (jaunder-inventory-member-id member))
+                          (equal (cdr identity) slug))
+               (jaunder--pull-error "Member response identity changed since inventory"))
+             (let* ((captured-at (current-time))
+                    (zone (jaunder--current-zone-name))
+                    (etag (jaunder--response-header response "ETag"))
+                    (pulled-member
+                     (jaunder--parse-pulled-member entry-xml etag captured-at zone))
+                    (plan
+                     (jaunder--pull-media-plan
+                      (jaunder-pulled-member-format pulled-member)
+                      (jaunder-pulled-member-body pulled-member)
+                      (jaunder--active-base-url))))
+               ;; A Post is the final durable claim: verified copies can safely
+               ;; survive a late failure and make the next reconcile retry cheaper.
+               (jaunder--pull-media-materialize root instance-id plan)
+               (jaunder--install-pulled-bytes
+                path
+                (jaunder--render-pulled-member
+                 pulled-member (jaunder--pull-media-apply-plan plan)))))))))))
 (provide 'jaunder-pull)
 ;;; jaunder-pull.el ends here

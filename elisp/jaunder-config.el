@@ -84,24 +84,26 @@ Both `jaunder--resolve-blog' (which blog to publish to) and `jaunder-new-post'
 
 (defvar jaunder--active-blog nil
   "Plist (:base-url :username) of the blog for the in-flight request.
-Dynamically bound by `jaunder--with-blog' for the extent of one request; it is
-internal request context, not user configuration.  The transport reads it only
-through `jaunder--active-base-url' / `jaunder--active-username', which fail
+Dynamically bound by `jaunder--call-with-blog' for the extent of one request;
+it is internal request context, not user configuration.  The transport reads it
+only through `jaunder--active-base-url' / `jaunder--active-username', which fail
 loudly when it is unset.")
 
 (defun jaunder--active-base-url ()
   "Return the in-flight blog's base URL.
 Errors when there is no active blog — i.e. a transport call made outside
-`jaunder--with-blog' — rather than silently issuing a half-configured request."
+`jaunder--call-with-blog' — rather than silently issuing a half-configured
+request."
   (or (plist-get jaunder--active-blog :base-url)
-      (error "jaunder: no active blog (call within `jaunder--with-blog')")))
+      (error "jaunder: no active blog (call within `jaunder--call-with-blog')")))
 
 (defun jaunder--active-username ()
   "Return the in-flight blog's username.
 Errors when there is no active blog — i.e. a transport call made outside
-`jaunder--with-blog' — rather than silently issuing a half-configured request."
+`jaunder--call-with-blog' — rather than silently issuing a half-configured
+request."
   (or (plist-get jaunder--active-blog :username)
-      (error "jaunder: no active blog (call within `jaunder--with-blog')")))
+      (error "jaunder: no active blog (call within `jaunder--call-with-blog')")))
 
 (defun jaunder--resolve-blog (file-or-dir)
   "Return the blog plist (:base-url :username) governing FILE-OR-DIR.
@@ -125,12 +127,12 @@ stripped), so downstream URL joining can treat it as a clean prefix."
       (list :base-url (replace-regexp-in-string "/+\\'" "" base-url)
             :username username))))
 
-(defmacro jaunder--with-blog (file &rest body)
-  "Resolve the blog for FILE and run BODY with `jaunder--active-blog' bound.
-Signals when FILE resolves to no configured, fully-specified blog."
-  (declare (indent 1) (debug t))
-  `(let ((jaunder--active-blog (jaunder--resolve-blog ,file)))
-     ,@body))
+(defun jaunder--call-with-blog (file thunk)
+  "Resolve FILE and call THUNK with `jaunder--active-blog' dynamically bound.
+THUNK receives no arguments.  Signals when FILE resolves to no configured,
+fully-specified blog, and returns THUNK's result."
+  (let ((jaunder--active-blog (jaunder--resolve-blog file)))
+    (funcall thunk)))
 
 (provide 'jaunder-config)
 ;;; jaunder-config.el ends here

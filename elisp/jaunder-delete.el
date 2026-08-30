@@ -43,19 +43,20 @@ after the server answers the confirmed conditional DELETE with HTTP 204."
         (error "jaunder: JAUNDER_ID must be numeric"))
       (unless (jaunder--strong-etag-p etag)
         (error "jaunder: JAUNDER_SYNCED must be a strong ETag"))
-      (jaunder--with-blog
+      (jaunder--call-with-blog
        file
-       (when (y-or-n-p (format "Delete Post %s? " id))
-         (let ((response
-                (jaunder--http-request
-                 "DELETE" (jaunder--member-url id) nil nil
-                 (list (cons "If-Match" etag)))))
-           (unless (equal (plist-get response :status) 204)
-             (error "jaunder: delete failed (HTTP %s)"
-                    (plist-get response :status)))
-           (delete-file file)
-           (set-buffer-modified-p nil)
-           (kill-buffer (current-buffer))))))))
+       (lambda ()
+         (when (y-or-n-p (format "Delete Post %s? " id))
+           (let ((response
+                  (jaunder--http-request
+                   "DELETE" (jaunder--member-url id) nil nil
+                   (list (cons "If-Match" etag)))))
+             (unless (equal (plist-get response :status) 204)
+               (error "jaunder: delete failed (HTTP %s)"
+                      (plist-get response :status)))
+             (delete-file file)
+             (set-buffer-modified-p nil)
+             (kill-buffer (current-buffer)))))))))
 
 (provide 'jaunder-delete)
 ;;; jaunder-delete.el ends here

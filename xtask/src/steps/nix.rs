@@ -17,9 +17,15 @@ enum TestCheck {
     Wasm,
     Coverage,
     Doctests,
+    ElispCoverageProducer,
 }
 
-const TEST_CHECKS: [TestCheck; 3] = [TestCheck::Wasm, TestCheck::Coverage, TestCheck::Doctests];
+const TEST_CHECKS: [TestCheck; 4] = [
+    TestCheck::Wasm,
+    TestCheck::Coverage,
+    TestCheck::Doctests,
+    TestCheck::ElispCoverageProducer,
+];
 const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck::Doctests];
 const STATIC_CHECK: &str = "static-checks";
 
@@ -36,9 +42,9 @@ const E2E_COMBOS: [(&str, &str); 4] = [
 
 /// Whether every result appended by the browser/backend E2E combinations passed.
 ///
-/// This deliberately excludes prior validate steps and the separately dispatched
-/// Elisp integration check, so callers can decide whether combination artifacts
-/// are trustworthy without masking an unrelated primary failure.
+/// This deliberately excludes prior validate steps, so callers can decide whether
+/// combination artifacts are trustworthy without masking an unrelated primary
+/// failure.
 #[derive(Clone, Copy, Debug)]
 pub struct E2eOutcome {
     pub combinations_ok: bool,
@@ -58,6 +64,7 @@ impl TestCheck {
             Self::Wasm => "wasm-tests",
             Self::Coverage => "coverage",
             Self::Doctests => "doctests",
+            Self::ElispCoverageProducer => "elisp-coverage-producer",
         }
     }
 
@@ -69,6 +76,7 @@ impl TestCheck {
             }
             Self::Coverage => coverage(result),
             Self::Doctests => doctests(result),
+            Self::ElispCoverageProducer => elisp_coverage(result),
         }
     }
 }
@@ -158,10 +166,80 @@ pub fn coverage(result: &mut CommandResult) {
     result.coverage = report;
 }
 
-/// The Nix doctest check (#763): the producer runs the workspace doctests and
-/// reconciles them against the fence population read from the source; the consumer
-/// fails on a non-ok sentinel.
-///
+/// Build the one combined pure/live Emacs producer, preserve its fixed artifact
+/// set for CI diagnostics, then let the host consumer own the coverage verdict.
+/// A failed Nix build is uncontrolled infrastructure failure; controlled producer
+/// outcomes reach `consume` through `status.json`.
+pub fn elisp_coverage(result: &mut CommandResult) {
+    const CHECK: &str = "elisp-coverage-producer";
+    let build = build_check("nix-elisp-coverage-producer", CHECK);
+    if !build.ok {
+        result.push(build);
+        return;
+    }
+    result.push(build);
+
+    let artifacts = Path::new(".xtask/gcroots/elisp-coverage-producer/elisp-coverage");
+    result.push(lift_elisp_coverage_artifacts(
+        artifacts,
+        Path::new(".xtask/diagnostics/elisp-coverage"),
+    ));
+
+    let step = match crate::elisp_coverage::consume(Path::new("."), artifacts) {
+        Ok(report) => StepResult::ok("elisp-coverage").detail(format!(
+            "covered {} point(s); ignored {} point(s)",
+            report.covered_points, report.ignored_points
+        )),
+        Err(error) => StepResult::fail("elisp-coverage").detail(elisp_coverage_detail(error)),
+    };
+    result.push(step);
+}
+
+fn lift_elisp_coverage_artifacts(source: &Path, destination: &Path) -> StepResult {
+    let names = ["lcov.info", "summary.txt", "status.json"];
+    if let Err(error) = std::fs::create_dir_all(destination) {
+        return StepResult::fail("elisp-coverage-artifacts")
+            .detail(format!("creating {}: {error}", destination.display()));
+    }
+    let mut failures = Vec::new();
+    for name in names {
+        let target = destination.join(name);
+        if let Err(error) = std::fs::remove_file(&target)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            failures.push(format!("{name}: removing prior artifact: {error}"));
+            continue;
+        }
+        if let Err(error) = std::fs::copy(source.join(name), target) {
+            failures.push(format!("{name}: {error}"));
+        }
+    }
+    if failures.is_empty() {
+        StepResult::ok("elisp-coverage-artifacts")
+            .detail("lifted lcov.info, summary.txt, status.json")
+    } else {
+        StepResult::fail("elisp-coverage-artifacts").detail(failures.join("; "))
+    }
+}
+
+fn elisp_coverage_detail(error: crate::elisp_coverage::CoverageError) -> String {
+    use crate::elisp_coverage::CoverageError;
+
+    match error {
+        CoverageError::Artifact { path, message } | CoverageError::Source { path, message } => {
+            format!("{}: {message}", path.display())
+        }
+        CoverageError::Status { message }
+        | CoverageError::Census { message }
+        | CoverageError::Lcov { message } => message,
+        CoverageError::Verdict { failures } => failures
+            .into_iter()
+            .map(|failure| format!("{}:{} {}", failure.path, failure.line, failure.message))
+            .collect::<Vec<_>>()
+            .join("; "),
+    }
+}
+
 /// Doctests are the one suite `nextest` structurally cannot run, so the `coverage`
 /// check above never sees them. Reconciling — rather than merely running — is what
 /// stops a green report standing for a population that was never looked at.
@@ -284,9 +362,8 @@ fn sentinel_detail(status: &coverage::status::CoverageStatus) -> String {
 /// per-backend report and manifest files from multiple combos.
 ///
 /// `postgres-integration` is deliberately not dispatched — its tests already run
-/// under the coverage check. The separate Elisp integration check remains part
-/// of the full `validate` route, but is not evidence that combination outputs
-/// are trustworthy.
+/// under the coverage check. The E2E lane owns browser/backend combinations only;
+/// Emacs coverage is finalized earlier by `test_checks`.
 pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
     let combo_start = result.steps.len();
     let builds = build_e2e_combos(E2E_COMBOS, |backend, browser| {
@@ -307,9 +384,7 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
             || crate::steps::duration_budget::validate_lifted_combo(backend, browser),
         );
     }
-    let outcome = E2eOutcome::from_combo_steps(&result.steps[combo_start..]);
-    elisp_integration(result);
-    outcome
+    E2eOutcome::from_combo_steps(&result.steps[combo_start..])
 }
 
 /// Start all independent E2E realizations before waiting for any of them. The
@@ -368,19 +443,6 @@ fn finish_e2e_combo(
     if succeeded {
         result.push(validate());
     }
-}
-
-/// Runs the hermetic elisp live-integration `nixosTest` check (ADR-0035): a NixOS
-/// VM with Emacs + the jaunder binary, where the harness self-boots the server.
-/// `validate` calls this separately after the browser combos; this dedicated
-/// builder is the per-job CI path.
-pub fn elisp_integration(result: &mut CommandResult) {
-    let check = "e2e-elisp-integration";
-    result.push(build_check("nix-elisp-integration", check));
-    lift_e2e_diagnostics(
-        std::path::Path::new(&format!(".xtask/gcroots/{check}")),
-        std::path::Path::new(&format!(".xtask/diagnostics/{check}")),
-    );
 }
 
 /// What one diagnostics-copy pass did.
@@ -951,16 +1013,60 @@ mod tests {
         CommandResult, E2E_COMBOS, E2eOutcome, FailedBuildDiagnostics, StepResult,
         build_e2e_combos, check_supporting_test_check_names, doctest_sentinel_detail,
         drain_build_stderr, failed_build_after_diagnostics_with, failed_status_step,
-        finish_e2e_combo, prepare_build_dirs_with, report_build_diagnostic_failure,
-        sentinel_detail, test_check_names, validate_check_names,
+        finish_e2e_combo, lift_elisp_coverage_artifacts, prepare_build_dirs_with,
+        report_build_diagnostic_failure, sentinel_detail, test_check_names, validate_check_names,
     };
     use coverage::status::{CoverageStatus, StatusCategory};
     use doctests::check::{Kind, Violation};
     use doctests::status::DoctestStatus;
 
     #[test]
-    fn nix_test_check_names_include_wasm_tests() {
-        assert!(test_check_names(false).eq(["wasm-tests", "coverage", "doctests"]));
+    fn nix_test_checks_include_the_authoritative_elisp_producer_once() {
+        let checks = test_check_names(false).collect::<Vec<_>>();
+
+        assert_eq!(
+            checks,
+            [
+                "wasm-tests",
+                "coverage",
+                "doctests",
+                "elisp-coverage-producer"
+            ]
+        );
+        assert_eq!(
+            checks
+                .iter()
+                .filter(|&&check| check == "elisp-coverage-producer")
+                .count(),
+            1,
+            "full validate inherits test_checks instead of dispatching a second live ERT VM"
+        );
+    }
+
+    #[test]
+    fn elisp_coverage_artifact_lift_replaces_prior_read_only_outputs() {
+        // Nix outputs are read-only; repeated validate runs must replace the
+        // prior lifted diagnostics rather than failing on their mode bits.
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        for name in ["lcov.info", "summary.txt", "status.json"] {
+            std::fs::write(source.path().join(name), format!("fresh-{name}")).unwrap();
+            let existing = destination.path().join(name);
+            std::fs::write(&existing, "stale").unwrap();
+            let mut permissions = std::fs::metadata(&existing).unwrap().permissions();
+            permissions.set_mode(0o444);
+            std::fs::set_permissions(&existing, permissions).unwrap();
+        }
+
+        let step = lift_elisp_coverage_artifacts(source.path(), destination.path());
+
+        assert!(step.ok, "{:?}", step.detail);
+        for name in ["lcov.info", "summary.txt", "status.json"] {
+            assert_eq!(
+                std::fs::read_to_string(destination.path().join(name)).unwrap(),
+                format!("fresh-{name}")
+            );
+        }
     }
 
     #[test]
@@ -969,8 +1075,23 @@ mod tests {
     }
 
     #[test]
+    fn e2e_catalog_contains_only_browser_backend_checks() {
+        assert!(
+            E2E_COMBOS
+                .iter()
+                .all(|(backend, browser)| !backend.contains("elisp") && !browser.contains("elisp"))
+        );
+    }
+
+    #[test]
     fn validate_check_names_include_static_checks_before_test_checks() {
-        assert!(validate_check_names().eq(["static-checks", "wasm-tests", "coverage", "doctests"]));
+        assert!(validate_check_names().eq([
+            "static-checks",
+            "wasm-tests",
+            "coverage",
+            "doctests",
+            "elisp-coverage-producer"
+        ]));
     }
 
     #[test]
@@ -1667,18 +1788,6 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
 
         assert!(!result.ok);
         assert!(E2eOutcome::from_combo_steps(&result.steps[combo_start..]).combinations_ok);
-    }
-
-    #[test]
-    fn e2e_outcome_ignores_the_trailing_elisp_integration_result() {
-        let mut result = CommandResult::new("validate");
-        result.push(StepResult::ok("nix-e2e-sqlite-chromium"));
-        result.push(StepResult::ok("e2e-duration-budget-sqlite-chromium"));
-        let outcome = E2eOutcome::from_combo_steps(&result.steps);
-        result.push(StepResult::fail("nix-elisp-integration"));
-
-        assert!(!result.ok);
-        assert!(outcome.combinations_ok);
     }
 
     #[test]

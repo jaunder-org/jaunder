@@ -65,8 +65,7 @@
 
 (defun jaunder--pull-media-effective-port (url)
   "Return URL's explicit or scheme-default port as a number."
-  (or (url-port url)
-      (if (equal (downcase (url-type url)) "https") 443 80)))
+  (url-port url))
 
 (defun jaunder--pull-media-same-origin-p (candidate origin)
   "Return non-nil when CANDIDATE has ORIGIN's normalized HTTP(S) origin."
@@ -426,7 +425,9 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
    ((and (<= (+ position 4) limit)
          (equal (substring body position (+ position 4)) "<!--"))
     (let ((end (string-search "-->" body (+ position 4))))
-      (if end (+ end 3) limit)))
+      (if end
+          (+ end 3)
+        limit)))
    ((and (< (1+ position) limit)
          (or (member (substring body position (+ position 2)) '("<?" "<!"))
              (memq (get-char-code-property (aref body (1+ position))
@@ -446,7 +447,9 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
            ((and quote (= character quote)) (setq quote nil))
            ((and (not quote) (memq character '(?\" ?'))) (setq quote character))))
         (setq cursor (1+ cursor)))
-      (if (< cursor limit) (1+ cursor) limit)))))
+      (if (< cursor limit)
+          (1+ cursor)
+        limit)))))
 
 (defun jaunder--pull-media-markdown-inline-candidates
     (table format origin body range destinations parser)
@@ -461,7 +464,10 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
                      body position ?` limit))
                (close (jaunder--pull-media-markdown-code-end
                        body end (- end position) limit)))
-          (setq position (or close end))))
+          (setq position
+                (if close
+                    close
+                  end))))
        ((and (= (aref body position) ?<)
              (not (jaunder--pull-media-markdown-escaped-p body position)))
         (let ((end (cl-position ?> body :start (1+ position) :end limit))
@@ -669,7 +675,10 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
            ((or (>= (1+ open) limit)
                 (memq (aref body (1+ open)) '(?! ?/ ??)))
             (let ((end (cl-position ?> body :start (+ open 2))))
-              (setq position (if end (1+ end) limit))))
+              (setq position
+                    (if end
+                        (1+ end)
+                      limit))))
            (t
             (let ((cursor (1+ open)))
               (while (and (< cursor limit)
@@ -882,7 +891,7 @@ public media identity and URL hash are valid only for the direct response."
 
 (defun jaunder--pull-media-target-path (root hash leaf)
   "Return ROOT's safe Local Media Copy path for HASH and decoded LEAF."
-  (unless (and (stringp root) (file-name-absolute-p (expand-file-name root)))
+  (unless (and (stringp root) (file-name-absolute-p root))
     (error "jaunder pull media: configured root is invalid: %S" root))
   (let ((case-fold-search nil))
     (unless (string-match-p jaunder--pull-media-sha256-regexp hash)
