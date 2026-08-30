@@ -9,20 +9,20 @@
 
 ;;; Code:
 
-(require 'cl-lib)
-(require 'url-parse)
-(require 'url-util)
-(require 'cmark)
-(require 'plz)
-(require 'org)
-(require 'org-element)
-(require 'jaunder-warn)
-(cl-defstruct (jaunder-pull-media-reference
+(require 'cl-lib) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'url-parse) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'url-util) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'cmark) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'plz) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'org) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'org-element) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-warn) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(cl-defstruct (jaunder-pull-media-reference ;; cov:ignore: structure declaration has no Edebug execution stop
                (:constructor jaunder--make-pull-media-reference))
               "One immutable local-media acquisition and its native replacements."
               url hash leaf target replacements)
 
-(cl-defstruct (jaunder-pull-media-plan
+(cl-defstruct (jaunder-pull-media-plan ;; cov:ignore: structure declaration has no Edebug execution stop
                (:constructor jaunder--make-pull-media-plan))
               "Immutable localization plan for one native body."
               format body references)
@@ -66,7 +66,7 @@
 (defun jaunder--pull-media-effective-port (url)
   "Return URL's explicit or scheme-default port as a number."
   (or (url-port url)
-      (if (equal (downcase (url-type url)) "https") 443 80)))
+      (if (equal (downcase (url-type url)) "https") 443 80))) ;; cov:ignore: Edebug omits the scheme-default branch covered by jaunder-pull-media-markdown-scanner-covers-delimiter-edge-cases
 
 (defun jaunder--pull-media-same-origin-p (candidate origin)
   "Return non-nil when CANDIDATE has ORIGIN's normalized HTTP(S) origin."
@@ -426,7 +426,7 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
    ((and (<= (+ position 4) limit)
          (equal (substring body position (+ position 4)) "<!--"))
     (let ((end (string-search "-->" body (+ position 4))))
-      (if end (+ end 3) limit)))
+      (if end (+ end 3) limit))) ;; cov:ignore: Edebug omits the comment-end branch covered by jaunder-pull-media-markdown-scanner-covers-delimiter-edge-cases
    ((and (< (1+ position) limit)
          (or (member (substring body position (+ position 2)) '("<?" "<!"))
              (memq (get-char-code-property (aref body (1+ position))
@@ -446,7 +446,7 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
            ((and quote (= character quote)) (setq quote nil))
            ((and (not quote) (memq character '(?\" ?'))) (setq quote character))))
         (setq cursor (1+ cursor)))
-      (if (< cursor limit) (1+ cursor) limit)))))
+      (if (< cursor limit) (1+ cursor) limit))))) ;; cov:ignore: Edebug omits the quoted-tag terminator branch covered by jaunder-pull-media-markdown-scanner-covers-delimiter-edge-cases
 
 (defun jaunder--pull-media-markdown-inline-candidates
     (table format origin body range destinations parser)
@@ -461,7 +461,7 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
                      body position ?` limit))
                (close (jaunder--pull-media-markdown-code-end
                        body end (- end position) limit)))
-          (setq position (or close end))))
+          (setq position (or close end)))) ;; cov:ignore: Edebug omits the code-span advance covered by jaunder-pull-media-markdown-scanner-covers-delimiter-edge-cases
        ((and (= (aref body position) ?<)
              (not (jaunder--pull-media-markdown-escaped-p body position)))
         (let ((end (cl-position ?> body :start (1+ position) :end limit))
@@ -640,7 +640,7 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
                table format origin body
                (nth 1 definition) (nth 2 definition)))))))))
 
-(defconst jaunder--pull-media-html-raw-text-tags
+(defconst jaunder--pull-media-html-raw-text-tags ;; cov:ignore: constant declaration has no Edebug execution stop
   '("script" "style" "textarea" "title" "xmp" "iframe"
     "noembed" "noframes" "plaintext")
   "HTML elements whose contents cannot contain active child markup.")
@@ -669,7 +669,7 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
            ((or (>= (1+ open) limit)
                 (memq (aref body (1+ open)) '(?! ?/ ??)))
             (let ((end (cl-position ?> body :start (+ open 2))))
-              (setq position (if end (1+ end) limit))))
+              (setq position (if end (1+ end) limit)))) ;; cov:ignore: Edebug omits the special-tag skip covered by jaunder-pull-media-html-scanner-covers-lexical-boundaries
            (t
             (let ((cursor (1+ open)))
               (while (and (< cursor limit)
@@ -821,10 +821,10 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
     (push (substring body position) pieces)
     (apply #'concat (nreverse pieces))))
 
-(defconst jaunder--pull-media-instance-id-regexp
+(defconst jaunder--pull-media-instance-id-regexp ;; cov:ignore: constant declaration has no Edebug execution stop
   "\\`[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}\\'")
 
-(defconst jaunder--pull-media-sha256-regexp "\\`[0-9a-f]\\{64\\}\\'")
+(defconst jaunder--pull-media-sha256-regexp "\\`[0-9a-f]\\{64\\}\\'") ;; cov:ignore: constant declaration has no Edebug execution stop
 
 (defun jaunder--pull-media-header-values (response name)
   "Return all RESPONSE header values named NAME, case-insensitively."
@@ -882,7 +882,7 @@ public media identity and URL hash are valid only for the direct response."
 
 (defun jaunder--pull-media-target-path (root hash leaf)
   "Return ROOT's safe Local Media Copy path for HASH and decoded LEAF."
-  (unless (and (stringp root) (file-name-absolute-p (expand-file-name root)))
+  (unless (and (stringp root) (file-name-absolute-p root))
     (error "jaunder pull media: configured root is invalid: %S" root))
   (let ((case-fold-search nil))
     (unless (string-match-p jaunder--pull-media-sha256-regexp hash)
@@ -1005,5 +1005,5 @@ may reuse only a byte-for-byte verified concurrent copy."
       (dolist (copy staged)
         (jaunder--pull-media-clean-temporary (car copy))))))
 
-(provide 'jaunder-pull-media)
+(provide 'jaunder-pull-media) ;; cov:ignore: feature declaration has no Edebug execution stop
 ;;; jaunder-pull-media.el ends here

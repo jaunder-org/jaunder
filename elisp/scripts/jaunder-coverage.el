@@ -181,16 +181,26 @@ failure cannot leak the server."
     failed))
 
 (defun jaunder-coverage--relativize-lcov (path root)
-  "Rewrite Undercover's store paths in PATH to consumer-stable source names."
-  (let ((known (mapcar #'file-truename (jaunder-coverage--source-files root))))
+  "Normalize PATH's SF names and retain every production module below ROOT."
+  (let ((known (mapcar #'file-truename (jaunder-coverage--source-files root)))
+        present)
     (with-temp-buffer
       (insert-file-contents path)
       (goto-char (point-min))
       (while (re-search-forward "^SF:\\(.+\\)$" nil t)
-        (let ((source (file-truename (match-string 1))))
+        (let* ((source (file-truename (match-string 1)))
+               (relative (concat "elisp/" (file-name-nondirectory source))))
           (unless (member source known)
             (error "LCOV contains non-production source %s" source))
-          (replace-match (concat "SF:elisp/" (file-name-nondirectory source)) t t)))
+          (push relative present)
+          (replace-match (concat "SF:" relative) t t)))
+      (goto-char (point-max))
+      (dolist (source known)
+        (let ((relative (concat "elisp/" (file-name-nondirectory source))))
+          (unless (member relative present)
+            (unless (bolp)
+              (insert "\n"))
+            (insert "SF:" relative "\nend_of_record\n"))))
       (write-region nil nil path nil 'silent))))
 
 (defun jaunder-coverage--write-summary (lcov-path summary-path)

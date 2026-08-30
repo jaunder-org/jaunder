@@ -99,6 +99,22 @@
                      nil t))))
       (delete-file lcov)
       (delete-file summary))))
+
+(ert-deftest jaunder-coverage-lcov-retains-synthetic-only-modules ()
+  "Every production module gets an SF record even when Undercover has no DA data."
+  (jaunder-coverage-test--with-tree
+   '(("jaunder-alpha.el" . "(defun alpha () t)\n")
+     ("jaunder-empty.el" . "(provide 'jaunder-empty)\n"))
+   (lambda (root)
+     (let ((lcov (expand-file-name "coverage.info" root)))
+       (with-temp-file lcov
+         (insert (format "SF:%s\nDA:1,1\nend_of_record\n"
+                         (expand-file-name "jaunder-alpha.el" root))))
+       (jaunder-coverage--relativize-lcov lcov root)
+       (with-temp-buffer
+         (insert-file-contents lcov)
+         (should (search-forward
+                  "SF:elisp/jaunder-empty.el\nend_of_record\n" nil t)))))))
 (ert-deftest jaunder-coverage-runs-both-populations-and-always-tears-down ()
   "A pure failure remains diagnostic while the live population still tears down."
   (let* ((root (file-name-directory (locate-library "jaunder")))

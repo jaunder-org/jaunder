@@ -10,18 +10,19 @@ on:
   # must report on the queue branch. See docs/ci-merge-queue.md.
   merge_group:
 
-# Runner selection, for the three jobs that build: pin the image, never `ubuntu-latest`.
+# Runner selection for every job that builds: pin the image, never `ubuntu-latest`.
 # `-latest` migrates whenever GitHub rolls the image family, so an unrelated PR is the
 # one that discovers the new toolchain — a CI break with no commit that caused it.
 # Bumping the pin is then a deliberate, revertable commit. (`ubuntu-latest` ==
 # `ubuntu-24.04` as of image 20260720.247, so the pin is behaviour-neutral today;
 # `ubuntu-26.04` exists but is still public preview.)
 #
-# Those three jobs must also stay x86_64 on a full VM. The e2e/elisp tests build a
-# NixOS test machine hardcoded to `x86_64-linux` (flake.nix `interactiveTestingVmSystem`
-# / `postgresTestingVmSystem`), and the jaunder-org cachix cache is populated for that
+# These jobs must also stay x86_64 on a full VM. The static lane's combined Emacs
+# coverage producer and the browser E2E checks build NixOS test machines hardcoded
+# to `x86_64-linux` (flake.nix `interactiveTestingVmSystem` /
+# `postgresTestingVmSystem`), and the jaunder-org cachix cache is populated for that
 # system only — an arm64 runner would emulate the VM and rebuild the world cold. They
-# also need a privileged, long-lived environment for the nix daemon and the test VMs,
+# also need a privileged, long-lived environment for the nix daemon and test VMs,
 # which rules out the container-based `ubuntu-slim` tier that `e2e-gate` uses below.
 jobs:
   validate-no-e2e:
@@ -33,7 +34,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Validate (static + clippy + coverage, via xtask)
+      - name: Validate (static + clippy + Rust and Emacs coverage, via xtask)
         run:
           nix develop .#ci --accept-flake-config -c cargo xtask validate
           --no-e2e
@@ -54,6 +55,7 @@ jobs:
             .xtask/diagnostics/
             .xtask/gcroots/coverage/status.json
             .xtask/gcroots/coverage/diagnostics/
+            .xtask/gcroots/elisp-coverage-producer/elisp-coverage/
             .xtask/last-result.json
           if-no-files-found: ignore
           retention-days: 14
@@ -91,29 +93,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  elisp-integration:
-    name: elisp-integration
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup-ci
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: elisp-integration (live server, via xtask)
-        run:
-          nix develop .#ci --accept-flake-config -c cargo xtask
-          elisp-integration
-      - name: Upload elisp-integration diagnostics
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-diagnostics-elisp-integration
-          path: |
-            .xtask/diagnostics/
-            .xtask/last-result.json
-          if-no-files-found: ignore
-          retention-days: 14
 
   e2e-gate:
     name: e2e gate
@@ -132,12 +111,11 @@ jobs:
     # tolerable only because the job depends on none of the image's preinstalled
     # software, which is exactly the property the paragraph above protects.
     runs-on: ubuntu-slim
-    needs: [e2e, elisp-integration]
+    needs: [e2e]
     if: always()
     steps:
-      - name: Require all e2e matrix + elisp-integration jobs to pass
+      - name: Require all e2e matrix jobs to pass
         run: |
           e2e="${{ needs.e2e.result }}"
-          elisp="${{ needs.elisp-integration.result }}"
-          echo "e2e matrix result: $e2e; elisp-integration result: $elisp"
-          test "$e2e" = "success" && test "$elisp" = "success"
+          echo "e2e matrix result: $e2e"
+          test "$e2e" = "success"

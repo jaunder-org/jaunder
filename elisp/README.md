@@ -36,7 +36,7 @@ emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-fix
 The pure suite and format steps run automatically as the `ert` and `elisp-fmt`
 steps in `cargo xtask check` and `cargo xtask validate` — both via
 `devtool check` — and, through the same implementation, as part of the
-`static-checks` nix check (so `nix flake check` covers them too).
+`static-checks` Nix check (so `nix flake check` covers them too).
 
 ### Live integration tests
 
@@ -49,13 +49,18 @@ JAUNDER_TEST_BINARY=target/debug/jaunder \
   emacs --batch -Q -l elisp/scripts/run-integration-tests.el
 ```
 
-In the gate it runs hermetically as the `elisp-integration` `nixosTest` check
-under `cargo xtask validate` (not the fast `check --no-test` loop). See
-[`docs/adr/0035-elisp-live-integration-harness.md`](../docs/adr/0035-elisp-live-integration-harness.md).
-
-elisp is interim-exempt from the Rust coverage gate (follow-on #82); write an
-ERT test for every pure mapping/transform function. See
-[`docs/adr/0031-elisp-separately-tested-subproject.md`](../docs/adr/0031-elisp-separately-tested-subproject.md).
+The authoritative gate is `cargo xtask validate --no-e2e`. It builds one
+hermetic `elisp-coverage-producer` VM that runs the pure and live ERT
+populations once, then realizes
+`$out/elisp-coverage/{lcov.info,summary.txt,status.json}`. The host consumer
+reconciles its pre-test production module/form census against LCOV; each
+ordinary point must have exactly one LCOV record, and zero-stop forms produce
+uncovered synthetic opening-line points. An uncovered executable or synthetic
+point needs a trailing same-line `;; cov:ignore: <reason>` marker with a
+non-empty trimmed reason. Controlled ERT, instrumentation, or invalid-report
+statuses and coverage findings fail the consumer; uncontrolled Nix or VM
+failures remain build failures. Full `cargo xtask validate` inherits this
+verdict and does not rerun live ERT.
 
 ## Pulled media
 

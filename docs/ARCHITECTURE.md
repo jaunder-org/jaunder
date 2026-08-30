@@ -1747,14 +1747,14 @@ owns the wire format). It lives in the top-level `elisp/` directory as a single
 live-server integration harness, `jaunder-test--with-live-server`
 ([ADR-0035](adr/0035-elisp-live-integration-harness.md)) — the testing section
 owns both. The floor is `Package-Requires: ((emacs "29.1"))`
-([ADR-0042](adr/0042-emacs-org-atom-mapping-struct-seam.md)). The proposed
+([ADR-0042](adr/0042-emacs-org-atom-mapping-struct-seam.md)). The
 [Elisp stateless coverage gate](adr/drafts/elisp-stateless-coverage-gate.md)
-will census every production Protocol Client module and top-level source form
-before testing, then reconcile every executable Edebug point with exactly one
+censuses every production Protocol Client module and top-level source form
+before testing, then reconciles every executable Edebug point with exactly one
 LCOV record. A zero-stop form contributes its opening line as an uncovered
 synthetic point until instrumented or justified. Test files, helpers, runners,
-vendored/generated sources, and byte-compiled files will remain outside that
-census and denominator.
+vendored/generated sources, and byte-compiled files remain outside that census
+and denominator.
 
 `elisp/jaunder.el` is the umbrella entry point — it holds the package headers
 and nothing but `require` forms for the feature modules (`elisp/jaunder.el:30`):
@@ -2271,16 +2271,17 @@ class at `storage/src/postgres/backup.rs:28`).
 
 ### The e2e suite
 
-Each e2e check is a NixOS-test VM running Playwright against a real served
-instance, one derivation per `{backend}×{browser}` combo (`mkE2eCombo`,
-`flake.nix:969`). CI runs `cargo xtask validate --no-e2e` in one job plus a
+Each browser e2e check is a NixOS-test VM running Playwright against a real
+served instance, one derivation per `{backend}×{browser}` combo (`mkE2eCombo`,
+`flake.nix:969`). CI runs `cargo xtask validate --no-e2e` in the static job,
+where the authoritative Emacs coverage verdict is decided, plus a
 `{sqlite,postgres}×{chromium,firefox}` matrix — each job
-`cargo xtask e2e <backend> <browser>` — aggregated by an `e2e-gate` job, so
-branch protection needs two stable names
-([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)). `e2e-gate` also requires
-the separate `elisp-integration` job (`.github/workflows/ci.yml:162`). Local
-`cargo xtask validate` builds the `e2e-checks` aggregate instead: the same
-derivations on one machine.
+`cargo xtask e2e <backend> <browser>` — aggregated by an `e2e-gate` that depends
+only on that browser matrix. Branch protection therefore needs two stable names
+([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)). Local
+`cargo xtask validate` builds the browser-only `e2e-checks` aggregate instead:
+the same derivations on one machine. It inherits the static lane's Emacs verdict
+and does not rerun live ERT.
 
 `end2end/playwright.config.ts` is the one config, loaded verbatim by both the VM
 and the host loop ([ADR-0051](adr/0051-single-playwright-config.md)). For each
@@ -2395,24 +2396,22 @@ rather than failing the check, with the JSON report still recording it
 `validate` (Check), each as a `devtool check` step in the `static-checks`
 derivation ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
 `xtask/src/steps/static_checks.rs:17-18`); one `emacsForCi` toolchain
-(`flake.nix:563`) serves both. Elisp is currently exempt from the Rust coverage
-gate, which cannot instrument it. The proposed
-[Elisp stateless coverage gate](adr/drafts/elisp-stateless-coverage-gate.md)
-will replace that unenforced ERT expectation for production Protocol Client
-modules. Its hermetic NixOS VM producer will merge pure and live ERT
-observations, then, for every controlled outcome, realize
-`$out/elisp-coverage/{lcov.info,summary.txt,status.json}`. A separate stateless,
-strict consumer will reconcile the pre-test module/form census with LCOV — each
-executable Edebug point occurs exactly once, while a zero-stop form contributes
-an uncovered synthetic point on its opening line — and fail an uncovered point
-unless its same physical line ends in `;; cov:ignore: <reason>` with a trimmed
-non-empty reason. There is no block form; malformed markers, and markers on
-covered or non-executable census lines, fail. Edebug limitations therefore stay
-visible instead of silently narrowing the denominator. The consumer maps
-controlled producer statuses and coverage findings to the verdict; an
-uncontrolled Nix or VM infrastructure failure remains an ordinary derivation
-failure. The check runs once in `validate --no-e2e` and the CI static lane; full
-`validate` inherits its verdict without rerunning the live suite.
+(`flake.nix:563`) serves both.
+
+The [Elisp stateless coverage gate](adr/drafts/elisp-stateless-coverage-gate.md)
+runs the pure and live ERT observations in one hermetic NixOS producer and, for
+every controlled outcome, realizes
+`$out/elisp-coverage/{lcov.info,summary.txt,status.json}`. Its host consumer
+reconciles the pre-test module/form census with current source and LCOV: each
+ordinary Edebug point occurs exactly once, while a zero-stop form contributes an
+uncovered synthetic opening-line point. Every uncovered point requires a
+trailing same-line `;; cov:ignore: <reason>` marker with a trimmed non-empty
+reason. There is no block form; malformed markers, and markers on covered or
+non-executable census lines, fail. Controlled producer statuses and coverage
+findings fail the consumer; uncontrolled Nix or VM infrastructure failures
+remain build failures. The check runs once in `validate --no-e2e` and the CI
+static lane; full `validate` inherits its verdict without rerunning the live
+suite.
 
 Live client behavior — transport, auth, publish and media round-trips — runs
 against a real server through the self-booting harness
@@ -2424,10 +2423,9 @@ via `jaunder app-password-create`. The suite
 (`elisp/test/jaunder-*-integration.el`, driven by
 `elisp/scripts/run-integration-tests.el`) remains available host-side via
 `JAUNDER_TEST_BINARY` for fast iteration. The coverage gate's combined producer
-now runs it hermetically, replacing the former `e2e-elisp-integration`
-`nixosTest`, `e2e-checks` membership, and separate CI job. This explicitly
-amends ADR-0035's gate placement while retaining its self-booting live-server
-harness as the integration boundary.
+runs the harness hermetically as the sole authoritative live-suite execution in
+the verification ladder. The self-booting harness remains the integration
+boundary.
 
 ## Verification gates
 
@@ -2452,10 +2450,12 @@ The ladder has four local entrypoints, all driven by `xtask`
   with the same clean-tree precheck as `validate`, then runs the verify-only
   host surface and the host-native `test-local` product Rust suite without
   hermetic Nix derivations.
-- **`cargo xtask validate`** runs the same host set **verify-only**, adds
-  `wasm-budget` (kept out of `check` because it costs a `nix build .#site`,
-  #836), runs the Nix `wasm-tests`, `coverage`, and `doctests` derivations, and
-  — unless `--no-e2e` — the e2e aggregate.
+- **`cargo xtask validate --no-e2e`** runs the same host set **verify-only**,
+  adds `wasm-budget` (kept out of `check` because it costs a `nix build .#site`,
+  #836), then runs the Nix `wasm-tests`, Rust `coverage`, `doctests`, and the
+  combined `elisp-coverage-producer` followed by its host consumer. Full
+  **`cargo xtask validate`** inherits that verdict and — unless `--no-e2e` —
+  adds the browser/backend e2e aggregate; it never reruns live ERT.
 
 Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
 `.githooks/pre-commit` calls `cargo xtask precommit`; the `xtask` Cargo alias
@@ -2477,12 +2477,16 @@ realizes each via
 `nix build -L --keep-failed --accept-flake-config --out-link .xtask/gcroots/<check>`
 (`xtask/src/steps/nix.rs:416`): cachix-substituted (an unchanged re-run is a
 substitution) and GC-rooted by the out-link, so garbage collection cannot evict
-a warm gate. `wasm-tests` returns the browser test verdict directly. Coverage
+warm gate. `wasm-tests` returns the browser test verdict directly. Rust coverage
 and doctests use producer/consumer pairs — `nix-coverage` + `nix-coverage-gate`,
 `nix-doctests` + `nix-doctests-gate` — whose producers cannot fail; xtask reads
-each verdict from the sandbox's `status.json` (`xtask/src/steps/nix.rs`). xtask
-itself is host-only; Nix never invokes it back
-([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
+each verdict from the sandbox's `status.json` (`xtask/src/steps/nix.rs`). The
+Elisp producer instead returns the fixed
+`elisp-coverage/{lcov.info,summary.txt,status.json}` set for every controlled
+outcome; xtask lifts it and its host consumer reconciles current source, census,
+LCOV, and strict same-line `;; cov:ignore: <reason>` markers. Uncontrolled Nix
+or VM failures remain build failures. xtask itself is host-only; Nix never
+invokes it back ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
 
 ### What the ladder actually runs
 

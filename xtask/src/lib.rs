@@ -243,10 +243,6 @@ pub enum Command {
     /// points the e2e suite actually drives.
     #[command(subcommand)]
     ServerFnCoverage(ServerFnCoverageCommand),
-    /// Build the hermetic elisp live-integration VM check (ADR-0035) through the
-    /// same diagnostic-preserving wrapper. For CI's parallel `elisp-integration`
-    /// job; local `validate` realizes it via the `e2e` aggregate. Host only.
-    ElispIntegration,
     /// Observe a pull request until the next caller-actionable outcome (#729).
     /// Host-only manual command; needs `gh`.
     #[command(subcommand)]
@@ -483,7 +479,6 @@ impl Cli {
             Command::ServerFnCoverage(ServerFnCoverageCommand::Verify) => {
                 steps::server_fn_coverage_check::VERIFY_STEP
             }
-            Command::ElispIntegration => "elisp-integration",
             Command::Pr(PrCommand::Watch { .. }) => "pr-watch",
             Command::Pr(PrCommand::Land { .. }) => "pr-land",
             Command::Issue(issue::IssueCommand::Candidates { .. }) => "issue-candidates",
@@ -1081,13 +1076,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             finalize(&mut result, start);
             Ok(result)
         }
-        Command::ElispIntegration => {
-            let start = std::time::Instant::now();
-            let mut result = CommandResult::new("elisp-integration");
-            steps::nix::elisp_integration(&mut result);
-            finalize(&mut result, start);
-            Ok(result)
-        }
         Command::Issue(sub) => issue::execute(sub),
         Command::Pr(sub) => {
             let start = std::time::Instant::now();
@@ -1408,6 +1396,17 @@ mod cli_tests {
         assert!(test_local < wasm_tests);
         assert!(!names.contains(&"coverage"));
         assert!(names.contains(&"doctests"));
+    }
+
+    #[test]
+    fn ci_shape_keeps_the_elisp_verdict_in_the_static_lane() {
+        let workflow = include_str!("../../.github/workflows/ci.yml");
+
+        assert!(workflow.contains("validate-no-e2e:"));
+        assert!(workflow.contains("cargo xtask validate\n          --no-e2e"));
+        assert!(workflow.contains(".xtask/gcroots/elisp-coverage-producer/elisp-coverage/"));
+        assert!(workflow.contains("needs: [e2e]"));
+        assert!(!workflow.contains("elisp-integration"));
     }
 
     #[test]

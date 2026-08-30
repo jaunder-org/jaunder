@@ -22,14 +22,14 @@
 
 ;;; Code:
 
-(require 'cl-lib)
+(require 'cl-lib) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
 
-(cl-defstruct (jaunder-entry (:constructor jaunder--make-entry))
+(cl-defstruct (jaunder-entry (:constructor jaunder--make-entry)) ;; cov:ignore: structure declaration has no Edebug execution stop
               "Structured AtomPub entry mapped from a source buffer.
 Holds abstract field values only; wire encoding (namespaces, media types,
 `app:draft' nesting) lives in `jaunder--atom-entry->xml'.  `body' is the
 body-only content with the metadata header block stripped."
               title categories summary draft content-type body published)
 
-(provide 'jaunder-entry)
+(provide 'jaunder-entry) ;; cov:ignore: feature declaration has no Edebug execution stop
 ;;; jaunder-entry.el ends here

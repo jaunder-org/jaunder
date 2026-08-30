@@ -788,4 +788,159 @@
                                           (should (or (file-exists-p (expand-file-name (format "local-media/%s/a.bin" hash-a) root))
                                                       (file-exists-p (expand-file-name (format "local-media/%s/b.bin" hash-b) root))))
                                           (should-not (directory-files-recursively root "\\.jaunder-media-" nil))))))
+(ert-deftest jaunder-pull-media-markdown-helper-boundaries-are-deterministic ()
+  "Low-level Markdown scanning preserves escape, CRLF, nesting, and range rules."
+  (should (jaunder--pull-media-markdown-escaped-p "\\\\[" 1))
+  (should-not (jaunder--pull-media-markdown-escaped-p "\\\\\\\\[" 2))
+  (let ((body "<https://h/media/a> \"title\"\n"))
+    (should (equal (jaunder--pull-media-markdown-destination
+                    body 0 ?\n (length body))
+                   (list 1 18 (length body)))))
+  (should (= (jaunder--pull-media-markdown-spnl " \r\n\tX" 0 5) 4))
+  (should-not (jaunder--pull-media-markdown-destination
+               "https://h/media/a (unterminated" 0 ?\n 31))
+  (should (equal (jaunder--pull-media-markdown-merge-ranges
+                  '((5 8) (1 3) (3 6) (12 13)))
+                 '((1 8) (12 13))))
+  (should (equal (jaunder--pull-media-markdown-subtract-ranges
+                  '((1 10)) '((3 5) (7 12)))
+                 '((1 3) (5 7)))))
+
+(ert-deftest jaunder-pull-media-html-scanner-keeps-literal-and-raw-text-safe ()
+  "Only complete supported markup exposes attributes to the localization plan."
+  (should (equal (jaunder--pull-media-html-attribute-spans
+                  "<!-- <img src='ignored'> --><IMG SRC=\"https://h/media/a\">")
+                 '(("src" 38 55))))
+  (should-not (jaunder--pull-media-html-attribute-spans
+               "<script src=\"https://h/media/a\"></script>"))
+  (should-not (jaunder--pull-media-html-attribute-spans
+               "<img src=\"https://h/media/a\""))
+  (should (equal (jaunder--pull-media-markdown-inline-html-end
+                  "<img title='>' src=x>" 0 21)
+                 21)))
+
+(ert-deftest jaunder-pull-media-rejects-invalid-planning-and-materialization-inputs ()
+  "Invalid formats, temporary files, roots, hashes, and instance IDs fail closed."
+  (should-error (jaunder--pull-media-plan "rst" "" "https://h"))
+  (should-error (jaunder--pull-media-get "https://h/media/a" "/missing"))
+  (should-error (jaunder--pull-media-target-path "relative" (make-string 64 ?a) "a.png"))
+  (should-error (jaunder--pull-media-target-path "/" "not-a-hash" "a.png"))
+  (let ((plan (jaunder--make-pull-media-plan :references nil)))
+    (should-error (jaunder--pull-media-materialize "/" "not-a-uuid" plan))))
+
+(ert-deftest jaunder-pull-media-markdown-definitions-recognize-container-prefixes ()
+  "Reference definitions retain source spans after blockquote and list prefixes."
+  (let* ((body "> - [photo]: https://h/media/a.png \"caption\"\n")
+         (ast (jaunder--pull-media-markdown-ast body))
+         (parser (nth 1 ast))
+         (excluded (nth 3 ast))
+         (definitions
+          (jaunder--pull-media-markdown-definitions parser body excluded)))
+    (should (= (length definitions) 1))
+    (should (equal (nth 5 (car definitions)) "https://h/media/a.png"))))
+
+
+(ert-deftest jaunder-pull-media-markdown-scanner-covers-delimiter-edge-cases ()
+  "Escapes, uneven code delimiters, titles, and source references stay byte-local."
+  (should (= (jaunder--pull-media-effective-port
+              (url-generic-parse-url "https://jaunder.example/media"))
+             443))
+  (should (= (jaunder--pull-media-effective-port
+              (url-generic-parse-url "http://jaunder.example/media"))
+             80))
+  (should (= (jaunder--pull-media-markdown-code-end "`x``y`" 1 1 6) 6))
+  (should (= (jaunder--pull-media-markdown-label-end "[`unclosed]" 1 11) 10))
+  (should (equal (jaunder--pull-media-markdown-destination
+                  "a\\ b(c)" 0 ?\n 7)
+                 '(0 7 7)))
+  (should (equal (jaunder--pull-media-markdown-destination
+                  "https://h \"a\\\"b\"   \n" 0 ?\n 20)
+                 '(0 9 20)))
+  (should (= (jaunder--pull-media-markdown-inline-html-end
+              "<!--x-->" 0 8)
+             8))
+  (should (= (jaunder--pull-media-markdown-inline-html-end
+              "<a title='>'>" 0 13)
+             13))
+  (let ((table (make-hash-table :test #'equal))
+        (destinations (make-hash-table :test #'equal)))
+    (should-not
+     (jaunder--pull-media-markdown-inline-candidates
+      table "markdown" jaunder-pull-media-test--origin
+      "`code`" '(0 6) destinations nil))
+    (should-not
+     (jaunder--pull-media-markdown-inline-candidates
+      table "markdown" jaunder-pull-media-test--origin
+      "[x" '(0 2) destinations nil))
+    (should-not
+     (jaunder--pull-media-markdown-inline-candidates
+      table "markdown" jaunder-pull-media-test--origin
+      "[x][" '(0 4) destinations nil)))
+  (let ((url (jaunder-pull-media-test--url "safe.png")))
+    (should (equal (jaunder-pull-media-test--rewrite
+                    "markdown" (format "[`unclosed](%s)" url))
+                   (format "[`unclosed](local-media/%s/safe.png)"
+                           jaunder-pull-media-test--hash))))
+  (should (equal (jaunder-pull-media-test--rewrite "markdown" "[unclosed")
+                 "[unclosed"))
+  (let* ((url (jaunder-pull-media-test--url "safe.png"))
+         (body (format "[use][]\n\n[use]: %s" url)))
+    (should (equal (jaunder-pull-media-test--rewrite "markdown" body)
+                   body))))
+
+(ert-deftest jaunder-pull-media-html-scanner-covers-lexical-boundaries ()
+  "The HTML lexer handles incomplete comments, literal tags, attributes, and raw text."
+  (should-not (jaunder--pull-media-html-attribute-spans "plain text"))
+  (should-not (jaunder--pull-media-html-attribute-spans "<!-- unfinished"))
+  (should-not (jaunder--pull-media-html-attribute-spans "<1 ignored>"))
+  (should-not (jaunder--pull-media-html-attribute-spans "<!ignored>"))
+  (should-not (jaunder--pull-media-html-attribute-spans "</ignored>"))
+  (should (equal (jaunder--pull-media-html-attribute-spans "<  img src=x>")
+                 '(("src" 11 12))))
+  (should (equal (jaunder--pull-media-html-attribute-spans
+                  "<img src='one' data-src=two SRC=\"three\">")
+                 '(("src" 10 13) ("data-src" 24 27) ("src" 33 38))))
+  (should (equal (jaunder--pull-media-html-attribute-spans
+                  "<plaintext src=\"ignored\"> <img src=\"also-ignored\">")
+                 '(("src" 16 23))))
+  (should (equal (jaunder--pull-media-html-attribute-spans
+                  "<style src=\"kept\"> unterminated raw text")
+                 '(("src" 12 16)))))
+
+(ert-deftest jaunder-pull-media-materialization-rechecks-installation-races ()
+  "A changed target or a concurrent verified winner prevents an unsafe overwrite."
+  (let* ((bytes (string-as-unibyte "body"))
+         (hash (secure-hash 'sha256 bytes))
+         (reference (jaunder--make-pull-media-reference
+                     :url "https://example.test/media" :hash hash :leaf "body.bin"))
+         (plan (jaunder--make-pull-media-plan :references (list reference))))
+    (jaunder-pull-media-test--with-root root
+                                        (let* ((target (expand-file-name "target.bin" root))
+                                               (other (expand-file-name "other.bin" root))
+                                               (calls 0))
+                                          (cl-letf (((symbol-function 'jaunder--pull-media-target-path)
+                                                     (lambda (&rest _)
+                                                       (setq calls (1+ calls))
+                                                       (if (= calls 1) target other)))
+                                                    ((symbol-function 'jaunder--pull-media-get)
+                                                     (lambda (_url temporary)
+                                                       (jaunder-pull-media-test--write-bytes temporary bytes)
+                                                       (jaunder-pull-media-test--response
+                                                        jaunder-pull-media-test--instance hash))))
+                                                   (should-error
+                                                    (jaunder--pull-media-materialize root jaunder-pull-media-test--instance plan))))
+                                        (let ((target (expand-file-name "winner.bin" root)))
+                                          (cl-letf (((symbol-function 'jaunder--pull-media-target-path)
+                                                     (lambda (&rest _) target))
+                                                    ((symbol-function 'jaunder--pull-media-get)
+                                                     (lambda (_url temporary)
+                                                       (jaunder-pull-media-test--write-bytes temporary bytes)
+                                                       (jaunder-pull-media-test--response
+                                                        jaunder-pull-media-test--instance hash)))
+                                                    ((symbol-function 'rename-file)
+                                                     (lambda (_from destination &optional _ok)
+                                                       (jaunder-pull-media-test--write-bytes destination bytes)
+                                                       (signal 'file-error '("race")))))
+                                                   (jaunder--pull-media-materialize root jaunder-pull-media-test--instance plan)
+                                                   (should (jaunder--pull-media-verified-file-p target hash)))))))
 ;;; jaunder-pull-media-test.el ends here

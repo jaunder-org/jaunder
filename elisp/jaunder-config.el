@@ -22,14 +22,14 @@
 
 ;;; Code:
 
-(require 'url-parse)
+(require 'url-parse) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
 
-(defgroup jaunder nil
+(defgroup jaunder nil ;; cov:ignore: customization group declaration has no Edebug execution stop
   "Emacs blogging front-end for Jaunder over AtomPub."
   :group 'comm
   :prefix "jaunder-")
 
-(defcustom jaunder-blogs nil
+(defcustom jaunder-blogs nil ;; cov:ignore: user option declaration has no Edebug execution stop
   "Alist mapping a local directory to a Jaunder blog.
 Each element is (DIRECTORY . PLIST), where PLIST carries :base-url and
 :username (strings) and an optional :format (accepted for forward
@@ -44,21 +44,21 @@ compatibility but not used in v1 — org is the only converter)."
 ;; silent).  The shared primitive is `jaunder--warn' (see jaunder-warn.el); the
 ;; domain deciders live in their feature modules.
 
-(defcustom jaunder-warn-zone-mismatch t
+(defcustom jaunder-warn-zone-mismatch t ;; cov:ignore: user option declaration has no Edebug execution stop
   "Whether to warn at publish on a machine-zone / JAUNDER_DATE_TZ mismatch.
 When non-nil, warn if the recorded JAUNDER_DATE_TZ differs from the machine's
 current zone.  See `jaunder--warn-zone-mismatch'."
   :type 'boolean
   :group 'jaunder)
 
-(defcustom jaunder-warn-untracked-media t
+(defcustom jaunder-warn-untracked-media t ;; cov:ignore: user option declaration has no Edebug execution stop
   "Whether to warn at publish about referenced media not tracked by git.
 When non-nil, warn for each referenced local media file not tracked by git in
 the document's repository.  See `jaunder--warn-untracked-media'."
   :type 'boolean
   :group 'jaunder)
 
-(defcustom jaunder-warn-missing-format-media-type t
+(defcustom jaunder-warn-missing-format-media-type t ;; cov:ignore: user option declaration has no Edebug execution stop
   "Whether to warn at publish when the server lacks the format-media-type feature.
 When non-nil, warn if the server's service document does not advertise the
 `format-media-type' feature.  See `jaunder--warn-missing-format-media-type'."
@@ -82,7 +82,7 @@ Both `jaunder--resolve-blog' (which blog to publish to) and `jaunder-new-post'
           (setq best entry best-len (length root)))))
     best))
 
-(defvar jaunder--active-blog nil
+(defvar jaunder--active-blog nil ;; cov:ignore: dynamic request context declaration has no Edebug execution stop
   "Plist (:base-url :username) of the blog for the in-flight request.
 Dynamically bound by `jaunder--with-blog' for the extent of one request; it is
 internal request context, not user configuration.  The transport reads it only
@@ -132,5 +132,5 @@ Signals when FILE resolves to no configured, fully-specified blog."
   `(let ((jaunder--active-blog (jaunder--resolve-blog ,file)))
      ,@body))
 
-(provide 'jaunder-config)
+(provide 'jaunder-config) ;; cov:ignore: feature declaration has no Edebug execution stop
 ;;; jaunder-config.el ends here

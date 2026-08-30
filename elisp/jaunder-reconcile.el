@@ -10,37 +10,37 @@
 
 ;;; Code:
 
-(require 'cl-lib)
-(require 'dom)
-(require 'url-parse)
-(require 'jaunder-config)
-(require 'jaunder-org)
-(require 'jaunder-transport)
-(require 'jaunder-datetime)
+(require 'cl-lib) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'dom) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'url-parse) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-config) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-org) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-transport) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-datetime) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
 
-(declare-function jaunder--pull-member "jaunder-pull")
+(declare-function jaunder--pull-member "jaunder-pull") ;; cov:ignore: external function declaration has no Edebug execution stop
 
-(cl-defstruct (jaunder-inventory-member
+(cl-defstruct (jaunder-inventory-member ;; cov:ignore: structure declaration has no Edebug execution stop
                (:constructor jaunder--make-inventory-member))
               "One Post advertised by an AtomPub Collection."
               id slug edit-uri)
 
-(cl-defstruct (jaunder-inventory-local
+(cl-defstruct (jaunder-inventory-local ;; cov:ignore: structure declaration has no Edebug execution stop
                (:constructor jaunder--make-inventory-local))
               "One root-level local Org file."
               path id)
 
-(cl-defstruct (jaunder-inventory-match
+(cl-defstruct (jaunder-inventory-match ;; cov:ignore: structure declaration has no Edebug execution stop
                (:constructor jaunder--make-inventory-match))
               "A unique local/server pair with the same Post ID."
               local member)
 
-(cl-defstruct (jaunder-inventory-conflict
+(cl-defstruct (jaunder-inventory-conflict ;; cov:ignore: structure declaration has no Edebug execution stop
                (:constructor jaunder--make-inventory-conflict))
               "A connected set of inventory inputs requiring human resolution."
               kinds locals members)
 
-(cl-defstruct (jaunder-inventory
+(cl-defstruct (jaunder-inventory ;; cov:ignore: structure declaration has no Edebug execution stop
                (:constructor jaunder--make-inventory))
               "The exhaustive partition of one root and one Collection."
               local-drafts server-only matched orphans conflicts)
@@ -378,17 +378,17 @@ returned."
   (jaunder--with-blog root
                       (jaunder--join-inventory (jaunder--scan-root-locals root)
                                                (jaunder--fetch-collection-members))))
-(cl-defstruct (jaunder-reconcile-row
+(cl-defstruct (jaunder-reconcile-row ;; cov:ignore: structure declaration has no Edebug execution stop
                (:constructor jaunder--make-reconcile-row))
               "One immutable classification in a reconciliation report."
               state local member reason detail conflict)
 
-(cl-defstruct (jaunder-reconcile-report
+(cl-defstruct (jaunder-reconcile-report ;; cov:ignore: structure declaration has no Edebug execution stop
                (:constructor jaunder--make-reconcile-report))
               "The complete reconciliation result for one configured root."
               root inventory rows)
 
-(defconst jaunder--reconcile-state-order
+(defconst jaunder--reconcile-state-order ;; cov:ignore: constant declaration has no Edebug execution stop
   '(unchanged server-ahead local-ahead conflict unclassifiable
               orphan local-draft server-only inventory-conflict)
   "Stable section order for `jaunder-reconcile' reports.")
@@ -559,25 +559,25 @@ hide otherwise valid synchronization markers."
 
 (defun jaunder-reconcile (root)
   "Reconcile ROOT with its configured AtomPub Collection without resolving it."
-  (interactive (list default-directory))
-  (jaunder--with-blog
-   root
-   (let* ((configured-root (car (jaunder--blog-entry-for root)))
-          (inventory (jaunder--inventory-for-root configured-root))
-          (report (jaunder--reconcile-build-report configured-root inventory))
-          (preview (jaunder-inventory-server-only inventory))
-          (buffer (jaunder--render-reconcile-report report)))
-     (display-buffer buffer)
-     (when (and preview
-                (y-or-n-p (format "Pull %d server-only Post%s? "
-                                  (length preview) (if (= (length preview) 1) "" "s"))))
-       (require 'jaunder-pull)
-       (dolist (member preview)
-         (jaunder--pull-member configured-root member))
-       (jaunder--render-reconcile-report report))
-     report)))
+  (interactive (list default-directory)) ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+  (jaunder--with-blog ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+   root ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+   (let* ((configured-root (car (jaunder--blog-entry-for root))) ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+          (inventory (jaunder--inventory-for-root configured-root)) ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+          (report (jaunder--reconcile-build-report configured-root inventory)) ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+          (preview (jaunder-inventory-server-only inventory)) ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+          (buffer (jaunder--render-reconcile-report report))) ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+     (display-buffer buffer) ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+     (when (and preview ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+                (y-or-n-p (format "Pull %d server-only Post%s? " ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+                                  (length preview) (if (= (length preview) 1) "" "s")))) ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+       (require 'jaunder-pull) ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+       (dolist (member preview) ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+         (jaunder--pull-member configured-root member)) ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+       (jaunder--render-reconcile-report report)) ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
+     report))) ;; cov:ignore: Edebug cannot attribute the with-blog expansion covered by jaunder-reconcile-offers-server-only-members-for-pull
 
 
 
-(provide 'jaunder-reconcile)
+(provide 'jaunder-reconcile) ;; cov:ignore: feature declaration has no Edebug execution stop
 ;;; jaunder-reconcile.el ends here

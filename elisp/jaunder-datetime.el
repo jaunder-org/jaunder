@@ -22,9 +22,9 @@
 
 ;;; Code:
 
-(require 'org)
-(require 'jaunder-config)
-(require 'jaunder-warn)
+(require 'org) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-config) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-warn) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
 
 (defun jaunder--offset->seconds (offset)
   "Parse a numeric UTC OFFSET string (\"±HHMM\" or \"±HH:MM\") to integer seconds.
@@ -103,5 +103,5 @@ comparing offsets would only false-positive.  Gated by
          "recorded timezone %s differs from this machine's zone %s; #+DATE: will be interpreted in the recorded zone %s"
          recorded current recorded)))))
 
-(provide 'jaunder-datetime)
+(provide 'jaunder-datetime) ;; cov:ignore: feature declaration has no Edebug execution stop
 ;;; jaunder-datetime.el ends here

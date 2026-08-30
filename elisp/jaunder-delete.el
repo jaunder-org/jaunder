@@ -23,9 +23,9 @@
 
 ;;; Code:
 
-(require 'jaunder-config)
-(require 'jaunder-org)
-(require 'jaunder-transport)
+(require 'jaunder-config) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-org) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-transport) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
 
 ;;;###autoload
 (defun jaunder-delete-post ()
@@ -57,5 +57,5 @@ after the server answers the confirmed conditional DELETE with HTTP 204."
            (set-buffer-modified-p nil)
            (kill-buffer (current-buffer))))))))
 
-(provide 'jaunder-delete)
+(provide 'jaunder-delete) ;; cov:ignore: feature declaration has no Edebug execution stop
 ;;; jaunder-delete.el ends here

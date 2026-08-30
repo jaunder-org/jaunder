@@ -23,7 +23,9 @@ pub(crate) fn parse(path: &Path, repo_root: &Path) -> Result<Lcov, CoverageError
             if current.is_some() {
                 return Err(error(format!("line {line_number}: nested SF record")));
             }
-            current = Some(normalize_source(source, repo_root).map_err(error)?);
+            let source = normalize_source(source, repo_root).map_err(error)?;
+            lcov.entry(source.clone()).or_default();
+            current = Some(source);
         } else if let Some(data) = line.strip_prefix("DA:") {
             let source = current
                 .as_ref()

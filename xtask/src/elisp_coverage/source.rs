@@ -28,15 +28,18 @@ pub(crate) fn read_forms(path: &Path) -> Result<(String, Vec<SourceForm>), Cover
     Ok((text, forms))
 }
 
-pub(crate) fn assert_forms(path: &Path, census: &[FormCensus]) -> Result<String, CoverageError> {
+pub(crate) fn assert_forms(
+    path: &Path,
+    census: &[FormCensus],
+) -> Result<(String, Vec<SourceForm>), CoverageError> {
     let (text, forms) = read_forms(path)?;
     let expected: Vec<_> = forms
-        .into_iter()
-        .map(|form| (form.start_line, form.kind))
+        .iter()
+        .map(|form| (form.start_line, form.kind.as_str()))
         .collect();
     let actual: Vec<_> = census
         .iter()
-        .map(|form| (form.start_line, form.kind.clone()))
+        .map(|form| (form.start_line, form.kind.as_str()))
         .collect();
     if actual != expected {
         return Err(CoverageError::Census {
@@ -46,7 +49,7 @@ pub(crate) fn assert_forms(path: &Path, census: &[FormCensus]) -> Result<String,
             ),
         });
     }
-    Ok(text)
+    Ok((text, forms))
 }
 
 struct Reader<'a> {
@@ -122,14 +125,11 @@ impl<'a> Reader<'a> {
                     self.bump();
                     self.bump();
                 }
-                // Reader notation such as #s(...) leaves the following
-                // structure to the normal recursive reader.
-                (Some(b'#'), Some(byte)) if byte.is_ascii_alphabetic() => {
+                // `#s(...)` prefixes a record literal; numeric forms such as
+                // `#x21` are ordinary atoms and must stay intact.
+                (Some(b'#'), Some(b's')) if self.bytes.get(self.index + 2) == Some(&b'(') => {
                     self.bump();
-                    while matches!(self.peek(), Some(byte) if byte.is_ascii_alphanumeric() || byte == b'-')
-                    {
-                        self.bump();
-                    }
+                    self.bump();
                 }
                 _ => return Ok(()),
             }
@@ -137,12 +137,21 @@ impl<'a> Reader<'a> {
     }
 
     fn list_kind(&mut self) -> Result<String, CoverageError> {
+        let opening_line = self.line;
         self.bump();
         self.skip_space_and_comments()?;
+        // Only a plain symbol can name a list form.  Reader syntax may make
+        // the first element any other form, including a character literal.
         let kind = match self.peek() {
             Some(b')') => "list".to_owned(),
+            Some(b'"' | b'?' | b'(' | b'[' | b'{' | b'\'' | b'`' | b',' | b'#') => {
+                self.form()?;
+                "list".to_owned()
+            }
             Some(_) => self.read_symbol().unwrap_or_else(|| "list".to_owned()),
-            None => return Err(self.error("unterminated list")),
+            None => {
+                return Err(self.error(&format!("unterminated list opened at line {opening_line}")));
+            }
         };
         loop {
             self.skip_space_and_comments()?;
@@ -155,7 +164,11 @@ impl<'a> Reader<'a> {
                 Some(_) => {
                     self.form()?;
                 }
-                None => return Err(self.error("unterminated list")),
+                None => {
+                    return Err(
+                        self.error(&format!("unterminated list opened at line {opening_line}"))
+                    );
+                }
             }
         }
     }
@@ -218,11 +231,31 @@ impl<'a> Reader<'a> {
         self.bump();
         if self.peek() == Some(b'\\') {
             self.bump();
+            if self.peek() == Some(b'N') && self.bytes.get(self.index + 1) == Some(&b'{') {
+                self.bump();
+                self.bump();
+                while !matches!(self.peek(), None | Some(b'}')) {
+                    self.bump();
+                }
+                if self.peek().is_none() {
+                    return Err(self.error("unterminated named character literal"));
+                }
+                self.bump();
+                return Ok(());
+            }
         }
-        if self.peek().is_none() {
-            return Err(self.error("unterminated character literal"));
+        self.bump_utf8_character()
+    }
+
+    fn bump_utf8_character(&mut self) -> Result<(), CoverageError> {
+        let remaining = &self.text[self.index..];
+        let character = remaining
+            .chars()
+            .next()
+            .ok_or_else(|| self.error("unterminated character literal"))?;
+        for _ in 0..character.len_utf8() {
+            self.bump();
         }
-        self.bump();
         Ok(())
     }
 

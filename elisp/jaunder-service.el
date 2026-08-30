@@ -24,12 +24,12 @@
 
 ;;; Code:
 
-(require 'dom)
-(require 'jaunder-config)
-(require 'jaunder-transport)
-(require 'jaunder-warn)
+(require 'dom) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-config) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-transport) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-warn) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
 
-(defvar jaunder--service-doc-cache nil
+(defvar jaunder--service-doc-cache nil ;; cov:ignore: session cache declaration has no Edebug execution stop
   "Session-scoped alist of BASE-URL -> list of advertised feature tokens.
 Populated on the first successful service-doc fetch per base-url; failures are
 not cached, so a later publish may retry.  Reset only by restarting Emacs.")
@@ -82,5 +82,5 @@ session.  A fetch or parse failure is neither cached nor warned on.  Gated by
            "server at %s does not advertise the format-media-type feature; it may store this post's org source verbatim instead of rendering it"
            base-url))))))
 
-(provide 'jaunder-service)
+(provide 'jaunder-service) ;; cov:ignore: feature declaration has no Edebug execution stop
 ;;; jaunder-service.el ends here

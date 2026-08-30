@@ -78,7 +78,7 @@ Out:
     runs. Build the producer through
     `devtool run -- nix build -L --accept-flake-config .#checks.x86_64-linux.elisp-coverage-producer`.
 
-- [ ] Task 3: Cut over the verification ladder and remove the obsolete path.
+- [x] Task 3: Cut over the verification ladder and remove the obsolete path.
   - Depends on Tasks 1 and 2.
   - Contract: `steps::nix::test_checks` builds the producer and invokes the
     consumer once for both `validate --no-e2e` and full `validate`; the e2e path

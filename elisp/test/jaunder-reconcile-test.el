@@ -410,13 +410,17 @@
                                                       :local local :member member)
                          (jaunder--make-reconcile-row :state 'unclassifiable
                                                       :local local :member member
-                                                      :reason 'stored-etag-invalid)))))
+                                                      :reason 'stored-etag-invalid)
+                         (jaunder--make-reconcile-row :state 'unclassifiable
+                                                      :local local :member member
+                                                      :reason 'member-http-error :detail 503)))))
     (let ((rendered (with-current-buffer (jaunder--render-reconcile-report report)
                       (buffer-string))))
       (with-current-buffer (jaunder--render-reconcile-report report)
         (should (equal (buffer-string) rendered))
         (should (string-match-p "server-ahead (1)" (buffer-string)))
         (should (string-match-p "stored-etag-invalid" (buffer-string)))
+        (should (string-match-p "member-http-error (503)" (buffer-string)))
         (should (string-match-p "Pull this Post manually" (buffer-string)))))))
 
 (ert-deftest jaunder-reconcile-requires-an-active-blog-before-inventory ()
@@ -476,6 +480,13 @@
                                  'file-mtime-unreadable)))))
       (delete-directory root t))))
 
+(ert-deftest jaunder-reconcile-missing-local-file-clears-all-marker-inputs ()
+  "A vanished local file yields no saved marker or mtime state."
+  (let ((local (jaunder-reconcile-test--local
+                "/definitely-missing/jaunder-post.org" "7")))
+    (should (equal (jaunder--reconcile-local-markers local)
+                   '(nil nil nil)))))
+
 (ert-deftest jaunder-reconcile-selects-the-most-specific-configured-root ()
   "Nested reconciliation resolves its active blog and inventory root by longest prefix."
   (let* ((parent (make-temp-file "jaunder-reconcile-parent-" t))
@@ -522,5 +533,42 @@
                               (buffer-string)))
       (should (string-match-p "local: /tmp/duplicate.org id=5" (buffer-string)))
       (should (string-match-p "slug=duplicate" (buffer-string))))))
+(ert-deftest jaunder-reconcile-rejects-malformed-page-and-retains-fetch-errors ()
+  "Malformed collection wire data and one Member fetch failure stay explicit."
+  (cl-letf (((symbol-function 'libxml-parse-xml-region)
+             (lambda (&rest _) (error "malformed"))))
+           (should-error (jaunder--parse-collection-xml "<feed>")))
+  (should-error (jaunder--parse-collection-page "<not xml" "https://h/posts"))
+  (should-error
+   (jaunder--parse-collection-page
+    "<feed><link rel=\"next\" href=\"\"/></feed>" "https://h/posts"))
+  (let ((member (jaunder-reconcile-test--member "1" "one")))
+    (cl-letf (((symbol-function 'jaunder--http-request)
+               (lambda (&rest _) (error "offline"))))
+             (should (plist-get (jaunder--reconcile-member-outcome member) :error)))))
+
+(ert-deftest jaunder-reconcile-offers-server-only-members-for-pull ()
+  "Accepting the preview pulls every server-only member then refreshes its report."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-reconcile-" t)))
+         (member (jaunder-reconcile-test--member "1" "one"))
+         (inventory (jaunder--make-inventory :server-only (list member)))
+         (report (jaunder--make-reconcile-report :root root :rows nil))
+         (jaunder-blogs (list (cons root '(:base-url "https://h" :username "alice"))))
+         pulled renders)
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--inventory-for-root) (lambda (_) inventory))
+                  ((symbol-function 'jaunder--reconcile-build-report) (lambda (&rest _) report))
+                  ((symbol-function 'jaunder--render-reconcile-report)
+                   (lambda (_) (setq renders (1+ (or renders 0))) (get-buffer-create " *jr*")))
+                  ((symbol-function 'display-buffer) (lambda (&rest _) nil))
+                  ((symbol-function 'y-or-n-p) (lambda (_) t))
+                  ((symbol-function 'jaunder--pull-member)
+                   (lambda (destination candidate)
+                     (push (list destination candidate) pulled))))
+                 (should (eq (jaunder-reconcile root) report))
+                 (should (equal pulled (list (list root member))))
+                 (should (= renders 2)))
+      (delete-directory root t))))
+
 (provide 'jaunder-reconcile-test)
 ;;; jaunder-reconcile-test.el ends here

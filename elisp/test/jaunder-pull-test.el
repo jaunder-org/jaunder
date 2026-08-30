@@ -583,5 +583,97 @@
                                   "winner"))
                    (should-not (jaunder-pull-test--temp-artifacts root))))
       (delete-directory root t))))
+(ert-deftest jaunder-pull-rejects-invalid-private-boundary-inputs ()
+  "Validate malformed wire values at each independently callable pull boundary."
+  (should-error (jaunder--pull-at-most-one '((summary . ("a" "b")))
+                                           'summary "summary"))
+  (cl-letf (((symbol-function 'date-to-time) (lambda (_) (error "parser"))))
+           (should-error (jaunder--pull-rfc-3339-time "2026-01-01T00:00:00Z")))
+  (should-error (jaunder--pull-content-format '(content ((type . "video/mp4")))))
+  (should-error (jaunder--pull-content-body '(content nil "body") 'unsupported))
+  (should-error (jaunder--parse-pulled-member
+                 (jaunder-pull-test--response-entry) "\"sha256-test\""
+                 jaunder-pull-test--captured-at ""))
+  (should-error (jaunder--render-pulled-member
+                 (jaunder--parse-pulled-member
+                  (jaunder-pull-test--response-entry) "\"sha256-test\""
+                  jaunder-pull-test--captured-at "UTC")
+                 nil))
+  (should-error (jaunder--pull-destination "/tmp" "../escape"))
+  (should-error (jaunder--pull-response-identity
+                 (jaunder-pull-test--entry
+                  "<title>T</title><j:slug>safe</j:slug>"
+                  "<content type=\"text/org\">B</content>"
+                  "<link rel=\"edit\" href=\"https://h/posts/not-a-number\"/>")))
+  (should-error (jaunder--pull-member "/tmp" 'not-an-inventory-member)))
+
+(ert-deftest jaunder-pull-parser-covers-explicit-draft-and-wire-invariants ()
+  "Explicit non-drafts and independently malformed Member fields remain distinct."
+  (let ((base (lambda (extra)
+                (jaunder-pull-test--entry
+                 "<title>T</title>"
+                 "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/42\"/>"
+                 "<j:slug>safe</j:slug>"
+                 "<content type=\"text/org\">B</content>"
+                 extra))))
+    (should (string-match-p "JAUNDER_STATUS published"
+                            (jaunder-pull-test--org
+                             (funcall base
+                                      "<app:control><app:draft>no</app:draft></app:control><published>2026-08-01T00:00:00Z</published>"))))
+    (should-error (jaunder-pull-test--org
+                   (funcall base
+                            "<app:control><app:draft>maybe</app:draft></app:control>")))
+    (should-error (jaunder-pull-test--org
+                   (jaunder-pull-test--entry
+                    "<title>T</title><link rel=\"edit\" href=\"https://h/posts/nope\"/>"
+                    "<j:slug>safe</j:slug><content type=\"text/org\">B</content>"
+                    "<app:control><app:draft>yes</app:draft></app:control>")))
+    (should-error (jaunder-pull-test--org
+                   (jaunder-pull-test--entry
+                    "<title>T</title><link rel=\"edit\" href=\"https://h/posts/42\"/>"
+                    "<j:slug>../escape</j:slug><content type=\"text/org\">B</content>"
+                    "<app:control><app:draft>yes</app:draft></app:control>")))
+    (should-error (jaunder-pull-test--org
+                   (jaunder-pull-test--entry
+                    "<title>T</title><category term=\"\"/>"
+                    "<link rel=\"edit\" href=\"https://h/posts/42\"/>"
+                    "<j:slug>safe</j:slug><content type=\"text/org\">B</content>"
+                    "<app:control><app:draft>yes</app:draft></app:control>")))))
+
+(ert-deftest jaunder-pull-install-file-error-distinguishes-a-racing-winner ()
+  "A generic link failure is blocked only when it discovers a winner."
+  (let* ((root (make-temp-file "jaunder-pull-" t))
+         (path (expand-file-name "post.org" root)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'add-name-to-file)
+                     (lambda (&rest _)
+                       (signal 'file-error '("link failed")))))
+                   (should-error (jaunder--install-pulled-bytes path "body")
+                                 :type 'file-error))
+          (cl-letf (((symbol-function 'add-name-to-file)
+                     (lambda (&rest _)
+                       (with-temp-file path (insert "winner"))
+                       (signal 'file-error '("link failed")))))
+                   (should (eq (jaunder-pull-result-status
+                                (jaunder--install-pulled-bytes path "body"))
+                               'blocked))))
+      (delete-directory root t))))
+
+
+(ert-deftest jaunder-pull-install-blocks-before-writing-existing-destination ()
+  "An existing destination is returned as blocked without touching its bytes."
+  (let* ((root (make-temp-file "jaunder-pull-" t))
+         (path (expand-file-name "post.org" root)))
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert "winner"))
+          (let ((result (jaunder--install-pulled-bytes path "replacement")))
+            (should (eq (jaunder-pull-result-status result) 'blocked))
+            (should (equal (with-temp-buffer
+                             (insert-file-contents path)
+                             (buffer-string))
+                           "winner"))))
+      (delete-directory root t))))
 (provide 'jaunder-pull-test)
 ;;; jaunder-pull-test.el ends here

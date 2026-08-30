@@ -49,9 +49,13 @@ pub fn consume(repo_root: &Path, artifact_dir: &Path) -> Result<CoverageReport, 
             ),
         });
     }
-    if !lcov.keys().all(|path| sources.contains_key(path)) {
+    if sources.keys().collect::<Vec<_>>() != lcov.keys().collect::<Vec<_>>() {
         return Err(CoverageError::Lcov {
-            message: "LCOV names a module outside the production census".to_owned(),
+            message: format!(
+                "LCOV modules do not match current source: expected {:?}, got {:?}",
+                sources.keys().collect::<Vec<_>>(),
+                lcov.keys().collect::<Vec<_>>()
+            ),
         });
     }
 
@@ -59,8 +63,8 @@ pub fn consume(repo_root: &Path, artifact_dir: &Path) -> Result<CoverageReport, 
     let mut failures = Vec::new();
     for (path, source_path) in sources {
         let module = &status_modules[&path];
-        let source_text = source::assert_forms(&source_path, &module.forms)?;
-        let points = census_points(&path, module)?;
+        let (source_text, source_forms) = source::assert_forms(&source_path, &module.forms)?;
+        let points = census_points(&path, module, &source_forms, source_text.lines().count())?;
         reject_unknown_lcov(&path, lcov.get(&path), &points)?;
         let markers = markers(&source_text, &path)?;
         for &line in markers.keys() {
@@ -162,9 +166,15 @@ fn census_modules(
 fn census_points<'a>(
     path: &str,
     module: &'a ModuleCensus,
+    source_forms: &[source::SourceForm],
+    source_line_count: usize,
 ) -> Result<BTreeMap<u32, &'a super::model::PointCensus>, CoverageError> {
+    let source_line_count =
+        u32::try_from(source_line_count).map_err(|_| CoverageError::Census {
+            message: format!("{path}: source has too many lines"),
+        })?;
     let mut points = BTreeMap::new();
-    for form in &module.forms {
+    for (index, form) in module.forms.iter().enumerate() {
         let synthetic = form
             .points
             .iter()
@@ -185,7 +195,16 @@ fn census_points<'a>(
                 ),
             });
         }
+        let next_form_start = source_forms.get(index + 1).map(|form| form.start_line);
         for point in &form.points {
+            let outside_form = point.line < form.start_line
+                || next_form_start.is_some_and(|next_start| point.line >= next_start)
+                || (next_form_start.is_none() && point.line > source_line_count);
+            if outside_form {
+                return Err(CoverageError::Census {
+                    message: format!("{path}:{} census point is outside its form", point.line),
+                });
+            }
             if point.line == 0 || points.insert(point.line, point).is_some() {
                 return Err(CoverageError::Census {
                     message: format!("{path}: duplicate or invalid census point {}", point.line),
@@ -241,12 +260,14 @@ fn markers(source: &str, path: &str) -> Result<BTreeMap<u32, ()>, CoverageError>
         let Some(start) = comment_start(line) else {
             continue;
         };
-        let comment = line[start + 2..].trim_start();
+        let comment = &line[start..];
         if !comment.contains("cov:ignore") {
             continue;
         }
         let valid = comment
-            .strip_prefix("cov:ignore:")
+            .strip_prefix(";;")
+            .map(str::trim_start)
+            .and_then(|comment| comment.strip_prefix("cov:ignore:"))
             .is_some_and(|reason| !reason.trim().is_empty());
         if !valid {
             return Err(CoverageError::Census {
@@ -269,7 +290,7 @@ fn comment_start(line: &str) -> Option<usize> {
                 string = !string;
                 index += 1;
             }
-            b';' if !string && bytes.get(index + 1) == Some(&b';') => return Some(index),
+            b';' if !string => return Some(index),
             _ => index += 1,
         }
     }

@@ -1204,11 +1204,12 @@
             # never in the prod artifact or the NixOS module.
             test-support = testSupportBin;
 
-            # The e2e aggregate: a symlinkJoin of every `e2e-*` check, exposed as
-            # `checks.e2e` and built by `cargo xtask validate`. Adding a new e2e
-            # combo automatically joins it here. Its `jaunder-e2e*` name keeps it
-            # out of the cachix push, so building it always realizes the
-            # underlying VM checks rather than substituting a cached aggregate.
+            # The e2e aggregate: a symlinkJoin of every browser/backend `e2e-*`
+            # check, exposed as `checks.e2e` and built by `cargo xtask validate`.
+            # Adding a new browser/backend combo automatically joins it here. Its
+            # `jaunder-e2e*` name keeps it out of the cachix push, so building it
+            # always realizes the underlying VM checks rather than substituting a
+            # cached aggregate.
             e2e-checks = pkgs.symlinkJoin {
               name = "jaunder-e2e-checks";
               paths = builtins.attrValues (
@@ -1265,19 +1266,19 @@
                 }
               );
 
-              # The single e2e gate `cargo xtask validate` builds. `e2e-checks`
-              # aggregates every `checks.e2e-*` combo (now 4); they are independent
-              # derivations realized in parallel up to the host `max-jobs` (CI's
-              # install-nix-action sets `max-jobs = auto`; a plain dev box defaults
-              # to 1 and runs them serially). The aggregate's name stays under
-              # `jaunder-e2e*`, so the cachix pushFilter still excludes it — the VM
-              # runs are never substituted from a cached aggregate.
+              # The browser/backend e2e gate `cargo xtask validate` builds.
+              # `e2e-checks` aggregates every browser/backend `checks.e2e-*` combo
+              # (now 4); they are independent derivations realized in parallel up
+              # to the host `max-jobs` (CI's install-nix-action sets `max-jobs =
+              # auto`; a plain dev box defaults to 1 and runs them serially). The
+              # aggregate's name stays under `jaunder-e2e*`, so the cachix
+              # pushFilter still excludes it — the VM runs are never substituted
+              # from a cached aggregate.
               e2e = self.packages.${system}.e2e-checks;
 
               # The producer combines pure and server-backed ERT observations in
-              # one VM, but deliberately returns controlled outcomes as artifacts.
-              # Task 3 wires this check into the verification ladder and removes
-              # the older standalone live check below.
+              # one VM, returning controlled outcomes as fixed artifacts for the
+              # host-side authoritative consumer.
               elisp-coverage-producer = pkgs.testers.nixosTest {
                 name = "jaunder-elisp-coverage-producer";
                 nodes.machine = _: {
@@ -1309,35 +1310,6 @@
                 '';
               };
 
-              # Live elisp integration suite (ADR-0035): a minimal NixOS VM with
-              # Emacs + the jaunder binary. The harness self-boots the server
-              # (no systemd service, no Playwright), so the VM only supplies the
-              # toolchain. The `e2e-` attr prefix folds it into the `e2e-checks`
-              # aggregate (realized in parallel with the combos by local
-              # `validate`); the `jaunder-e2e*` derivation name keeps it out of the
-              # cachix push, so the VM test always re-runs (never a cached green).
-              e2e-elisp-integration = pkgs.testers.nixosTest {
-                name = "jaunder-e2e-elisp-integration";
-                nodes.machine = _: {
-                  # #628: headroom so the server boots fast enough for the one
-                  # remaining readiness gate under CI load.
-                  virtualisation.memorySize = 4096;
-                  virtualisation.cores = 2;
-                  environment.systemPackages = [
-                    emacsForCi
-                    jaunderBin
-                    pkgs.curl
-                  ];
-                };
-                testScript = ''
-                  machine.start()
-                  machine.wait_for_unit("multi-user.target")
-                  machine.succeed(
-                      "JAUNDER_TEST_BINARY=${jaunderBin}/bin/jaunder "
-                      + "emacs --batch -Q -l ${emacsSrc}/scripts/run-integration-tests.el"
-                  )
-                '';
-              };
             }
           )
           // {

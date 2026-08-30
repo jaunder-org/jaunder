@@ -296,6 +296,19 @@
     (should (stringp z))
     (should (> (length z) 0))))
 
+(ert-deftest jaunder-current-zone-name-prefers-explicit-tz ()
+  "A configured IANA zone outranks the host localtime link."
+  (cl-letf (((symbol-function 'getenv)
+             (lambda (name) (and (equal name "TZ") "America/Chicago"))))
+           (should (equal (jaunder--current-zone-name) "America/Chicago"))))
+
+(ert-deftest jaunder-current-zone-name-reads-localtime-zoneinfo-link ()
+  "Without TZ, retain the named zone exposed by /etc/localtime."
+  (cl-letf (((symbol-function 'getenv) (lambda (_name) nil))
+            ((symbol-function 'file-symlink-p)
+             (lambda (_path) "/usr/share/zoneinfo/Europe/Paris")))
+           (should (equal (jaunder--current-zone-name) "Europe/Paris"))))
+
 (ert-deftest jaunder-ensure-date-tz-captures-when-unset-and-preserves ()
   (with-temp-buffer
     (org-mode)
@@ -1459,5 +1472,84 @@ Lets the warning tests assert on emitted warnings without touching the real
              (should-error (jaunder--create-with-retry "http://x/posts" "<xml/>"))
              (should (= calls 1))
              (should (= sleeps 0)))))
+(ert-deftest jaunder-auth-secret-rejects-missing-credential ()
+  "An auth-source match without a usable secret cannot make an anonymous request."
+  (let ((jaunder--active-blog '(:base-url "https://blog" :username "alice")))
+    (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) nil)))
+             (should-error (jaunder--auth-secret) :type 'error))))
+
+(ert-deftest jaunder-auth-secret-returns-a-literal-auth-source-secret ()
+  "A literal auth-source secret is returned unchanged for request authentication."
+  (let ((jaunder--active-blog '(:base-url "https://blog" :username "alice")))
+    (cl-letf (((symbol-function 'auth-source-search)
+               (lambda (&rest _) (list '(:secret "literal-token")))))
+             (should (equal (jaunder--auth-secret) "literal-token")))))
+
+(ert-deftest jaunder-http-request-resignals-transport-failure-without-response ()
+  "A transport failure without an HTTP response remains distinguishable to retry."
+  (let ((jaunder--active-blog '(:base-url "https://blog" :username "alice")))
+    (cl-letf (((symbol-function 'jaunder--auth-secret) (lambda () "secret"))
+              ((symbol-function 'plz)
+               (lambda (&rest _)
+                 (signal 'plz-curl-error
+                         (list "offline" (make-plz-error :message "offline"))))))
+             (should-error (jaunder--http-request "GET" "https://blog/posts")
+                           :type 'plz-error))))
+(ert-deftest jaunder-git-media-helpers-handle-worktree-and-untracked-results ()
+  "Git helper results drive the warning layer without exposing process details."
+  (let (arguments)
+    (cl-letf (((symbol-function 'executable-find) (lambda (_) "/git"))
+              ((symbol-function 'call-process)
+               (lambda (&rest args)
+                 (push args arguments)
+                 (if (equal (nth 4 args) "rev-parse") 0 1)))
+              ((symbol-function 'buffer-string) (lambda () "/repo\n")))
+             (should (equal (jaunder--git-toplevel "/repo/subdir") "/repo"))
+             (should-not (jaunder--git-tracked-p "/repo" "/repo/missing.png"))
+             (should (= (length arguments) 2)))))
+
+
+(ert-deftest jaunder-publish-commands-require-visiting-file ()
+  "Interactive publish must not silently manufacture request context."
+  (with-temp-buffer
+    (should-error (jaunder-publish) :type 'error)
+    (should-error (jaunder--rename-to-slug "post") :type 'error)))
+
+(ert-deftest jaunder-new-post-prompts-for-a-blog-when-directory-is-unmapped ()
+  "New-post selects an explicit configured blog rather than using an unrelated cwd."
+  (let* ((root (make-temp-file "jaunder-new-post-" t))
+         (other (make-temp-file "jaunder-other-" t))
+         (jaunder-blogs (list (cons (file-name-as-directory root)
+                                    '(:base-url "https://blog" :username "alice"))))
+         (default-directory other)
+         selected)
+    (unwind-protect
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (&rest _) (setq selected (file-name-as-directory root))))
+                  ((symbol-function 'format-time-string) (lambda (&rest _) "20260829T000000")))
+                 (jaunder-new-post)
+                 (should (equal selected (file-name-as-directory root)))
+                 (should (equal (buffer-file-name)
+                                (expand-file-name "draft-20260829T000000.org" root))))
+      (when (buffer-file-name) (kill-buffer (current-buffer)))
+      (delete-directory root t)
+      (delete-directory other t))))
+
+(ert-deftest jaunder-new-post-uses-default-directory-without-configured-blogs ()
+  "Without configured blogs, a draft is deliberately created in the current directory."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-new-post-" t)))
+         (default-directory root)
+         (jaunder-blogs nil)
+         created)
+    (unwind-protect
+        (cl-letf (((symbol-function 'format-time-string)
+                   (lambda (&rest _) "20260829T000001")))
+                 (jaunder-new-post)
+                 (setq created (current-buffer))
+                 (should (equal (buffer-file-name)
+                                (expand-file-name "draft-20260829T000001.org" root))))
+      (when (buffer-live-p created) (kill-buffer created))
+      (delete-directory root t))))
+
 
 ;;; jaunder-test.el ends here

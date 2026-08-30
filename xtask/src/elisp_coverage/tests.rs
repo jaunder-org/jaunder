@@ -96,11 +96,35 @@ fn source_population_and_forms_must_match_the_producer_census() {
     let missing_module = fixture(
         "(defun client () nil)\n",
         r#"{"schema":"elisp-coverage-v1","outcome":"success","modules":[]}"#,
-        "",
+        &lcov(""),
     );
     assert_message(consume_fixture(&missing_module), "producer modules");
-    let missing_form = fixture("(defun client () nil)\n", &status("success", "[]"), "");
+    let missing_form = fixture(
+        "(defun client () nil)\n",
+        &status("success", "[]"),
+        &lcov(""),
+    );
     assert_message(consume_fixture(&missing_form), "census forms");
+}
+
+#[test]
+fn lcov_module_population_must_match_the_source_census() {
+    let temp = fixture(
+        "(defun client ()\n  (message \"client\"))\n",
+        &ordinary_status(),
+        &lcov("DA:2,1\n"),
+    );
+    fs::write(
+        temp.path().join("elisp/other.el"),
+        "(defmacro other () nil)\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("artifacts/status.json"),
+        r#"{"schema":"elisp-coverage-v1","outcome":"success","modules":[{"path":"elisp/client.el","forms":[{"start_line":1,"kind":"defun","points":[{"line":2,"kind":"ordinary"}]}]},{"path":"elisp/other.el","forms":[{"start_line":1,"kind":"defmacro","points":[{"line":1,"kind":"synthetic"}]}]}]}"#,
+    )
+    .unwrap();
+    assert_message(consume_fixture(&temp), "LCOV modules");
 }
 
 #[test]
@@ -110,6 +134,18 @@ fn ordinary_points_require_one_and_only_one_lcov_record() {
     assert_message(consume_fixture(&missing), "missing an LCOV record");
     let duplicate = fixture(source, &ordinary_status(), &lcov("DA:2,0\nDA:2,1\n"));
     assert_message(consume_fixture(&duplicate), "2 LCOV records");
+}
+
+#[test]
+fn census_points_must_belong_to_their_owning_top_level_form() {
+    let source =
+        "(defun first ()\n  (message \"first\"))\n(defun second ()\n  (message \"second\"))\n";
+    let census = status(
+        "success",
+        r#"[{"start_line":1,"kind":"defun","points":[{"line":3,"kind":"ordinary"}]},{"start_line":3,"kind":"defun","points":[{"line":4,"kind":"ordinary"}]}]"#,
+    );
+    let temp = fixture(source, &census, &lcov("DA:3,1\nDA:4,1\n"));
+    assert_message(consume_fixture(&temp), "outside its form");
 }
 
 #[test]
@@ -129,7 +165,7 @@ fn zero_stop_and_macro_forms_remain_visible_as_synthetic_points() {
         "success",
         r#"[{"start_line":1,"kind":"defmacro","points":[{"line":1,"kind":"synthetic"}]}]"#,
     );
-    let unignored = fixture(source, &census, "");
+    let unignored = fixture(source, &census, &lcov(""));
     assert_message(
         consume_fixture(&unignored),
         "uninstrumented synthetic point",
@@ -137,7 +173,7 @@ fn zero_stop_and_macro_forms_remain_visible_as_synthetic_points() {
     let ignored = fixture(
         "(defmacro client-macro () nil) ;; cov:ignore: edebug cannot stop here\n",
         &census,
-        "",
+        &lcov(""),
     );
     assert_eq!(consume_fixture(&ignored).unwrap().ignored_points, 1);
 }
@@ -171,6 +207,16 @@ fn only_a_reasoned_trailing_marker_ignores_an_uncovered_point() {
 }
 
 #[test]
+fn cov_ignore_in_any_real_comment_must_use_the_trailing_marker_grammar() {
+    let temp = fixture(
+        "(defun client ()\n  (message \"x\")) ; cov:ignore: stale\n",
+        &ordinary_status(),
+        &lcov("DA:2,0\n"),
+    );
+    assert_message(consume_fixture(&temp), "malformed cov:ignore");
+}
+
+#[test]
 fn markers_on_covered_or_non_executable_lines_fail() {
     let covered = fixture(
         "(defun client ()\n  (message \"x\")) ;; cov:ignore: stale\n",
@@ -197,4 +243,39 @@ fn source_reader_handles_comments_strings_and_rejects_malformed_structure() {
     assert_eq!(consume_fixture(&temp).unwrap().covered_points, 1);
     let malformed = fixture("(defun client ()\n", &ordinary_status(), &lcov("DA:2,1\n"));
     assert_message(consume_fixture(&malformed), "unterminated list");
+}
+
+#[test]
+fn source_reader_accepts_character_literals_as_list_heads() {
+    // Character literals are reader atoms even when their syntax contains
+    // delimiters that would otherwise start reader structure.
+    let temp = fixture(
+        "(defun character-literals ()\n  (memq character '(?\\\" ?\\' ?> ?λ ?\\N{LATIN SMALL LETTER A})))\n",
+        &ordinary_status(),
+        &lcov(""),
+    );
+    let path = temp.path().join("elisp/client.el");
+    assert_eq!(
+        super::source::read_forms(&path).unwrap().1,
+        vec![super::source::SourceForm {
+            start_line: 1,
+            kind: "defun".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn source_reader_accepts_every_production_module() {
+    // Intent: the host census validator must accept the exact source population
+    // that the Emacs reader censused before instrumentation.
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    for entry in fs::read_dir(repo.join("elisp")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() && path.extension().is_some_and(|extension| extension == "el") {
+            super::source::read_forms(&path)
+                .unwrap_or_else(|error| panic!("{}: {error:?}", path.display()));
+        }
+    }
 }

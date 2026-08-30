@@ -22,13 +22,13 @@
 
 ;;; Code:
 
-(require 'jaunder-org)
-(require 'jaunder-atom)
-(require 'jaunder-config)
-(require 'jaunder-transport)
-(require 'jaunder-warn)
+(require 'jaunder-org) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-atom) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-config) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-transport) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-warn) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
 
-(defconst jaunder--media-types
+(defconst jaunder--media-types ;; cov:ignore: constant declaration has no Edebug execution stop
   '(("jpg" . "image/jpeg")
     ("jpeg" . "image/jpeg")
     ("png" . "image/png")
@@ -178,5 +178,5 @@ buffer is never modified."
        body
        (mapcar (lambda (r) (gethash (plist-get r :path) cache)) records)))))
 
-(provide 'jaunder-media)
+(provide 'jaunder-media) ;; cov:ignore: feature declaration has no Edebug execution stop
 ;;; jaunder-media.el ends here
