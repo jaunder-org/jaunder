@@ -1625,6 +1625,57 @@ Lets the warning tests assert on emitted warnings without touching the real
           (directory-files root nil "\\`draft-[^.]+\\.org\\'")))
       (delete-directory root t))))
 
+(ert-deftest jaunder-new-post-aborts-when-selected-blog-disappears ()
+  "A configuration race cannot create a Post in a no-longer-configured root."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-removed-" t)))
+         (other (file-name-as-directory (make-temp-file "jaunder-other-" t)))
+         (jaunder-blogs
+          (list (cons root '(:base-url "https://blog" :username "alice"))))
+         (default-directory other))
+    (unwind-protect
+        (cl-letf
+         (((symbol-function 'completing-read)
+           (lambda (prompt &rest _)
+             (should (string-prefix-p "Blog" prompt))
+             (setq jaunder-blogs nil)
+             root)))
+         (should-error (jaunder-new-post nil) :type 'error)
+         (should-not
+          (directory-files root nil "\\`draft-[^.]+\\.org\\'")))
+      (delete-directory root t)
+      (delete-directory other t))))
+
+(ert-deftest jaunder-new-post-malformed-blog-keeps-free-text-tags ()
+  "Invalid server configuration is visible but does not block local creation."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-malformed-" t)))
+         (jaunder-blogs
+          (list (cons root '(:base-url "relative" :username "alice"))))
+         (default-directory root)
+         messages
+         created)
+    (unwind-protect
+        (cl-letf
+         (((symbol-function 'read-string) (lambda (&rest _) ""))
+          ((symbol-function 'completing-read)
+           (lambda (prompt &rest _)
+             (cond
+              ((string-prefix-p "Tag" prompt) "")
+              ((string-prefix-p "Status" prompt) "draft")
+              (t (error "unexpected prompt: %s" prompt)))))
+          ((symbol-function 'jaunder--http-request)
+           (lambda (&rest _) (error "unexpected server request")))
+          ((symbol-function 'message)
+           (lambda (format-string &rest args)
+             (push (apply #'format format-string args) messages))))
+         (jaunder-new-post nil)
+         (setq created (current-buffer))
+         (should
+          (cl-some
+           (lambda (text) (string-match-p "malformed :base-url" text))
+           messages)))
+      (when (buffer-live-p created) (kill-buffer created))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-new-post-falls-back-to-valid-free-text-tags ()
   "Unavailable completion stays visible without blocking new valid Tag labels."
   (let* ((root (file-name-as-directory (make-temp-file "jaunder-tags-" t)))

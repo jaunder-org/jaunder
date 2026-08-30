@@ -88,13 +88,6 @@ categories are returned; categories from other Collections are ignored."
             terms
           'unknown)))))
 
-(defun jaunder--parse-service-tags (body)
-  "Return BODY's Posts Collection Tag slugs, or `unknown'.
-A valid Service Document with no inline categories returns `()'."
-  (let ((dom (jaunder--parse-service-document body)))
-    (if (eq dom 'unknown)
-        'unknown
-      (jaunder--service-tags dom))))
 
 (defun jaunder--fetch-service-document (base-url)
   "Fetch BASE-URL's AtomPub Service Document DOM, or return `unknown'.
