@@ -22,18 +22,18 @@
 
 ;;; Code:
 
-(require 'cl-lib) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'dom) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'xml) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-entry) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'cl-lib)
+(require 'dom)
+(require 'xml)
+(require 'jaunder-entry)
 
-(defconst jaunder--atom-ns "http://www.w3.org/2005/Atom" ;; cov:ignore: constant declaration has no Edebug execution stop
+(defconst jaunder--atom-ns "http://www.w3.org/2005/Atom"
   "The Atom namespace URI.")
 
-(defconst jaunder--app-ns "http://www.w3.org/2007/app" ;; cov:ignore: constant declaration has no Edebug execution stop
+(defconst jaunder--app-ns "http://www.w3.org/2007/app"
   "The Atom Publishing Protocol namespace URI (`app:control'/`app:draft').")
 
-(defconst jaunder--atompub-ns "https://jaunder.org/ns/atompub" ;; cov:ignore: constant declaration has no Edebug execution stop
+(defconst jaunder--atompub-ns "https://jaunder.org/ns/atompub"
   "The Jaunder AtomPub extension namespace URI.")
 
 
@@ -184,5 +184,5 @@ and publish responses remain valid."
                                    edit-links))
           (cons 'slugs (mapcar #'dom-text slugs)))))
 
-(provide 'jaunder-atom) ;; cov:ignore: feature declaration has no Edebug execution stop
+(provide 'jaunder-atom)
 ;;; jaunder-atom.el ends here

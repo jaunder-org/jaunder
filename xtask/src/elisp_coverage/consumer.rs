@@ -1,6 +1,10 @@
 //! Consumer entrypoint and source-local stateless verdict.
 
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+};
 
 use super::{
     lcov,
@@ -64,6 +68,8 @@ pub fn consume(repo_root: &Path, artifact_dir: &Path) -> Result<CoverageReport, 
     for (path, source_path) in sources {
         let module = &status_modules[&path];
         let (source_text, source_forms) = source::assert_forms(&source_path, &module.forms)?;
+        let automatically_structural =
+            automatically_structural_forms(&path, module, &source_forms)?;
         let points = census_points(&path, module, &source_forms, source_text.lines().count())?;
         reject_unknown_lcov(&path, lcov.get(&path), &points)?;
         let markers = markers(&source_text, &path)?;
@@ -71,6 +77,13 @@ pub fn consume(repo_root: &Path, artifact_dir: &Path) -> Result<CoverageReport, 
             let point = points.get(&line).ok_or_else(|| CoverageError::Census {
                 message: format!("{path}:{line} has a cov:ignore marker but is not a census point"),
             })?;
+            if automatically_structural.contains(&line) {
+                return Err(CoverageError::Census {
+                    message: format!(
+                        "{path}:{line} has a cov:ignore marker on an automatically structural form"
+                    ),
+                });
+            }
             if point.kind == PointKind::Ordinary && lcov_hits(&path, lcov.get(&path), line)? > 0 {
                 return Err(CoverageError::Census {
                     message: format!("{path}:{line} has a cov:ignore marker on a covered point"),
@@ -78,6 +91,10 @@ pub fn consume(repo_root: &Path, artifact_dir: &Path) -> Result<CoverageReport, 
             }
         }
         for (line, point) in points {
+            if automatically_structural.contains(&line) {
+                report.ignored_points += 1;
+                continue;
+            }
             let covered = match point.kind {
                 PointKind::Ordinary => lcov_hits(&path, lcov.get(&path), line)? > 0,
                 PointKind::Synthetic => false,
@@ -159,6 +176,45 @@ fn census_modules(
                 message: "duplicate module in census".to_owned(),
             });
         }
+    }
+    Ok(result)
+}
+fn automatically_structural_forms(
+    path: &str,
+    module: &ModuleCensus,
+    source_forms: &[source::SourceForm],
+) -> Result<BTreeSet<u32>, CoverageError> {
+    let mut result = BTreeSet::new();
+    for (form, source_form) in module.forms.iter().zip(source_forms) {
+        if !source_form.automatically_structural() {
+            continue;
+        }
+        let sole_synthetic_opening_point = matches!(
+            form.points.as_slice(),
+            [point] if point.kind == PointKind::Synthetic && point.line == form.start_line
+        );
+        if sole_synthetic_opening_point {
+            result.insert(form.start_line);
+            continue;
+        }
+        if form
+            .points
+            .iter()
+            .any(|point| point.kind == PointKind::Ordinary)
+        {
+            return Err(CoverageError::Census {
+                message: format!(
+                    "{path}:{} structurally exempt form unexpectedly has an ordinary census point",
+                    form.start_line
+                ),
+            });
+        }
+        return Err(CoverageError::Census {
+            message: format!(
+                "{path}:{} structurally exempt form must have exactly one synthetic opening-line point",
+                form.start_line
+            ),
+        });
     }
     Ok(result)
 }

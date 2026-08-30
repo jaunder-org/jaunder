@@ -9,15 +9,15 @@
 
 ;;; Code:
 
-(require 'cl-lib) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'dom) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'url-parse) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'xml) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-atom) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-datetime) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-config) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-reconcile) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-pull-media) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'cl-lib)
+(require 'dom)
+(require 'url-parse)
+(require 'xml)
+(require 'jaunder-atom)
+(require 'jaunder-datetime)
+(require 'jaunder-config)
+(require 'jaunder-reconcile)
+(require 'jaunder-pull-media)
 
 (defun jaunder--pull-error (invariant)
   "Signal a pull mapping error naming broken INVARIANT."
@@ -46,13 +46,13 @@
       (when (and (stringp path) (string-match "/\\([0-9]+\\)\\'" path))
         (match-string 1 path)))))
 
-(defconst jaunder--pull-rfc-3339-offset-regexp ;; cov:ignore: constant declaration has no Edebug execution stop
+(defconst jaunder--pull-rfc-3339-offset-regexp ;; cov:ignore: computed concat initializer has no Edebug execution stop
   (concat "\\`\\([0-9]\\{4\\}\\)-\\([0-9]\\{2\\}\\)-\\([0-9]\\{2\\}\\)"
           "T\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\)"
           "\\(?:\\.[0-9]+\\)?\\(?:Z\\|[+-]\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\)\\)\\'")
   "RFC-3339 timestamp shape with captured calendar and numeric-offset fields.")
 
-(defconst jaunder--pull-xhtml-ns "http://www.w3.org/1999/xhtml" ;; cov:ignore: constant declaration has no Edebug execution stop
+(defconst jaunder--pull-xhtml-ns "http://www.w3.org/1999/xhtml"
   "Namespace required on an Atom XHTML content wrapper.")
 
 (defun jaunder--pull-control-character-p (character)
@@ -163,7 +163,7 @@ KIND is `text' or `xhtml'."
     (mapcar (lambda (line) (format "#+%s: %s" name line))
             (split-string value "\n" nil))))
 
-(cl-defstruct (jaunder-pulled-member (:constructor jaunder--make-pulled-member)) ;; cov:ignore: cl-defstruct declaration is compile-time metadata with no Edebug execution stop
+(cl-defstruct (jaunder-pulled-member (:constructor jaunder--make-pulled-member))
               "Validated Member data shared by rendering and pull localization."
               org-prefix org format body)
 
@@ -248,7 +248,7 @@ as `jaunder--atom->org'.  This function performs no network or filesystem I/O."
   (concat (jaunder-pulled-member-org-prefix member) body))
 
 
-(cl-defstruct (jaunder-pull-result (:constructor jaunder--make-pull-result)) ;; cov:ignore: cl-defstruct declaration is compile-time metadata with no Edebug execution stop
+(cl-defstruct (jaunder-pull-result (:constructor jaunder--make-pull-result))
               "Outcome of one D3-facing server-only pull."
               status path)
 
@@ -353,5 +353,5 @@ localized Post is installed only after every Local Media Copy verifies."
                                  path
                                  (jaunder--render-pulled-member
                                   pulled-member (jaunder--pull-media-apply-plan plan))))))))))
-(provide 'jaunder-pull) ;; cov:ignore: feature declaration has no Edebug execution stop
+(provide 'jaunder-pull)
 ;;; jaunder-pull.el ends here

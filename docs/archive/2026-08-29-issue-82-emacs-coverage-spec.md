@@ -21,22 +21,32 @@ pure ERT suite with the live server-backed ERT suite and runs in CI through
 - The denominator starts from a pre-test census of every production module and
   every top-level source form under `elisp/`. Each form must produce one or more
   Edebug executable stop points. A form that produces none contributes its
-  opening line as an uncovered synthetic census point until that form is
-  instrumented or explicitly justified. Every ordinary census point must
-  reconcile with one LCOV record. A missing module, form, or point is a gate
-  failure rather than an implicit exclusion. Tests, test helpers, batch runners,
-  vendored dependencies, generated files, and byte-compiled files are outside
-  the census.
+  opening line as an uncovered synthetic census point. Every ordinary census
+  point must reconcile with one LCOV record. A missing module, form, or point is
+  a gate failure rather than an implicit exclusion. Tests, test helpers, batch
+  runners, vendored dependencies, generated files, and byte-compiled files are
+  outside the census.
+- The consumer automatically classifies only a zero-stop form whose census
+  contains exactly that single synthetic opening-line point as structural:
+  `require`, `provide`, `declare-function`, `defgroup`, and `cl-defstruct`; plus
+  `defvar`, `defconst`, and `defcustom` with an inert initializer. The closed
+  inert grammar is an absent initializer; `nil` or `t`; a number, string,
+  character, or keyword; a quote or function-quote; or a literal vector.
+  Computed calls, variable references, backquote/unquote, and every other
+  evaluated or unknown initializer remain measurable or require an individual
+  justification. A classifiable form with an ordinary point or LCOV observation
+  is a guard violation, not an exemption.
 - Enforcement is stateless and strict: every executable census line is covered
   or carries a trailing `;; cov:ignore: <reason>` on that same physical line.
-  The reason is trimmed and must remain non-empty. A malformed marker or a
-  marker on a covered or non-executable line fails, so an obsolete justification
-  cannot silently remain. There is no block marker, baseline, ratchet, or
-  percentage threshold.
+  The reason is trimmed and must remain non-empty. Structural exclusions are
+  counted as ignored/exempt without a source marker. A malformed marker or a
+  marker on a covered, non-executable, or structurally excluded line fails, so
+  an obsolete justification cannot silently remain. There is no block marker,
+  baseline, ratchet, or percentage threshold.
 - Undercover or Edebug limitations do not silently narrow the denominator.
   Production macro forms receive suitable Edebug instrumentation where
-  practical; any remaining zero-stop form needs an individual reason-bearing
-  marker on its synthetic opening-line census point.
+  practical; remaining executable or unclassified zero-stop forms need an
+  individual reason-bearing marker on their synthetic opening-line census point.
 - The Emacs verdict remains separate from Rust LLVM coverage and Rust CRAP
   analysis. The checks share policy—stateless, source-local justification—not a
   report format or denominator.
@@ -61,16 +71,23 @@ pure ERT suite with the live server-backed ERT suite and runs in CI through
   failing xtask verdict. An uncontrolled Nix or VM infrastructure failure
   remains an ordinary derivation failure.
 - Census/report reconciliation proves that every production Emacs Protocol
-  Client module and top-level form is present, every instrumentable form yields
-  Edebug stop points, and every point has exactly one LCOV record; only the
-  agreed non-production populations are absent.
-- A fixture with an uncovered executable production line fails the consumer. The
-  same fixture passes when exercised by either ERT population or when its
-  uncovered line carries `;; cov:ignore: <reason>` with a non-empty trimmed
-  reason.
+  Client module and top-level form is present, every non-structural form yields
+  Edebug stop points or a synthetic point, and every ordinary point has exactly
+  one LCOV record; only the agreed non-production populations are absent.
+- Fixtures prove that only zero-stop `require`, `provide`, `declare-function`,
+  `defgroup`, and `cl-defstruct`, plus `defvar`, `defconst`, and `defcustom`
+  with the closed inert initializer grammar, are automatically structural. Those
+  exclusions are counted without markers only when the census has exactly the
+  single synthetic opening-line point.
+- A fixture with an uncovered executable or unclassified production line fails
+  the consumer. The same fixture passes when exercised by either ERT population
+  or when its uncovered line carries `;; cov:ignore: <reason>` with a non-empty
+  trimmed reason.
 - Fixtures prove that missing modules, missing forms, missing or duplicate LCOV
-  points, empty or malformed markers, and markers on covered or non-executable
-  lines fail. A production macro cannot disappear silently from the census.
+  points, empty or malformed markers, markers on covered, non-executable, or
+  structural lines, and an otherwise structural form with an ordinary point or
+  LCOV observation fail. A production macro cannot disappear silently from the
+  census.
 - `cargo xtask validate --no-e2e` runs the producer and authoritative consumer;
   the existing CI static lane therefore enforces the same verdict without a new
   external coverage service, while full `validate` does not repeat live ERT.

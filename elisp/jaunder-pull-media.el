@@ -9,20 +9,20 @@
 
 ;;; Code:
 
-(require 'cl-lib) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'url-parse) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'url-util) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'cmark) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'plz) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'org) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'org-element) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-warn) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(cl-defstruct (jaunder-pull-media-reference ;; cov:ignore: structure declaration has no Edebug execution stop
+(require 'cl-lib)
+(require 'url-parse)
+(require 'url-util)
+(require 'cmark)
+(require 'plz)
+(require 'org)
+(require 'org-element)
+(require 'jaunder-warn)
+(cl-defstruct (jaunder-pull-media-reference
                (:constructor jaunder--make-pull-media-reference))
               "One immutable local-media acquisition and its native replacements."
               url hash leaf target replacements)
 
-(cl-defstruct (jaunder-pull-media-plan ;; cov:ignore: structure declaration has no Edebug execution stop
+(cl-defstruct (jaunder-pull-media-plan
                (:constructor jaunder--make-pull-media-plan))
               "Immutable localization plan for one native body."
               format body references)
@@ -640,7 +640,7 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
                table format origin body
                (nth 1 definition) (nth 2 definition)))))))))
 
-(defconst jaunder--pull-media-html-raw-text-tags ;; cov:ignore: constant declaration has no Edebug execution stop
+(defconst jaunder--pull-media-html-raw-text-tags
   '("script" "style" "textarea" "title" "xmp" "iframe"
     "noembed" "noframes" "plaintext")
   "HTML elements whose contents cannot contain active child markup.")
@@ -821,10 +821,10 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
     (push (substring body position) pieces)
     (apply #'concat (nreverse pieces))))
 
-(defconst jaunder--pull-media-instance-id-regexp ;; cov:ignore: constant declaration has no Edebug execution stop
+(defconst jaunder--pull-media-instance-id-regexp
   "\\`[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}\\'")
 
-(defconst jaunder--pull-media-sha256-regexp "\\`[0-9a-f]\\{64\\}\\'") ;; cov:ignore: constant declaration has no Edebug execution stop
+(defconst jaunder--pull-media-sha256-regexp "\\`[0-9a-f]\\{64\\}\\'")
 
 (defun jaunder--pull-media-header-values (response name)
   "Return all RESPONSE header values named NAME, case-insensitively."
@@ -1005,5 +1005,5 @@ may reuse only a byte-for-byte verified concurrent copy."
       (dolist (copy staged)
         (jaunder--pull-media-clean-temporary (car copy))))))
 
-(provide 'jaunder-pull-media) ;; cov:ignore: feature declaration has no Edebug execution stop
+(provide 'jaunder-pull-media)
 ;;; jaunder-pull-media.el ends here

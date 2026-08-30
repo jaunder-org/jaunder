@@ -514,12 +514,20 @@ runs, so `nix flake check` covers them too, with no duplicated sibling to drift
 self-booting live ERT populations once in a hermetic VM. Its fixed
 `$out/elisp-coverage/{lcov.info,summary.txt,status.json}` artifact set is
 consumed on the host: the source-derived module/form census must reconcile with
-LCOV, and every uncovered executable point needs a trailing same-line
-`;; cov:ignore: <reason>` with a non-empty trimmed reason. Synthetic zero-stop
-points follow the same rule. Controlled producer outcomes (`ert-failure`,
-`instrumentation-failure`, and `invalid-report`) and coverage findings fail the
-consumer; an uncontrolled Nix or VM failure remains a failed build. Full
-`validate` inherits this verdict and does not rerun live ERT.
+LCOV, and each ordinary point must have exactly one LCOV record. The consumer
+automatically counts as ignored/exempt, without a source marker, only a
+zero-stop form with exactly one synthetic opening-line point that is `require`,
+`provide`, `declare-function`, `defgroup`, or `cl-defstruct`, or that is
+`defvar`, `defconst`, or `defcustom` with an absent, `nil`/`t`, number, string,
+character, keyword, quote/function-quote, or literal vector initializer.
+Computed calls, variable references, backquote/unquote, and all other evaluated
+or unknown initializers remain measurable or need a trailing same-line
+`;; cov:ignore: <reason>` with a non-empty trimmed reason. An ordinary point or
+LCOV observation on a structural candidate is a guard violation. Controlled
+producer outcomes (`ert-failure`, `instrumentation-failure`, and
+`invalid-report`) and coverage findings fail the consumer; an uncontrolled Nix
+or VM failure remains a failed build. Full `validate` inherits this verdict and
+does not rerun live ERT.
 
 ### Observability and Performance Analysis
 

@@ -34,5 +34,5 @@ level `:warning'."
                    (apply #'format (concat "jaunder: " format-string) args)
                    :warning))
 
-(provide 'jaunder-warn) ;; cov:ignore: feature declaration has no Edebug execution stop
+(provide 'jaunder-warn)
 ;;; jaunder-warn.el ends here

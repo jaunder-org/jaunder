@@ -22,11 +22,11 @@
 
 ;;; Code:
 
-(require 'auth-source) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'seq) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'url-parse) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'plz) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-config) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'auth-source)
+(require 'seq)
+(require 'url-parse)
+(require 'plz)
+(require 'jaunder-config)
 
 (defun jaunder--build-url (base &rest segments)
   "Join BASE and path SEGMENTS into a URL with single-slash separators.
@@ -150,5 +150,5 @@ the auth header under load (ADR-0038)."
              (jaunder--plz-response->plist resp)
            (signal (car err) (cdr err))))))))
 
-(provide 'jaunder-transport) ;; cov:ignore: feature declaration has no Edebug execution stop
+(provide 'jaunder-transport)
 ;;; jaunder-transport.el ends here

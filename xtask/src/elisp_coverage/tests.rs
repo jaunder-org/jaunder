@@ -32,6 +32,15 @@ fn ordinary_status() -> String {
     )
 }
 
+fn synthetic_status(kind: &str) -> String {
+    status(
+        "success",
+        &format!(
+            r#"[{{"start_line":1,"kind":"{kind}","points":[{{"line":1,"kind":"synthetic"}}]}}]"#
+        ),
+    )
+}
+
 fn lcov(records: &str) -> String {
     format!("SF:elisp/client.el\n{records}end_of_record\n")
 }
@@ -179,6 +188,149 @@ fn zero_stop_and_macro_forms_remain_visible_as_synthetic_points() {
 }
 
 #[test]
+fn declarative_zero_stop_forms_are_automatically_structural() {
+    for (kind, source) in [
+        ("require", "(require 'client)\n"),
+        ("provide", "(provide 'client)\n"),
+        (
+            "declare-function",
+            "(declare-function client-function \"client\")\n",
+        ),
+        ("defgroup", "(defgroup client nil \"Client.\")\n"),
+        ("cl-defstruct", "(cl-defstruct client name)\n"),
+    ] {
+        let temp = fixture(source, &synthetic_status(kind), &lcov(""));
+        assert_eq!(
+            consume_fixture(&temp).unwrap().ignored_points,
+            1,
+            "{kind} should not require a source marker"
+        );
+    }
+}
+
+#[test]
+fn inert_declaration_initializers_are_automatically_structural() {
+    let initializers = [
+        "",
+        " nil",
+        " t",
+        " 42",
+        " -42",
+        " 1.5e-2",
+        " #x2a",
+        " \"client\"",
+        " ?c",
+        " :client",
+        " 'client",
+        " #'client-function",
+        " [client value]",
+        " [client (nested :data) [more client-data] 'client]",
+    ];
+    for kind in ["defvar", "defconst", "defcustom"] {
+        for initializer in initializers {
+            let temp = fixture(
+                &format!("({kind} client{initializer})\n"),
+                &synthetic_status(kind),
+                &lcov(""),
+            );
+            assert_eq!(
+                consume_fixture(&temp).unwrap().ignored_points,
+                1,
+                "{kind}{initializer:?} should be inert"
+            );
+        }
+    }
+}
+
+#[test]
+fn radix_integer_initializers_follow_emacs_reader_grammar() {
+    for (initializer, inert) in [
+        (" #b101", true),
+        (" #b-101", true),
+        (" #o+77", true),
+        (" #x-2A", true),
+        (" #2r101", true),
+        (" #2r-101", true),
+        (" #16r2a", true),
+        (" #16r+2A", true),
+        (" #36rz", true),
+        (" #1r0", false),
+        (" #37r10", false),
+        (" #2r2", false),
+        (" #16r2g", false),
+        (" #b2", false),
+        (" #o8", false),
+        (" #xg", false),
+        (" #16r2a.", false),
+        (" -#16r2a", false),
+        (" #16R2a", false),
+        (" #16r", false),
+    ] {
+        let temp = fixture(
+            &format!("(defvar client{initializer})\n"),
+            &synthetic_status("defvar"),
+            &lcov(""),
+        );
+        let result = consume_fixture(&temp);
+        if inert {
+            assert_eq!(
+                result.unwrap().ignored_points,
+                1,
+                "{initializer:?} should be an inert integer literal"
+            );
+        } else {
+            assert_message(result, "uninstrumented synthetic point");
+        }
+    }
+}
+
+#[test]
+fn evaluated_declaration_initializers_remain_measurable() {
+    for initializer in [
+        " (client-compute)",
+        " client-value",
+        " [#.(client-compute)]",
+        " [client [#.(client-compute)]]",
+        " [#_(client-compute)]",
+        " [#s(client value)]",
+        " `(client ,client-value)",
+    ] {
+        let temp = fixture(
+            &format!("(defvar client{initializer})\n"),
+            &synthetic_status("defvar"),
+            &lcov(""),
+        );
+        assert_message(consume_fixture(&temp), "uninstrumented synthetic point");
+    }
+}
+
+#[test]
+fn structurally_exempt_forms_reject_ordinary_census_observations() {
+    let temp = fixture(
+        "(require 'client)\n",
+        &status(
+            "success",
+            r#"[{"start_line":1,"kind":"require","points":[{"line":1,"kind":"ordinary"}]}]"#,
+        ),
+        &lcov("DA:1,1\n"),
+    );
+    assert_message(
+        consume_fixture(&temp),
+        "unexpectedly has an ordinary census point",
+    );
+}
+
+#[test]
+fn markers_on_automatically_structural_forms_are_stale() {
+    let temp = fixture(
+        "(provide 'client) ;; cov:ignore: obsolete\n",
+        &synthetic_status("provide"),
+        &lcov(""),
+    );
+    assert_message(consume_fixture(&temp), "automatically structural form");
+}
+
+#[test]
 fn only_a_reasoned_trailing_marker_ignores_an_uncovered_point() {
     let valid = fixture(
         "(defun client ()\n  (message \"x\")) ;; cov:ignore: exercised only by Emacs\n",
@@ -255,13 +407,10 @@ fn source_reader_accepts_character_literals_as_list_heads() {
         &lcov(""),
     );
     let path = temp.path().join("elisp/client.el");
-    assert_eq!(
-        super::source::read_forms(&path).unwrap().1,
-        vec![super::source::SourceForm {
-            start_line: 1,
-            kind: "defun".to_owned(),
-        }]
-    );
+    let forms = super::source::read_forms(&path).unwrap().1;
+    assert_eq!(forms.len(), 1);
+    assert_eq!(forms[0].start_line, 1);
+    assert_eq!(forms[0].kind, "defun");
 }
 
 #[test]

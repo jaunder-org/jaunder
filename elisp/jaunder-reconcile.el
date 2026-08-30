@@ -10,37 +10,37 @@
 
 ;;; Code:
 
-(require 'cl-lib) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'dom) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'url-parse) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-config) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-org) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-transport) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-datetime) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'cl-lib)
+(require 'dom)
+(require 'url-parse)
+(require 'jaunder-config)
+(require 'jaunder-org)
+(require 'jaunder-transport)
+(require 'jaunder-datetime)
 
-(declare-function jaunder--pull-member "jaunder-pull") ;; cov:ignore: external function declaration has no Edebug execution stop
+(declare-function jaunder--pull-member "jaunder-pull")
 
-(cl-defstruct (jaunder-inventory-member ;; cov:ignore: structure declaration has no Edebug execution stop
+(cl-defstruct (jaunder-inventory-member
                (:constructor jaunder--make-inventory-member))
               "One Post advertised by an AtomPub Collection."
               id slug edit-uri)
 
-(cl-defstruct (jaunder-inventory-local ;; cov:ignore: structure declaration has no Edebug execution stop
+(cl-defstruct (jaunder-inventory-local
                (:constructor jaunder--make-inventory-local))
               "One root-level local Org file."
               path id)
 
-(cl-defstruct (jaunder-inventory-match ;; cov:ignore: structure declaration has no Edebug execution stop
+(cl-defstruct (jaunder-inventory-match
                (:constructor jaunder--make-inventory-match))
               "A unique local/server pair with the same Post ID."
               local member)
 
-(cl-defstruct (jaunder-inventory-conflict ;; cov:ignore: structure declaration has no Edebug execution stop
+(cl-defstruct (jaunder-inventory-conflict
                (:constructor jaunder--make-inventory-conflict))
               "A connected set of inventory inputs requiring human resolution."
               kinds locals members)
 
-(cl-defstruct (jaunder-inventory ;; cov:ignore: structure declaration has no Edebug execution stop
+(cl-defstruct (jaunder-inventory
                (:constructor jaunder--make-inventory))
               "The exhaustive partition of one root and one Collection."
               local-drafts server-only matched orphans conflicts)
@@ -378,17 +378,17 @@ returned."
   (jaunder--with-blog root
                       (jaunder--join-inventory (jaunder--scan-root-locals root)
                                                (jaunder--fetch-collection-members))))
-(cl-defstruct (jaunder-reconcile-row ;; cov:ignore: structure declaration has no Edebug execution stop
+(cl-defstruct (jaunder-reconcile-row
                (:constructor jaunder--make-reconcile-row))
               "One immutable classification in a reconciliation report."
               state local member reason detail conflict)
 
-(cl-defstruct (jaunder-reconcile-report ;; cov:ignore: structure declaration has no Edebug execution stop
+(cl-defstruct (jaunder-reconcile-report
                (:constructor jaunder--make-reconcile-report))
               "The complete reconciliation result for one configured root."
               root inventory rows)
 
-(defconst jaunder--reconcile-state-order ;; cov:ignore: constant declaration has no Edebug execution stop
+(defconst jaunder--reconcile-state-order
   '(unchanged server-ahead local-ahead conflict unclassifiable
               orphan local-draft server-only inventory-conflict)
   "Stable section order for `jaunder-reconcile' reports.")
@@ -579,5 +579,5 @@ hide otherwise valid synchronization markers."
 
 
 
-(provide 'jaunder-reconcile) ;; cov:ignore: feature declaration has no Edebug execution stop
+(provide 'jaunder-reconcile)
 ;;; jaunder-reconcile.el ends here

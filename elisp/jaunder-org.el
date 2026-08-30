@@ -27,15 +27,15 @@
 
 ;;; Code:
 
-(require 'cl-lib) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'org) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'org-element) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'org-attach) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'url-util) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-entry) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-datetime) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'cl-lib)
+(require 'org)
+(require 'org-element)
+(require 'org-attach)
+(require 'url-util)
+(require 'jaunder-entry)
+(require 'jaunder-datetime)
 
-(defconst jaunder--org-media-type "text/org" ;; cov:ignore: constant declaration has no Edebug execution stop
+(defconst jaunder--org-media-type "text/org"
   "The atom:content media type for org source.
 `jaunder--org->atom' converts an org buffer, so its content is always org;
 the media type is knowable from the converter, not from any header field.
@@ -248,5 +248,5 @@ target is replaced, brackets and any `[…][description]' preserved (result stay
           (insert (if desc (format "[[%s][%s]]" url desc) (format "[[%s]]" url))))))
     (buffer-substring-no-properties (point-min) (point-max))))
 
-(provide 'jaunder-org) ;; cov:ignore: feature declaration has no Edebug execution stop
+(provide 'jaunder-org)
 ;;; jaunder-org.el ends here

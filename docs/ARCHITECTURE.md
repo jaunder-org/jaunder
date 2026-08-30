@@ -1751,9 +1751,15 @@ owns both. The floor is `Package-Requires: ((emacs "29.1"))`
 [Elisp stateless coverage gate](adr/drafts/elisp-stateless-coverage-gate.md)
 censuses every production Protocol Client module and top-level source form
 before testing, then reconciles every executable Edebug point with exactly one
-LCOV record. A zero-stop form contributes its opening line as an uncovered
-synthetic point until instrumented or justified. Test files, helpers, runners,
-vendored/generated sources, and byte-compiled files remain outside that census
+LCOV record. A zero-stop form with exactly its single synthetic opening-line
+point is structural only for `require`, `provide`, `declare-function`,
+`defgroup`, and `cl-defstruct`; or `defvar`, `defconst`, and `defcustom` with an
+absent, `nil`/`t`, number, string, character, keyword, quote/function-quote, or
+literal vector initializer. Computed calls, variable references,
+backquote/unquote, and all other evaluated or unknown initializers remain
+measurable or require a marker; an ordinary point or LCOV observation on a
+structural candidate fails the guard. Test files, helpers, runners,
+vendored/generated sources, and byte-compiled files remain outside the census
 and denominator.
 
 `elisp/jaunder.el` is the umbrella entry point — it holds the package headers
@@ -2403,15 +2409,21 @@ runs the pure and live ERT observations in one hermetic NixOS producer and, for
 every controlled outcome, realizes
 `$out/elisp-coverage/{lcov.info,summary.txt,status.json}`. Its host consumer
 reconciles the pre-test module/form census with current source and LCOV: each
-ordinary Edebug point occurs exactly once, while a zero-stop form contributes an
-uncovered synthetic opening-line point. Every uncovered point requires a
-trailing same-line `;; cov:ignore: <reason>` marker with a trimmed non-empty
-reason. There is no block form; malformed markers, and markers on covered or
-non-executable census lines, fail. Controlled producer statuses and coverage
-findings fail the consumer; uncontrolled Nix or VM infrastructure failures
-remain build failures. The check runs once in `validate --no-e2e` and the CI
-static lane; full `validate` inherits its verdict without rerunning the live
-suite.
+ordinary Edebug point occurs exactly once. It automatically counts as
+ignored/exempt, without a marker, only a zero-stop form with exactly its single
+synthetic opening-line point that is `require`, `provide`, `declare-function`,
+`defgroup`, or `cl-defstruct`; or `defvar`, `defconst`, or `defcustom` with an
+absent, `nil`/`t`, number, string, character, keyword, quote/function-quote, or
+literal vector initializer. Computed calls, variable references,
+backquote/unquote, and all other evaluated or unknown initializers remain
+measurable or require a trailing same-line `;; cov:ignore: <reason>` with a
+trimmed non-empty reason. An ordinary point or LCOV observation on a structural
+candidate fails the guard; malformed markers and markers on covered,
+non-executable, or structural lines fail. Controlled producer statuses and
+coverage findings fail the consumer; uncontrolled Nix or VM infrastructure
+failures remain build failures. The check runs once in `validate --no-e2e` and
+the CI static lane; full `validate` inherits its verdict without rerunning the
+live suite.
 
 Live client behavior — transport, auth, publish and media round-trips — runs
 against a real server through the self-booting harness

@@ -26,16 +26,16 @@
 ;; `plz' is required directly, not left to arrive via `jaunder-transport': the
 ;; retry below dispatches on the `plz-error' condition, and `condition-case'
 ;; silently never matches a condition symbol that no `define-error' has run for.
-(require 'plz) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'plz)
 
-(require 'jaunder-entry) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-config) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-datetime) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-atom) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-org) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-transport) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-service) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-media) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-entry)
+(require 'jaunder-config)
+(require 'jaunder-datetime)
+(require 'jaunder-atom)
+(require 'jaunder-org)
+(require 'jaunder-transport)
+(require 'jaunder-service)
+(require 'jaunder-media)
 
 (defun jaunder--validate-publish (entry status date-raw tz)
   "Signal an error if ENTRY is not publishable; return nil otherwise.
@@ -145,7 +145,7 @@ minimal template and visits the file."
     (switch-to-buffer (find-file-noselect path))
     (goto-char (point-max))))
 
-(defconst jaunder--entry-content-type "application/atom+xml;type=entry" ;; cov:ignore: constant declaration has no Edebug execution stop
+(defconst jaunder--entry-content-type "application/atom+xml;type=entry"
   "Request Content-Type for an AtomPub <entry> POST/PUT.")
 
 (defun jaunder--idempotency-key ()
@@ -240,5 +240,5 @@ file pristine."
   (jaunder-publish t))
 
 
-(provide 'jaunder-publish) ;; cov:ignore: feature declaration has no Edebug execution stop
+(provide 'jaunder-publish)
 ;;; jaunder-publish.el ends here

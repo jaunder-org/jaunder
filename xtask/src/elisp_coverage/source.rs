@@ -13,6 +13,146 @@ use super::model::{CoverageError, FormCensus};
 pub(crate) struct SourceForm {
     pub start_line: u32,
     pub kind: String,
+    expression: Expression,
+}
+
+impl SourceForm {
+    pub(crate) fn automatically_structural(&self) -> bool {
+        match self.kind.as_str() {
+            "require" | "provide" | "declare-function" | "defgroup" | "cl-defstruct" => true,
+            "defvar" | "defconst" | "defcustom" => match self.expression.list_elements() {
+                Some([_, Expression::Symbol(_)]) => true,
+                Some([_, Expression::Symbol(_), initializer, ..]) => {
+                    initializer.is_inert_initializer()
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Expression {
+    Symbol(String),
+    String,
+    Character,
+    List(Vec<Expression>),
+    Vector(Vec<Expression>),
+    Quote(Box<Expression>),
+    FunctionQuote(Box<Expression>),
+    Other,
+}
+
+impl Expression {
+    fn list_elements(&self) -> Option<&[Self]> {
+        let Self::List(elements) = self else {
+            return None;
+        };
+        Some(elements)
+    }
+
+    fn is_inert_initializer(&self) -> bool {
+        match self {
+            Self::String | Self::Character => true,
+            Self::Vector(elements) => elements.iter().all(Self::is_literal_data),
+            Self::Quote(expression) | Self::FunctionQuote(expression) => {
+                expression.is_literal_data()
+            }
+            Self::Symbol(symbol) => {
+                matches!(symbol.as_str(), "nil" | "t")
+                    || symbol.starts_with(':')
+                    || numeric_literal(symbol)
+            }
+            Self::List(_) | Self::Other => false,
+        }
+    }
+
+    /// Vector and quoted contents are reader data, except forms that invoke
+    /// evaluation or syntax the reader cannot classify.
+    fn is_literal_data(&self) -> bool {
+        match self {
+            Self::List(elements) | Self::Vector(elements) => {
+                elements.iter().all(Self::is_literal_data)
+            }
+            Self::Quote(expression) | Self::FunctionQuote(expression) => {
+                expression.is_literal_data()
+            }
+            Self::Symbol(_) | Self::String | Self::Character => true,
+            Self::Other => false,
+        }
+    }
+}
+
+fn numeric_literal(symbol: &str) -> bool {
+    radix_integer_literal(symbol) || decimal_or_float_literal(symbol)
+}
+
+fn radix_integer_literal(symbol: &str) -> bool {
+    let Some(prefix) = symbol.strip_prefix('#') else {
+        return false;
+    };
+    let (radix, digits) = match prefix.as_bytes() {
+        [b'b', rest @ ..] => (2, rest),
+        [b'o', rest @ ..] => (8, rest),
+        [b'x', rest @ ..] => (16, rest),
+        _ => {
+            let radix_end = prefix
+                .bytes()
+                .take_while(|digit| digit.is_ascii_digit())
+                .count();
+            let Some((radix, digits)) = prefix
+                .get(..radix_end)
+                .and_then(|radix| radix.parse::<u8>().ok())
+                .zip(
+                    prefix
+                        .get(radix_end..)
+                        .and_then(|suffix| suffix.strip_prefix('r')),
+                )
+            else {
+                return false;
+            };
+            (radix, digits.as_bytes())
+        }
+    };
+    let digits = match digits {
+        [b'+' | b'-', digits @ ..] => digits,
+        digits => digits,
+    };
+    (2..=36).contains(&radix)
+        && !digits.is_empty()
+        && digits
+            .iter()
+            .all(|digit| digit_value(*digit).is_some_and(|value| value < radix))
+}
+
+fn digit_value(digit: u8) -> Option<u8> {
+    match digit {
+        b'0'..=b'9' => Some(digit - b'0'),
+        b'a'..=b'z' => Some(digit - b'a' + 10),
+        b'A'..=b'Z' => Some(digit - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn decimal_or_float_literal(symbol: &str) -> bool {
+    let digits = symbol
+        .strip_prefix('+')
+        .or_else(|| symbol.strip_prefix('-'))
+        .unwrap_or(symbol);
+    (!digits.is_empty() && digits.bytes().all(|digit| digit.is_ascii_digit()))
+        || (symbol
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-'))
+            && symbol.parse::<f64>().is_ok())
+}
+
+#[derive(Clone, Copy)]
+enum Prefix {
+    Plain,
+    Quote,
+    FunctionQuote,
+    Other,
 }
 
 pub(crate) fn read_forms(path: &Path) -> Result<(String, Vec<SourceForm>), CoverageError> {
@@ -101,69 +241,114 @@ impl<'a> Reader<'a> {
 
     fn form(&mut self) -> Result<SourceForm, CoverageError> {
         let start_line = self.line;
-        self.consume_prefixes()?;
-        let kind = if matches!(self.peek(), Some(b'(')) {
-            self.list_kind()?
-        } else {
-            self.atom()?;
-            "atom".to_owned()
-        };
-        Ok(SourceForm { start_line, kind })
+        let expression = self.expression()?;
+        let kind = expression
+            .list_elements()
+            .and_then(|elements| elements.first())
+            .and_then(|head| match head {
+                Expression::Symbol(symbol) => Some(symbol.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "atom".to_owned());
+        Ok(SourceForm {
+            start_line,
+            kind,
+            expression,
+        })
     }
 
-    fn consume_prefixes(&mut self) -> Result<(), CoverageError> {
+    fn expression(&mut self) -> Result<Expression, CoverageError> {
+        let prefix = self.consume_prefixes()?;
+        let expression = match self.peek() {
+            Some(b'(') => self.list()?,
+            Some(b'[') => self.vector()?,
+            Some(b'{') => {
+                self.delimited(b'{', b'}')?;
+                Expression::Other
+            }
+            Some(b'"') => {
+                self.string()?;
+                Expression::String
+            }
+            Some(b'?') => {
+                self.character()?;
+                Expression::Character
+            }
+            Some(b')' | b']' | b'}') => return Err(self.error("unexpected closing delimiter")),
+            Some(_) => Expression::Symbol(
+                self.read_symbol()
+                    .ok_or_else(|| self.error("expected form"))?,
+            ),
+            None => return Err(self.error("expected form")),
+        };
+        Ok(match prefix {
+            Prefix::Plain => expression,
+            Prefix::Quote => Expression::Quote(Box::new(expression)),
+            Prefix::FunctionQuote => Expression::FunctionQuote(Box::new(expression)),
+            Prefix::Other => Expression::Other,
+        })
+    }
+
+    fn consume_prefixes(&mut self) -> Result<Prefix, CoverageError> {
+        let mut prefix = Prefix::Plain;
         loop {
             match (self.peek(), self.bytes.get(self.index + 1).copied()) {
-                (Some(b'\'' | b'`'), _) => self.bump(),
-                (Some(b','), Some(b'@')) => {
+                (Some(b'\''), _) => {
                     self.bump();
-                    self.bump();
+                    prefix = match prefix {
+                        Prefix::Plain => Prefix::Quote,
+                        _ => Prefix::Other,
+                    };
                 }
-                (Some(b','), _) => self.bump(),
-                (Some(b'#'), Some(b'(')) => self.bump(),
-                (Some(b'#'), Some(b'\'' | b'.' | b'_')) => {
+                (Some(b'`' | b','), _) => {
+                    self.bump();
+                    if self.peek() == Some(b'@') {
+                        self.bump();
+                    }
+                    prefix = Prefix::Other;
+                }
+                (Some(b'#'), Some(b'(')) => {
+                    self.bump();
+                    prefix = Prefix::Other;
+                }
+                (Some(b'#'), Some(b'\'')) => {
                     self.bump();
                     self.bump();
+                    prefix = match prefix {
+                        Prefix::Plain => Prefix::FunctionQuote,
+                        _ => Prefix::Other,
+                    };
+                }
+                (Some(b'#'), Some(b'.' | b'_')) => {
+                    self.bump();
+                    self.bump();
+                    prefix = Prefix::Other;
                 }
                 // `#s(...)` prefixes a record literal; numeric forms such as
                 // `#x21` are ordinary atoms and must stay intact.
                 (Some(b'#'), Some(b's')) if self.bytes.get(self.index + 2) == Some(&b'(') => {
                     self.bump();
                     self.bump();
+                    prefix = Prefix::Other;
                 }
-                _ => return Ok(()),
+                _ => return Ok(prefix),
             }
         }
     }
 
-    fn list_kind(&mut self) -> Result<String, CoverageError> {
+    fn list(&mut self) -> Result<Expression, CoverageError> {
         let opening_line = self.line;
         self.bump();
-        self.skip_space_and_comments()?;
-        // Only a plain symbol can name a list form.  Reader syntax may make
-        // the first element any other form, including a character literal.
-        let kind = match self.peek() {
-            Some(b')') => "list".to_owned(),
-            Some(b'"' | b'?' | b'(' | b'[' | b'{' | b'\'' | b'`' | b',' | b'#') => {
-                self.form()?;
-                "list".to_owned()
-            }
-            Some(_) => self.read_symbol().unwrap_or_else(|| "list".to_owned()),
-            None => {
-                return Err(self.error(&format!("unterminated list opened at line {opening_line}")));
-            }
-        };
+        let mut elements = Vec::new();
         loop {
             self.skip_space_and_comments()?;
             match self.peek() {
                 Some(b')') => {
                     self.bump();
-                    return Ok(kind);
+                    return Ok(Expression::List(elements));
                 }
                 Some(b']' | b'}') => return Err(self.error("mismatched closing delimiter")),
-                Some(_) => {
-                    self.form()?;
-                }
+                Some(_) => elements.push(self.expression()?),
                 None => {
                     return Err(
                         self.error(&format!("unterminated list opened at line {opening_line}"))
@@ -173,25 +358,23 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn atom(&mut self) -> Result<(), CoverageError> {
-        match self.peek() {
-            Some(b'"') => self.string(),
-            Some(b'?') => self.character(),
-            Some(b'(') => {
-                self.list_kind()?;
-                Ok(())
+    fn vector(&mut self) -> Result<Expression, CoverageError> {
+        debug_assert_eq!(self.peek(), Some(b'['));
+        self.bump();
+        let mut elements = Vec::new();
+        loop {
+            self.skip_space_and_comments()?;
+            match self.peek() {
+                Some(b']') => {
+                    self.bump();
+                    return Ok(Expression::Vector(elements));
+                }
+                Some(b')' | b'}') => return Err(self.error("mismatched closing delimiter")),
+                Some(_) => elements.push(self.expression()?),
+                None => return Err(self.error("unterminated reader structure")),
             }
-            Some(b'[') => self.delimited(b'[', b']'),
-            Some(b'{') => self.delimited(b'{', b'}'),
-            Some(b')' | b']' | b'}') => Err(self.error("unexpected closing delimiter")),
-            Some(_) => {
-                self.read_symbol();
-                Ok(())
-            }
-            None => Err(self.error("expected form")),
         }
     }
-
     fn delimited(&mut self, open: u8, close: u8) -> Result<(), CoverageError> {
         debug_assert_eq!(self.peek(), Some(open));
         self.bump();
@@ -204,7 +387,7 @@ impl<'a> Reader<'a> {
                 }
                 Some(b')' | b']' | b'}') => return Err(self.error("mismatched closing delimiter")),
                 Some(_) => {
-                    self.form()?;
+                    self.expression()?;
                 }
                 None => return Err(self.error("unterminated reader structure")),
             }

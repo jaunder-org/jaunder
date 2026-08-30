@@ -53,14 +53,21 @@ The authoritative gate is `cargo xtask validate --no-e2e`. It builds one
 hermetic `elisp-coverage-producer` VM that runs the pure and live ERT
 populations once, then realizes
 `$out/elisp-coverage/{lcov.info,summary.txt,status.json}`. The host consumer
-reconciles its pre-test production module/form census against LCOV; each
-ordinary point must have exactly one LCOV record, and zero-stop forms produce
-uncovered synthetic opening-line points. An uncovered executable or synthetic
-point needs a trailing same-line `;; cov:ignore: <reason>` marker with a
-non-empty trimmed reason. Controlled ERT, instrumentation, or invalid-report
-statuses and coverage findings fail the consumer; uncontrolled Nix or VM
-failures remain build failures. Full `cargo xtask validate` inherits this
-verdict and does not rerun live ERT.
+reconciles its pre-test production module/form census against LCOV: every
+ordinary point has exactly one LCOV record. It automatically counts as
+ignored/exempt without a marker only a zero-stop form whose census contains
+exactly its single synthetic opening-line point and which is `require`,
+`provide`, `declare-function`, `defgroup`, or `cl-defstruct`; or `defvar`,
+`defconst`, or `defcustom` with an absent, `nil`/`t`, number, string, character,
+keyword, quote/function-quote, or literal vector initializer. Computed calls,
+variable references, backquote/unquote, and all other evaluated or unknown
+initializers remain measurable or need a trailing same-line
+`;; cov:ignore: <reason>` marker with a non-empty trimmed reason. An ordinary
+point or LCOV observation on a structural candidate is a guard violation.
+Controlled ERT, instrumentation, or invalid-report statuses and coverage
+findings fail the consumer; uncontrolled Nix or VM failures remain build
+failures. Full `cargo xtask validate` inherits this verdict and does not rerun
+live ERT.
 
 ## Pulled media
 

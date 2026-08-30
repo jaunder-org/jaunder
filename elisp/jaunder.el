@@ -27,20 +27,20 @@
 
 ;;; Code:
 
-(require 'jaunder-entry) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-config) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-warn) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-datetime) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-atom) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-org) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-transport) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-service) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-media) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-publish) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-reconcile) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-delete) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-pull) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
-(require 'jaunder-pull-media) ;; cov:ignore: load-time dependency declaration has no Edebug execution stop
+(require 'jaunder-entry)
+(require 'jaunder-config)
+(require 'jaunder-warn)
+(require 'jaunder-datetime)
+(require 'jaunder-atom)
+(require 'jaunder-org)
+(require 'jaunder-transport)
+(require 'jaunder-service)
+(require 'jaunder-media)
+(require 'jaunder-publish)
+(require 'jaunder-reconcile)
+(require 'jaunder-delete)
+(require 'jaunder-pull)
+(require 'jaunder-pull-media)
 
-(provide 'jaunder) ;; cov:ignore: feature declaration has no Edebug execution stop
+(provide 'jaunder)
 ;;; jaunder.el ends here

@@ -42,14 +42,20 @@ Out:
     closed.
   - Contract: validate that the handed-off modules/forms match current
     production source, reconcile every ordinary point with exactly one LCOV
-    record, treat each synthetic point as uncovered, and accept only trailing
-    same-line `;; cov:ignore: <reason>` with a non-empty trimmed reason.
+    record, and classify only a zero-stop form with exactly its single synthetic
+    opening-line point as structural. The closed structural set is `require`,
+    `provide`, `declare-function`, `defgroup`, `cl-defstruct`, plus `defvar`,
+    `defconst`, and `defcustom` with an absent, `nil`/`t`, number, string,
+    character, keyword, quote/function-quote, or literal vector initializer. A
+    classifiable form with an ordinary point or LCOV observation fails as a
+    guard violation; computed and unknown initializers remain measurable or need
+    a trailing same-line `;; cov:ignore: <reason>`.
   - Verification: focused xtask tests over a shared coverage-fixture corpus
     prove all status outcomes; missing module, form, or LCOV point; duplicate
-    point; uncovered and covered points; zero-stop and production-macro forms;
-    valid, empty, malformed, covered, non-executable, and non-trailing markers.
-    Use the xtask workspace's `test-local` lane with
-    `--manifest-path xtask/Cargo.toml`.
+    point; uncovered and covered points; the structural set and inert grammar;
+    ordinary-point/LCOV guard failures; and valid, empty, malformed, covered,
+    non-executable, structural, and non-trailing markers. Use the xtask
+    workspace's `test-local` lane with `--manifest-path xtask/Cargo.toml`.
 
 - [x] Task 2: Produce authoritative combined coverage hermetically.
   - Depends on Task 1's artifact/status schema and population rules.
@@ -91,13 +97,26 @@ Out:
     `elisp/README.md`'s runner and coverage section, and
     `docs/ARCHITECTURE.md`'s e2e, Elisp-testing, and verify-ladder projections.
     Remove interim-exemption and standalone-live language; state no-e2e
-    ownership, fixed artifacts, census reconciliation, and the strict marker.
+    ownership, fixed artifacts, census reconciliation, structural exclusions,
+    their ordinary-point/LCOV guard, and retained strict markers.
   - Verification: xtask orchestration tests prove no-e2e ownership and no full
     validate duplicate; CI-shape checks prove the static job owns the verdict
     and e2e-gate depends only on the browser matrix; documentation checks prove
     obsolete standalone-live/interim-exemption claims are absent and the new
-    ownership/marker policy is present; `cargo xtask validate --no-e2e` proves
-    the complete authoritative path.
+    ownership/exemption/marker policy is present;
+    `cargo xtask validate --no-e2e` proves the complete authoritative path.
+
+- [x] Task 4: Revise the approved policy after PR review.
+  - Contract: replace per-instance markers for inherently declarative zero-stop
+    forms with the closed automatic structural classification and inert
+    initializer grammar; preserve markers for executable and unclassified gaps.
+    Require the single-synthetic-point eligibility condition and fail when a
+    structural candidate has an ordinary census point or LCOV observation.
+  - Verification: focused consumer fixtures prove the closed form set, inert and
+    computed initializer boundary, zero-stop-only eligibility, guard violations,
+    ignored/exempt accounting without markers, and retained marker enforcement;
+    current spec, ADR, architecture, contributor, and client docs state the same
+    policy.
 
 ## Key contracts
 
