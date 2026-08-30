@@ -188,6 +188,7 @@ convention). See the Status column below for each ADR's current status.
 | [0160](adr/0160-emacs-pulled-media-local-copies.md)                 | Emacs pull stores durable local media copies                                                                 | accepted   |
 | [0161](adr/0161-devtool-owns-ast-grep-enforcement.md)               | devtool owns ast-grep rule enforcement                                                                       | accepted   |
 | [0162](adr/0162-elisp-stateless-coverage-gate.md)                   | Elisp stateless coverage gate                                                                                | accepted   |
+| [0163](adr/0163-sqlx-decode-approval-is-type-only.md)               | SQLx decode approval is type-only                                                                            | accepted   |
 
 <!-- adr-table:end -->
 
