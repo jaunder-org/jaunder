@@ -628,6 +628,7 @@
           in
           [
             epkgs.plz
+            epkgs.undercover
             cmarkEl
           ]
         );
@@ -1272,6 +1273,41 @@
               # `jaunder-e2e*`, so the cachix pushFilter still excludes it — the VM
               # runs are never substituted from a cached aggregate.
               e2e = self.packages.${system}.e2e-checks;
+
+              # The producer combines pure and server-backed ERT observations in
+              # one VM, but deliberately returns controlled outcomes as artifacts.
+              # Task 3 wires this check into the verification ladder and removes
+              # the older standalone live check below.
+              elisp-coverage-producer = pkgs.testers.nixosTest {
+                name = "jaunder-elisp-coverage-producer";
+                nodes.machine = _: {
+                  virtualisation.memorySize = 4096;
+                  virtualisation.cores = 2;
+                  environment.systemPackages = [
+                    emacsForCi
+                    jaunderBin
+                    pkgs.curl
+                  ];
+                };
+                testScript = ''
+                  machine.start()
+                  machine.wait_for_unit("multi-user.target")
+                  machine.succeed("mkdir -p /tmp/elisp-coverage")
+                  machine.succeed(
+                      "JAUNDER_TEST_BINARY=${jaunderBin}/bin/jaunder "
+                      + "JAUNDER_ELISP_COVERAGE_DIR=/tmp/elisp-coverage "
+                      + "emacs --batch -Q -l ${emacsSrc}/scripts/run-coverage.el"
+                  )
+                  machine.succeed(
+                      "test -s /tmp/elisp-coverage/lcov.info"
+                      + " && test -s /tmp/elisp-coverage/summary.txt"
+                      + " && test -s /tmp/elisp-coverage/status.json"
+                  )
+                  machine.copy_from_machine("/tmp/elisp-coverage/lcov.info", "elisp-coverage")
+                  machine.copy_from_machine("/tmp/elisp-coverage/summary.txt", "elisp-coverage")
+                  machine.copy_from_machine("/tmp/elisp-coverage/status.json", "elisp-coverage")
+                '';
+              };
 
               # Live elisp integration suite (ADR-0035): a minimal NixOS VM with
               # Emacs + the jaunder binary. The harness self-boots the server

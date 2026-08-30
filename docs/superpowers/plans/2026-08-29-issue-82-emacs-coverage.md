@@ -51,7 +51,7 @@ Out:
     Use the xtask workspace's `test-local` lane with
     `--manifest-path xtask/Cargo.toml`.
 
-- [ ] Task 2: Produce authoritative combined coverage hermetically.
+- [x] Task 2: Produce authoritative combined coverage hermetically.
   - Depends on Task 1's artifact/status schema and population rules.
   - Contract: pin Undercover in `emacsForCi`; no runtime package resolution.
     Before tests or `(require 'jaunder)`, enumerate the flat production modules
