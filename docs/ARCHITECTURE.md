@@ -1529,7 +1529,7 @@ a project-wide capture blackout cannot disappear from the denominator and an
 unexpected project cannot inflate it. Artifacts are still copied before a
 Playwright failure is propagated; reconciliation runs only after the E2E
 combination succeeds, preserving the primary failure
-([Playwright report population authority](adr/drafts/playwright-report-defines-trace-gate-population.md)).
+([Playwright report population authority](adr/0165-playwright-report-defines-trace-gate-population.md)).
 
 ### Measurement frames are not mixed
 

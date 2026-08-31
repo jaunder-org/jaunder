@@ -1,6 +1,6 @@
-# ADR-DRAFT: Playwright report defines trace-gate population
+# ADR-0165: Playwright report defines trace-gate population
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-31
 - Issue: [#831](https://github.com/jaunder-org/jaunder/issues/831)
 
@@ -11,7 +11,7 @@ entirely missing Playwright project. The trace cannot prove the absence of a
 project when that project's capture is blacked out. Trusting trace rows
 therefore makes the producer define its own gate population, contrary to the
 fail-closed structural-membership rule in
-[ADR-0110](../0110-gate-population-membership-is-structural.md).
+[ADR-0110](0110-gate-population-membership-is-structural.md).
 
 The expected population could be duplicated from Playwright configuration,
 inferred from the trace, or derived from the Playwright JSON report already
@@ -29,11 +29,11 @@ between the report and trace-derived evidence; a missing or unexpected project
 is an evidence-integrity failure.
 
 Artifacts remain produced inside the Nix E2E derivation and analyzed by host
-`xtask`, preserving [ADR-0028](../0028-devtool-vs-xtask-boundary.md). Each
+`xtask`, preserving [ADR-0028](0028-devtool-vs-xtask-boundary.md). Each
 backend×browser combination is reconciled independently under
-[ADR-0034](../0034-ci-e2e-matrix-distribution.md). Artifacts are still lifted
+[ADR-0034](0034-ci-e2e-matrix-distribution.md). Artifacts are still lifted
 unconditionally before a failed Playwright result is propagated under
-[ADR-0037](../0037-e2e-failure-diagnostics-capture.md); trace-derived gates run
+[ADR-0037](0037-e2e-failure-diagnostics-capture.md); trace-derived gates run
 only after the combination itself succeeds, so they cannot mask the primary
 failure.
 
@@ -51,5 +51,5 @@ add a similarly independent structural authority rather than trusting the
 evidence stream it judges.
 
 This decision does not change browser capture or trace attribution under
-[ADR-0096](../0096-e2e-trace-capture-vs-attribution.md), and it introduces no
+[ADR-0096](0096-e2e-trace-capture-vs-attribution.md), and it introduces no
 ubiquitous-language change in `CONTEXT.md`.
