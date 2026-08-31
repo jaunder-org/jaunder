@@ -46,7 +46,7 @@ Out:
     positive-plus-`compile_fail` rustdoc convention and prove the fixtures
     participate in the storage doctest lane.
 
-- [ ] Task 2: Migrate application-semantic user and media surfaces
+- [x] Task 2: Migrate application-semantic user and media surfaces
   - Ownership: `storage/src/{users,helpers,atomic,media,media_manager}.rs`, both
     atomic dialects, both media dialects, and every caller found through LSP
     references. Do not edit `storage/src/sql.rs` or xtask gate files in this

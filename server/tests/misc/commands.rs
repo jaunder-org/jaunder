@@ -594,8 +594,9 @@ async fn cmd_user_create_with_operator_flag_sets_is_operator(#[case] backend: Ba
         .await
         .expect("db query")
         .expect("user should exist");
-    assert!(
+    assert_eq!(
         user.is_operator,
+        storage::OperatorStatus::OPERATOR,
         "is_operator should be true for operator user"
     );
 }

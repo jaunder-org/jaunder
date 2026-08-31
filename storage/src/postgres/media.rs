@@ -3,7 +3,7 @@ use common::media::{ByteSize, MediaRef};
 use sqlx::{Pool, Postgres, QueryBuilder};
 
 use crate::InstanceId;
-use crate::media::{MediaDialect, MediaStore};
+use crate::media::{MediaDeleteMode, MediaDialect, MediaStore};
 use crate::posts::{self, MediaReferenceEvidence};
 use common::ids::UserId;
 
@@ -54,7 +54,7 @@ impl MediaDialect for Postgres {
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-        force: bool,
+        mode: MediaDeleteMode,
     ) -> sqlx::Result<bool> {
         Self::lock_media_reference(conn, media).await?;
         let mut query = QueryBuilder::<Postgres>::new(String::new());
@@ -69,7 +69,7 @@ impl MediaDialect for Postgres {
             .push(" AND filename = ")
             .push_bind(media.filename.clone())
             .push(" AND (")
-            .push_bind(force);
+            .push_bind(mode);
         query.push(" OR NOT EXISTS (SELECT 1");
         posts::push_owner_media_reference_from_where(&mut query, user_id, media);
         posts::push_live_media_reference_predicate(&mut query, current_instance_id);

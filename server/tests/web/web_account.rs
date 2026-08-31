@@ -85,7 +85,12 @@ async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
         .run(|transaction| {
             Box::pin(async move {
                 users
-                    .set_email(transaction, session.user_id, Some(&email), true)
+                    .set_email(
+                        transaction,
+                        session.user_id,
+                        Some(&email),
+                        storage::EmailVerified::VERIFIED,
+                    )
                     .await
             })
         })

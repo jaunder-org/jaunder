@@ -222,8 +222,8 @@ mod tests {
             created_at: UtcInstant::now(),
             last_authenticated_at: None,
             email: None,
-            email_verified: false,
-            is_operator: false,
+            email_verified: storage::EmailVerified::UNVERIFIED,
+            is_operator: storage::OperatorStatus::STANDARD,
         }
     }
 

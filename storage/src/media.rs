@@ -79,6 +79,20 @@ pub enum TryDeleteOutcome {
     RefusedReferenced,
 }
 
+/// Whether media deletion must honor the owner's live-reference guard.
+///
+/// This persists directly as the existing SQL boolean representation while
+/// keeping guarded and forced deletion distinct at every storage boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+pub struct MediaDeleteMode(bool);
+
+impl MediaDeleteMode {
+    /// Refuse deletion when the requesting owner's live post references media.
+    pub const GUARDED: Self = Self(false);
+    /// Permit deletion despite the requesting owner's retained history.
+    pub const FORCED: Self = Self(true);
+}
+
 /// Async operations on the `media` table.
 ///
 /// This trait manages the metadata for media files, supporting both user
@@ -129,8 +143,8 @@ pub trait MediaStorage: Send + Sync {
         offset: PageOffset,
     ) -> sqlx::Result<Vec<MediaRecord>>;
 
-    /// Deletes a media record, refusing when `force` is absent and one of
-    /// `user_id`'s live posts references it, or when deleting it would leave a
+    /// Deletes a media record according to `mode`, refusing guarded deletion when
+    /// `user_id`'s live posts reference it, or when deleting it would leave a
     /// live Post anywhere naming a file with no remaining media row.
     ///
     /// The guards and the delete are **one statement**, so the storage decision has
@@ -147,7 +161,7 @@ pub trait MediaStorage: Send + Sync {
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-        force: bool,
+        mode: MediaDeleteMode,
     ) -> Result<TryDeleteOutcome, DeleteMediaError>;
 
     /// Whether the physical file named by `media` can be unlinked after a row
@@ -201,16 +215,16 @@ pub trait MediaDialect: Backend {
     /// Returns the total upload bytes across all users using backend-appropriate SQL.
     async fn total_upload_bytes(pool: &Pool<Self>) -> sqlx::Result<ByteSize>;
 
-    /// Executes the locked, conditional delete for a concrete `SQLx` dialect.
     /// `true` means the row was deleted; `false` preserves the caller's
-    /// NotFound-versus-refusal classification.
+    /// NotFound-versus-refusal classification. `mode` remains typed through the
+    /// dialect so its SQL representation cannot be substituted with another bool.
     async fn try_delete_media(
         conn: &mut Self::Connection,
         user_id: UserId,
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-        force: bool,
+        mode: MediaDeleteMode,
     ) -> sqlx::Result<bool>;
 
     /// Executes the locked global reclaimability decision for a concrete dialect
@@ -260,8 +274,8 @@ where
     for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> PageOffset: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `try_delete_media` binds `force` into the guard's boolean expressions.
-    for<'q> bool: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    // `MediaDeleteMode` binds directly into the guarded-delete expression.
+    for<'q> MediaDeleteMode: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> i64: sqlx::Decode<'q, DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
@@ -431,7 +445,7 @@ where
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-        force: bool,
+        mode: MediaDeleteMode,
     ) -> Result<TryDeleteOutcome, DeleteMediaError> {
         let connection = DB::write_connection(transaction)?;
         let removed = DB::try_delete_media(
@@ -440,7 +454,7 @@ where
             media,
             current_instance_id,
             evidence,
-            force,
+            mode,
         )
         .await?;
         if removed {
@@ -569,7 +583,7 @@ mod tests {
         media_ref: &MediaRef,
         instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-        force: bool,
+        mode: MediaDeleteMode,
     ) -> Result<common::MutationOutcome<TryDeleteOutcome>, crate::WriteScopeError<DeleteMediaError>>
     {
         let media = Arc::clone(&state.media);
@@ -587,7 +601,7 @@ mod tests {
                             &media_ref,
                             &instance_id,
                             &evidence,
-                            force,
+                            mode,
                         )
                         .await
                 })
@@ -704,10 +718,16 @@ mod tests {
                 delete_started_tx
                     .send(())
                     .expect("parent waits for delete start");
-                let result =
-                    try_delete_media_scoped(&state, owner, &media, &instance_id, &evidence, false)
-                        .await
-                        .map(confirmed);
+                let result = try_delete_media_scoped(
+                    &state,
+                    owner,
+                    &media,
+                    &instance_id,
+                    &evidence,
+                    MediaDeleteMode::GUARDED,
+                )
+                .await
+                .map(confirmed);
                 delete_finished_tx
                     .send(result)
                     .expect("parent waits for delete completion");
@@ -1183,7 +1203,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("the guarded delete succeeds as a scoped write"),
@@ -1233,7 +1253,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &near_match,
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("near-match guarded delete succeeds"),
@@ -1257,7 +1277,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &exact_match,
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("exact-evidence delete succeeds"),
@@ -1399,7 +1419,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &current_evidence,
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("guarded delete succeeds"),
@@ -1421,7 +1441,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &revision_evidence,
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("guarded delete succeeds"),
@@ -1447,7 +1467,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &complete_evidence,
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("guarded delete succeeds"),
@@ -1474,7 +1494,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                    true,
+                    MediaDeleteMode::FORCED,
                 )
                 .await
                 .expect("forced delete succeeds"),
@@ -1507,7 +1527,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                    true,
+                    MediaDeleteMode::FORCED,
                 )
                 .await
                 .expect("forced delete succeeds"),
@@ -1534,7 +1554,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("delete succeeds"),
@@ -1559,7 +1579,7 @@ mod tests {
             &media_ref_for("never-uploaded.jpg"),
             env.base.instance_id(),
             &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-            false,
+            MediaDeleteMode::GUARDED,
         )
         .await;
 
@@ -1626,7 +1646,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("no SQLite busy under concurrent scoped writes"),
@@ -1665,7 +1685,7 @@ mod tests {
                                 &delete_media_ref,
                                 &instance_id,
                                 &evidence,
-                                false,
+                                MediaDeleteMode::GUARDED,
                             )
                             .await?,
                         TryDeleteOutcome::Deleted
@@ -1712,7 +1732,7 @@ mod tests {
                             &delete_media_ref,
                             &instance_id,
                             &evidence,
-                            false,
+                            MediaDeleteMode::GUARDED,
                         )
                         .await
                 })

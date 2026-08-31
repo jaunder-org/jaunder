@@ -219,7 +219,7 @@ pub async fn require_operator() -> InternalResult<()> {
         return Err(InternalError::unauthorized("user does not exist"));
     };
 
-    if !user.is_operator {
+    if !user.is_operator.is_operator() {
         return Err(InternalError::unauthorized("operator access required"));
     }
 
@@ -243,7 +243,7 @@ pub async fn is_operator_soft() -> InternalResult<bool> {
     Ok(users
         .get_user(auth.user_id)
         .await?
-        .is_some_and(|u| u.is_operator))
+        .is_some_and(|u| u.is_operator.is_operator()))
 }
 
 pub(crate) fn auth_rejection_error(error: Rejection) -> InternalError {

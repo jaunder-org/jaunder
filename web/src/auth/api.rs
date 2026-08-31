@@ -117,7 +117,7 @@ pub async fn login(
                     raw_token,
                     super::SessionUser {
                         username: record.username,
-                        is_operator: record.is_operator,
+                        is_operator: record.is_operator.is_operator(),
                     },
                 ))
             })
@@ -169,7 +169,7 @@ pub async fn get_session() -> WebResult<Option<super::SessionUser>> {
     let is_operator = users
         .get_user(auth.user_id)
         .await?
-        .is_some_and(|u| u.is_operator);
+        .is_some_and(|u| u.is_operator.is_operator());
     Ok(Some(super::SessionUser {
         username: auth.username,
         is_operator,

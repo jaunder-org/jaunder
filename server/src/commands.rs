@@ -314,7 +314,7 @@ async fn create_command_user(
     username: Username,
     password: Password,
     display_name: Option<DisplayName>,
-    is_operator: bool,
+    is_operator: storage::OperatorStatus,
 ) -> anyhow::Result<common::ids::UserId> {
     let password = storage::prepare_password(password)
         .await
@@ -376,7 +376,11 @@ pub async fn cmd_user_create(
         username.clone(),
         password,
         display_name.cloned(),
-        is_operator,
+        if is_operator {
+            storage::OperatorStatus::OPERATOR
+        } else {
+            storage::OperatorStatus::STANDARD
+        },
     )
     .await?;
 

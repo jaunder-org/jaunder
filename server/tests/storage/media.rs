@@ -274,7 +274,7 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
                         &media_ref,
                         &instance_id,
                         &evidence,
-                        false,
+                        storage::MediaDeleteMode::GUARDED,
                     )
                     .await
             })
@@ -325,7 +325,7 @@ async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
                         &media_ref,
                         &instance_id,
                         &evidence,
-                        false,
+                        storage::MediaDeleteMode::GUARDED,
                     )
                     .await
             })

@@ -10,9 +10,10 @@ use common::{display_name::DisplayName, ids::UserId, token::RawToken, username::
 use host::{invite::InviteCode, password::Password};
 use thiserror::Error;
 
+use crate::password;
 use crate::{
-    CreateUserError, InviteStorage, PasswordResetStorage, SessionStorage, UserStorage,
-    WriteTransaction, prepare_password,
+    CreateUserError, InviteStorage, OperatorStatus, PasswordResetStorage, SessionStorage,
+    UserStorage, WriteTransaction,
 };
 
 /// Errors returned by [`register_with_invite`].
@@ -130,8 +131,8 @@ pub struct RegisterWithInviteInput<'a> {
     pub password: &'a Password,
     /// Optional display name assigned to the newly created user.
     pub display_name: Option<&'a DisplayName>,
-    /// Whether the newly created user receives operator privileges.
-    pub is_operator: bool,
+    /// Privilege state assigned to the newly created user.
+    pub is_operator: OperatorStatus,
     /// Capability that authorizes the registration.
     pub invite_code: &'a InviteCode,
 }
@@ -169,7 +170,7 @@ pub async fn register_with_invite(
 
     // An invite is a high-entropy capability. After its read-only precheck,
     // Argon2 may run before the transactional user insertion.
-    let prepared_password = prepare_password(input.password.clone())
+    let prepared_password = password::prepare_password(input.password.clone())
         .await
         .map_err(|error| RegisterWithInviteError::Internal(sqlx::Error::Io(error)))?;
     let user_id = users

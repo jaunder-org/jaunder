@@ -5,7 +5,9 @@ use std::{fmt, io, str::FromStr};
 use serde::{Deserialize, Serialize};
 
 use crate::role_instant::impl_role_instant;
-use crate::{InviteRecord, MediaRecord, PostTag, SessionRecord, UserRecord};
+use crate::{
+    EmailVerified, InviteRecord, MediaRecord, OperatorStatus, PostTag, SessionRecord, UserRecord,
+};
 use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;
@@ -44,25 +46,6 @@ impl_role_instant!(InviteCreatedAt, UtcInstant);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
 struct InviteExpiresAt(UtcInstant);
 impl_role_instant!(InviteExpiresAt, UtcInstant);
-/// The email-verification bit decoded from a user row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-pub(crate) struct EmailVerified(bool);
-
-impl EmailVerified {
-    pub(crate) const fn value(self) -> bool {
-        self.0
-    }
-}
-
-/// The operator-status bit decoded from a user row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-pub(crate) struct OperatorStatus(bool);
-
-impl OperatorStatus {
-    pub(crate) const fn value(self) -> bool {
-        self.0
-    }
-}
 
 /// A session label retained exactly until the repair-on-read display policy.
 #[derive(Debug, macros::SqlxBridge)]
@@ -104,11 +87,9 @@ where
 
 /// The parts a [`UserRecord`] is assembled from.
 ///
-/// **Named fields, not a tuple.** `email_verified` and `is_operator` are adjacent
-/// `bool`s: as a positional tuple, swapping them compiled silently and turned a verified
-/// flag into an operator grant. Naming them makes a swap visible at the one place the
-/// mapping happens ([`user_record_from_row`]) instead of spreading a positional contract
-/// across every caller.
+/// **Named fields, not a tuple.** `email_verified` and `is_operator` have
+/// distinct domain types, so swapping them fails at compile time at the one
+/// place the mapping happens ([`user_record_from_row`]).
 ///
 /// Not a decode target and deliberately **not** `#[derive(FromRow)]` — [`UserRow`] is the
 /// type rows decode into, and it stays a tuple alias precisely so the gate keeps policing
@@ -121,8 +102,8 @@ pub(crate) struct UserRecordParts {
     pub(crate) created_at: UtcInstant,
     pub(crate) last_authenticated_at: Option<UtcInstant>,
     pub(crate) email: Option<Email>,
-    pub(crate) email_verified: bool,
-    pub(crate) is_operator: bool,
+    pub(crate) email_verified: EmailVerified,
+    pub(crate) is_operator: OperatorStatus,
 }
 
 pub(crate) fn build_user_record(
@@ -325,8 +306,8 @@ pub(crate) fn user_record_from_row(row: UserRow) -> UserRecord {
         created_at,
         last_authenticated_at,
         email,
-        email_verified: email_verified.value(),
-        is_operator: is_operator.value(),
+        email_verified,
+        is_operator,
     })
 }
 
@@ -758,8 +739,8 @@ mod tests {
             created_at: now,
             last_authenticated_at: Some(now),
             email: Some(parse_email("alice@example.com")),
-            email_verified: true,
-            is_operator: false,
+            email_verified: EmailVerified::VERIFIED,
+            is_operator: OperatorStatus::STANDARD,
         };
         let record = build_user_record(parts);
         assert_eq!(record.user_id, UserId::from(1));
@@ -1022,8 +1003,8 @@ mod tests {
             now,
             None,
             None,
-            EmailVerified(false),
-            OperatorStatus(false),
+            EmailVerified::UNVERIFIED,
+            OperatorStatus::STANDARD,
         );
         let record = user_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));
@@ -1184,8 +1165,8 @@ mod tests {
             now,
             Some(now),
             Some(parse_email("alice@example.com")),
-            EmailVerified(true),
-            OperatorStatus(false),
+            EmailVerified::VERIFIED,
+            OperatorStatus::STANDARD,
         );
         let record = user_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));
@@ -1195,7 +1176,7 @@ mod tests {
         assert_eq!(record.created_at, now);
         assert_eq!(record.last_authenticated_at, Some(now));
         assert_eq!(record.email.unwrap(), "alice@example.com");
-        assert!(record.email_verified);
+        assert_eq!(record.email_verified, EmailVerified::VERIFIED);
     }
 
     #[test]

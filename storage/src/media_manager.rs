@@ -25,7 +25,7 @@ use host::metrics::{self, UploadOutcome};
 
 use crate::media_ownership::resolve_media_reference_ownership;
 use crate::{
-    CreateMediaError, MediaContentLocks, MediaRecord, MediaReferenceEvidence,
+    CreateMediaError, MediaContentLocks, MediaDeleteMode, MediaRecord, MediaReferenceEvidence,
     MediaReferenceOwnershipResolver, MediaReferenceSnapshot, MediaStorage, PersistedMediaReference,
     PostStorage, SiteConfigStorage, TryDeleteOutcome, WriteScope, WriteScopeError,
 };
@@ -635,7 +635,11 @@ impl MediaManager {
             identity.base_url.as_ref(),
         )
         .await;
-
+        let mode = if force {
+            MediaDeleteMode::FORCED
+        } else {
+            MediaDeleteMode::GUARDED
+        };
         let _content_lock = self.content_locks.acquire_one(&media.sha256).await?;
         let storage = Arc::clone(&self.media);
         let media_for_write = media.clone();
@@ -652,7 +656,7 @@ impl MediaManager {
                             &media_for_write,
                             &instance_for_write,
                             &evidence_for_write,
-                            force,
+                            mode,
                         )
                         .await
                         .map_err(anyhow::Error::from)

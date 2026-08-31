@@ -11,7 +11,9 @@ use {
     common::time::UtcInstant,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{EmailVerificationStorage, SiteConfigStorage, UserStorage, WriteScope},
+    storage::{
+        EmailVerificationStorage, EmailVerified, SiteConfigStorage, UserStorage, WriteScope,
+    },
 };
 
 use crate::error::WebResult;
@@ -113,7 +115,7 @@ pub async fn verify(token: RawToken) -> WebResult<MutationOutcome<()>> {
                         transaction,
                         consumption.user_id,
                         Some(&consumption.email),
-                        true,
+                        EmailVerified::VERIFIED,
                     )
                     .await
                     .map_err(InternalError::storage)?;

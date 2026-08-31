@@ -71,7 +71,7 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
                         &username,
                         &password_for_author,
                         Some(&display_name),
-                        true,
+                        storage::OperatorStatus::OPERATOR,
                     )
                     .await
             })
@@ -125,7 +125,7 @@ async fn seed_named_audience_post(
                         &viewer_name,
                         &password,
                         Some(&display_name),
-                        false,
+                        storage::OperatorStatus::STANDARD,
                     )
                     .await
             })
@@ -256,7 +256,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
         .await
         .expect("get user")
         .expect("restored user");
-    assert!(user.is_operator);
+    assert_eq!(user.is_operator, storage::OperatorStatus::OPERATOR);
     assert_eq!(user.display_name.as_deref(), Some("Backup User"));
 
     // The public post resolves for its author.

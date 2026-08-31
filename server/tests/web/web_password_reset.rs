@@ -34,7 +34,12 @@ async fn create_user_with_verified_email(state: &Arc<AppState>, email: &str) -> 
         .run(|transaction| {
             Box::pin(async move {
                 users
-                    .set_email(transaction, session.user_id, Some(&email), true)
+                    .set_email(
+                        transaction,
+                        session.user_id,
+                        Some(&email),
+                        storage::EmailVerified::VERIFIED,
+                    )
                     .await
             })
         })

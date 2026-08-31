@@ -10,7 +10,7 @@ use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, CloseablePool, SeedUser, backends, confirmed_for};
 use storage::{
-    AppState, WriteScopeError,
+    AppState, OperatorStatus, WriteScopeError,
     account_mutations::{self, RegisterWithInviteError, RegisterWithInviteInput},
 };
 #[apply(backends)]
@@ -100,7 +100,7 @@ async fn create_user_with_invite_creates_user_and_marks_invite_used(#[case] back
         username("alice"),
         password("password123"),
         Some(parse_display_name("Alice")),
-        false,
+        storage::OperatorStatus::STANDARD,
         code.clone(),
     )
     .await;
@@ -129,7 +129,7 @@ async fn create_user_with_invite_second_call_returns_already_used(#[case] backen
         username("alice"),
         password("password123"),
         None,
-        false,
+        storage::OperatorStatus::STANDARD,
         code.clone(),
     )
     .await;
@@ -139,7 +139,7 @@ async fn create_user_with_invite_second_call_returns_already_used(#[case] backen
         username("bob"),
         password("password123"),
         None,
-        false,
+        storage::OperatorStatus::STANDARD,
         code,
     )
     .await
@@ -214,7 +214,7 @@ async fn create_user_with_invite_expired_returns_invite_expired(#[case] backend:
         username("alice"),
         password("password123"),
         None,
-        false,
+        storage::OperatorStatus::STANDARD,
         code,
     )
     .await
@@ -246,7 +246,7 @@ async fn create_user_with_invite_unknown_code_returns_not_found(#[case] backend:
         username("alice"),
         password("password123"),
         None,
-        false,
+        storage::OperatorStatus::STANDARD,
         "no-such-code".parse().unwrap(),
     )
     .await
@@ -286,7 +286,7 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
         user.username.clone(),
         password("other_password"),
         None,
-        false,
+        storage::OperatorStatus::STANDARD,
         code,
     )
     .await
@@ -393,7 +393,7 @@ async fn create_user_with_invite(
     username: common::username::Username,
     password: host::password::Password,
     display_name: Option<common::display_name::DisplayName>,
-    is_operator: bool,
+    is_operator: storage::OperatorStatus,
     code: InviteCode,
 ) -> common::ids::UserId {
     let outcome =
@@ -408,7 +408,7 @@ async fn create_user_with_invite_result(
     username: common::username::Username,
     password: host::password::Password,
     display_name: Option<common::display_name::DisplayName>,
-    is_operator: bool,
+    is_operator: storage::OperatorStatus,
     code: InviteCode,
 ) -> Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>> {
     let users = Arc::clone(&state.users);
@@ -425,7 +425,11 @@ async fn create_user_with_invite_result(
                         username: &username,
                         password: &password,
                         display_name: display_name.as_ref(),
-                        is_operator,
+                        is_operator: if is_operator {
+                            OperatorStatus::OPERATOR
+                        } else {
+                            OperatorStatus::STANDARD
+                        },
                         invite_code: &code,
                     },
                 )
