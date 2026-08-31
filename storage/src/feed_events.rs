@@ -335,10 +335,10 @@ pub trait FeedEventDialect: Backend {
         error: &str,
         now: UtcInstant,
     ) -> Result<(), FeedEventError>;
-    /// Delete one bounded batch of terminal rows eligible at `now`.
+    /// Delete one bounded batch of terminal rows eligible at `failed_cutoff`.
     async fn prune_terminal_events(
         pool: &Pool<Self>,
-        now: UtcInstant,
+        failed_cutoff: UtcInstant,
         limit: RowLimit,
     ) -> Result<u64, FeedEventError>;
 }
@@ -362,6 +362,7 @@ const INSERT_FEED_EVENT: &str = "INSERT INTO feed_events (feed_url) VALUES ($1)"
 
 /// The maximum rows one terminal-retention statement may delete.
 const TERMINAL_PRUNE_LIMIT: RowLimit = RowLimit::at_most(200);
+const FAILED_EVENT_RETENTION: chrono::Duration = chrono::Duration::days(7);
 impl<DB: Database> FeedEventStore<DB> {
     #[must_use]
     pub fn new(pool: Pool<DB>) -> Self {
@@ -534,9 +535,11 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn prune_terminal_events(&self, now: UtcInstant) -> Result<u64, FeedEventError> {
+        let failed_cutoff = UtcInstant::from(now.value() - FAILED_EVENT_RETENTION);
         let mut deleted = 0;
         loop {
-            let batch = DB::prune_terminal_events(&self.pool, now, TERMINAL_PRUNE_LIMIT).await?;
+            let batch =
+                DB::prune_terminal_events(&self.pool, failed_cutoff, TERMINAL_PRUNE_LIMIT).await?;
             deleted += batch;
             if batch < TERMINAL_PRUNE_LIMIT.value().unsigned_abs() {
                 return Ok(deleted);

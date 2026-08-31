@@ -688,12 +688,17 @@ mod tests {
         db.migrate_to(28).await.unwrap();
         db.pool
             .execute(
-                "INSERT INTO feed_events (feed_url, status, created_at, pinged_at) VALUES
+                "INSERT INTO feed_events
+                    (feed_url, status, created_at, pinged_at, next_attempt_at, claimed_at)
+                 VALUES
                  ('/~done-known/feed.rss', 'done', '2026-01-01T00:00:00Z',
-                  '2026-01-02T00:00:00Z'),
-                 ('/~done-fallback/feed.rss', 'done', '2026-01-03T00:00:00Z', NULL),
-                 ('/~failed/feed.rss', 'failed', '2026-01-04T00:00:00Z', NULL),
-                 ('/~pending/feed.rss', 'pending', '2026-01-05T00:00:00Z', NULL)",
+                  '2026-01-02T00:00:00Z', '2026-01-01T00:00:00Z', NULL),
+                 ('/~done-fallback/feed.rss', 'done', '2026-01-03T00:00:00Z',
+                  NULL, '2026-01-03T00:00:00Z', NULL),
+                 ('/~failed/feed.rss', 'failed', '2026-01-04T00:00:00Z',
+                  NULL, '2026-01-04T00:00:00Z', '2026-01-06T00:00:00Z'),
+                 ('/~pending/feed.rss', 'pending', '2026-01-05T00:00:00Z',
+                  NULL, '2026-01-05T00:00:00Z', NULL)",
             )
             .await
             .unwrap();
@@ -718,6 +723,30 @@ mod tests {
                 .unwrap(),
             1,
             "a known completion instant must remain the retention anchor"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM feed_events
+                     WHERE feed_url = '/~done-fallback/feed.rss'
+                       AND terminal_at = created_at",
+                )
+                .await
+                .unwrap(),
+            1,
+            "a legacy completion without pinged_at must retain its original age"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM feed_events
+                     WHERE feed_url = '/~failed/feed.rss'
+                       AND terminal_at = claimed_at",
+                )
+                .await
+                .unwrap(),
+            1,
+            "a legacy exhaustion must retain its final-attempt age"
         );
         assert_eq!(
             db.pool

@@ -2,8 +2,8 @@ ALTER TABLE feed_events ADD COLUMN terminal_at TIMESTAMP;
 
 UPDATE feed_events
 SET terminal_at = CASE
-    WHEN status = 'done' THEN COALESCE(pinged_at, CURRENT_TIMESTAMP)
-    WHEN status = 'failed' THEN CURRENT_TIMESTAMP
+    WHEN status = 'done' THEN COALESCE(pinged_at, regenerated_at, claimed_at, next_attempt_at, created_at)
+    WHEN status = 'failed' THEN COALESCE(claimed_at, next_attempt_at, created_at)
 END
 WHERE status IN ('done', 'failed');
 

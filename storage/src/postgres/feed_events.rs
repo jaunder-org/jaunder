@@ -174,10 +174,9 @@ impl FeedEventDialect for Postgres {
     }
     async fn prune_terminal_events(
         pool: &Pool<Postgres>,
-        now: UtcInstant,
+        failed_cutoff: UtcInstant,
         limit: RowLimit,
     ) -> Result<u64, FeedEventError> {
-        let failed_cutoff = UtcInstant::from(now.value() - chrono::Duration::days(7));
         let result = sqlx::query(
             "WITH eligible AS ( \
                 SELECT id FROM feed_events \
