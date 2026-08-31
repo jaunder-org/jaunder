@@ -264,6 +264,55 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
 }
 #[apply(backends)]
 #[tokio::test]
+async fn create_user_with_invite_hash_failure_preserves_password_error_and_invite(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let code = create_invite(
+        state,
+        "2099-01-02T03:04:05.123457Z".parse::<UtcInstant>().unwrap(),
+    )
+    .await;
+
+    let error = create_user_with_invite_result(
+        state,
+        username("alice"),
+        password("force-hash-error-for-test-coverage"),
+        None,
+        false,
+        code,
+    )
+    .await
+    .expect_err("a forced password hash failure must reject registration");
+    let WriteScopeError::Operation(RegisterWithInviteError::Internal(sqlx::Error::Io(source))) =
+        error
+    else {
+        panic!("expected PasswordError wrapped by sqlx::Error::Io");
+    };
+    assert!(
+        source
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<host::password::PasswordError>())
+            .is_some(),
+        "the password error must remain downcastable through sqlx::Error::Io"
+    );
+
+    let invite = state.invites.list_invites().await.unwrap().pop().unwrap();
+    assert!(invite.used_at.is_none());
+    assert!(invite.used_by.is_none());
+    assert!(
+        state
+            .users
+            .get_user_by_username(&username("alice"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn invite_list_operations(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
