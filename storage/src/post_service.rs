@@ -2223,6 +2223,101 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn create_rendered_post_preserves_indeterminate_commit_without_reporting_success(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = Arc::clone(&env.state.posts);
+        let key = parse_idempotency_key("indeterminate-commit-key");
+        let created_at = UtcInstant::from(
+            Utc.with_ymd_and_hms(2026, 8, 31, 12, 0, 0)
+                .single()
+                .expect("fixed instant"),
+        );
+        let cutoff = UtcInstant::from(created_at.value() + Duration::hours(1));
+
+        confirmed(
+            perform_post_creation_at(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
+                created_at,
+                creation_with_key(user_id, parse_post_body("original body"), Some(&key)),
+            )
+            .await
+            .expect("original keyed create"),
+        );
+
+        let outcome = create_rendered_post(
+            &env.state
+                .write_scope
+                .with_commit_acknowledgement_loss_after_commit_for_test(),
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
+            RenderedPostContent {
+                user_id,
+                title: None,
+                slug: parse_slug("indeterminate-commit"),
+                body: parse_post_body("indeterminate body"),
+                format: PostFormat::Markdown,
+                published_at: Some(cutoff),
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
+                idempotency_key: Some(key.clone()),
+                expectations: PostBookkeepingExpectation::default(),
+            },
+            cutoff,
+        )
+        .await
+        .expect("a lost commit acknowledgement is a mutation outcome");
+        let MutationOutcome::CommitIndeterminate(record) = outcome else {
+            panic!("lost commit acknowledgement must not be reported as a confirmed creation");
+        };
+
+        assert_eq!(record.user_id, user_id);
+        assert_eq!(record.slug, parse_slug("indeterminate-commit"));
+        assert_eq!(record.body, parse_post_body("indeterminate body"));
+        assert_eq!(record.published_at, Some(cutoff));
+        assert_eq!(
+            storage
+                .post_id_for_idempotency_key(user_id, &key, cutoff)
+                .await
+                .expect("replacement idempotency mapping"),
+            Some(record.post_id),
+            "the indeterminate creation's durable side effects must survive"
+        );
+
+        let stored = storage
+            .get_post_by_id(
+                record.post_id,
+                &common::visibility::ViewerIdentity::local(user_id),
+            )
+            .await
+            .expect("load indeterminate creation")
+            .expect("indeterminate commit still created the post");
+        assert_eq!(stored.post_id, record.post_id);
+        assert_eq!(stored.user_id, record.user_id);
+        assert_eq!(stored.author_username, record.author_username);
+        assert_eq!(stored.title, record.title);
+        assert_eq!(stored.slug, record.slug);
+        assert_eq!(stored.body, record.body);
+        assert_eq!(stored.format, record.format);
+        assert_eq!(stored.rendered_html, record.rendered_html);
+        assert_eq!(stored.created_at, record.created_at);
+        assert_eq!(stored.updated_at, record.updated_at);
+        assert_eq!(stored.published_at, record.published_at);
+        assert_eq!(stored.deleted_at, record.deleted_at);
+        assert_eq!(stored.summary, record.summary);
+        assert!(stored.tags.is_empty());
+        assert!(record.tags.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn idempotency_mapping_expires_at_the_inclusive_cutoff_and_prunes(
         #[case] backend: Backend,
     ) {

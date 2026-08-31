@@ -477,6 +477,78 @@ mod tests {
     }
 
     #[test]
+    fn startup_lock_acquire_keeps_directory_creation_error_context() {
+        let dir = TempDir::new().unwrap();
+        let storage_path = dir.path().join("not-a-directory");
+        fs::write(&storage_path, "ordinary file").unwrap();
+
+        let Err(error) = StartupLockGuard::acquire(&storage_path) else {
+            panic!("a file cannot serve as the startup lock directory");
+        };
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "cannot create startup lock directory {}",
+                storage_path.display()
+            )
+        );
+        assert!(
+            error.chain().any(|source| matches!(
+                source.downcast_ref::<std::io::Error>(),
+                Some(error) if error.kind() == std::io::ErrorKind::AlreadyExists
+            )),
+            "directory creation failure must retain its typed I/O source: {error:#}"
+        );
+        assert!(
+            storage_path.is_file(),
+            "acquisition must not replace the file"
+        );
+    }
+
+    #[test]
+    fn startup_lock_reservation_write_failure_is_fatal_and_contextual() {
+        let dir = TempDir::new().unwrap();
+        let reservation_path = dir.path().join("reservation");
+        let discovery_path = dir.path().join("discovery.json");
+        fs::create_dir(&reservation_path).unwrap();
+        let lock = StartupLockGuard::acquire(dir.path()).expect("startup lock");
+
+        let Err(error) = lock.reserve(
+            reservation_path.clone(),
+            discovery_path.clone(),
+            addr(),
+            own_start_time(),
+        ) else {
+            panic!("a directory cannot receive a runtime reservation");
+        };
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "cannot publish live runtime reservation {}",
+                reservation_path.display()
+            )
+        );
+        assert!(
+            error
+                .chain()
+                .any(|source| source.downcast_ref::<std::io::Error>().is_some()),
+            "fatal reservation failure must retain its typed I/O source: {error:#}"
+        );
+        assert!(
+            reservation_path.is_dir(),
+            "failed publication must not replace the reservation target"
+        );
+        assert!(
+            !discovery_path.exists(),
+            "a failed canonical reservation must not publish discovery output"
+        );
+        StartupLockGuard::acquire(dir.path())
+            .expect("failed reservation drops its lock instead of blocking retry");
+    }
+
+    #[test]
     fn runtime_guard_removes_discovery_file_before_releasing_lock() {
         let dir = TempDir::new().unwrap();
         let runtime_path = canonical_runtime_path(dir.path());
@@ -578,6 +650,53 @@ mod tests {
             0,
         );
         assert!(inert.path().is_none());
+    }
+
+    #[test]
+    fn inert_guard_update_is_a_silent_noop() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("missing").join("runtime.json");
+        let guard = RuntimeFileGuard::write(path.clone(), addr(), 0);
+        assert!(
+            guard.path().is_none(),
+            "failed initial publication is inert"
+        );
+
+        let ((), trace) = capture(|| guard.update(addr(), 1));
+
+        assert!(
+            trace.is_empty(),
+            "an inert guard must not report updates: {trace}"
+        );
+        assert!(
+            !path.exists(),
+            "an inert update must not create its unavailable runtime file"
+        );
+        assert!(
+            !path.with_extension("tmp").exists(),
+            "an inert update must not attempt an atomic replacement"
+        );
+    }
+
+    #[test]
+    fn active_guard_update_failure_is_reported_and_leaves_path_unpublished() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("missing").join("runtime.json");
+        let guard = RuntimeFileGuard {
+            path: Some(path.clone()),
+        };
+
+        let ((), trace) = capture(|| guard.update(addr(), 1));
+
+        assert_one_report(&trace, "server.runtime_file.write");
+        assert!(
+            !path.exists(),
+            "a failed update must not publish a replacement runtime file"
+        );
+        assert!(
+            !path.with_extension("tmp").exists(),
+            "a write failure before serialization must not leave a temporary file"
+        );
     }
 
     #[test]

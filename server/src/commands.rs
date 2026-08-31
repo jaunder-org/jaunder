@@ -2294,6 +2294,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prepare_server_refuses_canonical_live_runtime_identity_before_cleanup() {
+        let temp = TempDir::new().expect("temp dir");
+        let db_path = temp.path().join("jaunder.db");
+        let storage = sqlite_storage_args(&temp);
+        let tmp_dir = temp.path().join("media").join("tmp");
+        fs::create_dir_all(&tmp_dir).expect("create temporary directory");
+        let stale_upload = tmp_dir.join("stale-upload");
+        fs::write(&stale_upload, b"stale").expect("write stale upload");
+        let runtime_path = temp.path().join("runtime.json");
+        let start_time = runtime_file::require_start_time_at(Path::new("/proc/self/stat"))
+            .expect("current process start time");
+        let live_identity = serde_json::json!({
+            "ip": "127.0.0.1",
+            "port": 1,
+            "pid": std::process::id(),
+            "start_time": start_time,
+        })
+        .to_string();
+        fs::write(&runtime_path, &live_identity).expect("write live canonical runtime file");
+
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let telemetry = test_telemetry(None);
+        let error = prepare_server(&storage, bind, false, None, &telemetry, None)
+            .await
+            .err()
+            .expect("a live canonical runtime identity must refuse startup");
+
+        assert!(
+            error
+                .to_string()
+                .contains("another jaunder instance is already running"),
+            "refusal must identify the live canonical owner: {error:#}"
+        );
+        assert!(
+            !db_path.exists(),
+            "must refuse before creating the database"
+        );
+        assert!(
+            stale_upload.exists(),
+            "a canonical live-identity refusal must occur before temporary cleanup"
+        );
+        assert_eq!(
+            fs::read_to_string(&runtime_path).expect("read live canonical runtime file"),
+            live_identity,
+            "the live canonical identity must not be overwritten"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_server_propagates_reservation_failure_before_cleanup() {
+        let temp = TempDir::new().expect("temp dir");
+        let db_path = temp.path().join("jaunder.db");
+        let storage = sqlite_storage_args(&temp);
+        let tmp_dir = temp.path().join("media").join("tmp");
+        fs::create_dir_all(&tmp_dir).expect("create temporary directory");
+        let stale_upload = tmp_dir.join("stale-upload");
+        fs::write(&stale_upload, b"stale").expect("write stale upload");
+        let runtime_path = temp.path().join("runtime.json");
+        fs::create_dir(&runtime_path).expect("block canonical runtime reservation");
+
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let telemetry = test_telemetry(None);
+        let error = prepare_server(&storage, bind, false, None, &telemetry, None)
+            .await
+            .err()
+            .expect("a canonical reservation failure must stop startup");
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot publish live runtime reservation"),
+            "reservation failure must propagate with its publication context: {error:#}"
+        );
+        assert!(
+            error
+                .chain()
+                .any(|source| source.downcast_ref::<std::io::Error>().is_some()),
+            "reservation failure must retain its I/O source: {error:#}"
+        );
+        assert!(!db_path.exists(), "must fail before creating the database");
+        assert!(
+            stale_upload.exists(),
+            "a reservation failure must occur before temporary cleanup"
+        );
+        assert!(
+            runtime_path.is_dir(),
+            "the blocking canonical runtime path must not be replaced"
+        );
+    }
+
+    #[tokio::test]
     async fn prepare_server_refuses_on_live_lock_before_cleanup() {
         // Holding the OS-backed guard must refuse the contender before it can
         // delete temporary uploads or create the dev-mode database.

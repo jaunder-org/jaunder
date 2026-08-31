@@ -137,6 +137,45 @@ mod tests {
         MockPasswordResetStorage, MockPostStorage,
     };
     use tokio::time;
+    #[derive(Clone)]
+    struct SharedWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("trace lock").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for SharedWriter {
+        type Writer = Self;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn trace_capture() -> (
+        tracing::subscriber::DefaultGuard,
+        Arc<std::sync::Mutex<Vec<u8>>>,
+    ) {
+        let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_writer(SharedWriter(output.clone()))
+            .finish();
+        (tracing::subscriber::set_default(subscriber), output)
+    }
+
+    fn trace_text(output: &Arc<std::sync::Mutex<Vec<u8>>>) -> String {
+        std::io::Write::flush(&mut SharedWriter(output.clone())).expect("flush trace");
+        String::from_utf8(output.lock().expect("trace lock").clone()).expect("utf8 trace")
+    }
 
     fn maintenance(
         posts: MockPostStorage,
@@ -391,6 +430,83 @@ mod tests {
         .expect("scheduled maintenance run");
         scheduler.shutdown().await.expect("shutdown scheduler");
         assert!(calls.load(Ordering::SeqCst) >= 2);
+    }
+
+    #[test]
+    fn report_cleanup_logs_a_bounded_successful_domain_result() {
+        let (guard, output) = trace_capture();
+
+        report_cleanup(Domain::Invites, Ok::<u64, std::io::Error>(3));
+
+        drop(guard);
+        let trace = trace_text(&output);
+        assert_eq!(
+            trace
+                .matches(r#""message":"database.maintenance.completed""#)
+                .count(),
+            1,
+            "trace: {trace}"
+        );
+        assert!(
+            trace.contains(r#""retention.domain":"invites""#),
+            "trace: {trace}"
+        );
+        assert!(trace.contains(r#""pruned":3"#), "trace: {trace}");
+        assert!(
+            !trace.contains(r#""error":"#),
+            "a successful cleanup must not produce an error field: {trace}"
+        );
+    }
+
+    #[test]
+    fn report_cleanup_logs_a_bounded_failure_and_reports_its_error() {
+        let (guard, output) = trace_capture();
+
+        report_cleanup(
+            Domain::FeedEvents,
+            Err::<u64, _>(std::io::Error::other("cleanup storage unavailable")),
+        );
+
+        drop(guard);
+        let trace = trace_text(&output);
+        assert_eq!(
+            trace
+                .matches(r#""message":"database.maintenance.failed""#)
+                .count(),
+            1,
+            "trace: {trace}"
+        );
+        assert!(
+            trace.contains(r#""retention.domain":"feed_events""#),
+            "trace: {trace}"
+        );
+        assert!(
+            trace.contains(r#""error":"cleanup storage unavailable""#),
+            "trace: {trace}"
+        );
+        assert_eq!(
+            trace
+                .matches(r#""error.context":"server.maintenance""#)
+                .count(),
+            1,
+            "failure must be reported once: {trace}"
+        );
+        assert!(
+            trace.contains(r#""error.kind":"storage""#),
+            "trace: {trace}"
+        );
+        assert!(
+            trace.contains(r#""error.class":"transient""#),
+            "trace: {trace}"
+        );
+        assert!(
+            trace.contains(r#""error.disposition":"swallowed""#),
+            "trace: {trace}"
+        );
+        assert!(
+            !trace.contains("http://") && !trace.contains("user@"),
+            "bounded maintenance reporting must not include fixture PII: {trace}"
+        );
     }
 
     #[test]

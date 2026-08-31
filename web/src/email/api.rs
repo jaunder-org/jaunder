@@ -20,6 +20,22 @@ use crate::error::WebResult;
 // (deserialize) sides.
 use common::{MutationOutcome, email::Email, token::RawToken};
 
+#[cfg(feature = "server")]
+fn finalize_verification(outcome: &MutationOutcome<common::ids::UserId>) -> MutationOutcome<()> {
+    match outcome {
+        MutationOutcome::Confirmed(user_id) => {
+            tracing::info!(
+                credential.kind = "email_verification",
+                credential.outcome = "consumed",
+                user.id = %user_id,
+                "credential consumed"
+            );
+            MutationOutcome::Confirmed(())
+        }
+        MutationOutcome::CommitIndeterminate(_) => MutationOutcome::CommitIndeterminate(()),
+    }
+}
+
 /// Sends a verification email to `email`. Requires authentication.
 ///
 /// Creates a 24-hour verification token, sends an absolute
@@ -106,16 +122,19 @@ pub async fn verify(token: RawToken) -> WebResult<MutationOutcome<()>> {
         })
         .await
         .map_err(from_write_scope_error)?;
-    match outcome {
-        MutationOutcome::Confirmed(user_id) => {
-            tracing::info!(
-                credential.kind = "email_verification",
-                credential.outcome = "consumed",
-                user.id = %user_id,
-                "credential consumed"
-            );
-            Ok(MutationOutcome::Confirmed(()))
-        }
-        MutationOutcome::CommitIndeterminate(_) => Ok(MutationOutcome::CommitIndeterminate(())),
+    Ok(finalize_verification(&outcome))
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::finalize_verification;
+    use common::{MutationOutcome, ids::UserId};
+
+    #[test]
+    fn verification_indeterminate_outcome_preserves_uncertainty_and_erases_user_id() {
+        let outcome =
+            finalize_verification(&MutationOutcome::CommitIndeterminate(UserId::from(41)));
+
+        assert!(matches!(outcome, MutationOutcome::CommitIndeterminate(())));
     }
 }

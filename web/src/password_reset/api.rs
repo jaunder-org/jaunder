@@ -25,6 +25,25 @@ use crate::error::WebResult;
 // server builds.
 use common::{MutationOutcome, password::ProfferedPassword, token::RawToken, username::Username};
 
+#[cfg(feature = "server")]
+fn finalize_password_reset(
+    outcome: &MutationOutcome<storage::PasswordResetConsumption>,
+) -> MutationOutcome<()> {
+    match outcome {
+        MutationOutcome::Confirmed(consumption) => {
+            tracing::info!(
+                credential.kind = "password_reset",
+                credential.outcome = "consumed",
+                user.id = %consumption.user_id,
+                "credential consumed"
+            );
+            metrics::password_reset(PasswordResetEvent::Completed);
+            MutationOutcome::Confirmed(())
+        }
+        MutationOutcome::CommitIndeterminate(_) => MutationOutcome::CommitIndeterminate(()),
+    }
+}
+
 #[macros::server]
 pub async fn request(username: Username) -> WebResult<MutationOutcome<()>> {
     let users = expect_context::<Arc<dyn UserStorage>>();
@@ -130,17 +149,23 @@ pub async fn confirm(request: ConfirmPasswordResetRequest) -> WebResult<Mutation
         })
         .await
         .map_err(map_write_scope_error)?;
-    match outcome {
-        MutationOutcome::Confirmed(consumption) => {
-            tracing::info!(
-                credential.kind = "password_reset",
-                credential.outcome = "consumed",
-                user.id = %consumption.user_id,
-                "credential consumed"
-            );
-            metrics::password_reset(PasswordResetEvent::Completed);
-            Ok(MutationOutcome::Confirmed(()))
-        }
-        MutationOutcome::CommitIndeterminate(_) => Ok(MutationOutcome::CommitIndeterminate(())),
+    Ok(finalize_password_reset(&outcome))
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::finalize_password_reset;
+    use common::{MutationOutcome, ids::UserId};
+    use storage::PasswordResetConsumption;
+
+    #[test]
+    fn password_reset_indeterminate_outcome_preserves_uncertainty_and_erases_consumption() {
+        let outcome = finalize_password_reset(&MutationOutcome::CommitIndeterminate(
+            PasswordResetConsumption {
+                user_id: UserId::from(42),
+            },
+        ));
+
+        assert!(matches!(outcome, MutationOutcome::CommitIndeterminate(())));
     }
 }
