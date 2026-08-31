@@ -250,7 +250,8 @@ does not exist in that engine. Chromium reports normally.
 
 ### Browser-side e2e spans
 
-- `e2e.test` (automatic, from `end2end/tests/fixtures.ts`)
+- `e2e.test` (automatic, from `end2end/tests/performance.ts`, composed into the
+  suite surface by `end2end/tests/fixtures.ts`)
   - one span per test
   - request timing summary
   - default-page navigation lifecycle summary (`e2e.navigation_top_json`)
@@ -270,8 +271,8 @@ does not exist in that engine. Chromium reports normally.
 
 These browser-side spans share one **trace id** (from `JAUNDER_E2E_TRACEPARENT`)
 so browser and backend spans are correlated in a single trace. Since #681 the
-**parent span id** is per test, not run-wide: `fixtures.ts` mints the `e2e.test`
-span id before the test body and sends
+**parent span id** is per test, not run-wide: `performance.ts` mints the
+`e2e.test` span id before the test body and sends
 `traceparent: 00-<traceId>-<testSpanId>-01` on every context the test uses. The
 server adopts that as its request span's parent. Server request spans therefore
 carry the id of the test that caused them, which is the structural join the
@@ -1588,10 +1589,10 @@ The directional prediction held: `wasm_fetch` rose, as the moved download now
 contends.
 
 `wasm_instantiate` also rose 125 ms on firefox — **and that figure must not be
-read as a compile regression.** It is **derived, not measured**: `fixtures.ts`
-computes it as `boot.entry.startTime − wasm.responseEndMs`, because Rust cannot
-observe its own fetch or instantiation. It is a **residual**, so it absorbs
-whatever happens between those two points.
+read as a compile regression.** It is **derived, not measured**:
+`performance.ts` computes it as `boot.entry.startTime − wasm.responseEndMs`,
+because Rust cannot observe its own fetch or instantiation. It is a
+**residual**, whatever happens between those two points.
 
 That makes it **not comparable across arms that move when the fetch starts**:
 
@@ -2548,10 +2549,10 @@ Measured (all four combos, 16-core / 32 GB, live-loaded host):
 
 **Budget-bug correction (important — the `workers=4` "flaky" rows above are
 tainted).** Those rows ran with a **worker-scaling bug**:
-`workerContentionScale` in `fixtures.ts` re-read `JAUNDER_E2E_WORKERS` with its
-own default of `1`, which diverged from the config's `workers` default, so when
-the env was unset the budgets computed **zero** contention headroom while N>1
-workers actually ran. Because the scale is applied as
+`workerContentionScale` in `end2end/tests/timeout-policy.ts` re-read
+`JAUNDER_E2E_WORKERS` with its own default of `1`, which diverged from the
+config's `workers` default, so when the env was unset the budgets computed
+**zero** contention headroom while N>1 workers actually ran. Because the scale
 `max(browserScale, workerContentionScale)`, Firefox (browserScale 2.2) was
 unaffected but **chromium (browserScale 1.0) got no headroom at all** — which is
 why the `workers=4` failures were overwhelmingly chromium timeouts. Fixed
@@ -2603,7 +2604,7 @@ ambient one.
 
 For an individual assertion that needs longer on a slow browser, use
 `slowBrowserTimeoutMs(testInfo, chromiumBudgetMs)` from
-`end2end/tests/fixtures.ts` instead of a hard-coded timeout number.
+`end2end/tests/timeout-policy.ts` instead of a hard-coded timeout number.
 
 For first document navigation in a test (typically the coldest path), use
 `slowBrowserFirstNavigationTimeoutMs(testInfo, chromiumBudgetMs)`.
@@ -2625,10 +2626,10 @@ paginated fixtures through the `test-support` binary (ADR-0046) — one in-proce
 storage write per post — rather than a sequential loop of
 `POST /api/posts/create` round-trips. That removes the setup cost `#155`
 mitigated with worker-contention timeout headroom (`workerContentionScale` in
-`end2end/tests/fixtures.ts`), so that headroom is now a candidate for reduction
-once `workers>1` is unblocked (`#173`). The before/after measurement is driven
-separately by the `#152` trace-analysis harness (`cargo xtask traces run`); the
-timeouts are not re-tuned here.
+`end2end/tests/timeout-policy.ts`), so that headroom is now a candidate for
+reduction once `workers>1` is unblocked (`#173`). The before/after measurement
+is separately by the `#152` trace-analysis harness (`cargo xtask traces run`);
+the timeouts are not re-tuned here.
 
 ## WASM Bundle Audit
 

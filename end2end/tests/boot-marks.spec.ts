@@ -18,7 +18,7 @@ import {
   navigationTopTelemetryFrom,
   stylesheetModuleDiagnosticsFrom,
   type NavigationSummary,
-} from "./fixtures";
+} from "./performance";
 import { goto } from "./helpers";
 
 const wasm = {

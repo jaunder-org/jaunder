@@ -1494,7 +1494,9 @@ phase-tagged sink from `pretest` to `test`, so nothing a fixture does before the
 test body lands in `e2e.test`'s arrays.
 
 `e2e.test` keeps its original span id, range, and attributes. Fixture-lifecycle
-time is measured by an envelope nested around it (`end2end/tests/fixtures.ts`):
+time is measured by an envelope nested around it in
+`end2end/tests/performance.ts`; `fixtures.ts` remains the sole ordered
+composition and test-export surface:
 
 ```
 e2e.test.lifecycle
@@ -2390,7 +2392,7 @@ child closes the pipe so the driver can drain that journal-equivalent input
 before invoking the shared zero-panic verifier.
 
 Specs are parallel-safe by construction, via per-test identity fixtures in
-`end2end/tests/fixtures.ts`
+`end2end/tests/provisioning.ts`, composed only by `end2end/tests/fixtures.ts`
 ([ADR-0039](adr/0039-e2e-parallelism-via-per-test-identity-fixtures.md)): `user`
 provisions a uniquely-named account out of band, `mailbox` is a recipient-scoped
 cursor-tracked mail waiter, `verifiedUser` adds the verification flow. Specs

@@ -18,9 +18,11 @@
 //! suite still passes, the snapshot just quietly shrinks. Which is why this is a
 //! gate and not a convention: nothing else in the build notices.
 //!
-//! The sanctioned doors are the `tracedContext` fixture, which closes over the ids,
-//! and the `test` re-exported from `./fixtures`, which opens the `e2e.test` span.
-//! `fixtures.ts` is exempt because it *is* both of them.
+//! The ordinary sanctioned doors are the `tracedContext` fixture, which closes over
+//! the ids, and the `test` re-exported from `./fixtures`, which opens the `e2e.test`
+//! span. The fixture composition must import the upstream `test` to construct that
+//! re-export; performance instrumentation must create its raw context. Those two
+//! narrowly scoped implementation permissions are checked independently.
 //!
 //! Accepted limitation: matching is per-line, so a call — or an import clause — split across
 //! lines by the formatter could evade it. A guardrail against accidental reintroduction, not
@@ -34,9 +36,11 @@ use crate::result::{CommandResult, StepResult};
 /// The e2e spec tree scanned for both rules.
 const SPEC_ROOT: &str = "end2end/tests";
 
-/// The one file allowed to do either — it implements `tracedContext` and wraps
-/// `test`.
-const EXEMPT: &str = "fixtures.ts";
+/// The exact composition module permitted to import the upstream `test`.
+const FIXTURES: &str = "end2end/tests/fixtures.ts";
+
+/// The exact performance module permitted to create raw browser contexts.
+const PERFORMANCE: &str = "end2end/tests/performance.ts";
 
 /// This gate's step name, spelled once so the reported name cannot drift between the
 /// ok, fail, and cannot-scan arms.
@@ -53,6 +57,17 @@ enum Violation {
     RawContext,
     /// Playwright's own `test`, which opens no `e2e.test` span.
     UpstreamTest,
+}
+
+/// Whether this exact module owns an otherwise forbidden operation.
+///
+/// The permission is deliberately per violation: broad file exemptions would let a
+/// future unrelated operation silently evade the traced-context guard.
+fn is_authorized_owner(path: &str, violation: Violation) -> bool {
+    match violation {
+        Violation::RawContext => path == PERFORMANCE,
+        Violation::UpstreamTest => path == FIXTURES,
+    }
 }
 
 /// Every rejected line of one file, as `(1-based line, reason)` in line order.
@@ -102,7 +117,9 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     let mut lines = Vec::new();
     for (path, source) in scanned {
         for (ln, violation) in violations(source) {
-            lines.push(format!("{path}:{ln}: {}", remedy(violation)));
+            if !is_authorized_owner(path, violation) {
+                lines.push(format!("{path}:{ln}: {}", remedy(violation)));
+            }
         }
     }
     (!lines.is_empty()).then(|| lines.join("\n"))
@@ -142,10 +159,7 @@ pub fn run(result: &mut CommandResult) {
     // precisely the silent under-report this gate exists to prevent.
     let mut scanned = Vec::new();
     let mut read_errors = Vec::new();
-    for path in files
-        .iter()
-        .filter(|p| p.file_name().is_some_and(|n| n != EXEMPT))
-    {
+    for path in &files {
         match std::fs::read_to_string(path) {
             Ok(s) => scanned.push((path.display().to_string(), s)),
             Err(e) => read_errors.push(format!("{}: cannot read: {e}", path.display())),
@@ -269,12 +283,53 @@ mod tests {
     }
 
     #[test]
-    fn problems_is_none_when_every_spec_uses_the_fixture() {
+    fn problems_allows_each_violation_in_its_authorized_owner() {
+        let scanned = vec![
+            (
+                "end2end/tests/fixtures.ts".to_string(),
+                "import { test } from \"@playwright/test\";\n".to_string(),
+            ),
+            (
+                "end2end/tests/performance.ts".to_string(),
+                "const context = await browser.newContext();\n".to_string(),
+            ),
+        ];
+        assert_eq!(problems(&scanned), None);
+    }
+
+    #[test]
+    fn problems_rejects_violations_in_the_other_authorized_owner() {
+        let scanned = vec![
+            (
+                "end2end/tests/fixtures.ts".to_string(),
+                "const context = await browser.newContext();\n".to_string(),
+            ),
+            (
+                "end2end/tests/performance.ts".to_string(),
+                "import { test } from \"@playwright/test\";\n".to_string(),
+            ),
+        ];
+        let detail = problems(&scanned).expect("cross-owner violations");
+        assert!(detail.contains("end2end/tests/fixtures.ts:1"), "{detail}");
+        assert!(detail.contains("tracedContext"), "{detail}");
+        assert!(
+            detail.contains("end2end/tests/performance.ts:1"),
+            "{detail}"
+        );
+        assert!(detail.contains("./fixtures"), "{detail}");
+    }
+
+    #[test]
+    fn problems_rejects_both_violations_in_an_ordinary_spec() {
         let scanned = vec![(
             "end2end/tests/posts.spec.ts".to_string(),
-            "import { test } from \"./fixtures\";\nconst ctx = await tracedContext();\n"
+            "import { test } from \"@playwright/test\";\nconst context = await browser.newContext();\n"
                 .to_string(),
         )];
-        assert_eq!(problems(&scanned), None);
+        let detail = problems(&scanned).expect("ordinary-spec violations");
+        assert!(detail.contains("end2end/tests/posts.spec.ts:1"), "{detail}");
+        assert!(detail.contains("end2end/tests/posts.spec.ts:2"), "{detail}");
+        assert!(detail.contains("tracedContext"), "{detail}");
+        assert!(detail.contains("./fixtures"), "{detail}");
     }
 }
