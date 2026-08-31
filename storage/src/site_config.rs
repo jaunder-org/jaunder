@@ -1,6 +1,7 @@
 //! Site-wide configuration storage.
 
 use crate::backend::Backend;
+use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use common::media::{MaxFileSize, UserQuota};
@@ -410,7 +411,7 @@ where
         let row = sqlx::query_as::<_, (StoredSiteConfigValue,)>(
             "SELECT value FROM site_config WHERE key = $1",
         )
-        .bind(key)
+        .bind_storage(key)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|(value,)| value.into_inner()))
@@ -436,7 +437,7 @@ where
         // `ColumnDecode` labelled with the key (see `read_value`), never as a silently
         // coerced default.
         let host = sqlx::query_as::<_, (SmtpHost,)>(SELECT_VALUE_SQL)
-            .bind(SiteConfigKey::SmtpHost)
+            .bind_storage(SiteConfigKey::SmtpHost)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpHost, e))?
@@ -447,35 +448,35 @@ where
         };
 
         let port = sqlx::query_as::<_, (SmtpPort,)>(SELECT_VALUE_SQL)
-            .bind(SiteConfigKey::SmtpPort)
+            .bind_storage(SiteConfigKey::SmtpPort)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpPort, e))?
             .map_or_else(SmtpPort::default, |(port,)| port);
 
         let tls_mode = sqlx::query_as::<_, (SmtpTlsMode,)>(SELECT_VALUE_SQL)
-            .bind(SiteConfigKey::SmtpTlsMode)
+            .bind_storage(SiteConfigKey::SmtpTlsMode)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpTlsMode, e))?
             .map_or_else(SmtpTlsMode::default, |(tls_mode,)| tls_mode);
 
         let sender = sqlx::query_as::<_, (SmtpSender,)>(SELECT_VALUE_SQL)
-            .bind(SiteConfigKey::SmtpSender)
+            .bind_storage(SiteConfigKey::SmtpSender)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpSender, e))?
             .map_or_else(SmtpSender::default, |(sender,)| sender);
 
         let username = sqlx::query_as::<_, (SmtpUsername,)>(SELECT_VALUE_SQL)
-            .bind(SiteConfigKey::SmtpUsername)
+            .bind_storage(SiteConfigKey::SmtpUsername)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpUsername, e))?
             .map(|(username,)| username);
 
         let password = sqlx::query_as::<_, (SmtpPassword,)>(SELECT_VALUE_SQL)
-            .bind(SiteConfigKey::SmtpPassword)
+            .bind_storage(SiteConfigKey::SmtpPassword)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpPassword, e))?
@@ -515,7 +516,7 @@ where
         let removed = sqlx::query_as::<_, (StoredSiteConfigKey,)>(
             "DELETE FROM site_config WHERE key = $1 RETURNING key",
         )
-        .bind(key)
+        .bind_storage(key)
         .fetch_optional(connection)
         .await?;
         Ok(removed.is_some())
@@ -542,8 +543,8 @@ where
         "INSERT INTO site_config (key, value) VALUES ($1, $2)
              ON CONFLICT (key) DO UPDATE SET value = excluded.value",
     )
-    .bind(key)
-    .bind(value)
+    .bind_storage(key)
+    .bind_storage(value)
     .execute(connection)
     .await?;
     Ok(())

@@ -32,6 +32,7 @@ pub use backend::{
 pub use feeds::fp;
 pub use invites::parse_invite_code;
 pub use mail::noop_mailer;
+pub(crate) use media::RawMediaFilename;
 pub use media::{
     MEDIA_TEST_SHA256, fetch_post_media, media_ref_for, media_row_exists, media_url_for,
     raw_media_filename_exists, rewrite_media_filename_in_backup, seed_media,
@@ -43,6 +44,7 @@ pub use postgres::{
     PG_URL_FILE, PostgresDbGuard, PostgresTestConfig, nonexistent_postgres_url,
     recorded_postgres_url, template_postgres_url, unique_postgres_url,
 };
+pub(crate) use postgres::{TemplateDatabaseLockKey, TemplateDatabaseName};
 pub use posts::{
     SeedPost, SeedRawPost, SeededPost, UpdateRawPost, create_posts_confirmed, seed_posts,
 };

@@ -14,7 +14,7 @@ use sqlx::{Database, Pool};
 use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::helpers::{self, InviteTokenStateRow, TokenState};
-use crate::sql::RowCount;
+use crate::sql::{QueryStorageExt, RowCount};
 use common::ids::UserId;
 use common::time::UtcInstant;
 /// Test-only invalid `invites.code` column value.
@@ -151,9 +151,9 @@ where
         let connection = DB::write_connection(transaction)?;
 
         sqlx::query("INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)")
-            .bind(&code)
-            .bind(now)
-            .bind(expires_at)
+            .bind_storage(&code)
+            .bind_storage(now)
+            .bind_storage(expires_at)
             .execute(&mut *connection)
             .await?;
 
@@ -314,9 +314,9 @@ mod tests {
         let sql = "INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)";
         crate::with_closeable_pool!(base.pool(), pool, {
             sqlx::query(sql)
-                .bind(CorruptInviteCode::malformed())
-                .bind(now)
-                .bind(expires_at)
+                .bind_storage(CorruptInviteCode::malformed())
+                .bind_storage(now)
+                .bind_storage(expires_at)
                 .execute(pool)
                 .await
                 .unwrap();

@@ -2,7 +2,57 @@
 
 use std::fmt::Display;
 
-use common::tag::Tag;
+use crate::backup::{
+    CatalogTableName, RestoreBoolean, RestoreInteger, RestoreJson, RestoreReal, RestoreText,
+};
+use crate::feed_cache::{FeedCacheGeneratedAt, FeedCacheUpdatedAt, StoredFeedBody};
+use crate::feed_events::{FeedEventAttempts, StoredFeedDiagnostic};
+use crate::helpers::{
+    InviteCreatedAt, InviteExpiresAt, SerializedPostTags, SessionCreatedAt, SessionLastUsedAt,
+    StoredSessionLabel,
+};
+use crate::media::MediaDeleteMode;
+use crate::posts::{
+    MediaAdvisoryLockKey, MediaReferenceSnapshotLimit, PermalinkDateText,
+    PersistedMediaSubjectKind, PostPublicationClear, TagSlugPrefixPattern,
+};
+use crate::subscriptions::SubscriptionStatusName;
+use crate::user_config::StoredUserConfigValue;
+use crate::users::{EmailVerified, OperatorStatus};
+use crate::{InstanceId, StoredSiteConfigValue};
+use common::audience::AudienceName;
+use common::bio::Bio;
+use common::display_name::DisplayName;
+use common::email::Email;
+use common::etag::ETag;
+use common::idempotency_key::IdempotencyKey;
+use common::ids::{
+    AudienceId, ChannelId, FeedEventId, PostId, RevisionId, SubscriptionId, TagId, UserId,
+};
+use common::media::{
+    ByteSize, ContentHash, ContentType, Filename, MediaReferenceForm, MediaReferenceKind,
+    MediaSource,
+};
+use common::pagination::{PageOffset, PageSize, RowLimit};
+use common::post_body::PostBody;
+use common::post_summary::PostSummary;
+use common::post_title::PostTitle;
+use common::render::{PostFormat, RenderedHtml};
+use common::root_relative_url::RootRelativeUrl;
+use common::seed::PageCursor;
+use common::session_label::SessionLabel;
+use common::slug::Slug;
+use common::tag::{Tag, TagLabel};
+use common::tagged_url::MediaSourceUrl;
+use common::time::UtcInstant;
+use common::token::TokenHash;
+use common::username::Username;
+use common::visibility::SubscriberRef;
+use common::visibility::{DefaultAudience, TargetKind};
+use host::config_key::{SiteConfigKey, UserConfigKey};
+use host::feed::{FeedEventClaimLimit, FeedEventStatus, FeedMinItems, FeedPath};
+use host::invite::InviteCode;
+use host::stored_password_hash::StoredPasswordHash;
 use sqlx::{
     Database, Encode, QueryBuilder, Type,
     query::{Query, QueryAs, QueryScalar},
@@ -120,8 +170,130 @@ pub trait QueryBuilderStorageExt<'args, DB: Database> {
         T: StorageBind + 'args + Encode<'args, DB> + Type<DB>;
 }
 
-impl StorageBind for Tag {}
-impl sealed::StorageBind for Tag {}
+macro_rules! approve_storage_binds {
+    ($($type:ty),+ $(,)?) => {
+        $(
+            impl StorageBind for $type {}
+            impl sealed::StorageBind for $type {}
+        )+
+    };
+}
+
+approve_storage_binds!(
+    AudienceId,
+    AudienceName,
+    Bio,
+    ByteSize,
+    ChannelId,
+    ContentHash,
+    ContentType,
+    DefaultAudience,
+    DisplayName,
+    ETag,
+    Email,
+    FeedEventId,
+    Filename,
+    IdempotencyKey,
+    InstanceId,
+    MediaAdvisoryLockKey,
+    MediaDeleteMode,
+    MediaReferenceForm,
+    MediaReferenceKind,
+    MediaReferenceSnapshotLimit,
+    MediaSource,
+    MediaSourceUrl,
+    PageOffset,
+    PageSize,
+    PermalinkDateText,
+    TagSlugPrefixPattern,
+    PersistedMediaSubjectKind,
+    PostId,
+    PostPublicationClear,
+    PostTitle,
+    RevisionId,
+    RootRelativeUrl,
+    PostBody,
+    PostFormat,
+    Slug,
+    SubscriptionId,
+    SubscriptionStatusName,
+    Tag,
+    TagId,
+    TagLabel,
+    RenderedHtml,
+    UtcInstant,
+    UserId,
+    Username,
+    FeedEventClaimLimit,
+    FeedEventStatus,
+    FeedMinItems,
+    InviteCode,
+    OperatorStatus,
+    EmailVerified,
+    PostSummary,
+    SiteConfigKey,
+    StoredPasswordHash,
+    SubscriberRef,
+    UserConfigKey,
+    CatalogTableName,
+    RestoreBoolean,
+    RestoreInteger,
+    RestoreJson,
+    PageCursor,
+    FeedPath,
+    RestoreReal,
+    RestoreText,
+    RowLimit,
+    SessionLabel,
+    TargetKind,
+    TokenHash,
+    FeedCacheGeneratedAt,
+    FeedCacheUpdatedAt,
+    FeedEventAttempts,
+    InviteCreatedAt,
+    InviteExpiresAt,
+    SessionCreatedAt,
+    SessionLastUsedAt,
+    StoredFeedBody,
+    StoredFeedDiagnostic,
+    StoredSessionLabel,
+    StoredSiteConfigValue,
+    SerializedPostTags,
+    StoredUserConfigValue,
+);
+#[cfg(test)]
+use crate::backup::CatalogDatabaseName;
+#[cfg(test)]
+use crate::email::CorruptEmailAddress;
+#[cfg(test)]
+use crate::invites::CorruptInviteCode;
+#[cfg(test)]
+use crate::posts::{CorruptPostFormat, CorruptPostSlug, CorruptTagSlug};
+#[cfg(test)]
+use crate::sessions::CorruptSessionTokenHash;
+#[cfg(any(test, feature = "test-support"))]
+use crate::test_support::{RawMediaFilename, TemplateDatabaseLockKey, TemplateDatabaseName};
+#[cfg(test)]
+use crate::users::CorruptUsername;
+
+#[cfg(any(test, feature = "test-support"))]
+approve_storage_binds!(
+    RawMediaFilename,
+    TemplateDatabaseLockKey,
+    TemplateDatabaseName
+);
+
+#[cfg(test)]
+approve_storage_binds!(
+    CorruptEmailAddress,
+    CorruptInviteCode,
+    CorruptPostFormat,
+    CorruptPostSlug,
+    CorruptSessionTokenHash,
+    CorruptTagSlug,
+    CorruptUsername,
+    CatalogDatabaseName,
+);
 
 impl<T> StorageBind for Option<T> where T: StorageBind {}
 impl<T> sealed::StorageBind for Option<T> where T: StorageBind {}
@@ -133,6 +305,8 @@ impl<T> StorageBind for &T where T: StorageBind + ?Sized {}
 
 impl<T> sealed::StorageBind for &T where T: StorageBind + ?Sized {}
 
+impl<T> StorageBind for [T] where T: StorageBind {}
+impl<T> sealed::StorageBind for [T] where T: StorageBind {}
 impl StorageBind for RowCount {}
 impl sealed::StorageBind for RowCount {}
 

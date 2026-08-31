@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::InstanceId;
 use crate::backend::Backend;
 use crate::helpers::SerializedPostTags;
-use crate::sql::{Exists, RowCount};
+use crate::sql::{Exists, QueryBuilderStorageExt, QueryStorageExt, RowCount};
 use crate::write_scope::WriteTransaction;
 use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
@@ -907,12 +907,25 @@ pub enum PersistedMediaSubject {
     Revision(RevisionId),
 }
 
+/// The exact stored discriminator for a retained media reference subject.
+#[macros::text_enum(
+    sqlx,
+    error = InvalidPersistedMediaSubjectKind,
+    message = "invalid persisted media subject kind"
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[strum(serialize_all = "snake_case")]
+pub(crate) enum PersistedMediaSubjectKind {
+    Current,
+    Revision,
+}
+
 impl PersistedMediaSubject {
     #[must_use]
-    pub(crate) const fn kind(self) -> &'static str {
+    pub(crate) const fn kind(self) -> PersistedMediaSubjectKind {
         match self {
-            Self::Current => "current",
-            Self::Revision(_) => "revision",
+            Self::Current => PersistedMediaSubjectKind::Current,
+            Self::Revision(_) => PersistedMediaSubjectKind::Revision,
         }
     }
 
@@ -1674,23 +1687,23 @@ pub(crate) fn push_media_reference_evidence_cte<'a, DB>(
             let reference = proof.reference();
             query
                 .push("(")
-                .push_bind(reference.post_id())
+                .push_storage_bind(reference.post_id())
                 .push(", ")
-                .push_bind(reference.subject().kind())
+                .push_storage_bind(reference.subject().kind())
                 .push(", ")
-                .push_bind(reference.subject().revision_id())
+                .push_storage_bind(reference.subject().revision_id())
                 .push(", ")
-                .push_bind(reference.media().source)
+                .push_storage_bind(reference.media().source)
                 .push(", ")
-                .push_bind(reference.media().sha256.clone())
+                .push_storage_bind(reference.media().sha256.clone())
                 .push(", ")
-                .push_bind(reference.media().filename.clone())
+                .push_storage_bind(reference.media().filename.clone())
                 .push(", ")
-                .push_bind(reference.kind())
+                .push_storage_bind(reference.kind())
                 .push(", ")
-                .push_bind(reference.reference_form().clone())
+                .push_storage_bind(reference.reference_form().clone())
                 .push(", ")
-                .push_bind(proof.expected_instance_id())
+                .push_storage_bind(proof.expected_instance_id())
                 .push(")");
         }
     }
@@ -1719,7 +1732,7 @@ pub(crate) fn push_live_media_reference_predicate<'a, DB>(
              AND evidence.reference_form = pm.reference_form \
              AND evidence.expected_instance_id = ",
     );
-    query.push_bind(current_instance_id);
+    query.push_storage_bind(current_instance_id);
     query.push(")");
 }
 
@@ -1737,13 +1750,13 @@ pub(crate) fn push_owner_media_reference_from_where<DB>(
 {
     query
         .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE p.user_id = ")
-        .push_bind(user_id)
+        .push_storage_bind(user_id)
         .push(" AND pm.source = ")
-        .push_bind(media.source)
+        .push_storage_bind(media.source)
         .push(" AND pm.sha256 = ")
-        .push_bind(media.sha256.clone())
+        .push_storage_bind(media.sha256.clone())
         .push(" AND pm.filename = ")
-        .push_bind(media.filename.clone());
+        .push_storage_bind(media.filename.clone());
 }
 pub(crate) fn push_any_media_reference_from_where<DB>(
     query: &mut QueryBuilder<'_, DB>,
@@ -1756,11 +1769,11 @@ pub(crate) fn push_any_media_reference_from_where<DB>(
 {
     query
         .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE pm.source = ")
-        .push_bind(media.source)
+        .push_storage_bind(media.source)
         .push(" AND pm.sha256 = ")
-        .push_bind(media.sha256.clone())
+        .push_storage_bind(media.sha256.clone())
         .push(" AND pm.filename = ")
-        .push_bind(media.filename.clone());
+        .push_storage_bind(media.filename.clone());
 }
 
 /// Appends a non-owner reference lookup for the global accounting safeguard.
@@ -1781,13 +1794,13 @@ pub(crate) fn push_other_owner_media_reference_from_where<DB>(
 {
     query
         .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE p.user_id <> ")
-        .push_bind(user_id)
+        .push_storage_bind(user_id)
         .push(" AND pm.source = ")
-        .push_bind(media.source)
+        .push_storage_bind(media.source)
         .push(" AND pm.sha256 = ")
-        .push_bind(media.sha256.clone())
+        .push_storage_bind(media.sha256.clone())
         .push(" AND pm.filename = ")
-        .push_bind(media.filename.clone());
+        .push_storage_bind(media.filename.clone());
 }
 
 /// The typed columns that make up one immutable revision snapshot.
@@ -2031,7 +2044,7 @@ where
             tags = DB::TAGS_SUBQUERY,
         );
         let record = sqlx::query_as::<_, PostRecord>(&sql)
-            .bind(post_id)
+            .bind_storage(post_id)
             .fetch_one(connection)
             .await?;
         Ok(CreatedPost {
@@ -2086,9 +2099,9 @@ where
             "SELECT post_id FROM idempotency_keys
              WHERE user_id = $1 AND key = $2 AND created_at > $3",
         )
-        .bind(user_id)
-        .bind(key)
-        .bind(cutoff)
+        .bind_storage(user_id)
+        .bind_storage(key)
+        .bind_storage(cutoff)
         .fetch_optional(&self.pool)
         .await
     }
@@ -2150,7 +2163,7 @@ where
                AND {resolution}",
             tags = DB::TAGS_SUBQUERY,
         );
-        let query = sqlx::query_as::<_, PostRecord>(&sql).bind(post_id);
+        let query = sqlx::query_as::<_, PostRecord>(&sql).bind_storage(post_id);
         Ok(binds.bind_onto(query).fetch_optional(&self.pool).await?)
     }
 
@@ -2178,8 +2191,8 @@ where
         let owned = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM posts WHERE post_id = $1 AND user_id = $2",
         )
-        .bind(post_id)
-        .bind(user_id)
+        .bind_storage(post_id)
+        .bind_storage(user_id)
         .fetch_optional(&self.pool)
         .await?;
         let Some(_) = owned else {
@@ -2216,8 +2229,8 @@ where
             "SELECT post_id, title, slug, format, created_at, updated_at, published_at, deleted_at
              FROM posts WHERE post_id = $1 AND user_id = $2",
         )
-        .bind(post_id)
-        .bind(user_id)
+        .bind_storage(post_id)
+        .bind_storage(user_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(
@@ -2250,9 +2263,9 @@ where
              FROM post_revisions
              WHERE revision_id = $1 AND post_id = $2 AND user_id = $3",
         )
-        .bind(revision_id)
-        .bind(post_id)
-        .bind(user_id)
+        .bind_storage(revision_id)
+        .bind_storage(post_id)
+        .bind_storage(user_id)
         .fetch_optional(&self.pool)
         .await?
         .map(RevisionDetailRow::decode)
@@ -2281,14 +2294,14 @@ where
             "SELECT tag_slug, tag_display FROM post_revision_tags
              WHERE revision_id = $1 ORDER BY tag_slug",
         )
-        .bind(revision_id)
+        .bind_storage(revision_id)
         .fetch_all(&self.pool)
         .await?;
         let audiences: Vec<(TargetKind, Option<AudienceId>)> = sqlx::query_as(
             "SELECT target_kind, audience_id FROM post_revision_audiences
              WHERE revision_id = $1 ORDER BY target_kind, audience_id",
         )
-        .bind(revision_id)
+        .bind_storage(revision_id)
         .fetch_all(&self.pool)
         .await?;
         let media: Vec<(
@@ -2303,8 +2316,8 @@ where
              WHERE post_id = $1 AND subject_kind = 'revision' AND revision_id = $2
              ORDER BY source, sha256, filename, reference_kind, reference_form",
         )
-        .bind(post_id)
-        .bind(revision_id)
+        .bind_storage(post_id)
+        .bind_storage(revision_id)
         .fetch_all(&self.pool)
         .await?;
 
@@ -2360,7 +2373,7 @@ where
              WHERE pa.post_id = $1 \
              ORDER BY tk.name, pa.audience_id",
         )
-        .bind(post_id)
+        .bind_storage(post_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -2396,10 +2409,10 @@ where
              ORDER BY pm.post_id, pm.subject_kind, pm.revision_id, pm.reference_kind, pm.reference_form
              LIMIT $4",
         )
-        .bind(media.source)
-        .bind(&media.sha256)
-        .bind(&media.filename)
-        .bind(MEDIA_REFERENCE_SNAPSHOT_QUERY_LIMIT)
+        .bind_storage(media.source)
+        .bind_storage(&media.sha256)
+        .bind_storage(&media.filename)
+        .bind_storage(MEDIA_REFERENCE_SNAPSHOT_QUERY_LIMIT)
         .fetch_all(&self.pool)
         .await?;
         let has_unexamined_references = rows.len() > MAX_MEDIA_REFERENCE_SNAPSHOT;
@@ -2490,10 +2503,10 @@ where
             date_clause = DB::PERMALINK_DATE_CLAUSE,
         );
         let query = sqlx::query_as::<_, PostRecord>(&sql)
-            .bind(username)
-            .bind(slug)
-            .bind(date_text)
-            .bind(now);
+            .bind_storage(username)
+            .bind_storage(slug)
+            .bind_storage(date_text)
+            .bind_storage(now);
         Ok(binds.bind_onto(query).fetch_optional(&self.pool).await?)
     }
 
@@ -2525,10 +2538,10 @@ where
                AND p.deleted_at IS NULL"
         );
         let row = sqlx::query_as::<_, PostRecord>(&sql)
-            .bind(user_id)
-            .bind(slug)
-            .bind(date_text)
-            .bind(now)
+            .bind_storage(user_id)
+            .bind_storage(slug)
+            .bind_storage(date_text)
+            .bind_storage(now)
             .fetch_optional(&self.pool)
             .await?;
         Ok(row)
@@ -2567,7 +2580,7 @@ where
         let live = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
         )
-        .bind(post_id)
+        .bind_storage(post_id)
         .fetch_optional(&mut *connection)
         .await?;
         Err(if live.is_some() {
@@ -2595,7 +2608,7 @@ where
         let live = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
         )
-        .bind(post_id)
+        .bind_storage(post_id)
         .fetch_optional(&mut *connection)
         .await?;
         Err(if live.is_some() {
@@ -2623,7 +2636,7 @@ where
         let live = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
         )
-        .bind(post_id)
+        .bind_storage(post_id)
         .fetch_optional(&mut *connection)
         .await?;
         Err(if live.is_some() {
@@ -2669,14 +2682,14 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(username)
-                .bind(cursor.created_at)
-                .bind(cursor.created_at)
-                .bind(cursor.post_id)
-                .bind(now);
+                .bind_storage(username)
+                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.post_id)
+                .bind_storage(now);
             binds
                 .bind_onto(query)
-                .bind(limit)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         } else {
@@ -2699,11 +2712,11 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(username)
-                .bind(now);
+                .bind_storage(username)
+                .bind_storage(now);
             binds
                 .bind_onto(query)
-                .bind(limit)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -2743,13 +2756,13 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(cursor.created_at)
-                .bind(cursor.created_at)
-                .bind(cursor.post_id)
-                .bind(now);
+                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.post_id)
+                .bind_storage(now);
             binds
                 .bind_onto(query)
-                .bind(limit)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         } else {
@@ -2770,10 +2783,10 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql).bind(now);
+            let query = sqlx::query_as::<_, PostRecord>(&sql).bind_storage(now);
             binds
                 .bind_onto(query)
-                .bind(limit)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -2810,12 +2823,12 @@ where
                  LIMIT $6"
             );
             sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(user_id)
-                .bind(cursor.created_at)
-                .bind(cursor.created_at)
-                .bind(cursor.post_id)
-                .bind(now)
-                .bind(limit)
+                .bind_storage(user_id)
+                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.post_id)
+                .bind_storage(now)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         } else {
@@ -2834,9 +2847,9 @@ where
                  LIMIT $3"
             );
             sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(user_id)
-                .bind(now)
-                .bind(limit)
+                .bind_storage(user_id)
+                .bind_storage(now)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -2872,12 +2885,12 @@ where
                  LIMIT $6"
             );
             sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(user_id)
-                .bind(cursor.published_at)
-                .bind(cursor.published_at)
-                .bind(cursor.post_id)
-                .bind(now)
-                .bind(limit)
+                .bind_storage(user_id)
+                .bind_storage(cursor.published_at)
+                .bind_storage(cursor.published_at)
+                .bind_storage(cursor.post_id)
+                .bind_storage(now)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         } else {
@@ -2895,9 +2908,9 @@ where
                  LIMIT $3"
             );
             sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(user_id)
-                .bind(now)
-                .bind(limit)
+                .bind_storage(user_id)
+                .bind_storage(now)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -2930,10 +2943,10 @@ where
                  LIMIT $4"
             );
             sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(user_id)
-                .bind(cursor.updated_at)
-                .bind(cursor.post_id)
-                .bind(limit)
+                .bind_storage(user_id)
+                .bind_storage(cursor.updated_at)
+                .bind_storage(cursor.post_id)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         } else {
@@ -2949,8 +2962,8 @@ where
                  LIMIT $2"
             );
             sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(user_id)
-                .bind(limit)
+                .bind_storage(user_id)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -2986,7 +2999,7 @@ where
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists = sqlx::query_scalar::<_, Exists>(TAG_EXISTS_SQL)
-            .bind(tag_slug)
+            .bind_storage(tag_slug)
             .fetch_one(&self.pool)
             .await?
             .into_bool();
@@ -3020,14 +3033,14 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(tag_slug)
-                .bind(cursor.created_at)
-                .bind(cursor.created_at)
-                .bind(cursor.post_id)
-                .bind(now);
+                .bind_storage(tag_slug)
+                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.post_id)
+                .bind_storage(now);
             binds
                 .bind_onto(query)
-                .bind(limit)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         } else {
@@ -3052,11 +3065,11 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(tag_slug)
-                .bind(now);
+                .bind_storage(tag_slug)
+                .bind_storage(now);
             binds
                 .bind_onto(query)
-                .bind(limit)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -3079,7 +3092,7 @@ where
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists = sqlx::query_scalar::<_, Exists>(TAG_EXISTS_SQL)
-            .bind(tag_slug)
+            .bind_storage(tag_slug)
             .fetch_one(&self.pool)
             .await?
             .into_bool();
@@ -3114,15 +3127,15 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(user_id)
-                .bind(tag_slug)
-                .bind(cursor.created_at)
-                .bind(cursor.created_at)
-                .bind(cursor.post_id)
-                .bind(now);
+                .bind_storage(user_id)
+                .bind_storage(tag_slug)
+                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.created_at)
+                .bind_storage(cursor.post_id)
+                .bind_storage(now);
             binds
                 .bind_onto(query)
-                .bind(limit)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         } else {
@@ -3148,12 +3161,12 @@ where
                  LIMIT ${limit_idx}"
             );
             let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(user_id)
-                .bind(tag_slug)
-                .bind(now);
+                .bind_storage(user_id)
+                .bind_storage(tag_slug)
+                .bind_storage(now);
             binds
                 .bind_onto(query)
-                .bind(limit)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -3187,8 +3200,8 @@ where
                      ORDER BY tag_slug
                      LIMIT $2",
                 )
-                .bind(like)
-                .bind(limit)
+                .bind_storage(like)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
             }
@@ -3198,7 +3211,7 @@ where
                      ORDER BY tag_slug
                      LIMIT $1",
                 )
-                .bind(limit)
+                .bind_storage(limit)
                 .fetch_all(&self.pool)
                 .await?
             }
@@ -3270,8 +3283,8 @@ where
              ORDER BY p.published_at ASC, p.post_id ASC"
         );
         let rows = sqlx::query_as::<_, PostRecord>(&sql)
-            .bind(after)
-            .bind(upto)
+            .bind_storage(after)
+            .bind_storage(upto)
             .fetch_all(&self.pool)
             .await?;
         Ok(rows
@@ -3401,17 +3414,17 @@ where
     let after = cursor.map_or(RevisionId::from(i64::MAX), |cursor| cursor.revision_id);
     let rows = if let Some(post_id) = post_id {
         sqlx::query(sql)
-            .bind(user_id)
-            .bind(post_id)
-            .bind(after)
-            .bind(limit)
+            .bind_storage(user_id)
+            .bind_storage(post_id)
+            .bind_storage(after)
+            .bind_storage(limit)
             .fetch_all(pool)
             .await?
     } else {
         sqlx::query(sql)
-            .bind(user_id)
-            .bind(after)
-            .bind(limit)
+            .bind_storage(user_id)
+            .bind_storage(after)
+            .bind_storage(limit)
             .fetch_all(pool)
             .await?
     };
@@ -3597,21 +3610,21 @@ impl ResolutionBinds {
     {
         match self {
             Self::Anonymous => query
-                .bind(None::<UserId>)
-                .bind(None::<ChannelId>)
-                .bind(None::<&SubscriberRef>)
-                .bind(None::<ChannelId>)
-                .bind(None::<&SubscriberRef>),
+                .bind_storage(None::<UserId>)
+                .bind_storage(None::<ChannelId>)
+                .bind_storage(None::<&SubscriberRef>)
+                .bind_storage(None::<ChannelId>)
+                .bind_storage(None::<&SubscriberRef>),
             Self::Local { user_id, subref } => query
-                .bind(Some(*user_id))
-                .bind(Some(subref))
-                .bind(Some(subref)),
+                .bind_storage(Some(*user_id))
+                .bind_storage(Some(subref))
+                .bind_storage(Some(subref)),
             Self::Remote { channel, subref } => query
-                .bind(None::<UserId>)
-                .bind(Some(*channel))
-                .bind(Some(subref))
-                .bind(Some(*channel))
-                .bind(Some(subref)),
+                .bind_storage(None::<UserId>)
+                .bind_storage(Some(*channel))
+                .bind_storage(Some(subref))
+                .bind_storage(Some(*channel))
+                .bind_storage(Some(subref)),
         }
     }
 }
@@ -3873,16 +3886,21 @@ where
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING post_id",
     )
-    .bind(input.user_id)
-    .bind(input.title.as_ref())
-    .bind(&input.slug)
-    .bind(&input.body)
-    .bind(input.format)
-    .bind(input.rendered.html())
-    .bind(now)
-    .bind(now)
-    .bind(input.published_at)
-    .bind(input.summary.as_ref())
+    .bind_storage(input.user_id)
+    // `Option::as_ref` → `Option<&PostTitle>` (a typed newtype bind, not an
+    // `AsRef<str>` strip); the sqlx bridge encodes `Option<&PostTitle>`.
+    .bind_storage(input.title.as_ref())
+    .bind_storage(&input.slug)
+    .bind_storage(&input.body)
+    .bind_storage(input.format)
+    .bind_storage(input.rendered.html())
+    .bind_storage(now)
+    .bind_storage(now)
+    .bind_storage(input.published_at)
+    // `Option::as_ref` → `Option<&PostSummary>` (a typed newtype bind via the
+    // ADR-0071 sqlx bridge, not an `AsRef<str>` strip); the `sqlx-newtype-bind`
+    // gate forbids stripping to `&str` here.
+    .bind_storage(input.summary.as_ref())
     .fetch_one(&mut *conn)
     .await
     .map_err(|e| match e {
@@ -3903,13 +3921,13 @@ where
             "INSERT INTO idempotency_keys (user_id, key, post_id, created_at)
              VALUES ($1, $2, $3, $4)",
         )
-        .bind(input.user_id)
-        .bind(key)
-        .bind(post_id)
-        .bind(now)
+        .bind_storage(input.user_id)
+        .bind_storage(key)
+        .bind_storage(post_id)
+        .bind_storage(now)
         .execute(&mut *conn)
         .await
-        .map_err(CreatePostError::Internal)?;
+        .map_err(map_idempotency_insert_error)?;
     }
 
     Ok((post_id, idempotency_key_expired))
@@ -3935,15 +3953,15 @@ where
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     sqlx::query(DB::DELETE_POST_AUDIENCES)
-        .bind(post_id)
+        .bind_storage(post_id)
         .execute(&mut *conn)
         .await?;
     for target in audiences {
         if let Some((kind, audience_id)) = audience_target_row(target) {
             sqlx::query(DB::INSERT_POST_AUDIENCE)
-                .bind(post_id)
-                .bind(audience_id)
-                .bind(kind)
+                .bind_storage(post_id)
+                .bind_storage(audience_id)
+                .bind_storage(kind)
                 .execute(&mut *conn)
                 .await?;
         }
@@ -3976,13 +3994,13 @@ where
     for label in ordered {
         let slug = label.slug();
         let tag_id = sqlx::query_scalar::<_, TagId>(UPSERT_TAG_RETURNING_ID)
-            .bind(&slug)
+            .bind_storage(&slug)
             .fetch_one(&mut *conn)
             .await?;
         sqlx::query(INSERT_POST_TAG)
-            .bind(post_id)
-            .bind(tag_id)
-            .bind(&label)
+            .bind_storage(post_id)
+            .bind_storage(tag_id)
+            .bind_storage(&label)
             .execute(&mut *conn)
             .await?;
     }
@@ -4009,8 +4027,8 @@ where
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     let revision_id = sqlx::query_scalar::<_, RevisionId>(INSERT_COMPLETE_POST_REVISION)
-        .bind(captured_at)
-        .bind(post_id)
+        .bind_storage(captured_at)
+        .bind_storage(post_id)
         .fetch_one(&mut *conn)
         .await?;
     sqlx::query(
@@ -4019,8 +4037,8 @@ where
          FROM post_tags pt JOIN tags t ON t.tag_id = pt.tag_id
          WHERE pt.post_id = $2",
     )
-    .bind(revision_id)
-    .bind(post_id)
+    .bind_storage(revision_id)
+    .bind_storage(post_id)
     .execute(&mut *conn)
     .await?;
     sqlx::query(
@@ -4029,8 +4047,8 @@ where
          FROM post_audiences pa JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
          WHERE pa.post_id = $2",
     )
-    .bind(revision_id)
-    .bind(post_id)
+    .bind_storage(revision_id)
+    .bind_storage(post_id)
     .execute(&mut *conn)
     .await?;
     sqlx::query(
@@ -4040,8 +4058,8 @@ where
          FROM post_media
          WHERE post_id = $2 AND subject_kind = 'current' AND revision_id = 0",
     )
-    .bind(revision_id)
-    .bind(post_id)
+    .bind_storage(revision_id)
+    .bind_storage(post_id)
     .execute(&mut *conn)
     .await?;
     Ok(revision_id)
@@ -4114,7 +4132,7 @@ where
 {
     let rows = media_reference_rows([(post_id, media)]);
     sqlx::query(DB::DELETE_POST_MEDIA)
-        .bind(post_id)
+        .bind_storage(post_id)
         .execute(&mut *conn)
         .await?;
     DB::insert_post_media_rows(conn, rows).await
@@ -4216,9 +4234,9 @@ where
             let (resolution, binds, _) = resolution_where(viewer, 4);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(now)
-                .bind(min_items)
-                .bind(cutoff);
+                .bind_storage(now)
+                .bind_storage(min_items)
+                .bind_storage(cutoff);
             binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::User { username } => {
@@ -4227,10 +4245,10 @@ where
             let (resolution, binds, _) = resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(now)
-                .bind(username)
-                .bind(min_items)
-                .bind(cutoff);
+                .bind_storage(now)
+                .bind_storage(username)
+                .bind_storage(min_items)
+                .bind_storage(cutoff);
             binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::SiteTag { tag } => {
@@ -4239,10 +4257,10 @@ where
             let (resolution, binds, _) = resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(now)
-                .bind(tag)
-                .bind(min_items)
-                .bind(cutoff);
+                .bind_storage(now)
+                .bind_storage(tag)
+                .bind_storage(min_items)
+                .bind_storage(cutoff);
             binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::UserTag { username, tag } => {
@@ -4251,11 +4269,11 @@ where
             let (resolution, binds, _) = resolution_where(viewer, 6);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind(now)
-                .bind(username)
-                .bind(tag)
-                .bind(min_items)
-                .bind(cutoff);
+                .bind_storage(now)
+                .bind_storage(username)
+                .bind_storage(tag)
+                .bind_storage(min_items)
+                .bind_storage(cutoff);
             binds.bind_onto(query).fetch_all(pool).await
         }
     }
@@ -4393,7 +4411,7 @@ where
                    AND p.deleted_at IS NULL
                  ORDER BY p.published_at DESC LIMIT 1",
             )
-            .bind(now)
+            .bind_storage(now)
             .fetch_optional(pool)
             .await?
         }
@@ -4405,8 +4423,8 @@ where
                    AND p.deleted_at IS NULL AND u.username = $2
                  ORDER BY p.published_at DESC LIMIT 1",
             )
-            .bind(now)
-            .bind(username)
+            .bind_storage(now)
+            .bind_storage(username)
             .fetch_optional(pool)
             .await?
         }
@@ -4419,8 +4437,8 @@ where
                    AND p.deleted_at IS NULL AND t.tag_slug = $2
                  ORDER BY p.published_at DESC LIMIT 1",
             )
-            .bind(now)
-            .bind(tag)
+            .bind_storage(now)
+            .bind_storage(tag)
             .fetch_optional(pool)
             .await?
         }
@@ -4434,9 +4452,9 @@ where
                    AND p.deleted_at IS NULL AND u.username = $2 AND t.tag_slug = $3
                  ORDER BY p.published_at DESC LIMIT 1",
             )
-            .bind(now)
-            .bind(username)
-            .bind(tag)
+            .bind_storage(now)
+            .bind_storage(username)
+            .bind_storage(tag)
             .fetch_optional(pool)
             .await?
         }
@@ -5035,7 +5053,7 @@ mod tests {
                 sqlx::query_scalar::<_, PhysicalPostTagRowId>(
                     "SELECT ctid::text FROM post_tags WHERE post_id = $1 ORDER BY tag_id",
                 )
-                .bind(post_id)
+                .bind_storage(post_id)
                 .fetch_all(pool)
                 .await
             }
@@ -5043,7 +5061,7 @@ mod tests {
                 sqlx::query_scalar::<_, PhysicalPostTagRowId>(
                     "SELECT CAST(rowid AS TEXT) FROM post_tags WHERE post_id = $1 ORDER BY tag_id",
                 )
-                .bind(post_id)
+                .bind_storage(post_id)
                 .fetch_all(pool)
                 .await
             }
@@ -5132,14 +5150,14 @@ mod tests {
         match env.base.pool() {
             CloseablePool::Postgres(pool) => decode!(
                 sqlx::query(sql)
-                    .bind(post_id)
+                    .bind_storage(post_id)
                     .fetch_one(pool)
                     .await
                     .expect("read revision")
             ),
             CloseablePool::Sqlite(pool) => decode!(
                 sqlx::query(sql)
-                    .bind(post_id)
+                    .bind_storage(post_id)
                     .fetch_one(pool)
                     .await
                     .expect("read revision")
@@ -6234,8 +6252,8 @@ mod tests {
                 "UPDATE tags SET tag_slug = $1
                  WHERE tag_id = (SELECT tag_id FROM post_tags WHERE post_id = $2)",
             )
-            .bind(CorruptTagSlug("not a slug".to_owned()))
-            .bind(post_id)
+            .bind_storage(CorruptTagSlug("not a slug".to_owned()))
+            .bind_storage(post_id)
             .execute(pool)
             .await
             .expect("corrupt tag slug");
@@ -7727,8 +7745,8 @@ mod tests {
                    WHERE tag_id = (SELECT tag_id FROM post_tags WHERE post_id = $2)";
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
-                .bind(CorruptTagSlug("not a slug".to_owned()))
-                .bind(post_id)
+                .bind_storage(CorruptTagSlug("not a slug".to_owned()))
+                .bind_storage(post_id)
                 .execute(pool)
                 .await
                 .expect("corrupt tag slug");
@@ -7764,8 +7782,8 @@ mod tests {
         let sql = "UPDATE posts SET slug = $1 WHERE post_id = $2";
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
-                .bind(CorruptPostSlug("not a slug".to_owned()))
-                .bind(post_id)
+                .bind_storage(CorruptPostSlug("not a slug".to_owned()))
+                .bind_storage(post_id)
                 .execute(pool)
                 .await
                 .unwrap();
@@ -7829,8 +7847,8 @@ mod tests {
         let sql = "UPDATE posts SET format = $1 WHERE post_id = $2";
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
-                .bind(CorruptPostFormat("bogus".to_owned()))
-                .bind(post_id)
+                .bind_storage(CorruptPostFormat("bogus".to_owned()))
+                .bind_storage(post_id)
                 .execute(pool)
                 .await
                 .unwrap();

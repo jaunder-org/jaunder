@@ -26,33 +26,37 @@ use host::stored_password_hash::StoredPasswordHash;
 /// The `sessions.created_at` storage timestamp role, distinct from
 /// `last_used_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct SessionCreatedAt(UtcInstant);
+pub(crate) struct SessionCreatedAt(UtcInstant);
 impl_role_instant!(SessionCreatedAt, UtcInstant);
 
 /// The `sessions.last_used_at` storage timestamp role, distinct from
 /// `created_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct SessionLastUsedAt(UtcInstant);
+pub(crate) struct SessionLastUsedAt(UtcInstant);
 impl_role_instant!(SessionLastUsedAt, UtcInstant);
 
 /// The `invites.created_at` storage timestamp role, distinct from `expires_at`
 /// so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct InviteCreatedAt(UtcInstant);
+pub(crate) struct InviteCreatedAt(UtcInstant);
 impl_role_instant!(InviteCreatedAt, UtcInstant);
 
 /// The `invites.expires_at` storage timestamp role, distinct from `created_at`
 /// so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct InviteExpiresAt(UtcInstant);
+pub(crate) struct InviteExpiresAt(UtcInstant);
 impl_role_instant!(InviteExpiresAt, UtcInstant);
 
 /// A session label retained exactly until the repair-on-read display policy.
 #[derive(Debug, macros::SqlxBridge)]
-struct StoredSessionLabel(String);
+pub(crate) struct StoredSessionLabel(String);
 
 impl StoredSessionLabel {
-    fn as_str(&self) -> &str {
+    #[cfg(test)]
+    pub(crate) fn new(value: String) -> Self {
+        Self(value)
+    }
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -694,6 +698,7 @@ pub(crate) mod swallowed_test {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sql::QueryStorageExt;
     use crate::test_support::{Backend, backends, parse_invite_code};
 
     use common::test_support::{
@@ -711,7 +716,7 @@ mod tests {
         let expected = "2026-08-26T12:34:56.123456Z".parse::<UtcInstant>().unwrap();
         let actual = crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query_scalar::<_, UtcInstant>("SELECT $1")
-                .bind(expected)
+                .bind_storage(expected)
                 .fetch_one(pool)
                 .await
                 .unwrap()
@@ -720,7 +725,7 @@ mod tests {
 
         let absent = crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query_scalar::<_, Option<UtcInstant>>("SELECT $1")
-                .bind(None::<UtcInstant>)
+                .bind_storage(None::<UtcInstant>)
                 .fetch_one(pool)
                 .await
                 .unwrap()

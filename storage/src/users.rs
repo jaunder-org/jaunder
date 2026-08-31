@@ -1,6 +1,7 @@
 //! User account and profile storage.
 
 use crate::WriteTransaction;
+use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
 
 use sqlx::{Database, Pool};
@@ -340,7 +341,7 @@ impl<DB: Database> UserStore<DB> {
                     password_hash, email, email_verified, is_operator
              FROM users WHERE username = $1",
         )
-        .bind(username)
+        .bind_storage(username)
         .fetch_optional(&self.pool)
         .instrument(tracing::info_span!(
             "storage.user.authenticate.lookup_user",
@@ -470,11 +471,11 @@ where
              VALUES ($1, $2, $3, $4, $5)
              RETURNING user_id",
         )
-        .bind(username)
-        .bind(&password.0)
-        .bind(display_name)
-        .bind(now)
-        .bind(is_operator)
+        .bind_storage(username)
+        .bind_storage(&password.0)
+        .bind_storage(display_name)
+        .bind_storage(now)
+        .bind_storage(is_operator)
         .fetch_one(&mut *connection)
         .instrument(tracing::info_span!(
             "storage.user.create_user.insert_user_row",
@@ -514,8 +515,8 @@ where
         let connection =
             DB::write_connection(transaction).map_err(map_user_auth_connection_error)?;
         sqlx::query("UPDATE users SET last_authenticated_at = $1 WHERE user_id = $2")
-            .bind(now)
-            .bind(authentication.0.user_id)
+            .bind_storage(now)
+            .bind_storage(authentication.0.user_id)
             .execute(&mut *connection)
             .instrument(tracing::info_span!(
                 "storage.user.authenticate.update_last_authenticated_at",
@@ -533,7 +534,7 @@ where
                     email, email_verified, is_operator
              FROM users WHERE user_id = $1",
         )
-        .bind(user_id)
+        .bind_storage(user_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(helpers::user_record_from_row))
@@ -545,7 +546,7 @@ where
                     email, email_verified, is_operator
              FROM users WHERE username = $1",
         )
-        .bind(username)
+        .bind_storage(username)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(helpers::user_record_from_row))
@@ -559,9 +560,9 @@ where
     ) -> sqlx::Result<()> {
         let connection = DB::write_connection(transaction)?;
         sqlx::query("UPDATE users SET display_name = $1, bio = $2 WHERE user_id = $3")
-            .bind(update.display_name)
-            .bind(update.bio)
-            .bind(user_id)
+            .bind_storage(update.display_name)
+            .bind_storage(update.bio)
+            .bind_storage(user_id)
             .execute(&mut *connection)
             .await?;
         Ok(())
@@ -576,9 +577,9 @@ where
     ) -> sqlx::Result<()> {
         let connection = DB::write_connection(transaction)?;
         sqlx::query("UPDATE users SET email = $1, email_verified = $2 WHERE user_id = $3")
-            .bind(email)
-            .bind(verified)
-            .bind(user_id)
+            .bind_storage(email)
+            .bind_storage(verified)
+            .bind_storage(user_id)
             .execute(&mut *connection)
             .await?;
         Ok(())
@@ -593,8 +594,8 @@ where
         let connection = DB::write_connection(transaction)?;
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
-            .bind(&password.0)
-            .bind(user_id)
+            .bind_storage(&password.0)
+            .bind_storage(user_id)
             .execute(&mut *connection)
             .await?;
         Ok(())
@@ -803,8 +804,8 @@ mod tests {
         let sql = "UPDATE users SET username = $1 WHERE user_id = $2";
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
-                .bind(CorruptUsername::malformed())
-                .bind(user_id)
+                .bind_storage(CorruptUsername::malformed())
+                .bind_storage(user_id)
                 .execute(pool)
                 .await
                 .unwrap();

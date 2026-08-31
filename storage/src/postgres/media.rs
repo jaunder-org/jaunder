@@ -5,6 +5,7 @@ use sqlx::{Pool, Postgres, QueryBuilder};
 use crate::InstanceId;
 use crate::media::{MediaDeleteMode, MediaDialect, MediaStore};
 use crate::posts::{self, MediaReferenceEvidence};
+use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use common::ids::UserId;
 
 /// Postgres-backed media storage.
@@ -19,7 +20,7 @@ impl MediaDialect for Postgres {
         let row = sqlx::query_as::<_, (ByteSize,)>(
             "SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM media WHERE user_id = $1 AND source = 'upload'",
         )
-        .bind(user_id)
+        .bind_storage(user_id)
         .fetch_one(pool)
         .await?;
 
@@ -32,7 +33,7 @@ impl MediaDialect for Postgres {
     ) -> sqlx::Result<()> {
         let key = posts::media_advisory_lock_key(media);
         sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(key)
+            .bind_storage(key)
             .execute(conn)
             .await?;
         Ok(())
@@ -61,15 +62,15 @@ impl MediaDialect for Postgres {
         posts::push_media_reference_evidence_cte(&mut query, evidence);
         query.push("DELETE FROM media WHERE user_id = ");
         query
-            .push_bind(user_id)
+            .push_storage_bind(user_id)
             .push(" AND source = ")
-            .push_bind(media.source)
+            .push_storage_bind(media.source)
             .push(" AND sha256 = ")
-            .push_bind(media.sha256.clone())
+            .push_storage_bind(media.sha256.clone())
             .push(" AND filename = ")
-            .push_bind(media.filename.clone())
+            .push_storage_bind(media.filename.clone())
             .push(" AND (")
-            .push_bind(mode);
+            .push_storage_bind(mode);
         query.push(" OR NOT EXISTS (SELECT 1");
         posts::push_owner_media_reference_from_where(&mut query, user_id, media);
         posts::push_live_media_reference_predicate(&mut query, current_instance_id);
@@ -78,13 +79,13 @@ impl MediaDialect for Postgres {
         posts::push_live_media_reference_predicate(&mut query, current_instance_id);
         query.push(") OR EXISTS (SELECT 1 FROM media m2 WHERE m2.source = ");
         query
-            .push_bind(media.source)
+            .push_storage_bind(media.source)
             .push(" AND m2.sha256 = ")
-            .push_bind(media.sha256.clone())
+            .push_storage_bind(media.sha256.clone())
             .push(" AND m2.filename = ")
-            .push_bind(media.filename.clone())
+            .push_storage_bind(media.filename.clone())
             .push(" AND m2.user_id <> ")
-            .push_bind(user_id)
+            .push_storage_bind(user_id)
             .push(")) RETURNING 1");
         let removed = query
             .build_query_scalar::<i32>()
@@ -105,11 +106,11 @@ impl MediaDialect for Postgres {
         posts::push_media_reference_evidence_cte(&mut query, evidence);
         query.push("SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM media WHERE source = ");
         query
-            .push_bind(media.source)
+            .push_storage_bind(media.source)
             .push(" AND sha256 = ")
-            .push_bind(media.sha256.clone())
+            .push_storage_bind(media.sha256.clone())
             .push(" AND filename = ")
-            .push_bind(media.filename.clone());
+            .push_storage_bind(media.filename.clone());
         query.push(") AND NOT EXISTS (SELECT 1");
         posts::push_any_media_reference_from_where(&mut query, media);
         posts::push_live_media_reference_predicate(&mut query, current_instance_id);

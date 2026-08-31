@@ -1,3 +1,5 @@
+use crate::sql::QueryStorageExt;
+
 use std::str::FromStr;
 
 use sqlx::{Database, Pool};
@@ -48,14 +50,14 @@ where
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
-    for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> InstanceId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'r> InstanceId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
 {
-    let generated = InstanceId::new().to_string();
+    let generated = InstanceId::new();
     sqlx::query(
         "INSERT INTO instance_identity (singleton, instance_id) VALUES (1, $1) ON CONFLICT DO NOTHING",
     )
-    .bind(generated)
+    .bind_storage(generated)
     .execute(pool)
     .await?;
 

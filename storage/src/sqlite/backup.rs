@@ -15,6 +15,7 @@ use crate::backup::{
 };
 use crate::helpers;
 use crate::sql;
+use crate::sql::QueryStorageExt;
 
 fn finish_export_rollback(
     primary: Result<BackupManifest, BackupError>,
@@ -279,12 +280,12 @@ fn bind_restore_value<'q>(
     value: RestoreBindValue,
 ) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
     match value {
-        RestoreBindValue::Null => query.bind(Option::<RestoreText>::None),
-        RestoreBindValue::Boolean(value) => query.bind(value),
-        RestoreBindValue::Integer(value) => query.bind(value),
-        RestoreBindValue::Real { value, .. } => query.bind(value),
-        RestoreBindValue::Text(value) => query.bind(value),
-        RestoreBindValue::Json(value) => query.bind(value),
+        RestoreBindValue::Null => query.bind_storage(Option::<RestoreText>::None),
+        RestoreBindValue::Boolean(value) => query.bind_storage(value),
+        RestoreBindValue::Integer(value) => query.bind_storage(value),
+        RestoreBindValue::Real { value, .. } => query.bind_storage(value),
+        RestoreBindValue::Text(value) => query.bind_storage(value),
+        RestoreBindValue::Json(value) => query.bind_storage(value),
     }
 }
 

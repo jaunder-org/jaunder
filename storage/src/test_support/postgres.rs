@@ -1,6 +1,7 @@
 //! Postgres-specific per-test database configuration, clone provisioning, and RAII
 //! teardown. Backend-neutral environment setup and template selection live in [`super::backend`].
 use crate::DbConnectOptions;
+use crate::sql::QueryStorageExt;
 use crate::sql::{Exists, quote_identifier};
 
 use sqlx::Connection;
@@ -292,7 +293,7 @@ async fn ensure_template_db(config: &PostgresTestConfig, template: &TemplateData
     let mut admin = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
 
     sqlx::query("SELECT pg_advisory_lock($1)")
-        .bind(TEMPLATE_LOCK_KEY)
+        .bind_storage(TEMPLATE_LOCK_KEY)
         .execute(&mut admin)
         .await
         .unwrap();
@@ -300,7 +301,7 @@ async fn ensure_template_db(config: &PostgresTestConfig, template: &TemplateData
     let exists = sqlx::query_scalar::<_, Exists>(
         "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
     )
-    .bind(template)
+    .bind_storage(template)
     .fetch_one(&mut admin)
     .await
     .unwrap()
@@ -333,7 +334,7 @@ async fn ensure_template_db(config: &PostgresTestConfig, template: &TemplateData
     }
 
     sqlx::query("SELECT pg_advisory_unlock($1)")
-        .bind(TEMPLATE_LOCK_KEY)
+        .bind_storage(TEMPLATE_LOCK_KEY)
         .execute(&mut admin)
         .await
         .unwrap();

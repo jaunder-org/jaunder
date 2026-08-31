@@ -10,6 +10,7 @@ use crate::feed_events::{
     self, ClaimedFeedEventRow, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord,
     FeedEventStore, StoredFeedDiagnostic,
 };
+use crate::sql::QueryStorageExt;
 use crate::sql::RowCount;
 
 /// Postgres-backed feed-event storage.
@@ -35,7 +36,7 @@ async fn purge_corrupt(
         .execute(&mut *connection)
         .await?;
     let result = sqlx::query("DELETE FROM feed_events WHERE id = ANY($1)")
-        .bind(ids)
+        .bind_storage(ids)
         .execute(&mut *connection)
         .await;
     if let Err(error) = result {
@@ -75,9 +76,9 @@ impl FeedEventDialect for Postgres {
              RETURNING id, feed_url, status, attempts, last_error, next_attempt_at, claimed_at, terminal_at, \
                        created_at, regenerated_at, pinged_at",
         )
-        .bind(now)
-        .bind(lease_cutoff)
-        .bind(limit)
+        .bind_storage(now)
+        .bind_storage(lease_cutoff)
+        .bind_storage(limit)
         .fetch_all(&mut *connection)
         .await?
         .into_iter()
@@ -99,8 +100,8 @@ impl FeedEventDialect for Postgres {
              WHERE (status = 'pending' AND next_attempt_at <= $1) \
                 OR (status = 'claimed' AND claimed_at < $2)",
         )
-        .bind(now)
-        .bind(lease_cutoff)
+        .bind_storage(now)
+        .bind_storage(lease_cutoff)
         .fetch_one(pool)
         .await?;
         Ok(count.into_u64())
@@ -112,8 +113,8 @@ impl FeedEventDialect for Postgres {
     ) -> Result<(), FeedEventError> {
         let now = UtcInstant::now();
         sqlx::query("UPDATE feed_events SET regenerated_at = $1 WHERE id = ANY($2)")
-            .bind(now)
-            .bind(ids)
+            .bind_storage(now)
+            .bind_storage(ids)
             .execute(&mut *connection)
             .await?;
         Ok(())
@@ -127,8 +128,8 @@ impl FeedEventDialect for Postgres {
         sqlx::query(
             "UPDATE feed_events SET status = 'done', pinged_at = $1, terminal_at = $1 WHERE id = ANY($2)",
         )
-        .bind(now)
-        .bind(ids)
+        .bind_storage(now)
+        .bind_storage(ids)
         .execute(&mut *connection)
         .await?;
         Ok(())
@@ -146,9 +147,9 @@ impl FeedEventDialect for Postgres {
                  last_error = $1, next_attempt_at = $2, claimed_at = NULL \
              WHERE id = ANY($3)",
         )
-        .bind(error)
-        .bind(next_attempt_at)
-        .bind(ids)
+        .bind_storage(error)
+        .bind_storage(next_attempt_at)
+        .bind_storage(ids)
         .execute(&mut *connection)
         .await?;
         Ok(())
@@ -163,9 +164,9 @@ impl FeedEventDialect for Postgres {
         sqlx::query(
             "UPDATE feed_events SET status = 'failed', last_error = $1, terminal_at = $2 WHERE id = ANY($3)",
         )
-        .bind(error)
-        .bind(now)
-        .bind(ids)
+        .bind_storage(error)
+        .bind_storage(now)
+        .bind_storage(ids)
         .execute(&mut *connection)
         .await?;
         Ok(())

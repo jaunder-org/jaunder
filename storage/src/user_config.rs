@@ -3,6 +3,7 @@
 use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::posts::PostFormat;
+use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
 use common::ids::UserId;
 use sqlx::{Database, Pool};
@@ -132,8 +133,8 @@ where
         let row = sqlx::query_as::<_, (StoredUserConfigValue,)>(
             "SELECT value FROM user_config WHERE user_id = $1 AND key = $2",
         )
-        .bind(user_id)
-        .bind(key)
+        .bind_storage(user_id)
+        .bind_storage(key)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -174,8 +175,8 @@ where
     ) -> sqlx::Result<()> {
         let connection = DB::write_connection(transaction)?;
         sqlx::query("DELETE FROM user_config WHERE user_id = $1 AND key = $2")
-            .bind(user_id)
-            .bind(key)
+            .bind_storage(user_id)
+            .bind_storage(key)
             .execute(&mut *connection)
             .await?;
         Ok(())
@@ -205,9 +206,9 @@ where
         "INSERT INTO user_config (user_id, key, value) VALUES ($1, $2, $3)
              ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value",
     )
-    .bind(user_id)
-    .bind(key)
-    .bind(value)
+    .bind_storage(user_id)
+    .bind_storage(key)
+    .bind_storage(value)
     .execute(&mut *connection)
     .await?;
     Ok(())

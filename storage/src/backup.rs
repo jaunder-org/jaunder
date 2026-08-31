@@ -16,7 +16,9 @@ pub use common::backup::BackupMode;
 pub use error::BackupError;
 pub use format::BackupManifest;
 pub use orchestration::{BackupExportOptions, BackupRestoreOptions, export_backup, restore_backup};
-pub(crate) use restore_bind::{RestoreBindValue, RestoreText};
+pub(crate) use restore_bind::{
+    RestoreBindValue, RestoreBoolean, RestoreInteger, RestoreJson, RestoreReal, RestoreText,
+};
 
 #[cfg(test)]
 pub(crate) use catalog::CatalogDatabaseName;

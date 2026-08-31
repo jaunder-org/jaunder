@@ -5,6 +5,7 @@ use super::TestBase;
 use super::confirmed_for;
 use crate::media::MediaRecord;
 use crate::sql::Exists;
+use crate::sql::QueryStorageExt;
 use crate::{AppState, DbConnectOptions, StorageRuntimeConfig, resolved_postgres_options};
 
 use common::ids::PostId;
@@ -87,7 +88,7 @@ async fn raw_media_filename_exists_sqlite(
         .await
         .expect("connect sqlite");
     sqlx::query_scalar::<_, Exists>(RAW_MEDIA_FILENAME_EXISTS_SQL)
-        .bind(filename)
+        .bind_storage(filename)
         .fetch_one(&pool)
         .await
         .expect("query sqlite media")
@@ -103,7 +104,7 @@ async fn raw_media_filename_exists_postgres(
         .await
         .expect("connect postgres");
     sqlx::query_scalar::<_, Exists>(RAW_MEDIA_FILENAME_EXISTS_SQL)
-        .bind(filename)
+        .bind_storage(filename)
         .fetch_one(&pool)
         .await
         .expect("query postgres media")

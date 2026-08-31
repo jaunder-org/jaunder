@@ -102,7 +102,7 @@ Out:
     `server/tests/misc/backup_interop.rs` preserves both cross-backend
     directions and the PostgreSQL → SQLite → PostgreSQL → SQLite four-hop cycle.
 
-- [ ] Task 5: Close the registry and activate the residual gate
+- [x] Task 5: Close the registry and activate the residual gate
   - Dependency: Tasks 2–4 must be integrated first. This task exclusively owns
     `storage/src/sql.rs`, the repository-wide bind-method rename,
     `xtask/src/steps/sqlx_newtype_bind_check.rs`, and any unchanged gate

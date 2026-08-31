@@ -15,6 +15,7 @@ use crate::backup::{
 };
 use crate::helpers;
 use crate::sql;
+use crate::sql::QueryStorageExt;
 
 fn finish_export_rollback(
     primary: Result<BackupManifest, BackupError>,
@@ -246,12 +247,12 @@ fn bind_restore_value(
     value: RestoreBindValue,
 ) -> sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments> {
     match value {
-        RestoreBindValue::Null => query.bind(Option::<RestoreText>::None),
-        RestoreBindValue::Boolean(value) => query.bind(value.into_text()),
-        RestoreBindValue::Integer(value) => query.bind(value.into_text()),
-        RestoreBindValue::Real { text, .. } => query.bind(text),
-        RestoreBindValue::Text(value) => query.bind(value),
-        RestoreBindValue::Json(value) => query.bind(value.into_text()),
+        RestoreBindValue::Null => query.bind_storage(Option::<RestoreText>::None),
+        RestoreBindValue::Boolean(value) => query.bind_storage(value.into_text()),
+        RestoreBindValue::Integer(value) => query.bind_storage(value.into_text()),
+        RestoreBindValue::Real { text, .. } => query.bind_storage(text),
+        RestoreBindValue::Text(value) => query.bind_storage(value),
+        RestoreBindValue::Json(value) => query.bind_storage(value.into_text()),
     }
 }
 
@@ -340,7 +341,7 @@ async fn columns(
          WHERE table_schema = 'public' AND table_name = $1
          ORDER BY ordinal_position",
     )
-    .bind(table)
+    .bind_storage(table)
     .fetch_all(&mut *connection)
     .await?;
     rows.into_iter()

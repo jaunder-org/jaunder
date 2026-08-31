@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::WriteTransaction;
+use crate::sql::QueryStorageExt;
 use common::ids::UserId;
 use common::session_label::SessionLabel;
 use common::time::UtcInstant;
@@ -209,11 +210,11 @@ where
             "INSERT INTO sessions (token_hash, user_id, label, created_at, last_used_at)
              VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(token_hash)
-        .bind(user_id)
-        .bind(label)
-        .bind(now)
-        .bind(now)
+        .bind_storage(token_hash)
+        .bind_storage(user_id)
+        .bind_storage(label)
+        .bind_storage(now)
+        .bind_storage(now)
         .execute(&mut *connection)
         .await?;
 
@@ -255,7 +256,7 @@ where
     ) -> sqlx::Result<()> {
         let connection = DB::write_connection(transaction)?;
         sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
-            .bind(token_hash)
+            .bind_storage(token_hash)
             .execute(&mut *connection)
             .await?;
         Ok(())
@@ -280,7 +281,7 @@ where
              FROM sessions s JOIN users u ON s.user_id = u.user_id
              WHERE s.user_id = $1",
         )
-        .bind(user_id)
+        .bind_storage(user_id)
         .fetch_all(&self.pool)
         .await?;
 
@@ -367,7 +368,7 @@ mod tests {
         let sql = "UPDATE sessions SET token_hash = $1";
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
-                .bind(CorruptSessionTokenHash::malformed())
+                .bind_storage(CorruptSessionTokenHash::malformed())
                 .execute(pool)
                 .await
                 .unwrap();
@@ -402,10 +403,10 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(outcome, common::MutationOutcome::Confirmed(_)));
-        let stored = "x".repeat(1_000);
+        let stored = crate::helpers::StoredSessionLabel::new("x".repeat(1_000));
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query("UPDATE sessions SET label = $1")
-                .bind(&stored)
+                .bind_storage(&stored)
                 .execute(pool)
                 .await
                 .unwrap();
@@ -413,7 +414,7 @@ mod tests {
 
         let sessions = env.state.sessions.list_sessions(user_id).await.unwrap();
         assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].label, SessionLabel::from_lossy(&stored));
+        assert_eq!(sessions[0].label, SessionLabel::from_lossy(stored.as_str()));
     }
     #[apply(backends)]
     #[tokio::test]
@@ -439,9 +440,9 @@ mod tests {
             sqlx::query(
                 "UPDATE sessions SET created_at = $1, last_used_at = $2 WHERE token_hash = $3",
             )
-            .bind(created_at)
-            .bind(last_used_at)
-            .bind(&token_hash)
+            .bind_storage(created_at)
+            .bind_storage(last_used_at)
+            .bind_storage(&token_hash)
             .execute(pool)
             .await
             .unwrap();
@@ -494,8 +495,8 @@ mod tests {
             let token_hash = token::hash(&raw_token).unwrap();
             crate::with_closeable_pool!(env.base.pool(), pool, {
                 sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")
-                    .bind(stored_last_used_at)
-                    .bind(&token_hash)
+                    .bind_storage(stored_last_used_at)
+                    .bind_storage(&token_hash)
                     .execute(pool)
                     .await
                     .unwrap();

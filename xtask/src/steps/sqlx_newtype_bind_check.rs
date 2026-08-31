@@ -1,413 +1,399 @@
-//! The `sqlx-newtype-bind` static check (#438, #686, #716): enumerates
-//! primitive `sqlx` bind arguments under `storage/src` and denies them by
-//! default.
+//! The `sqlx-newtype-bind` gate closes every source-visible sqlx value-admission
+//! door under `storage/src`.
 //!
-//! Domain values that are stored emit an `sqlx::Encode`/`Type`/`Decode` bridge
-//! from one shared codegen (`macros::sqlx_bridge`) — `StrNewtype`,
-//! `IdNewtype`, `NumNewtype`, `SqlxBridge`, and stored `#[text_enum(sqlx)]`
-//! enums — so storage code should bind the typed value directly. Stripping to a
-//! primitive at the bind boundary re-opens the transposition hazard the newtype
-//! exists to close (ADR-0063 §2).
+//! The typed storage seam is the only admission API: `bind_storage` for native
+//! queries and `push_storage_bind` for native builders.  This gate is intentionally
+//! syntax based and deny-by-default: it rejects every source-visible raw admission
+//! shape rather than trying to identify primitive arguments.  Its only allowance is
+//! the five direct `self.<raw>(value)` delegations in `storage/src/sql.rs`'s typed
+//! extension implementations.  It does not claim rustc name resolution or insight
+//! into arbitrary proc-macro expansion; query macros are therefore forbidden.
 //!
-//! This gate follows ADR-0085: it parses Rust, defines its population
-//! structurally, and fails closed. The population is a `.bind(...)` whose
-//! argument is visibly primitive without type inference: a literal, a cast to a
-//! primitive, a `.as_str()` borrow, or an identifier whose current function
-//! parameter / typed local binding is primitive (`bool`, `str`, `String`, or a
-//! numeric primitive, including references to those). That is deliberately wider
-//! than the old spelling search (`.as_ref()`, `&*`, `i64::from(...)`) and catches
-//! the #716 shape where a primitive parameter is bound after the strip occurred
-//! elsewhere.
-//!
-//! Exemptions are ADR-0094 markers, not a central allowlist: the line immediately
-//! above the bind must carry `// sqlx-newtype-bind:allow <category> — <reason>`.
-//! Categories are `permanent-primitive`, `test-fixture-corruption`, and
-//! `deferred-newtype`; `deferred-newtype` must name a tracking issue. A marker is
-//! an in-source assertion, not a proof: the gate checks that it is present,
-//! categorized, non-orphaned, and points at exactly one primitive bind, but it
-//! cannot prove the reason is true.
-//!
-//! ## Structural limits
-//!
-//! No call graph: the gate detects the primitive bind, not the caller that may
-//! have stripped a domain value before passing it through a function or trait
-//! seam. No SQL semantics: `COUNT(*)`, timestamps, booleans, and driver-required
-//! primitives are not inferred from query text; they need markers. No type
-//! inference: an unannotated field such as `record.size_bytes` is not classified
-//! from the struct definition. The line-level marker is one level of indirection
-//! off the strongest possible key, so the gate requires exactly one primitive
-//! bind on the marked line and fails orphan markers.
-
-use std::collections::HashMap;
+//! `run_source_scan` supplies every governed Rust file and fails closed when the
+//! root or a file cannot be read.  Parsing failures are reported as failures too.
+use std::collections::HashSet;
 
 use quote::ToTokens;
 use syn::visit::{self, Visit};
 
-use crate::markers;
 use crate::result::CommandResult;
 use crate::steps::scan::run_source_scan;
 
-/// Source root scanned recursively for `.rs` files.
 const POLICED_ROOT: &str = "storage/src";
-const MARKER: &str = "sqlx-newtype-bind:allow";
+const RAW_METHODS: &[&str] = &[
+    "bind",
+    "try_bind",
+    "push_bind",
+    "push_bind_unseparated",
+    "with_arguments",
+];
+const RAW_CONSTRUCTORS: &[&str] = &[
+    "query_with",
+    "query_as_with",
+    "query_scalar_with",
+    "__query_with_result",
+    "__query_scalar_with_result",
+];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Category {
-    PermanentPrimitive,
-    TestFixtureCorruption,
-    DeferredNewtype,
-}
-
-impl Category {
-    const ALL_LABELS: &[&str] = &[
-        "permanent-primitive",
-        "test-fixture-corruption",
-        "deferred-newtype",
-    ];
-
-    fn parse(label: &str) -> Option<Self> {
-        match label {
-            "permanent-primitive" => Some(Self::PermanentPrimitive),
-            "test-fixture-corruption" => Some(Self::TestFixtureCorruption),
-            "deferred-newtype" => Some(Self::DeferredNewtype),
-            _ => None,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::PermanentPrimitive => "permanent-primitive",
-            Self::TestFixtureCorruption => "test-fixture-corruption",
-            Self::DeferredNewtype => "deferred-newtype",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct BindSite {
+#[derive(Debug)]
+struct Site {
     line: usize,
-    expr: String,
-}
-
-#[derive(Debug, Clone)]
-struct MarkedSite {
-    line: usize,
-    category: Category,
-    reason: String,
-}
-
-#[derive(Debug, Default)]
-struct Scan {
-    sites: Vec<BindSite>,
+    detail: String,
 }
 
 #[derive(Default)]
-struct BindVisitor {
-    scopes: Vec<HashMap<String, String>>,
-    sites: Vec<BindSite>,
+struct AdmissionVisitor {
+    sites: Vec<Site>,
+    native_argument_aliases: HashSet<String>,
+    native_argument_scopes: Vec<HashSet<String>>,
+    query_macro_aliases: HashSet<String>,
+    sqlx_receiver_aliases: HashSet<String>,
+    seam_method: Option<String>,
+    in_typed_seam_impl: bool,
+    allow_seam_delegations: bool,
 }
-
-impl BindVisitor {
-    fn enter_scope(&mut self, inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>) {
-        let mut scope = HashMap::new();
-        for input in inputs {
-            if let syn::FnArg::Typed(pat) = input
-                && let syn::Pat::Ident(ident) = pat.pat.as_ref()
-                && primitive_type(&pat.ty)
-            {
-                scope.insert(
-                    ident.ident.to_string(),
-                    pat.ty.to_token_stream().to_string(),
-                );
-            }
-        }
-        self.scopes.push(scope);
+impl AdmissionVisitor {
+    fn record<T: ToTokens>(&mut self, span: proc_macro2::Span, detail: T) {
+        self.sites.push(Site {
+            line: span.start().line,
+            detail: detail.to_token_stream().to_string(),
+        });
     }
 
-    fn enter_closure_scope(
-        &mut self,
-        inputs: &syn::punctuated::Punctuated<syn::Pat, syn::token::Comma>,
-    ) {
-        let mut scope = HashMap::new();
-        for input in inputs {
-            if let syn::Pat::Type(pat_ty) = input
-                && let syn::Pat::Ident(ident) = pat_ty.pat.as_ref()
-                && primitive_type(&pat_ty.ty)
-            {
-                scope.insert(
-                    ident.ident.to_string(),
-                    pat_ty.ty.to_token_stream().to_string(),
-                );
-            }
-        }
-        self.scopes.push(scope);
+    fn raw_method(method: &syn::Ident) -> bool {
+        RAW_METHODS.contains(&method.to_string().as_str())
     }
 
-    fn leave_scope(&mut self) {
-        self.scopes.pop();
-    }
-
-    fn record_local(&mut self, local: &syn::Local) {
-        let syn::Pat::Type(pat_ty) = &local.pat else {
-            return;
+    fn direct_seam_delegation(&self, call: &syn::ExprMethodCall) -> bool {
+        let Some(seam_method) = &self.seam_method else {
+            return false;
         };
-        let syn::Pat::Ident(ident) = pat_ty.pat.as_ref() else {
-            return;
-        };
-        if primitive_type(&pat_ty.ty)
-            && let Some(scope) = self.scopes.last_mut()
-        {
-            scope.insert(
-                ident.ident.to_string(),
-                pat_ty.ty.to_token_stream().to_string(),
+        self.allow_seam_delegations
+            && self.in_typed_seam_impl
+            && matches!(seam_method.as_str(), "bind_storage" | "push_storage_bind")
+            && call.receiver.to_token_stream().to_string() == "self"
+            && call.args.len() == 1
+            && call.args[0].to_token_stream().to_string() == "value"
+            && matches!(
+                (seam_method.as_str(), call.method.to_string().as_str()),
+                ("bind_storage", "bind") | ("push_storage_bind", "push_bind")
+            )
+    }
+
+    fn native_arguments(&self, path: &syn::Path) -> bool {
+        path.segments.iter().any(|segment| {
+            let name = segment.ident.to_string();
+            matches!(name.as_str(), "PgArguments" | "SqliteArguments")
+                || self.native_argument_aliases.contains(&name)
+        })
+    }
+
+    fn ufcs_sqlx_method(&self, path: &syn::Path) -> bool {
+        RAW_METHODS.contains(
+            &path
+                .segments
+                .last()
+                .expect("non-empty path")
+                .ident
+                .to_string()
+                .as_str(),
+        ) && path.segments.iter().rev().nth(1).is_some_and(|segment| {
+            let name = segment.ident.to_string();
+            matches!(
+                name.as_str(),
+                "Query" | "QueryAs" | "QueryScalar" | "QueryBuilder" | "Separated"
+            ) || self.sqlx_receiver_aliases.contains(&name)
+        })
+    }
+
+    fn forbidden_query_macro(&self, path: &syn::Path) -> bool {
+        let name = path
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string());
+        name.is_some_and(|name| {
+            self.query_macro_aliases.contains(&name)
+                || matches!(
+                    name.as_str(),
+                    "query" | "query_as" | "query_scalar" | "query_file" | "query_file_as"
+                )
+                || name.starts_with("query_")
+        })
+    }
+    fn inspect_macro<T: ToTokens>(&mut self, mac: &syn::Macro, detail: T) {
+        if self.forbidden_query_macro(&mac.path) {
+            self.record(
+                mac.path
+                    .segments
+                    .last()
+                    .expect("non-empty path")
+                    .ident
+                    .span(),
+                detail,
             );
         }
     }
 
-    fn ident_is_primitive(&self, ident: &str) -> bool {
-        self.scopes
+    fn native_argument_local(&self, name: &str) -> bool {
+        self.native_argument_scopes
             .iter()
             .rev()
-            .any(|scope| scope.contains_key(ident))
+            .any(|scope| scope.contains(name))
     }
 
-    fn expr_is_primitive_bind(&self, expr: &syn::Expr) -> bool {
-        match expr {
-            syn::Expr::Lit(lit) => primitive_lit(&lit.lit),
-            syn::Expr::Path(path) => path
-                .path
-                .get_ident()
-                .is_some_and(|ident| self.ident_is_primitive(&ident.to_string())),
-            syn::Expr::Reference(reference) => self.expr_is_primitive_bind(&reference.expr),
-            syn::Expr::Cast(cast) => primitive_type(&cast.ty),
-            syn::Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
-                self.expr_is_primitive_bind(&unary.expr)
-            }
-            syn::Expr::MethodCall(call) => call.method == "as_str",
-            syn::Expr::Paren(paren) => self.expr_is_primitive_bind(&paren.expr),
-            _ => false,
+    fn collect_argument(&mut self, pat: &syn::Pat) {
+        let syn::Pat::Type(pat) = pat else { return };
+        let syn::Pat::Ident(ident) = pat.pat.as_ref() else {
+            return;
+        };
+        let tokens = pat.ty.to_token_stream().to_string();
+        if self.native_arguments_type(&tokens) {
+            self.native_argument_scopes
+                .last_mut()
+                .expect("function scope exists")
+                .insert(ident.ident.to_string());
         }
+    }
+    fn inspect_import<T: ToTokens>(
+        &mut self,
+        original: &str,
+        local: &str,
+        span: proc_macro2::Span,
+        detail: T,
+    ) {
+        if matches!(original, "query" | "query_as" | "query_scalar") {
+            self.query_macro_aliases.insert(local.to_owned());
+        }
+        if matches!(
+            original,
+            "Query" | "QueryAs" | "QueryScalar" | "QueryBuilder" | "Separated"
+        ) {
+            self.sqlx_receiver_aliases.insert(local.to_owned());
+        }
+        if matches!(original, "PgArguments" | "SqliteArguments") {
+            self.native_argument_aliases.insert(local.to_owned());
+        }
+        if RAW_CONSTRUCTORS.contains(&original)
+            || RAW_METHODS.contains(&original)
+            || matches!(
+                original,
+                "add" | "Arguments" | "IntoArguments" | "PgArguments" | "SqliteArguments"
+            )
+        {
+            self.record(span, detail);
+        }
+    }
+
+    fn native_arguments_type(&self, tokens: &str) -> bool {
+        tokens.contains("PgArguments")
+            || tokens.contains("SqliteArguments")
+            || self
+                .native_argument_aliases
+                .iter()
+                .any(|alias| tokens.contains(alias))
     }
 }
 
-impl<'ast> Visit<'ast> for BindVisitor {
-    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-        self.enter_scope(&node.sig.inputs);
-        visit::visit_block(self, &node.block);
-        self.leave_scope();
+impl<'ast> Visit<'ast> for AdmissionVisitor {
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        self.native_argument_scopes.push(HashSet::new());
+        for input in &node.sig.inputs {
+            if let syn::FnArg::Typed(argument) = input {
+                self.collect_argument(&argument.pat);
+            }
+        }
+        let previous = self.seam_method.replace(node.sig.ident.to_string());
+        visit::visit_impl_item_fn(self, node);
+        self.seam_method = previous;
+        self.native_argument_scopes.pop();
     }
 
-    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
-        self.enter_scope(&node.sig.inputs);
-        visit::visit_block(self, &node.block);
-        self.leave_scope();
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        self.native_argument_scopes.push(HashSet::new());
+        for input in &node.sig.inputs {
+            if let syn::FnArg::Typed(argument) = input {
+                self.collect_argument(&argument.pat);
+            }
+        }
+        visit::visit_item_fn(self, node);
+        self.native_argument_scopes.pop();
+    }
+    fn visit_block(&mut self, node: &'ast syn::Block) {
+        self.native_argument_scopes.push(HashSet::new());
+        visit::visit_block(self, node);
+        self.native_argument_scopes.pop();
     }
 
     fn visit_expr_closure(&mut self, node: &'ast syn::ExprClosure) {
-        self.enter_closure_scope(&node.inputs);
-        visit::visit_expr(self, &node.body);
-        self.leave_scope();
-    }
-
-    fn visit_local(&mut self, node: &'ast syn::Local) {
-        self.record_local(node);
-        visit::visit_local(self, node);
+        self.native_argument_scopes.push(HashSet::new());
+        for input in &node.inputs {
+            self.collect_argument(input);
+        }
+        visit::visit_expr_closure(self, node);
+        self.native_argument_scopes.pop();
     }
 
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
-        if node.method == "bind"
-            && let Some(arg) = node.args.first()
-            && self.expr_is_primitive_bind(arg)
+        if Self::raw_method(&node.method) && !self.direct_seam_delegation(node) {
+            self.record(node.method.span(), node);
+        }
+        if node.method == "add"
+            && matches!(&*node.receiver, syn::Expr::Path(path) if self.native_argument_local(&path.path.to_token_stream().to_string()))
         {
-            self.sites.push(BindSite {
-                line: node.method.span().start().line,
-                expr: arg.to_token_stream().to_string(),
-            });
+            self.record(node.method.span(), node);
         }
         visit::visit_expr_method_call(self, node);
     }
-}
 
-fn primitive_lit(lit: &syn::Lit) -> bool {
-    matches!(
-        lit,
-        syn::Lit::Bool(_) | syn::Lit::Int(_) | syn::Lit::Float(_) | syn::Lit::Str(_)
-    )
-}
-
-fn primitive_type(ty: &syn::Type) -> bool {
-    match ty {
-        syn::Type::Reference(reference) => primitive_type(&reference.elem),
-        syn::Type::Path(path) => path.path.segments.last().is_some_and(|segment| {
-            matches!(
-                segment.ident.to_string().as_str(),
-                "bool"
-                    | "str"
-                    | "String"
-                    | "i8"
-                    | "i16"
-                    | "i32"
-                    | "i64"
-                    | "i128"
-                    | "isize"
-                    | "u8"
-                    | "u16"
-                    | "u32"
-                    | "u64"
-                    | "u128"
-                    | "usize"
-                    | "f32"
-                    | "f64"
-            )
-        }),
-        syn::Type::Paren(paren) => primitive_type(&paren.elem),
-        _ => false,
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = node.func.as_ref()
+            && (self.native_arguments(&path.path)
+                || RAW_CONSTRUCTORS.contains(
+                    &path
+                        .path
+                        .segments
+                        .last()
+                        .expect("non-empty path")
+                        .ident
+                        .to_string()
+                        .as_str(),
+                )
+                || self.ufcs_sqlx_method(&path.path)
+                || (path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "add")
+                    && path
+                        .path
+                        .to_token_stream()
+                        .to_string()
+                        .contains("Arguments")))
+        {
+            self.record(
+                path.path
+                    .segments
+                    .last()
+                    .expect("non-empty path")
+                    .ident
+                    .span(),
+                node,
+            );
+        }
+        visit::visit_expr_call(self, node);
     }
-}
 
-fn primitive_binds(source: &str) -> Result<Scan, String> {
-    let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
-    let mut visitor = BindVisitor::default();
-    visitor.visit_file(&file);
-    Ok(Scan {
-        sites: visitor.sites,
-    })
-}
-
-fn parse_marker(reason: &str) -> Result<(Category, String), String> {
-    if reason.trim().is_empty() {
-        return Err("marker has no reason".to_string());
+    fn visit_expr_macro(&mut self, node: &'ast syn::ExprMacro) {
+        self.inspect_macro(&node.mac, node);
+        visit::visit_expr_macro(self, node);
     }
-    let mut parts = reason.trim().splitn(2, char::is_whitespace);
-    let label = parts.next().unwrap_or_default();
-    let rest = parts
-        .next()
-        .unwrap_or_default()
-        .trim_start_matches([' ', '-', '—', ':'])
-        .trim()
-        .to_string();
-    let Some(category) = Category::parse(label) else {
-        return Err(format!(
-            "marker category `{label}` is not one of {}",
-            Category::ALL_LABELS.join(", ")
-        ));
-    };
-    if rest.is_empty() {
-        return Err("marker has no reason after its category".to_string());
+
+    fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
+        self.inspect_macro(&node.mac, node);
+        visit::visit_item_macro(self, node);
     }
-    if category == Category::DeferredNewtype && !names_issue(&rest) {
-        return Err("deferred-newtype marker must name a tracking issue like #750".to_string());
+
+    fn visit_stmt_macro(&mut self, node: &'ast syn::StmtMacro) {
+        self.inspect_macro(&node.mac, node);
+        visit::visit_stmt_macro(self, node);
     }
-    Ok((category, rest))
-}
 
-fn names_issue(reason: &str) -> bool {
-    let bytes = reason.as_bytes();
-    bytes.windows(2).enumerate().any(|(idx, pair)| {
-        pair[0] == b'#'
-            && pair[1].is_ascii_digit()
-            && reason[idx + 1..].bytes().any(|b| b.is_ascii_digit())
-    })
-}
+    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+        let trait_name = node
+            .trait_
+            .as_ref()
+            .and_then(|(_, path, _)| path.segments.last())
+            .map(|segment| segment.ident.to_string());
+        if matches!(trait_name.as_deref(), Some("Arguments" | "IntoArguments")) {
+            self.record(node.impl_token.span, node);
+        }
+        let previous = self.in_typed_seam_impl;
+        self.in_typed_seam_impl = matches!(
+            trait_name.as_deref(),
+            Some("QueryStorageExt" | "QueryBuilderStorageExt")
+        ) && matches!(
+            node.self_ty.to_token_stream().to_string().as_str(),
+            self_type if self_type.contains("Query") || self_type.contains("Separated")
+        );
+        visit::visit_item_impl(self, node);
+        self.in_typed_seam_impl = previous;
+    }
 
-/// The failure detail for offending primitive binds and malformed markers, or `None`.
-pub fn problems(scanned: &[(String, String)]) -> Option<String> {
-    let mut lines = Vec::new();
-    let mut marked = Vec::new();
-
-    for (path, source) in scanned {
-        let scan = match primitive_binds(source) {
-            Ok(scan) => scan,
-            Err(e) => {
-                lines.push(format!(
-                    "{path}: {e} — an unparsed file is invisible to this gate, which is exactly \
-                     the blind spot it exists to close. Fix the file or the parser; do not skip it."
-                ));
-                continue;
+    fn visit_local(&mut self, node: &'ast syn::Local) {
+        let (ident, type_tokens) = match &node.pat {
+            syn::Pat::Ident(ident) => (&ident.ident, String::new()),
+            syn::Pat::Type(pat) if matches!(pat.pat.as_ref(), syn::Pat::Ident(_)) => {
+                let syn::Pat::Ident(ident) = pat.pat.as_ref() else {
+                    unreachable!()
+                };
+                (&ident.ident, pat.ty.to_token_stream().to_string())
+            }
+            _ => {
+                visit::visit_local(self, node);
+                return;
             }
         };
-        let comments = markers::line_comments(source);
-        let mut sites_by_line: HashMap<usize, Vec<&BindSite>> = HashMap::new();
-        for site in &scan.sites {
-            sites_by_line.entry(site.line).or_default().push(site);
+        if self.native_arguments_type(&type_tokens) {
+            self.native_argument_scopes
+                .last_mut()
+                .expect("local has enclosing scope")
+                .insert(ident.to_string());
         }
-
-        for (idx, comment) in comments.iter().enumerate() {
-            let marker_line = idx + 1;
-            let Some(reason) = comment.and_then(|c| markers::marker_in_comment(c, MARKER)) else {
-                continue;
-            };
-            let pointed_line = marker_line + 1;
-            match sites_by_line.get(&pointed_line).map(Vec::as_slice).unwrap_or(&[]) {
-                [] => lines.push(format!(
-                    "{path}:{marker_line}: `{MARKER}` marker is orphaned — the next line has no \
-                     primitive sqlx bind. Delete the stale marker or move it directly above the bind."
-                )),
-                [_site] => match parse_marker(reason) {
-                    Ok((category, parsed_reason)) => marked.push((
-                        path.clone(),
-                        MarkedSite {
-                            line: pointed_line,
-                            category,
-                            reason: parsed_reason,
-                        },
-                    )),
-                    Err(error) => lines.push(format!(
-                        "{path}:{marker_line}: malformed `{MARKER}` marker — {error}. Use \
-                         `// {MARKER} permanent-primitive — <reason>`, \
-                         `test-fixture-corruption`, or `deferred-newtype #NNNN`."
-                    )),
-                },
-                many => lines.push(format!(
-                    "{path}:{marker_line}: `{MARKER}` marker points at line {pointed_line}, which \
-                     has {} primitive sqlx binds. Split the bind chain so one marker covers one site.",
-                    many.len()
-                )),
-            }
+        visit::visit_local(self, node);
+    }
+    fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
+        if self.native_arguments_type(&node.ty.to_token_stream().to_string()) {
+            self.native_argument_aliases.insert(node.ident.to_string());
         }
-
-        for site in &scan.sites {
-            let marked_line = site
-                .line
-                .checked_sub(2)
-                .and_then(|idx| comments.get(idx))
-                .and_then(|comment| comment.and_then(|c| markers::marker_in_comment(c, MARKER)))
-                .is_some();
-            if !marked_line {
-                lines.push(format!(
-                    "{path}:{}: `.bind({})` binds a primitive value. Type the seam so a domain \
-                     value reaches sqlx, or add a one-line marker immediately above this bind with \
-                     category and reason.",
-                    site.line, site.expr
-                ));
-            }
-        }
+        visit::visit_item_type(self, node);
     }
 
-    if lines.is_empty() {
-        return None;
+    fn visit_use_name(&mut self, node: &'ast syn::UseName) {
+        let name = node.ident.to_string();
+        self.inspect_import(&name, &name, node.ident.span(), node);
+        visit::visit_use_name(self, node);
     }
 
-    lines.push(
-        "  recovery: this gate enumerates primitive binds rather than searching for known strip \
-         spellings. Typing the seam is the default fix. Markers are for scalar facts, intentional \
-         corrupt test rows, or tracked `deferred-newtype` debt; a marker is trusted prose, so keep \
-         the census small enough to re-read."
-            .to_string(),
-    );
-    if !marked.is_empty() {
-        lines.push("  currently marked primitive-bind exemptions:".to_string());
-        marked.sort_by(|a, b| (&a.0, a.1.line).cmp(&(&b.0, b.1.line)));
-        for (path, site) in marked {
+    fn visit_use_rename(&mut self, node: &'ast syn::UseRename) {
+        let original = node.ident.to_string();
+        let local = node.rename.to_string();
+        self.inspect_import(&original, &local, node.rename.span(), node);
+        visit::visit_use_rename(self, node);
+    }
+}
+
+fn admissions(source: &str, allow_seam_delegations: bool) -> Result<Vec<Site>, String> {
+    let file = syn::parse_file(source).map_err(|error| format!("cannot parse as Rust: {error}"))?;
+    let mut visitor = AdmissionVisitor {
+        allow_seam_delegations,
+        ..AdmissionVisitor::default()
+    };
+    visitor.visit_file(&file);
+    Ok(visitor.sites)
+}
+
+/// Reports every raw sqlx value-admission syntax under the governed tree.
+pub fn problems(scanned: &[(String, String)]) -> Option<String> {
+    let mut lines = Vec::new();
+    for (path, source) in scanned {
+        match admissions(source, path == "storage/src/sql.rs") {
+            Ok(sites) => lines.extend(sites.into_iter().map(|site| {
+                format!(
+                    "{path}:{}: forbidden raw sqlx value admission `{}`; use the typed storage seam",
+                    site.line, site.detail
+                )
+            })),
+            Err(error) => lines.push(format!(
+                "{path}: {error} — an unparsable governed file is invisible to this gate, so it fails closed"
+            )),
+        }
+        if source.contains("sqlx-newtype-bind:allow") {
             lines.push(format!(
-                "    - {path}:{} — {} — {}",
-                site.line,
-                site.category.label(),
-                site.reason
+                "{path}: obsolete sqlx-newtype-bind exemption marker; the typed seam has no exemptions"
             ));
         }
     }
-    Some(lines.join("\n"))
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 /// Scan every Rust file under [`POLICED_ROOT`] and push the result step.
@@ -417,155 +403,118 @@ pub fn run(result: &mut CommandResult) {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
+    use crate::steps::scan::run_source_scan_with;
+
     use super::*;
 
-    fn site_lines(src: &str) -> Vec<usize> {
-        primitive_binds(src)
-            .expect("parse")
-            .sites
-            .into_iter()
-            .map(|s| s.line)
-            .collect()
-    }
-
-    #[test]
-    fn typed_newtype_bind_is_clean() {
-        let src = "fn f(slug: Slug) { q.bind(slug); }";
-        assert!(site_lines(src).is_empty());
-    }
-
-    #[test]
-    fn primitive_parameter_bind_is_flagged_without_strip_spelling() {
-        let src = "fn f(min_items: i64) { q.bind(min_items); }";
-        assert_eq!(site_lines(src), vec![1]);
-    }
-
-    #[test]
-    fn primitive_closure_parameter_bind_is_flagged() {
-        let src = "fn f() { let bind_limit = |limit: i64| q.bind(limit); }";
-        assert_eq!(site_lines(src), vec![1]);
-    }
-
-    #[test]
-    fn dereferenced_primitive_reference_bind_is_flagged() {
-        let src = "fn f(value: &bool) { q.bind(*value); }";
-        assert_eq!(site_lines(src), vec![1]);
-    }
-
-    #[test]
-    fn primitive_local_and_as_str_bind_are_flagged() {
-        let src = r#"
-fn f() {
-    let limit: i64 = 10;
-    q.bind(limit);
-    q.bind("bad");
-    q.bind(name.as_str());
-}
-"#;
-        assert_eq!(site_lines(src), vec![4, 5, 6]);
-    }
-
-    #[test]
-    fn categorized_marker_exempts_one_site() {
-        let src = r#"
-fn f(is_operator: bool) {
-    // sqlx-newtype-bind:allow permanent-primitive — boolean operator flag has no domain identity.
-    q.bind(is_operator);
-}
-"#;
-        assert_eq!(
-            problems(&[("storage/src/users.rs".into(), src.into())]),
-            None
+    fn rejected(source: &str) {
+        assert!(
+            problems(&[("storage/src/example.rs".to_string(), source.to_string())]).is_some(),
+            "expected rejection: {source}"
         );
     }
 
     #[test]
-    fn unmarked_site_reports_recovery() {
-        let src = "fn f(min_items: i64) { q.bind(min_items); }";
-        let detail = problems(&[("storage/src/posts.rs".into(), src.into())]).expect("problem");
-        assert!(detail.contains("storage/src/posts.rs:1"));
-        assert!(detail.contains("binds a primitive value"));
-        assert!(detail.contains("Typing the seam is the default fix"));
+    fn admits_only_exact_typed_seam_delegations() {
+        assert!(problems(&[(
+            "storage/src/sql.rs".to_string(),
+            "impl QueryStorageExt for Query { fn bind_storage(self, value: T) { self.bind(value); } } impl QueryBuilderStorageExt for QueryBuilder { fn push_storage_bind(&mut self, value: T) { self.push_bind(value); } }".to_string(),
+        )]).is_none());
+        assert!(
+            problems(&[(
+                "storage/src/example.rs".to_string(),
+                "impl X { fn bind_storage(self, value: T) { self.bind(value); } }".to_string(),
+            )])
+            .is_some()
+        );
+        assert!(
+            problems(&[(
+                "storage/src/sql.rs".to_string(),
+                "impl X { fn bind_storage(self, value: T) { self.bind(value); } }".to_string(),
+            )])
+            .is_some()
+        );
     }
 
     #[test]
-    fn marker_with_no_reason_fails() {
-        let src = r#"
-fn f(is_operator: bool) {
-    // sqlx-newtype-bind:allow
-    q.bind(is_operator);
-}
-"#;
-        let detail = problems(&[("storage/src/users.rs".into(), src.into())]).expect("problem");
-        assert!(detail.contains("marker has no reason"));
+    fn allows_non_sqlx_associated_bind_and_generic_arguments_type() {
+        assert!(problems(&[(
+            "storage/src/example.rs".to_string(),
+            "fn f<'q, DB>() { let _: Query<'q, DB, DB::Arguments<'q>>; UnixListener::bind(\"path\"); }".to_string(),
+        )]).is_none());
     }
 
     #[test]
-    fn marker_with_unknown_category_fails() {
-        let src = r#"
-fn f(is_operator: bool) {
-    // sqlx-newtype-bind:allow because I said so
-    q.bind(is_operator);
-}
-"#;
-        let detail = problems(&[("storage/src/users.rs".into(), src.into())]).expect("problem");
-        assert!(detail.contains("marker category `because`"));
+    fn rejects_each_raw_method_family() {
+        rejected("fn f(q: Query, value: T) { q.bind(value); }");
+        rejected("fn f(q: Query, value: T) { q.try_bind(value); }");
+        rejected("fn f(q: Query, value: T) { q.push_bind(value); }");
+        rejected("fn f(q: Query, value: T) { q.push_bind_unseparated(value); }");
+        rejected("fn f(q: Query, value: T) { q.with_arguments(value); }");
+        rejected("fn f(value: T) { let q = hidden(); q.bind(value); }");
+        rejected("fn f(q: Unknown, value: T) { q.bind(value); }");
     }
 
     #[test]
-    fn deferred_marker_without_issue_fails() {
-        let src = r#"
-fn f(limit_i: i64) {
-    // sqlx-newtype-bind:allow deferred-newtype — type this later.
-    q.bind(limit_i);
-}
-"#;
-        let detail =
-            problems(&[("storage/src/feed_events.rs".into(), src.into())]).expect("problem");
-        assert!(detail.contains("deferred-newtype marker must name"));
+    fn rejects_prebuilt_arguments_and_aliases() {
+        rejected("fn f(value: T) { Query::bind(value); }");
+        rejected("fn f(value: T) { sqlx::query_with(\"\", value); }");
+        rejected("fn f(value: T) { sqlx::query_as_with(\"\", value); }");
+        rejected("fn f(value: T) { sqlx::query_scalar_with(\"\", value); }");
+        rejected("fn f(value: T) { sqlx::__query_with_result(\"\", value); }");
+        rejected("fn f(value: T) { sqlx::__query_scalar_with_result(\"\", value); }");
+        rejected("fn f(value: T) { Arguments::add(value); }");
+        rejected("use sqlx::query_with as admitted;");
+        rejected("impl sqlx::Arguments for Args {}");
+        rejected("impl sqlx::IntoArguments<'_> for Args {}");
     }
 
     #[test]
-    fn orphan_marker_fails() {
-        let src = r#"
-fn f(slug: Slug) {
-    // sqlx-newtype-bind:allow permanent-primitive — stale.
-    q.bind(slug);
-}
-"#;
-        let detail = problems(&[("storage/src/posts.rs".into(), src.into())]).expect("problem");
-        assert!(detail.contains("marker is orphaned"));
+    fn rejects_imported_query_constructor_binds() {
+        rejected("use sqlx::query; fn f(value: T) { let q = query(\"SELECT ?\"); q.bind(value); }");
+        rejected(
+            "use sqlx::query as make_query; fn f(value: T) { let q = make_query(\"SELECT ?\"); q.bind(value); }",
+        );
     }
 
     #[test]
-    fn shared_line_marker_fails() {
-        let src = r#"
-fn f(a: bool, b: bool) {
-    // sqlx-newtype-bind:allow permanent-primitive — two binds are ambiguous.
-    q.bind(a).bind(b);
-}
-"#;
-        let detail = problems(&[("storage/src/users.rs".into(), src.into())]).expect("problem");
-        assert!(detail.contains("has 2 primitive sqlx binds"));
+    fn rejects_native_argument_construction_and_aliases() {
+        rejected("fn f() { PgArguments::default(); }");
+        rejected("fn f() { SqliteArguments::default(); }");
+        rejected("use sqlx::postgres::PgArguments as Args;");
+        rejected("use sqlx::sqlite::SqliteArguments as Args;");
     }
 
     #[test]
-    fn failure_includes_marker_census() {
-        let src = r##"
-fn f(ok: bool, bad: i64) {
-    // sqlx-newtype-bind:allow permanent-primitive — boolean operator flag has no domain identity.
-    q.bind(ok);
-    q.bind(bad);
-}
-"##;
-        let detail = problems(&[("storage/src/users.rs".into(), src.into())]).expect("problem");
-        assert!(detail.contains("currently marked primitive-bind exemptions"));
-        assert!(detail.contains("storage/src/users.rs:4 — permanent-primitive"));
+    fn rejects_query_macros_markers_and_parse_failures() {
+        rejected("fn f() { sqlx::query!(\"SELECT 1\"); }");
+        rejected("fn f() { sqlx::query_as!(Row, \"SELECT 1\"); }");
+        rejected("fn f() { sqlx::query_scalar!(\"SELECT 1\"); }");
+        rejected("// sqlx-newtype-bind:allow nope\nfn f() {}");
+        rejected("fn f( {");
     }
 
     #[test]
-    fn unparseable_file_fails_closed() {
-        let detail = problems(&[("storage/src/bad.rs".into(), "fn {".into())]).expect("problem");
-        assert!(detail.contains("cannot parse as Rust"));
+    fn unreadable_source_fails_closed() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        std::fs::write(directory.path().join("audited.rs"), "fn f() {}").expect("fixture source");
+        let mut result = CommandResult::new("test");
+        run_source_scan_with(
+            &mut result,
+            "sqlx-newtype-bind",
+            &[directory.path().to_str().expect("utf-8 path")],
+            |_| Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied")),
+            problems,
+        );
+        assert!(!result.steps[0].ok);
+        assert!(
+            result.steps[0]
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("denied")
+        );
     }
 }

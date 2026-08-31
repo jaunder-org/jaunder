@@ -6,6 +6,7 @@
 mod tests {
     use crate::backup::CatalogDatabaseName;
     use crate::sql::Exists;
+    use crate::sql::QueryStorageExt;
     use crate::test_support::{
         Backend, PostgresTestConfig, postgres_only, recorded_postgres_url, unique_postgres_url,
     };
@@ -38,7 +39,7 @@ mod tests {
         let exists = sqlx::query_scalar::<_, Exists>(
             "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
         )
-        .bind(db_name)
+        .bind_storage(db_name)
         .fetch_one(&mut conn)
         .await
         .expect("query pg_database")

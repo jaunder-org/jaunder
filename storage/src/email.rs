@@ -1,6 +1,7 @@
 //! Email verification token storage.
 
 use crate::WriteTransaction;
+use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
 use chrono::Duration;
 
@@ -166,8 +167,8 @@ where
              SET expires_at = created_at
              WHERE user_id = $1 AND used_at IS NULL AND expires_at > $2",
         )
-        .bind(user_id)
-        .bind(now)
+        .bind_storage(user_id)
+        .bind_storage(now)
         .execute(&mut *connection)
         .await?;
 
@@ -176,11 +177,11 @@ where
              (token_hash, user_id, email, created_at, expires_at)
              VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(token_hash)
-        .bind(user_id)
-        .bind(email)
-        .bind(now)
-        .bind(expires_at)
+        .bind_storage(token_hash)
+        .bind_storage(user_id)
+        .bind_storage(email)
+        .bind_storage(now)
+        .bind_storage(expires_at)
         .execute(&mut *connection)
         .await?;
 
@@ -209,9 +210,9 @@ where
              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
              RETURNING user_id, email",
         )
-        .bind(now)
-        .bind(&token_hash)
-        .bind(now)
+        .bind_storage(now)
+        .bind_storage(&token_hash)
+        .bind_storage(now)
         .fetch_optional(&mut *connection)
         .await
         .map_err(UseEmailVerificationError::Internal)?;
@@ -225,7 +226,7 @@ where
         let row = sqlx::query_as::<_, TokenStateRow>(
             "SELECT used_at, expires_at FROM email_verifications WHERE token_hash = $1",
         )
-        .bind(&token_hash)
+        .bind_storage(&token_hash)
         .fetch_optional(&self.pool)
         .await
         .map_err(UseEmailVerificationError::Internal)?;
@@ -358,7 +359,7 @@ mod tests {
         let sql = "UPDATE email_verifications SET email = $1";
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
-                .bind(CorruptEmailAddress::malformed())
+                .bind_storage(CorruptEmailAddress::malformed())
                 .execute(pool)
                 .await
                 .unwrap();

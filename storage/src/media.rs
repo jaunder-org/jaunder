@@ -13,6 +13,7 @@ use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::helpers;
 use crate::posts::MediaReferenceEvidence;
+use crate::sql::QueryStorageExt;
 use thiserror::Error;
 
 /// A media metadata record returned by [`MediaStorage`] queries.
@@ -308,14 +309,14 @@ where
             "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
-        .bind(record.user_id)
-        .bind(&record.sha256)
-        .bind(&record.filename)
-        .bind(record.source)
-        .bind(&record.content_type)
-        .bind(record.size_bytes)
-        .bind(record.source_url.clone())
-        .bind(record.created_at)
+        .bind_storage(record.user_id)
+        .bind_storage(&record.sha256)
+        .bind_storage(&record.filename)
+        .bind_storage(record.source)
+        .bind_storage(&record.content_type)
+        .bind_storage(record.size_bytes)
+        .bind_storage(record.source_url.clone())
+        .bind_storage(record.created_at)
         .execute(connection)
         .await;
 
@@ -348,10 +349,10 @@ where
              FROM media
              WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
         )
-        .bind(user_id)
-        .bind(sha256)
-        .bind(filename)
-        .bind(*source)
+        .bind_storage(user_id)
+        .bind_storage(sha256)
+        .bind_storage(filename)
+        .bind_storage(*source)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -383,10 +384,10 @@ where
                  ORDER BY created_at DESC
                  LIMIT $3 OFFSET $4",
             )
-            .bind(user_id)
-            .bind(*src)
-            .bind(limit)
-            .bind(offset)
+            .bind_storage(user_id)
+            .bind_storage(*src)
+            .bind_storage(limit)
+            .bind_storage(offset)
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -397,9 +398,9 @@ where
                  ORDER BY created_at DESC
                  LIMIT $2 OFFSET $3",
             )
-            .bind(user_id)
-            .bind(limit)
-            .bind(offset)
+            .bind_storage(user_id)
+            .bind_storage(limit)
+            .bind_storage(offset)
             .fetch_all(&self.pool)
             .await?
         };
@@ -465,10 +466,10 @@ where
             "SELECT 1 FROM media \
              WHERE user_id = $1 AND source = $2 AND sha256 = $3 AND filename = $4",
         )
-        .bind(user_id)
-        .bind(media.source)
-        .bind(&media.sha256)
-        .bind(&media.filename)
+        .bind_storage(user_id)
+        .bind_storage(media.source)
+        .bind_storage(&media.sha256)
+        .bind_storage(&media.filename)
         .fetch_optional(DB::write_connection(transaction)?)
         .await?;
 
@@ -538,8 +539,8 @@ where
              WHERE sha256 = $1 AND source = $2
              LIMIT 1",
         )
-        .bind(sha256)
-        .bind(*source)
+        .bind_storage(sha256)
+        .bind_storage(*source)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(helpers::media_record_from_row))

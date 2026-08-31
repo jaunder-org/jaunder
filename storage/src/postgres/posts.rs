@@ -6,6 +6,7 @@ use crate::posts::{
     self, MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill, PostTag,
     PostTagDiff, PostTagRow,
 };
+use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
     UpdatePostError, UpdatePostInput, WriteTransaction, postgres_connection,
@@ -33,7 +34,7 @@ async fn locked_update_expectation_error(
          JOIN tags t ON t.tag_id = pt.tag_id \
          WHERE pt.post_id = $1 ORDER BY t.tag_slug COLLATE \"C\"",
     )
-    .bind(post_id)
+    .bind_storage(post_id)
     .fetch_all(&mut *connection)
     .await?;
     Ok(posts::update_expectation_error(
@@ -61,7 +62,7 @@ async fn load_current_post_media_lock_set(
         "SELECT source, sha256, filename FROM post_media
          WHERE post_id = $1 AND subject_kind = 'current' AND revision_id = 0",
     )
-    .bind(post_id)
+    .bind_storage(post_id)
     .fetch_all(connection)
     .await?
     .into_iter()
@@ -85,20 +86,20 @@ async fn apply_lifecycle_change(
     posts::capture_complete_post_revision::<Postgres>(connection, post_id, now).await?;
     if delete {
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
-            .bind(now)
-            .bind(post_id)
+            .bind_storage(now)
+            .bind_storage(post_id)
             .execute(&mut *connection)
             .await?;
     } else if publish {
         sqlx::query("UPDATE posts SET published_at = $1, updated_at = $1 WHERE post_id = $2")
-            .bind(now)
-            .bind(post_id)
+            .bind_storage(now)
+            .bind_storage(post_id)
             .execute(&mut *connection)
             .await?;
     } else {
         sqlx::query("UPDATE posts SET published_at = NULL, updated_at = $1 WHERE post_id = $2")
-            .bind(now)
-            .bind(post_id)
+            .bind_storage(now)
+            .bind_storage(post_id)
             .execute(&mut *connection)
             .await?;
     }
@@ -123,7 +124,7 @@ async fn lifecycle_post(
     >(
         "SELECT user_id, deleted_at, published_at FROM posts WHERE post_id = $1 FOR UPDATE",
     )
-    .bind(post_id)
+    .bind_storage(post_id)
     .fetch_optional(&mut *connection)
     .await?;
     let Some((owner, deleted_at, published_at)) = state else {
@@ -148,7 +149,7 @@ async fn lifecycle_post(
                 '[]'::json)::text AS tags
          FROM posts p JOIN users u ON u.user_id = p.user_id WHERE p.post_id = $1",
     )
-    .bind(post_id)
+    .bind_storage(post_id)
     .fetch_one(&mut *connection)
     .await
     .map(Some)
@@ -170,7 +171,7 @@ async fn load_post_update_relations(
     input: &UpdatePostInput,
 ) -> sqlx::Result<PostUpdateRelations> {
     let tag_rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
-        .bind(post_id)
+        .bind_storage(post_id)
         .fetch_all(&mut *tx)
         .await?;
     let existing_tags = posts::post_tags_from_rows(tag_rows);
@@ -184,14 +185,14 @@ async fn load_post_update_relations(
         "SELECT tk.name, pa.audience_id FROM post_audiences pa
          JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id WHERE pa.post_id = $1",
     )
-    .bind(post_id)
+    .bind_storage(post_id)
     .fetch_all(&mut *tx)
     .await?;
     let old_media = sqlx::query_as::<_, MediaRefRow>(
         "SELECT source, sha256, filename, reference_kind, reference_form FROM post_media
          WHERE post_id = $1 AND subject_kind = 'current' AND revision_id = 0",
     )
-    .bind(post_id)
+    .bind_storage(post_id)
     .fetch_all(&mut *tx)
     .await?;
     let desired_media = input
@@ -243,37 +244,37 @@ async fn apply_post_update(
                    created_at, updated_at, published_at, deleted_at, summary,
                    COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]'::json)::text AS tags",
     )
-    .bind(input.title.as_ref())
-    .bind(&input.slug)
-    .bind(&input.body)
-    .bind(input.format)
-    .bind(input.rendered.html())
-    .bind(publication_clear)
-    .bind(explicit_published_at)
-    .bind(explicit_published_at)
-    .bind(now)
-    .bind(now)
-    .bind(input.summary.as_ref())
-    .bind(post_id)
+    .bind_storage(input.title.as_ref())
+    .bind_storage(&input.slug)
+    .bind_storage(&input.body)
+    .bind_storage(input.format)
+    .bind_storage(input.rendered.html())
+    .bind_storage(publication_clear)
+    .bind_storage(explicit_published_at)
+    .bind_storage(explicit_published_at)
+    .bind_storage(now)
+    .bind_storage(now)
+    .bind_storage(input.summary.as_ref())
+    .bind_storage(post_id)
     .fetch_one(&mut *tx)
     .await?;
     posts::replace_post_audiences::<Postgres>(tx, post_id, &input.audiences).await?;
     for label in tag_diff.to_add {
         let tag_id = sqlx::query_scalar::<_, TagId>(posts::UPSERT_TAG_RETURNING_ID)
-            .bind(label.slug())
+            .bind_storage(label.slug())
             .fetch_one(&mut *tx)
             .await?;
         sqlx::query(posts::INSERT_POST_TAG)
-            .bind(post_id)
-            .bind(tag_id)
-            .bind(label)
+            .bind_storage(post_id)
+            .bind_storage(tag_id)
+            .bind_storage(label)
             .execute(&mut *tx)
             .await?;
     }
     for slug in tag_diff.to_remove {
         sqlx::query(posts::DELETE_POST_TAG_BY_SLUG)
-            .bind(post_id)
-            .bind(slug)
+            .bind_storage(post_id)
+            .bind_storage(slug)
             .execute(&mut *tx)
             .await?;
     }
@@ -305,7 +306,7 @@ impl PostDialect for Postgres {
     ) -> sqlx::Result<()> {
         for key in posts::media_advisory_lock_keys(media.iter().cloned()) {
             sqlx::query("SELECT pg_advisory_xact_lock($1)")
-                .bind(key)
+                .bind_storage(key)
                 .execute(&mut *conn)
                 .await?;
         }
@@ -347,7 +348,7 @@ impl PostDialect for Postgres {
             "SELECT user_id, deleted_at, title, slug, body, format, rendered_html, summary, published_at
              FROM posts WHERE post_id = $1 FOR UPDATE",
         )
-        .bind(post_id)
+        .bind_storage(post_id)
         .fetch_optional(&mut *connection)
         .await?;
         let existing = match existing {
@@ -391,7 +392,7 @@ impl PostDialect for Postgres {
                         COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display) ORDER BY t.tag_slug COLLATE \"C\") FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text AS tags
                  FROM posts p JOIN users u ON u.user_id = p.user_id WHERE p.post_id = $1",
             )
-            .bind(post_id)
+            .bind_storage(post_id)
             .fetch_one(&mut *connection)
             .await
             .map_err(UpdatePostError::from);
@@ -436,7 +437,7 @@ impl PostDialect for Postgres {
         let post = sqlx::query_as::<_, (UserId, Option<common::time::UtcInstant>)>(
             "SELECT user_id, deleted_at FROM posts WHERE post_id = $1 FOR UPDATE",
         )
-        .bind(post_id)
+        .bind_storage(post_id)
         .fetch_optional(&mut *connection)
         .await?;
         match post {
@@ -445,7 +446,7 @@ impl PostDialect for Postgres {
             Some(_) => {}
         }
         let rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
-            .bind(post_id)
+            .bind_storage(post_id)
             .fetch_all(&mut *connection)
             .await?;
         let existing = posts::post_tags_from_rows(rows);
@@ -463,20 +464,20 @@ impl PostDialect for Postgres {
         .await?;
         for label in diff.to_add {
             let tag_id = sqlx::query_scalar::<_, TagId>(posts::UPSERT_TAG_RETURNING_ID)
-                .bind(label.slug())
+                .bind_storage(label.slug())
                 .fetch_one(&mut *connection)
                 .await?;
             sqlx::query(posts::INSERT_POST_TAG)
-                .bind(post_id)
-                .bind(tag_id)
-                .bind(label)
+                .bind_storage(post_id)
+                .bind_storage(tag_id)
+                .bind_storage(label)
                 .execute(&mut *connection)
                 .await?;
         }
         for slug in diff.to_remove {
             sqlx::query(posts::DELETE_POST_TAG_BY_SLUG)
-                .bind(post_id)
-                .bind(slug)
+                .bind_storage(post_id)
+                .bind_storage(slug)
                 .execute(&mut *connection)
                 .await?;
         }
@@ -540,12 +541,12 @@ impl PostDialect for Postgres {
         );
         query.push_values(rows, |mut values, (post_id, media, kind, form)| {
             values
-                .push_bind(post_id)
-                .push_bind(media.source)
-                .push_bind(media.sha256)
-                .push_bind(media.filename)
-                .push_bind(kind)
-                .push_bind(form);
+                .push_storage_bind(post_id)
+                .push_storage_bind(media.source)
+                .push_storage_bind(media.sha256)
+                .push_storage_bind(media.filename)
+                .push_storage_bind(kind)
+                .push_storage_bind(form);
         });
         query.build().execute(&mut *conn).await?;
         Ok(())

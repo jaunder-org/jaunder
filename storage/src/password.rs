@@ -12,7 +12,7 @@ use common::token::RawToken;
 use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::helpers::{self, TokenStateRow};
-use crate::sql::RowCount;
+use crate::sql::{QueryStorageExt, RowCount};
 use common::ids::UserId;
 use host::{metrics, retention::Domain, token};
 
@@ -116,10 +116,10 @@ where
             "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)
              VALUES ($1, $2, $3, $4)",
         )
-        .bind(token_hash)
-        .bind(user_id)
-        .bind(now)
-        .bind(expires_at)
+        .bind_storage(token_hash)
+        .bind_storage(user_id)
+        .bind_storage(now)
+        .bind_storage(expires_at)
         .execute(&mut *connection)
         .await?;
 
@@ -145,9 +145,9 @@ where
              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
              RETURNING user_id",
         )
-        .bind(now)
-        .bind(&token_hash)
-        .bind(now)
+        .bind_storage(now)
+        .bind_storage(&token_hash)
+        .bind_storage(now)
         .fetch_optional(&mut *connection)
         .await?;
 
@@ -157,7 +157,7 @@ where
         let row = sqlx::query_as::<_, TokenStateRow>(
             "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
         )
-        .bind(&token_hash)
+        .bind_storage(&token_hash)
         .fetch_optional(&mut *connection)
         .await?;
 

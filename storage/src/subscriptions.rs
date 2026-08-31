@@ -23,6 +23,7 @@ use sqlx::{Database, Pool, Row};
 use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::error::RequireRow;
+use crate::sql::QueryStorageExt;
 #[derive(Debug, macros::SqlxBridge)]
 pub(crate) struct SubscriptionStatusName(String);
 
@@ -238,10 +239,10 @@ where
         // conflict arm alike, so the row is guaranteed and `fetch_one` is the
         // honest read.
         sqlx::query_as::<_, (SubscriptionId,)>(DB::INSERT_SUBSCRIPTION)
-            .bind(author_user_id)
-            .bind(subscriber.channel_id)
-            .bind(&subscriber.subscriber_ref)
-            .bind(SubscriptionStatusName(status_name.into()))
+            .bind_storage(author_user_id)
+            .bind_storage(subscriber.channel_id)
+            .bind_storage(&subscriber.subscriber_ref)
+            .bind_storage(SubscriptionStatusName(status_name.into()))
             .fetch_one(&mut *connection)
             .await
             .map(|(id,)| id)
@@ -255,9 +256,9 @@ where
     ) -> sqlx::Result<()> {
         let connection = DB::write_connection(transaction)?;
         sqlx::query(DB::DELETE_SUBSCRIPTION)
-            .bind(author_user_id)
-            .bind(subscriber.channel_id)
-            .bind(&subscriber.subscriber_ref)
+            .bind_storage(author_user_id)
+            .bind_storage(subscriber.channel_id)
+            .bind_storage(&subscriber.subscriber_ref)
             .execute(&mut *connection)
             .await?;
         Ok(())
@@ -278,8 +279,8 @@ where
             ViewerIdentity::Local { user_id } => {
                 let subscriber_ref = visibility::local_subscriber_ref(*user_id);
                 sqlx::query_as::<_, (Exists,)>(DB::IS_ACTIVE_LOCAL_SUBSCRIBER)
-                    .bind(author_user_id)
-                    .bind(&subscriber_ref)
+                    .bind_storage(author_user_id)
+                    .bind_storage(&subscriber_ref)
                     .fetch_one(&self.pool)
                     .await?
             }
@@ -288,9 +289,9 @@ where
                 subscriber_ref,
             } => {
                 sqlx::query_as::<_, (Exists,)>(DB::IS_ACTIVE_SUBSCRIBER)
-                    .bind(author_user_id)
-                    .bind(*channel_id)
-                    .bind(subscriber_ref)
+                    .bind_storage(author_user_id)
+                    .bind_storage(*channel_id)
+                    .bind_storage(subscriber_ref)
                     .fetch_one(&self.pool)
                     .await?
             }
@@ -307,7 +308,7 @@ where
         // `subscriber_ref` costs only its row, while identity, channel, and
         // timestamp failures still fail the batch (ADR-0122).
         let rows = sqlx::query(DB::LIST_ACTIVE_SUBSCRIBERS)
-            .bind(author_user_id)
+            .bind_storage(author_user_id)
             .fetch_all(&self.pool)
             .await?;
         let mut records = Vec::with_capacity(rows.len());
@@ -350,7 +351,7 @@ where
         // As above, decode every non-divertible column first so only the
         // validated subscriber reference can make this summary skip a row.
         let rows = sqlx::query(DB::LIST_SUBSCRIBER_SUMMARIES)
-            .bind(author_user_id)
+            .bind_storage(author_user_id)
             .fetch_all(&self.pool)
             .await?;
         let mut summaries = Vec::with_capacity(rows.len());

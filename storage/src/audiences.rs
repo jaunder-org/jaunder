@@ -11,6 +11,7 @@
 //! cross-author pairing (ADR-0019, same-owner invariant).
 
 use crate::WriteTransaction;
+use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
 use common::audience::AudienceName;
 use common::ids::{AudienceId, SubscriptionId, UserId};
@@ -252,8 +253,8 @@ where
         match sqlx::query_as::<_, (AudienceId,)>(
             "INSERT INTO audiences (author_user_id, name) VALUES ($1, $2) RETURNING audience_id",
         )
-        .bind(author_user_id)
-        .bind(name)
+        .bind_storage(author_user_id)
+        .bind_storage(name)
         .fetch_one(&mut *connection)
         .await
         {
@@ -284,9 +285,9 @@ where
             "UPDATE audiences SET name = $1 WHERE author_user_id = $2 AND audience_id = $3 \
              RETURNING audience_id",
         )
-        .bind(name)
-        .bind(author_user_id)
-        .bind(audience_id)
+        .bind_storage(name)
+        .bind_storage(author_user_id)
+        .bind_storage(audience_id)
         .fetch_optional(&mut *connection)
         .await;
         match result {
@@ -312,13 +313,13 @@ where
     ) -> sqlx::Result<()> {
         let connection = DB::write_connection(transaction)?;
         sqlx::query("DELETE FROM audience_members WHERE author_user_id = $1 AND audience_id = $2")
-            .bind(author_user_id)
-            .bind(audience_id)
+            .bind_storage(author_user_id)
+            .bind_storage(audience_id)
             .execute(&mut *connection)
             .await?;
         sqlx::query("DELETE FROM audiences WHERE author_user_id = $1 AND audience_id = $2")
-            .bind(author_user_id)
-            .bind(audience_id)
+            .bind_storage(author_user_id)
+            .bind_storage(audience_id)
             .execute(&mut *connection)
             .await?;
         Ok(())
@@ -334,7 +335,7 @@ where
             "SELECT audience_id, name, created_at FROM audiences \
              WHERE author_user_id = $1 ORDER BY audience_id",
         )
-        .bind(author_user_id)
+        .bind_storage(author_user_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -365,9 +366,9 @@ where
              VALUES ($1, $2, $3) \
              ON CONFLICT (audience_id, subscription_id) DO NOTHING",
         )
-        .bind(audience_id)
-        .bind(subscription_id)
-        .bind(author_user_id)
+        .bind_storage(audience_id)
+        .bind_storage(subscription_id)
+        .bind_storage(author_user_id)
         .execute(&mut *connection)
         .await?;
         Ok(())
@@ -390,9 +391,9 @@ where
             "DELETE FROM audience_members \
              WHERE author_user_id = $1 AND audience_id = $2 AND subscription_id = $3",
         )
-        .bind(author_user_id)
-        .bind(audience_id)
-        .bind(subscription_id)
+        .bind_storage(author_user_id)
+        .bind_storage(audience_id)
+        .bind_storage(subscription_id)
         .execute(&mut *connection)
         .await?;
         Ok(())
@@ -412,8 +413,8 @@ where
             "SELECT subscription_id FROM audience_members \
              WHERE author_user_id = $1 AND audience_id = $2 ORDER BY subscription_id",
         )
-        .bind(author_user_id)
-        .bind(audience_id)
+        .bind_storage(author_user_id)
+        .bind_storage(audience_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
@@ -423,6 +424,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{AudienceError, InvalidAudienceTargets, validate_named_audience_targets};
+    use crate::sql::QueryStorageExt;
     use crate::test_support::{Backend, SeedUser, backends};
     use common::audience::AudienceName;
     use common::ids::AudienceId;
@@ -472,14 +474,14 @@ mod tests {
 
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query("UPDATE audiences SET created_at = $1 WHERE audience_id = $2")
-                .bind(first_created_at)
-                .bind(first_id)
+                .bind_storage(first_created_at)
+                .bind_storage(first_id)
                 .execute(pool)
                 .await
                 .unwrap();
             sqlx::query("UPDATE audiences SET created_at = $1 WHERE audience_id = $2")
-                .bind(second_created_at)
-                .bind(second_id)
+                .bind_storage(second_created_at)
+                .bind_storage(second_id)
                 .execute(pool)
                 .await
                 .unwrap();

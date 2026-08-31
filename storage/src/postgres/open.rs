@@ -70,6 +70,7 @@ pub(crate) async fn database_is_empty(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sql::QueryStorageExt;
     use crate::test_support::{Backend, CloseablePool, postgres_only};
     use common::tag::Tag;
     use common::test_support::parse_tag;
@@ -93,7 +94,7 @@ mod tests {
         for slug in ["alpha", "beta", "gamma"] {
             let tag = parse_tag(slug);
             sqlx::query("INSERT INTO tags (tag_slug) VALUES ($1)")
-                .bind(tag)
+                .bind_storage(tag)
                 .execute(pool)
                 .await
                 .expect("seed tag");
@@ -104,7 +105,7 @@ mod tests {
         let found = sqlx::query_scalar::<_, Tag>(
             "SELECT tag_slug FROM tags WHERE tag_slug = ANY($1) ORDER BY tag_slug",
         )
-        .bind(&wanted)
+        .bind_storage(&wanted)
         .fetch_all(pool)
         .await
         .expect("array bind");
