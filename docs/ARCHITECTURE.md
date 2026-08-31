@@ -308,13 +308,16 @@ non-blank value is parsed once into an owned `IdempotencyKey`; typed borrowed
 keys carry it through post creation and duplicate lookup, and the owned type is
 bound for persistence.
 
-The existing `idempotency_keys` table needs no schema migration: it stores the
-key as `TEXT NOT NULL` and enforces `UNIQUE(user_id, key)`. A fresh keyed create
-writes its post and key row atomically; a uniqueness collision rolls the
-attempted creation back. The fresh keyed create returns `201`; when its original
-post remains available, same-user key reuse returns that original post as `200`,
-even when the new payload differs. Another user may use the same key
-independently, and key rows are retained indefinitely.
+The existing `idempotency_keys` table stores the key as `TEXT NOT NULL` and
+enforces `UNIQUE(user_id, key)`. A fresh keyed create writes its post and key
+row atomically; a uniqueness collision rolls the attempted creation back. The
+fresh keyed create returns `201`; when its original post remains available,
+same-user key reuse returns that original post as `200`, even when the new
+payload differs. Another user may use the same key independently. The proposed
+[bounded transient-data retention policy](adr/drafts/bounded-transient-data-retention.md)
+replaces indefinite mapping retention with a one-hour semantic replay window: at
+`cutoff <= now`, the mapping no longer coordinates a replay, whether or not a
+later cleanup pass has physically removed it.
 
 ### Testing (summary)
 
@@ -809,8 +812,14 @@ separately inspectable and redrivable
 `Failed`, or `NoHub`.
 [AtomPub does not enqueue, web enqueue is not atomic, and triggers are coarse](https://github.com/jaunder-org/jaunder/issues/1051).
 [Configuration changes do not invalidate caches, worker/regenerator snapshots can differ, configuration access errors can collapse to `NoHub`, HTTP failures retry alike, `Retry-After` is ignored, budgets are shared, and terminal rows lack redrive](https://github.com/jaunder-org/jaunder/issues/1052).
-`HttpWebSubClient` runs in production; noop and file-capture implementations
-back tests.
+
+The proposed
+[bounded transient-data retention policy](adr/drafts/bounded-transient-data-retention.md)
+makes completed feed events cleanup-eligible immediately and retains exhausted
+events for seven days before making them cleanup-eligible. It is terminal-row
+retention, not a recovery or redrive decision for #1052, and does not apply to
+`feed_cache`. `HttpWebSubClient` runs in production; noop and file-capture
+implementations back tests.
 
 ### Committed direction — inbound federation
 
@@ -917,6 +926,14 @@ pass.
   User-Agent/host label, app passwords carry a user-supplied name. Revocation is
   deleting the session in the Sessions UI
   ([ADR-0014](adr/0014-atompub-authentication.md)).
+
+The proposed
+[bounded transient-data retention policy](adr/drafts/bounded-transient-data-retention.md)
+separates permanent sessions and App Passwords from credentials with expiry: an
+expired credential remains retained for 24 hours after expiry, while a consumed
+credential is cleanup-eligible immediately. It is a proposed retention and
+operations contract, not a claim that current storage cleanup implements it.
+
 - A token for user X reaches only `/atompub/X/*`. The enforcer is
   `server::atompub::require_user_match` (`server/src/atompub/guards.rs:13`),
   which returns 403 on mismatch and guards every per-user route — directly at
@@ -1019,6 +1036,11 @@ split by the **entropy of the value being validated**:
   bogus-secret requests into a CPU-exhaustion amplifier while destroying invite
   issuance as a throttle
   ([ADR-0022](adr/0022-validate-before-expensive-work.md)).
+
+The proposed
+[bounded transient-data retention policy](adr/drafts/bounded-transient-data-retention.md)
+governs retention after a credential enters its terminal state; it does not
+alter the cheap-reject and atomic-claim security properties above.
 
 Do not apply the equalizing-dummy-hash rule to high-entropy-secret paths, or
 cheap-reject to enumerable identifiers — each ADR carries the scope boundary to
@@ -1423,6 +1445,12 @@ determinants follow the same rule: record bounded decisions and stable internal
 IDs, never passwords, tokens, raw emails, invite codes, request bodies,
 arbitrary source text, or whole-struct dumps.
 
+The proposed
+[bounded transient-data retention policy](adr/drafts/bounded-transient-data-retention.md)
+adds PII- and secret-free structured OpenTelemetry signals at transient-data
+state transitions: expiry, consumption, completion, exhaustion, and cleanup. The
+operator, rather than Jaunder, owns long-term telemetry retention.
+
 ### Server-fn span names are macro-derived
 
 Every `#[server]` fn in `web/src` is written as `#[macros::server]`, which emits
@@ -1760,6 +1788,20 @@ and `restore` round-trip the data, with the backup target auto-derived from the
 storage configuration ([ADR-0064](adr/0064-backup-target-auto-derivation.md),
 [ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)); and
 `site-config set/get/list/unset` reads and writes site settings.
+
+**Proposed transient-data cleanup.** The
+[bounded transient-data retention policy](adr/drafts/bounded-transient-data-retention.md)
+requires database-backed transient data to have authoritative semantic expiry at
+`cutoff <= now`, with physical removal once at startup and daily thereafter.
+Each run receives one explicit `now` and drains eligible backlogs through
+repeated fixed-size statements that release locks between batches. A database
+cleanup failure is reported, does not stop later domains in the same run, and
+retries during the next scheduled run. Before uploads are accepted, startup must
+clear `media/tmp`; failure to clear it is fatal. This is proposed behavior, not
+a claim that the current startup path has these cleanup passes. The policy
+excludes durable Posts, revisions, tombstones, and referenced media;
+non-expiring sessions and App Passwords; `feed_cache`; and external captures,
+and deliberately creates no generic retention framework.
 
 `site-config` is not a free-form door. Its `key` argument is host-owned
 `SiteConfigKey`, so clap rejects an unknown key at parse time, and each key
