@@ -3,8 +3,9 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
+use chrono::Duration;
 use sha2::{Digest, Sha256};
-use sqlx::{Database, Pool, QueryBuilder, Row};
+use sqlx::{Database, Decode, Error as SqlxError, Pool, QueryBuilder, Row, Type};
 use thiserror::Error;
 
 use crate::InstanceId;
@@ -15,7 +16,10 @@ use crate::write_scope::WriteTransaction;
 use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
-use common::media::{self, MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind};
+use common::media::{
+    self, ContentHash, Filename, MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind,
+    MediaSource,
+};
 use common::org::PublicationState;
 use common::pagination::{PageSize, RowLimit};
 use common::post_body::PostBody;
@@ -350,7 +354,7 @@ pub struct CreatedPost {
 const IDEMPOTENCY_REPLAY_WINDOW_HOURS: i64 = 1;
 
 fn idempotency_replay_cutoff(now: UtcInstant) -> UtcInstant {
-    UtcInstant::from(now.value() - chrono::Duration::hours(IDEMPOTENCY_REPLAY_WINDOW_HOURS))
+    UtcInstant::from(now.value() - Duration::hours(IDEMPOTENCY_REPLAY_WINDOW_HOURS))
 }
 
 /// Errors that can occur when updating a post.
@@ -1118,7 +1122,7 @@ pub trait PostStorage: Send + Sync {
     /// Physically removes every idempotency mapping expired at `now`, in
     /// fixed-size statements. Each completed statement releases its connection
     /// before the next one, so an accumulated backlog never extends one lock.
-    async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, sqlx::Error>;
+    async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, SqlxError>;
 
     /// Fetches a post by its ID, applying the viewer-resolution filter: the post
     /// is returned only if `viewer` is the author or a targeted audience admits
@@ -1862,9 +1866,9 @@ where
     RevisionDetailRow: DecodeRawRow<DB>,
     (Tag, TagLabel): for<'r> sqlx::FromRow<'r, DB::Row>,
     (
-        common::media::MediaSource,
-        common::media::ContentHash,
-        common::media::Filename,
+        MediaSource,
+        ContentHash,
+        Filename,
         MediaReferenceKind,
         MediaReferenceForm,
     ): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -1890,18 +1894,18 @@ where
     // bridge; this tuple keeps the reference form typed at the SQL boundary.
     (
         PostId,
-        common::media::MediaSource,
-        common::media::ContentHash,
-        common::media::Filename,
+        MediaSource,
+        ContentHash,
+        Filename,
         MediaReferenceKind,
         MediaReferenceForm,
     ): for<'r> sqlx::FromRow<'r, DB::Row>,
     (
         PostId,
         UserId,
-        common::media::MediaSource,
-        common::media::ContentHash,
-        common::media::Filename,
+        MediaSource,
+        ContentHash,
+        Filename,
         MediaReferenceKind,
         MediaReferenceForm,
     ): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -1909,20 +1913,20 @@ where
         PostId,
         UserId,
         RevisionId,
-        common::media::MediaSource,
-        common::media::ContentHash,
-        common::media::Filename,
+        MediaSource,
+        ContentHash,
+        Filename,
         MediaReferenceKind,
         MediaReferenceForm,
     ): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> MediaReferenceKind: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> common::media::MediaSource: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q common::media::ContentHash: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q common::media::Filename: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> MediaSource: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q ContentHash: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q Filename: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> MediaReferenceForm: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // makes every id newtype bind on a generic backend.
     for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> RowCount: sqlx::Decode<'q, DB> + sqlx::Type<DB>,
+    for<'q> RowCount: Decode<'q, DB> + Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -2040,7 +2044,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, sqlx::Error> {
+    async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, SqlxError> {
         const BATCH_SIZE: i64 = 100;
         let cutoff = idempotency_replay_cutoff(now);
         let mut deleted = 0;
@@ -2231,9 +2235,9 @@ where
         .fetch_all(&self.pool)
         .await?;
         let media: Vec<(
-            common::media::MediaSource,
-            common::media::ContentHash,
-            common::media::Filename,
+            MediaSource,
+            ContentHash,
+            Filename,
             MediaReferenceKind,
             MediaReferenceForm,
         )> = sqlx::query_as(
@@ -2321,9 +2325,9 @@ where
             PostId,
             UserId,
             RevisionId,
-            common::media::MediaSource,
-            common::media::ContentHash,
-            common::media::Filename,
+            MediaSource,
+            ContentHash,
+            Filename,
             MediaReferenceKind,
             MediaReferenceForm,
         )> = sqlx::query_as(
@@ -3760,7 +3764,7 @@ pub(crate) async fn write_post_in_tx<DB>(
 where
     DB: PostDialect,
     for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> RowCount: sqlx::Decode<'q, DB> + sqlx::Type<DB>,
+    for<'q> RowCount: Decode<'q, DB> + Type<DB>,
     for<'q> Option<AudienceId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,

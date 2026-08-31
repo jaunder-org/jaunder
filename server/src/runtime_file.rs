@@ -9,9 +9,9 @@
 //! directory. We still inspect the JSON identity during rollout so a live legacy
 //! process without the lock remains protected.
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use host::error;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -208,9 +208,9 @@ impl StartupLockGuard {
     ///
     /// Returns an error when the lock directory or file cannot be created, or
     /// when another live process already holds the exclusive lock.
-    pub fn acquire(runtime_path: &Path) -> anyhow::Result<Self> {
+    pub fn acquire(runtime_path: &Path) -> Result<Self> {
         if let Some(parent) = runtime_path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
+            fs::create_dir_all(parent).with_context(|| {
                 format!("cannot create startup lock directory {}", parent.display())
             })?;
         }
@@ -396,7 +396,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let runtime_path = dir.path().join("runtime.json");
         let lock_path = lock_path(&runtime_path);
-        std::fs::write(&lock_path, "left by a dead process").unwrap();
+        fs::write(&lock_path, "left by a dead process").unwrap();
 
         let lock = StartupLockGuard::acquire(&runtime_path).expect("stale file is not a lock");
         drop(lock);

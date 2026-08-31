@@ -15,7 +15,7 @@ use common::{MutationOutcome, registration::RegistrationPolicy, username::Userna
 #[cfg(feature = "server")]
 use {
     crate::auth,
-    crate::error::{InternalError, from_write_scope_error},
+    crate::error::{InternalError, InternalResult, from_write_scope_error},
     common::ids::UserId,
     common::session_label::SessionLabel,
     common::token::RawToken,
@@ -43,7 +43,7 @@ fn classify_registration_scope_result(
     span: &tracing::Span,
     metric_policy: RegistrationMetricPolicy,
     is_invite_registration: bool,
-) -> crate::error::InternalResult<MutationOutcome<RawToken>> {
+) -> InternalResult<MutationOutcome<RawToken>> {
     match scope_result {
         Ok(MutationOutcome::Confirmed((token, invite_consumed))) => {
             metrics::registration(

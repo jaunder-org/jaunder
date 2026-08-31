@@ -1,9 +1,10 @@
 //! Invite code storage.
 
 use async_trait::async_trait;
+use chrono::Duration;
 use thiserror::Error;
 
-use host::invite::InviteCode;
+use host::invite::{self, InviteCode};
 use sqlx::{Database, Pool};
 
 use crate::WriteTransaction;
@@ -77,10 +78,10 @@ pub trait InviteStorage: Send + Sync {
 
     /// Returns a list of all invite codes in the system.
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>>;
-
-    /// Deletes consumed invites and unused invites expired for at least 24 hours.
+    /// Deletes consumed invites whose consumption is at or before the supplied
+    /// instant, and unused invites expired for at least 24 hours.
     ///
-    /// Each call drains fixed-size batches at the supplied instant, releasing the
+    /// Each call drains fixed-size batches at that instant, releasing the
     /// database connection after every statement.
     async fn prune_invites(&self, now: UtcInstant) -> sqlx::Result<u64>;
 }
@@ -127,7 +128,7 @@ where
         // Mint a typed `InviteCode` up front (infallible trusted door) and bind it
         // directly, so the code is a domain value end-to-end with no raw-`String` bind
         // and no fallible re-parse on the return (#438).
-        let code = host::invite::generate();
+        let code = invite::generate();
         let now = UtcInstant::now();
         let connection = DB::write_connection(transaction)?;
 
@@ -213,7 +214,7 @@ where
     }
 
     async fn prune_invites(&self, now: UtcInstant) -> sqlx::Result<u64> {
-        let unused_cutoff = UtcInstant::from(now.value() - chrono::Duration::hours(24));
+        let unused_cutoff = UtcInstant::from(now.value() - Duration::hours(24));
         let mut deleted = 0;
 
         loop {
@@ -223,12 +224,13 @@ where
                 "DELETE FROM invites
                  WHERE code IN (
                      SELECT code FROM invites
-                     WHERE used_at IS NOT NULL OR expires_at <= $1
+                     WHERE (used_at IS NOT NULL AND used_at <= $1) OR expires_at <= $2
                      ORDER BY code
-                     LIMIT $2
+                     LIMIT $3
                  )
                  RETURNING CAST(1 AS BIGINT)",
             )
+            .bind(now)
             .bind(unused_cutoff)
             .bind(PRUNE_BATCH_SIZE)
             .fetch_all(&self.pool)
@@ -245,10 +247,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, TestEnv, backends};
-    use chrono::Utc;
+    use crate::test_support::{Backend, TestEnv, backends, confirmed_for};
+    use chrono::{Duration, Utc};
     use rstest::*;
     use rstest_reuse::*;
+    use sqlx::Error as SqlxError;
     use std::sync::Arc;
 
     #[apply(backends)]
@@ -257,7 +260,7 @@ mod tests {
         // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::days(7));
+        let expires_at = UtcInstant::from(Utc::now() + Duration::days(7));
 
         // `create_invite` binds a typed `InviteCode`; `list_invites` decodes the
         // `code` column straight back into `InviteCode` — exercising both bridge
@@ -271,7 +274,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let code = crate::test_support::confirmed_for(outcome, "invite fixture setup");
+        let code = confirmed_for(outcome, "invite fixture setup");
         let invites = env.state.invites.list_invites().await.unwrap();
 
         assert_eq!(invites.len(), 1);
@@ -283,7 +286,7 @@ mod tests {
     async fn list_invites_rejects_a_malformed_code_column(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         let now = UtcInstant::now();
-        let expires_at = UtcInstant::from(now.value() + chrono::Duration::days(7));
+        let expires_at = UtcInstant::from(now.value() + Duration::days(7));
 
         // Seed a row whose `code` column holds a value `InviteCode::from_str`
         // rejects (a space is not a base64url character), binding it as a raw `&str`
@@ -305,7 +308,7 @@ mod tests {
         // bridge's `Decode` error arm).
         let err = state.invites.list_invites().await.unwrap_err();
         assert!(
-            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            matches!(err, SqlxError::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
         );
     }
@@ -326,8 +329,8 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
-        let eligible_at = UtcInstant::from(now.value() - chrono::Duration::hours(24));
-        let valid_until = UtcInstant::from(now.value() + chrono::Duration::hours(1));
+        let eligible_at = UtcInstant::from(now.value() - Duration::hours(24));
+        let valid_until = UtcInstant::from(now.value() + Duration::hours(1));
 
         let invites = Arc::clone(&env.state.invites);
         env.state
@@ -354,29 +357,49 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn prune_invites_removes_consumed_rows_and_reports_closed_pool(#[case] backend: Backend) {
+    async fn prune_invites_uses_the_supplied_instant_for_consumed_rows(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
-        let expires_at = UtcInstant::from(now.value() + chrono::Duration::hours(1));
+        let valid_until = UtcInstant::from(now.value() + Duration::hours(1));
         let invites = Arc::clone(&state.invites);
         let outcome = state
             .write_scope
             .run(|transaction| {
-                Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+                Box::pin(async move { invites.create_invite(transaction, valid_until).await })
             })
             .await
             .unwrap();
-        let code = crate::test_support::confirmed_for(outcome, "invite fixture setup");
+        let boundary_code = confirmed_for(outcome, "boundary invite fixture");
+        let invites = Arc::clone(&state.invites);
+        let outcome = state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { invites.create_invite(transaction, valid_until).await })
+            })
+            .await
+            .unwrap();
+        let future_code = confirmed_for(outcome, "future invite fixture");
+
         crate::with_closeable_pool!(base.pool(), pool, {
             sqlx::query("UPDATE invites SET used_at = $1 WHERE code = $2")
                 .bind(now)
-                .bind(&code)
+                .bind(&boundary_code)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE invites SET used_at = $1 WHERE code = $2")
+                .bind(valid_until)
+                .bind(&future_code)
                 .execute(pool)
                 .await
                 .unwrap();
         });
 
         assert_eq!(state.invites.prune_invites(now).await.unwrap(), 1);
+        let invites = state.invites.list_invites().await.unwrap();
+        assert_eq!(invites.len(), 1);
+        assert_eq!(invites[0].code.as_ref(), future_code.as_ref());
+
         base.close_pool().await;
         assert!(state.invites.prune_invites(now).await.is_err());
     }

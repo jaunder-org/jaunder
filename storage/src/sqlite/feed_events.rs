@@ -185,18 +185,20 @@ impl FeedEventDialect for Sqlite {
     }
     async fn prune_terminal_events(
         pool: &Pool<Sqlite>,
+        now: UtcInstant,
         failed_cutoff: UtcInstant,
         limit: RowLimit,
     ) -> Result<u64, FeedEventError> {
         let result = sqlx::query(
             "DELETE FROM feed_events WHERE id IN ( \
                 SELECT id FROM feed_events \
-                WHERE status = 'done' \
-                   OR (status = 'failed' AND terminal_at <= $1) \
+                WHERE (status = 'done' AND terminal_at <= $1) \
+                   OR (status = 'failed' AND terminal_at <= $2) \
                 ORDER BY terminal_at ASC \
-                LIMIT $2 \
+                LIMIT $3 \
              )",
         )
+        .bind(now)
         .bind(failed_cutoff)
         .bind(limit)
         .execute(pool)

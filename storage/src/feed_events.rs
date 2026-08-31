@@ -3,6 +3,8 @@
 //! claims are re-eligible after `lease_timeout` elapses (claim-lease pattern).
 
 use std::str::FromStr;
+#[cfg(test)]
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Duration;
@@ -10,8 +12,10 @@ use common::ids::FeedEventId;
 use common::pagination::RowLimit;
 use common::time::UtcInstant;
 use host::feed::{FeedEventClaimLimit, FeedEventStatus, FeedPath};
-use sqlx::{Database, Pool};
+use sqlx::{Database, Error as SqlxError, Pool};
 use thiserror::Error;
+#[cfg(test)]
+use tokio::sync::{Notify, RwLock};
 
 use crate::backend::Backend;
 
@@ -84,7 +88,7 @@ pub struct FeedEventRecord {
 #[derive(Debug, Error)]
 pub enum FeedEventError {
     #[error("database error: {0}")]
-    Db(#[from] sqlx::Error),
+    Db(#[from] SqlxError),
 }
 
 /// One row of a claim batch: either a converted record, or the id of a row whose
@@ -161,7 +165,7 @@ pub(crate) fn partition_claimed(rows: Vec<ClaimedRow>) -> (Vec<FeedEventRecord>,
 /// once at the dialect's useful aggregation boundary.
 pub(crate) fn finish_corrupt_purge(
     records: Vec<FeedEventRecord>,
-    purge: Result<(), sqlx::Error>,
+    purge: Result<(), SqlxError>,
     context: &'static str,
 ) -> Vec<FeedEventRecord> {
     crate::helpers::preserve_after_secondary(
@@ -176,8 +180,8 @@ pub(crate) fn finish_corrupt_purge(
 #[cfg(test)]
 #[derive(Default)]
 pub struct PruneBatchGate {
-    arrived: tokio::sync::Notify,
-    resume: tokio::sync::Notify,
+    arrived: Notify,
+    resume: Notify,
 }
 
 #[cfg(test)]
@@ -269,7 +273,7 @@ pub trait FeedEventStorage: Send + Sync {
     /// Delete terminal rows eligible at the supplied instant in fixed-size
     /// statements, releasing the connection after each statement.
     #[cfg(test)]
-    async fn install_prune_batch_gate(&self, gate: Option<std::sync::Arc<PruneBatchGate>>);
+    async fn install_prune_batch_gate(&self, gate: Option<Arc<PruneBatchGate>>);
     async fn prune_terminal_events(&self, now: UtcInstant) -> Result<u64, FeedEventError>;
 }
 
@@ -335,9 +339,12 @@ pub trait FeedEventDialect: Backend {
         error: &str,
         now: UtcInstant,
     ) -> Result<(), FeedEventError>;
-    /// Delete one bounded batch of terminal rows eligible at `failed_cutoff`.
+    /// Delete one bounded batch of terminal rows eligible at the frozen `now`.
+    ///
+    /// Failed rows use the separately derived `failed_cutoff` retention boundary.
     async fn prune_terminal_events(
         pool: &Pool<Self>,
+        now: UtcInstant,
         failed_cutoff: UtcInstant,
         limit: RowLimit,
     ) -> Result<u64, FeedEventError>;
@@ -352,7 +359,7 @@ pub trait FeedEventDialect: Backend {
 pub struct FeedEventStore<DB: Database> {
     pool: Pool<DB>,
     #[cfg(test)]
-    prune_batch_gate: tokio::sync::RwLock<Option<std::sync::Arc<PruneBatchGate>>>,
+    prune_batch_gate: RwLock<Option<Arc<PruneBatchGate>>>,
 }
 
 /// The one enqueue statement, shared by [`FeedEventStorage::enqueue`] (which
@@ -362,14 +369,14 @@ const INSERT_FEED_EVENT: &str = "INSERT INTO feed_events (feed_url) VALUES ($1)"
 
 /// The maximum rows one terminal-retention statement may delete.
 const TERMINAL_PRUNE_LIMIT: RowLimit = RowLimit::at_most(200);
-const FAILED_EVENT_RETENTION: chrono::Duration = chrono::Duration::days(7);
+const FAILED_EVENT_RETENTION: Duration = Duration::days(7);
 impl<DB: Database> FeedEventStore<DB> {
     #[must_use]
     pub fn new(pool: Pool<DB>) -> Self {
         Self {
             pool,
             #[cfg(test)]
-            prune_batch_gate: tokio::sync::RwLock::new(None),
+            prune_batch_gate: RwLock::new(None),
         }
     }
 }
@@ -539,7 +546,8 @@ where
         let mut deleted = 0;
         loop {
             let batch =
-                DB::prune_terminal_events(&self.pool, failed_cutoff, TERMINAL_PRUNE_LIMIT).await?;
+                DB::prune_terminal_events(&self.pool, now, failed_cutoff, TERMINAL_PRUNE_LIMIT)
+                    .await?;
             deleted += batch;
             if batch < TERMINAL_PRUNE_LIMIT.value().unsigned_abs() {
                 return Ok(deleted);
@@ -555,17 +563,22 @@ where
         }
     }
     #[cfg(test)]
-    async fn install_prune_batch_gate(&self, gate: Option<std::sync::Arc<PruneBatchGate>>) {
+    async fn install_prune_batch_gate(&self, gate: Option<Arc<PruneBatchGate>>) {
         *self.prune_batch_gate.write().await = gate;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Timelike, Utc};
+    use std::sync::Arc;
+    use std::time::Duration as StdDuration;
+
+    use chrono::{Duration, TimeZone, Timelike, Utc};
+    use sqlx::Error as SqlxError;
+    use tokio::time;
 
     use super::*;
-    use crate::test_support::{Backend, backends, fp};
+    use crate::test_support::{Backend, backends, confirmed_for, fp};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -578,14 +591,14 @@ mod tests {
             Result<T, FeedEventError>,
         >,
     ) -> T {
-        crate::test_support::confirmed_for(
+        confirmed_for(
             scope.run(callback).await.expect("feed-event write"),
             "feed-event test write acknowledgement",
         )
     }
     async fn enqueue(
         scope: &crate::WriteScope,
-        feed_events: std::sync::Arc<dyn FeedEventStorage>,
+        feed_events: Arc<dyn FeedEventStorage>,
         feed_path: FeedPath,
     ) -> FeedEventId {
         confirmed(scope, move |transaction| {
@@ -596,9 +609,9 @@ mod tests {
 
     async fn claim(
         scope: &crate::WriteScope,
-        feed_events: std::sync::Arc<dyn FeedEventStorage>,
+        feed_events: Arc<dyn FeedEventStorage>,
         limit: usize,
-        lease: chrono::Duration,
+        lease: Duration,
     ) -> Vec<FeedEventRecord> {
         confirmed(scope, move |transaction| {
             Box::pin(async move {
@@ -612,7 +625,7 @@ mod tests {
 
     async fn mark_regenerated(
         scope: &crate::WriteScope,
-        feed_events: std::sync::Arc<dyn FeedEventStorage>,
+        feed_events: Arc<dyn FeedEventStorage>,
         ids: Vec<FeedEventId>,
     ) {
         confirmed(scope, move |transaction| {
@@ -623,7 +636,7 @@ mod tests {
 
     async fn mark_pinged(
         scope: &crate::WriteScope,
-        feed_events: std::sync::Arc<dyn FeedEventStorage>,
+        feed_events: Arc<dyn FeedEventStorage>,
         ids: Vec<FeedEventId>,
         now: UtcInstant,
     ) {
@@ -635,7 +648,7 @@ mod tests {
 
     async fn mark_failed(
         scope: &crate::WriteScope,
-        feed_events: std::sync::Arc<dyn FeedEventStorage>,
+        feed_events: Arc<dyn FeedEventStorage>,
         ids: Vec<FeedEventId>,
         error: String,
         next_attempt_at: UtcInstant,
@@ -652,7 +665,7 @@ mod tests {
 
     async fn mark_exhausted(
         scope: &crate::WriteScope,
-        feed_events: std::sync::Arc<dyn FeedEventStorage>,
+        feed_events: Arc<dyn FeedEventStorage>,
         ids: Vec<FeedEventId>,
         error: String,
         now: UtcInstant,
@@ -676,7 +689,7 @@ mod tests {
         let env = backend.setup().await;
         let id = enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
@@ -693,7 +706,7 @@ mod tests {
             fp("/tags/t/feed.rss"),
         ];
         let expected: std::collections::HashSet<_> = paths.iter().cloned().collect();
-        let feed_events = std::sync::Arc::clone(&env.state.feed_events);
+        let feed_events = Arc::clone(&env.state.feed_events);
         env.state
             .write_scope
             .run(move |transaction| {
@@ -704,9 +717,9 @@ mod tests {
 
         let claimed = claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
         // FeedPath has no Ord (deliberate), so compare as sets.
@@ -722,7 +735,7 @@ mod tests {
         // No dedupe: the drain groups by feed_path, so duplicate rows are
         // harmless — pin that enqueue_many does not silently collapse them.
         let paths = vec![fp("/feed.rss"), fp("/feed.rss")];
-        let feed_events = std::sync::Arc::clone(&env.state.feed_events);
+        let feed_events = Arc::clone(&env.state.feed_events);
         env.state
             .write_scope
             .run(move |transaction| {
@@ -733,9 +746,9 @@ mod tests {
 
         let claimed = claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
         assert_eq!(claimed.len(), 2);
@@ -745,7 +758,7 @@ mod tests {
     #[tokio::test]
     async fn enqueue_many_empty_input_is_a_no_op(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let feed_events = std::sync::Arc::clone(&env.state.feed_events);
+        let feed_events = Arc::clone(&env.state.feed_events);
         let paths = Vec::new();
         env.state
             .write_scope
@@ -757,9 +770,9 @@ mod tests {
 
         let claimed = claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
         assert!(claimed.is_empty());
@@ -771,7 +784,7 @@ mod tests {
         let env = backend.setup().await;
         enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
@@ -779,7 +792,7 @@ mod tests {
         let count = env
             .state
             .feed_events
-            .claimable_count(chrono::Duration::minutes(5))
+            .claimable_count(Duration::minutes(5))
             .await
             .unwrap();
 
@@ -792,23 +805,23 @@ mod tests {
         let env = backend.setup().await;
         let id = enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
         mark_failed(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             vec![id],
             "retry later".to_owned(),
-            UtcInstant::from(chrono::Utc::now() + chrono::Duration::hours(1)),
+            UtcInstant::from(chrono::Utc::now() + Duration::hours(1)),
         )
         .await;
 
         let count = env
             .state
             .feed_events
-            .claimable_count(chrono::Duration::minutes(5))
+            .claimable_count(Duration::minutes(5))
             .await
             .unwrap();
 
@@ -821,15 +834,15 @@ mod tests {
         let env = backend.setup().await;
         enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
         let claimed = claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
         assert_eq!(claimed.len(), 1);
@@ -837,7 +850,7 @@ mod tests {
         let count = env
             .state
             .feed_events
-            .claimable_count(chrono::Duration::minutes(5))
+            .claimable_count(Duration::minutes(5))
             .await
             .unwrap();
 
@@ -850,22 +863,22 @@ mod tests {
         let env = backend.setup().await;
         enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
         claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
 
         let count = env
             .state
             .feed_events
-            .claimable_count(chrono::Duration::zero())
+            .claimable_count(Duration::zero())
             .await
             .unwrap();
 
@@ -885,7 +898,7 @@ mod tests {
             .unwrap();
         enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
@@ -893,8 +906,8 @@ mod tests {
         // The claim skips-and-purges the corrupt row and returns only the valid
         // one — the batch is NOT failed (which would wedge the worker forever).
         // The batch-level report is redacted rather than retaining the bad value.
-        let feed_events = std::sync::Arc::clone(&env.state.feed_events);
-        let lease = chrono::Duration::minutes(5);
+        let feed_events = Arc::clone(&env.state.feed_events);
+        let lease = Duration::minutes(5);
         let (claimed, trace) = crate::helpers::swallowed_test::capture_async(
             env.state.write_scope.run(move |transaction| {
                 Box::pin(async move {
@@ -940,7 +953,7 @@ mod tests {
         let env = backend.setup().await;
         enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
@@ -961,8 +974,8 @@ mod tests {
             .await
             .unwrap();
 
-        let feed_events = std::sync::Arc::clone(&env.state.feed_events);
-        let lease = chrono::Duration::minutes(5);
+        let feed_events = Arc::clone(&env.state.feed_events);
+        let lease = Duration::minutes(5);
         let err = match env
             .state
             .write_scope
@@ -982,7 +995,7 @@ mod tests {
             }
         };
         assert!(
-            matches!(err, FeedEventError::Db(sqlx::Error::ColumnDecode { .. })),
+            matches!(err, FeedEventError::Db(SqlxError::ColumnDecode { .. })),
             "expected a column-decode error, got {err:?}"
         );
 
@@ -1023,7 +1036,7 @@ mod tests {
         let env = backend.setup().await;
         enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
@@ -1033,8 +1046,8 @@ mod tests {
             .await
             .unwrap();
 
-        let feed_events = std::sync::Arc::clone(&env.state.feed_events);
-        let lease = chrono::Duration::minutes(5);
+        let feed_events = Arc::clone(&env.state.feed_events);
+        let lease = Duration::minutes(5);
         let err = match env
             .state
             .write_scope
@@ -1054,7 +1067,7 @@ mod tests {
             }
         };
         assert!(
-            matches!(err, FeedEventError::Db(sqlx::Error::ColumnDecode { .. })),
+            matches!(err, FeedEventError::Db(SqlxError::ColumnDecode { .. })),
             "expected a column-decode error, got {err:?}"
         );
 
@@ -1096,7 +1109,7 @@ mod tests {
             .unwrap();
         enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
@@ -1119,8 +1132,8 @@ mod tests {
             .await
             .unwrap();
 
-        let feed_events = std::sync::Arc::clone(&env.state.feed_events);
-        let lease = chrono::Duration::minutes(5);
+        let feed_events = Arc::clone(&env.state.feed_events);
+        let lease = Duration::minutes(5);
         let (claimed, trace) = crate::helpers::swallowed_test::capture_async(
             env.state.write_scope.run(move |transaction| {
                 Box::pin(async move {
@@ -1181,15 +1194,15 @@ mod tests {
         let env = backend.setup().await;
         enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
         let claimed = claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
         assert_eq!(claimed.len(), 1);
@@ -1203,22 +1216,22 @@ mod tests {
         let env = backend.setup().await;
         enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
         let first = claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
         let second = claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
         assert_eq!(first.len(), 1);
@@ -1231,23 +1244,23 @@ mod tests {
         let env = backend.setup().await;
         enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
         let _first = claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
         // With a zero lease, the just-claimed row is immediately re-eligible.
         let second = claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::zero(),
+            Duration::zero(),
         )
         .await;
         assert_eq!(second.len(), 1);
@@ -1259,28 +1272,28 @@ mod tests {
         let env = backend.setup().await;
         enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
         let claimed = claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
         let ids: Vec<FeedEventId> = claimed.iter().map(|r| r.id).collect();
         let id = ids[0];
         mark_regenerated(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             ids.clone(),
         )
         .await;
         mark_pinged(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             ids,
             fixture_instant(500_000),
         )
@@ -1297,9 +1310,9 @@ mod tests {
         assert_eq!(terminal_at, Some(fixture_instant(500_000)));
         let next = claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
         assert!(next.is_empty());
@@ -1311,21 +1324,21 @@ mod tests {
         let env = backend.setup().await;
         let id = enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
         claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
-        let future = UtcInstant::from(Utc::now() + chrono::Duration::minutes(1));
+        let future = UtcInstant::from(Utc::now() + Duration::minutes(1));
         mark_failed(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             vec![id],
             "boom".to_owned(),
             future,
@@ -1334,9 +1347,9 @@ mod tests {
         // Not eligible until `future`.
         let now = claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
         assert!(now.is_empty());
@@ -1348,13 +1361,13 @@ mod tests {
         let env = backend.setup().await;
         let id = enqueue(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             fp("/feed.rss"),
         )
         .await;
         mark_exhausted(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             vec![id],
             "gave up".to_owned(),
             fixture_instant(600_000),
@@ -1373,9 +1386,9 @@ mod tests {
         // Failed rows are never eligible.
         let next = claim(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             10,
-            chrono::Duration::minutes(5),
+            Duration::minutes(5),
         )
         .await;
         assert!(next.is_empty());
@@ -1572,15 +1585,19 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn prune_terminal_events_obeys_exact_cutoff_and_preserves_nonterminal_rows(
+    async fn prune_terminal_events_obeys_frozen_now_and_preserves_nonterminal_rows(
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
         let now = fixture_instant(900_000);
-        let cutoff = UtcInstant::from(now.value() - chrono::Duration::days(7));
+        let cutoff = UtcInstant::from(now.value() - Duration::days(7));
         crate::with_closeable_pool!(env.base.pool(), pool, {
             for (path, status, terminal_at) in [
-                (fp("/~completed/feed.rss"), FeedEventStatus::Done, Some(now)),
+                (
+                    fp("/~completed-exact-now/feed.rss"),
+                    FeedEventStatus::Done,
+                    Some(now),
+                ),
                 (
                     fp("/~failed-boundary/feed.rss"),
                     FeedEventStatus::Failed,
@@ -1589,9 +1606,12 @@ mod tests {
                 (
                     fp("/~failed-newer/feed.rss"),
                     FeedEventStatus::Failed,
-                    Some(UtcInstant::from(
-                        cutoff.value() + chrono::Duration::seconds(1),
-                    )),
+                    Some(UtcInstant::from(cutoff.value() + Duration::seconds(1))),
+                ),
+                (
+                    fp("/~completed-future/feed.rss"),
+                    FeedEventStatus::Done,
+                    Some(UtcInstant::from(now.value() + Duration::seconds(1))),
                 ),
                 (fp("/~pending/feed.rss"), FeedEventStatus::Pending, None),
                 (fp("/~claimed/feed.rss"), FeedEventStatus::Claimed, None),
@@ -1624,7 +1644,7 @@ mod tests {
                 .scalar_i64("SELECT COUNT(*) FROM feed_events")
                 .await
                 .expect("count retained rows"),
-            3
+            4
         );
     }
 
@@ -1676,15 +1696,15 @@ mod tests {
             }
         });
 
-        let gate = std::sync::Arc::new(PruneBatchGate::default());
+        let gate = Arc::new(PruneBatchGate::default());
         env.state
             .feed_events
-            .install_prune_batch_gate(Some(std::sync::Arc::clone(&gate)))
+            .install_prune_batch_gate(Some(Arc::clone(&gate)))
             .await;
-        let feed_events = std::sync::Arc::clone(&env.state.feed_events);
+        let feed_events = Arc::clone(&env.state.feed_events);
         let cleanup = tokio::spawn(async move { feed_events.prune_terminal_events(now).await });
 
-        tokio::time::timeout(std::time::Duration::from_secs(2), gate.wait_for_batch())
+        time::timeout(StdDuration::from_secs(2), gate.wait_for_batch())
             .await
             .expect("first prune batch");
         env.base
@@ -1722,7 +1742,7 @@ mod tests {
                 .feed_events
                 .prune_terminal_events(UtcInstant::now())
                 .await,
-            Err(FeedEventError::Db(sqlx::Error::PoolClosed))
+            Err(FeedEventError::Db(SqlxError::PoolClosed))
         ));
     }
 
@@ -1732,20 +1752,20 @@ mod tests {
         let env = backend.setup().await;
         mark_regenerated(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             Vec::new(),
         )
         .await;
         mark_pinged(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             Vec::new(),
             UtcInstant::now(),
         )
         .await;
         mark_failed(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             Vec::new(),
             "x".to_owned(),
             UtcInstant::now(),
@@ -1753,7 +1773,7 @@ mod tests {
         .await;
         mark_exhausted(
             &env.state.write_scope,
-            std::sync::Arc::clone(&env.state.feed_events),
+            Arc::clone(&env.state.feed_events),
             Vec::new(),
             "x".to_owned(),
             UtcInstant::now(),

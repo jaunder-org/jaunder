@@ -2,9 +2,11 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Result;
 use common::time::UtcInstant;
 use host::{
-    error, metrics,
+    error::{self, ErrorClass, ErrorKind, SwallowedSource},
+    metrics,
     retention::{CleanupResult, Domain},
 };
 use storage::{
@@ -73,7 +75,7 @@ impl DatabaseMaintenance {
     /// Returns an error when `interval` is zero or the scheduler cannot be
     /// constructed, populated, or started. Cleanup failures are reported and
     /// swallowed per domain so they do not fail startup.
-    pub(crate) async fn start(self, interval: Duration) -> anyhow::Result<JobScheduler> {
+    pub(crate) async fn start(self, interval: Duration) -> Result<JobScheduler> {
         anyhow::ensure!(
             !interval.is_zero(),
             "database maintenance interval must be non-zero"
@@ -116,10 +118,10 @@ where
                 "database.maintenance.failed"
             );
             error::report_swallowed(
-                error::ErrorKind::Storage,
-                error::ErrorClass::Transient,
+                ErrorKind::Storage,
+                ErrorClass::Transient,
                 "server.maintenance",
-                error::SwallowedSource::Error(&error),
+                SwallowedSource::Error(&error),
             );
         }
     }
@@ -128,11 +130,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::Error as SqlxError;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use storage::{
         FeedEventError, MockEmailVerificationStorage, MockFeedEventStorage, MockInviteStorage,
         MockPasswordResetStorage, MockPostStorage,
     };
+    use tokio::time;
 
     fn maintenance(
         posts: MockPostStorage,
@@ -212,31 +216,31 @@ mod tests {
             .expect_prune_expired_idempotency_keys()
             .withf(move |actual| *actual == now)
             .times(1)
-            .returning(|_| Err(sqlx::Error::PoolClosed));
+            .returning(|_| Err(SqlxError::PoolClosed));
         let mut invites = MockInviteStorage::new();
         invites
             .expect_prune_invites()
             .withf(move |actual| *actual == now)
             .times(1)
-            .returning(|_| Err(sqlx::Error::PoolClosed));
+            .returning(|_| Err(SqlxError::PoolClosed));
         let mut email_verifications = MockEmailVerificationStorage::new();
         email_verifications
             .expect_prune_email_verifications()
             .withf(move |actual| *actual == now)
             .times(1)
-            .returning(|_| Err(sqlx::Error::PoolClosed));
+            .returning(|_| Err(SqlxError::PoolClosed));
         let mut password_resets = MockPasswordResetStorage::new();
         password_resets
             .expect_prune_password_resets()
             .withf(move |actual| *actual == now)
             .times(1)
-            .returning(|_| Err(sqlx::Error::PoolClosed));
+            .returning(|_| Err(SqlxError::PoolClosed));
         let mut feed_events = MockFeedEventStorage::new();
         feed_events
             .expect_prune_terminal_events()
             .withf(move |actual| *actual == now)
             .times(1)
-            .returning(|_| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_| Err(FeedEventError::Db(SqlxError::PoolClosed)));
 
         maintenance(
             posts,
@@ -259,7 +263,7 @@ mod tests {
             .times(2)
             .returning(move |_| {
                 if post_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                    Err(sqlx::Error::PoolClosed)
+                    Err(SqlxError::PoolClosed)
                 } else {
                     Ok(1)
                 }
@@ -304,27 +308,27 @@ mod tests {
         posts
             .expect_prune_expired_idempotency_keys()
             .times(1)
-            .returning(|_| Err(sqlx::Error::PoolClosed));
+            .returning(|_| Err(SqlxError::PoolClosed));
         let mut invites = MockInviteStorage::new();
         invites
             .expect_prune_invites()
             .times(1)
-            .returning(|_| Err(sqlx::Error::PoolClosed));
+            .returning(|_| Err(SqlxError::PoolClosed));
         let mut email_verifications = MockEmailVerificationStorage::new();
         email_verifications
             .expect_prune_email_verifications()
             .times(1)
-            .returning(|_| Err(sqlx::Error::PoolClosed));
+            .returning(|_| Err(SqlxError::PoolClosed));
         let mut password_resets = MockPasswordResetStorage::new();
         password_resets
             .expect_prune_password_resets()
             .times(1)
-            .returning(|_| Err(sqlx::Error::PoolClosed));
+            .returning(|_| Err(SqlxError::PoolClosed));
         let mut feed_events = MockFeedEventStorage::new();
         feed_events
             .expect_prune_terminal_events()
             .times(1)
-            .returning(|_| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_| Err(FeedEventError::Db(SqlxError::PoolClosed)));
 
         let mut scheduler = maintenance(
             posts,
@@ -378,9 +382,9 @@ mod tests {
         .await
         .expect("start maintenance scheduler");
 
-        tokio::time::timeout(Duration::from_secs(3), async {
+        time::timeout(Duration::from_secs(3), async {
             while calls.load(Ordering::SeqCst) < 2 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await

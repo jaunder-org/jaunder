@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+
 use thiserror::Error;
 
 use crate::{
@@ -646,11 +647,15 @@ mod tests {
         Backend, SeedUser, backends, confirmed, fetch_post_media, media_ref_for, media_url_for,
         seed_media,
     };
+    #[cfg(feature = "test-utils")]
+    use crate::{MockFeedEventStorage, MockPostStorage};
+    use chrono::{Duration, TimeZone, Utc};
     use common::idempotency_key::IdempotencyKey;
     use common::media::{MediaReferenceForm, MediaReferenceKind};
     use common::test_support::{parse_post_body, parse_post_title, parse_row_limit, parse_slug};
     #[cfg(feature = "test-utils")]
     use common::test_support::{parse_tag, parse_tag_label};
+    use sqlx::Error as SqlxError;
 
     use rstest::*;
     use rstest_reuse::*;
@@ -864,12 +869,12 @@ mod tests {
         // A storage-layer `Internal` error from `create_post` (as opposed to the
         // retryable `SlugConflict`) short-circuits the slug-retry loop into
         // `PerformCreationError::Storage`.
-        let mut storage = crate::MockPostStorage::new();
+        let mut storage = MockPostStorage::new();
         storage
             .expect_create_post()
-            .returning(|_, _, _| Err(CreatePostError::Internal(sqlx::Error::RowNotFound)));
+            .returning(|_, _, _| Err(CreatePostError::Internal(SqlxError::RowNotFound)));
         let write_scope = mock_write_scope();
-        let feed_events = crate::MockFeedEventStorage::new();
+        let feed_events = MockFeedEventStorage::new();
         let storage: Arc<dyn PostStorage> = Arc::new(storage);
         let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
         let temp = tempfile::tempdir().unwrap();
@@ -2221,19 +2226,16 @@ mod tests {
     async fn idempotency_mapping_expires_at_the_inclusive_cutoff_and_prunes(
         #[case] backend: Backend,
     ) {
-        use chrono::TimeZone;
-
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let storage = Arc::clone(&env.state.posts);
         let key = parse_idempotency_key("retained-key");
         let created_at = UtcInstant::from(
-            chrono::Utc
-                .with_ymd_and_hms(2026, 8, 31, 12, 0, 0)
+            Utc.with_ymd_and_hms(2026, 8, 31, 12, 0, 0)
                 .single()
                 .expect("fixed instant"),
         );
-        let cutoff = UtcInstant::from(created_at.value() + chrono::Duration::hours(1));
+        let cutoff = UtcInstant::from(created_at.value() + Duration::hours(1));
 
         let first = confirmed(
             perform_post_creation_at(
@@ -2253,7 +2255,7 @@ mod tests {
                 .post_id_for_idempotency_key(
                     user_id,
                     &key,
-                    UtcInstant::from(cutoff.value() - chrono::Duration::seconds(1)),
+                    UtcInstant::from(cutoff.value() - Duration::seconds(1)),
                 )
                 .await
                 .expect("pre-cutoff lookup"),
@@ -2303,7 +2305,7 @@ mod tests {
         assert_eq!(
             storage
                 .prune_expired_idempotency_keys(UtcInstant::from(
-                    cutoff.value() + chrono::Duration::hours(1),
+                    cutoff.value() + Duration::hours(1)
                 ))
                 .await
                 .expect("prune expired mapping"),
@@ -2314,7 +2316,7 @@ mod tests {
                 .post_id_for_idempotency_key(
                     user_id,
                     &key,
-                    UtcInstant::from(cutoff.value() + chrono::Duration::hours(1)),
+                    UtcInstant::from(cutoff.value() + Duration::hours(1)),
                 )
                 .await
                 .expect("lookup after pruning"),
@@ -2330,7 +2332,7 @@ mod tests {
         let storage = Arc::clone(&env.state.posts);
         let key = parse_idempotency_key("concurrent-retained-key");
         let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
-        let cutoff = UtcInstant::from(created_at.value() + chrono::Duration::hours(1));
+        let cutoff = UtcInstant::from(created_at.value() + Duration::hours(1));
 
         let original = confirmed(
             perform_post_creation_at(
@@ -2376,7 +2378,7 @@ mod tests {
                 .post_id_for_idempotency_key(
                     user_id,
                     &key,
-                    UtcInstant::from(cutoff.value() + chrono::Duration::seconds(1)),
+                    UtcInstant::from(cutoff.value() + Duration::seconds(1)),
                 )
                 .await
                 .expect("replacement mapping"),

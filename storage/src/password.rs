@@ -1,15 +1,16 @@
 //! Password reset token storage.
 
 use async_trait::async_trait;
+use chrono::Duration;
 
-use sqlx::Database;
+use sqlx::{Database, Error as SqlxError, Pool};
 use thiserror::Error;
 
 use common::time::UtcInstant;
 use common::token::RawToken;
 
 use crate::backend::Backend;
-use crate::helpers::TokenStateRow;
+use crate::helpers::{self, TokenStateRow};
 use crate::sql::RowCount;
 use crate::{PasswordResetConsumption, WriteTransaction};
 use common::ids::UserId;
@@ -29,7 +30,7 @@ pub enum UsePasswordResetError {
     AlreadyUsed,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] sqlx::Error),
+    Internal(#[from] SqlxError),
 }
 
 /// Storage for password-reset tokens.
@@ -63,9 +64,9 @@ pub trait PasswordResetStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         raw_token: &RawToken,
     ) -> Result<PasswordResetConsumption, UsePasswordResetError>;
-
-    /// Deletes consumed reset tokens and unused tokens expired for at least 24
-    /// hours, draining bounded batches at the supplied instant.
+    /// Deletes consumed reset tokens whose consumption is at or before the
+    /// supplied instant, and unused tokens expired for at least 24 hours,
+    /// draining bounded batches at that instant.
     async fn prune_password_resets(&self, now: UtcInstant) -> sqlx::Result<u64>;
 }
 
@@ -73,14 +74,14 @@ pub trait PasswordResetStorage: Send + Sync {
 ///
 /// Zero backend divergence (identical SQL across `SQLite` and Postgres),
 pub struct PasswordResetStore<DB: Database> {
-    pool: sqlx::Pool<DB>,
+    pool: Pool<DB>,
 }
 
 const PRUNE_BATCH_SIZE: i64 = 100;
 
 impl<DB: Database> PasswordResetStore<DB> {
     #[must_use]
-    pub fn new(pool: sqlx::Pool<DB>) -> Self {
+    pub fn new(pool: Pool<DB>) -> Self {
         Self { pool }
     }
 }
@@ -98,7 +99,7 @@ where
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
-    for<'c> &'c sqlx::Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     async fn create_password_reset(
@@ -160,10 +161,10 @@ where
         .fetch_optional(&mut *connection)
         .await?;
 
-        Err(crate::helpers::password_reset_claim_error(row, now))
+        Err(helpers::password_reset_claim_error(row, now))
     }
     async fn prune_password_resets(&self, now: UtcInstant) -> sqlx::Result<u64> {
-        let unused_cutoff = UtcInstant::from(now.value() - chrono::Duration::hours(24));
+        let unused_cutoff = UtcInstant::from(now.value() - Duration::hours(24));
         let mut deleted = 0;
 
         loop {
@@ -173,12 +174,13 @@ where
                 "DELETE FROM password_resets
                  WHERE token_hash IN (
                      SELECT token_hash FROM password_resets
-                     WHERE used_at IS NOT NULL OR expires_at <= $1
+                     WHERE (used_at IS NOT NULL AND used_at <= $1) OR expires_at <= $2
                      ORDER BY token_hash
-                     LIMIT $2
+                     LIMIT $3
                  )
                  RETURNING CAST(1 AS BIGINT)",
             )
+            .bind(now)
             .bind(unused_cutoff)
             .bind(PRUNE_BATCH_SIZE)
             .fetch_all(&self.pool)
@@ -195,7 +197,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, SeedUser, backends};
+    use crate::test_support::{Backend, SeedUser, backends, confirmed_for};
+    use chrono::Duration;
+    use host::token;
     use rstest::*;
     use rstest_reuse::*;
     use std::sync::Arc;
@@ -225,7 +229,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let raw_token = crate::test_support::confirmed_for(outcome, "password-reset fixture setup");
+        let raw_token = confirmed_for(outcome, "password-reset fixture setup");
         let password_resets = Arc::clone(&env.state.password_resets);
         let outcome = env
             .state
@@ -239,20 +243,20 @@ mod tests {
             })
             .await
             .unwrap();
-        let consumption = crate::test_support::confirmed_for(outcome, "password reset");
+        let consumption = confirmed_for(outcome, "password reset");
         assert_eq!(consumption.user_id, user_id);
     }
 
     #[apply(backends)]
     #[tokio::test]
-    async fn prune_password_resets_removes_eligible_rows_without_touching_valid_tokens(
+    async fn prune_password_resets_uses_the_supplied_instant_for_consumed_rows(
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
-        let eligible_at = UtcInstant::from(now.value() - chrono::Duration::hours(24));
-        let valid_until = UtcInstant::from(now.value() + chrono::Duration::hours(1));
+        let expired_at = UtcInstant::from(now.value() - Duration::hours(24));
+        let valid_until = UtcInstant::from(now.value() + Duration::hours(1));
 
         let password_resets = Arc::clone(&env.state.password_resets);
         let outcome = env
@@ -261,14 +265,14 @@ mod tests {
             .run(|transaction| {
                 Box::pin(async move {
                     password_resets
-                        .create_password_reset(transaction, user_id, eligible_at)
+                        .create_password_reset(transaction, user_id, expired_at)
                         .await
                 })
             })
             .await
             .unwrap();
-        let expired_token =
-            crate::test_support::confirmed_for(outcome, "expired password-reset fixture");
+        let expired_token = confirmed_for(outcome, "expired password-reset fixture");
+
         let password_resets = Arc::clone(&env.state.password_resets);
         let outcome = env
             .state
@@ -282,8 +286,39 @@ mod tests {
             })
             .await
             .unwrap();
-        let valid_token =
-            crate::test_support::confirmed_for(outcome, "valid password-reset fixture");
+        let boundary_token = confirmed_for(outcome, "boundary password-reset fixture");
+        let boundary_hash = token::hash(&boundary_token).unwrap();
+
+        let password_resets = Arc::clone(&env.state.password_resets);
+        let outcome = env
+            .state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    password_resets
+                        .create_password_reset(transaction, user_id, valid_until)
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        let future_token = confirmed_for(outcome, "future password-reset fixture");
+        let future_hash = token::hash(&future_token).unwrap();
+
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE password_resets SET used_at = $1 WHERE token_hash = $2")
+                .bind(now)
+                .bind(boundary_hash)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE password_resets SET used_at = $1 WHERE token_hash = $2")
+                .bind(valid_until)
+                .bind(future_hash)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         assert_eq!(
             env.state
@@ -291,50 +326,46 @@ mod tests {
                 .prune_password_resets(now)
                 .await
                 .unwrap(),
-            1
+            2
         );
+
+        for token in [expired_token, boundary_token] {
+            let password_resets = Arc::clone(&env.state.password_resets);
+            let error = env
+                .state
+                .write_scope
+                .run(|transaction| {
+                    Box::pin(async move {
+                        password_resets
+                            .use_password_reset(transaction, &token)
+                            .await
+                    })
+                })
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                crate::WriteScopeError::Operation(UsePasswordResetError::NotFound)
+            ));
+        }
+
         let password_resets = Arc::clone(&env.state.password_resets);
-        let expired = env
+        let future = env
             .state
             .write_scope
             .run(|transaction| {
                 Box::pin(async move {
                     password_resets
-                        .use_password_reset(transaction, &expired_token)
+                        .use_password_reset(transaction, &future_token)
                         .await
                 })
             })
             .await
             .unwrap_err();
         assert!(matches!(
-            expired,
-            crate::WriteScopeError::Operation(UsePasswordResetError::NotFound)
+            future,
+            crate::WriteScopeError::Operation(UsePasswordResetError::AlreadyUsed)
         ));
-        let password_resets = Arc::clone(&env.state.password_resets);
-        let valid = env
-            .state
-            .write_scope
-            .run(|transaction| {
-                Box::pin(async move {
-                    password_resets
-                        .use_password_reset(transaction, &valid_token)
-                        .await
-                })
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            crate::test_support::confirmed_for(valid, "valid password reset").user_id,
-            user_id
-        );
-        assert_eq!(
-            env.state
-                .password_resets
-                .prune_password_resets(now)
-                .await
-                .unwrap(),
-            1
-        );
     }
 
     #[apply(backends)]

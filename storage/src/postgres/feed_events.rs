@@ -174,19 +174,21 @@ impl FeedEventDialect for Postgres {
     }
     async fn prune_terminal_events(
         pool: &Pool<Postgres>,
+        now: UtcInstant,
         failed_cutoff: UtcInstant,
         limit: RowLimit,
     ) -> Result<u64, FeedEventError> {
         let result = sqlx::query(
             "WITH eligible AS ( \
                 SELECT id FROM feed_events \
-                WHERE status = 'done' \
-                   OR (status = 'failed' AND terminal_at <= $1) \
+                WHERE (status = 'done' AND terminal_at <= $1) \
+                   OR (status = 'failed' AND terminal_at <= $2) \
                 ORDER BY terminal_at ASC \
-                LIMIT $2 \
+                LIMIT $3 \
              ) \
              DELETE FROM feed_events WHERE id IN (SELECT id FROM eligible)",
         )
+        .bind(now)
         .bind(failed_cutoff)
         .bind(limit)
         .execute(pool)

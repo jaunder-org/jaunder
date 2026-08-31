@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::websub::WebSubClient;
 use chrono::Utc;
@@ -18,7 +18,10 @@ use storage::{
     FeedCacheStorage, FeedEventError, FeedEventRecord, FeedEventStorage, PostStorage,
     SiteConfigStorage, WriteScope, WriteTransaction,
 };
-use tokio::sync::Mutex;
+use tokio::{
+    sync::Mutex,
+    time::{self, MissedTickBehavior},
+};
 
 use super::regenerate::{self, RegenerateError};
 
@@ -278,7 +281,7 @@ impl FeedWorker {
         identity: Option<&common::site::SiteIdentity>,
     ) {
         let ids: Vec<FeedEventId> = recs.iter().map(|r| r.id).collect();
-        let started = std::time::Instant::now();
+        let started = Instant::now();
 
         match regenerate::regenerate_feed(
             self.site_config(),
@@ -538,8 +541,8 @@ impl FeedWorker {
             tokio_cron_scheduler::Job::new_one_shot_async(Duration::ZERO, move |_uuid, _lock| {
                 let worker = worker.clone();
                 Box::pin(async move {
-                    let mut ticker = tokio::time::interval(interval);
-                    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    let mut ticker = time::interval(interval);
+                    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
                     loop {
                         ticker.tick().await;
                         spawn_tick(worker.clone()).await;
@@ -574,7 +577,11 @@ mod tests {
     use crate::websub::NoopWebSubClient;
     use common::site::SiteIdentity;
     use host::feed::FeedEventStatus;
-    use storage::{FeedEventError, FeedEventRecord, test_support::mock_write_scope};
+    use sqlx::Error as SqlxError;
+    use storage::{
+        FeedEventError, FeedEventRecord, MockFeedCacheStorage, MockFeedEventStorage,
+        test_support::mock_write_scope,
+    };
 
     fn event(id: i64, feed_url: &str, attempts: i32) -> FeedEventRecord {
         let now = UtcInstant::now();
@@ -677,8 +684,8 @@ mod tests {
     fn worker(
         site_config: storage::MockSiteConfigStorage,
         posts: storage::MockPostStorage,
-        feed_cache: storage::MockFeedCacheStorage,
-        feed_events: storage::MockFeedEventStorage,
+        feed_cache: MockFeedCacheStorage,
+        feed_events: MockFeedEventStorage,
     ) -> FeedWorker {
         FeedWorker::new(
             Arc::new(site_config),
@@ -691,7 +698,7 @@ mod tests {
     }
 
     fn worker_with_websub(
-        feed_events: storage::MockFeedEventStorage,
+        feed_events: MockFeedEventStorage,
         websub: Arc<dyn WebSubClient>,
     ) -> FeedWorker {
         FeedWorker::new(
@@ -750,7 +757,7 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_transition_events_exclude_feed_urls_and_error_text() {
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_pinged()
             .times(1)
@@ -785,7 +792,7 @@ mod tests {
         site_config
             .expect_get_feeds_websub_hub_url()
             .times(1)
-            .returning(|| Err(sqlx::Error::PoolClosed));
+            .returning(|| Err(SqlxError::PoolClosed));
         site_config
             .expect_get_identity()
             .times(2)
@@ -794,7 +801,7 @@ mod tests {
             .expect_get_feeds_config()
             .times(1)
             .returning(|| Ok(test_feeds_config()));
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
             .times(1)
@@ -834,7 +841,7 @@ mod tests {
             .times(2)
             .returning(move || {
                 if identity_reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
-                    Err(sqlx::Error::PoolClosed)
+                    Err(SqlxError::PoolClosed)
                 } else {
                     Ok(test_identity())
                 }
@@ -843,7 +850,7 @@ mod tests {
             .expect_get_feeds_config()
             .times(1)
             .returning(|| Ok(test_feeds_config()));
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
             .times(1)
@@ -886,11 +893,11 @@ mod tests {
             .expect_list_published_in_window()
             .times(1)
             .returning(|_, _, _, _| Ok(vec![]));
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_regenerated()
             .times(1)
-            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         events
             .expect_mark_pinged()
             .times(1)
@@ -914,11 +921,11 @@ mod tests {
     // guard:no-backend — mock status store and successful protocol client.
     #[tokio::test]
     async fn continuation_reporting_websub_success_survives_mark_pinged_failure() {
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_pinged()
             .times(1)
-            .returning(|_, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
         let hub = "https://hub.example/".parse().expect("hub URL");
         let identity = test_identity();
@@ -940,11 +947,11 @@ mod tests {
     // guard:no-backend — mock status store and failing protocol client.
     #[tokio::test]
     async fn continuation_reporting_websub_exhaustion_survives_status_write_failure() {
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_exhausted()
             .times(1)
-            .returning(|_, _, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(FailingWebSubClient));
         let hub = "https://hub.example/".parse().expect("hub URL");
         let identity = test_identity();
@@ -968,11 +975,11 @@ mod tests {
     // guard:no-backend — mock status store and failing protocol client.
     #[tokio::test]
     async fn continuation_reporting_websub_retry_survives_status_write_failure() {
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_failed()
             .times(1)
-            .returning(|_, _, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(FailingWebSubClient));
         let hub = "https://hub.example/".parse().expect("hub URL");
         let identity = test_identity();
@@ -996,11 +1003,11 @@ mod tests {
     // guard:no-backend — mock status store isolates regeneration retry.
     #[tokio::test]
     async fn continuation_reporting_regeneration_retry_survives_status_write_failure() {
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_failed()
             .times(1)
-            .returning(|_, _, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
         let record = event(1, "/feed.rss", 0);
         let error =
@@ -1027,11 +1034,11 @@ mod tests {
             .expect_feed_urls_needing_catchup()
             .times(0..)
             .returning(|_| Ok(vec![]));
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         // No mark_* expectation is set: any call after the claim error would
         // panic as an unexpected call, proving the tick returned early.
         let w = worker(
@@ -1061,7 +1068,7 @@ mod tests {
             .expect_feed_urls_needing_catchup()
             .times(0..)
             .returning(|_| Ok(vec![]));
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
             .times(1)
@@ -1084,8 +1091,8 @@ mod tests {
         posts
             .expect_feed_urls_needing_catchup()
             .times(1)
-            .returning(|_| Err(sqlx::Error::PoolClosed));
-        let mut events = storage::MockFeedEventStorage::new();
+            .returning(|_| Err(SqlxError::PoolClosed));
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
             .times(1)
@@ -1112,7 +1119,7 @@ mod tests {
     // guard:no-backend — mock store and failing protocol client.
     #[tokio::test]
     async fn websub_transport_failure_reaches_retry_boundary_and_reports_once() {
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_failed()
             .times(1)
@@ -1154,11 +1161,11 @@ mod tests {
     // guard:no-backend — mock status store.
     #[tokio::test]
     async fn completed_ping_keeps_success_primary_and_reports_status_failure_once() {
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_pinged()
             .times(1)
-            .returning(|_, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
         let (guard, output) = trace_capture();
         worker
@@ -1195,7 +1202,7 @@ mod tests {
                     "/tags/t/feed.rss".parse().expect("valid feed path in test"),
                 ])
             });
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         // The regression gate for #766: the whole catch-up fans out as ONE
         // batched write, and the per-row API is never used.
         events
@@ -1230,7 +1237,7 @@ mod tests {
                     })
                     .collect())
             });
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_enqueue_many()
             .times(2)
@@ -1376,7 +1383,7 @@ mod tests {
             .expect_feed_urls_needing_catchup()
             .times(1)
             .returning(|_| Ok(vec![]));
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
             .times(1)
@@ -1384,7 +1391,7 @@ mod tests {
         events
             .expect_mark_exhausted()
             .times(1)
-            .returning(|_, _, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let w = worker(
             site_config,
             posts,

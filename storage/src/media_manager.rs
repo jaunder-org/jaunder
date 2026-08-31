@@ -3,7 +3,7 @@
 //! result. Relocated from `server` (#517) so a `web` `#[server]` fn can construct
 //! it directly — its work is persistence and its deps are all `storage`'s.
 
-use std::io;
+use std::io::{Error as IoError, ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -56,11 +56,11 @@ pub struct MediaTemporaryDirectoryError {
     /// The temporary directory that could not be prepared.
     pub path: PathBuf,
     #[source]
-    source: io::Error,
+    source: IoError,
 }
 
 impl MediaTemporaryDirectoryError {
-    fn new(operation: &'static str, path: PathBuf, source: io::Error) -> Self {
+    fn new(operation: &'static str, path: PathBuf, source: IoError) -> Self {
         Self {
             operation,
             path,
@@ -143,7 +143,7 @@ impl MediaManager {
         let tmp_dir = storage_path.join("media").join("tmp");
         match fs::remove_dir_all(&tmp_dir).await {
             Ok(()) => {}
-            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) if source.kind() == ErrorKind::NotFound => {}
             Err(source) => {
                 return Err(MediaTemporaryDirectoryError::new(
                     "removing", tmp_dir, source,
@@ -278,7 +278,7 @@ impl MediaManager {
         Ok(())
     }
 
-    fn finish_temp_cleanup<T>(primary: T, cleanup: io::Result<()>, context: &'static str) -> T {
+    fn finish_temp_cleanup<T>(primary: T, cleanup: IoResult<()>, context: &'static str) -> T {
         crate::helpers::preserve_after_secondary(
             primary,
             cleanup,
@@ -324,7 +324,7 @@ impl MediaManager {
     async fn finish_deduplication_from_result(
         tmp_path: &Path,
         target_path: &Path,
-        existing_file: io::Result<Option<PathBuf>>,
+        existing_file: IoResult<Option<PathBuf>>,
     ) -> anyhow::Result<TargetDisposition> {
         Self::finish_deduplication(tmp_path, target_path, existing_file?).await
     }
@@ -680,7 +680,7 @@ impl MediaManager {
         ));
         match fs::remove_file(&file_path).await {
             Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
             Err(error) => Err(MediaError::Internal(Box::new(error)).into()),
         }
     }
@@ -716,7 +716,7 @@ impl MediaManager {
         Ok((sha256_hex, ByteSize::try_from(bytes_written)?))
     }
 
-    async fn directory_entries(dir: &Path) -> io::Result<impl Stream<Item = io::Result<PathBuf>>> {
+    async fn directory_entries(dir: &Path) -> IoResult<impl Stream<Item = IoResult<PathBuf>>> {
         let read_dir = fs::read_dir(dir).await?;
         Ok(stream::try_unfold(read_dir, |mut read_dir| async move {
             read_dir
@@ -726,13 +726,13 @@ impl MediaManager {
         }))
     }
 
-    async fn first_file_in_dir(dir: &Path) -> io::Result<Option<PathBuf>> {
+    async fn first_file_in_dir(dir: &Path) -> IoResult<Option<PathBuf>> {
         Self::first_file_in_entries(Self::directory_entries(dir).await).await
     }
 
-    async fn first_file_in_entries<S>(entries: io::Result<S>) -> io::Result<Option<PathBuf>>
+    async fn first_file_in_entries<S>(entries: IoResult<S>) -> IoResult<Option<PathBuf>>
     where
-        S: Stream<Item = io::Result<PathBuf>>,
+        S: Stream<Item = IoResult<PathBuf>>,
     {
         let entries = entries?;
         futures_util::pin_mut!(entries);
@@ -747,7 +747,10 @@ impl MediaManager {
 
 #[cfg(test)]
 mod tests {
+    use std::fs as std_fs;
+
     use super::*;
+
     use crate::test_support::{
         Backend, SeedUser, backends, create_post_via_service, media_row_exists,
     };
@@ -792,7 +795,7 @@ mod tests {
             "temporary upload directory must be created"
         );
         assert!(
-            std::fs::read_dir(tmp_dir)
+            std_fs::read_dir(tmp_dir)
                 .expect("read temporary directory")
                 .next()
                 .is_none(),
@@ -818,7 +821,7 @@ mod tests {
             "temporary upload directory must remain usable"
         );
         assert!(
-            std::fs::read_dir(tmp_dir)
+            std_fs::read_dir(tmp_dir)
                 .expect("read temporary directory")
                 .next()
                 .is_none(),
@@ -850,7 +853,7 @@ mod tests {
             .expect("clear temporary artifacts");
 
         assert!(
-            std::fs::read_dir(&tmp_dir)
+            std_fs::read_dir(&tmp_dir)
                 .expect("read temporary directory")
                 .next()
                 .is_none(),
@@ -881,7 +884,7 @@ mod tests {
             .expect("clear nested temporary artifacts");
 
         assert!(
-            std::fs::read_dir(tmp_dir)
+            std_fs::read_dir(tmp_dir)
                 .expect("read temporary directory")
                 .next()
                 .is_none(),
@@ -907,7 +910,7 @@ mod tests {
 
         assert_eq!(error.operation, "removing");
         assert_eq!(error.path, tmp_dir);
-        assert_eq!(error.source.kind(), io::ErrorKind::NotADirectory);
+        assert_eq!(error.source.kind(), ErrorKind::NotADirectory);
     }
 
     #[test]
@@ -926,9 +929,9 @@ mod tests {
             UploadOutcome::QuotaExceeded
         ));
         assert!(matches!(
-            MediaManager::upload_outcome(Some(&MediaError::Internal(Box::new(
-                std::io::Error::other("x"),
-            )))),
+            MediaManager::upload_outcome(Some(&MediaError::Internal(Box::new(IoError::other(
+                "x"
+            ),)))),
             UploadOutcome::Error
         ));
         assert!(matches!(
@@ -1396,8 +1399,8 @@ mod tests {
     #[test]
     fn continuation_reporting_cleanup_failures_preserve_quota_and_dedup_results_and_report_once() {
         let cleanup_error = || {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
+            Err(IoError::new(
+                ErrorKind::PermissionDenied,
                 "temp cleanup denied",
             ))
         };
@@ -1536,11 +1539,10 @@ mod tests {
         let tmp_path = tmp_dir.join("upload");
         fs::write(&tmp_path, b"payload").await.unwrap();
         let target_path = media_dir.join("hash").join("upload.png");
-        let entries: std::io::Result<futures_util::stream::Empty<std::io::Result<PathBuf>>> =
-            Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "initial directory read sentinel",
-            ));
+        let entries: IoResult<futures_util::stream::Empty<IoResult<PathBuf>>> = Err(IoError::new(
+            ErrorKind::PermissionDenied,
+            "initial directory read sentinel",
+        ));
 
         let existing_file = MediaManager::first_file_in_entries(entries).await;
         let error =
@@ -1549,9 +1551,9 @@ mod tests {
                 .expect_err("dedup must not report success");
 
         let source = error
-            .downcast_ref::<std::io::Error>()
+            .downcast_ref::<IoError>()
             .expect("typed initial read error");
-        assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(source.kind(), ErrorKind::PermissionDenied);
         assert_eq!(source.to_string(), "initial directory read sentinel");
         assert!(tmp_path.exists(), "failed probe must not consume upload");
         assert!(!target_path.exists(), "failed probe must not create target");
@@ -1571,7 +1573,7 @@ mod tests {
         let target_path = hash_dir.join("upload.png");
         let entries = Ok(futures_util::stream::iter([
             Ok(hash_dir.join("subdir")),
-            Err(std::io::Error::other("later next-entry sentinel")),
+            Err(IoError::other("later next-entry sentinel")),
         ]));
 
         let existing_file = MediaManager::first_file_in_entries(entries).await;
@@ -1581,9 +1583,9 @@ mod tests {
                 .expect_err("dedup must not report success after partial enumeration");
 
         let source = error
-            .downcast_ref::<std::io::Error>()
+            .downcast_ref::<IoError>()
             .expect("typed next-entry error");
-        assert_eq!(source.kind(), std::io::ErrorKind::Other);
+        assert_eq!(source.kind(), ErrorKind::Other);
         assert_eq!(source.to_string(), "later next-entry sentinel");
         assert!(tmp_path.exists(), "failed probe must not consume upload");
         assert!(!target_path.exists(), "failed probe must not create target");
@@ -1733,7 +1735,7 @@ mod tests {
         }
         let expected = ContentHash::from_digest(hasher.finalize().into());
 
-        let stream = futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
+        let stream = futures_util::stream::iter(chunks.into_iter().map(Ok::<_, IoError>));
         let filename = parse_filename("s.png");
         let resp = manager
             .upload(
@@ -1931,8 +1933,8 @@ mod tests {
             .unwrap();
         let media = upload_ref(&uploaded);
         let file_path = stored_path(env.base.path(), &media);
-        std::fs::remove_file(&file_path).unwrap();
-        std::fs::create_dir(&file_path).unwrap();
+        std_fs::remove_file(&file_path).unwrap();
+        std_fs::create_dir(&file_path).unwrap();
 
         let outcome = manager
             .delete_media(

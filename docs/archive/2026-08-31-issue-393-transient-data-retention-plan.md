@@ -28,10 +28,10 @@ Out:
   - Contract: matching SQLite/PostgreSQL migration `0029` adds nullable
     `feed_events.terminal_at` in each backend's canonical instant type plus the
     cutoff indexes required by all database retention predicates. Non-terminal
-    legacy rows keep `NULL`. Completed legacy rows use
-    `COALESCE(pinged_at, migration_now)`; exhausted legacy rows use the single
-    migration application instant, preserving a fresh seven-day window rather
-    than disappearing on upgrade. Future transitions persist an explicit
+    legacy rows keep `NULL`. Completed and exhausted legacy rows backfill from
+    their historical terminal evidence, falling back to `created_at` where that
+    evidence is absent, so restored old terminal state retains its historical
+    retention eligibility. Future transitions persist an explicit
     application-supplied instant.
   - Verification: backend-parametric migration tests prove schema parity, every
     status backfill, constraints, and indexes; backup/restore validation accepts
