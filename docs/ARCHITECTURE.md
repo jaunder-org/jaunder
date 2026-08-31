@@ -596,14 +596,14 @@ boundary and non-owner requests are masked as absent. Both lists use
 newest-first immutable Revision-ID keyset pagination with bounded overfetch and
 opaque cursors. History is not a revert mechanism.
 
-Soft deletion stamps and retains the Post, all revisions, idempotency records,
-and child relationships indefinitely while excluding the current Post from
-active web reads, Syndication Feeds, and AtomPub Collections. Active permalink
-and syndicated-item identity can be reused by a later Post, with accepted
+Soft deletion stamps and retains the Post, all revisions, and child
+relationships indefinitely while excluding the current Post from active web
+reads, Syndication Feeds, and AtomPub Collections. Active permalink and
+syndicated-item identity can be reused by a later Post, with accepted
 feed-reader conflation; restore is not promised. There is no product purge. A
-future purge must decide the combined Post, Revision, media, idempotency, and
-child erasure policy ([ADR-0136](adr/0136-local-post-lifecycle.md)). ADR-0009
-continues to govern consumed content rather than these local rows.
+future purge must decide the combined Post, Revision, media, and child erasure
+policy ([ADR-0136](adr/0136-local-post-lifecycle.md)). ADR-0009 continues to
+govern consumed content rather than these local rows.
 
 Cross-cutting values are validated newtypes whose `FromStr` is the single
 chokepoint: `Username`, `Slug`, and `Tag` live in `common`; `Password` lives in
@@ -1789,19 +1789,18 @@ storage configuration ([ADR-0064](adr/0064-backup-target-auto-derivation.md),
 [ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)); and
 `site-config set/get/list/unset` reads and writes site settings.
 
-**Proposed transient-data cleanup.** The
-[bounded transient-data retention policy](adr/drafts/bounded-transient-data-retention.md)
+**Transient-data cleanup.** The
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
 requires database-backed transient data to have authoritative semantic expiry at
 `cutoff <= now`, with physical removal once at startup and daily thereafter.
 Each run receives one explicit `now` and drains eligible backlogs through
 repeated fixed-size statements that release locks between batches. A database
 cleanup failure is reported, does not stop later domains in the same run, and
-retries during the next scheduled run. Before uploads are accepted, startup must
-clear `media/tmp`; failure to clear it is fatal. This is proposed behavior, not
-a claim that the current startup path has these cleanup passes. The policy
-excludes durable Posts, revisions, tombstones, and referenced media;
-non-expiring sessions and App Passwords; `feed_cache`; and external captures,
-and deliberately creates no generic retention framework.
+retries during the next scheduled run. Before uploads are accepted, startup
+clears `media/tmp`; failure to clear it is fatal. The policy excludes durable
+Posts, revisions, tombstones, and referenced media; non-expiring sessions and
+App Passwords; `feed_cache`; and external captures, and deliberately creates no
+generic retention framework.
 
 `site-config` is not a free-form door. Its `key` argument is host-owned
 `SiteConfigKey`, so clap rejects an unknown key at parse time, and each key
