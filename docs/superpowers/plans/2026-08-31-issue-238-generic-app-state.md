@@ -14,8 +14,8 @@ In:
 - Add race-safe invite validation/claim and whole-user session revocation to
   their owning generic stores.
 - Cut over registration/password-reset callers and every `AppState` constructor.
-- Replace both production AppState builders with one generic builder and a
-  `Backend` scope factory.
+- Replace both production AppState builders with one generic builder using a
+  crate-private composition trait for scope construction.
 - Update the closed mutation census, focused dual-backend/web tests, proposed
   ADR, and architecture projection.
 
@@ -51,16 +51,20 @@ Out:
     validation errors and registration mappings remain stable.
 
 - [x] Task 2: Make AppState construction generic
-  - Contract: `Backend` adds `write_scope(Pool<Self>) -> WriteScope`,
-    implemented only for SQLite/Postgres beside `write_connection`; it acquires
-    no sqlx bind/executor bounds. `app_state` owns one crate-visible
-    `make_app_state<DB>(Pool<DB>) -> Arc<AppState>` with one explicit
-    `XStore<DB>: XStorage` coercion bound per handle; detailed sqlx bounds
-    remain solely on their store implementations.
+  - Contract: public `Backend` remains the generic-store marker and sealed
+    transaction-connection adapter. Crate-private `AppStateBackend: Backend`
+    alone adds `write_scope(Pool<Self>) -> WriteScope`, implemented only for
+    SQLite/Postgres; downstream code cannot name it or mint a scope. `app_state`
+    owns one crate-visible `make_app_state<DB>(Pool<DB>) -> Arc<AppState>`
+    bounded by that private trait, with one explicit `XStore<DB>: XStorage`
+    coercion bound per handle; detailed sqlx bounds remain solely on store
+    implementations.
   - Cutover: both production openers call the generic function; delete their
     field wiring and obsolete alias imports. Preserve all thirteen object-safe
-    storage handles, open-subscription policy, pool cloning, and sealed
-    backend-specific scope construction.
+    storage handles, open-subscription policy, pool cloning, ADR-0164's
+    downstream-construction invariant, and sealed backend-specific scope
+    construction without changing ADR-0019's public marker surface or
+    per-consumer bound discipline.
   - Documentation: land the proposed account-mutation ADR and architecture
     projection with the final composition/census/error semantics; `CONTEXT.md`
     remains unchanged.

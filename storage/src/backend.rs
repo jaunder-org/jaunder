@@ -12,7 +12,10 @@
 //! Instead, each store's `impl` restates exactly the bounds it needs.
 
 /// A sqlx database jaunder supports, carrying its OpenTelemetry `db.system`
-/// identity.
+/// identity and adapting the sealed write capability to its connection.
+///
+/// Generic stores use this public marker. It deliberately does not construct
+/// write scopes; that composition step belongs exclusively to `AppState`.
 pub trait Backend: sqlx::Database {
     /// Value of the `db.system` span field (`"sqlite"` | `"postgres"`).
     const DB_SYSTEM: &'static str;
@@ -25,7 +28,13 @@ pub trait Backend: sqlx::Database {
     fn write_connection(
         transaction: &mut crate::WriteTransaction,
     ) -> Result<&mut Self::Connection, sqlx::Error>;
+}
 
+/// Backend capability used only while composing [`crate::AppState`].
+///
+/// This remains crate-private so downstream code can use a factory-minted
+/// [`crate::WriteScope`] but cannot construct one from a pool.
+pub(crate) trait AppStateBackend: Backend {
     /// Creates this backend's sealed write capability from its connection pool.
     fn write_scope(pool: sqlx::Pool<Self>) -> crate::WriteScope;
 }
@@ -38,7 +47,9 @@ impl Backend for sqlx::Sqlite {
     ) -> Result<&mut Self::Connection, sqlx::Error> {
         crate::write_scope::sqlite_connection(transaction)
     }
+}
 
+impl AppStateBackend for sqlx::Sqlite {
     fn write_scope(pool: sqlx::Pool<Self>) -> crate::WriteScope {
         crate::WriteScope::sqlite(pool)
     }
@@ -52,7 +63,9 @@ impl Backend for sqlx::Postgres {
     ) -> Result<&mut Self::Connection, sqlx::Error> {
         crate::write_scope::postgres_connection(transaction)
     }
+}
 
+impl AppStateBackend for sqlx::Postgres {
     fn write_scope(pool: sqlx::Pool<Self>) -> crate::WriteScope {
         crate::WriteScope::postgres(pool)
     }

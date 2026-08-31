@@ -59,15 +59,19 @@ callsites use the existing typed conversion whose missing, expired, and
 already-used variants are client validation errors; this deliberately corrects
 the prior web callsite's blanket storage-error mapping.
 
-`Backend` owns both directions of the sealed transaction adaptation: it extracts
-its concrete connection from `WriteTransaction` and constructs a backend-erased
-`WriteScope` from `Pool<Self>`. This supersedes ADR-0019's "`DB_SYSTEM` and
-nothing else" restriction only for these sealed transaction adapters; the
-prohibition on bundled sqlx bounds remains. With no backend-specific operation
-holder left, one generic `make_app_state<DB>(Pool<DB>)` constructs every
-object-safe storage handle and the scope. The builder states one
-`XStore<DB>: XStorage` coercion bound per handle; each store remains the sole
-owner of its detailed sqlx bounds, and `Backend` carries none of them.
+Public `Backend` remains the generic-store marker and owns only the sealed
+transaction-connection adapter. Crate-private `AppStateBackend: Backend` owns
+the pool-to-`WriteScope` factory and is implemented only for SQLite and
+PostgreSQL. Generic `make_app_state<DB>(Pool<DB>)`, its sole consumer, is bound
+by that private trait. Downstream code can run a factory-minted scope but cannot
+name the trait or construct one from a pool, preserving ADR-0164's
+downstream-construction invariant without superseding ADR-0019's public
+`Backend` marker surface.
+
+The builder states one `XStore<DB>: XStorage` coercion bound per handle; each
+store remains the sole owner of its detailed sqlx bounds, and neither `Backend`
+nor `AppStateBackend` carries them. ADR-0019's per-consumer bound discipline
+therefore remains intact.
 
 ## Consequences
 

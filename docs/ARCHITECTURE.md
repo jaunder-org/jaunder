@@ -137,15 +137,18 @@ persistence work rather than a trait — `post_service.rs` (post create/update
 over `PostStorage`, shared by the web and AtomPub front-ends) and
 `media_manager.rs` (content-addressed upload, relocated from `server` in #517).
 The trait bodies are implemented once by a generic `XStore<DB>` bounded on
-`Backend: sqlx::Database` (`storage/src/backend.rs`, implemented for `Sqlite`
-and `Postgres`). `Backend` carries the `db.system` span constant and the two
-sealed transaction adapters: construct a backend-erased `WriteScope` from its
-pool, and recover its concrete connection from `WriteTransaction`
-([account mutations compose storage primitives](adr/drafts/account-mutations-compose-storage-primitives.md)).
-Backend-specific SQL is isolated in per-trait `XDialect` impls under
+public `Backend: sqlx::Database` (`storage/src/backend.rs`, implemented for
+`Sqlite` and `Postgres`). `Backend` carries the `db.system` span constant and
+adapts sealed `WriteTransaction` capability to the concrete connection.
+Crate-private `AppStateBackend: Backend`, implemented only for those two
+backends, converts a pool into a backend-erased `WriteScope` exclusively for
+generic `AppState` composition. Downstream code can run the factory-minted scope
+but cannot name that trait or construct one from a pool, preserving ADR-0164's
+downstream-construction invariant without changing ADR-0019's public marker
+surface. Backend-specific SQL is isolated in per-trait `XDialect` impls under
 `storage/src/{sqlite,postgres}/*.rs`. Traits with no divergence need no dialect
-at all. `Backend` deliberately carries no sqlx bind/executor bounds — each store
-impl restates exactly the subset it uses
+at all. Neither `Backend` nor `AppStateBackend` carries sqlx bind/executor
+bounds — each store impl restates exactly the subset it uses
 ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)). Span names are
 backend-agnostic (`storage.posts.*`) with `db.system` distinguishing the
 backend. Pure-SQL helpers shared by both dialects live in `storage/src/sql.rs`
@@ -162,11 +165,12 @@ be a thin shell over a near-total dialect
 `storage::AppState` (`storage/src/app_state.rs`) is a bundle of thirteen
 `Arc<dyn *Storage>` handles and the factory-minted, sealed `WriteScope`. One
 generic `make_app_state<DB>(Pool<DB>)` builds it for both production backends;
-`Backend` converts its pool into the backend-erased scope. It holds storage
-dependencies only; services (mailer, WebSub client, background workers) are
-constructed in `server` and injected per-consumer as constructor parameters, and
-there is no services bundle. The durable invariant: no type may be both a
-heterogeneous dependency holder and passed beyond the composition root
+its crate-private `AppStateBackend` bound converts the pool into the
+backend-erased scope. It holds storage dependencies only; services (mailer,
+WebSub client, background workers) are constructed in `server` and injected
+per-consumer as constructor parameters, and there is no services bundle. The
+durable invariant: no type may be both a heterogeneous dependency holder and
+passed beyond the composition root
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
 
 The web layer takes its dependencies per-trait via Leptos context and receives
@@ -346,7 +350,8 @@ Details in the testing section.
 
 - **Structural write scopes and mutation outcomes.** A factory-minted, sealed,
   backend-erased `WriteScope` is injected separately beside the exact storage
-  traits
+  traits. Only crate-private `AppStateBackend` can mint it during AppState
+  composition; downstream code cannot construct a scope from a pool
   ([structural write scopes and mutation outcomes](adr/0164-structural-write-scopes-and-mutation-outcomes.md)).
   Its explicit `run` boundary supplies a sealed mutable `WriteTransaction`
   capability, never storage lookup or arbitrary SQL. The closed audited

@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
+use super::backend::AppStateBackend;
 use super::{
-    AudienceStorage, AudienceStore, Backend, EmailVerificationStorage, EmailVerificationStore,
+    AudienceStorage, AudienceStore, EmailVerificationStorage, EmailVerificationStore,
     FeedCacheStorage, FeedCacheStore, FeedEventStorage, FeedEventStore, InviteStorage, InviteStore,
     MediaStorage, MediaStore, PasswordResetStorage, PasswordResetStore, PostStorage, PostStore,
     SessionStorage, SessionStore, SiteConfigStorage, SiteConfigStore, SubscriptionStorage,
@@ -56,9 +57,13 @@ pub struct AppState {
 }
 
 /// Constructs every application storage handle over one concrete database pool.
+///
+/// The crate-private [`AppStateBackend`] bound keeps pool-to-`WriteScope`
+/// construction at this composition seam; public [`crate::Backend`] users cannot
+/// mint scopes.
 pub(crate) fn make_app_state<DB>(pool: sqlx::Pool<DB>) -> Arc<AppState>
 where
-    DB: Backend,
+    DB: AppStateBackend,
     SiteConfigStore<DB>: SiteConfigStorage,
     UserStore<DB>: UserStorage,
     SessionStore<DB>: SessionStorage,

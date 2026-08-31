@@ -59,15 +59,19 @@ behavior remains unchanged.
   chains intact.
 - Password reset still revokes all active sessions in the same transaction as
   token consumption and password replacement.
-- `Backend` gains the inverse of its existing transaction-connection adapter: a
-  factory method that converts `Pool<Self>` into the sealed, backend-erased
-  `WriteScope`. This is the only backend-specific step in generic `AppState`
-  composition. The new ADR supersedes ADR-0019's obsolete "`DB_SYSTEM` and
-  nothing else" clause only for these two sealed transaction-adapter directions.
-- The generic builder states one coercion bound per `XStore<DB>: XStorage`. Each
-  store remains the sole owner of its detailed sqlx bind/executor/row bounds;
-  neither the builder nor `Backend` duplicates that internal union. ADR-0019's
-  per-consumer bound discipline remains intact.
+- `Backend` remains the public marker and sealed transaction-connection adapter
+  used by generic stores. A documented crate-private `AppStateBackend: Backend`
+  alone converts `Pool<Self>` into the sealed, backend-erased `WriteScope`; only
+  SQLite and PostgreSQL implement it, and generic `AppState` composition is its
+  sole consumer. Downstream code can run a factory-minted scope but cannot name
+  the trait or construct one from a pool, preserving ADR-0164's
+  downstream-construction invariant.
+- The generic builder is bound by `AppStateBackend` and states one coercion
+  bound per `XStore<DB>: XStorage`. Each store remains the sole owner of its
+  detailed sqlx bind/executor/row bounds; neither the builder nor either backend
+  trait duplicates that internal union. ADR-0019's public `Backend` marker
+  surface and its per-consumer bound discipline remain intact; this change does
+  not supersede them.
 - `AppState` remains a composition-root-only heterogeneous storage bundle under
   ADR-0016. The generic builder does not implement the separately decided
   on-demand backend handle factory.
@@ -81,6 +85,8 @@ behavior remains unchanged.
 - Both production database openers call one generic one-argument
   `make_app_state(pool)` implementation; neither contains a backend-specific
   copy of the field wiring.
+- Public `Backend` cannot construct `WriteScope`; only the crate-private
+  `AppStateBackend` used by generic `AppState` composition can do so.
 - `AppState` contains the thirteen object-safe storage handles and one sealed
   `WriteScope`, with no atomic-operation holder.
 - The storage and web crate surfaces contain no `AtomicOps`, `SqliteAtomicOps`,
