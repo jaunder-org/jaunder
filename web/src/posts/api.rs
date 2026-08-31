@@ -524,10 +524,8 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<SavedPost>> {
         };
         validate_org_audiences(&audiences, auth.user_id).await?;
         let published_at = match metadata.lifecycle {
-            Presence::Present(PublicationState::Draft) | Presence::Absent => None,
-            Presence::Present(
-                PublicationState::Scheduled(at) | PublicationState::Published(at),
-            ) => Some(at),
+            Presence::Present(state) => state.published_at(),
+            Presence::Absent => None,
         };
         let tags = match metadata.tags {
             Presence::Present(tags) => tags,
@@ -733,12 +731,8 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
         };
         validate_org_audiences(&audiences, auth.user_id).await?;
         let publish = match metadata.lifecycle {
-            Presence::Present(PublicationState::Draft) | Presence::Absent => {
-                PublishUpdate::Unpublish
-            }
-            Presence::Present(
-                PublicationState::Scheduled(at) | PublicationState::Published(at),
-            ) => PublishUpdate::Publish { at: Some(at) },
+            Presence::Present(state) => state.into(),
+            Presence::Absent => PublishUpdate::Unpublish,
         };
         (
             normalized.body,

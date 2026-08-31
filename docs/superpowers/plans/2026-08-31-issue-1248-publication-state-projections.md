@@ -31,7 +31,7 @@ Out:
     present state.
   - Verification: table tests cover Draft, Scheduled, and Published with exact
     instants in both owner modules.
-- [ ] Task 2: Cut over all four present-state callers
+- [x] Task 2: Cut over all four present-state callers
   - Contract: web Org create calls `published_at`; web Org update converts into
     `PublishUpdate`; AtomPub create/update delegate only
     `Presence::Present(state)`. Every `Presence::Absent` and non-Org branch
