@@ -61,12 +61,13 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
         .unwrap();
     let feed_events_for_ping = state.feed_events.clone();
     let ids_for_ping = ids.clone();
+    let pinged_at = UtcInstant::now();
     state
         .write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 feed_events_for_ping
-                    .mark_pinged(transaction, &ids_for_ping)
+                    .mark_pinged(transaction, &ids_for_ping, pinged_at)
                     .await
             })
         })
@@ -90,12 +91,18 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
     let feed_events_for_exhaustion = state.feed_events.clone();
     let ids_for_exhaustion = ids;
     let exhaustion_reason = "gave up";
+    let exhausted_at = UtcInstant::now();
     state
         .write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 feed_events_for_exhaustion
-                    .mark_exhausted(transaction, &ids_for_exhaustion, exhaustion_reason)
+                    .mark_exhausted(
+                        transaction,
+                        &ids_for_exhaustion,
+                        exhaustion_reason,
+                        exhausted_at,
+                    )
                     .await
             })
         })

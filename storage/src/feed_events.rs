@@ -7,6 +7,7 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use chrono::Duration;
 use common::ids::FeedEventId;
+use common::pagination::RowLimit;
 use common::time::UtcInstant;
 use host::feed::{FeedEventClaimLimit, FeedEventStatus, FeedPath};
 use sqlx::{Database, Pool};
@@ -57,6 +58,7 @@ pub(crate) struct ClaimedFeedEventRow {
     last_error: Option<StoredFeedDiagnostic>,
     next_attempt_at: UtcInstant,
     claimed_at: Option<UtcInstant>,
+    terminal_at: Option<UtcInstant>,
     created_at: UtcInstant,
     regenerated_at: Option<UtcInstant>,
     pinged_at: Option<UtcInstant>,
@@ -73,6 +75,7 @@ pub struct FeedEventRecord {
     pub last_error: Option<String>,
     pub next_attempt_at: UtcInstant,
     pub claimed_at: Option<UtcInstant>,
+    pub terminal_at: Option<UtcInstant>,
     pub created_at: UtcInstant,
     pub regenerated_at: Option<UtcInstant>,
     pub pinged_at: Option<UtcInstant>,
@@ -107,6 +110,7 @@ impl From<ClaimedFeedEventRow> for ClaimedRow {
             last_error,
             next_attempt_at,
             claimed_at,
+            terminal_at,
             created_at,
             regenerated_at,
             pinged_at,
@@ -122,6 +126,7 @@ impl From<ClaimedFeedEventRow> for ClaimedRow {
             last_error: last_error.map(StoredFeedDiagnostic::into_inner),
             next_attempt_at,
             claimed_at,
+            terminal_at,
             created_at,
             regenerated_at,
             pinged_at,
@@ -214,11 +219,13 @@ pub trait FeedEventStorage: Send + Sync {
         ids: &[FeedEventId],
     ) -> Result<(), FeedEventError>;
 
-    /// Transition rows to `status = 'done'` and stamp `pinged_at = now`.
+    /// Transition rows to `status = 'done'`, stamp `pinged_at`, and persist the
+    /// supplied terminal instant for the retention cutoff.
     async fn mark_pinged(
         &self,
         transaction: &mut crate::WriteTransaction,
         ids: &[FeedEventId],
+        now: UtcInstant,
     ) -> Result<(), FeedEventError>;
 
     /// Re-queue rows for another attempt: status back to `pending`,
@@ -232,13 +239,18 @@ pub trait FeedEventStorage: Send + Sync {
         next_attempt_at: UtcInstant,
     ) -> Result<(), FeedEventError>;
 
-    /// Terminal failure: status = 'failed', record the final error.
+    /// Terminal failure: set `status = 'failed'`, record the final error, and
+    /// persist the supplied terminal instant for the retention cutoff.
     async fn mark_exhausted(
         &self,
         transaction: &mut crate::WriteTransaction,
         ids: &[FeedEventId],
         error: &str,
+        now: UtcInstant,
     ) -> Result<(), FeedEventError>;
+    /// Delete terminal rows eligible at the supplied instant in fixed-size
+    /// statements, releasing the connection after each statement.
+    async fn prune_terminal_events(&self, now: UtcInstant) -> Result<u64, FeedEventError>;
 }
 
 /// Backend-specific divergence for [`FeedEventStore`].
@@ -280,10 +292,11 @@ pub trait FeedEventDialect: Backend {
         ids: &[FeedEventId],
     ) -> Result<(), FeedEventError>;
 
-    /// Transition rows to `done` and stamp `pinged_at = now`.
+    /// Transition rows to `done`, stamp `pinged_at`, and persist `terminal_at`.
     async fn mark_pinged(
         connection: &mut Self::Connection,
         ids: &[FeedEventId],
+        now: UtcInstant,
     ) -> Result<(), FeedEventError>;
 
     /// Re-queue rows for another attempt.
@@ -294,12 +307,20 @@ pub trait FeedEventDialect: Backend {
         next_attempt_at: UtcInstant,
     ) -> Result<(), FeedEventError>;
 
-    /// Terminal failure: set `status = 'failed'` and record the final error.
+    /// Terminal failure: set `status = 'failed'`, record the final error, and
+    /// persist `terminal_at`.
     async fn mark_exhausted(
         connection: &mut Self::Connection,
         ids: &[FeedEventId],
         error: &str,
+        now: UtcInstant,
     ) -> Result<(), FeedEventError>;
+    /// Delete one bounded batch of terminal rows eligible at `now`.
+    async fn prune_terminal_events(
+        pool: &Pool<Self>,
+        now: UtcInstant,
+        limit: RowLimit,
+    ) -> Result<u64, FeedEventError>;
 }
 
 /// Generic [`FeedEventStorage`] backed by any [`FeedEventDialect`] database.
@@ -317,6 +338,9 @@ pub struct FeedEventStore<DB: Database> {
 /// change edits it once.
 const INSERT_FEED_EVENT: &str = "INSERT INTO feed_events (feed_url) VALUES ($1)";
 
+/// The maximum rows one terminal-retention statement may delete.
+const TERMINAL_PRUNE_BATCH: u64 = 200;
+const TERMINAL_PRUNE_LIMIT: RowLimit = RowLimit::at_most(200);
 impl<DB: Database> FeedEventStore<DB> {
     #[must_use]
     pub fn new(pool: Pool<DB>) -> Self {
@@ -433,12 +457,13 @@ where
         &self,
         transaction: &mut crate::WriteTransaction,
         ids: &[FeedEventId],
+        now: UtcInstant,
     ) -> Result<(), FeedEventError> {
         if ids.is_empty() {
             return Ok(());
         }
         let connection = DB::write_connection(transaction)?;
-        DB::mark_pinged(connection, ids).await
+        DB::mark_pinged(connection, ids, now).await
     }
 
     #[tracing::instrument(
@@ -470,12 +495,28 @@ where
         transaction: &mut crate::WriteTransaction,
         ids: &[FeedEventId],
         error: &str,
+        now: UtcInstant,
     ) -> Result<(), FeedEventError> {
         if ids.is_empty() {
             return Ok(());
         }
         let connection = DB::write_connection(transaction)?;
-        DB::mark_exhausted(connection, ids, error).await
+        DB::mark_exhausted(connection, ids, error, now).await
+    }
+    #[tracing::instrument(
+        name = "storage.feed_events.prune_terminal_events",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn prune_terminal_events(&self, now: UtcInstant) -> Result<u64, FeedEventError> {
+        let mut deleted = 0;
+        loop {
+            let batch = DB::prune_terminal_events(&self.pool, now, TERMINAL_PRUNE_LIMIT).await?;
+            deleted += batch;
+            if batch < TERMINAL_PRUNE_BATCH {
+                return Ok(deleted);
+            }
+        }
     }
 }
 
@@ -544,9 +585,10 @@ mod tests {
         scope: &crate::WriteScope,
         feed_events: std::sync::Arc<dyn FeedEventStorage>,
         ids: Vec<FeedEventId>,
+        now: UtcInstant,
     ) {
         confirmed(scope, move |transaction| {
-            Box::pin(async move { feed_events.mark_pinged(transaction, &ids).await })
+            Box::pin(async move { feed_events.mark_pinged(transaction, &ids, now).await })
         })
         .await;
     }
@@ -573,9 +615,14 @@ mod tests {
         feed_events: std::sync::Arc<dyn FeedEventStorage>,
         ids: Vec<FeedEventId>,
         error: String,
+        now: UtcInstant,
     ) {
         confirmed(scope, move |transaction| {
-            Box::pin(async move { feed_events.mark_exhausted(transaction, &ids, &error).await })
+            Box::pin(async move {
+                feed_events
+                    .mark_exhausted(transaction, &ids, &error, now)
+                    .await
+            })
         })
         .await;
     }
@@ -1184,6 +1231,7 @@ mod tests {
         )
         .await;
         let ids: Vec<FeedEventId> = claimed.iter().map(|r| r.id).collect();
+        let id = ids[0];
         mark_regenerated(
             &env.state.write_scope,
             std::sync::Arc::clone(&env.state.feed_events),
@@ -1194,8 +1242,19 @@ mod tests {
             &env.state.write_scope,
             std::sync::Arc::clone(&env.state.feed_events),
             ids,
+            fixture_instant(500_000),
         )
         .await;
+        let terminal_at = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_scalar::<_, Option<UtcInstant>>(
+                "SELECT terminal_at FROM feed_events WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        });
+        assert_eq!(terminal_at, Some(fixture_instant(500_000)));
         let next = claim(
             &env.state.write_scope,
             std::sync::Arc::clone(&env.state.feed_events),
@@ -1258,8 +1317,19 @@ mod tests {
             std::sync::Arc::clone(&env.state.feed_events),
             vec![id],
             "gave up".to_owned(),
+            fixture_instant(600_000),
         )
         .await;
+        let terminal_at = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_scalar::<_, Option<UtcInstant>>(
+                "SELECT terminal_at FROM feed_events WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        });
+        assert_eq!(terminal_at, Some(fixture_instant(600_000)));
         // Failed rows are never eligible.
         let next = claim(
             &env.state.write_scope,
@@ -1365,6 +1435,7 @@ mod tests {
                 None,
                 fixture_instant(100_001),
                 None,
+                None,
                 fixture_instant(100_002),
                 None,
                 None,
@@ -1376,6 +1447,7 @@ mod tests {
                 Some("claim in progress"),
                 fixture_instant(200_001),
                 Some(fixture_instant(200_002)),
+                None,
                 fixture_instant(200_003),
                 None,
                 None,
@@ -1387,6 +1459,7 @@ mod tests {
                 None,
                 fixture_instant(300_001),
                 Some(fixture_instant(300_002)),
+                Some(fixture_instant(300_005)),
                 fixture_instant(300_003),
                 Some(fixture_instant(300_004)),
                 Some(fixture_instant(300_005)),
@@ -1398,6 +1471,7 @@ mod tests {
                 Some("ping exhausted"),
                 fixture_instant(400_001),
                 Some(fixture_instant(400_002)),
+                Some(fixture_instant(400_005)),
                 fixture_instant(400_003),
                 Some(fixture_instant(400_004)),
                 None,
@@ -1408,8 +1482,8 @@ mod tests {
             for fixture in &fixtures {
                 sqlx::query(
                     "INSERT INTO feed_events \
-                     (feed_url, status, attempts, last_error, next_attempt_at, claimed_at, created_at, regenerated_at, pinged_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                     (feed_url, status, attempts, last_error, next_attempt_at, claimed_at, terminal_at, created_at, regenerated_at, pinged_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
                 )
                 .bind(&fixture.0)
                 .bind(fixture.1)
@@ -1420,13 +1494,14 @@ mod tests {
                 .bind(fixture.6)
                 .bind(fixture.7)
                 .bind(fixture.8)
+                .bind(fixture.9)
                 .execute(pool)
                 .await
                 .unwrap();
             }
 
             sqlx::query_as::<_, ClaimedFeedEventRow>(
-                "SELECT id, feed_url, status, attempts, last_error, next_attempt_at, claimed_at, \
+                "SELECT id, feed_url, status, attempts, last_error, next_attempt_at, claimed_at, terminal_at, \
                  created_at, regenerated_at, pinged_at FROM feed_events ORDER BY id",
             )
             .fetch_all(pool)
@@ -1439,9 +1514,7 @@ mod tests {
 
         let (rows, corrupt_ids) = partition_claimed(claimed_rows);
         assert!(corrupt_ids.is_empty());
-
         assert_eq!(rows.len(), fixtures.len());
-
         for (row, fixture) in rows.iter().zip(fixtures.iter()) {
             assert!(i64::from(row.id) > 0);
             assert_eq!(row.feed_path, fixture.0);
@@ -1450,10 +1523,112 @@ mod tests {
             assert_eq!(row.last_error.as_deref(), fixture.3);
             assert_eq!(row.next_attempt_at, fixture.4);
             assert_eq!(row.claimed_at, fixture.5);
-            assert_eq!(row.created_at, fixture.6);
-            assert_eq!(row.regenerated_at, fixture.7);
-            assert_eq!(row.pinged_at, fixture.8);
+            assert_eq!(row.terminal_at, fixture.6);
+            assert_eq!(row.created_at, fixture.7);
+            assert_eq!(row.regenerated_at, fixture.8);
+            assert_eq!(row.pinged_at, fixture.9);
         }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn prune_terminal_events_obeys_exact_cutoff_and_preserves_nonterminal_rows(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let now = fixture_instant(900_000);
+        let cutoff = UtcInstant::from(now.value() - chrono::Duration::days(7));
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            for (path, status, terminal_at) in [
+                (fp("/~completed/feed.rss"), FeedEventStatus::Done, Some(now)),
+                (
+                    fp("/~failed-boundary/feed.rss"),
+                    FeedEventStatus::Failed,
+                    Some(cutoff),
+                ),
+                (
+                    fp("/~failed-newer/feed.rss"),
+                    FeedEventStatus::Failed,
+                    Some(UtcInstant::from(
+                        cutoff.value() + chrono::Duration::seconds(1),
+                    )),
+                ),
+                (fp("/~pending/feed.rss"), FeedEventStatus::Pending, None),
+                (fp("/~claimed/feed.rss"), FeedEventStatus::Claimed, None),
+            ] {
+                sqlx::query(
+                    "INSERT INTO feed_events (feed_url, status, next_attempt_at, terminal_at) \
+                     VALUES ($1, $2, $3, $4)",
+                )
+                .bind(path)
+                .bind(status)
+                .bind(now)
+                .bind(terminal_at)
+                .execute(pool)
+                .await
+                .unwrap();
+            }
+        });
+
+        assert_eq!(
+            env.state
+                .feed_events
+                .prune_terminal_events(now)
+                .await
+                .expect("prune terminal rows"),
+            2
+        );
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .expect("count retained rows"),
+            3
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn prune_terminal_events_drains_more_than_one_fixed_batch(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let now = fixture_instant(900_000);
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            for index in 0..=TERMINAL_PRUNE_BATCH {
+                sqlx::query(
+                    "INSERT INTO feed_events (feed_url, status, next_attempt_at, terminal_at) \
+                     VALUES ($1, 'done', $2, $2)",
+                )
+                .bind(format!("/~completed-{index}/feed.rss"))
+                .bind(now)
+                .execute(pool)
+                .await
+                .unwrap();
+            }
+        });
+
+        assert_eq!(
+            env.state
+                .feed_events
+                .prune_terminal_events(now)
+                .await
+                .expect("drain terminal rows"),
+            TERMINAL_PRUNE_BATCH + 1
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn prune_terminal_events_preserves_closed_pool_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.base.pool().close().await;
+        assert!(matches!(
+            env.state
+                .feed_events
+                .prune_terminal_events(UtcInstant::now())
+                .await,
+            Err(FeedEventError::Db(sqlx::Error::PoolClosed))
+        ));
     }
 
     #[apply(backends)]
@@ -1470,6 +1645,7 @@ mod tests {
             &env.state.write_scope,
             std::sync::Arc::clone(&env.state.feed_events),
             Vec::new(),
+            UtcInstant::now(),
         )
         .await;
         mark_failed(
@@ -1485,6 +1661,7 @@ mod tests {
             std::sync::Arc::clone(&env.state.feed_events),
             Vec::new(),
             "x".to_owned(),
+            UtcInstant::now(),
         )
         .await;
     }
