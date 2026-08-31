@@ -887,11 +887,10 @@ pass.
   token and its SHA-256 digest are returned together and only the digest is
   persisted, so the raw value is never stored. On the lookup side
   `host::token::hash` (`:53`) is the **sole** `RawToken → TokenHash` conversion
-  (`storage/src/sessions.rs:185`, `password.rs:116`, `email.rs:161`,
-  `sqlite/atomic.rs:131`, `postgres/atomic.rs:98`). The neighbouring
-  `host::token::generate` (`:28`) mints invite codes, not session tokens
-  (`host/src/invite.rs:59` is its only caller). The two are distinct newtypes,
-  `common::token::{RawToken, TokenHash}`
+  (`storage/src/sessions.rs:219`, `password.rs:126`, `email.rs:162`). The
+  neighbouring `host::token::generate` (`:28`) mints invite codes, not session
+  tokens (`host/src/invite.rs:59` is its only caller). The two are distinct
+  newtypes, `common::token::{RawToken, TokenHash}`
   ([#458](https://github.com/jaunder-org/jaunder/issues/458)), and `RawToken`
   carries `#[str_newtype(no_sqlx, no_ord)]` (`common/src/token.rs`) so
   `.bind(raw_token)` does not compile — that opt-out, not a lint, is what keeps
@@ -997,15 +996,19 @@ split by the **entropy of the value being validated**:
   and no parity test asserts it — an accepted limitation of hard-coding, and why
   the fallback is a last resort
   ([ADR-0114](adr/0114-absent-user-timing-equalization.md)).
-- **High-entropy secret (invite code, reset token): cheap-reject first.** Both
-  operations live on the `AtomicOps` trait (`storage/src/atomic.rs:101`), which
-  each backend implements separately (`storage/src/sqlite/atomic.rs:30`, `:125`;
-  `storage/src/postgres/atomic.rs:26`, `:92`). `create_user_with_invite`
-  validates the invite with a cheap lookup before hashing (the SQLite backend
-  takes its write lock up front per ADR-0021, so the hash runs inside the
-  immediate transaction on the success path only), and `confirm_password_reset`
-  atomically claims the reset token before hashing the new password — it
-  originally hashed first, which ADR-0022 recorded as a violation and
+- **High-entropy secret (invite code, reset token): cheap-reject first.**
+  Storage-owned account mutations compose the rows' primitive traits inside the
+  caller-owned `WriteScope`: `account_mutations::register_with_invite` prechecks
+  and conditionally claims through `InviteStorage`, with
+  `UserStorage::create_user` between those operations; and
+  `account_mutations::confirm_password_reset` claims through
+  `PasswordResetStorage::use_password_reset`, then calls
+  `UserStorage::set_password` and `SessionStorage::revoke_all_for_user`.
+  Registration validates the invite with a cheap lookup before hashing, creates
+  the user, and then conditionally claims the invite so a concurrent PostgreSQL
+  loser rolls back its inserted user. Password reset atomically claims the reset
+  token before hashing the new password — it originally hashed first, which
+  ADR-0022 recorded as a violation and
   [#60](https://github.com/jaunder-org/jaunder/issues/60) fixed. A ~256-bit
   secret admits no useful timing oracle, and hashing first would turn
   bogus-secret requests into a CPU-exhaustion amplifier while destroying invite
@@ -1470,8 +1473,8 @@ declares the fields it may later record, usually with `tracing::field::Empty`,
 then records each value when the code reaches the decision. Branch-specific
 child span names are avoided: e.g. `web.registration.register` carries
 `registration.policy`, `registration.invite_present`, and
-`registration.outcome`, while the invite-backed atomic create remains a separate
-child operation span named `storage.atomic.create_user_with_invite`.
+`registration.outcome`, while invite-backed registration has the separate child
+operation span `storage.account_mutations.register_with_invite`.
 
 `host::error::InternalError` captures a `tracing_error::SpanTrace` at
 construction time, while the active span stack still exists. Boundary failures

@@ -171,9 +171,9 @@ pub async fn register(
                                 .map_err(|_| InternalError::validation("invalid invite code"))?;
                             account_mutations::register_with_invite(
                                 transaction,
+                                users.as_ref(),
+                                invites.as_ref(),
                                 RegisterWithInviteInput {
-                                    users: users.as_ref(),
-                                    invites: invites.as_ref(),
                                     username: &username,
                                     password: &password,
                                     display_name: None,

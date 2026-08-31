@@ -13,7 +13,9 @@ use storage::{
 };
 #[apply(backends)]
 #[tokio::test]
-async fn confirm_password_reset_hash_failure_returns_internal(#[case] backend: Backend) {
+async fn confirm_password_reset_hash_failure_preserves_password_error_source_and_token(
+    #[case] backend: Backend,
+) {
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
@@ -23,20 +25,28 @@ async fn confirm_password_reset_hash_failure_returns_internal(#[case] backend: B
         "2099-01-02T03:04:05.123456Z".parse().unwrap(),
     )
     .await;
-    // Valid token → the claim succeeds, then hashing the new password fails → Internal
-    // (success-path hash failure; the failed hash rolls the claim back).
-    let result = confirm_password_reset_result(
+
+    let error = confirm_password_reset_result(
         state,
-        reset_token,
+        reset_token.clone(),
         password("force-hash-error-for-test-coverage"),
     )
-    .await;
-    assert!(matches!(
-        result,
-        Err(WriteScopeError::Operation(
-            ConfirmPasswordResetError::Internal(_)
-        ))
-    ));
+    .await
+    .expect_err("a forced password hash failure must reject the reset");
+    let WriteScopeError::Operation(ConfirmPasswordResetError::Internal(sqlx::Error::Io(source))) =
+        error
+    else {
+        panic!("expected PasswordError wrapped by sqlx::Error::Io");
+    };
+    assert!(
+        source
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<host::password::PasswordError>())
+            .is_some(),
+        "the password error must remain downcastable through sqlx::Error::Io"
+    );
+
+    assert_eq!(use_password_reset(state, reset_token).await, user_id);
 }
 
 #[apply(backends)]

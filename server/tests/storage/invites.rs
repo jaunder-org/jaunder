@@ -330,9 +330,9 @@ async fn create_user_with_invite_result(
             Box::pin(async move {
                 account_mutations::register_with_invite(
                     transaction,
+                    users.as_ref(),
+                    invites.as_ref(),
                     RegisterWithInviteInput {
-                        users: users.as_ref(),
-                        invites: invites.as_ref(),
                         username: &username,
                         password: &password,
                         display_name: display_name.as_ref(),

@@ -109,16 +109,12 @@ impl From<crate::UsePasswordResetError> for ConfirmPasswordResetError {
     }
 }
 
-/// Input and exact storage dependencies for [`register_with_invite`].
+/// Values required by [`register_with_invite`].
 ///
 /// The caller owns all referenced values for the duration of the registration
-/// operation. Keeping the dependencies explicit avoids coupling this mutation
-/// to the composition-root [`AppState`](crate::AppState).
+/// operation. Storage dependencies remain function parameters so this carrier
+/// describes only the registration request.
 pub struct RegisterWithInviteInput<'a> {
-    /// Store used to create the registered user.
-    pub users: &'a dyn UserStorage,
-    /// Store used to validate and atomically claim the invite.
-    pub invites: &'a dyn InviteStorage,
     /// Username assigned to the newly created user.
     pub username: &'a Username,
     /// Plaintext password to prepare before creating the user.
@@ -148,15 +144,16 @@ pub struct RegisterWithInviteInput<'a> {
 /// preparation or storage fails.
 #[tracing::instrument(
     name = "storage.account_mutations.register_with_invite",
-    skip(transaction, input),
+    skip(transaction, users, invites, input),
     fields(username = %input.username)
 )]
 pub async fn register_with_invite(
     transaction: &mut WriteTransaction,
+    users: &dyn UserStorage,
+    invites: &dyn InviteStorage,
     input: RegisterWithInviteInput<'_>,
 ) -> Result<UserId, RegisterWithInviteError> {
-    input
-        .invites
+    invites
         .precheck_invite(input.invite_code)
         .await
         .map_err(RegisterWithInviteError::from)?;
@@ -166,8 +163,7 @@ pub async fn register_with_invite(
     let prepared_password = prepare_password(input.password.clone())
         .await
         .map_err(|error| RegisterWithInviteError::Internal(sqlx::Error::Io(error)))?;
-    let user_id = input
-        .users
+    let user_id = users
         .create_user(
             transaction,
             input.username,
@@ -180,8 +176,7 @@ pub async fn register_with_invite(
             CreateUserError::UsernameTaken => RegisterWithInviteError::UsernameTaken,
             CreateUserError::Internal(error) => RegisterWithInviteError::Internal(error),
         })?;
-    input
-        .invites
+    invites
         .claim_invite(transaction, input.invite_code, user_id)
         .await
         .map_err(RegisterWithInviteError::from)?;
