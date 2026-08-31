@@ -37,7 +37,7 @@ production.
   existing Nix E2E derivation, as governed by ADR-0028.
 - The Playwright report's ownership of the executed project population is
   recorded in
-  `docs/adr/drafts/playwright-report-defines-trace-gate-population.md`.
+  `docs/adr/0165-playwright-report-defines-trace-gate-population.md`.
 - The gate reads copied artifacts after Playwright exits and the VM attempts to
   flush the trace collector; it does not require a quiescent CI host or sample
   live host performance. The 1 ms tolerance checks arithmetic closure within one
@@ -72,5 +72,5 @@ production.
   source-coverage gate, or server-function coverage gate.
 - No new domain terminology is introduced; ADR-0028, ADR-0034, ADR-0096,
   ADR-0100, ADR-0110, ADR-0111, and
-  `docs/adr/drafts/playwright-report-defines-trace-gate-population.md` govern
+  `docs/adr/0165-playwright-report-defines-trace-gate-population.md` govern
   the implementation.

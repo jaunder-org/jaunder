@@ -1,7 +1,7 @@
 //! Strict host-side validation of Playwright projects against trace boot evidence.
 //! The lifted Playwright report is the sole authority for the executed project
 //! population, under
-//! `docs/adr/drafts/playwright-report-defines-trace-gate-population.md`.
+//! `docs/adr/0165-playwright-report-defines-trace-gate-population.md`.
 //! Evidence is accepted from `e2e.test` and navigation-bearing `e2e.page` spans,
 //! reconciled exactly to that report, and uses the analyzer's non-null
 //! `commitToMountMs` proxy only to define mounted membership. Every mounted
