@@ -7,6 +7,7 @@ pub mod commands;
 pub mod context;
 pub mod feed;
 pub mod mailer;
+mod maintenance;
 pub mod media;
 pub mod media_ownership;
 pub mod metrics;

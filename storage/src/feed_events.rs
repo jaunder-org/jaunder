@@ -173,6 +173,24 @@ pub(crate) fn finish_corrupt_purge(
     )
 }
 
+#[cfg(test)]
+#[derive(Default)]
+pub struct PruneBatchGate {
+    arrived: tokio::sync::Notify,
+    resume: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+impl PruneBatchGate {
+    async fn wait_for_batch(&self) {
+        self.arrived.notified().await;
+    }
+
+    fn resume(&self) {
+        self.resume.notify_one();
+    }
+}
+
 #[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait FeedEventStorage: Send + Sync {
@@ -250,6 +268,8 @@ pub trait FeedEventStorage: Send + Sync {
     ) -> Result<(), FeedEventError>;
     /// Delete terminal rows eligible at the supplied instant in fixed-size
     /// statements, releasing the connection after each statement.
+    #[cfg(test)]
+    async fn install_prune_batch_gate(&self, gate: Option<std::sync::Arc<PruneBatchGate>>);
     async fn prune_terminal_events(&self, now: UtcInstant) -> Result<u64, FeedEventError>;
 }
 
@@ -331,6 +351,8 @@ pub trait FeedEventDialect: Backend {
 /// bulk-id binding approach. See ADR-0019.
 pub struct FeedEventStore<DB: Database> {
     pool: Pool<DB>,
+    #[cfg(test)]
+    prune_batch_gate: tokio::sync::RwLock<Option<std::sync::Arc<PruneBatchGate>>>,
 }
 
 /// The one enqueue statement, shared by [`FeedEventStorage::enqueue`] (which
@@ -344,7 +366,11 @@ const TERMINAL_PRUNE_LIMIT: RowLimit = RowLimit::at_most(200);
 impl<DB: Database> FeedEventStore<DB> {
     #[must_use]
     pub fn new(pool: Pool<DB>) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            #[cfg(test)]
+            prune_batch_gate: tokio::sync::RwLock::new(None),
+        }
     }
 }
 
@@ -516,7 +542,19 @@ where
             if batch < TERMINAL_PRUNE_BATCH {
                 return Ok(deleted);
             }
+            #[cfg(test)]
+            {
+                let gate = self.prune_batch_gate.read().await.clone();
+                if let Some(gate) = gate {
+                    gate.arrived.notify_one();
+                    gate.resume.notified().await;
+                }
+            }
         }
+    }
+    #[cfg(test)]
+    async fn install_prune_batch_gate(&self, gate: Option<std::sync::Arc<PruneBatchGate>>) {
+        *self.prune_batch_gate.write().await = gate;
     }
 }
 
@@ -1614,6 +1652,61 @@ mod tests {
                 .await
                 .expect("drain terminal rows"),
             TERMINAL_PRUNE_BATCH + 1
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn independent_writer_progresses_between_prune_batches(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let now = fixture_instant(900_000);
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            for index in 0..=TERMINAL_PRUNE_BATCH {
+                sqlx::query(
+                    "INSERT INTO feed_events (feed_url, status, next_attempt_at, terminal_at) \
+                     VALUES ($1, 'done', $2, $2)",
+                )
+                .bind(format!("/~completed-{index}/feed.rss"))
+                .bind(now)
+                .execute(pool)
+                .await
+                .unwrap();
+            }
+        });
+
+        let gate = std::sync::Arc::new(PruneBatchGate::default());
+        env.state
+            .feed_events
+            .install_prune_batch_gate(Some(std::sync::Arc::clone(&gate)))
+            .await;
+        let feed_events = std::sync::Arc::clone(&env.state.feed_events);
+        let cleanup = tokio::spawn(async move { feed_events.prune_terminal_events(now).await });
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), gate.wait_for_batch())
+            .await
+            .expect("first prune batch");
+        env.base
+            .pool()
+            .execute("INSERT INTO feed_events (feed_url) VALUES ('/~writer/feed.rss')")
+            .await
+            .expect("independent writer commits between cleanup batches");
+        env.state.feed_events.install_prune_batch_gate(None).await;
+        gate.resume();
+
+        assert_eq!(
+            cleanup
+                .await
+                .expect("cleanup task")
+                .expect("cleanup result"),
+            TERMINAL_PRUNE_BATCH + 1
+        );
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .expect("count writer row"),
+            1
         );
     }
 

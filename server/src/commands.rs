@@ -818,6 +818,7 @@ pub struct PreparedServer {
     pub router: axum::Router,
     // Held only to keep the workers running for the server's lifetime.
     backup_scheduler: Option<tokio_cron_scheduler::JobScheduler>,
+    maintenance_scheduler: tokio_cron_scheduler::JobScheduler,
     feed_scheduler: tokio_cron_scheduler::JobScheduler,
     /// Removes the runtime-info file on drop (see ADR-0035).
     runtime_guard: runtime_file::RuntimeFileGuard,
@@ -916,6 +917,15 @@ pub async fn prepare_server(
         instance_id,
         pool_observer,
     } = open_server_database(storage, &runtime, prod).await?;
+    let maintenance_scheduler = crate::maintenance::DatabaseMaintenance::new(
+        db.posts.clone(),
+        db.invites.clone(),
+        db.email_verifications.clone(),
+        db.password_resets.clone(),
+        db.feed_events.clone(),
+    )
+    .start(crate::maintenance::DATABASE_MAINTENANCE_INTERVAL)
+    .await?;
 
     let saturation_metrics = prepare_saturation_metrics(
         db.clone(),
@@ -967,6 +977,7 @@ pub async fn prepare_server(
         listener,
         router,
         backup_scheduler,
+        maintenance_scheduler,
         feed_scheduler,
         runtime_guard,
         saturation_metrics,
@@ -1069,6 +1080,7 @@ pub async fn cmd_serve(
         listener,
         router,
         backup_scheduler,
+        maintenance_scheduler,
         feed_scheduler,
         runtime_guard,
         saturation_metrics,
@@ -1077,6 +1089,7 @@ pub async fn cmd_serve(
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     // Keep the worker schedulers alive for the lifetime of the serve loop.
     let _backup_scheduler = backup_scheduler;
+    let _maintenance_scheduler = maintenance_scheduler;
     let _feed_scheduler = feed_scheduler;
     let _saturation_metrics = saturation_metrics;
     #[cfg(unix)]

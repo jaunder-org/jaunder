@@ -49,7 +49,7 @@ Out:
     Deleted Posts, physical pruning, and restored expired mappings. Bounded
     metrics distinguish creation, replay, and expiry without key material.
 
-- [ ] Task 3: Prune terminal credential rows without changing credential
+- [x] Task 3: Prune terminal credential rows without changing credential
       security
   - Contract: invite, email-verification, and password-reset stores each own a
     bounded cleanup operation taking explicit `now`. Consumed rows are eligible
@@ -60,7 +60,7 @@ Out:
     unused rows, rejection after pruning, failure isolation, and backup restore.
     Structured consumption telemetry uses stable non-secret identifiers only.
 
-- [ ] Task 4: Bound terminal Syndication Feed event retention
+- [x] Task 4: Bound terminal Syndication Feed event retention
   - Contract: completion and exhaustion persist their terminal instant.
     Completed rows are eligible immediately; exhausted rows are eligible at
     seven days. Cleanup never selects pending, claimed, or retryable rows and
@@ -71,7 +71,7 @@ Out:
     and completion/exhaustion telemetry without feed URLs or other unbounded
     fields.
 
-- [ ] Task 5: Establish a clean media temporary directory at startup
+- [x] Task 5: Establish a clean media temporary directory at startup
   - Contract: after the runtime single-instance guard is successfully acquired
     but before upload handling is prepared, startup removes all artifacts under
     `media/tmp` and recreates a usable empty directory. A competing live
@@ -83,7 +83,7 @@ Out:
     guard acquisition precedes cleanup, live-instance refusal performs no
     cleanup, and cleanup completes before uploads are accepted.
 
-- [ ] Task 6: Integrate startup and daily database maintenance
+- [x] Task 6: Integrate startup and daily database maintenance
   - Contract: the composition root runs database maintenance once during startup
     and schedules it every 24 hours. One explicit `now` freezes each run's
     eligible set. Every domain repeats fixed-size statements until that set is

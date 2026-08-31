@@ -36,6 +36,7 @@ pub enum UsePasswordResetError {
 ///
 /// This trait manages the lifecycle of tokens sent to users to allow them to
 /// reset their passwords via email.
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait PasswordResetStorage: Send + Sync {
     /// Stores a new reset token for a user.

@@ -48,6 +48,7 @@ pub enum UseInviteError {
 /// Async operations on the `invites` table.
 ///
 /// This trait manages the lifecycle of invite codes used for registration.
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait InviteStorage: Send + Sync {
     /// Generates and stores a new invite code.

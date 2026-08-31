@@ -53,6 +53,7 @@ impl From<UseEmailVerificationError> for host::error::InternalError {
 ///
 /// This trait manages the lifecycle of tokens sent to users to verify their
 /// email addresses.
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait EmailVerificationStorage: Send + Sync {
     /// Stores a new verification token for a user's email address.

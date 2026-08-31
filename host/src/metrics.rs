@@ -46,6 +46,14 @@ enum_attr!(BackupResult { Success => "success", Failure => "failure" });
 enum_attr!(PostEvent { Created => "created", Updated => "updated", Published => "published", Deleted => "deleted" });
 enum_attr!(AtompubResult { Ok => "ok", ClientError => "client_error", ServerError => "server_error" });
 enum_attr!(IdempotencyEvent { Created => "created", Replayed => "replayed", Expired => "expired" });
+enum_attr!(RetentionDomain {
+    IdempotencyKeys => "idempotency_keys",
+    Invites => "invites",
+    EmailVerifications => "email_verifications",
+    PasswordResets => "password_resets",
+    FeedEvents => "feed_events"
+});
+enum_attr!(RetentionResult { Success => "success", Failure => "failure" });
 
 struct Instruments {
     logins: Counter<u64>,
@@ -68,6 +76,8 @@ struct Instruments {
     posts: Counter<u64>,
     atompub_requests: Counter<u64>,
     idempotency_keys: Counter<u64>,
+    retention_runs: Counter<u64>,
+    retention_pruned: Counter<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -143,6 +153,8 @@ static M: LazyLock<Instruments> = LazyLock::new(|| {
         posts: m.u64_counter("jaunder.posts").build(),
         atompub_requests: m.u64_counter("jaunder.atompub.requests").build(),
         idempotency_keys: m.u64_counter("jaunder.atompub.idempotency_keys").build(),
+        retention_runs: m.u64_counter("jaunder.storage.retention_runs").build(),
+        retention_pruned: m.u64_counter("jaunder.storage.retention_pruned").build(),
     }
 });
 
@@ -359,6 +371,18 @@ pub fn post(event: PostEvent) {
 /// the client-supplied key or any Post content.
 pub fn idempotency(event: IdempotencyEvent) {
     M.idempotency_keys.add(1, &kv("event", event.as_str()));
+}
+/// Records one bounded retention-domain outcome and its successful prune count.
+pub fn retention_cleanup(domain: RetentionDomain, result: RetentionResult, pruned: u64) {
+    let attributes = [
+        KeyValue::new("domain", domain.as_str()),
+        KeyValue::new("result", result.as_str()),
+    ];
+    M.retention_runs.add(1, &attributes);
+    if matches!(result, RetentionResult::Success) {
+        M.retention_pruned
+            .add(pruned, &kv("domain", domain.as_str()));
+    }
 }
 
 pub fn atompub_request(op: &'static str, result: AtompubResult) {
@@ -781,6 +805,24 @@ mod tests {
         assert_eq!(AtompubResult::Ok.as_str(), "ok");
         assert_eq!(AtompubResult::ClientError.as_str(), "client_error");
         assert_eq!(AtompubResult::ServerError.as_str(), "server_error");
+
+        assert_eq!(IdempotencyEvent::Created.as_str(), "created");
+        assert_eq!(IdempotencyEvent::Replayed.as_str(), "replayed");
+        assert_eq!(IdempotencyEvent::Expired.as_str(), "expired");
+
+        assert_eq!(
+            RetentionDomain::IdempotencyKeys.as_str(),
+            "idempotency_keys"
+        );
+        assert_eq!(RetentionDomain::Invites.as_str(), "invites");
+        assert_eq!(
+            RetentionDomain::EmailVerifications.as_str(),
+            "email_verifications"
+        );
+        assert_eq!(RetentionDomain::PasswordResets.as_str(), "password_resets");
+        assert_eq!(RetentionDomain::FeedEvents.as_str(), "feed_events");
+        assert_eq!(RetentionResult::Success.as_str(), "success");
+        assert_eq!(RetentionResult::Failure.as_str(), "failure");
     }
 
     /// `kv` is the one shared shape-builder: every single-attribute emitter goes
