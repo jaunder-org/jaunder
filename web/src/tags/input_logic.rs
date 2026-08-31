@@ -46,10 +46,7 @@ pub fn prev_suggestion(selected: Option<usize>) -> Option<usize> {
 /// a valid tag (empty, whitespace-only, or contains disallowed characters).
 pub fn parse_committed_tag(raw: &str) -> Result<TagSummary, String> {
     match raw.parse::<TagLabel>() {
-        Ok(label) => Ok(TagSummary {
-            slug: label.slug(),
-            display: label,
-        }),
+        Ok(label) => Ok(label.into()),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -60,11 +57,7 @@ mod tests {
     use common::seed::TagSummary;
 
     fn summary(display: &str) -> TagSummary {
-        let label: common::tag::TagLabel = display.parse().unwrap();
-        TagSummary {
-            slug: label.slug(),
-            display: label,
-        }
+        display.parse::<common::tag::TagLabel>().unwrap().into()
     }
 
     #[test]

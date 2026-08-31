@@ -21,14 +21,22 @@ use crate::username::Username;
 /// A tag row returned by the `list_tags` server fn.
 ///
 /// `slug` is the canonical lowercase form used in URLs (`/tags/:slug`).
-/// `display` is the case-preserving form the author most recently used; the
+/// `display` is either the author-cased label from a tagging row or the
+/// canonical-slug fallback from a catalog row without a separate label. The
 /// autocomplete dropdown should render this to the user. When a tag has been
-/// applied with multiple casings across posts, `display` reflects whichever
-/// row the underlying `SELECT` returned first.
+/// applied with multiple casings across posts, `display` reflects whichever row
+/// the underlying `SELECT` returned first.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TagSummary {
     pub slug: Tag,
     pub display: TagLabel,
+}
+
+impl From<TagLabel> for TagSummary {
+    fn from(display: TagLabel) -> Self {
+        let slug = display.slug();
+        Self { slug, display }
+    }
 }
 
 /// A post in rendered form: everything needed to paint it, without its source.
@@ -165,6 +173,14 @@ mod tests {
             is_author: false,
             tags: Vec::new(),
         }
+    }
+
+    #[test]
+    fn tag_summary_from_label_preserves_display_and_derives_canonical_slug() {
+        let summary = TagSummary::from("Rust".parse::<TagLabel>().unwrap());
+
+        assert_eq!(summary.slug, "rust");
+        assert_eq!(summary.display, "Rust");
     }
 
     #[test]
