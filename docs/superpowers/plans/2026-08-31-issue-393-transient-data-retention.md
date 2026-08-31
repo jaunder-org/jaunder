@@ -37,7 +37,7 @@ Out:
     status backfill, constraints, and indexes; backup/restore validation accepts
     and preserves `terminal_at`.
 
-- [ ] Task 2: Enforce the one-hour AtomPub idempotency window atomically
+- [x] Task 2: Enforce the one-hour AtomPub idempotency window atomically
   - Contract: Idempotency Key lookup and keyed Post creation receive an explicit
     `now`. Before the inclusive cutoff, replay is unchanged. At or after it, the
     stale mapping is retired and one concurrent create atomically establishes a

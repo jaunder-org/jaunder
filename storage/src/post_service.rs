@@ -2247,6 +2247,14 @@ mod tests {
                 .expect("pre-cutoff lookup"),
             Some(first.post_id)
         );
+        env.base
+            .pool()
+            .execute(&format!(
+                "UPDATE posts SET deleted_at = created_at WHERE post_id = {}",
+                i64::from(first.post_id)
+            ))
+            .await
+            .expect("soft-delete original Post");
         assert_eq!(
             storage
                 .post_id_for_idempotency_key(user_id, &key, cutoff)
@@ -2268,16 +2276,17 @@ mod tests {
             .expect("cutoff reuse creates a replacement"),
         );
         assert_ne!(replacement.post_id, first.post_id);
-        assert!(
-            storage
-                .get_post_by_id(
-                    first.post_id,
-                    &common::visibility::ViewerIdentity::local(user_id),
-                )
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64(&format!(
+                    "SELECT COUNT(*) FROM posts WHERE post_id = {} AND deleted_at IS NOT NULL",
+                    i64::from(first.post_id)
+                ))
                 .await
-                .expect("original post lookup")
-                .is_some(),
-            "idempotency expiry must not alter the original Post"
+                .expect("inspect original Post tombstone"),
+            1,
+            "idempotency expiry must not alter a Deleted Post"
         );
         assert_eq!(
             storage
@@ -2298,6 +2307,76 @@ mod tests {
                 .await
                 .expect("lookup after pruning"),
             None
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn concurrent_exact_cutoff_reuse_creates_one_replacement(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = Arc::clone(&env.state.posts);
+        let key = parse_idempotency_key("concurrent-retained-key");
+        let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
+        let cutoff = UtcInstant::from(created_at.value() + chrono::Duration::hours(1));
+
+        let original = confirmed(
+            perform_post_creation_at(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
+                created_at,
+                creation_with_key(user_id, parse_post_body("original"), Some(&key)),
+            )
+            .await
+            .expect("original keyed create"),
+        );
+
+        let first_locks = env.media_content_locks();
+        let second_locks = env.media_content_locks();
+        let first_attempt = perform_post_creation_at(
+            &env.state.write_scope,
+            &first_locks,
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
+            cutoff,
+            creation_with_key(user_id, parse_post_body("replacement one"), Some(&key)),
+        );
+        let second_attempt = perform_post_creation_at(
+            &env.state.write_scope,
+            &second_locks,
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
+            cutoff,
+            creation_with_key(user_id, parse_post_body("replacement two"), Some(&key)),
+        );
+        let outcomes = tokio::join!(first_attempt, second_attempt);
+        let replacement = match outcomes {
+            (Ok(outcome), Err(PerformCreationError::IdempotencyConflict))
+            | (Err(PerformCreationError::IdempotencyConflict), Ok(outcome)) => confirmed(outcome),
+            other => panic!("expected one replacement and one conflict, got {other:?}"),
+        };
+
+        assert_ne!(replacement.post_id, original.post_id);
+        assert_eq!(
+            storage
+                .post_id_for_idempotency_key(
+                    user_id,
+                    &key,
+                    UtcInstant::from(cutoff.value() + chrono::Duration::seconds(1)),
+                )
+                .await
+                .expect("replacement mapping"),
+            Some(replacement.post_id)
+        );
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM posts")
+                .await
+                .expect("count durable Posts"),
+            2
         );
     }
 
