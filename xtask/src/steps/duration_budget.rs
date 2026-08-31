@@ -13,6 +13,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::StepResult;
+use crate::playwright_report::{PlaywrightReport, PlaywrightSpec, PlaywrightTest};
 
 const SCHEMA_VERSION: u32 = 1;
 const PRESSURE_THRESHOLD: f64 = 0.80;
@@ -91,43 +92,6 @@ struct ManifestAttempt {
     effective_timeout_ms: f64,
 }
 
-#[derive(Deserialize)]
-struct Report {
-    suites: Vec<ReportSuite>,
-}
-
-#[derive(Deserialize)]
-struct ReportSuite {
-    #[serde(default)]
-    suites: Vec<ReportSuite>,
-    #[serde(default)]
-    specs: Vec<ReportSpec>,
-}
-
-#[derive(Deserialize)]
-struct ReportSpec {
-    id: String,
-    title: String,
-    file: String,
-    line: u64,
-    tests: Vec<ReportTest>,
-}
-
-#[derive(Deserialize)]
-struct ReportTest {
-    #[serde(rename = "projectId")]
-    project_id: String,
-    #[serde(rename = "projectName")]
-    project_name: String,
-    results: Vec<ReportAttempt>,
-}
-
-#[derive(Deserialize)]
-struct ReportAttempt {
-    retry: u32,
-    duration: f64,
-}
-
 #[derive(Clone, Copy)]
 struct Offender<'a> {
     identity: &'a Identity,
@@ -163,7 +127,7 @@ fn validate_files(report_path: &Path, manifest_path: &Path) -> Result<String, St
 }
 
 fn validate_json(report_json: &str, manifest_json: &str) -> Result<String, String> {
-    let report: Report = serde_json::from_str(report_json)
+    let report: PlaywrightReport = serde_json::from_str(report_json)
         .map_err(|error| format!("parsing Playwright report: {error}"))?;
     let manifest: Manifest = serde_json::from_str(manifest_json)
         .map_err(|error| format!("parsing duration-budget manifest: {error}"))?;
@@ -229,11 +193,11 @@ fn manifest_attempts(manifest: Manifest) -> Result<BTreeMap<Identity, BTreeMap<u
     Ok(expected)
 }
 
-fn report_attempts(report: Report) -> Result<BTreeMap<Identity, BTreeMap<u32, f64>>, String> {
+fn report_attempts(
+    report: PlaywrightReport,
+) -> Result<BTreeMap<Identity, BTreeMap<u32, f64>>, String> {
     let mut specs = Vec::new();
-    for suite in report.suites {
-        collect_specs(suite, &mut specs);
-    }
+    report.visit_specs(&mut |spec| specs.push(spec));
     if specs.is_empty() {
         return Err("report contains no selected tests".into());
     }
@@ -241,18 +205,13 @@ fn report_attempts(report: Report) -> Result<BTreeMap<Identity, BTreeMap<u32, f6
     let mut observed = BTreeMap::new();
     for spec in specs {
         if spec.tests.is_empty() {
-            return Err(format!("report spec {} has no project results", spec.id));
+            return Err(format!(
+                "report spec {} has no project results",
+                spec.id.as_deref().unwrap_or("<missing>")
+            ));
         }
-        for test in spec.tests {
-            let identity = Identity {
-                test_id: spec.id.clone(),
-                project_id: test.project_id,
-                project_name: test.project_name,
-                title: spec.title.clone(),
-                file: spec.file.clone(),
-                line: spec.line,
-            };
-            identity.validate("report test")?;
+        for test in &spec.tests {
+            let identity = report_identity(spec, test)?;
             if test.results.is_empty() {
                 return Err(format!(
                     "report test has no results: {}",
@@ -260,18 +219,25 @@ fn report_attempts(report: Report) -> Result<BTreeMap<Identity, BTreeMap<u32, f6
                 ));
             }
             let mut attempts = BTreeMap::new();
-            for attempt in test.results {
-                if !attempt.duration.is_finite() || attempt.duration < 0.0 {
+            for attempt in &test.results {
+                let retry = attempt.retry.ok_or_else(|| {
+                    format!("report attempt has no retry: {}", identity.describe())
+                })?;
+                let duration = attempt.duration.ok_or_else(|| {
+                    format!(
+                        "report retry {retry} has no duration: {}",
+                        identity.describe()
+                    )
+                })?;
+                if !duration.is_finite() || duration < 0.0 {
                     return Err(format!(
-                        "report retry {} has a non-finite or negative duration: {}",
-                        attempt.retry,
+                        "report retry {retry} has a non-finite or negative duration: {}",
                         identity.describe()
                     ));
                 }
-                if attempts.insert(attempt.retry, attempt.duration).is_some() {
+                if attempts.insert(retry, duration).is_some() {
                     return Err(format!(
-                        "report has duplicate retry {}: {}",
-                        attempt.retry,
+                        "report has duplicate retry {retry}: {}",
                         identity.describe()
                     ));
                 }
@@ -288,11 +254,17 @@ fn report_attempts(report: Report) -> Result<BTreeMap<Identity, BTreeMap<u32, f6
     Ok(observed)
 }
 
-fn collect_specs(suite: ReportSuite, specs: &mut Vec<ReportSpec>) {
-    specs.extend(suite.specs);
-    for child in suite.suites {
-        collect_specs(child, specs);
-    }
+fn report_identity(spec: &PlaywrightSpec, test: &PlaywrightTest) -> Result<Identity, String> {
+    let identity = Identity {
+        test_id: spec.id.clone().unwrap_or_default(),
+        project_id: test.project_id.clone().unwrap_or_default(),
+        project_name: test.project_name.clone().unwrap_or_default(),
+        title: spec.title.clone().unwrap_or_default(),
+        file: spec.file.clone().unwrap_or_default(),
+        line: spec.line.unwrap_or_default(),
+    };
+    identity.validate("report test")?;
+    Ok(identity)
 }
 
 fn require_contiguous_retries(

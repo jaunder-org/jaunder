@@ -263,20 +263,19 @@ fn bridge_sample(nav: &Value) -> Option<BridgeSample> {
 }
 
 /// Decompose one current navigation against its own marks (spec D5).
-fn decompose(nav: &Value, marks: &[Value]) -> NavOutcome {
+///
+/// `page_total` is only supplied by the explicit page-span classification path;
+/// ordinary analysis and test-span evidence must close to the mark-derived end.
+fn decompose(nav: &Value, marks: &[Value], page_total: Option<f64>) -> NavOutcome {
     if nav.get("wasmTimingSchema").and_then(Value::as_str) != Some("direct-init-v1") {
         return NavOutcome::NotDecomposed;
     }
     let starts = mark_starts(marks);
-    // The decomposition target, taken independently of the segments so the
-    // closure check has something to close against. Mark-derived totals retain
-    // compatibility with complete mark evidence; navigation-owned totals close
-    // current `e2e.page` evidence whose span does not carry boot marks.
     let boot_total_ms = starts
         .iter()
         .find(|(name, _)| name.ends_with(MOUNT_DONE_SUFFIX))
         .map(|(_, start)| *start)
-        .or_else(|| field_f64(nav, "documentBootTotalMs"));
+        .or(page_total);
     let Some(boot_total_ms) = boot_total_ms else {
         return NavOutcome::NotDecomposed;
     };
@@ -341,12 +340,29 @@ fn decompose(nav: &Value, marks: &[Value]) -> NavOutcome {
     }))
 }
 
-/// Classify one navigation using the shared document-frame decomposition.
+/// Classify test-span navigation evidence using mark-derived document closure.
 pub(crate) fn boot_decomposition_outcome(
     navigation: &Value,
     marks: &[Value],
 ) -> BootDecompositionOutcome {
-    match decompose(navigation, marks) {
+    outcome(decompose(navigation, marks, None))
+}
+
+/// Classify page-span navigation evidence, which may carry its document total
+/// without the test span's boot-mark attribute.
+pub(crate) fn page_boot_decomposition_outcome(
+    navigation: &Value,
+    marks: &[Value],
+) -> BootDecompositionOutcome {
+    outcome(decompose(
+        navigation,
+        marks,
+        field_f64(navigation, "documentBootTotalMs"),
+    ))
+}
+
+fn outcome(outcome: NavOutcome) -> BootDecompositionOutcome {
+    match outcome {
         NavOutcome::NotDecomposed => BootDecompositionOutcome::Incomplete,
         NavOutcome::ClosureViolation => BootDecompositionOutcome::ClosureViolation,
         NavOutcome::Decomposed(_) => BootDecompositionOutcome::Complete,
@@ -509,7 +525,7 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
                 .and_then(|id| marks_by_nav.get(&id))
                 .cloned()
                 .unwrap_or_default();
-            match decompose(nav, &marks) {
+            match decompose(nav, &marks, None) {
                 NavOutcome::NotDecomposed => {}
                 NavOutcome::ClosureViolation => population.closure_violations += 1,
                 NavOutcome::Decomposed(decomposition) => {
@@ -1352,13 +1368,13 @@ mod tests {
         let mut navigation = nav(1, "warm", 105.0, Some(160.0));
         navigation["documentBootTotalMs"] = json!(105.0);
         assert!(matches!(
-            boot_decomposition_outcome(&navigation, &[]),
+            page_boot_decomposition_outcome(&navigation, &[]),
             BootDecompositionOutcome::Complete
         ));
 
         navigation["documentBootTotalMs"] = json!(107.0);
         assert!(matches!(
-            boot_decomposition_outcome(&navigation, &[]),
+            page_boot_decomposition_outcome(&navigation, &[]),
             BootDecompositionOutcome::ClosureViolation
         ));
     }

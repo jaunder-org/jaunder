@@ -240,37 +240,26 @@ fn passes(span: &Value, name: &str, project: &str, filters: &Filters) -> bool {
 /// hard error; blank lines are skipped.
 pub fn parse_spans(content: &str, filters: &Filters, source: &str) -> Result<Vec<Span>> {
     let mut spans = Vec::new();
-    for line in content.lines() {
+    for (line_number, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        let record: Value = serde_json::from_str(line)
-            .with_context(|| format!("failed to parse JSON line in {source}"))?;
-        let resource_spans = record
-            .get("resourceSpans")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for resource_span in &resource_spans {
-            let scope_spans = resource_span
-                .get("scopeSpans")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            for scope_span in &scope_spans {
-                let nested = scope_span
-                    .get("spans")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
+        let record: Value = serde_json::from_str(line).with_context(|| {
+            format!("failed to parse JSON line {} in {source}", line_number + 1)
+        })?;
+        let resource_spans = required_array(&record, "resourceSpans", source, line_number + 1)?;
+        for resource_span in resource_spans {
+            let scope_spans = required_array(resource_span, "scopeSpans", source, line_number + 1)?;
+            for scope_span in scope_spans {
+                let nested = required_array(scope_span, "spans", source, line_number + 1)?;
                 for span in nested {
                     let name = span
                         .get("name")
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_string();
-                    let project = get_attr(&span, "e2e.project");
-                    if !passes(&span, &name, &project, filters) {
+                    let project = get_attr(span, "e2e.project");
+                    if !passes(span, &name, &project, filters) {
                         continue;
                     }
                     spans.push(Span {
@@ -289,21 +278,33 @@ pub fn parse_spans(content: &str, filters: &Filters, source: &str) -> Result<Vec
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_string(),
-                        method: get_attr(&span, "method"),
-                        uri: get_attr(&span, "uri"),
-                        busy_ns: get_attr(&span, "busy_ns"),
-                        idle_ns: get_attr(&span, "idle_ns"),
-                        duration_ms: parse_duration_ms(&span),
+                        method: get_attr(span, "method"),
+                        uri: get_attr(span, "uri"),
+                        busy_ns: get_attr(span, "busy_ns"),
+                        idle_ns: get_attr(span, "idle_ns"),
+                        duration_ms: parse_duration_ms(span),
                         source: source.to_string(),
                         name,
                         project,
-                        raw: span,
+                        raw: span.clone(),
                     });
                 }
             }
         }
     }
     Ok(spans)
+}
+
+fn required_array<'a>(
+    value: &'a Value,
+    field: &str,
+    source: &str,
+    line_number: usize,
+) -> Result<&'a Vec<Value>> {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("JSON line {line_number} in {source} has no {field} array"))
 }
 
 /// Read a file and `parse_spans` its content. Errors name the path (missing file,
@@ -321,6 +322,16 @@ mod tests {
 
     fn line(spans: Value) -> String {
         json!({ "resourceSpans": [{ "scopeSpans": [{ "spans": spans }] }] }).to_string()
+    }
+
+    #[test]
+    fn rejects_an_empty_jsonl_record_beside_valid_otlp_evidence() {
+        let input = format!("{}\n{{}}", line(json!([])));
+        let error = parse_spans(&input, &Filters::default(), "capture").unwrap_err();
+        assert!(
+            error.to_string().contains("resourceSpans array"),
+            "{error:#}"
+        );
     }
 
     #[test]

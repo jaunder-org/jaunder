@@ -16,6 +16,7 @@ mod ids;
 pub mod issue;
 pub mod markers;
 mod nix_build;
+mod playwright_report;
 pub mod pr;
 mod result;
 mod server_fn_coverage;

@@ -13,22 +13,20 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use std::fs::File;
-use std::io::Read;
 use std::path::Path;
 
-use flate2::read::GzDecoder;
-
-use serde::Deserialize;
 use serde_json::Value;
+
+use crate::playwright_report::PlaywrightReport;
+use crate::traces::run::read_trace_member;
 
 use crate::StepResult;
 use crate::traces::{
-    boot_phases::{BootDecompositionOutcome, boot_decomposition_outcome},
+    boot_phases::{
+        BootDecompositionOutcome, boot_decomposition_outcome, page_boot_decomposition_outcome,
+    },
     parse::{Filters, get_attr, parse_json_attr, parse_spans},
 };
-
-const TRACE_MEMBER: &str = "capture/otel-traces.jsonl";
 
 /// Validate one successful E2E combination's independently lifted execution
 /// population and trace evidence.
@@ -61,89 +59,16 @@ fn validate_files(report_path: &Path, capture_path: &Path) -> Result<String, Str
             report_path.display()
         ));
     }
-    let trace = read_trace(capture_path)?;
+    let trace = read_trace_member(capture_path)
+        .map_err(|error| format!("reading capture {}: {error:#}", capture_path.display()))?;
     validate_json(&report, &trace)
-}
-
-/// Read exactly one regular trace member without unpacking the untrusted archive.
-fn read_trace(capture_path: &Path) -> Result<String, String> {
-    let file = File::open(capture_path)
-        .map_err(|error| format!("opening capture {}: {error}", capture_path.display()))?;
-    let mut archive = tar::Archive::new(GzDecoder::new(file));
-    let mut trace = None;
-    let entries = archive
-        .entries()
-        .map_err(|error| format!("reading capture {}: {error}", capture_path.display()))?;
-
-    for entry in entries {
-        let mut entry = entry
-            .map_err(|error| format!("reading capture {}: {error}", capture_path.display()))?;
-        let path = entry
-            .path()
-            .map_err(|error| format!("reading capture member path: {error}"))?;
-        if path.as_ref() != Path::new(TRACE_MEMBER) {
-            continue;
-        }
-        if !entry.header().entry_type().is_file() {
-            return Err(format!(
-                "trace member `{TRACE_MEMBER}` is not a regular file"
-            ));
-        }
-        if trace.is_some() {
-            return Err(format!(
-                "capture has ambiguous trace member `{TRACE_MEMBER}`"
-            ));
-        }
-        let mut contents = String::new();
-        entry
-            .read_to_string(&mut contents)
-            .map_err(|error| format!("reading trace member `{TRACE_MEMBER}`: {error}"))?;
-        trace = Some(contents);
-    }
-
-    let trace = trace.ok_or_else(|| {
-        format!(
-            "trace member `{TRACE_MEMBER}` is missing from {}",
-            capture_path.display()
-        )
-    })?;
-    if trace.trim().is_empty() {
-        return Err(format!("trace member `{TRACE_MEMBER}` is empty"));
-    }
-    Ok(trace)
-}
-
-#[derive(Deserialize)]
-struct Report {
-    #[serde(default)]
-    suites: Vec<ReportSuite>,
-}
-
-#[derive(Deserialize)]
-struct ReportSuite {
-    #[serde(default)]
-    suites: Vec<ReportSuite>,
-    #[serde(default)]
-    specs: Vec<ReportSpec>,
-}
-
-#[derive(Deserialize)]
-struct ReportSpec {
-    #[serde(default)]
-    tests: Vec<ReportTest>,
-}
-
-#[derive(Deserialize)]
-struct ReportTest {
-    #[serde(rename = "projectName")]
-    project_name: String,
 }
 
 /// Evaluate in-memory artifacts at the stable host-side test seam.
 pub(crate) fn validate_json(report_json: &str, trace_jsonl: &str) -> Result<String, String> {
-    let report: Report = serde_json::from_str(report_json)
+    let report: PlaywrightReport = serde_json::from_str(report_json)
         .map_err(|error| format!("parsing Playwright report: {error}"))?;
-    let expected = report_projects(report)?;
+    let expected = report_projects(&report)?;
     let spans = parse_spans(trace_jsonl, &Filters::default(), "trace capture")
         .map_err(|error| format!("parsing trace capture: {error:#}"))?;
     let observed = trace_projects(&spans)?;
@@ -164,37 +89,29 @@ pub(crate) fn validate_json(report_json: &str, trace_jsonl: &str) -> Result<Stri
     ))
 }
 
-fn report_projects(report: Report) -> Result<BTreeSet<String>, String> {
-    let mut specs = Vec::new();
-    for suite in report.suites {
-        collect_specs(suite, &mut specs);
-    }
-    let projects = specs
-        .into_iter()
-        .flat_map(|spec| spec.tests)
-        .map(|test| test.project_name)
-        .collect::<BTreeSet<_>>();
+fn report_projects(report: &PlaywrightReport) -> Result<BTreeSet<String>, String> {
+    let mut projects = BTreeSet::new();
+    report.visit_specs(&mut |spec| {
+        projects.extend(
+            spec.tests
+                .iter()
+                .filter_map(|test| test.project_name.clone()),
+        );
+    });
     if projects.is_empty() || projects.iter().any(|project| project.is_empty()) {
         return Err("Playwright report has no complete project population".into());
     }
     Ok(projects)
 }
 
-fn collect_specs(suite: ReportSuite, specs: &mut Vec<ReportSpec>) {
-    specs.extend(suite.specs);
-    for nested in suite.suites {
-        collect_specs(nested, specs);
-    }
-}
-
 fn trace_projects(spans: &[crate::traces::parse::Span]) -> Result<BTreeSet<String>, String> {
     let mut projects = BTreeSet::new();
     let mut mounted = BTreeMap::<String, usize>::new();
 
-    for span in spans.iter().filter(|span| {
-        span.name == "e2e.test"
-            || (span.name == "e2e.page" && has_attribute(&span.raw, "e2e.navigation_top_json"))
-    }) {
+    for span in spans
+        .iter()
+        .filter(|span| span.name == "e2e.test" || span.name == "e2e.page")
+    {
         if span.project.is_empty() {
             return Err(format!("{} span has no e2e.project", span.name));
         }
@@ -205,30 +122,36 @@ fn trace_projects(spans: &[crate::traces::parse::Span]) -> Result<BTreeSet<Strin
         let navigations = parse_json_attr(&span.raw, "e2e.navigation_top_json", &span.source)
             .map_err(|error| {
                 format!("project {project}: malformed navigation evidence: {error:#}")
-            })?;
+            })?
+            .ok_or_else(|| format!("project {project}: missing navigation evidence"))?;
+        let navigations = navigations
+            .as_array()
+            .ok_or_else(|| format!("project {project}: navigation evidence is not an array"))?;
         let marks =
             parse_json_attr(&span.raw, "e2e.boot_marks_json", &span.source).map_err(|error| {
                 format!("project {project}: malformed boot-mark evidence: {error:#}")
             })?;
-        let marks = marks_by_navigation(marks.as_ref());
-
-        let Some(navigations) = navigations.as_ref() else {
-            continue;
-        };
-        let navigations = navigations
-            .as_array()
-            .ok_or_else(|| format!("project {project}: navigation evidence is not an array"))?;
+        let marks = marks_by_navigation(marks.as_ref(), project)?;
         for navigation in navigations {
-            if navigation
-                .get("commitToMountMs")
-                .and_then(Value::as_f64)
-                .filter(|value| value.is_finite())
-                .is_none()
-            {
-                continue;
+            let object = navigation
+                .as_object()
+                .ok_or_else(|| format!("project {project}: navigation entry is not an object"))?;
+            match object.get("commitToMountMs") {
+                Some(Value::Null) => continue,
+                Some(Value::Number(value)) if value.as_f64().is_some_and(f64::is_finite) => {}
+                Some(_) => {
+                    return Err(format!(
+                        "project {project}: navigation commitToMountMs is not null or a finite number"
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "project {project}: navigation evidence has no commitToMountMs"
+                    ));
+                }
             }
             *mounted.entry(project.clone()).or_default() += 1;
-            validate_navigation(project, navigation, &marks)?;
+            validate_navigation(project, navigation, &marks, span.name == "e2e.page")?;
         }
     }
 
@@ -254,10 +177,12 @@ fn has_attribute(raw: &Value, key: &str) -> bool {
 }
 
 fn validate_dropped(span: &crate::traces::parse::Span, project: &str) -> Result<(), String> {
-    let value = get_attr(&span.raw, "e2e.navigation_top_dropped");
-    if value.is_empty() {
-        return Ok(());
+    if !has_attribute(&span.raw, "e2e.navigation_top_dropped") {
+        return Err(format!(
+            "project {project}: missing dropped-navigation count"
+        ));
     }
+    let value = get_attr(&span.raw, "e2e.navigation_top_dropped");
     let dropped = value
         .parse::<u64>()
         .map_err(|_| format!("project {project}: malformed dropped-navigation count {value:?}"))?;
@@ -270,24 +195,62 @@ fn validate_dropped(span: &crate::traces::parse::Span, project: &str) -> Result<
     }
 }
 
-fn marks_by_navigation(marks: Option<&Value>) -> BTreeMap<i64, &[Value]> {
-    marks
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| {
-            Some((
-                entry.get("id")?.as_i64()?,
-                entry.get("marks")?.as_array()?.as_slice(),
-            ))
-        })
-        .collect()
+fn marks_by_navigation<'a>(
+    marks: Option<&'a Value>,
+    project: &str,
+) -> Result<BTreeMap<i64, &'a [Value]>, String> {
+    let Some(marks) = marks else {
+        return Ok(BTreeMap::new());
+    };
+    let marks = marks
+        .as_array()
+        .ok_or_else(|| format!("project {project}: boot-mark evidence is not an array"))?;
+    let mut by_navigation = BTreeMap::new();
+    for entry in marks {
+        let entry = entry
+            .as_object()
+            .ok_or_else(|| format!("project {project}: boot-mark entry is not an object"))?;
+        let id = entry
+            .get("id")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| format!("project {project}: boot-mark entry has no integer id"))?;
+        let marks = entry
+            .get("marks")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("project {project}: boot-mark entry has no marks array"))?;
+        for mark in marks {
+            let mark = mark
+                .as_object()
+                .ok_or_else(|| format!("project {project}: boot-mark record is not an object"))?;
+            if mark.get("name").and_then(Value::as_str).is_none() {
+                return Err(format!(
+                    "project {project}: boot-mark record has no string name"
+                ));
+            }
+            if !mark
+                .get("startTime")
+                .and_then(Value::as_f64)
+                .is_some_and(f64::is_finite)
+            {
+                return Err(format!(
+                    "project {project}: boot-mark startTime is not a finite number"
+                ));
+            }
+        }
+        if by_navigation.insert(id, marks.as_slice()).is_some() {
+            return Err(format!(
+                "project {project}: duplicate boot-mark navigation id {id}"
+            ));
+        }
+    }
+    Ok(by_navigation)
 }
 
 fn validate_navigation(
     project: &str,
     navigation: &Value,
     marks: &BTreeMap<i64, &[Value]>,
+    page_only: bool,
 ) -> Result<(), String> {
     if navigation.get("wasmTimingSchema").and_then(Value::as_str) != Some("direct-init-v1") {
         return Err(format!(
@@ -301,7 +264,12 @@ fn validate_navigation(
         .and_then(|id| marks.get(&id))
         .copied()
         .unwrap_or_default();
-    match boot_decomposition_outcome(navigation, marks) {
+    let outcome = if page_only {
+        page_boot_decomposition_outcome(navigation, marks)
+    } else {
+        boot_decomposition_outcome(navigation, marks)
+    };
+    match outcome {
         BootDecompositionOutcome::Complete => Ok(()),
         BootDecompositionOutcome::Incomplete => Err(format!(
             "project {project}: incomplete direct-init decomposition"
@@ -328,7 +296,8 @@ mod tests {
     use flate2::write::GzEncoder;
     use serde_json::{Value, json};
 
-    use super::{TRACE_MEMBER, validate_files, validate_json};
+    use super::{validate_files, validate_json};
+    use crate::traces::run::TRACE_MEMBER;
 
     fn report(projects: &[&str]) -> String {
         json!({
@@ -530,6 +499,125 @@ mod tests {
     }
 
     #[test]
+    fn rejects_missing_required_navigation_and_dropped_evidence() {
+        let mut missing_navigation: Value = serde_json::from_str(&valid_trace()).unwrap();
+        let attributes =
+            missing_navigation["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
+                .as_array_mut()
+                .unwrap();
+        attributes.retain(|attribute| attribute["key"].as_str() != Some("e2e.navigation_top_json"));
+        assert_rejected(
+            &report(&["chromium"]),
+            &missing_navigation.to_string(),
+            "missing navigation evidence",
+        );
+        missing_navigation["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"] =
+            json!("e2e.page");
+        assert_rejected(
+            &report(&["chromium"]),
+            &missing_navigation.to_string(),
+            "missing navigation evidence",
+        );
+
+        let mut missing_dropped: Value = serde_json::from_str(&valid_trace()).unwrap();
+        let attributes =
+            missing_dropped["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
+                .as_array_mut()
+                .unwrap();
+        attributes
+            .retain(|attribute| attribute["key"].as_str() != Some("e2e.navigation_top_dropped"));
+        assert_rejected(
+            &report(&["chromium"]),
+            &missing_dropped.to_string(),
+            "missing dropped-navigation count",
+        );
+
+        let mut negative_dropped: Value = serde_json::from_str(&valid_trace()).unwrap();
+        let attributes =
+            negative_dropped["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
+                .as_array_mut()
+                .unwrap();
+        let dropped = attributes
+            .iter_mut()
+            .find(|attribute| attribute["key"].as_str() == Some("e2e.navigation_top_dropped"))
+            .unwrap();
+        dropped["value"]["stringValue"] = json!("-1");
+        assert_rejected(
+            &report(&["chromium"]),
+            &negative_dropped.to_string(),
+            "malformed dropped-navigation count",
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_and_duplicate_boot_mark_evidence() {
+        let mut not_an_array: Value = serde_json::from_str(&valid_trace()).unwrap();
+        let attributes =
+            not_an_array["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
+                .as_array_mut()
+                .unwrap();
+        let boot_marks = attributes
+            .iter_mut()
+            .find(|attribute| attribute["key"].as_str() == Some("e2e.boot_marks_json"))
+            .unwrap();
+        boot_marks["value"]["stringValue"] = json!(json!({"id": 1}).to_string());
+        assert_rejected(
+            &report(&["chromium"]),
+            &not_an_array.to_string(),
+            "boot-mark evidence is not an array",
+        );
+
+        let mut duplicate: Value = serde_json::from_str(&valid_trace()).unwrap();
+        let attributes = duplicate["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
+            .as_array_mut()
+            .unwrap();
+        let boot_marks = attributes
+            .iter_mut()
+            .find(|attribute| attribute["key"].as_str() == Some("e2e.boot_marks_json"))
+            .unwrap();
+        boot_marks["value"]["stringValue"] = json!(json!([marks(1), marks(1)]).to_string());
+        assert_rejected(
+            &report(&["chromium"]),
+            &duplicate.to_string(),
+            "duplicate boot-mark navigation id",
+        );
+
+        let mut malformed_mark: Value = serde_json::from_str(&valid_trace()).unwrap();
+        let attributes =
+            malformed_mark["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
+                .as_array_mut()
+                .unwrap();
+        let boot_marks = attributes
+            .iter_mut()
+            .find(|attribute| attribute["key"].as_str() == Some("e2e.boot_marks_json"))
+            .unwrap();
+        boot_marks["value"]["stringValue"] = json!(
+            json!([{ "id": 1, "marks": [{ "name": "jaunder.boot.entry", "startTime": "early" }] }])
+                .to_string()
+        );
+        assert_rejected(
+            &report(&["chromium"]),
+            &malformed_mark.to_string(),
+            "boot-mark startTime is not a finite number",
+        );
+
+        let mut missing_id: Value = serde_json::from_str(&valid_trace()).unwrap();
+        let attributes = missing_id["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
+            .as_array_mut()
+            .unwrap();
+        let boot_marks = attributes
+            .iter_mut()
+            .find(|attribute| attribute["key"].as_str() == Some("e2e.boot_marks_json"))
+            .unwrap();
+        boot_marks["value"]["stringValue"] = json!(json!([{ "marks": [] }]).to_string());
+        assert_rejected(
+            &report(&["chromium"]),
+            &missing_id.to_string(),
+            "boot-mark entry has no integer id",
+        );
+    }
+
+    #[test]
     fn rejects_mismatched_project_sets() {
         assert_rejected(
             &report(&["chromium", "firefox"]),
@@ -539,13 +627,38 @@ mod tests {
     }
 
     #[test]
-    fn rejects_project_without_a_mounted_navigation() {
+    fn rejects_navigation_missing_mounted_membership_field() {
         let mut nav = navigation(1, true);
         nav.as_object_mut().unwrap().remove("commitToMountMs");
         assert_rejected(
             &report(&["chromium"]),
             &trace("chromium", "e2e.test", nav, marks(1), 0),
+            "no commitToMountMs",
+        );
+    }
+
+    #[test]
+    fn accepts_null_membership_as_unmounted_and_rejects_wrong_navigation_entries() {
+        let mut unmounted = navigation(1, true);
+        unmounted["commitToMountMs"] = Value::Null;
+        assert_rejected(
+            &report(&["chromium"]),
+            &trace("chromium", "e2e.test", unmounted, marks(1), 0),
             "no mounted navigation",
+        );
+
+        let mut wrong = navigation(1, true);
+        wrong["commitToMountMs"] = json!("fast");
+        assert_rejected(
+            &report(&["chromium"]),
+            &trace("chromium", "e2e.test", wrong, marks(1), 0),
+            "not null or a finite number",
+        );
+
+        assert_rejected(
+            &report(&["chromium"]),
+            &trace("chromium", "e2e.test", json!(false), marks(1), 0),
+            "navigation entry is not an object",
         );
     }
 
@@ -611,6 +724,21 @@ mod tests {
             &report(&["chromium"]),
             &trace("chromium", "e2e.page", nav, marks(1), 0),
             "does not close within 1 ms",
+        );
+    }
+
+    #[test]
+    fn rejects_test_span_document_total_without_boot_marks() {
+        let trace = trace_without_marks(
+            "chromium",
+            "e2e.test",
+            page_navigation_with_document_total(1, 55.0),
+        );
+
+        assert_rejected(
+            &report(&["chromium"]),
+            &trace,
+            "incomplete direct-init decomposition",
         );
     }
 
