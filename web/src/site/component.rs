@@ -2,6 +2,7 @@ use super::UpdateIdentity;
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
+use common::MutationOutcome;
 use common::site::{SiteIdentity, SiteTitle};
 use common::tagged_url::BaseUrl;
 use leptos::prelude::*;
@@ -35,11 +36,19 @@ pub fn SiteSettingsPage() -> impl IntoView {
                     update_action
                         .value()
                         .get()
-                        .map(|result: Result<(), WebError>| match result {
-                            Ok(()) => {
+                        .map(|result: Result<MutationOutcome<()>, WebError>| match result {
+                            Ok(MutationOutcome::Confirmed(())) => {
                                 view! {
                                     <p class="j-settings-saved" role="status">
                                         "Site settings saved."
+                                    </p>
+                                }
+                                    .into_any()
+                            }
+                            Ok(MutationOutcome::CommitIndeterminate(())) => {
+                                view! {
+                                    <p class="error j-settings-error">
+                                        "Save acknowledgement was lost; reload to verify the settings."
                                     </p>
                                 }
                                     .into_any()

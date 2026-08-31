@@ -33,6 +33,16 @@ async fn soft_delete_post_confirmed(state: &AppState, post_id: PostId, user_id: 
     confirmed(outcome, "post deletion");
 }
 
+async fn upsert_cache_confirmed(state: &AppState, row: FeedCacheRow) {
+    let cache = Arc::clone(&state.feed_cache);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| Box::pin(async move { cache.upsert(transaction, row).await }))
+        .await
+        .expect("seed cached feed");
+    confirmed(outcome, "feed-cache fixture");
+}
+
 async fn anon_user_by_tag(
     state: &AppState,
     user_id: UserId,
@@ -958,27 +968,11 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     );
 
     // Stale (generated before go-live) => must be returned.
-    state
-        .feed_cache
-        .upsert(mk_row("/feed.atom", UtcInstant::from(t0)))
-        .await
-        .unwrap();
-    state
-        .feed_cache
-        .upsert(mk_row(&site_tag_url, UtcInstant::from(t0)))
-        .await
-        .unwrap();
-    state
-        .feed_cache
-        .upsert(mk_row(&user_tag_url, UtcInstant::from(t0)))
-        .await
-        .unwrap();
+    upsert_cache_confirmed(state, mk_row("/feed.atom", UtcInstant::from(t0))).await;
+    upsert_cache_confirmed(state, mk_row(&site_tag_url, UtcInstant::from(t0))).await;
+    upsert_cache_confirmed(state, mk_row(&user_tag_url, UtcInstant::from(t0))).await;
     // Fresh (generated after the newest live post) => must NOT be returned.
-    state
-        .feed_cache
-        .upsert(mk_row("/~alice/feed.atom", UtcInstant::from(now)))
-        .await
-        .unwrap();
+    upsert_cache_confirmed(state, mk_row("/~alice/feed.atom", UtcInstant::from(now))).await;
 
     let stale = state
         .posts

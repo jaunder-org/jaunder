@@ -125,7 +125,7 @@ impl WriteScope {
     }
 
     #[cfg(test)]
-    fn with_commit_acknowledgement_loss_after_commit_for_test(&self) -> Self {
+    pub(crate) fn with_commit_acknowledgement_loss_after_commit_for_test(&self) -> Self {
         Self {
             backend: self.backend.clone(),
             lose_commit_acknowledgement_after_commit: true,

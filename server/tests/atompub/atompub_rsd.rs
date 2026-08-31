@@ -19,14 +19,20 @@ use storage::test_support::backends;
 #[tokio::test]
 async fn rsd_document_advertises_service_url(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
-    state
-        .site_config
-        .set_identity(&common::site::SiteIdentity {
-            title: common::test_support::parse_site_title("Test"),
-            base_url: Some(common::test_support::parse_url("https://example.test/")),
-        })
-        .await
-        .unwrap();
+    let identity = common::site::SiteIdentity {
+        title: common::test_support::parse_site_title("Test"),
+        base_url: Some(common::test_support::parse_url("https://example.test/")),
+    };
+    let site_config = std::sync::Arc::clone(&state.site_config);
+    storage::test_support::confirmed(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { site_config.set_identity(transaction, &identity).await })
+            })
+            .await
+            .unwrap(),
+    );
     let app = make_app(&state, &base);
 
     // RSD is public — no authentication required.

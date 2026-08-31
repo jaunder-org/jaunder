@@ -10,8 +10,7 @@ use host::feed::{
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
-use crate::backend::Backend;
-use crate::role_instant::impl_role_instant;
+use crate::{WriteTransaction, backend::Backend, role_instant::impl_role_instant};
 
 /// The `feed_cache.updated_at` storage timestamp role, distinct from
 /// `generated_at` so mappings cannot transpose silently (#751).
@@ -128,8 +127,16 @@ pub enum FeedCacheError {
 #[async_trait]
 pub trait FeedCacheStorage: Send + Sync {
     async fn get(&self, feed_path: &FeedPath) -> Result<Option<FeedCacheRow>, FeedCacheError>;
-    async fn upsert(&self, row: FeedCacheRow) -> Result<(), FeedCacheError>;
-    async fn delete(&self, feed_path: &FeedPath) -> Result<(), FeedCacheError>;
+    async fn upsert(
+        &self,
+        transaction: &mut WriteTransaction,
+        row: FeedCacheRow,
+    ) -> Result<(), FeedCacheError>;
+    async fn delete(
+        &self,
+        transaction: &mut WriteTransaction,
+        feed_path: &FeedPath,
+    ) -> Result<(), FeedCacheError>;
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -212,6 +219,7 @@ where
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     #[tracing::instrument(
@@ -232,10 +240,15 @@ where
 
     #[tracing::instrument(
         name = "storage.feed_cache.upsert",
-        skip(self, row),
+        skip(self, transaction, row),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn upsert(&self, row: FeedCacheRow) -> Result<(), FeedCacheError> {
+    async fn upsert(
+        &self,
+        transaction: &mut WriteTransaction,
+        row: FeedCacheRow,
+    ) -> Result<(), FeedCacheError> {
+        let connection = DB::write_connection(transaction)?;
         sqlx::query(
             "INSERT INTO feed_cache (feed_url, body, etag, content_type, updated_at, generated_at) \
              VALUES ($1, $2, $3, $4, $5, $6) \
@@ -254,20 +267,25 @@ where
         .bind(row.representation().content_type())
         .bind(row.updated_at)
         .bind(row.generated_at)
-        .execute(&self.pool)
+        .execute(&mut *connection)
         .await?;
         Ok(())
     }
 
     #[tracing::instrument(
         name = "storage.feed_cache.delete",
-        skip(self),
+        skip(self, transaction),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn delete(&self, feed_path: &FeedPath) -> Result<(), FeedCacheError> {
+    async fn delete(
+        &self,
+        transaction: &mut WriteTransaction,
+        feed_path: &FeedPath,
+    ) -> Result<(), FeedCacheError> {
+        let connection = DB::write_connection(transaction)?;
         sqlx::query("DELETE FROM feed_cache WHERE feed_url = $1")
             .bind(feed_path)
-            .execute(&self.pool)
+            .execute(&mut *connection)
             .await?;
         Ok(())
     }
@@ -275,6 +293,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::test_support::{Backend, backends, fp};
 
@@ -301,16 +321,42 @@ mod tests {
         .expect("matching cache row formats")
     }
 
+    async fn upsert_confirmed(state: &crate::AppState, row: FeedCacheRow) {
+        let cache = Arc::clone(&state.feed_cache);
+        let outcome = state
+            .write_scope
+            .run(move |transaction| Box::pin(async move { cache.upsert(transaction, row).await }))
+            .await
+            .expect("upsert cache");
+        assert!(matches!(
+            outcome,
+            common::mutation::MutationOutcome::Confirmed(())
+        ));
+    }
+
+    async fn delete_confirmed(state: &crate::AppState, feed_path: &FeedPath) {
+        let cache = Arc::clone(&state.feed_cache);
+        let feed_path = feed_path.clone();
+        let outcome = state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { cache.delete(transaction, &feed_path).await })
+            })
+            .await
+            .expect("delete cache");
+        assert!(matches!(
+            outcome,
+            common::mutation::MutationOutcome::Confirmed(())
+        ));
+    }
+
     #[test]
     fn timestamp_role_wrappers_preserve_distinct_instants() {
         let updated_at = UtcInstant::now();
         let generated_at = UtcInstant::from(updated_at.value() + chrono::Duration::seconds(5));
 
-        assert_eq!(FeedCacheUpdatedAt::from(updated_at).value(), updated_at);
-        assert_eq!(
-            FeedCacheGeneratedAt::from(generated_at).value(),
-            generated_at
-        );
+        assert_eq!(FeedCacheUpdatedAt(updated_at).value(), updated_at);
+        assert_eq!(FeedCacheGeneratedAt(generated_at).value(), generated_at);
     }
 
     #[test]
@@ -359,7 +405,7 @@ mod tests {
                 .expect("valid UTC instant"),
         )
         .expect("matching cache row formats");
-        env.state.feed_cache.upsert(row.clone()).await.unwrap();
+        upsert_confirmed(&env.state, row.clone()).await;
         let got = env
             .state
             .feed_cache
@@ -379,7 +425,7 @@ mod tests {
     async fn second_upsert_updates_existing_body(#[case] backend: Backend) {
         let env = backend.setup().await;
         let row = sample("/feed.rss");
-        env.state.feed_cache.upsert(row.clone()).await.unwrap();
+        upsert_confirmed(&env.state, row.clone()).await;
         let replacement = FeedCacheRow::new(
             fp("/feed.rss"),
             SyndicationFeedRepresentation::try_from_stored(
@@ -393,7 +439,7 @@ mod tests {
             row.generated_at,
         )
         .expect("matching cache row formats");
-        env.state.feed_cache.upsert(replacement).await.unwrap();
+        upsert_confirmed(&env.state, replacement).await;
         let got = env
             .state
             .feed_cache
@@ -410,11 +456,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        env.state
-            .feed_cache
-            .upsert(sample("/feed.rss"))
-            .await
-            .unwrap();
+        upsert_confirmed(&env.state, sample("/feed.rss")).await;
         // A non-media-type value bypasses `ContentType` validation — only reachable via
         // DB tampering. The key stays valid so the row is found; the validating bridge
         // `Decode` (#438) then rejects the `content_type` column on read.
@@ -442,11 +484,7 @@ mod tests {
     #[tokio::test]
     async fn get_rejects_directly_inserted_path_content_type_mismatch(#[case] backend: Backend) {
         let env = backend.setup().await;
-        env.state
-            .feed_cache
-            .upsert(sample("/feed.rss"))
-            .await
-            .unwrap();
+        upsert_confirmed(&env.state, sample("/feed.rss")).await;
         env.base
             .pool()
             .execute(
@@ -473,11 +511,7 @@ mod tests {
     #[tokio::test]
     async fn get_surfaces_a_column_decode_error_for_a_malformed_etag(#[case] backend: Backend) {
         let env = backend.setup().await;
-        env.state
-            .feed_cache
-            .upsert(sample("/feed.rss"))
-            .await
-            .unwrap();
+        upsert_confirmed(&env.state, sample("/feed.rss")).await;
         // An unquoted value bypasses `ETag`'s quoted-format invariant — only reachable via
         // DB tampering. The key stays valid so the row is found; the validating bridge
         // `Decode` (#438/#634) then rejects the `etag` column on read.
@@ -505,6 +539,7 @@ mod tests {
     #[tokio::test]
     async fn get_missing_returns_none(#[case] backend: Backend) {
         let env = backend.setup().await;
+
         assert!(
             env.state
                 .feed_cache
@@ -514,17 +549,75 @@ mod tests {
                 .is_none()
         );
     }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn failed_cache_operation_rolls_back_its_write_scope(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let row = sample("/feed.rss");
+        let cache = Arc::clone(&env.state.feed_cache);
+        let result = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    cache.upsert(transaction, row).await?;
+                    Err::<(), _>(FeedCacheError::Db(sqlx::Error::PoolClosed))
+                })
+            })
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Operation(FeedCacheError::Db(
+                sqlx::Error::PoolClosed
+            )))
+        ));
+        assert!(
+            env.state
+                .feed_cache
+                .get(&fp("/feed.rss"))
+                .await
+                .expect("read after rolled-back write")
+                .is_none()
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn indeterminate_cache_commit_is_not_reported_as_confirmed(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let scope = env
+            .state
+            .write_scope
+            .with_commit_acknowledgement_loss_after_commit_for_test();
+        let cache = Arc::clone(&env.state.feed_cache);
+        let row = sample("/feed.rss");
+
+        let outcome = scope
+            .run(move |transaction| Box::pin(async move { cache.upsert(transaction, row).await }))
+            .await
+            .expect("cache mutation reaches commit");
+
+        assert!(matches!(
+            outcome,
+            common::mutation::MutationOutcome::CommitIndeterminate(())
+        ));
+        assert!(
+            env.state
+                .feed_cache
+                .get(&fp("/feed.rss"))
+                .await
+                .expect("read after indeterminate commit")
+                .is_some()
+        );
+    }
 
     #[apply(backends)]
     #[tokio::test]
     async fn delete_removes_row(#[case] backend: Backend) {
         let env = backend.setup().await;
-        env.state
-            .feed_cache
-            .upsert(sample("/feed.rss"))
-            .await
-            .unwrap();
-        env.state.feed_cache.delete(&fp("/feed.rss")).await.unwrap();
+        upsert_confirmed(&env.state, sample("/feed.rss")).await;
+        delete_confirmed(&env.state, &fp("/feed.rss")).await;
         assert!(
             env.state
                 .feed_cache

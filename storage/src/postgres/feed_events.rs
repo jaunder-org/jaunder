@@ -23,13 +23,31 @@ fn finish_purge(
 
 /// Deletes claimed rows whose `feed_url` cannot decode. Partitioning reports
 /// the aggregate decode failure; only a failed cleanup is reported here.
-async fn purge_corrupt(pool: &Pool<Postgres>, ids: &[FeedEventId]) -> Result<(), sqlx::Error> {
+async fn purge_corrupt(
+    connection: &mut sqlx::PgConnection,
+    ids: &[FeedEventId],
+) -> Result<(), sqlx::Error> {
     if ids.is_empty() {
         return Ok(());
     }
-    sqlx::query("DELETE FROM feed_events WHERE id = ANY($1)")
+    sqlx::query("SAVEPOINT feed_event_purge")
+        .execute(&mut *connection)
+        .await?;
+    let result = sqlx::query("DELETE FROM feed_events WHERE id = ANY($1)")
         .bind(ids)
-        .execute(pool)
+        .execute(&mut *connection)
+        .await;
+    if let Err(error) = result {
+        sqlx::query("ROLLBACK TO SAVEPOINT feed_event_purge")
+            .execute(&mut *connection)
+            .await?;
+        sqlx::query("RELEASE SAVEPOINT feed_event_purge")
+            .execute(&mut *connection)
+            .await?;
+        return Err(error);
+    }
+    sqlx::query("RELEASE SAVEPOINT feed_event_purge")
+        .execute(&mut *connection)
         .await?;
     Ok(())
 }
@@ -37,16 +55,11 @@ async fn purge_corrupt(pool: &Pool<Postgres>, ids: &[FeedEventId]) -> Result<(),
 #[async_trait]
 impl FeedEventDialect for Postgres {
     async fn claim_pending_batch(
-        pool: &Pool<Postgres>,
+        connection: &mut sqlx::PgConnection,
         now: UtcInstant,
         lease_cutoff: UtcInstant,
         limit: FeedEventClaimLimit,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
-        // Keep the atomic UPDATE … RETURNING claim inside a transaction until every
-        // returned row decodes and conversion partitions feed-URL purge candidates.
-        // Dropping the transaction rolls the claim back on any non-URL decode error;
-        // commit before purge so an unparseable URL retains its existing diversion.
-        let mut tx = pool.begin().await?;
         let rows = sqlx::query_as::<_, ClaimedFeedEventRow>(
             "WITH eligible AS ( \
                 SELECT id FROM feed_events \
@@ -64,15 +77,14 @@ impl FeedEventDialect for Postgres {
         .bind(now)
         .bind(lease_cutoff)
         .bind(limit)
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut *connection)
         .await?
         .into_iter()
         .map(ClaimedRow::from)
         .collect();
 
         let (records, corrupt) = feed_events::partition_claimed(rows);
-        tx.commit().await?;
-        let purge = purge_corrupt(pool, &corrupt).await;
+        let purge = purge_corrupt(connection, &corrupt).await;
         Ok(finish_purge(records, purge))
     }
 
@@ -94,30 +106,33 @@ impl FeedEventDialect for Postgres {
     }
 
     async fn mark_regenerated(
-        pool: &Pool<Postgres>,
+        connection: &mut sqlx::PgConnection,
         ids: &[FeedEventId],
     ) -> Result<(), FeedEventError> {
         let now = UtcInstant::now();
         sqlx::query("UPDATE feed_events SET regenerated_at = $1 WHERE id = ANY($2)")
             .bind(now)
             .bind(ids)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
         Ok(())
     }
 
-    async fn mark_pinged(pool: &Pool<Postgres>, ids: &[FeedEventId]) -> Result<(), FeedEventError> {
+    async fn mark_pinged(
+        connection: &mut sqlx::PgConnection,
+        ids: &[FeedEventId],
+    ) -> Result<(), FeedEventError> {
         let now = UtcInstant::now();
         sqlx::query("UPDATE feed_events SET status = 'done', pinged_at = $1 WHERE id = ANY($2)")
             .bind(now)
             .bind(ids)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
         Ok(())
     }
 
     async fn mark_failed(
-        pool: &Pool<Postgres>,
+        connection: &mut sqlx::PgConnection,
         ids: &[FeedEventId],
         error: &str,
         next_attempt_at: UtcInstant,
@@ -132,13 +147,13 @@ impl FeedEventDialect for Postgres {
         .bind(error)
         .bind(next_attempt_at)
         .bind(ids)
-        .execute(pool)
+        .execute(&mut *connection)
         .await?;
         Ok(())
     }
 
     async fn mark_exhausted(
-        pool: &Pool<Postgres>,
+        connection: &mut sqlx::PgConnection,
         ids: &[FeedEventId],
         error: &str,
     ) -> Result<(), FeedEventError> {
@@ -146,7 +161,7 @@ impl FeedEventDialect for Postgres {
             // sqlx-newtype-bind:allow permanent-primitive — stored diagnostic text has no domain identity.
             .bind(error)
             .bind(ids)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
         Ok(())
     }

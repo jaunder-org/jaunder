@@ -12,6 +12,7 @@ mod atompub;
 mod http;
 mod registrar;
 mod session;
+mod site_config;
 mod websub_capturing;
 
 // Three items are deliberately absent from the re-export lists below —
@@ -40,5 +41,6 @@ pub use session::{
     create_session_for, create_user_and_session, session_cookie, setup_with_base_url,
     tmp_storage_path, token_from_set_cookie,
 };
+pub use site_config::{delete_site_config, set_site_config};
 // The capturing WebSub client used by `feed_worker.rs`.
 pub use websub_capturing::CapturingWebSubClient;

@@ -1,5 +1,6 @@
 //! Per-user preference storage.
 
+use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::posts::PostFormat;
 use async_trait::async_trait;
@@ -28,10 +29,21 @@ pub trait UserConfigStorage: Send + Sync {
     async fn get(&self, user_id: UserId, key: UserConfigKey) -> sqlx::Result<Option<String>>;
 
     /// Sets or updates a user's configuration value.
-    async fn set(&self, user_id: UserId, key: UserConfigKey, value: &str) -> sqlx::Result<()>;
+    async fn set(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        key: UserConfigKey,
+        value: &str,
+    ) -> sqlx::Result<()>;
 
     /// Deletes a specific configuration key for a user.
-    async fn delete(&self, user_id: UserId, key: UserConfigKey) -> sqlx::Result<()>;
+    async fn delete(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        key: UserConfigKey,
+    ) -> sqlx::Result<()>;
 }
 
 /// Reads a user's default post format preference, falling back to `Markdown`
@@ -64,11 +76,17 @@ pub async fn get_default_post_format(
 /// Returns a database error if the query fails.
 pub async fn set_default_post_format(
     config: &dyn UserConfigStorage,
+    transaction: &mut WriteTransaction,
     user_id: UserId,
     format: PostFormat,
 ) -> sqlx::Result<()> {
     config
-        .set(user_id, UserConfigKey::DefaultPostFormat, format.as_ref())
+        .set(
+            transaction,
+            user_id,
+            UserConfigKey::DefaultPostFormat,
+            format.as_ref(),
+        )
         .await
 }
 
@@ -101,6 +119,7 @@ where
     // borrowed text), so binding a key directly needs `String: Type<DB>` in scope.
     String: sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     #[tracing::instrument(
@@ -122,10 +141,17 @@ where
 
     #[tracing::instrument(
         name = "storage.user_config.set",
-        skip(self),
+        skip(self, transaction),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn set(&self, user_id: UserId, key: UserConfigKey, value: &str) -> sqlx::Result<()> {
+    async fn set(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        key: UserConfigKey,
+        value: &str,
+    ) -> sqlx::Result<()> {
+        let connection = DB::write_connection(transaction)?;
         sqlx::query(
             "INSERT INTO user_config (user_id, key, value) VALUES ($1, $2, $3)
              ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value",
@@ -134,21 +160,27 @@ where
         .bind(key)
         // sqlx-newtype-bind:allow permanent-primitive — typed user config values are persisted through their string representation.
         .bind(value)
-        .execute(&self.pool)
+        .execute(&mut *connection)
         .await?;
         Ok(())
     }
 
     #[tracing::instrument(
         name = "storage.user_config.delete",
-        skip(self),
+        skip(self, transaction),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn delete(&self, user_id: UserId, key: UserConfigKey) -> sqlx::Result<()> {
+    async fn delete(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+        key: UserConfigKey,
+    ) -> sqlx::Result<()> {
+        let connection = DB::write_connection(transaction)?;
         sqlx::query("DELETE FROM user_config WHERE user_id = $1 AND key = $2")
             .bind(user_id)
             .bind(key)
-            .execute(&self.pool)
+            .execute(&mut *connection)
             .await?;
         Ok(())
     }
@@ -158,6 +190,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{Backend, SeedUser, backends};
+    use common::MutationOutcome;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -176,32 +209,57 @@ mod tests {
     async fn get_preserves_opaque_stored_values(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let config = &*env.state.user_config;
-        let value = "unknown representation\nretained verbatim";
-
-        config
-            .set(user_id, UserConfigKey::DefaultPostFormat, value)
+        let config = std::sync::Arc::clone(&env.state.user_config);
+        let config_for_write = std::sync::Arc::clone(&config);
+        let key = UserConfigKey::DefaultPostFormat;
+        let value = "unknown representation\nretained verbatim".to_owned();
+        let expected = value.clone();
+        let outcome = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    config_for_write
+                        .set(transaction, user_id, key, &value)
+                        .await
+                })
+            })
             .await
             .unwrap();
+        assert!(matches!(outcome, MutationOutcome::Confirmed(())));
 
         assert_eq!(
             config
                 .get(user_id, UserConfigKey::DefaultPostFormat)
                 .await
                 .unwrap(),
-            Some(value.to_owned())
+            Some(expected)
         );
     }
+
     #[apply(backends)]
     #[tokio::test]
     async fn set_and_get_default_post_format_markdown(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let config = &*env.state.user_config;
-        set_default_post_format(config, user_id, PostFormat::Markdown)
+        let config = std::sync::Arc::clone(&env.state.user_config);
+        let config_for_write = std::sync::Arc::clone(&config);
+        let format = PostFormat::Markdown;
+        let outcome = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    set_default_post_format(config_for_write.as_ref(), transaction, user_id, format)
+                        .await
+                })
+            })
             .await
             .unwrap();
-        let result = get_default_post_format(config, user_id).await.unwrap();
+        assert!(matches!(outcome, MutationOutcome::Confirmed(())));
+        let result = get_default_post_format(config.as_ref(), user_id)
+            .await
+            .unwrap();
         assert_eq!(result, PostFormat::Markdown);
     }
 
@@ -210,11 +268,24 @@ mod tests {
     async fn set_and_get_default_post_format_org(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let config = &*env.state.user_config;
-        set_default_post_format(config, user_id, PostFormat::Org)
+        let config = std::sync::Arc::clone(&env.state.user_config);
+        let config_for_write = std::sync::Arc::clone(&config);
+        let format = PostFormat::Org;
+        let outcome = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    set_default_post_format(config_for_write.as_ref(), transaction, user_id, format)
+                        .await
+                })
+            })
             .await
             .unwrap();
-        let result = get_default_post_format(config, user_id).await.unwrap();
+        assert!(matches!(outcome, MutationOutcome::Confirmed(())));
+        let result = get_default_post_format(config.as_ref(), user_id)
+            .await
+            .unwrap();
         assert_eq!(result, PostFormat::Org);
     }
 
@@ -223,15 +294,27 @@ mod tests {
     async fn get_default_post_format_invalid_string_returns_markdown(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let config = &*env.state.user_config;
-
-        // Store a garbage value through the storage handle.
-        config
-            .set(user_id, UserConfigKey::DefaultPostFormat, "garbage")
+        let config = std::sync::Arc::clone(&env.state.user_config);
+        let config_for_write = std::sync::Arc::clone(&config);
+        let key = UserConfigKey::DefaultPostFormat;
+        let value = "garbage".to_owned();
+        let outcome = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    config_for_write
+                        .set(transaction, user_id, key, &value)
+                        .await
+                })
+            })
             .await
             .unwrap();
+        assert!(matches!(outcome, MutationOutcome::Confirmed(())));
 
-        let result = get_default_post_format(config, user_id).await.unwrap();
+        let result = get_default_post_format(config.as_ref(), user_id)
+            .await
+            .unwrap();
         assert_eq!(result, PostFormat::Markdown);
     }
 }

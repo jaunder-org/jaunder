@@ -10,6 +10,7 @@ use host::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
 use host::smtp_config::SmtpConfig;
 // Re-exported so `storage::RegistrationPolicy` keeps resolving for call sites, and
 // used by `get_registration_policy` below (the typed config accessor, #607).
+use crate::WriteTransaction;
 pub use common::registration::RegistrationPolicy;
 use common::site::{SiteIdentity, SiteTitle};
 use common::smtp_host::SmtpHost;
@@ -32,8 +33,13 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Returns the raw stored text for a specific configuration key.
     async fn get_raw(&self, key: SiteConfigKey) -> sqlx::Result<Option<String>>;
 
-    /// Sets or updates the value for a configuration key.
-    async fn set(&self, key: SiteConfigKey, value: &str) -> sqlx::Result<()>;
+    /// Sets or updates the value for a configuration key within the caller-owned write scope.
+    async fn set(
+        &self,
+        transaction: &mut WriteTransaction,
+        key: SiteConfigKey,
+        value: &str,
+    ) -> sqlx::Result<()>;
 
     /// Enumerates every `site_config` entry as `(key, value)`, ordered by key.
     ///
@@ -41,11 +47,15 @@ pub trait SiteConfigStorage: Send + Sync {
     /// default: a `vec![]` default would silently under-report for any
     /// implementor). Backs `jaunder site-config list`.
     async fn list(&self) -> sqlx::Result<Vec<(String, String)>>;
-    /// Deletes a `site_config` entry, returning whether a row was removed.
+    /// Deletes a `site_config` entry within the caller-owned write scope, returning whether a row was removed.
     ///
     /// Idempotent: deleting an absent key is a no-op that returns `false`. Backs
     /// `jaunder site-config unset`.
-    async fn delete(&self, key: SiteConfigKey) -> sqlx::Result<bool>;
+    async fn delete(
+        &self,
+        transaction: &mut WriteTransaction,
+        key: SiteConfigKey,
+    ) -> sqlx::Result<bool>;
 
     /// Reads the whole SMTP block as one typed [`SmtpConfig`], or `None` when
     /// `smtp.host` is unset (which is how an instance says "no outbound mail").
@@ -157,8 +167,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Returns the configured `WebSub` hub URL, if any. An empty stored value is
     /// treated as unset; a non-empty value that no longer parses as an absolute
     /// `http(s)` URL (corruption, or legacy data pre-dating this validation) is
-    /// **purged** and read as unset — mirroring the `feed_events` unparseable-`feed_url`
-    /// purge, so a bad stored value never hard-fails the read.
+    /// read as unset.
     async fn get_feeds_websub_hub_url(&self) -> sqlx::Result<Option<HubUrl>> {
         let Some(raw) = self
             .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
@@ -170,8 +179,7 @@ pub trait SiteConfigStorage: Send + Sync {
         if let Ok(url) = raw.parse::<HubUrl>() {
             Ok(Some(url))
         } else {
-            tracing::warn!("purging unparseable stored feeds.websub_hub_url");
-            self.delete(SiteConfigKey::FeedsWebsubHubUrl).await?;
+            tracing::warn!("ignoring unparseable stored feeds.websub_hub_url");
             Ok(None)
         }
     }
@@ -205,11 +213,9 @@ pub trait SiteConfigStorage: Send + Sync {
                 if let Ok(url) = raw.parse::<BaseUrl>() {
                     Some(url)
                 } else {
-                    // Purge a corrupt/legacy unparseable value and read as unset (as
-                    // `get_feeds_websub_hub_url` does), so a bad `base_url` never bricks
-                    // feed regeneration or the settings page it would otherwise 500.
-                    tracing::warn!("purging unparseable stored site.base_url");
-                    self.delete(SiteConfigKey::SiteBaseUrl).await?;
+                    // Do not mutate while reading: callers that choose to repair this
+                    // legacy value must acquire their own write capability.
+                    tracing::warn!("ignoring unparseable stored site.base_url");
                     None
                 }
             }
@@ -220,28 +226,39 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Stores the site identity (title and base URL).
     /// For `base_url`, an empty string is stored when `None` is provided; a set
     /// value is stored in its canonical form (the `BaseUrl` normalized it).
-    async fn set_identity(&self, config: &SiteIdentity) -> sqlx::Result<()> {
-        self.set(SiteConfigKey::SiteTitle, &config.title).await?;
+    async fn set_identity(
+        &self,
+        transaction: &mut WriteTransaction,
+        config: &SiteIdentity,
+    ) -> sqlx::Result<()> {
+        self.set(transaction, SiteConfigKey::SiteTitle, &config.title)
+            .await?;
         let base_url_value = config.base_url.as_deref().unwrap_or("");
-        self.set(SiteConfigKey::SiteBaseUrl, base_url_value).await?;
+        self.set(transaction, SiteConfigKey::SiteBaseUrl, base_url_value)
+            .await?;
         Ok(())
     }
 
-    /// Stores the backup configuration to the site config storage.
-    async fn set_backup_config(&self, config: &BackupConfig) -> sqlx::Result<()> {
+    async fn set_backup_config(
+        &self,
+        transaction: &mut WriteTransaction,
+        config: &BackupConfig,
+    ) -> sqlx::Result<()> {
         self.set(
+            transaction,
             SiteConfigKey::BackupDestinationPath,
             config.destination_path.as_deref().unwrap_or(""),
         )
         .await?;
-        self.set(SiteConfigKey::BackupSchedule, &config.schedule)
+        self.set(transaction, SiteConfigKey::BackupSchedule, &config.schedule)
             .await?;
         self.set(
+            transaction,
             SiteConfigKey::BackupRetentionCount,
             &config.retention_count.to_string(),
         )
         .await?;
-        self.set(SiteConfigKey::BackupMode, config.mode.as_ref())
+        self.set(transaction, SiteConfigKey::BackupMode, config.mode.as_ref())
             .await?;
         Ok(())
     }
@@ -261,19 +278,38 @@ pub trait SiteConfigStorage: Send + Sync {
 
     /// Stores the closed instance-wide Default Audience using its standard
     /// string representation.
-    async fn set_default_audience(&self, audience: &DefaultAudience) -> sqlx::Result<()> {
-        self.set(SiteConfigKey::PostsDefaultAudience, audience.as_ref())
-            .await
+    async fn set_default_audience(
+        &self,
+        transaction: &mut WriteTransaction,
+        audience: &DefaultAudience,
+    ) -> sqlx::Result<()> {
+        self.set(
+            transaction,
+            SiteConfigKey::PostsDefaultAudience,
+            audience.as_ref(),
+        )
+        .await
     }
 
-    /// Stores the feed-generation configuration. An absent `websub_hub_url` is
-    /// stored as the empty string (treated as unset on read).
-    async fn set_feeds_config(&self, config: &FeedsConfig) -> sqlx::Result<()> {
-        self.set(SiteConfigKey::FeedsMinItems, &config.min_items.to_string())
-            .await?;
-        self.set(SiteConfigKey::FeedsMinDays, &config.min_days.to_string())
-            .await?;
+    async fn set_feeds_config(
+        &self,
+        transaction: &mut WriteTransaction,
+        config: &FeedsConfig,
+    ) -> sqlx::Result<()> {
         self.set(
+            transaction,
+            SiteConfigKey::FeedsMinItems,
+            &config.min_items.to_string(),
+        )
+        .await?;
+        self.set(
+            transaction,
+            SiteConfigKey::FeedsMinDays,
+            &config.min_days.to_string(),
+        )
+        .await?;
+        self.set(
+            transaction,
             SiteConfigKey::FeedsWebsubHubUrl,
             config.websub_hub_url.as_deref().unwrap_or(""),
         )
@@ -366,6 +402,7 @@ where
     // borrowed text), so binding a key directly needs `String: Type<DB>` in scope.
     String: sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     async fn get_raw(&self, key: SiteConfigKey) -> sqlx::Result<Option<String>> {
@@ -380,10 +417,16 @@ where
 
     #[tracing::instrument(
         name = "storage.site_config.set",
-        skip(self, value),
+        skip(self, transaction, value),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn set(&self, key: SiteConfigKey, value: &str) -> sqlx::Result<()> {
+    async fn set(
+        &self,
+        transaction: &mut WriteTransaction,
+        key: SiteConfigKey,
+        value: &str,
+    ) -> sqlx::Result<()> {
+        let connection = DB::write_connection(transaction)?;
         sqlx::query(
             "INSERT INTO site_config (key, value) VALUES ($1, $2)
              ON CONFLICT (key) DO UPDATE SET value = excluded.value",
@@ -391,7 +434,7 @@ where
         .bind(key)
         // sqlx-newtype-bind:allow permanent-primitive — typed site config values are persisted through their string representation.
         .bind(value)
-        .execute(&self.pool)
+        .execute(connection)
         .await?;
         Ok(())
     }
@@ -469,7 +512,12 @@ where
             .collect())
     }
 
-    async fn delete(&self, key: SiteConfigKey) -> sqlx::Result<bool> {
+    async fn delete(
+        &self,
+        transaction: &mut WriteTransaction,
+        key: SiteConfigKey,
+    ) -> sqlx::Result<bool> {
+        let connection = DB::write_connection(transaction)?;
         // `RETURNING` + `fetch_optional` detects a no-match generically (a `None`),
         // avoiding `rows_affected()` which sqlx exposes only on concrete results
         // (mirrors `audiences::rename_audience`). Both backends support RETURNING.
@@ -477,7 +525,7 @@ where
             "DELETE FROM site_config WHERE key = $1 RETURNING key",
         )
         .bind(key)
-        .fetch_optional(&self.pool)
+        .fetch_optional(connection)
         .await?;
         Ok(removed.is_some())
     }
@@ -486,7 +534,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{SiteConfigKey, SmtpTlsMode};
-    use crate::test_support::{Backend, backends, backends_matrix};
+    use crate::test_support::{Backend, TestEnv, backends, backends_matrix, confirmed};
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::media::{MaxFileSize, UserQuota};
     use common::registration::RegistrationPolicy;
@@ -501,21 +549,50 @@ mod tests {
     use rstest::*;
     use rstest_reuse::*;
 
+    async fn set_config(env: &TestEnv, key: SiteConfigKey, value: &str) -> anyhow::Result<()> {
+        let storage = std::sync::Arc::clone(&env.state.site_config);
+        let value = value.to_owned();
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move { storage.set(transaction, key, &value).await })
+                })
+                .await?,
+        );
+        Ok(())
+    }
+
+    async fn delete_config(env: &TestEnv, key: SiteConfigKey) -> anyhow::Result<bool> {
+        let storage = std::sync::Arc::clone(&env.state.site_config);
+        Ok(confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move { storage.delete(transaction, key).await })
+                })
+                .await?,
+        ))
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn site_config_primitives_round_trip(#[case] backend: Backend) {
         let env = backend.setup().await;
         let store = &*env.state.site_config;
-        store.set(SiteConfigKey::SiteTitle, "T").await.unwrap();
-        store
-            .set(SiteConfigKey::BackupMode, "archive")
+        set_config(&env, SiteConfigKey::SiteTitle, "T")
+            .await
+            .unwrap();
+        set_config(&env, SiteConfigKey::BackupMode, "archive")
             .await
             .unwrap();
         assert_eq!(
             store.get_raw(SiteConfigKey::SiteTitle).await.unwrap(),
             Some("T".to_string())
         );
-        store.set(SiteConfigKey::FeedsMinItems, "9").await.unwrap();
+        set_config(&env, SiteConfigKey::FeedsMinItems, "9")
+            .await
+            .unwrap();
         assert_eq!(
             store.list().await.unwrap(),
             vec![
@@ -524,8 +601,8 @@ mod tests {
                 ("site.title".to_string(), "T".to_string()),
             ],
         );
-        assert!(store.delete(SiteConfigKey::SiteTitle).await.unwrap());
-        assert!(!store.delete(SiteConfigKey::SiteTitle).await.unwrap());
+        assert!(delete_config(&env, SiteConfigKey::SiteTitle).await.unwrap());
+        assert!(!delete_config(&env, SiteConfigKey::SiteTitle).await.unwrap());
         assert_eq!(store.get_raw(SiteConfigKey::SiteTitle).await.unwrap(), None);
     }
 
@@ -578,8 +655,20 @@ mod tests {
             retention_count: parse_retention_count("14"),
             mode: BackupMode::Archive,
         };
-        storage.set_backup_config(&config).await.unwrap();
-        assert_eq!(storage.get_backup_config().await.unwrap(), config);
+        let config_storage = std::sync::Arc::clone(&env.state.site_config);
+        let expected = config.clone();
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(
+                        async move { config_storage.set_backup_config(transaction, &config).await },
+                    )
+                })
+                .await
+                .unwrap(),
+        );
+        assert_eq!(storage.get_backup_config().await.unwrap(), expected);
     }
 
     #[apply(backends)]
@@ -592,7 +681,6 @@ mod tests {
         assert_eq!(config.min_days, FeedMinDays::default());
         assert_eq!(config.websub_hub_url, None);
     }
-
     #[apply(backends)]
     #[tokio::test]
     async fn set_and_get_feeds_config_round_trips(#[case] backend: Backend) {
@@ -603,12 +691,24 @@ mod tests {
             min_days: parse_feed_min_days("7"),
             websub_hub_url: Some(parse_url("https://hub.example.com/")),
         };
-        storage.set_feeds_config(&config).await.unwrap();
+        let config_storage = std::sync::Arc::clone(&env.state.site_config);
+        let expected = config.clone();
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(
+                        async move { config_storage.set_feeds_config(transaction, &config).await },
+                    )
+                })
+                .await
+                .unwrap(),
+        );
         let loaded = storage.get_feeds_config().await.unwrap();
-        assert_eq!(loaded, config);
+        assert_eq!(loaded, expected);
         // Exercise the derived Clone/Debug so the aggregate struct is covered.
-        assert_eq!(loaded.clone(), config);
-        assert!(!format!("{config:?}").is_empty());
+        assert_eq!(loaded.clone(), expected);
+        assert!(!format!("{expected:?}").is_empty());
     }
 
     /// An unset `smtp.host` is how an instance says "no outbound mail" — not an error,
@@ -634,7 +734,7 @@ mod tests {
             (SiteConfigKey::SmtpUsername, "user@example.com"),
             (SiteConfigKey::SmtpPassword, "s3cr3t"),
         ] {
-            storage.set(key, value).await.unwrap();
+            set_config(&env, key, value).await.unwrap();
         }
 
         let got = storage
@@ -668,12 +768,10 @@ mod tests {
     async fn get_smtp_config_rejects_a_bad_stored_port(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+        set_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();
-        storage
-            .set(SiteConfigKey::SmtpPort, "not-a-port")
+        set_config(&env, SiteConfigKey::SmtpPort, "not-a-port")
             .await
             .unwrap();
         let err = storage.get_smtp_config().await.unwrap_err();
@@ -698,11 +796,12 @@ mod tests {
     async fn get_smtp_config_rejects_a_stored_port_the_newtype_forbids(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+        set_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();
-        storage.set(SiteConfigKey::SmtpPort, "0").await.unwrap();
+        set_config(&env, SiteConfigKey::SmtpPort, "0")
+            .await
+            .unwrap();
         let err = storage.get_smtp_config().await.unwrap_err();
         assert!(
             matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "smtp.port"),
@@ -717,7 +816,7 @@ mod tests {
     async fn get_smtp_config_rejects_an_empty_stored_host(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage.set(SiteConfigKey::SmtpHost, "").await.unwrap();
+        set_config(&env, SiteConfigKey::SmtpHost, "").await.unwrap();
         let err = storage.get_smtp_config().await.unwrap_err();
         assert!(
             matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "smtp.host"),
@@ -730,8 +829,7 @@ mod tests {
     async fn get_smtp_config_rejects_an_empty_credential(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+        set_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();
         // An empty stored credential bypasses the non-empty invariant only via tampering;
@@ -739,13 +837,13 @@ mod tests {
         // error echoes the value, unlike the sibling keys above.
         for key in [SiteConfigKey::SmtpUsername, SiteConfigKey::SmtpPassword] {
             let dotted = key.as_ref();
-            storage.set(key, "").await.unwrap();
+            set_config(&env, key, "").await.unwrap();
             let err = storage.get_smtp_config().await.unwrap_err();
             assert!(
                 matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == dotted),
                 "expected a column-decode error for {dotted}, got: {err:?}"
             );
-            storage.delete(key).await.unwrap();
+            delete_config(&env, key).await.unwrap();
         }
     }
 
@@ -754,16 +852,13 @@ mod tests {
     async fn get_backup_config_ignores_invalid_stored_values(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::BackupSchedule, "not a cron")
+        set_config(&env, SiteConfigKey::BackupSchedule, "not a cron")
             .await
             .unwrap();
-        storage
-            .set(SiteConfigKey::BackupRetentionCount, "daily")
+        set_config(&env, SiteConfigKey::BackupRetentionCount, "daily")
             .await
             .unwrap();
-        storage
-            .set(SiteConfigKey::BackupMode, "floppy")
+        set_config(&env, SiteConfigKey::BackupMode, "floppy")
             .await
             .unwrap();
         let config = storage.get_backup_config().await.unwrap();
@@ -777,8 +872,7 @@ mod tests {
         // (7) rather than being kept — pruning can never be configured to remove every backup.
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::BackupRetentionCount, "0")
+        set_config(&env, SiteConfigKey::BackupRetentionCount, "0")
             .await
             .unwrap();
         let config = storage.get_backup_config().await.unwrap();
@@ -791,13 +885,13 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         // Insert out of key order to prove the ORDER BY, not insertion order.
-        storage.set(SiteConfigKey::SiteTitle, "T").await.unwrap();
-        storage
-            .set(SiteConfigKey::FeedsWebsubHubUrl, "https://h/")
+        set_config(&env, SiteConfigKey::SiteTitle, "T")
             .await
             .unwrap();
-        storage
-            .set(SiteConfigKey::BackupMode, "archive")
+        set_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "https://h/")
+            .await
+            .unwrap();
+        set_config(&env, SiteConfigKey::BackupMode, "archive")
             .await
             .unwrap();
 
@@ -817,11 +911,13 @@ mod tests {
     async fn delete_removes_a_key_and_reports_whether_present(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage.set(SiteConfigKey::SiteTitle, "T").await.unwrap();
+        set_config(&env, SiteConfigKey::SiteTitle, "T")
+            .await
+            .unwrap();
 
         // Deleting a present key reports true and the row is gone.
         assert!(
-            storage.delete(SiteConfigKey::SiteTitle).await.unwrap(),
+            delete_config(&env, SiteConfigKey::SiteTitle).await.unwrap(),
             "deleting a present key reports true",
         );
         assert_eq!(
@@ -832,7 +928,7 @@ mod tests {
 
         // Deleting an absent key is an idempotent no-op reporting false.
         assert!(
-            !storage.delete(SiteConfigKey::SiteTitle).await.unwrap(),
+            !delete_config(&env, SiteConfigKey::SiteTitle).await.unwrap(),
             "deleting an absent key reports false (no-op)",
         );
     }
@@ -853,8 +949,7 @@ mod tests {
     async fn feeds_min_items_returns_override_value(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::FeedsMinItems, "50")
+        set_config(&env, SiteConfigKey::FeedsMinItems, "50")
             .await
             .unwrap();
         assert_eq!(
@@ -868,8 +963,7 @@ mod tests {
     async fn feeds_min_items_falls_back_when_invalid_or_zero(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::FeedsMinItems, "not a number")
+        set_config(&env, SiteConfigKey::FeedsMinItems, "not a number")
             .await
             .unwrap();
         assert_eq!(
@@ -877,8 +971,7 @@ mod tests {
             FeedMinItems::default()
         );
         // A stored `0` is rejected by the min-1 invariant and also falls back.
-        storage
-            .set(SiteConfigKey::FeedsMinItems, "0")
+        set_config(&env, SiteConfigKey::FeedsMinItems, "0")
             .await
             .unwrap();
         assert_eq!(
@@ -903,8 +996,7 @@ mod tests {
     async fn feeds_min_days_returns_override_value(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::FeedsMinDays, "60")
+        set_config(&env, SiteConfigKey::FeedsMinDays, "60")
             .await
             .unwrap();
         assert_eq!(
@@ -922,8 +1014,7 @@ mod tests {
             storage.get_media_max_file_size().await.unwrap(),
             MaxFileSize::default()
         );
-        storage
-            .set(SiteConfigKey::MediaMaxFileSizeBytes, "1024")
+        set_config(&env, SiteConfigKey::MediaMaxFileSizeBytes, "1024")
             .await
             .unwrap();
         assert_eq!(
@@ -931,8 +1022,7 @@ mod tests {
             parse_max_file_size("1024")
         );
         // A stored 0/negative is rejected by the positive invariant → falls back.
-        storage
-            .set(SiteConfigKey::MediaMaxFileSizeBytes, "0")
+        set_config(&env, SiteConfigKey::MediaMaxFileSizeBytes, "0")
             .await
             .unwrap();
         assert_eq!(
@@ -950,16 +1040,14 @@ mod tests {
             storage.get_media_user_quota().await.unwrap(),
             UserQuota::default()
         );
-        storage
-            .set(SiteConfigKey::MediaUserQuotaBytes, "2048")
+        set_config(&env, SiteConfigKey::MediaUserQuotaBytes, "2048")
             .await
             .unwrap();
         assert_eq!(
             storage.get_media_user_quota().await.unwrap(),
             parse_user_quota("2048")
         );
-        storage
-            .set(SiteConfigKey::MediaUserQuotaBytes, "-5")
+        set_config(&env, SiteConfigKey::MediaUserQuotaBytes, "-5")
             .await
             .unwrap();
         assert_eq!(
@@ -981,10 +1069,13 @@ mod tests {
     async fn feeds_websub_hub_url_returns_some_when_set(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::FeedsWebsubHubUrl, "https://hub.example.com/")
-            .await
-            .unwrap();
+        set_config(
+            &env,
+            SiteConfigKey::FeedsWebsubHubUrl,
+            "https://hub.example.com/",
+        )
+        .await
+        .unwrap();
         // Asserted against a typed `HubUrl`, not its bytes: the column carries the
         // *role*, so a getter retyped to another role would fail here (#875).
         let want: HubUrl = parse_url("https://hub.example.com/");
@@ -999,8 +1090,7 @@ mod tests {
     async fn feeds_websub_hub_url_treats_empty_as_none(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::FeedsWebsubHubUrl, "")
+        set_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "")
             .await
             .unwrap();
         assert!(storage.get_feeds_websub_hub_url().await.unwrap().is_none());
@@ -1008,23 +1098,20 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn feeds_websub_hub_url_purges_unparseable_stored_value(#[case] backend: Backend) {
-        // A non-empty stored value that no longer parses as an absolute http(s) URL is
-        // purged and read as unset (self-heal, mirroring the feed_events feed_url purge).
+    async fn feeds_websub_hub_url_ignores_unparseable_stored_value(#[case] backend: Backend) {
+        // Reads do not acquire write capabilities merely to repair legacy data.
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::FeedsWebsubHubUrl, "not-a-url")
+        set_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "not-a-url")
             .await
             .unwrap();
         assert_eq!(storage.get_feeds_websub_hub_url().await.unwrap(), None);
-        // The corrupt value was deleted, not merely ignored.
         assert_eq!(
             storage
                 .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
                 .await
                 .unwrap(),
-            None
+            Some("not-a-url".to_owned())
         );
     }
 
@@ -1043,8 +1130,7 @@ mod tests {
     async fn identity_returns_override_when_title_set(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::SiteTitle, "My Blog")
+        set_config(&env, SiteConfigKey::SiteTitle, "My Blog")
             .await
             .unwrap();
         let identity = storage.get_identity().await.expect("get_identity");
@@ -1059,8 +1145,7 @@ mod tests {
         let storage = &*env.state.site_config;
         // A value stored WITHOUT a trailing slash (representable in the column)
         // still parses; the type normalizes it to the canonical slashed form.
-        storage
-            .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
+        set_config(&env, SiteConfigKey::SiteBaseUrl, "https://example.com")
             .await
             .unwrap();
         let identity = storage.get_identity().await.expect("get_identity");
@@ -1070,20 +1155,17 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn identity_purges_unparseable_stored_base_url(#[case] backend: Backend) {
-        // A corrupt/legacy unparseable base_url is purged and read as unset, so it never
-        // bricks the identity read (which feeds and the settings page depend on).
+    async fn identity_ignores_unparseable_stored_base_url(#[case] backend: Backend) {
+        // Reads do not acquire write capabilities merely to repair legacy data.
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::SiteBaseUrl, "not-a-url")
+        set_config(&env, SiteConfigKey::SiteBaseUrl, "not-a-url")
             .await
             .unwrap();
         assert_eq!(storage.get_identity().await.unwrap().base_url, None);
-        // The corrupt value was deleted, not merely ignored.
         assert_eq!(
             storage.get_raw(SiteConfigKey::SiteBaseUrl).await.unwrap(),
-            None
+            Some("not-a-url".to_owned())
         );
     }
 
@@ -1092,7 +1174,9 @@ mod tests {
     async fn identity_treats_empty_title_as_unset(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage.set(SiteConfigKey::SiteTitle, "   ").await.unwrap();
+        set_config(&env, SiteConfigKey::SiteTitle, "   ")
+            .await
+            .unwrap();
         let identity = storage.get_identity().await.expect("get_identity");
         assert_eq!(identity.title, common::site::DEFAULT_SITE_TITLE);
     }
@@ -1102,7 +1186,9 @@ mod tests {
     async fn identity_treats_empty_base_url_as_none(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage.set(SiteConfigKey::SiteBaseUrl, "").await.unwrap();
+        set_config(&env, SiteConfigKey::SiteBaseUrl, "")
+            .await
+            .unwrap();
         let identity = storage.get_identity().await.expect("get_identity");
         assert_eq!(identity.base_url, None);
     }
@@ -1116,9 +1202,21 @@ mod tests {
             title: parse_site_title("Test Site"),
             base_url: Some(parse_url("https://test.example.com/")),
         };
-        storage.set_identity(&original).await.expect("set_identity");
+        let config_storage = std::sync::Arc::clone(&env.state.site_config);
+        let expected = original.clone();
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(
+                        async move { config_storage.set_identity(transaction, &original).await },
+                    )
+                })
+                .await
+                .unwrap(),
+        );
         let retrieved = storage.get_identity().await.expect("get_identity");
-        assert_eq!(retrieved, original);
+        assert_eq!(retrieved, expected);
     }
 
     #[apply(backends)]
@@ -1126,8 +1224,7 @@ mod tests {
     async fn get_backup_config_treats_empty_destination_as_none(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::BackupDestinationPath, "")
+        set_config(&env, SiteConfigKey::BackupDestinationPath, "")
             .await
             .unwrap();
         let config = storage.get_backup_config().await.unwrap();
@@ -1156,15 +1253,29 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage.set_default_audience(&audience).await.unwrap();
+        let config_storage = std::sync::Arc::clone(&env.state.site_config);
+        let expected = audience;
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config_storage
+                            .set_default_audience(transaction, &audience)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
         assert_eq!(
             storage
                 .get_raw(SiteConfigKey::PostsDefaultAudience)
                 .await
                 .unwrap(),
-            Some(audience.as_ref().to_owned())
+            Some(expected.as_ref().to_owned())
         );
-        assert_eq!(storage.get_default_audience().await.unwrap(), audience);
+        assert_eq!(storage.get_default_audience().await.unwrap(), expected);
     }
 
     #[apply(backends)]
@@ -1173,8 +1284,7 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         for value in ["named", "not a real value", " private "] {
-            storage
-                .set(SiteConfigKey::PostsDefaultAudience, value)
+            set_config(&env, SiteConfigKey::PostsDefaultAudience, value)
                 .await
                 .unwrap();
             assert_eq!(
@@ -1221,8 +1331,7 @@ mod tests {
             ("invite_only", RegistrationPolicy::InviteOnly),
             ("closed", RegistrationPolicy::Closed),
         ] {
-            storage
-                .set(SiteConfigKey::SiteRegistrationPolicy, token)
+            set_config(&env, SiteConfigKey::SiteRegistrationPolicy, token)
                 .await
                 .unwrap();
             assert_eq!(storage.get_registration_policy().await.unwrap(), expected);
@@ -1234,8 +1343,7 @@ mod tests {
     async fn registration_policy_falls_back_to_closed_when_garbage(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::SiteRegistrationPolicy, "garbage")
+        set_config(&env, SiteConfigKey::SiteRegistrationPolicy, "garbage")
             .await
             .unwrap();
         assert_eq!(

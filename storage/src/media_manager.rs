@@ -920,9 +920,7 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         // Cap the per-file limit well below the payload size.
-        env.state
-            .site_config
-            .set(SiteConfigKey::MediaMaxFileSizeBytes, "5")
+        crate::test_support::set_site_config(&env, SiteConfigKey::MediaMaxFileSizeBytes, "5")
             .await
             .unwrap();
         let manager = MediaManager::new(

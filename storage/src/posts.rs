@@ -5955,25 +5955,31 @@ mod tests {
         for url in ["/feed.rss", "/feed.atom"] {
             let feed_path = fp(url);
             let (_, format) = feed_path.parts().expect("valid feed path");
-            state
-                .feed_cache
-                .upsert(
-                    FeedCacheRow::new(
-                        feed_path,
-                        SyndicationFeedRepresentation::try_from_stored(
-                            format,
-                            format.content_type(),
-                            "<rss/>".into(),
-                        )
-                        .expect("matching stored representation metadata"),
-                        parse_etag("\"sha256-deadbeef\""),
-                        UtcInstant::from(stale),
-                        UtcInstant::from(stale),
-                    )
-                    .expect("matching cache row formats"),
+            let row = FeedCacheRow::new(
+                feed_path,
+                SyndicationFeedRepresentation::try_from_stored(
+                    format,
+                    format.content_type(),
+                    "<rss/>".into(),
                 )
+                .expect("matching stored representation metadata"),
+                parse_etag("\"sha256-deadbeef\""),
+                UtcInstant::from(stale),
+                UtcInstant::from(stale),
+            )
+            .expect("matching cache row formats");
+            let write_scope = state.write_scope.clone();
+            let feed_cache = Arc::clone(&state.feed_cache);
+            let outcome = write_scope
+                .run(move |transaction| {
+                    Box::pin(async move { feed_cache.upsert(transaction, row).await })
+                })
                 .await
-                .unwrap();
+                .expect("seed cached feed");
+            assert!(matches!(
+                outcome,
+                common::mutation::MutationOutcome::Confirmed(())
+            ));
         }
         // Only reachable by DB tampering or a row written under a looser grammar:
         // `FeedPath`'s validating bridge rejects this on read.

@@ -93,11 +93,20 @@ pub async fn get_default_post_format() -> WebResult<PostFormat> {
 
 /// Sets the authenticated user's default post format preference.
 #[macros::server]
-pub async fn set_default_post_format(format: PostFormat) -> WebResult<()> {
+pub async fn set_default_post_format(format: PostFormat) -> WebResult<MutationOutcome<()>> {
     let auth = auth::require_auth().await?;
+    let write_scope = expect_context::<WriteScope>();
     let config = expect_context::<Arc<dyn UserConfigStorage>>();
-    storage::set_default_post_format(config.as_ref(), auth.user_id, format).await?;
-    Ok(())
+    write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                storage::set_default_post_format(config.as_ref(), transaction, auth.user_id, format)
+                    .await
+                    .map_err(InternalError::storage)
+            })
+        })
+        .await
+        .map_err(from_write_scope_error)
 }
 
 #[cfg(test)]

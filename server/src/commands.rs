@@ -1113,7 +1113,23 @@ async fn cmd_site_config_set(
     key.validate(value)?;
     let runtime = storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime).await?;
-    state.site_config.set(key, value).await?;
+    let site_config = Arc::clone(&state.site_config);
+    let value = value.to_owned();
+    let value_for_set = value.clone();
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { site_config.set(transaction, key, &value_for_set).await })
+        })
+        .await?;
+    if matches!(
+        outcome,
+        common::mutation::MutationOutcome::CommitIndeterminate(())
+    ) {
+        return Err(anyhow::anyhow!(
+            "site_config set commit acknowledgement was indeterminate"
+        ));
+    }
     eprintln!("set site_config {key} = {value}");
     Ok(())
 }
@@ -1146,7 +1162,20 @@ async fn cmd_site_config_list(storage: &StorageArgs) -> anyhow::Result<()> {
 async fn cmd_site_config_unset(storage: &StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime).await?;
-    if state.site_config.delete(key).await? {
+    let site_config = Arc::clone(&state.site_config);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| Box::pin(async move { site_config.delete(transaction, key).await }))
+        .await?;
+    let removed = match outcome {
+        common::mutation::MutationOutcome::Confirmed(removed) => removed,
+        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
+            return Err(anyhow::anyhow!(
+                "site_config unset commit acknowledgement was indeterminate"
+            ));
+        }
+    };
+    if removed {
         eprintln!("unset site_config {key}");
     } else {
         eprintln!("site_config {key} was not set (no-op)");
@@ -1193,7 +1222,7 @@ mod tests {
     use storage::{
         DbConnectOptions,
         test_support::{
-            Backend, PostgresDbGuard, TestEnv, backends, sqlite_url, unique_postgres_url,
+            Backend, PostgresDbGuard, TestEnv, backends, confirmed, sqlite_url, unique_postgres_url,
         },
     };
     use tempfile::TempDir;
@@ -1861,14 +1890,49 @@ mod tests {
         let cfg = &state.site_config;
         // set() is the typed seam and does not validate; the CLI does. Storing junk
         // here is how a pre-#687 row would look to `list`.
-        cfg.set(SiteConfigKey::SiteBaseUrl, "nonsense://x")
-            .await
-            .unwrap();
-        cfg.set(SiteConfigKey::SiteTitle, "My Site").await.unwrap();
+        let config = Arc::clone(&state.site_config);
+        confirmed(
+            state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config
+                            .set(transaction, SiteConfigKey::SiteBaseUrl, "nonsense://x")
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        let config = Arc::clone(&state.site_config);
+        confirmed(
+            state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config
+                            .set(transaction, SiteConfigKey::SiteTitle, "My Site")
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
         // An empty value on an optional key means unset, not invalid (spec D1b).
-        cfg.set(SiteConfigKey::BackupDestinationPath, "")
-            .await
-            .unwrap();
+        let config = Arc::clone(&state.site_config);
+        confirmed(
+            state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config
+                            .set(transaction, SiteConfigKey::BackupDestinationPath, "")
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
 
         let rendered = format_entries(&cfg.list().await.unwrap());
 
@@ -1973,11 +2037,24 @@ mod tests {
         let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
             .expect("open db");
-        state
-            .site_config
-            .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
-            .await
-            .expect("set base_url");
+        let config = Arc::clone(&state.site_config);
+        confirmed(
+            state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config
+                            .set(
+                                transaction,
+                                SiteConfigKey::SiteBaseUrl,
+                                "https://example.com",
+                            )
+                            .await
+                    })
+                })
+                .await
+                .expect("set base_url"),
+        );
 
         cmd_user_invite(&storage_args, Some(parse_invite_ttl_hours("24")))
             .await

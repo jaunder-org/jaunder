@@ -337,6 +337,7 @@ mod tests {
     use crate::test_support::{migrated_sqlite_db, site_config};
     use common::test_support::{parse_destination_path, parse_retention_count};
     use host::config_key::SiteConfigKey;
+    use storage::test_support::{confirmed, sqlite_write_scope};
     use tempfile::TempDir;
     #[derive(Clone)]
     struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
@@ -567,15 +568,39 @@ mod tests {
         let storage = TempDir::new().expect("temp dir");
         let (db, pool) = migrated_sqlite_db(storage.path()).await;
         let cfg = site_config(&pool);
-        cfg.set(
-            SiteConfigKey::BackupDestinationPath,
-            storage.path().join("backups").to_str().expect("utf-8 path"),
-        )
-        .await
-        .expect("set destination");
-        cfg.set(SiteConfigKey::BackupSchedule, "0 0 0 1 1 *")
-            .await
-            .expect("set schedule");
+        let destination_path = storage.path().join("backups");
+        let scope = sqlite_write_scope(pool.clone());
+        let config = Arc::clone(&cfg);
+        confirmed(
+            scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config
+                            .set(
+                                transaction,
+                                SiteConfigKey::BackupDestinationPath,
+                                destination_path.to_str().expect("utf-8 path"),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .expect("set destination"),
+        );
+        let scope = sqlite_write_scope(pool.clone());
+        let config = Arc::clone(&cfg);
+        confirmed(
+            scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config
+                            .set(transaction, SiteConfigKey::BackupSchedule, "0 0 0 1 1 *")
+                            .await
+                    })
+                })
+                .await
+                .expect("set schedule"),
+        );
 
         let scheduler = start_backup_worker(
             cfg,
@@ -599,15 +624,39 @@ mod tests {
         std::fs::create_dir_all(&media_path).expect("media dir");
         std::fs::write(media_path.join("file.txt"), "media").expect("media file");
         let destination_path = temp.path().join("scheduled-backups");
-        cfg.set(
-            SiteConfigKey::BackupDestinationPath,
-            destination_path.to_str().expect("utf-8 path"),
-        )
-        .await
-        .expect("set destination");
-        cfg.set(SiteConfigKey::BackupSchedule, "*/1 * * * * *")
-            .await
-            .expect("set schedule");
+        let destination_path_for_config = destination_path.clone();
+        let scope = sqlite_write_scope(pool.clone());
+        let config = Arc::clone(&cfg);
+        confirmed(
+            scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config
+                            .set(
+                                transaction,
+                                SiteConfigKey::BackupDestinationPath,
+                                destination_path_for_config.to_str().expect("utf-8 path"),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .expect("set destination"),
+        );
+        let scope = sqlite_write_scope(pool.clone());
+        let config = Arc::clone(&cfg);
+        confirmed(
+            scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config
+                            .set(transaction, SiteConfigKey::BackupSchedule, "*/1 * * * * *")
+                            .await
+                    })
+                })
+                .await
+                .expect("set schedule"),
+        );
 
         let mut scheduler =
             start_backup_worker(cfg, db, StorageRuntimeConfig::default(), storage_path)

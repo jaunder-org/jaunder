@@ -156,6 +156,22 @@ fn DefaultPostFormatControl() -> impl IntoView {
                         <div class="j-form-body">
                             <DefaultPostFormatBody state=state />
                         </div>
+                        {move || {
+                            action
+                                .value()
+                                .get()
+                                .and_then(|result: Result<MutationOutcome<()>, WebError>| match result {
+                                    Ok(MutationOutcome::Confirmed(())) => None,
+                                    Ok(MutationOutcome::CommitIndeterminate(())) => {
+                                        Some(
+                                            "Save acknowledgement was lost; reload to verify the default post format."
+                                                .to_owned(),
+                                        )
+                                    }
+                                    Err(error) => Some(error.to_string()),
+                                })
+                                .map(|error| view! { <p class="error">{error}</p> })
+                        }}
                         <div class="j-form-actions">
                             <button
                                 type="button"

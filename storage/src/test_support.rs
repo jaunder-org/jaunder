@@ -75,6 +75,35 @@ use rstest_reuse::template;
 pub fn mock_write_scope() -> WriteScope {
     WriteScope::mock()
 }
+
+/// Mints a SQLite-backed write scope for a test fixture that owns its pool.
+#[must_use]
+pub fn sqlite_write_scope(pool: sqlx::SqlitePool) -> WriteScope {
+    WriteScope::sqlite(pool)
+}
+
+/// Persists a site-config fixture through a confirmed caller-owned write scope.
+///
+/// # Errors
+///
+/// Returns an error when the storage operation fails.
+pub async fn set_site_config(
+    env: &TestEnv,
+    key: host::config_key::SiteConfigKey,
+    value: &str,
+) -> anyhow::Result<()> {
+    let site_config = Arc::clone(&env.state.site_config);
+    let value = value.to_owned();
+    confirmed(
+        env.state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { site_config.set(transaction, key, &value).await })
+            })
+            .await?,
+    );
+    Ok(())
+}
 /// Extracts a mutation value, requiring that commit acknowledgement is confirmed.
 ///
 /// # Panics

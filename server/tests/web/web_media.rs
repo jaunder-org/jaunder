@@ -865,9 +865,7 @@ async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     // Cap the max file size at 5 bytes so a 14-byte upload trips PayloadTooLarge,
     // exercising `map_media_error`'s PayloadTooLarge arm.
-    state
-        .site_config
-        .set(SiteConfigKey::MediaMaxFileSizeBytes, "5")
+    crate::helpers::set_site_config(&state, SiteConfigKey::MediaMaxFileSizeBytes, "5")
         .await
         .unwrap();
     let cookie = create_user_and_session(&state).await.cookie();
@@ -899,9 +897,7 @@ async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     // A 5-byte user quota with a 14-byte upload trips InsufficientStorage, exercising
     // `map_media_error`'s InsufficientStorage arm.
-    state
-        .site_config
-        .set(SiteConfigKey::MediaUserQuotaBytes, "5")
+    crate::helpers::set_site_config(&state, SiteConfigKey::MediaUserQuotaBytes, "5")
         .await
         .unwrap();
     let cookie = create_user_and_session(&state).await.cookie();

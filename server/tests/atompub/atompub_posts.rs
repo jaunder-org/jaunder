@@ -506,14 +506,25 @@ async fn malformed_username_path_returns_400(#[case] backend: Backend) {
 async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    // Set default format to Markdown so text entries round-trip properly
-    storage::set_default_post_format(
-        state.user_config.as_ref(),
-        session.user_id,
-        storage::PostFormat::Markdown,
-    )
-    .await
-    .unwrap();
+    // Set default format to Markdown so text entries round-trip properly.
+    let user_config = Arc::clone(&state.user_config);
+    let user_id = session.user_id;
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                storage::set_default_post_format(
+                    user_config.as_ref(),
+                    transaction,
+                    user_id,
+                    storage::PostFormat::Markdown,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    assert!(matches!(outcome, MutationOutcome::Confirmed(())));
     let app = make_app(&state, &base);
 
     let xml = entry_xml("Hello", "text", "the body");
@@ -2056,11 +2067,20 @@ async fn create_widens_each_default_audience(
 
     // AtomPub has no audience field, so post creation is the per-Post boundary
     // that widens this instance-wide default.
-    state
-        .site_config
-        .set_default_audience(&default_audience)
-        .await
-        .unwrap();
+    let site_config = std::sync::Arc::clone(&state.site_config);
+    storage::test_support::confirmed(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    site_config
+                        .set_default_audience(transaction, &default_audience)
+                        .await
+                })
+            })
+            .await
+            .unwrap(),
+    );
 
     let app = make_app(&state, &base);
     let xml = entry_xml("Hello", "text", "the body");

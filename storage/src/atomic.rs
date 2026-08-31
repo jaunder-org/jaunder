@@ -268,11 +268,13 @@ mod tests {
                 .is_err()
         );
         assert!(
-            env.state
-                .site_config
-                .set(SiteConfigKey::SiteRegistrationPolicy, "open")
-                .await
-                .is_err()
+            crate::test_support::set_site_config(
+                &env,
+                SiteConfigKey::SiteRegistrationPolicy,
+                "open",
+            )
+            .await
+            .is_err()
         );
         let atomic = std::sync::Arc::clone(&env.state.atomic);
         let result = env

@@ -207,11 +207,19 @@ async fn seed_named_audience_post(
 /// Seeds the side tables: a `user_config` row, a media-table row, and a
 /// `feed_events` row.
 async fn seed_side_tables(state: &AppState, author: UserId) {
-    state
-        .user_config
-        .set(author, UserConfigKey::DefaultPostFormat, "org")
-        .await
-        .expect("set user config");
+    let user_config = Arc::clone(&state.user_config);
+    let key = UserConfigKey::DefaultPostFormat;
+    let value = String::from("org");
+    confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { user_config.set(transaction, author, key, &value).await })
+            })
+            .await
+            .expect("set user config"),
+        "backup fixture user config",
+    );
     state
         .media
         .create_media(&MediaRecord {
@@ -226,11 +234,18 @@ async fn seed_side_tables(state: &AppState, author: UserId) {
         })
         .await
         .expect("create media row");
-    state
-        .feed_events
-        .enqueue(&fp("/feed.rss"))
-        .await
-        .expect("enqueue feed event");
+    let feed_events = Arc::clone(&state.feed_events);
+    let feed_path = fp("/feed.rss");
+    confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { feed_events.enqueue(transaction, &feed_path).await })
+            })
+            .await
+            .expect("enqueue feed event"),
+        "backup fixture feed event",
+    );
 }
 
 pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixtureIds) {

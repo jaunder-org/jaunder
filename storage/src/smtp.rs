@@ -118,7 +118,9 @@ mod tests {
             (SiteConfigKey::SmtpPassword, "s3cr3t"),
             (SiteConfigKey::SmtpSender, "Jaunder <noreply@example.com>"),
         ] {
-            store.set(key, value).await.unwrap();
+            crate::test_support::set_site_config(&env, key, value)
+                .await
+                .unwrap();
         }
 
         let config = load_smtp_config(store)
@@ -145,8 +147,7 @@ mod tests {
     async fn load_smtp_config_uses_defaults_for_missing_optional_fields(#[case] backend: Backend) {
         let env = backend.setup().await;
         let store = &*env.state.site_config;
-        store
-            .set(SiteConfigKey::SmtpHost, "relay.example.com")
+        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "relay.example.com")
             .await
             .unwrap();
 
@@ -168,12 +169,10 @@ mod tests {
     async fn load_smtp_config_returns_err_for_invalid_sender(#[case] backend: Backend) {
         let env = backend.setup().await;
         let store = &*env.state.site_config;
-        store
-            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();
-        store
-            .set(SiteConfigKey::SmtpSender, "not-a-valid-email")
+        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpSender, "not-a-valid-email")
             .await
             .unwrap();
 
@@ -194,12 +193,10 @@ mod tests {
     async fn load_smtp_config_returns_err_for_invalid_port(#[case] backend: Backend) {
         let env = backend.setup().await;
         let store = &*env.state.site_config;
-        store
-            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();
-        store
-            .set(SiteConfigKey::SmtpPort, "not-a-port")
+        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpPort, "not-a-port")
             .await
             .unwrap();
 
@@ -216,11 +213,12 @@ mod tests {
     async fn load_smtp_config_returns_err_for_invalid_tls_mode(#[case] backend: Backend) {
         let env = backend.setup().await;
         let store = &*env.state.site_config;
-        store
-            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();
-        store.set(SiteConfigKey::SmtpTlsMode, "ssl").await.unwrap();
+        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpTlsMode, "ssl")
+            .await
+            .unwrap();
 
         let err = load_smtp_config(store).await.unwrap_err();
         // Message, not variant — see the note on `..._invalid_sender`.
@@ -235,11 +233,12 @@ mod tests {
     async fn load_smtp_config_returns_err_for_empty_password(#[case] backend: Backend) {
         let env = backend.setup().await;
         let store = &*env.state.site_config;
-        store
-            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();
-        store.set(SiteConfigKey::SmtpPassword, "").await.unwrap();
+        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpPassword, "")
+            .await
+            .unwrap();
 
         let err = load_smtp_config(store).await.unwrap_err();
         assert!(matches!(err, SmtpConfigError::InvalidCredential));
@@ -250,11 +249,12 @@ mod tests {
     async fn load_smtp_config_returns_err_for_empty_username(#[case] backend: Backend) {
         let env = backend.setup().await;
         let store = &*env.state.site_config;
-        store
-            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();
-        store.set(SiteConfigKey::SmtpUsername, "").await.unwrap();
+        crate::test_support::set_site_config(&env, SiteConfigKey::SmtpUsername, "")
+            .await
+            .unwrap();
 
         let err = load_smtp_config(store).await.unwrap_err();
         assert!(matches!(err, SmtpConfigError::InvalidCredential));

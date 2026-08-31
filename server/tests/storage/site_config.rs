@@ -32,9 +32,7 @@ async fn build_mailer_returns_noop_when_smtp_not_configured(#[case] backend: Bac
 #[tokio::test]
 async fn site_config_round_trips_through_typed_keys(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteTitle, "My Site")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteTitle, "My Site")
         .await
         .unwrap();
     assert_eq!(
@@ -55,9 +53,7 @@ async fn site_config_round_trips_through_typed_keys(#[case] backend: Backend) {
         None
     );
     assert!(
-        state
-            .site_config
-            .delete(SiteConfigKey::SiteTitle)
+        crate::helpers::delete_site_config(&state, SiteConfigKey::SiteTitle)
             .await
             .unwrap()
     );
@@ -82,9 +78,7 @@ async fn site_config_operations(#[case] backend: Backend) {
         other => panic!("Expected Ok(None), got {other:?}"),
     }
 
-    state
-        .site_config
-        .set(SiteConfigKey::SiteTitle, "test.value")
+    crate::helpers::set_site_config(state, SiteConfigKey::SiteTitle, "test.value")
         .await
         .expect("set failed");
     let value = state.site_config.get_raw(SiteConfigKey::SiteTitle).await;
@@ -93,9 +87,7 @@ async fn site_config_operations(#[case] backend: Backend) {
         other => panic!("Expected Ok(Some), got {other:?}"),
     }
 
-    state
-        .site_config
-        .set(SiteConfigKey::SiteTitle, "updated.value")
+    crate::helpers::set_site_config(state, SiteConfigKey::SiteTitle, "updated.value")
         .await
         .expect("set update failed");
     let value = state.site_config.get_raw(SiteConfigKey::SiteTitle).await;

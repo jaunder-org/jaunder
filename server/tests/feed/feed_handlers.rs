@@ -39,6 +39,19 @@ fn cache_row(
     .expect("matching cache row formats")
 }
 
+async fn upsert_cache(state: &Arc<storage::AppState>, row: storage::FeedCacheRow) {
+    let feed_cache = Arc::clone(&state.feed_cache);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| Box::pin(async move { feed_cache.upsert(transaction, row).await }))
+        .await
+        .expect("upsert cache");
+    assert!(matches!(
+        outcome,
+        common::mutation::MutationOutcome::Confirmed(())
+    ));
+}
+
 fn with_feed_cache(
     state: &Arc<storage::AppState>,
     feed_cache: Arc<dyn storage::FeedCacheStorage>,
@@ -185,7 +198,7 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
         updated_at,
         UtcInstant::now(),
     );
-    state.feed_cache.upsert(row).await.expect("upsert cache");
+    upsert_cache(&state, row).await;
 
     let req = Request::builder()
         .method("GET")
@@ -242,17 +255,17 @@ async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
     let feed_path = format!("/~{}/feed.rss", user.username);
     let cached_body = "corrupt-cache-body";
     let etag = "\"corrupt-cache-etag\"";
-    state
-        .feed_cache
-        .upsert(cache_row(
+    upsert_cache(
+        &state,
+        cache_row(
             &feed_path,
             cached_body,
             etag,
             UtcInstant::now(),
             UtcInstant::now(),
-        ))
-        .await
-        .expect("seed coherent cache row");
+        ),
+    )
+    .await;
 
     // Bypass the invariant-bearing storage API to model a corrupted persisted
     // metadata column while retaining an otherwise coherent cache row.
@@ -323,7 +336,7 @@ async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
         UtcInstant::now(),
         UtcInstant::now(),
     );
-    state.feed_cache.upsert(row).await.expect("upsert cache");
+    upsert_cache(&state, row).await;
 
     let req = Request::builder()
         .method("GET")
@@ -358,7 +371,7 @@ async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: B
         UtcInstant::from(update_time),
         UtcInstant::now(),
     );
-    state.feed_cache.upsert(row).await.expect("upsert cache");
+    upsert_cache(&state, row).await;
 
     // Request with If-Modified-Since set to the same time
     let req = Request::builder()

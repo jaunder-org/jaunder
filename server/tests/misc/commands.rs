@@ -231,16 +231,16 @@ async fn command_source_chain_cmd_smtp_test_quoted_sender_reaches_send(#[case] b
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
         .expect("open");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpHost, "mail.example.com")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpHost, "mail.example.com")
         .await
         .expect("set host");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpSender, "Acme, Inc <noreply@example.com>")
-        .await
-        .expect("set sender");
+    crate::helpers::set_site_config(
+        &state,
+        SiteConfigKey::SmtpSender,
+        "Acme, Inc <noreply@example.com>",
+    )
+    .await
+    .expect("set sender");
 
     let error = cmd_smtp_test(&args, &parse_email("to@example.com"))
         .await
@@ -269,9 +269,7 @@ async fn command_source_chain_cmd_smtp_test_send(#[case] backend: Backend) {
         (SiteConfigKey::SmtpPort, "1"),
         (SiteConfigKey::SmtpTlsMode, "plain"),
     ] {
-        state
-            .site_config
-            .set(key, value)
+        crate::helpers::set_site_config(&state, key, value)
             .await
             .expect("set SMTP config");
     }
@@ -1392,34 +1390,22 @@ async fn cmd_smtp_test_succeeds_with_mock_server(#[case] backend: Backend) {
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
         .expect("open db");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpHost, &server.host().to_string())
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpHost, &server.host().to_string())
         .await
         .expect("set host");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpPort, &server.port().to_string())
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpPort, &server.port().to_string())
         .await
         .expect("set port");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpTlsMode, "plain")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpTlsMode, "plain")
         .await
         .expect("set tls_mode");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpSender, "noreply@example.com")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpSender, "noreply@example.com")
         .await
         .expect("set sender");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpUsername, "user")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpUsername, "user")
         .await
         .expect("set username");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpPassword, "password")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpPassword, "password")
         .await
         .expect("set password");
 

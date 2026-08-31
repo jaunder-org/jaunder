@@ -2,6 +2,7 @@ use crate::backup::{self, UpdateSettings};
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedBareInput, ValidatedInput};
 use crate::topbar::Topbar;
+use common::MutationOutcome;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use leptos::prelude::*;
 use strum::VariantArray;
@@ -37,9 +38,18 @@ pub fn BackupSettingsPage() -> impl IntoView {
                     update_action
                         .value()
                         .get()
-                        .and_then(|result: Result<(), WebError>| result.err())
+                        .and_then(|result: Result<MutationOutcome<()>, WebError>| match result {
+                            Ok(MutationOutcome::Confirmed(())) => None,
+                            Ok(MutationOutcome::CommitIndeterminate(())) => {
+                                Some(
+                                    "Save acknowledgement was lost; reload to verify the settings."
+                                        .to_owned(),
+                                )
+                            }
+                            Err(error) => Some(error.to_string()),
+                        })
                         .map(|error| {
-                            view! { <p class="error j-settings-error">{error.to_string()}</p> }
+                            view! { <p class="error j-settings-error">{error}</p> }
                         })
                 }}
             </div>

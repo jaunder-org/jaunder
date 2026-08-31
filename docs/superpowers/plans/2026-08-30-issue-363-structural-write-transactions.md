@@ -115,7 +115,7 @@ pool-backed or independently committing compatibility form behind.
     AtomPub, and event-hook suites pass; a later event failure rolls back the
     Post mutation; no selected caller retains an independent commit.
 
-- [ ] **Task 5: Bound configuration, cache, and worker write scopes.**
+- [x] **Task 5: Bound configuration, cache, and worker write scopes.**
   - Cutover: both `FeedCacheStorage` mutations, the remaining six
     `FeedEventStorage` mutations, all six `SiteConfigStorage` mutations, and
     both `UserConfigStorage` mutations; migrate site/backup APIs, CLI

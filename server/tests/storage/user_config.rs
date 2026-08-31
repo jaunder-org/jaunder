@@ -1,7 +1,20 @@
+use common::MutationOutcome;
 use host::config_key::UserConfigKey;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, backends};
+
+async fn assert_confirmed_write(
+    state: &storage::AppState,
+    operation: impl for<'scope> FnOnce(
+        &'scope mut storage::WriteTransaction,
+    ) -> futures_util::future::BoxFuture<'scope, sqlx::Result<()>>,
+) {
+    assert!(matches!(
+        state.write_scope.run(operation).await.unwrap(),
+        MutationOutcome::Confirmed(())
+    ));
+}
 
 // ── UserConfigStorage tests ───────────────────────────────────────────────────
 
@@ -27,14 +40,22 @@ async fn user_config_round_trips_through_typed_keys(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
-
-    state
-        .user_config
-        .set(user_id, UserConfigKey::DefaultPostFormat, "markdown")
-        .await
-        .unwrap();
-    let val = state
-        .user_config
+    let config_for_write = state.user_config.clone();
+    let config_for_read = state.user_config.clone();
+    assert_confirmed_write(state, move |transaction| {
+        Box::pin(async move {
+            config_for_write
+                .set(
+                    transaction,
+                    user_id,
+                    UserConfigKey::DefaultPostFormat,
+                    "markdown",
+                )
+                .await
+        })
+    })
+    .await;
+    let val = config_for_read
         .get(user_id, UserConfigKey::DefaultPostFormat)
         .await
         .unwrap();
@@ -47,14 +68,22 @@ async fn user_config_set_and_get(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
-
-    state
-        .user_config
-        .set(user_id, UserConfigKey::DefaultPostFormat, "org")
-        .await
-        .unwrap();
-    let val = state
-        .user_config
+    let config_for_write = state.user_config.clone();
+    let config_for_read = state.user_config.clone();
+    assert_confirmed_write(state, move |transaction| {
+        Box::pin(async move {
+            config_for_write
+                .set(
+                    transaction,
+                    user_id,
+                    UserConfigKey::DefaultPostFormat,
+                    "org",
+                )
+                .await
+        })
+    })
+    .await;
+    let val = config_for_read
         .get(user_id, UserConfigKey::DefaultPostFormat)
         .await
         .unwrap();
@@ -67,19 +96,36 @@ async fn user_config_overwrite(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
-
-    state
-        .user_config
-        .set(user_id, UserConfigKey::DefaultPostFormat, "markdown")
-        .await
-        .unwrap();
-    state
-        .user_config
-        .set(user_id, UserConfigKey::DefaultPostFormat, "org")
-        .await
-        .unwrap();
-    let val = state
-        .user_config
+    let config_for_initial_write = state.user_config.clone();
+    assert_confirmed_write(state, move |transaction| {
+        Box::pin(async move {
+            config_for_initial_write
+                .set(
+                    transaction,
+                    user_id,
+                    UserConfigKey::DefaultPostFormat,
+                    "markdown",
+                )
+                .await
+        })
+    })
+    .await;
+    let config_for_overwrite = state.user_config.clone();
+    let config_for_read = state.user_config.clone();
+    assert_confirmed_write(state, move |transaction| {
+        Box::pin(async move {
+            config_for_overwrite
+                .set(
+                    transaction,
+                    user_id,
+                    UserConfigKey::DefaultPostFormat,
+                    "org",
+                )
+                .await
+        })
+    })
+    .await;
+    let val = config_for_read
         .get(user_id, UserConfigKey::DefaultPostFormat)
         .await
         .unwrap();
@@ -92,23 +138,35 @@ async fn user_config_delete_removes_key(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
-
-    state
-        .user_config
-        .set(user_id, UserConfigKey::DefaultPostFormat, "org")
-        .await
-        .unwrap();
-    state
-        .user_config
-        .delete(user_id, UserConfigKey::DefaultPostFormat)
-        .await
-        .unwrap();
-    let val = state
-        .user_config
+    let config_for_initial_write = state.user_config.clone();
+    assert_confirmed_write(state, move |transaction| {
+        Box::pin(async move {
+            config_for_initial_write
+                .set(
+                    transaction,
+                    user_id,
+                    UserConfigKey::DefaultPostFormat,
+                    "org",
+                )
+                .await
+        })
+    })
+    .await;
+    let config_for_delete = state.user_config.clone();
+    let config_for_read = state.user_config.clone();
+    assert_confirmed_write(state, move |transaction| {
+        Box::pin(async move {
+            config_for_delete
+                .delete(transaction, user_id, UserConfigKey::DefaultPostFormat)
+                .await
+        })
+    })
+    .await;
+    let val = config_for_read
         .get(user_id, UserConfigKey::DefaultPostFormat)
         .await
         .unwrap();
-    assert!(val.is_none());
+    assert_eq!(val, None);
 }
 
 #[apply(backends)]
@@ -117,10 +175,13 @@ async fn user_config_delete_nonexistent_is_ok(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
-
-    state
-        .user_config
-        .delete(user_id, UserConfigKey::DefaultPostFormat)
-        .await
-        .unwrap();
+    let config_for_delete = state.user_config.clone();
+    assert_confirmed_write(state, move |transaction| {
+        Box::pin(async move {
+            config_for_delete
+                .delete(transaction, user_id, UserConfigKey::DefaultPostFormat)
+                .await
+        })
+    })
+    .await;
 }

@@ -151,9 +151,7 @@ pub fn basic_header(username: &str, token: &RawToken) -> String {
 /// unset. `BaseUrl` canonicalizes this to `https://example.com/` (trailing
 /// slash), so composed URLs are prefixed with `https://example.com`.
 pub async fn seed_base_url(state: &Arc<storage::AppState>) {
-    state
-        .site_config
-        .set(SiteConfigKey::SiteBaseUrl, "https://example.com/")
+    crate::helpers::set_site_config(state, SiteConfigKey::SiteBaseUrl, "https://example.com/")
         .await
         .unwrap();
 }

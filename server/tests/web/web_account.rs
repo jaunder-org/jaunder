@@ -276,14 +276,10 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
 #[tokio::test]
 async fn create_invite_nested_request_maps_fields(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
-    state
-        .site_config
-        .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteBaseUrl, "https://example.com")
         .await
         .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
@@ -401,9 +397,7 @@ async fn create_invite_without_base_url_errors_and_sends_nothing(#[case] backend
 #[tokio::test]
 async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteBaseUrl, "https://example.com")
         .await
         .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
@@ -436,9 +430,7 @@ async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend)
 #[tokio::test]
 async fn create_invite_send_failure_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteBaseUrl, "https://example.com")
         .await
         .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
@@ -465,9 +457,7 @@ async fn create_invite_send_failure_returns_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteBaseUrl, "https://example.com")
         .await
         .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
@@ -504,9 +494,7 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteBaseUrl, "https://example.com")
         .await
         .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
@@ -542,9 +530,7 @@ async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteBaseUrl, "https://example.com")
         .await
         .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
