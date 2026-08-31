@@ -1735,17 +1735,25 @@ feature.
 **What is inside the executable.** Two `rust-embed` trees, so **no external file
 is needed to serve the client** ([ADR-0003](adr/0003-asset-management.md)).
 Request handling still touches disk for user data — media blobs are opened per
-request from the storage path (`server/src/media.rs:116,147`) — and the process
-may also write a runtime-info JSON file and read a PostgreSQL password file; see
-"Outside the binary" below.
+request from the storage path (`server/src/media.rs`) — and the process writes a
+canonical runtime identity under that path, may write an additional discovery
+override, and may read a PostgreSQL password file; see "Outside the binary"
+below.
 
-That runtime file is not only informational: it is a **startup mutex**.
-`check_startup_mutex` (`server/src/runtime_file.rs:104`, called from
-`server/src/commands.rs:487`) makes `serve` **refuse to start** when the file
-names a live writer process, and an unreadable file refuses too rather than
-serving with a broken guard (`runtime_file.rs:61`). A `RuntimeFileGuard` removes
-it on graceful exit and on SIGTERM/SIGINT (`commands.rs:1227-1234`). The e2e
-harness reads the same file for port discovery.
+Startup ownership is an OS-backed exclusive `runtime.lock` keyed only by the
+storage directory. `serve` acquires it before transient cleanup and retains it
+through shutdown, so distinct `--runtime-file` discovery overrides cannot let
+two processes clean the same `media/tmp`. Before cleanup it also writes the
+canonical `<storage>/runtime.json` identity; that initial reservation is fatal
+on failure and remains visible to older binaries whose JSON `pid` plus process
+start-time check predates the OS lock. `--runtime-file` adds a second discovery
+file rather than replacing the canonical reservation. After binding, address
+updates are best-effort but preserve the live reservation on failure; graceful
+and forced shutdown remove every published identity before releasing the lock.
+The e2e harness reads the configured discovery file for its port handshake. This
+retains ADR-0035's discovery contract while qualifying its former JSON-as-mutex
+and override behavior ([ADR-0035](adr/0035-elisp-live-integration-harness.md);
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)).
 
 - `StaticAssets` (`server/src/assets.rs:3-5`, `#[folder = "assets/"]`) carries
   the base stylesheets `jaunder.css` and `jaunder-themes.css`, mounted at

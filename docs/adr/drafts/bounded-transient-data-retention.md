@@ -27,6 +27,13 @@ both supported databases. The existing OpenTelemetry discipline
 ([ADR-0011](../0011-unified-observability.md)) prohibits PII and secrets in
 telemetry.
 
+[ADR-0035](../0035-elisp-live-integration-harness.md) made the runtime-info JSON
+file both an ephemeral-port discovery handshake and the startup mutex. That
+single file cannot safely protect startup cleanup when `--runtime-file` moves
+discovery outside the storage directory or when publication remains best-effort
+until after binding. Clearing `media/tmp` therefore requires a storage-directory
+ownership mechanism that exists before cleanup and survives until shutdown.
+
 ## Decision
 
 Jaunder adopts fixed product retention policies for four transient surfaces:
@@ -44,6 +51,20 @@ Jaunder adopts fixed product retention policies for four transient surfaces:
 - **`media/tmp`** is cleared at server startup before uploads are accepted. Its
   cleanup failure is fatal because a dirty temporary upload area cannot safely
   be treated as ready.
+
+To make temporary-upload cleanup exclusive, `serve` acquires an OS-backed
+exclusive lock keyed only by the storage directory before inspecting or deleting
+transient files, and retains it through shutdown. It also publishes the
+canonical `<storage>/runtime.json` identity before cleanup; failure to publish
+this legacy-visible reservation is fatal. A distinct `--runtime-file` is
+additional discovery output, not the lock identity or a replacement for the
+canonical reservation. Existing JSON `pid` plus process-start-time checks
+continue to refuse live legacy processes that predate the OS lock. After the
+listener binds, address updates are best-effort and must preserve the existing
+live identity on failure; graceful and forced shutdown remove every published
+runtime file before releasing the lock. This qualifies ADR-0035's JSON-as-mutex,
+override-replaces-default, post-bind publication, and best-effort initial-write
+rules while retaining its discovery contract.
 
 For database-backed transient data, semantic expiry is authoritative at
 `cutoff <= now`; physical cleanup is not required to occur at that instant.
@@ -92,6 +113,11 @@ must accept time explicitly and limit each pass. Operators receive enough
 structured state-transition telemetry to understand cleanup and terminal states
 without receiving tokens, credentials, payloads, or other PII; they configure
 and retain that telemetry outside Jaunder.
+
+The storage-directory lock prevents runtime discovery overrides from splitting
+startup ownership. Mandatory pre-cleanup canonical publication keeps older
+processes able to observe the new instance, while retaining separate discovery
+output for harnesses and operators.
 
 The different outcomes are intentional: a failed `media/tmp` cleanup stops
 startup, while a database cleanup failure is reported and later domain passes
