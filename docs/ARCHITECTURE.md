@@ -3081,8 +3081,8 @@ to `accepted`. Any other token a draft carries — `superseded`, `rejected`,
 rewrite alone would not hold the property, so `adr-format` enforces the other
 half by rejecting `proposed` on any numbered file; rewrite, gate, and table
 renderer share one status-line parse, so they cannot disagree about which line
-they are reading (`xtask/src/adr.rs:105`, `xtask/src/adr_readme.rs:152`,
-`xtask/src/adr_readme.rs:391`).
+they are reading (`xtask/src/adr.rs:105`, `xtask/src/adr_readme/files.rs:125`,
+`xtask/src/adr_readme/files.rs:213`).
 
 Identifier collisions remain loud
 ([ADR-0036](adr/0036-identifier-collision-policy.md)): the
