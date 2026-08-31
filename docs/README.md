@@ -189,6 +189,7 @@ convention). See the Status column below for each ADR's current status.
 | [0161](adr/0161-devtool-owns-ast-grep-enforcement.md)               | devtool owns ast-grep rule enforcement                                                                       | accepted   |
 | [0162](adr/0162-elisp-stateless-coverage-gate.md)                   | Elisp stateless coverage gate                                                                                | accepted   |
 | [0163](adr/0163-sqlx-decode-approval-is-type-only.md)               | SQLx decode approval is type-only                                                                            | accepted   |
+| [0164](adr/0164-structural-write-scopes-and-mutation-outcomes.md)   | Structural Write Scopes and Mutation Outcomes                                                                | accepted   |
 
 <!-- adr-table:end -->
 
