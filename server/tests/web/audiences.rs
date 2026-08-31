@@ -1,5 +1,4 @@
 use axum::http::StatusCode;
-use common::MutationOutcome;
 use common::ids::{AudienceId, SubscriptionId, UserId};
 use common::test_support::parse_audience_name;
 use common::visibility::{SubscriberIdentity, local_subscriber_identity};
@@ -10,7 +9,8 @@ use rstest_reuse::*;
 use std::sync::Arc;
 
 use crate::helpers::{
-    create_user_and_session, post_form, post_server_fn, post_server_fn_request_fixture,
+    confirmed_mutation, create_user_and_session, post_form, post_server_fn,
+    post_server_fn_request_fixture,
 };
 use storage::{
     AppState,
@@ -25,9 +25,7 @@ struct RenameAudienceDecodeFixture<'a> {
 
 /// Parses the JSON-encoded confirmed audience id that `create_audience` returns.
 fn parse_id(body: &str) -> i64 {
-    let outcome: MutationOutcome<AudienceId> =
-        serde_json::from_str(body).expect("parse create audience outcome");
-    i64::from(confirmed(outcome, "create audience"))
+    i64::from(confirmed_mutation::<AudienceId>(body))
 }
 
 async fn create_audience_confirmed(
