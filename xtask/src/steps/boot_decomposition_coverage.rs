@@ -91,14 +91,25 @@ pub(crate) fn validate_json(report_json: &str, trace_jsonl: &str) -> Result<Stri
 
 fn report_projects(report: &PlaywrightReport) -> Result<BTreeSet<String>, String> {
     let mut projects = BTreeSet::new();
+    let mut incomplete = false;
     report.visit_specs(&mut |spec| {
-        projects.extend(
-            spec.tests
-                .iter()
-                .filter_map(|test| test.project_name.clone()),
-        );
+        for test in &spec.tests {
+            match test
+                .project_name
+                .as_deref()
+                .filter(|project| !project.is_empty())
+            {
+                Some(project) => {
+                    projects.insert(project.to_owned());
+                }
+                None => incomplete = true,
+            }
+        }
     });
-    if projects.is_empty() || projects.iter().any(|project| project.is_empty()) {
+    if incomplete {
+        return Err("Playwright report test has missing or empty projectName".into());
+    }
+    if projects.is_empty() {
         return Err("Playwright report has no complete project population".into());
     }
     Ok(projects)
@@ -623,6 +634,45 @@ mod tests {
             &report(&["chromium", "firefox"]),
             &valid_trace(),
             "project-set mismatch",
+        );
+    }
+
+    #[test]
+    fn rejects_a_mixed_report_with_an_incomplete_project_name() {
+        for malformed in [
+            json!({}),
+            json!({ "projectName": null }),
+            json!({ "projectName": "" }),
+        ] {
+            let report = json!({
+                "suites": [{
+                    "specs": [{
+                        "tests": [
+                            { "projectName": "chromium" },
+                            malformed,
+                        ],
+                    }],
+                }],
+            });
+            assert_rejected(
+                &report.to_string(),
+                &valid_trace(),
+                "missing or empty projectName",
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_malformed_span_beside_valid_e2e_evidence() {
+        let mut trace: Value = serde_json::from_str(&valid_trace()).unwrap();
+        trace["resourceSpans"][0]["scopeSpans"][0]["spans"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({}));
+        assert_rejected(
+            &report(&["chromium"]),
+            &trace.to_string(),
+            "span entry without a nonempty string name",
         );
     }
 

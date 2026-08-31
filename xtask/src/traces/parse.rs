@@ -253,10 +253,22 @@ pub fn parse_spans(content: &str, filters: &Filters, source: &str) -> Result<Vec
             for scope_span in scope_spans {
                 let nested = required_array(scope_span, "spans", source, line_number + 1)?;
                 for span in nested {
+                    if !span.is_object() {
+                        return Err(anyhow::anyhow!(
+                            "JSON line {} in {source} has a span entry that is not an object",
+                            line_number + 1
+                        ));
+                    }
                     let name = span
                         .get("name")
                         .and_then(Value::as_str)
-                        .unwrap_or("")
+                        .filter(|name| !name.is_empty())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "JSON line {} in {source} has a span entry without a nonempty string name",
+                                line_number + 1
+                            )
+                        })?
                         .to_string();
                     let project = get_attr(span, "e2e.project");
                     if !passes(span, &name, &project, filters) {
@@ -323,15 +335,18 @@ mod tests {
     fn line(spans: Value) -> String {
         json!({ "resourceSpans": [{ "scopeSpans": [{ "spans": spans }] }] }).to_string()
     }
-
     #[test]
-    fn rejects_an_empty_jsonl_record_beside_valid_otlp_evidence() {
-        let input = format!("{}\n{{}}", line(json!([])));
-        let error = parse_spans(&input, &Filters::default(), "capture").unwrap_err();
-        assert!(
-            error.to_string().contains("resourceSpans array"),
-            "{error:#}"
-        );
+    fn rejects_malformed_spans_beside_valid_e2e_evidence() {
+        for malformed in [json!(null), json!({}), json!({ "name": "" })] {
+            let input = line(json!([
+                malformed,
+                { "name": "e2e.test", "attributes": [
+                    { "key": "e2e.project", "value": { "stringValue": "chromium" } }
+                ] },
+            ]));
+            let error = parse_spans(&input, &Filters::default(), "capture").unwrap_err();
+            assert!(error.to_string().contains("span entry"), "{error:#}");
+        }
     }
 
     #[test]
