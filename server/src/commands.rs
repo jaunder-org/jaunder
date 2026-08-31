@@ -930,12 +930,12 @@ pub async fn prepare_server(
             StartupCheck::Stale | StartupCheck::Proceed => {}
         }
     }
-    // Publish a mandatory, legacy-visible identity before cleanup. If this fails,
-    // do not risk deleting another process's temporary uploads.
+    // Publish a mandatory, legacy-visible identity with a not-ready port before
+    // cleanup. If this fails, do not risk deleting another process's uploads.
     let runtime_guard = startup_lock.reserve(
         canonical_runtime_path,
         discovery_runtime_path,
-        bind,
+        SocketAddr::new(bind.ip(), 0),
         start_time,
     )?;
     // The exclusive OS lock and live reservation above prove no valid upload can
