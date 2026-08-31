@@ -43,6 +43,17 @@ pub enum PublicationState {
     Published(UtcInstant),
 }
 
+impl PublicationState {
+    /// Return the persistence timestamp represented by this present lifecycle state.
+    #[must_use]
+    pub const fn published_at(self) -> Option<UtcInstant> {
+        match self {
+            Self::Draft => None,
+            Self::Scheduled(at) | Self::Published(at) => Some(at),
+        }
+    }
+}
+
 /// Structured values supplied by an ingress before Org headers are considered.
 ///
 /// An absent scalar is omitted; scalar clearing is a surface concern after
@@ -589,6 +600,19 @@ mod tests {
 
     fn clock() -> UtcInstant {
         "2026-08-26T12:00:00Z".parse().expect("valid fixed clock")
+    }
+
+    #[test]
+    fn publication_state_projects_published_at() {
+        let at: UtcInstant = "2026-11-01T05:30:00Z".parse().expect("valid instant");
+
+        for (state, expected) in [
+            (PublicationState::Draft, None),
+            (PublicationState::Scheduled(at), Some(at)),
+            (PublicationState::Published(at), Some(at)),
+        ] {
+            assert_eq!(state.published_at(), expected);
+        }
     }
 
     fn normalize(source: &str) -> OrgNormalization {
