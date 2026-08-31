@@ -691,6 +691,7 @@ fn run_host_gate(sh: &xshell::Shell, mode: Mode, result: &mut CommandResult) {
 fn run_local_push_gate(sh: &xshell::Shell, result: &mut CommandResult) {
     run_host_gate(sh, Mode::Check, result);
     steps::test_local::run(sh, result, &[]);
+    steps::doctest_fences::run_workspace(sh, result);
 }
 
 fn run_precommit_with_host_gate(
@@ -733,6 +734,7 @@ fn precommit_host_step_names_for_test() -> Vec<&'static str> {
 fn prepush_step_names_for_test() -> Vec<&'static str> {
     let mut names = host_gate_step_names_for_test(Mode::Check);
     names.push("test-local");
+    names.push("workspace-doctests");
     names
 }
 
@@ -1294,9 +1296,20 @@ mod cli_tests {
     }
 
     #[test]
-    fn prepush_surface_is_local_verify_host_plus_product_tests() {
+    fn prepush_surface_is_local_verify_host_product_and_workspace_doctests() {
         let prepush = prepush_step_names_for_test();
+        assert_eq!(
+            prepush.iter().filter(|name| **name == "host-tests").count(),
+            1
+        );
         assert!(prepush.contains(&"test-local"));
+        assert_eq!(
+            prepush
+                .iter()
+                .filter(|name| **name == "workspace-doctests")
+                .count(),
+            1
+        );
         assert!(!prepush.contains(&"wasm-budget"));
         assert!(!prepush.contains(&"wasm-tests"));
         assert!(!prepush.contains(&"coverage"));
@@ -1365,12 +1378,14 @@ mod cli_tests {
     }
 
     #[test]
-    fn prepush_precondition_runs_before_host_gate_and_product_tests() {
+    fn prepush_precondition_and_local_tests_keep_their_order() {
         let mut names = vec!["clean-tree"];
         names.extend(prepush_step_names_for_test());
 
         assert!(position(&names, "clean-tree") < position(&names, "fmt"));
         assert!(position(&names, "clean-tree") < position(&names, "test-local"));
+        assert!(position(&names, "host-tests") < position(&names, "test-local"));
+        assert!(position(&names, "test-local") < position(&names, "workspace-doctests"));
     }
 
     #[test]

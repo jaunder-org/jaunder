@@ -2543,14 +2543,16 @@ The ladder has four local entrypoints, all driven by `xtask`
   and tolerated.
 - **`cargo xtask prepush`** is the fast local push-hook entrypoint. It opens
   with the same clean-tree precheck as `validate`, then runs the verify-only
-  host surface and the host-native `test-local` product Rust suite without
-  hermetic Nix derivations.
-- **`cargo xtask validate --no-e2e`** runs the same host set **verify-only**,
-  adds `wasm-budget` (kept out of `check` because it costs a `nix build .#site`,
-  #836), then runs the Nix `wasm-tests`, Rust `coverage`, `doctests`, and the
-  combined `elisp-coverage-producer` followed by its host consumer. Full
-  **`cargo xtask validate`** inherits that verdict and — unless `--no-e2e` —
-  adds the browser/backend e2e aggregate; it never reruns live ERT.
+  host/static surface, the auxiliary `xtask`/`tools` non-doc tests, the
+  host-native `test-local` product Rust suite, and `workspace-doctests` after
+  the product tests. It invokes no Nix derivation.
+- **`cargo xtask validate --no-e2e`** runs the verify-only host/static surface,
+  then adds `wasm-budget` (kept out of `check` because it costs a
+  `nix build .#site`, #836), the Nix static proof, Nix `wasm-tests`, Rust
+  `coverage`, Nix `doctests`, and the combined `elisp-coverage-producer`
+  followed by its host consumer. Full **`cargo xtask validate`** inherits that
+  verdict and — unless `--no-e2e` — adds the browser/backend e2e aggregate; it
+  never reruns live ERT.
 
 Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
 `.githooks/pre-commit` calls `cargo xtask precommit`; the `xtask` Cargo alias
@@ -2566,6 +2568,29 @@ authority. Every `cargo xtask` run self-heals `core.hooksPath` to the tracked,
 relative `.githooks` (`xtask/src/git.rs`: `ensure_hooks_path`).
 `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate local escapes; CI is the
 non-bypassable authority.
+
+#### Prepush parity by failure surface
+
+The fast local lane and `validate --no-e2e` do not run the same tests in
+different environments. They have the following explicit authority split
+([ADR-0029](adr/0029-git-enforced-verify-gate.md), #1117 supplement):
+
+| `validate --no-e2e` surface                              | `prepush` coverage                                                                                                 | Authority / rationale                                                                                                                                                              |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Verify-only host/static surface                          | Runs the same host surface.                                                                                        | Prepush is the fast host verdict; Nix static proof remains authoritative for the sandboxed offline environment.                                                                    |
+| Auxiliary `xtask`/`tools` non-doc tests                  | Runs once.                                                                                                         | The host tests are the applicable verdict; they are outside the application coverage/Nix test gates.                                                                               |
+| Host-native product Rust tests                           | Runs `test-local`.                                                                                                 | The host-native product verdict is cheap and cache-friendly.                                                                                                                       |
+| Root-workspace doctests and fence reconciliation         | Runs `workspace-doctests`: `cargo test --workspace --doc` plus the same bidirectional root-workspace fence census. | Prepush is authoritative for host-toolchain example execution and reconciliation; Nix `doctests`/`doctests-gate` remains authoritative for the pinned sandbox/offline environment. |
+| Nix static proof                                         | Does not run.                                                                                                      | Only the sandboxed offline Cargo environment proves the hermetic static definitions.                                                                                               |
+| Rust coverage/CRAP                                       | Does not run.                                                                                                      | Instrumentation and SQLite/PostgreSQL backend parity are part of the verdict.                                                                                                      |
+| Wasm browser tests                                       | Does not run.                                                                                                      | The verdict exercises wasm browser primitives unavailable to a cheap host lane.                                                                                                    |
+| Elisp coverage                                           | Does not run.                                                                                                      | The coverage VM is the authoritative execution environment.                                                                                                                        |
+| Wasm budget                                              | Does not run.                                                                                                      | The verdict is defined by the Nix-built artifact's size semantics.                                                                                                                 |
+| Server-function flow verification (full `validate` only) | Does not run.                                                                                                      | This is an e2e/full-validate responsibility outside the `validate --no-e2e` comparator.                                                                                            |
+
+`workspace-doctests` and the Nix doctest producer/gate reconcile the same
+root-workspace fence population in both directions; neither path may silently
+shrink it. Only the Nix path establishes the pinned sandbox/offline verdict.
 
 The heavy checks are Nix flake check derivations — the hermetic layer. xtask
 realizes each via
@@ -2725,10 +2750,6 @@ instrumented rather than skipped (`flake.nix:1288-1293`). The host-side gate
   (`xtask/src/coverage/crap.rs:32`).
 
 The coverage source is bounded to cargo sources, enforced by a `drvPath` probe
-in both directions — an excluded file must not change it, an instrumented `.rs`
-must (`xtask/src/coverage/probe.rs`) — run in CI as
-`cargo xtask coverage probe-source` (`.github/workflows/ci.yml:52`). Before
-every eval the probe **dirties an excluded tracked file**, `README.md`
 (`xtask/src/coverage/probe.rs:148-155`,
 [ADR-0116](adr/0116-coverage-probe-dirty-tree-workaround.md)): on a clean
 worktree nix's flake git-fetcher walks history for `revCount`, which fails on
@@ -2750,11 +2771,12 @@ vocabulary is closed to three exact strings — plain, `compile_fail`, `text` �
 because `ignore` is collected and reported by rustdoc and would read as a
 one-word self-exemption. Every `compile_fail` must carry a `#`-hidden prelude
 whose every line appears in a plain fence **in the same doc comment**; the run
-is `cargo test --workspace --doc`, never package-scoped. The population splits
-across two steps: the Nix `doctests` derivation covers the workspace, and the
-`doctest-fences` step covers `xtask/` and `tools/`, which the flake's source
-filter excludes (`xtask/src/steps/doctest_fences.rs`). Doctests feed no
-coverage: `llvm-cov --doctests` is unstable, so `--doc` runs outside
+is `cargo test --workspace --doc`, never package-scoped. `workspace-doctests`
+runs and reconciles the root-workspace population during `prepush`; the Nix
+`doctests` producer/gate remains the sandbox/offline authority for that same
+population. The `doctest-fences` step covers `xtask/` and `tools`, which the
+flake's source filter excludes (`xtask/src/steps/doctest_fences.rs`). Doctests
+feed no coverage: `llvm-cov --doctests` is unstable, so `--doc` runs outside
 instrumentation.
 
 ### Server-fn gates
