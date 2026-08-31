@@ -1,4 +1,15 @@
 //! Strict host-side validation of Playwright projects against trace boot evidence.
+//! The lifted Playwright report is the sole authority for the executed project
+//! population, under
+//! `docs/adr/drafts/playwright-report-defines-trace-gate-population.md`.
+//! Evidence is accepted from `e2e.test` and navigation-bearing `e2e.page` spans,
+//! reconciled exactly to that report, and uses the analyzer's non-null
+//! `commitToMountMs` proxy only to define mounted membership. Every mounted
+//! navigation must use the current schema, contain a complete document-frame
+//! decomposition, and close to its document-frame target within 1 ms; no
+//! navigation may have been dropped. Nix invokes this only after a successful
+//! combination's diagnostics are lifted, after the duration validator, so a VM
+//! failure remains its own primary result.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,7 +24,7 @@ use serde_json::Value;
 
 use crate::StepResult;
 use crate::traces::{
-    boot_phases::{BootDecompositionOutcome, MIN_BOOT_PHASES, boot_decomposition_outcome},
+    boot_phases::{BootDecompositionOutcome, boot_decomposition_outcome},
     parse::{Filters, get_attr, parse_json_attr, parse_spans},
 };
 
@@ -201,9 +212,12 @@ fn trace_projects(spans: &[crate::traces::parse::Span]) -> Result<BTreeSet<Strin
             })?;
         let marks = marks_by_navigation(marks.as_ref());
 
-        let Some(navigations) = navigations.as_ref().and_then(Value::as_array) else {
+        let Some(navigations) = navigations.as_ref() else {
             continue;
         };
+        let navigations = navigations
+            .as_array()
+            .ok_or_else(|| format!("project {project}: navigation evidence is not an array"))?;
         for navigation in navigations {
             if navigation
                 .get("commitToMountMs")
@@ -280,12 +294,8 @@ fn validate_navigation(
             "project {project}: legacy or missing timing schema"
         ));
     }
-    let phases = navigation
-        .get("bootPhases")
-        .and_then(Value::as_object)
-        .filter(|phases| phases.len() >= MIN_BOOT_PHASES)
-        .ok_or_else(|| format!("project {project}: incomplete boot phases"))?;
-    let _ = phases;
+    // The shared decomposition seam owns both the finite boot-interval floor and
+    // document-frame closure, so the gate cannot count unrelated properties.
     let id = navigation.get("id").and_then(Value::as_i64);
     let marks = id
         .and_then(|id| marks.get(&id))
@@ -404,6 +414,26 @@ mod tests {
         record.to_string()
     }
 
+    fn trace_without_marks(project: &str, span_name: &str, nav: Value) -> String {
+        json!({
+            "resourceSpans": [{ "scopeSpans": [{ "spans": [{
+                "name": span_name,
+                "attributes": [
+                    string_attr("e2e.project", project),
+                    attr("e2e.navigation_top_json", json!([nav])),
+                    attr("e2e.navigation_top_dropped", json!(0)),
+                ],
+            }] }] }],
+        })
+        .to_string()
+    }
+
+    fn page_navigation_with_document_total(id: i64, document_boot_total_ms: f64) -> Value {
+        let mut nav = navigation(id, true);
+        nav["documentBootTotalMs"] = json!(document_boot_total_ms);
+        nav
+    }
+
     fn assert_rejected(report_json: &str, trace_jsonl: &str, expected: &str) {
         let error = validate_json(report_json, trace_jsonl).unwrap_err();
         assert!(error.contains(expected), "{error}");
@@ -482,6 +512,24 @@ mod tests {
     }
 
     #[test]
+    fn rejects_present_navigation_evidence_that_is_not_an_array() {
+        let mut record: Value = serde_json::from_str(&valid_trace()).unwrap();
+        let attributes = record["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
+            .as_array_mut()
+            .unwrap();
+        let navigation = attributes
+            .iter_mut()
+            .find(|attribute| attribute["key"].as_str() == Some("e2e.navigation_top_json"))
+            .unwrap();
+        navigation["value"]["stringValue"] = json!(json!({"id": 1}).to_string());
+        assert_rejected(
+            &report(&["chromium"]),
+            &record.to_string(),
+            "navigation evidence is not an array",
+        );
+    }
+
+    #[test]
     fn rejects_mismatched_project_sets() {
         assert_rejected(
             &report(&["chromium", "firefox"]),
@@ -513,7 +561,23 @@ mod tests {
         assert_rejected(
             &report(&["chromium"]),
             &trace("chromium", "e2e.test", navigation(1, false), marks(1), 0),
-            "incomplete boot phases",
+            "incomplete direct-init decomposition",
+        );
+    }
+
+    #[test]
+    fn rejects_junk_properties_that_do_not_supply_boot_phase_intervals() {
+        let mut nav = navigation(1, true);
+        nav["bootPhases"] = json!({
+            "jaunder.boot.entry->jaunder.boot.mount_done": 40.0,
+            "notBoot": 1.0,
+            "boot.not_an_interval": "not finite",
+            "diagnostic": 3.0,
+        });
+        assert_rejected(
+            &report(&["chromium"]),
+            &trace("chromium", "e2e.test", nav, marks(1), 0),
+            "incomplete direct-init decomposition",
         );
     }
 
@@ -548,6 +612,28 @@ mod tests {
             &trace("chromium", "e2e.page", nav, marks(1), 0),
             "does not close within 1 ms",
         );
+    }
+
+    #[test]
+    fn accepts_page_navigation_closed_to_its_navigation_document_total_without_marks() {
+        let trace = trace_without_marks(
+            "chromium",
+            "e2e.page",
+            page_navigation_with_document_total(1, 55.0),
+        );
+
+        validate_json(&report(&["chromium"]), &trace).unwrap();
+    }
+
+    #[test]
+    fn rejects_page_navigation_not_closed_to_its_navigation_document_total_without_marks() {
+        let trace = trace_without_marks(
+            "chromium",
+            "e2e.page",
+            page_navigation_with_document_total(1, 56.5),
+        );
+
+        assert_rejected(&report(&["chromium"]), &trace, "does not close within 1 ms");
     }
 
     #[test]

@@ -32,8 +32,9 @@ const EXCLUSIVE_SEGMENTS: [(&str, &str); 2] = [
     ),
 ];
 
-/// The fewest boot intervals a complete navigation carries. It is a floor so
-/// future instrumentation can add marks without becoming a coverage blackout.
+/// The fewest finite `boot.*` intervals the document-frame decomposition itself
+/// uses. It is a floor so future instrumentation can add marks without becoming
+/// a coverage blackout.
 pub(crate) const MIN_BOOT_PHASES: usize = 3;
 
 /// How far the segments may miss `mount_done.startTime` before the navigation is
@@ -268,12 +269,15 @@ fn decompose(nav: &Value, marks: &[Value]) -> NavOutcome {
     }
     let starts = mark_starts(marks);
     // The decomposition target, taken independently of the segments so the
-    // closure check has something to close *against*.
-    let Some(boot_total_ms) = starts
+    // closure check has something to close against. Mark-derived totals retain
+    // compatibility with complete mark evidence; navigation-owned totals close
+    // current `e2e.page` evidence whose span does not carry boot marks.
+    let boot_total_ms = starts
         .iter()
         .find(|(name, _)| name.ends_with(MOUNT_DONE_SUFFIX))
         .map(|(_, start)| *start)
-    else {
+        .or_else(|| field_f64(nav, "documentBootTotalMs"));
+    let Some(boot_total_ms) = boot_total_ms else {
         return NavOutcome::NotDecomposed;
     };
     let mut segments: Vec<(String, f64)> = Vec::new();
@@ -296,7 +300,7 @@ fn decompose(nav: &Value, marks: &[Value]) -> NavOutcome {
             Some((key.clone(), ms))
         })
         .collect();
-    if intervals.is_empty() {
+    if intervals.len() < MIN_BOOT_PHASES {
         return NavOutcome::NotDecomposed;
     }
     // `startTime` order, from the marks themselves: `bootPhases` is a JSON object,
@@ -1341,6 +1345,22 @@ mod tests {
             rows[0].decomposed, 0,
             "a violation is excluded from the medians"
         );
+    }
+
+    #[test]
+    fn navigation_document_total_closes_page_evidence_without_boot_marks() {
+        let mut navigation = nav(1, "warm", 105.0, Some(160.0));
+        navigation["documentBootTotalMs"] = json!(105.0);
+        assert!(matches!(
+            boot_decomposition_outcome(&navigation, &[]),
+            BootDecompositionOutcome::Complete
+        ));
+
+        navigation["documentBootTotalMs"] = json!(107.0);
+        assert!(matches!(
+            boot_decomposition_outcome(&navigation, &[]),
+            BootDecompositionOutcome::ClosureViolation
+        ));
     }
 
     #[test]

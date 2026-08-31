@@ -381,14 +381,7 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
                     Path::new(&format!(".xtask/diagnostics/{check}")),
                 );
             },
-            || {
-                [
-                    crate::steps::duration_budget::validate_lifted_combo(backend, browser),
-                    crate::steps::boot_decomposition_coverage::validate_lifted_combo(
-                        backend, browser,
-                    ),
-                ]
-            },
+            || validate_lifted_e2e_combo(backend, browser),
         );
     }
     E2eOutcome::from_combo_steps(&result.steps[combo_start..])
@@ -432,13 +425,19 @@ pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
                 Path::new(&format!(".xtask/diagnostics/{check}")),
             );
         },
-        || {
-            [
-                crate::steps::duration_budget::validate_lifted_combo(backend, browser),
-                crate::steps::boot_decomposition_coverage::validate_lifted_combo(backend, browser),
-            ]
-        },
+        || validate_lifted_e2e_combo(backend, browser),
     );
+}
+
+/// Validate one successful lifted E2E combination in the fixed post-build order.
+///
+/// Both aggregate and single-combination orchestration use this seam so the
+/// duration verdict always precedes boot-decomposition coverage.
+fn validate_lifted_e2e_combo(backend: &str, browser: &str) -> [StepResult; 2] {
+    [
+        crate::steps::duration_budget::validate_lifted_combo(backend, browser),
+        crate::steps::boot_decomposition_coverage::validate_lifted_combo(backend, browser),
+    ]
 }
 
 /// Preserve ADR-0037's diagnostic-before-failure order. A failed VM has already
