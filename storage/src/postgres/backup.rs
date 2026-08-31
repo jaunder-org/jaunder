@@ -252,7 +252,7 @@ fn bind_restore_value(
         RestoreBindValue::Integer(value) => query.bind_storage(value.into_text()),
         RestoreBindValue::Real { text, .. } => query.bind_storage(text),
         RestoreBindValue::Text(value) => query.bind_storage(value),
-        RestoreBindValue::Json(value) => query.bind_storage(value.into_text()),
+        RestoreBindValue::Json(value) => query.bind_storage(value),
     }
 }
 
@@ -555,6 +555,38 @@ mod tests {
             matches!(error, BackupError::Sqlx(_)),
             "non-constraint (class 22) restore error must map to Sqlx, got {error:?}"
         );
+        Ok(())
+    }
+
+    // reason: validates PostgreSQL restore's exact text encoding for real and JSON cells
+    #[apply(postgres_only)]
+    #[tokio::test]
+    async fn restore_bind_values_preserve_real_and_json_text(
+        #[case] backend: Backend,
+    ) -> Result<(), sqlx::Error> {
+        let env = backend.setup().await;
+        let CloseablePool::Postgres(pool) = env.base.pool() else {
+            unreachable!("postgres_only yields a Postgres pool")
+        };
+
+        let real = bind_restore_value(
+            sqlx::query("SELECT $1::text AS value"),
+            RestoreBindValue::from_json(&serde_json::json!(1.25)),
+        )
+        .fetch_one(pool)
+        .await?
+        .try_get::<RestoreText, _>("value")?;
+        assert_eq!(real.as_str(), "1.25");
+
+        let json = bind_restore_value(
+            sqlx::query("SELECT $1::text AS value"),
+            RestoreBindValue::from_json(&serde_json::json!({"items": [1, true]})),
+        )
+        .fetch_one(pool)
+        .await?
+        .try_get::<RestoreText, _>("value")?;
+        assert_eq!(json.as_str(), r#"{"items":[1,true]}"#);
+
         Ok(())
     }
 

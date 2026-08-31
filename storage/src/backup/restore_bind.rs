@@ -47,12 +47,6 @@ pub(crate) struct RestoreReal(f64);
 #[derive(Debug, macros::SqlxBridge)]
 pub(crate) struct RestoreJson(String);
 
-impl RestoreJson {
-    pub(crate) fn into_text(self) -> RestoreText {
-        RestoreText::new(self.0)
-    }
-}
-
 /// Every storage representation admitted by dynamic backup restore.
 #[derive(Debug)]
 pub(crate) enum RestoreBindValue {

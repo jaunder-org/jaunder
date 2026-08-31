@@ -27,13 +27,6 @@ impl CatalogTableName {
 pub(crate) struct CatalogDatabaseName(String);
 
 #[cfg(test)]
-impl CatalogDatabaseName {
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-#[cfg(test)]
 impl From<String> for CatalogDatabaseName {
     fn from(value: String) -> Self {
         Self(value)

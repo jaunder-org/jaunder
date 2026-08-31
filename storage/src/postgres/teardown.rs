@@ -59,16 +59,14 @@ mod tests {
 
         assert!(
             database_exists(&config, &db_name).await,
-            "per-test database {} should exist while the TestEnv is alive",
-            db_name.as_str()
+            "per-test database {db_name:?} should exist while the TestEnv is alive"
         );
 
         drop(env);
 
         assert!(
             !database_exists(&config, &db_name).await,
-            "per-test database {} should be dropped once the TestEnv is gone",
-            db_name.as_str()
+            "per-test database {db_name:?} should be dropped once the TestEnv is gone"
         );
     }
 
@@ -81,16 +79,14 @@ mod tests {
 
         assert!(
             database_exists(&config, &db_name).await,
-            "unique_postgres_url() database {} should exist while its guard is held",
-            db_name.as_str()
+            "unique_postgres_url() database {db_name:?} should exist while its guard is held"
         );
 
         drop(guard);
 
         assert!(
             !database_exists(&config, &db_name).await,
-            "unique_postgres_url() database {} should be dropped once its guard is gone",
-            db_name.as_str()
+            "unique_postgres_url() database {db_name:?} should be dropped once its guard is gone"
         );
     }
 }
