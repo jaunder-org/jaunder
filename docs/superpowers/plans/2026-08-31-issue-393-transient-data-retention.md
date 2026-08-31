@@ -24,7 +24,7 @@ Out:
 
 ## Task outline
 
-- [ ] Task 1: Add dual-backend schema support for bounded pruning
+- [x] Task 1: Add dual-backend schema support for bounded pruning
   - Contract: matching SQLite/PostgreSQL migration `0029` adds nullable
     `feed_events.terminal_at` in each backend's canonical instant type plus the
     cutoff indexes required by all database retention predicates. Non-terminal
