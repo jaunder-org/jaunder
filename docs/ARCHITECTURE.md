@@ -1934,17 +1934,17 @@ stale-ETag, is recoverable by a plain re-publish
 applies to the sent body only; the authoring buffer is never modified.
 
 Creates go through `jaunder--create-with-retry`
-(`elisp/jaunder-publish.el:280`), which currently retries a 5xx or **any**
-signalled error — the handler is a bare `(error …)` (`:294`), so a non-transport
-failure such as a missing auth-source entry is also retried twice before
-re-signalling. That credential-error retry contradicts the accepted auth-source
-boundary and is tracked in
-[#1062](https://github.com/jaunder-org/jaunder/issues/1062); transport retry
-still uses up to three attempts (≈1s then ≈2s backoff) under **one**
-`Idempotency-Key`, so the server dedups the replay. The key is ephemeral, not
-stable across invocations: it is a fresh md5 of local entropy per call, so a
-later re-publish gets a new key and an edit is never mistaken for a retry. The
-server side of that contract was decided in issue
+(`elisp/jaunder-publish.el:279`), which retries a response-less signalled
+`plz-error` or a returned 5xx response. `jaunder--http-request` converts a
+response-bearing `plz-error` into the ordinary response plist, so a signalled
+`plz-error` at this boundary is transport failure; non-transport failures such
+as a missing `auth-source` entry propagate immediately
+([Emacs auth-source App Password storage](adr/0143-emacs-auth-source-app-password-storage.md)).
+Transport retry uses up to three attempts with one- then two-second backoff
+under **one** `Idempotency-Key`, so the server dedups the replay. The key is
+ephemeral, not stable across invocations: it is a fresh md5 of local entropy per
+call, so a later re-publish gets a new key and an edit is never mistaken for a
+retry. The server side of that contract was decided in issue
 [#79](https://github.com/jaunder-org/jaunder/issues/79) as a follow-on to
 ADR-0047 — see the Storage section.
 
