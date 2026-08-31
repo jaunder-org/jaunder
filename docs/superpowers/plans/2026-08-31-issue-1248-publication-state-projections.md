@@ -38,7 +38,7 @@ Out:
     stays behaviorally identical.
   - Verification: focused common/storage unit tests plus retained web Org,
     AtomPub, and dual-backend publication contracts pass.
-- [ ] Task 3: Reconcile documentation and review the clean cutover
+- [x] Task 3: Reconcile documentation and review the clean cutover
   - Contract: update architecture documentation only if the new public
     interfaces materially change its current ownership description; remove every
     obsolete duplicated present-state match.
