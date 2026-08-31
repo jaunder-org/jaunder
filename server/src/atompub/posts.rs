@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
+use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::PostId;
 use common::org::{self, OrgOperation, OrgStructuredMetadata, Presence, PublicationState};
@@ -22,7 +23,6 @@ use common::tagged_url::{self, BaseUrl, EditUriUrl, FeedUrl, PaginationUrl};
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
-use common::{MutationOutcome, etag::ETag};
 use host::atompub::{self, CollectionFeedTitle, Entry, FeedMeta};
 use host::{etag, feed};
 use storage::{
@@ -467,8 +467,8 @@ pub async fn member_delete(
             WriteScopeError::Operation(error) => error,
             WriteScopeError::Begin(error) => HandlerError::from(error),
         })?;
-    if matches!(outcome, MutationOutcome::CommitIndeterminate(())) {
-        return Err(HandlerError::Invariant);
+    if let Err(status) = super::mutation::confirmed_or_accepted(outcome) {
+        return Ok(status.into_response());
     }
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -568,11 +568,11 @@ pub async fn collection_post(
         return post_entry_response(StatusCode::OK, &post, &base, &username);
     }
 
-    // Fresh create: a non-conflict error propagates via `?`; AtomPub cannot
-    // safely claim a durable response when commit acknowledgement is lost.
-    let created = match created? {
-        MutationOutcome::Confirmed(post) => post,
-        MutationOutcome::CommitIndeterminate(_) => return Err(HandlerError::Invariant),
+    // Fresh create: a non-conflict error propagates via `?`; an unavailable commit
+    // acknowledgement tells the client to revalidate with `202 Accepted`.
+    let created = match super::mutation::confirmed_or_accepted(created?) {
+        Ok(created) => created,
+        Err(status) => return Ok(status.into_response()),
     };
     let post = posts
         .get_post_by_id(created.post_id, &viewer)
@@ -689,8 +689,8 @@ pub async fn member_put(
         },
     )
     .await?;
-    if matches!(update_outcome, MutationOutcome::CommitIndeterminate(_)) {
-        return Err(HandlerError::Invariant);
+    if let Err(status) = super::mutation::confirmed_or_accepted(update_outcome) {
+        return Ok(status.into_response());
     }
 
     let viewer = owner_viewer(&auth_user);

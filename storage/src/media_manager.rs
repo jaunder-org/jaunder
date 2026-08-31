@@ -3,6 +3,7 @@
 //! result. Relocated from `server` (#517) so a `web` `#[server]` fn can construct
 //! it directly — its work is persistence and its deps are all `storage`'s.
 
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -241,6 +242,25 @@ impl MediaManager {
             }
         }
     }
+    /// Acquires the cross-process lock for one content-addressed hash.
+    ///
+    /// The lock serializes filesystem placement/reclamation with the short
+    /// database scopes without holding a database transaction across file I/O.
+    async fn acquire_content_lock(&self, hash: &ContentHash) -> anyhow::Result<File> {
+        let lock_dir = self.storage_path.join("media").join(".locks");
+        fs::create_dir_all(&lock_dir).await?;
+        let lock_path = lock_dir.join(format!("{hash}.lock"));
+        tokio::task::spawn_blocking(move || {
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(lock_path)?;
+            file.lock()?;
+            Ok::<_, io::Error>(file)
+        })
+        .await?
+        .map_err(anyhow::Error::from)
+    }
 
     /// Content-addresses the temp file at `target_path`, distinguishing a
     /// pre-existing target from one created by this upload.
@@ -292,10 +312,11 @@ impl MediaManager {
         }
     }
 
-    /// Places an upload and records it while holding the media identity lock.
+    /// Places an upload and records it under the media content lock.
     ///
-    /// The lock spans target placement, insertion, and rollback cleanup: another
-    /// writer therefore cannot adopt a target that this failed upload removes.
+    /// Filesystem placement and cleanup happen outside the database write
+    /// scope. The cross-process content lock prevents another uploader from
+    /// adopting a newly placed target before a failed registration removes it.
     async fn place_and_register(
         &self,
         record: MediaRecord,
@@ -304,76 +325,55 @@ impl MediaManager {
         target_path: PathBuf,
         hash_dir: PathBuf,
     ) -> anyhow::Result<(TargetDisposition, MutationOutcome<()>)> {
+        let _content_lock = self.acquire_content_lock(&media_ref.sha256).await?;
+        let disposition = match Self::handle_deduplication(&tmp_path, &target_path, &hash_dir).await
+        {
+            Ok(disposition) => disposition,
+            Err(error) => {
+                return Self::finish_temp_cleanup(
+                    Err(error),
+                    fs::remove_file(&tmp_path).await,
+                    "storage.media.placement_temp_cleanup",
+                );
+            }
+        };
+
         let media = Arc::clone(&self.media);
-        let tmp_path_for_begin = tmp_path.clone();
-        let outcome = match self
+        let outcome = self
             .write_scope
             .run(move |transaction| {
                 Box::pin(async move {
-                    if let Err(error) = media.lock_media_reference(transaction, &media_ref).await {
-                        return Self::finish_temp_cleanup(
-                            Err(anyhow::anyhow!(MediaError::Internal(Box::new(error)))),
-                            fs::remove_file(&tmp_path).await,
-                            "storage.media.lock_temp_cleanup",
-                        );
-                    }
-                    let disposition = match Self::handle_deduplication(
-                        &tmp_path,
-                        &target_path,
-                        &hash_dir,
-                    )
-                    .await
-                    {
-                        Ok(disposition) => disposition,
-                        Err(error) => {
-                            return Self::finish_temp_cleanup(
-                                Err(error),
-                                fs::remove_file(&tmp_path).await,
-                                "storage.media.placement_temp_cleanup",
-                            );
-                        }
-                    };
+                    media
+                        .lock_media_reference(transaction, &media_ref)
+                        .await
+                        .map_err(|error| anyhow::anyhow!(MediaError::Internal(Box::new(error))))?;
                     match media.create_media(transaction, &record).await {
-                        Ok(()) | Err(CreateMediaError::AlreadyExists) => Ok(disposition),
+                        Ok(()) | Err(CreateMediaError::AlreadyExists) => Ok(()),
                         Err(CreateMediaError::Internal(error)) => {
                             tracing::error!(error = %error, "create_media failed");
-                            let error = anyhow::anyhow!(MediaError::Internal(Box::new(error)));
-                            if disposition.was_created_by_upload() {
-                                Self::finish_temp_cleanup(
-                                    Err(error),
-                                    fs::remove_file(&target_path).await,
-                                    "storage.media.create_target_cleanup",
-                                )
-                            } else {
-                                Err(error)
-                            }
+                            Err(anyhow::anyhow!(MediaError::Internal(Box::new(error))))
                         }
                     }
                 })
             })
-            .await
-        {
-            Ok(outcome) => outcome,
-            Err(error @ WriteScopeError::Operation(_)) => {
-                return Err(Self::scope_error(error));
-            }
-            Err(error @ WriteScopeError::Begin(_)) => {
-                return Self::finish_temp_cleanup(
-                    Err(Self::scope_error(error)),
-                    fs::remove_file(&tmp_path_for_begin).await,
-                    "storage.media.begin_temp_cleanup",
-                );
-            }
-        };
-        let disposition = *outcome.value();
-        Ok((disposition, outcome.map(|_| ())))
+            .await;
+
+        match outcome {
+            Ok(outcome) => Ok((disposition, outcome)),
+            Err(error) if disposition.was_created_by_upload() => Self::finish_temp_cleanup(
+                Err(Self::scope_error(error)),
+                fs::remove_file(&target_path).await,
+                "storage.media.create_target_cleanup",
+            ),
+            Err(error) => Err(Self::scope_error(error)),
+        }
     }
 
     /// Shared finalization for an upload whose bytes are already written to
-    /// `tmp_path` with a known content hash and size: enforces quota before its
-    /// short database scope, then holds the media identity lock while it
-    /// content-addresses the file and records it. Streaming and hashing remain
-    /// outside that scope.
+    /// `tmp_path` with a known content hash and size: enforces quota, then uses
+    /// the cross-process content lock to serialize filesystem placement with a
+    /// short database registration scope. Streaming, hashing, placement, and
+    /// cleanup remain outside the database scope.
     async fn finalize_upload(
         &self,
         user_id: UserId,
@@ -501,13 +501,12 @@ impl MediaManager {
             .await
     }
 
-    /// Deletes a media row and reclaims the on-disk entry when no remaining row or
-    /// live Post names the same canonical media address.
+    /// Deletes a media row and reclaims the on-disk entry when no remaining row
+    /// or live Post names the same canonical media address.
     ///
-    /// # Errors
-    /// Deletes a media row in a scoped transaction. A confirmed deletion then
-    /// conservatively attempts post-commit filesystem reclamation.
-    ///
+    /// A content lock serializes the scoped database checks with upload
+    /// placement. Confirmed reclamation removes the file only after the
+    /// database scope completes.
     /// # Errors
     ///
     /// Returns write-scope acquisition or operation errors. Reclaim failures are
@@ -520,6 +519,7 @@ impl MediaManager {
         evidence: &MediaReferenceEvidence,
         force: bool,
     ) -> anyhow::Result<MutationOutcome<TryDeleteOutcome>> {
+        let _content_lock = self.acquire_content_lock(&media.sha256).await?;
         let storage = Arc::clone(&self.media);
         let media_for_write = media.clone();
         let instance_for_write = current_instance_id.clone();
@@ -548,28 +548,33 @@ impl MediaManager {
             MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
         ) {
             let storage = Arc::clone(&self.media);
-            let storage_path = Arc::clone(&self.storage_path);
-            let media = media.clone();
-            let current_instance_id = current_instance_id.clone();
-            let evidence = evidence.clone();
-            let reclaim = self
+            let media_for_reclaim = media.clone();
+            let instance_for_reclaim = current_instance_id.clone();
+            let evidence_for_reclaim = evidence.clone();
+            let reclaimability = self
                 .write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
-                        Self::reclaim_deleted_media_file(
+                        Self::deleted_media_file_is_reclaimable(
                             storage.as_ref(),
                             transaction,
-                            storage_path.as_ref(),
-                            &media,
-                            &current_instance_id,
-                            &evidence,
+                            &media_for_reclaim,
+                            &instance_for_reclaim,
+                            &evidence_for_reclaim,
                         )
                         .await
                     })
                 })
-                .await
-                .map(drop)
-                .map_err(Self::scope_error);
+                .await;
+            let reclaim = match reclaimability {
+                Ok(MutationOutcome::Confirmed(true)) => {
+                    Self::remove_media_file(self.storage_path.as_ref(), media).await
+                }
+                Ok(MutationOutcome::Confirmed(false) | MutationOutcome::CommitIndeterminate(_)) => {
+                    Ok(())
+                }
+                Err(error) => Err(Self::scope_error(error)),
+            };
             return Ok(Self::finish_reclaim(outcome, reclaim));
         }
         Ok(outcome)
@@ -587,32 +592,27 @@ impl MediaManager {
         primary
     }
 
-    /// Reclaims the file for an already-deleted media row when the canonical entry is
-    /// no longer named by any remaining row or live Post.
-    ///
-    /// # Errors
-    ///
-    /// Returns storage errors from the reclaimability query and I/O errors from
-    /// removing a reclaimable file.
-    async fn reclaim_deleted_media_file(
+    /// Checks whether an already-deleted media row's canonical entry is no
+    /// longer named by any remaining row or live Post.
+    async fn deleted_media_file_is_reclaimable(
         media_storage: &dyn MediaStorage,
         transaction: &mut crate::WriteTransaction,
-        storage_path: &Path,
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         media_storage
             .lock_media_reference(transaction, media)
             .await?;
-
-        if !media_storage
+        media_storage
             .media_entry_is_reclaimable(transaction, media, current_instance_id, evidence)
-            .await?
-        {
-            return Ok(());
-        }
+            .await
+            .map_err(anyhow::Error::from)
+    }
 
+    /// Removes a confirmed-reclaimable canonical media file after its database
+    /// scope has completed.
+    async fn remove_media_file(storage_path: &Path, media: &MediaRef) -> anyhow::Result<()> {
         let file_path = storage_path.join("media").join(media::media_path(
             &media.source,
             &media.sha256,
@@ -883,7 +883,7 @@ mod tests {
         );
     }
 
-    // guard:no-backend — mock media lock fails before filesystem placement
+    // guard:no-backend — a database identity-lock failure removes the target placed before the scope.
     #[tokio::test]
     async fn upload_lock_failure_removes_temp_file() {
         let temp = TempDir::new().unwrap();

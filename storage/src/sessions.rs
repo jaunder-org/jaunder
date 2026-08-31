@@ -309,12 +309,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let raw_token = match outcome {
-            common::MutationOutcome::Confirmed(raw_token) => raw_token,
-            common::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("session fixture setup requires a confirmed commit")
-            }
-        };
+        let raw_token = crate::test_support::confirmed_for(outcome, "session fixture setup");
         let expected_hash = token::hash(&raw_token).unwrap();
 
         let sessions = Arc::clone(&env.state.sessions);
@@ -326,12 +321,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let record = match outcome {
-            common::MutationOutcome::Confirmed(record) => record,
-            common::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("session authentication requires a confirmed commit")
-            }
-        };
+        let record = crate::test_support::confirmed_for(outcome, "session authentication");
         assert_eq!(record.token_hash, expected_hash);
         assert_eq!(record.user_id, user_id);
 
@@ -427,12 +417,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let raw_token = match outcome {
-            common::MutationOutcome::Confirmed(raw_token) => raw_token,
-            common::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("session fixture setup requires a confirmed commit")
-            }
-        };
+        let raw_token = crate::test_support::confirmed_for(outcome, "session fixture setup");
         let token_hash = token::hash(&raw_token).unwrap();
         let created_at = "2026-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap();
         let last_used_at = "2026-03-04T05:06:07.654321Z".parse::<UtcInstant>().unwrap();
@@ -492,12 +477,7 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            let raw_token = match outcome {
-                common::MutationOutcome::Confirmed(raw_token) => raw_token,
-                common::MutationOutcome::CommitIndeterminate(_) => {
-                    panic!("session fixture setup requires a confirmed commit")
-                }
-            };
+            let raw_token = crate::test_support::confirmed_for(outcome, "session fixture setup");
             let token_hash = token::hash(&raw_token).unwrap();
             crate::with_closeable_pool!(env.base.pool(), pool, {
                 sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")

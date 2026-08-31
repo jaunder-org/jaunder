@@ -356,7 +356,10 @@ Details in the testing section.
   owning scope span records the bounded outcome. SQLite scopes retain
   `BEGIN IMMEDIATE`; PostgreSQL operations retain their required row locks; and
   the post-tag plus media-reconciliation paths retain their ordering,
-  rollback-on-drop, and injected-error behaviour.
+  rollback-on-drop, and injected-error behaviour. Media placement and
+  reclamation use a cross-process, per-content file lock around their short
+  database identity-lock scopes, so no database transaction spans filesystem I/O
+  while failed uploads can still remove only targets they created.
 
 ## Content model
 

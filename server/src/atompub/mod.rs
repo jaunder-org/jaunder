@@ -3,6 +3,7 @@
 
 pub mod mapping;
 pub mod media;
+mod mutation;
 pub mod posts;
 pub mod rsd;
 pub mod service;

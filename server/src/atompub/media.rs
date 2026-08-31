@@ -12,7 +12,6 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use common::media::{self, ContentHash, Filename, MediaRef, MediaSource};
-use common::mutation::MutationOutcome;
 use common::root_relative_url::RootRelativeUrl;
 use common::tagged_url::{self, BaseUrl, EditMediaUriUrl, EditUriUrl};
 use common::username::Username;
@@ -141,12 +140,13 @@ pub async fn collection_post(
         write_scope,
         storage_path,
     );
-    let upload = match manager
-        .upload_bytes(auth_user.user_id, &filename, content_type, &body)
-        .await?
-    {
-        MutationOutcome::Confirmed(upload) => upload,
-        MutationOutcome::CommitIndeterminate(_) => return Err(HandlerError::Invariant),
+    let upload = match super::mutation::confirmed_or_accepted(
+        manager
+            .upload_bytes(auth_user.user_id, &filename, content_type, &body)
+            .await?,
+    ) {
+        Ok(upload) => upload,
+        Err(status) => return Ok(status.into_response()),
     };
 
     let record = media
@@ -289,13 +289,14 @@ pub(super) async fn member_delete(
     )
     .await;
     let manager = MediaManager::new(media, site_config, write_scope, storage_path);
-    let outcome = match manager
-        .delete_media(auth_user.user_id, &media_ref, &instance_id, &evidence, true)
-        .await
-        .map_err(map_delete_error)?
-    {
-        MutationOutcome::Confirmed(outcome) => outcome,
-        MutationOutcome::CommitIndeterminate(_) => return Err(HandlerError::Invariant),
+    let outcome = match super::mutation::confirmed_or_accepted(
+        manager
+            .delete_media(auth_user.user_id, &media_ref, &instance_id, &evidence, true)
+            .await
+            .map_err(map_delete_error)?,
+    ) {
+        Ok(outcome) => outcome,
+        Err(status) => return Ok(status.into_response()),
     };
     if outcome == storage::TryDeleteOutcome::RefusedReferenced {
         return Err(StatusCode::CONFLICT.into());

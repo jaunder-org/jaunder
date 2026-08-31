@@ -141,12 +141,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let code = match outcome {
-            common::MutationOutcome::Confirmed(code) => code,
-            common::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("invite fixture setup requires a confirmed commit")
-            }
-        };
+        let code = crate::test_support::confirmed_for(outcome, "invite fixture setup");
         let invites = env.state.invites.list_invites().await.unwrap();
 
         assert_eq!(invites.len(), 1);

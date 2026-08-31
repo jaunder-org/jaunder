@@ -582,12 +582,7 @@ mod tests {
             })
             .await
             .expect("user fixture setup should succeed");
-        match outcome {
-            common::MutationOutcome::Confirmed(user_id) => user_id,
-            common::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("user fixture setup requires a confirmed commit")
-            }
-        }
+        crate::test_support::confirmed_for(outcome, "user fixture setup")
     }
 
     async fn authenticate(
@@ -606,12 +601,10 @@ mod tests {
                 Box::pin(async move { users.authenticate(transaction, authentication).await })
             })
             .await?;
-        match outcome {
-            common::MutationOutcome::Confirmed(user) => Ok(user),
-            common::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("authentication requires a confirmed commit")
-            }
-        }
+        Ok(crate::test_support::confirmed_for(
+            outcome,
+            "authentication",
+        ))
     }
 
     #[apply(backends)]

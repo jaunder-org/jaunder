@@ -497,12 +497,10 @@ mod tests {
             Result<T, FeedEventError>,
         >,
     ) -> T {
-        match scope.run(callback).await.expect("feed-event write") {
-            common::mutation::MutationOutcome::Confirmed(value) => value,
-            common::mutation::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("feed-event test write acknowledgement was indeterminate")
-            }
-        }
+        crate::test_support::confirmed_for(
+            scope.run(callback).await.expect("feed-event write"),
+            "feed-event test write acknowledgement",
+        )
     }
     async fn enqueue(
         scope: &crate::WriteScope,
@@ -820,12 +818,7 @@ mod tests {
             }),
         )
         .await;
-        let claimed = match claimed.unwrap() {
-            common::mutation::MutationOutcome::Confirmed(claimed) => claimed,
-            common::mutation::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("claim acknowledgement was indeterminate")
-            }
-        };
+        let claimed = crate::test_support::confirmed_for(claimed.unwrap(), "claim acknowledgement");
         crate::helpers::swallowed_test::assert_one_report(
             &trace,
             "storage.feed_events.decode_feed_path",
@@ -1047,12 +1040,7 @@ mod tests {
             }),
         )
         .await;
-        let claimed = match claimed.unwrap() {
-            common::mutation::MutationOutcome::Confirmed(claimed) => claimed,
-            common::mutation::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("claim acknowledgement was indeterminate")
-            }
-        };
+        let claimed = crate::test_support::confirmed_for(claimed.unwrap(), "claim acknowledgement");
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].feed_path, "/feed.rss");
 

@@ -189,11 +189,37 @@ fn pool_like(expression: &syn::Expr) -> bool {
     }
 }
 
-fn direct_transaction_start(expression: &syn::Expr) -> bool {
+fn pool_connection_acquisition(expression: &syn::Expr) -> bool {
+    match expression {
+        syn::Expr::Try(try_) => pool_connection_acquisition(try_.expr.as_ref()),
+        syn::Expr::Await(await_) => pool_connection_acquisition(await_.base.as_ref()),
+        syn::Expr::Paren(paren) => pool_connection_acquisition(paren.expr.as_ref()),
+        syn::Expr::Group(group) => pool_connection_acquisition(group.expr.as_ref()),
+        syn::Expr::MethodCall(call) => {
+            call.method == "acquire" && pool_like(call.receiver.as_ref())
+        }
+        _ => false,
+    }
+}
+
+fn pool_connection(expression: &syn::Expr, pool_connections: &BTreeSet<String>) -> bool {
+    pool_like(expression)
+        || matches!(expression,
+            syn::Expr::Path(path)
+                if path.path.segments.len() == 1
+                    && pool_connections.contains(&path.path.segments[0].ident.to_string())
+        )
+}
+
+fn direct_transaction_start(
+    expression: &syn::Expr,
+    pool_connections: &BTreeSet<String>,
+    database_root: bool,
+) -> bool {
     match expression {
         syn::Expr::MethodCall(call) => {
             matches!(call.method.to_string().as_str(), "begin" | "begin_with")
-                && pool_like(call.receiver.as_ref())
+                && (database_root || pool_connection(call.receiver.as_ref(), pool_connections))
         }
         syn::Expr::Call(call) => {
             matches!(call.func.as_ref(), syn::Expr::Path(path) if path_ends_in(&path.path, "begin") || path_ends_in(&path.path, "begin_with"))
@@ -220,6 +246,7 @@ fn is_admin_transaction_function(path: &str, name: &syn::Ident) -> bool {
 struct BypassVisitor<'a> {
     path: &'a str,
     lines: &'a mut Vec<String>,
+    pool_connections: BTreeSet<String>,
 }
 
 impl<'ast> syn::visit::Visit<'ast> for BypassVisitor<'_> {
@@ -227,18 +254,45 @@ impl<'ast> syn::visit::Visit<'ast> for BypassVisitor<'_> {
         if is_admin_transaction_function(self.path, &function.sig.ident) {
             return;
         }
+        let pool_connections = std::mem::take(&mut self.pool_connections);
         syn::visit::visit_item_fn(self, function);
+        self.pool_connections = pool_connections;
     }
 
     fn visit_impl_item_fn(&mut self, function: &'ast syn::ImplItemFn) {
         if is_admin_transaction_function(self.path, &function.sig.ident) {
             return;
         }
+        let pool_connections = std::mem::take(&mut self.pool_connections);
         syn::visit::visit_impl_item_fn(self, function);
+        self.pool_connections = pool_connections;
+    }
+
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        let pool_connections = self.pool_connections.clone();
+        syn::visit::visit_block(self, block);
+        self.pool_connections = pool_connections;
+    }
+
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        if let syn::Pat::Ident(ident) = &local.pat {
+            let name = ident.ident.to_string();
+            self.pool_connections.remove(&name);
+            if local
+                .init
+                .as_ref()
+                .is_some_and(|init| pool_connection_acquisition(init.expr.as_ref()))
+            {
+                self.pool_connections.insert(name);
+            }
+        }
+        syn::visit::visit_local(self, local);
     }
 
     fn visit_expr(&mut self, expression: &'ast syn::Expr) {
-        if direct_transaction_start(expression) {
+        let database_root =
+            self.path.starts_with("storage/src/") || self.path.starts_with("server/src/");
+        if direct_transaction_start(expression, &self.pool_connections, database_root) {
             self.lines.push(format!(
                 "{}:{}: direct transaction start bypasses WriteScope::run",
                 self.path,
@@ -286,6 +340,7 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
                 &mut BypassVisitor {
                     path,
                     lines: &mut problems,
+                    pool_connections: BTreeSet::new(),
                 },
                 &file,
             );
@@ -521,6 +576,29 @@ mod tests {
         );
         assert!(
             problems(&fixture(&direct))
+                .unwrap()
+                .contains("direct transaction start bypasses WriteScope::run")
+        );
+    }
+
+    #[test]
+    fn acquired_pool_connection_transaction_start_fails_closed() {
+        let acquired = format!(
+            "{} async fn bypass(db: sqlx::PgPool) {{ let mut connection = db.acquire().await?; connection.begin().await?; }}",
+            complete_census()
+        );
+        assert!(
+            problems(&fixture(&acquired))
+                .unwrap()
+                .contains("direct transaction start bypasses WriteScope::run")
+        );
+
+        let begin_with = format!(
+            "{} async fn bypass(db: sqlx::PgPool) {{ let mut connection = db.acquire().await?; connection.begin_with(\"BEGIN\").await?; }}",
+            complete_census()
+        );
+        assert!(
+            problems(&fixture(&begin_with))
                 .unwrap()
                 .contains("direct transaction start bypasses WriteScope::run")
         );

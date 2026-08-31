@@ -192,12 +192,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let raw_token = match outcome {
-            common::MutationOutcome::Confirmed(raw_token) => raw_token,
-            common::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("password-reset fixture setup requires a confirmed commit")
-            }
-        };
+        let raw_token = crate::test_support::confirmed_for(outcome, "password-reset fixture setup");
         let password_resets = Arc::clone(&env.state.password_resets);
         let outcome = env
             .state
@@ -211,12 +206,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let claimed = match outcome {
-            common::MutationOutcome::Confirmed(claimed) => claimed,
-            common::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("password reset requires a confirmed commit")
-            }
-        };
+        let claimed = crate::test_support::confirmed_for(outcome, "password reset");
         assert_eq!(claimed, user_id);
     }
 

@@ -243,12 +243,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let raw_token = match outcome {
-            common::MutationOutcome::Confirmed(raw_token) => raw_token,
-            common::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("email-verification fixture setup requires a confirmed commit")
-            }
-        };
+        let raw_token =
+            crate::test_support::confirmed_for(outcome, "email-verification fixture setup");
 
         let email_verifications = Arc::clone(&env.state.email_verifications);
         let outcome = env
@@ -263,12 +259,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let (claimed_user, claimed_email) = match outcome {
-            common::MutationOutcome::Confirmed(claimed) => claimed,
-            common::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("email verification requires a confirmed commit")
-            }
-        };
+        let (claimed_user, claimed_email) =
+            crate::test_support::confirmed_for(outcome, "email verification");
         assert_eq!(claimed_user, user_id);
         assert_eq!(claimed_email, email);
     }
@@ -295,12 +287,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let raw_token = match outcome {
-            common::MutationOutcome::Confirmed(raw_token) => raw_token,
-            common::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("email-verification fixture setup requires a confirmed commit")
-            }
-        };
+        let raw_token =
+            crate::test_support::confirmed_for(outcome, "email-verification fixture setup");
 
         // Overwrite the `email` column with a value `Email::from_str` rejects,
         // binding it as a raw `&str` so the bad value actually lands in the column.
@@ -403,12 +391,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let raw_token = match outcome {
-            common::MutationOutcome::Confirmed(raw_token) => raw_token,
-            common::MutationOutcome::CommitIndeterminate(_) => {
-                panic!("email-verification fixture setup requires a confirmed commit")
-            }
-        };
+        let raw_token =
+            crate::test_support::confirmed_for(outcome, "email-verification fixture setup");
         env.base.close_pool().await;
 
         let email_verifications = Arc::clone(&env.state.email_verifications);

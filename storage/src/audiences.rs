@@ -424,7 +424,6 @@ where
 mod tests {
     use super::{AudienceError, InvalidAudienceTargets, validate_named_audience_targets};
     use crate::test_support::{Backend, SeedUser, backends};
-    use common::MutationOutcome;
     use common::audience::AudienceName;
     use common::ids::AudienceId;
     use common::test_support::parse_audience_name;
@@ -443,22 +442,19 @@ mod tests {
         let audiences = Arc::clone(&state.audiences);
         let write_scope = state.write_scope.clone();
         let name = name.clone();
-        match write_scope
-            .run(move |transaction| {
-                Box::pin(async move {
-                    audiences
-                        .create_audience(transaction, author_user_id, &name)
-                        .await
+        crate::test_support::confirmed_for(
+            write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        audiences
+                            .create_audience(transaction, author_user_id, &name)
+                            .await
+                    })
                 })
-            })
-            .await
-            .unwrap()
-        {
-            MutationOutcome::Confirmed(id) => id,
-            MutationOutcome::CommitIndeterminate(_) => {
-                panic!("audience fixture setup requires a confirmed commit")
-            }
-        }
+                .await
+                .unwrap(),
+            "audience fixture setup",
+        )
     }
 
     #[apply(backends)]
