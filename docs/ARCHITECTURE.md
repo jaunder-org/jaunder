@@ -339,7 +339,7 @@ Details in the testing section.
 - **Structural write scopes and mutation outcomes.** A factory-minted, sealed,
   backend-erased `WriteScope` is injected separately beside the exact storage
   traits
-  ([structural write scopes and mutation outcomes](adr/drafts/structural-write-scopes-and-mutation-outcomes.md)).
+  ([structural write scopes and mutation outcomes](adr/0164-structural-write-scopes-and-mutation-outcomes.md)).
   Its explicit `run` boundary supplies a sealed mutable `WriteTransaction`
   capability, never storage lookup or arbitrary SQL. The closed audited
   application surface has exactly 48 declarations: Audience (5), Email

@@ -1,6 +1,6 @@
-# ADR-DRAFT: Structural Write Scopes and Mutation Outcomes
+# ADR-0164: Structural Write Scopes and Mutation Outcomes
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-30
 - Issue: [#363](https://github.com/jaunder-org/jaunder/issues/363)
 
@@ -60,7 +60,7 @@ On callback `Err`, the scope rolls back or drops the transaction and returns
 `MutationOutcome::Confirmed`, while any commit error returns
 `MutationOutcome::CommitIndeterminate`, never a rollback-confirmed operation
 failure. The scope records this bounded outcome on the span that owns the
-decision, following [ADR-0147](../0147-decision-path-observability.md).
+decision, following [ADR-0147](0147-decision-path-observability.md).
 
 Server mutation outputs preserve the same outcome algebra: a rollback-confirmed
 `WriteScopeError`, `MutationOutcome::Confirmed`, or
@@ -87,7 +87,7 @@ snapshot ordering, and injected-error behaviour. Every audited application
 mutation uses the same capability; no cutover retains a second mutation path or
 a general SQL executor.
 
-This decision supersedes [ADR-0021](../0021-sqlite-transaction-discipline.md)'s
+This decision supersedes [ADR-0021](0021-sqlite-transaction-discipline.md)'s
 single-statement-autocommit preference for the audited application mutations
 only. Administrative lifecycle operations, including migrations, whole-store
 backup/restore, and PostgreSQL bootstrap, retain their top-level transaction or
