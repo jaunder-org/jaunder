@@ -47,7 +47,7 @@ Out:
     each declared query records success, unavailable, or failure rather than
     treating absence as clean.
 
-- [ ] Task 3: Reconcile candidates and route accepted findings
+- [x] Task 3: Reconcile candidates and route accepted findings
   - Contract: deduplicate lens output by concern; apply every audit question and
     the deletion test; assign each group exactly one terminal disposition:
     accepted, rejected by the deletion test, prior-covered, or low-confidence.
