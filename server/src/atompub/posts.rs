@@ -429,6 +429,23 @@ pub async fn member_get(
         .into_response())
 }
 
+fn member_delete_update_error(error: storage::UpdatePostError) -> HandlerError {
+    HandlerError::from(storage::PerformUpdateError::from(error))
+}
+
+fn member_delete_feed_event_error(error: FeedEventError) -> HandlerError {
+    match error {
+        FeedEventError::Db(error) => HandlerError::from(error),
+    }
+}
+
+fn member_delete_write_scope_error(error: WriteScopeError<HandlerError>) -> HandlerError {
+    match error {
+        WriteScopeError::Operation(error) => error,
+        WriteScopeError::Begin(error) => HandlerError::from(error),
+    }
+}
+
 /// `DELETE /atompub/{username}/posts/{post_id}` — soft-deletes a post.
 ///
 /// # Errors
@@ -462,22 +479,15 @@ pub async fn member_delete(
                 posts
                     .soft_delete_post(transaction, post.post_id, auth_user.user_id)
                     .await
-                    .map_err(|error| {
-                        HandlerError::from(storage::PerformUpdateError::from(error))
-                    })?;
+                    .map_err(member_delete_update_error)?;
                 feed_events
                     .enqueue_many(transaction, &feed_paths)
                     .await
-                    .map_err(|error| match error {
-                        FeedEventError::Db(error) => HandlerError::from(error),
-                    })
+                    .map_err(member_delete_feed_event_error)
             })
         })
         .await
-        .map_err(|error| match error {
-            WriteScopeError::Operation(error) => error,
-            WriteScopeError::Begin(error) => HandlerError::from(error),
-        })?;
+        .map_err(member_delete_write_scope_error)?;
     if let Err(status) = super::mutation::confirmed_or_accepted(outcome) {
         return Ok(status.into_response());
     }
@@ -728,13 +738,82 @@ pub async fn member_put(
 #[cfg(test)]
 mod etag_tests {
     use super::*;
+    use axum::response::IntoResponse;
     use chrono::{TimeZone, Utc};
     use common::ids::{TagId, UserId};
     use common::tag::{Tag, TagLabel};
     use common::test_support::{
         parse_post_body, parse_post_summary, parse_post_title, parse_utc_instant,
     };
+    use std::error::Error;
     use storage::{MockAudienceStorage, PostFormat, PostTag, PublishUpdate};
+
+    #[test]
+    fn member_delete_update_storage_error_is_internal_with_sqlx_source() {
+        let error =
+            member_delete_update_error(storage::UpdatePostError::Internal(sqlx::Error::PoolClosed));
+
+        let HandlerError::Internal(source) = &error else {
+            panic!("storage update errors must map to HandlerError::Internal");
+        };
+        let update = source
+            .downcast_ref::<storage::PerformUpdateError>()
+            .expect("internal source should retain the update error");
+        assert!(matches!(
+            update
+                .source()
+                .and_then(|source| source.downcast_ref::<sqlx::Error>()),
+            Some(sqlx::Error::PoolClosed)
+        ));
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn member_delete_feed_event_db_error_is_internal_with_sqlx_source() {
+        let error = member_delete_feed_event_error(FeedEventError::Db(sqlx::Error::RowNotFound));
+
+        let HandlerError::Internal(source) = &error else {
+            panic!("feed event database errors must map to HandlerError::Internal");
+        };
+        assert!(matches!(
+            source.downcast_ref::<sqlx::Error>(),
+            Some(sqlx::Error::RowNotFound)
+        ));
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn member_delete_write_scope_operation_preserves_handler_error() {
+        let error =
+            member_delete_write_scope_error(WriteScopeError::Operation(HandlerError::NotFound));
+
+        assert!(matches!(&error, HandlerError::NotFound));
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn member_delete_write_scope_begin_is_internal_with_sqlx_source() {
+        let error =
+            member_delete_write_scope_error(WriteScopeError::Begin(sqlx::Error::PoolTimedOut));
+
+        let HandlerError::Internal(source) = &error else {
+            panic!("write scope begin errors must map to HandlerError::Internal");
+        };
+        assert!(matches!(
+            source.downcast_ref::<sqlx::Error>(),
+            Some(sqlx::Error::PoolTimedOut)
+        ));
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
 
     fn mk_tag(post_id: PostId, tag_id: TagId, slug: Tag, display: TagLabel) -> PostTag {
         PostTag {

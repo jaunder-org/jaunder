@@ -135,10 +135,7 @@ pub async fn regenerate_feed(
             Box::pin(async move { feed_cache.upsert(transaction, row_for_upsert).await })
         })
         .await
-        .map_err(|error| match error {
-            WriteScopeError::Operation(error) => storage_err(error),
-            WriteScopeError::Begin(error) => storage_err(error),
-        })?;
+        .map_err(regenerate_write_scope_error)?;
     if matches!(
         outcome,
         common::mutation::MutationOutcome::CommitIndeterminate(())
@@ -151,6 +148,15 @@ pub async fn regenerate_feed(
 
 fn storage_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> RegenerateError {
     RegenerateError::Storage(Box::new(e))
+}
+
+fn regenerate_write_scope_error(
+    error: WriteScopeError<storage::FeedCacheError>,
+) -> RegenerateError {
+    match error {
+        WriteScopeError::Operation(error) => storage_err(error),
+        WriteScopeError::Begin(error) => storage_err(error),
+    }
 }
 
 /// Builds the feed's items from the records the listing query already returned.
@@ -203,6 +209,41 @@ mod tests {
         let err = storage_err(sqlx::Error::RowNotFound);
         let source = err.source().expect("Storage should expose a source");
         assert!(source.downcast_ref::<sqlx::Error>().is_some());
+    }
+
+    #[test]
+    fn regenerate_write_scope_operation_preserves_cache_sqlx_source() {
+        use std::error::Error;
+
+        let error = regenerate_write_scope_error(WriteScopeError::Operation(
+            storage::FeedCacheError::Db(sqlx::Error::RowNotFound),
+        ));
+
+        let RegenerateError::Storage(source) = &error else {
+            panic!("write operation errors must map to RegenerateError::Storage");
+        };
+        let cache = source
+            .downcast_ref::<storage::FeedCacheError>()
+            .expect("storage source should retain the cache error");
+        assert!(matches!(
+            cache
+                .source()
+                .and_then(|source| source.downcast_ref::<sqlx::Error>()),
+            Some(sqlx::Error::RowNotFound)
+        ));
+    }
+
+    #[test]
+    fn regenerate_write_scope_begin_preserves_sqlx_source() {
+        let error = regenerate_write_scope_error(WriteScopeError::Begin(sqlx::Error::PoolTimedOut));
+
+        let RegenerateError::Storage(source) = &error else {
+            panic!("write scope begin errors must map to RegenerateError::Storage");
+        };
+        assert!(matches!(
+            source.downcast_ref::<sqlx::Error>(),
+            Some(sqlx::Error::PoolTimedOut)
+        ));
     }
 
     // guard:no-backend — mock store

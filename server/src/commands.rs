@@ -284,6 +284,21 @@ pub async fn cmd_create_pg_db(
     Ok(())
 }
 
+/// Converts a mutation outcome into its confirmed value for a CLI operation.
+///
+/// A lost commit acknowledgement leaves the operator unable to safely retry.
+fn require_confirmed_mutation<T>(
+    outcome: common::mutation::MutationOutcome<T>,
+    operation: &str,
+) -> anyhow::Result<T> {
+    match outcome {
+        common::mutation::MutationOutcome::Confirmed(value) => Ok(value),
+        common::mutation::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
+            "{operation} commit acknowledgement was indeterminate"
+        )),
+    }
+}
+
 async fn create_command_user(
     write_scope: &storage::WriteScope,
     users: Arc<dyn storage::UserStorage>,
@@ -312,12 +327,7 @@ async fn create_command_user(
         .await
         .map_err(anyhow::Error::from)
         .context("failed to create user")?;
-    match outcome {
-        common::mutation::MutationOutcome::Confirmed(user_id) => Ok(user_id),
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
-            "user creation commit acknowledgement was indeterminate"
-        )),
-    }
+    require_confirmed_mutation(outcome, "user creation")
 }
 
 /// Creates a new user in the database.
@@ -403,12 +413,7 @@ pub async fn app_password_create(
         .await
         .map_err(anyhow::Error::from)
         .context("failed to create app password")?;
-    match outcome {
-        common::mutation::MutationOutcome::Confirmed(token) => Ok(token),
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
-            "app password commit acknowledgement was indeterminate"
-        )),
-    }
+    require_confirmed_mutation(outcome, "app password")
 }
 
 /// CLI wrapper: opens the database, mints an app password, prints it to stdout.
@@ -467,14 +472,7 @@ pub async fn cmd_user_invite(
         .await
         .map_err(anyhow::Error::from)
         .context("failed to create invite")?;
-    let code = match outcome {
-        common::mutation::MutationOutcome::Confirmed(code) => code,
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
-            return Err(anyhow::anyhow!(
-                "invite creation commit acknowledgement was indeterminate"
-            ));
-        }
-    };
+    let code = require_confirmed_mutation(outcome, "invite creation")?;
     metrics::invite(host::metrics::InviteEvent::Created);
     // Deliberate operator-facing reveal via `AsRef` (InviteCode has no Display/serde). With a
     // configured base URL, print a ready-to-send invitation link; otherwise the bare code.
@@ -1122,14 +1120,7 @@ async fn cmd_site_config_set(
             Box::pin(async move { site_config.set(transaction, key, &value_for_set).await })
         })
         .await?;
-    if matches!(
-        outcome,
-        common::mutation::MutationOutcome::CommitIndeterminate(())
-    ) {
-        return Err(anyhow::anyhow!(
-            "site_config set commit acknowledgement was indeterminate"
-        ));
-    }
+    require_confirmed_mutation(outcome, "site_config set")?;
     eprintln!("set site_config {key} = {value}");
     Ok(())
 }
@@ -1167,14 +1158,7 @@ async fn cmd_site_config_unset(storage: &StorageArgs, key: SiteConfigKey) -> any
         .write_scope
         .run(move |transaction| Box::pin(async move { site_config.delete(transaction, key).await }))
         .await?;
-    let removed = match outcome {
-        common::mutation::MutationOutcome::Confirmed(removed) => removed,
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
-            return Err(anyhow::anyhow!(
-                "site_config unset commit acknowledgement was indeterminate"
-            ));
-        }
-    };
+    let removed = require_confirmed_mutation(outcome, "site_config unset")?;
     if removed {
         eprintln!("unset site_config {key}");
     } else {
@@ -1827,6 +1811,31 @@ mod tests {
             "site.base_url=https://example.com/\nsite.title=My Site\n"
         );
         assert_eq!(format_entries(&[]), "");
+    }
+
+    #[test]
+    fn confirmed_mutation_returns_its_value() {
+        let value = require_confirmed_mutation(
+            common::mutation::MutationOutcome::Confirmed(42_u8),
+            "unused operation",
+        )
+        .expect("confirmed mutation");
+
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn indeterminate_mutation_reports_the_operation() {
+        let error = require_confirmed_mutation(
+            common::mutation::MutationOutcome::CommitIndeterminate(()),
+            "user creation",
+        )
+        .expect_err("indeterminate mutation");
+
+        assert_eq!(
+            error.to_string(),
+            "user creation commit acknowledgement was indeterminate"
+        );
     }
 
     /// A7: a known key with an invalid value is rejected before the write.
