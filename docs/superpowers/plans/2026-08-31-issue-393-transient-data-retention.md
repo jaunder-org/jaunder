@@ -98,7 +98,7 @@ Out:
     batches, not merely that a fake store receives repeated calls. Server
     startup remains successful after database maintenance errors.
 
-- [ ] Task 7: Reconcile the delivered architecture and full contract
+- [x] Task 7: Reconcile the delivered architecture and full contract
   - Contract: the proposed ADR, `docs/ARCHITECTURE.md`, issue #393, and code
     state agree; no generic retention surface, configuration key, or
     durable-data purge entered the diff. Every exported-symbol change has all
