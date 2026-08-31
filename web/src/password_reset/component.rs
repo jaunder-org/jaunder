@@ -5,7 +5,7 @@ use super::{Confirm, ConfirmPasswordResetRequest, Request};
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
 use crate::topbar::Topbar;
-use common::{MutationOutcome, password::ProfferedPassword, token::RawToken, username::Username};
+use common::{MutationOutcome, password::PasswordShape, token::RawToken, username::Username};
 use leptos::prelude::*;
 use leptos_router::components::Redirect;
 
@@ -80,11 +80,11 @@ pub fn ResetPasswordPage() -> impl IntoView {
         .get("token")
         .and_then(|value| value.parse::<RawToken>().ok());
     let confirm_action = ServerAction::<Confirm>::new();
-    let new_password = Field::<ProfferedPassword>::new();
+    let new_password = Field::<PasswordShape>::new();
     let (disabled, submit) = forms::server_action_submit(confirm_action, move || {
         token
             .clone()
-            .zip(new_password.parsed())
+            .zip(new_password.value.get().parse().ok())
             .map(|(token, new_password)| Confirm {
                 request: ConfirmPasswordResetRequest {
                     token,
@@ -98,7 +98,7 @@ pub fn ResetPasswordPage() -> impl IntoView {
         <div class="j-scroll">
             <div class="j-page">
                 <form on:submit=submit>
-                    <ValidatedInput<ProfferedPassword>
+                    <ValidatedInput<PasswordShape>
                         label="New password"
                         name="new_password"
                         input_type="password"

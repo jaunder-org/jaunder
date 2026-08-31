@@ -8,7 +8,9 @@ use crate::auth::{self, SessionUser};
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
 use crate::topbar::Topbar;
-use common::{MutationOutcome, registration::RegistrationPolicy, username::Username};
+use common::{
+    MutationOutcome, password::PasswordShape, registration::RegistrationPolicy, username::Username,
+};
 use leptos::prelude::*;
 
 /// Guidance shown on `/register` in invite-only mode when the URL carries no invite
@@ -126,7 +128,7 @@ fn RegistrationForm(
     show_invite_note: bool,
 ) -> impl IntoView {
     let username = Field::<Username>::new();
-    let password = Field::<String>::new();
+    let password = Field::<PasswordShape>::new();
     let (disabled, submit) = forms::server_action_submit(action, move || {
         username
             .parsed()
@@ -153,7 +155,7 @@ fn RegistrationForm(
                     field=username
                     transform=str::to_lowercase
                 />
-                <ValidatedInput<String>
+                <ValidatedInput<PasswordShape>
                     label="Password"
                     name="password"
                     input_type="password"

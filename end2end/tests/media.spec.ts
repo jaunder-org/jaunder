@@ -1,12 +1,14 @@
 import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 import {
   BASE_URL,
+  confirmedMutation,
   goto,
   signInAsNewUser,
   signInAsNewUserRecord,
   click,
   waitForSelector,
   failServerFn,
+  type MutationOutcome,
   stallServerFn,
 } from "./helpers";
 import { createPostViaApi } from "./posts";
@@ -30,15 +32,18 @@ async function uploadMedia(
     },
   });
   expect(response.status()).toBe(200);
-  return await response.json();
+  return confirmedMutation(
+    (await response.json()) as MutationOutcome<UploadedMedia>,
+    "media::upload",
+  );
 }
 
 test.describe("Media upload and serving", () => {
   test("authenticated user can upload and access media", async ({ page }) => {
     await signInAsNewUser(page);
 
-    // Drive the `media::upload` server fn directly — session cookie is in page's
-    // cookie jar. The fn returns 200 with the bare `UploadedMedia` JSON.
+    // Drive `media::upload` directly — the session cookie is in the page's
+    // cookie jar and the helper unwraps its confirmed mutation payload.
     const fileContent = Buffer.from("fake image content for testing");
     const json = await uploadMedia(page, "test-image.jpg", fileContent);
     expect(json.filename).toBe("test-image.jpg");

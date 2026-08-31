@@ -7,7 +7,7 @@ use super::{Login, Logout, SessionUser};
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
 use crate::topbar::Topbar;
-use common::{MutationOutcome, username::Username};
+use common::{MutationOutcome, password::PasswordShape, username::Username};
 use leptos::prelude::*;
 
 /// Login page.
@@ -59,12 +59,12 @@ pub fn LoginPage() -> impl IntoView {
     }
 }
 
-/// Native login form: dispatches the generated flat server-function input. The
-/// server boundary validates and converts the password secret.
+/// Native login form: validates typed domain values before dispatching the
+/// generated flat server-function input.
 #[component]
 fn LoginForm(action: ServerAction<Login>) -> impl IntoView {
     let username = Field::<Username>::new();
-    let password = Field::<String>::new();
+    let password = Field::<PasswordShape>::new();
     let (disabled, submit) = forms::server_action_submit(action, move || {
         username
             .parsed()
@@ -89,7 +89,7 @@ fn LoginForm(action: ServerAction<Login>) -> impl IntoView {
                     field=username
                     transform=str::to_lowercase
                 />
-                <ValidatedInput<String>
+                <ValidatedInput<PasswordShape>
                     label="Password"
                     name="password"
                     input_type="password"

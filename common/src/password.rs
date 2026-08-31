@@ -36,6 +36,22 @@ pub fn validate_password_shape(s: &str) -> Result<(), InvalidPassword> {
     Ok(())
 }
 
+/// Client-side proof that a password string satisfies the shared input shape.
+///
+/// This zero-sized parser validates form state without retaining the submitted
+/// value in that validation state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PasswordShape;
+
+impl FromStr for PasswordShape {
+    type Err = InvalidPassword;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        validate_password_shape(s)?;
+        Ok(Self)
+    }
+}
+
 /// A raw plaintext password as **submitted by a client** during registration,
 /// login, or password-reset confirmation.
 ///
@@ -60,6 +76,15 @@ impl FromStr for ProfferedPassword {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn password_shape_uses_the_shared_bounds_without_retaining_input() {
+        assert!(matches!(
+            "longenough".parse::<PasswordShape>(),
+            Ok(PasswordShape)
+        ));
+        assert!("short".parse::<PasswordShape>().is_err());
+    }
 
     #[test]
     fn proffered_password_accepts_inclusive_unicode_scalar_bounds() {

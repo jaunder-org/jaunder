@@ -78,6 +78,16 @@ import {
 import { SEL } from "./selectors";
 
 export { waitForMount } from "./mount";
+export type MutationOutcome<T> = { Confirmed: T } | { CommitIndeterminate: T };
+
+/** Returns a confirmed mutation payload; ordinary e2e writes must be acknowledged. */
+export function confirmedMutation<T>(
+  outcome: MutationOutcome<T>,
+  context: string,
+): T {
+  if ("Confirmed" in outcome) return outcome.Confirmed;
+  throw new Error(`${context} commit acknowledgement was indeterminate`);
+}
 
 // The server's base URL. `JAUNDER_E2E_BASE_URL` lets the harness point the suite
 // at an ephemeral-port server (the host e2e loop feeds its discovered
