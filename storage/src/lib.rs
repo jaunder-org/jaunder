@@ -67,7 +67,7 @@ pub use instance_identity::*;
 pub use invites::*;
 pub use media::*;
 pub use media_content_locks::MediaContentLocks;
-pub use media_manager::{MediaError, MediaManager};
+pub use media_manager::{MediaError, MediaManager, MediaTemporaryDirectoryError};
 pub use media_ownership::*;
 pub use password::*;
 pub use post_service::*;

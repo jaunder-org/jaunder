@@ -44,6 +44,31 @@ pub enum MediaError {
     Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
+/// Failure to establish the clean temporary upload directory required at startup.
+#[derive(Debug, Error)]
+#[error(
+    "failed {operation} media temporary directory {}: {source}",
+    path.display()
+)]
+pub struct MediaTemporaryDirectoryError {
+    /// The filesystem operation that failed.
+    pub operation: &'static str,
+    /// The temporary directory that could not be prepared.
+    pub path: PathBuf,
+    #[source]
+    source: io::Error,
+}
+
+impl MediaTemporaryDirectoryError {
+    fn new(operation: &'static str, path: PathBuf, source: io::Error) -> Self {
+        Self {
+            operation,
+            path,
+            source,
+        }
+    }
+}
+
 // `UploadedMedia` is defined in `common::media`, not here — it is the `#[server]` fn's
 // return type, which must be nameable on the wasm client build where `storage` is not
 // compiled (`storage` is a `server`-gated `web` dep). `common` is ungated and reachable
@@ -100,6 +125,34 @@ impl MediaManager {
             storage_path: Arc::clone(content_locks.storage_path()),
             content_locks,
         }
+    }
+
+    /// Removes crash-orphaned upload artifacts and recreates `media/tmp` empty.
+    ///
+    /// This is deliberately confined to the transient directory. `remove_dir_all`
+    /// removes a symlink itself rather than following it, so finalized media paths
+    /// cannot be reached through a stale temporary-directory entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when removing stale artifacts or creating the usable
+    /// replacement directory fails.
+    pub async fn prepare_temporary_upload_directory(
+        storage_path: &Path,
+    ) -> Result<(), MediaTemporaryDirectoryError> {
+        let tmp_dir = storage_path.join("media").join("tmp");
+        match fs::remove_dir_all(&tmp_dir).await {
+            Ok(()) => {}
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(MediaTemporaryDirectoryError::new(
+                    "removing", tmp_dir, source,
+                ));
+            }
+        }
+        fs::create_dir_all(&tmp_dir)
+            .await
+            .map_err(|source| MediaTemporaryDirectoryError::new("creating", tmp_dir, source))
     }
 
     /// Streams a multipart upload to a content-addressed, dedup'd path and records
@@ -722,6 +775,139 @@ mod tests {
             &media.sha256,
             &media.filename,
         ))
+    }
+
+    // guard:no-backend — filesystem-only temporary upload cleanup.
+    #[tokio::test]
+    async fn prepare_temporary_upload_directory_creates_an_absent_directory() {
+        let temp = TempDir::new().expect("temp dir");
+        let tmp_dir = temp.path().join("media").join("tmp");
+
+        MediaManager::prepare_temporary_upload_directory(temp.path())
+            .await
+            .expect("create absent temporary directory");
+
+        assert!(
+            tmp_dir.is_dir(),
+            "temporary upload directory must be created"
+        );
+        assert!(
+            std::fs::read_dir(tmp_dir)
+                .expect("read temporary directory")
+                .next()
+                .is_none(),
+            "new temporary upload directory must be empty"
+        );
+    }
+
+    // guard:no-backend — filesystem-only temporary upload cleanup.
+    #[tokio::test]
+    async fn prepare_temporary_upload_directory_retains_an_empty_directory() {
+        let temp = TempDir::new().expect("temp dir");
+        let tmp_dir = temp.path().join("media").join("tmp");
+        fs::create_dir_all(&tmp_dir)
+            .await
+            .expect("create temporary directory");
+
+        MediaManager::prepare_temporary_upload_directory(temp.path())
+            .await
+            .expect("refresh empty temporary directory");
+
+        assert!(
+            tmp_dir.is_dir(),
+            "temporary upload directory must remain usable"
+        );
+        assert!(
+            std::fs::read_dir(tmp_dir)
+                .expect("read temporary directory")
+                .next()
+                .is_none(),
+            "temporary upload directory must remain empty"
+        );
+    }
+
+    // guard:no-backend — filesystem-only temporary upload cleanup.
+    #[tokio::test]
+    async fn prepare_temporary_upload_directory_removes_populated_artifacts_only() {
+        let temp = TempDir::new().expect("temp dir");
+        let tmp_dir = temp.path().join("media").join("tmp");
+        let finalized = temp.path().join("media").join("upload").join("finalized");
+        fs::create_dir_all(&tmp_dir)
+            .await
+            .expect("create temporary directory");
+        fs::write(tmp_dir.join("stale-upload"), b"stale")
+            .await
+            .expect("write stale artifact");
+        fs::create_dir_all(finalized.parent().expect("finalized parent"))
+            .await
+            .expect("create finalized directory");
+        fs::write(&finalized, b"durable")
+            .await
+            .expect("write finalized media");
+
+        MediaManager::prepare_temporary_upload_directory(temp.path())
+            .await
+            .expect("clear temporary artifacts");
+
+        assert!(
+            std::fs::read_dir(&tmp_dir)
+                .expect("read temporary directory")
+                .next()
+                .is_none(),
+            "temporary artifacts must be removed"
+        );
+        assert_eq!(
+            fs::read(finalized).await.expect("read finalized media"),
+            b"durable",
+            "cleanup must not reach finalized media"
+        );
+    }
+
+    // guard:no-backend — filesystem-only temporary upload cleanup.
+    #[tokio::test]
+    async fn prepare_temporary_upload_directory_removes_nested_artifacts() {
+        let temp = TempDir::new().expect("temp dir");
+        let tmp_dir = temp.path().join("media").join("tmp");
+        let nested = tmp_dir.join("interrupted").join("stream").join("upload");
+        fs::create_dir_all(nested.parent().expect("nested parent"))
+            .await
+            .expect("create nested temporary directory");
+        fs::write(&nested, b"stale")
+            .await
+            .expect("write nested temporary artifact");
+
+        MediaManager::prepare_temporary_upload_directory(temp.path())
+            .await
+            .expect("clear nested temporary artifacts");
+
+        assert!(
+            std::fs::read_dir(tmp_dir)
+                .expect("read temporary directory")
+                .next()
+                .is_none(),
+            "nested temporary artifacts must be removed"
+        );
+    }
+
+    // guard:no-backend — filesystem-only temporary upload cleanup.
+    #[tokio::test]
+    async fn prepare_temporary_upload_directory_returns_typed_cleanup_failure() {
+        let temp = TempDir::new().expect("temp dir");
+        let tmp_dir = temp.path().join("media").join("tmp");
+        fs::create_dir_all(tmp_dir.parent().expect("temporary parent"))
+            .await
+            .expect("create media directory");
+        fs::write(&tmp_dir, b"not a directory")
+            .await
+            .expect("block temporary directory removal");
+
+        let error = MediaManager::prepare_temporary_upload_directory(temp.path())
+            .await
+            .expect_err("non-directory temporary path must fail preparation");
+
+        assert_eq!(error.operation, "removing");
+        assert_eq!(error.path, tmp_dir);
+        assert_eq!(error.source.kind(), io::ErrorKind::NotADirectory);
     }
 
     #[test]

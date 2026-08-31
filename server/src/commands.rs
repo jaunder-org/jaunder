@@ -878,8 +878,9 @@ async fn prepare_saturation_metrics(
 ///
 /// # Errors
 ///
-/// Returns an error if the database cannot be opened/initialized, a worker fails
-/// to start, or the listener cannot bind.
+/// Returns an error if the runtime mutex refuses startup, the temporary upload
+/// directory cannot be prepared, the database cannot be opened/initialized, a
+/// worker fails to start, or the listener cannot bind.
 pub async fn prepare_server(
     storage: &StorageArgs,
     bind: SocketAddr,
@@ -904,6 +905,11 @@ pub async fn prepare_server(
         ),
         runtime_file::StartupCheck::Stale | runtime_file::StartupCheck::Proceed => {}
     }
+    // The mutex above proves no valid upload can be active. Establish a clean
+    // transient area before any upload-capable server state is prepared.
+    storage::MediaManager::prepare_temporary_upload_directory(&storage.storage_path)
+        .await
+        .context("failed to prepare media temporary upload directory")?;
     let runtime = storage_runtime_config(&storage.db)?;
     let StartupDatabase {
         state: db,
@@ -2158,6 +2164,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prepare_server_cleans_temporary_uploads_before_returning_ready() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let tmp_dir = temp.path().join("media").join("tmp");
+        std::fs::create_dir_all(tmp_dir.join("interrupted").join("upload"))
+            .expect("create stale temporary directory");
+        std::fs::write(
+            tmp_dir.join("interrupted").join("upload").join("bytes"),
+            b"stale",
+        )
+        .expect("write stale temporary upload");
+
+        let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let telemetry = test_telemetry(None);
+        let prepared = prepare_server(&storage, bind, false, None, &telemetry, None)
+            .await
+            .expect("prepare server after temporary cleanup");
+
+        assert!(
+            std::fs::read_dir(&tmp_dir)
+                .expect("read cleaned temporary directory")
+                .next()
+                .is_none(),
+            "uploads may be accepted only after stale temporary artifacts are removed"
+        );
+        drop(prepared);
+    }
+
+    #[tokio::test]
+    async fn prepare_server_surfaces_temporary_cleanup_failure_as_fatal() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let tmp_dir = temp.path().join("media").join("tmp");
+        std::fs::create_dir_all(tmp_dir.parent().expect("temporary parent"))
+            .expect("create media directory");
+        std::fs::write(&tmp_dir, b"not a directory").expect("block temporary cleanup");
+
+        let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let telemetry = test_telemetry(None);
+        let error = prepare_server(&storage, bind, false, None, &telemetry, None)
+            .await
+            .err()
+            .expect("temporary cleanup failure must stop startup");
+
+        assert_eq!(
+            error.to_string(),
+            "failed to prepare media temporary upload directory"
+        );
+        assert!(
+            error.chain().any(|source| source
+                .downcast_ref::<storage::MediaTemporaryDirectoryError>()
+                .is_some()),
+            "fatal startup error must retain the typed cleanup source: {error:#}"
+        );
+    }
+
+    #[tokio::test]
     async fn prepare_server_refuses_on_live_holder_before_db_open() {
         // A planted runtime.json naming a live writer (our own pid + real
         // start-time) must make prepare_server refuse *before* opening/creating
@@ -2166,6 +2235,10 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         let db_path = temp.path().join("jaunder.db");
         let storage = sqlite_storage_args(&temp);
+        let tmp_dir = temp.path().join("media").join("tmp");
+        std::fs::create_dir_all(&tmp_dir).expect("create temporary directory");
+        let stale_upload = tmp_dir.join("stale-upload");
+        std::fs::write(&stale_upload, b"stale").expect("write stale upload");
         let start = runtime_file::require_start_time_at(std::path::Path::new("/proc/self/stat"))
             .expect("read own start-time");
         std::fs::write(
@@ -2192,6 +2265,10 @@ mod tests {
         assert!(
             !db_path.exists(),
             "must refuse before creating the database"
+        );
+        assert!(
+            stale_upload.exists(),
+            "a live-instance refusal must occur before temporary cleanup"
         );
     }
 
