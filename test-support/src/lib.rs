@@ -44,6 +44,21 @@ pub fn seed_slug(prefix: &str, i: usize) -> String {
     format!("{base}-{i}")
 }
 
+/// Extracts the callback value only when its enclosing write received a commit
+/// acknowledgement. Fixture writers cannot safely continue after an
+/// acknowledgement loss because they need a definitive identifier or token.
+fn confirmed_fixture_outcome<T>(
+    outcome: common::MutationOutcome<T>,
+    operation: impl std::fmt::Display,
+) -> anyhow::Result<T> {
+    match outcome {
+        common::MutationOutcome::Confirmed(value) => Ok(value),
+        common::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
+            "{operation} commit acknowledgement was indeterminate"
+        )),
+    }
+}
+
 /// Seed `count` posts for `username` through the shared `seed_post_input`
 /// recipe, written in one batched transaction — the same `create_post` write
 /// path the server runs, so audience rows, rendered HTML, and both SQL dialects
@@ -96,12 +111,7 @@ pub async fn seed_posts_for_user(
         })
         .await
         .map_err(|error| anyhow::anyhow!("batch seed of {count} posts failed: {error}"))?;
-    match outcome {
-        common::MutationOutcome::Confirmed(post_ids) => Ok(post_ids),
-        common::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
-            "batch seed of {count} posts commit acknowledgement was indeterminate"
-        )),
-    }
+    confirmed_fixture_outcome(outcome, format_args!("batch seed of {count} posts"))
 }
 
 /// Create a fixture user through the real `UserStorage::create_user` path — the
@@ -150,12 +160,7 @@ pub async fn create_user(
         })
         .await
         .map_err(|error| anyhow::anyhow!("fixture user creation failed: {error}"))?;
-    match outcome {
-        common::mutation::MutationOutcome::Confirmed(user_id) => Ok(user_id),
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
-            "fixture user creation commit acknowledgement was indeterminate"
-        )),
-    }
+    confirmed_fixture_outcome(outcome, "fixture user creation")
 }
 
 /// Reset the mail-capture file: delete `path` if it exists. A missing file is
@@ -216,14 +221,7 @@ async fn session_record(
         })
         .await
         .map_err(|error| anyhow::anyhow!("fixture session creation failed: {error}"))?;
-    let token = match outcome {
-        common::mutation::MutationOutcome::Confirmed(token) => token,
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
-            return Err(anyhow::anyhow!(
-                "fixture session creation commit acknowledgement was indeterminate"
-            ));
-        }
-    };
+    let token = confirmed_fixture_outcome(outcome, "fixture session creation")?;
     Ok(SeedRecord {
         username: username.to_string(),
         user_id: i64::from(user_id),
@@ -302,6 +300,29 @@ mod content_tests {
     fn seed_slug_is_slug_safe() {
         assert_eq!(seed_slug("Timeline Post", 0), "timeline-post-0");
         assert_eq!(seed_slug("Home Feed Mine", 12), "home-feed-mine-12");
+    }
+
+    #[test]
+    fn fixture_outcome_returns_a_confirmed_value() {
+        assert_eq!(
+            confirmed_fixture_outcome(common::MutationOutcome::Confirmed(42), "fixture operation")
+                .expect("confirmed outcome"),
+            42
+        );
+    }
+
+    #[test]
+    fn fixture_outcome_rejects_an_indeterminate_commit_with_the_operation_label() {
+        let error = confirmed_fixture_outcome(
+            common::MutationOutcome::CommitIndeterminate(()),
+            "fixture operation",
+        )
+        .expect_err("indeterminate outcome");
+
+        assert_eq!(
+            error.to_string(),
+            "fixture operation commit acknowledgement was indeterminate"
+        );
     }
 }
 
@@ -437,12 +458,7 @@ mod seed_session_tests {
             })
             .await
             .map_err(|error| anyhow::anyhow!("fixture session authentication failed: {error}"))?;
-        match outcome {
-            common::mutation::MutationOutcome::Confirmed(session) => Ok(session),
-            common::mutation::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
-                "fixture session authentication commit acknowledgement was indeterminate"
-            )),
-        }
+        confirmed_fixture_outcome(outcome, "fixture session authentication")
     }
 
     #[tokio::test]

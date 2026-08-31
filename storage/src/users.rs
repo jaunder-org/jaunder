@@ -855,7 +855,9 @@ mod tests {
         )
         .await;
         let Err(crate::WriteScopeError::Operation(UserAuthError::Internal(source))) = result else {
-            panic!("expected authentication preparation to fail against the closed pool");
+            unreachable!(
+                "closed-pool authentication preparation returns an internal operation error"
+            );
         };
         assert!(
             matches!(
@@ -1036,7 +1038,7 @@ mod tests {
 
         let error = result.unwrap_err();
         let UserAuthError::Internal(source) = &error else {
-            panic!("expected internal authentication failure");
+            unreachable!("forced verification failure is preserved as an internal error");
         };
         let io_error = source
             .downcast_ref::<std::io::Error>()
@@ -1050,7 +1052,7 @@ mod tests {
             host::password::PasswordError::VerificationFailed(expected),
         ) = (password_error, &expected)
         else {
-            panic!("expected typed verification failures");
+            unreachable!("forced verification failures retain their typed variant");
         };
 
         assert_eq!(actual, expected);
@@ -1101,7 +1103,7 @@ mod tests {
     fn user_auth_connection_error_preserves_sqlx_source() {
         let error = map_user_auth_connection_error(sqlx::Error::PoolClosed);
         let UserAuthError::Internal(source) = error else {
-            panic!("connection failure must map to an internal authentication error");
+            unreachable!("connection errors map to internal authentication errors");
         };
         assert!(matches!(
             source.downcast_ref::<sqlx::Error>(),

@@ -548,11 +548,9 @@ impl MediaManager {
                     })
                 })
                 .await;
-            let reclaim = match Self::reclaimable_from_scope(reclaimability) {
-                Ok(true) => Self::remove_media_file(self.storage_path.as_ref(), media).await,
-                Ok(false) => Ok(()),
-                Err(error) => Err(error),
-            };
+            let reclaim =
+                Self::reclaim_file_after_scope(self.storage_path.as_ref(), media, reclaimability)
+                    .await;
             return Ok(Self::finish_reclaim(outcome, reclaim));
         }
         Ok(outcome)
@@ -565,6 +563,18 @@ impl MediaManager {
             Ok(MutationOutcome::Confirmed(reclaimable)) => Ok(reclaimable),
             Ok(MutationOutcome::CommitIndeterminate(_)) => Ok(false),
             Err(error) => Err(Self::scope_error(error)),
+        }
+    }
+
+    async fn reclaim_file_after_scope(
+        storage_path: &Path,
+        media: &MediaRef,
+        reclaimability: Result<MutationOutcome<bool>, WriteScopeError<anyhow::Error>>,
+    ) -> anyhow::Result<()> {
+        if Self::reclaimable_from_scope(reclaimability)? {
+            Self::remove_media_file(storage_path, media).await
+        } else {
+            Ok(())
         }
     }
 
@@ -770,22 +780,43 @@ mod tests {
         assert!(ByteSize::try_from(-1).is_err());
     }
 
-    #[test]
-    fn reclaimability_scope_begin_failure_maps_to_typed_internal_error() {
-        let error = MediaManager::reclaimable_from_scope(Err(WriteScopeError::Begin(
-            sqlx::Error::PoolClosed,
-        )))
-        .expect_err("scope begin failure must be returned");
-        let media_error = error
-            .downcast_ref::<MediaError>()
-            .expect("scope begin failure must map to MediaError");
-        let MediaError::Internal(source) = media_error else {
-            panic!("scope begin failure must map to an internal error");
+    // guard:no-backend — exercises the pure reclaim mapper before filesystem work
+    #[tokio::test]
+    async fn reclaim_file_after_scope_returns_scope_begin_failure() {
+        let temp = TempDir::new().unwrap();
+        let media = MediaRef {
+            source: MediaSource::Upload,
+            sha256: parse_content_hash(
+                "deadbeef00000000000000000000000000000000000000000000000000000000",
+            ),
+            filename: parse_filename("unreclaimed.png"),
         };
+
+        let error = MediaManager::reclaim_file_after_scope(
+            temp.path(),
+            &media,
+            Err(WriteScopeError::Begin(sqlx::Error::PoolClosed)),
+        )
+        .await
+        .expect_err("scope begin failure must be returned");
+
         assert!(matches!(
-            source.downcast_ref::<sqlx::Error>(),
+            error
+                .downcast_ref::<MediaError>()
+                .and_then(|error| match error {
+                    MediaError::Internal(source) => source.downcast_ref::<sqlx::Error>(),
+                    _ => None,
+                }),
             Some(sqlx::Error::PoolClosed)
         ));
+    }
+
+    #[test]
+    fn indeterminate_reclaimability_does_not_reclaim() {
+        assert!(
+            !MediaManager::reclaimable_from_scope(Ok(MutationOutcome::CommitIndeterminate(true)))
+                .expect("indeterminate scope is conservatively non-reclaimable")
+        );
     }
 
     // guard:no-backend — placement fails before the database scope starts.

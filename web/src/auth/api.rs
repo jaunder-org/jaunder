@@ -18,9 +18,15 @@ use {
     host::password::Password,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{SessionStorage, UserStorage, WriteScope},
+    storage::{SessionStorage, UserStorage, WriteScope, WriteScopeError},
     tracing::Instrument,
 };
+
+#[cfg(feature = "server")]
+fn login_write_scope_error(error: WriteScopeError<InternalError>) -> InternalError {
+    metrics::login(LoginOutcome::InternalError);
+    from_write_scope_error(error)
+}
 
 /// Authenticates a user. Sets the `HttpOnly` `session` cookie and returns the
 /// authenticated viewer's [`super::SessionUser`] — deliberately not the session token
@@ -99,10 +105,7 @@ pub async fn login(
             })
         })
         .await
-        .map_err(|error| {
-            metrics::login(LoginOutcome::InternalError);
-            from_write_scope_error(error)
-        })?;
+        .map_err(login_write_scope_error)?;
 
     match outcome {
         MutationOutcome::Confirmed((raw_token, session)) => {
@@ -164,4 +167,25 @@ pub async fn get_session() -> WebResult<Option<super::SessionUser>> {
         username: auth.username,
         is_operator,
     }))
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::login_write_scope_error;
+    use crate::error::{ErrorClass, ErrorKind, WebError, project};
+
+    #[test]
+    fn login_begin_failure_emits_internal_metric_and_maps_to_a_masked_storage_error() {
+        let error =
+            login_write_scope_error(storage::WriteScopeError::Begin(sqlx::Error::PoolClosed));
+
+        assert_eq!(error.kind(), ErrorKind::Storage);
+        assert_eq!(error.class(), ErrorClass::Bug);
+        assert_eq!(
+            project(error.kind(), error.public_message()),
+            WebError::Storage {
+                message: "storage operation failed".to_string(),
+            }
+        );
+    }
 }

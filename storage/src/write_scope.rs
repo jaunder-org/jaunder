@@ -215,22 +215,20 @@ impl WriteScope {
                 #[cfg(any(test, feature = "test-utils"))]
                 HeldTransaction::Mock => Ok(()),
             };
-            match classify_commit_result(commit, value) {
-                MutationOutcome::Confirmed(value) => {
-                    #[cfg(test)]
-                    if self.lose_commit_acknowledgement_after_commit {
-                        span.record("write_scope.outcome", "commit_indeterminate");
-                        return Ok(MutationOutcome::CommitIndeterminate(value));
-                    }
-
-                    span.record("write_scope.outcome", "confirmed_commit");
-                    Ok(MutationOutcome::Confirmed(value))
+            let outcome = classify_commit_result(commit, value);
+            #[cfg(test)]
+            let outcome = match (self.lose_commit_acknowledgement_after_commit, outcome) {
+                (true, MutationOutcome::Confirmed(value)) => {
+                    MutationOutcome::CommitIndeterminate(value)
                 }
-                MutationOutcome::CommitIndeterminate(value) => {
-                    span.record("write_scope.outcome", "commit_indeterminate");
-                    Ok(MutationOutcome::CommitIndeterminate(value))
-                }
-            }
+                (_, outcome) => outcome,
+            };
+            let outcome_label = match outcome {
+                MutationOutcome::Confirmed(_) => "confirmed_commit",
+                MutationOutcome::CommitIndeterminate(_) => "commit_indeterminate",
+            };
+            span.record("write_scope.outcome", outcome_label);
+            Ok(outcome)
         }
         .instrument(span_for_future)
         .await
@@ -268,8 +266,8 @@ mod tests {
             self.0.push((field.name().to_owned(), value.to_owned()));
         }
 
-        fn record_debug(&mut self, _field: &Field, _value: &dyn fmt::Debug) {
-            unreachable!("write_scope.outcome is recorded as a string");
+        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+            self.0.push((field.name().to_owned(), format!("{value:?}")));
         }
     }
 
@@ -283,20 +281,17 @@ mod tests {
             values: &tracing::span::Record<'_>,
             context: Context<'_, S>,
         ) {
-            let Some(span) = context.span(id) else {
-                return;
-            };
-            if span.metadata().name() != "storage.write_scope" {
-                return;
+            if let Some(span) = context.span(id)
+                && span.metadata().name() == "storage.write_scope"
+            {
+                let mut fields = FieldRecorder(Vec::new());
+                values.record(&mut fields);
+                self.0.0.lock().expect("outcome recorder mutex").extend(
+                    fields.0.into_iter().filter_map(|(field, value)| {
+                        (field == "write_scope.outcome").then_some(value)
+                    }),
+                );
             }
-            let mut fields = FieldRecorder(Vec::new());
-            values.record(&mut fields);
-            self.0.0.lock().expect("outcome recorder mutex").extend(
-                fields
-                    .0
-                    .into_iter()
-                    .filter_map(|(field, value)| (field == "write_scope.outcome").then_some(value)),
-            );
         }
     }
 
@@ -495,6 +490,34 @@ mod tests {
                 "confirmed_commit",
                 "commit_indeterminate"
             ]
+        );
+    }
+
+    #[test]
+    fn outcome_recorder_records_debug_values() {
+        let outcomes = Arc::new(RecordedOutcomes::default());
+        let subscriber =
+            tracing_subscriber::registry().with(WriteScopeRecorder(Arc::clone(&outcomes)));
+        let guard = tracing::subscriber::set_default(subscriber);
+        let span = tracing::info_span!(
+            "storage.write_scope",
+            db.system = "mock",
+            write_scope.outcome = tracing::field::Empty,
+        );
+
+        span.record(
+            "write_scope.outcome",
+            tracing::field::debug("debug outcome"),
+        );
+        drop(guard);
+
+        assert_eq!(
+            outcomes
+                .0
+                .lock()
+                .expect("outcome recorder mutex")
+                .as_slice(),
+            ["\"debug outcome\""]
         );
     }
 

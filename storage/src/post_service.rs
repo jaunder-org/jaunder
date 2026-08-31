@@ -621,7 +621,7 @@ mod tests {
 
         let error = map_create_post_scope_error(WriteScopeError::Begin(sqlx::Error::PoolClosed));
         let CreatePostError::Internal(source) = error else {
-            panic!("begin failure must map to a create storage error");
+            unreachable!("scope_error maps scope begin failures to CreatePostError::Internal");
         };
         assert!(matches!(source, sqlx::Error::PoolClosed));
     }
@@ -635,7 +635,7 @@ mod tests {
 
         let error = map_post_update_scope_error(WriteScopeError::Begin(sqlx::Error::PoolClosed));
         let PerformUpdateError::Storage(source) = error else {
-            panic!("begin failure must map to an update storage error");
+            unreachable!("scope_error maps scope begin failures to PerformUpdateError::Storage");
         };
         assert!(matches!(source, sqlx::Error::PoolClosed));
     }
