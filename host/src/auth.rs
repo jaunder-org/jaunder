@@ -7,7 +7,7 @@
 //! `http` header types for parsing but no `web`/`storage`/leptos abstraction
 //! (ADR-0058 floor invariant).
 
-use std::str::FromStr;
+use std::{fmt, str::FromStr};
 
 use common::token::RawToken;
 
@@ -149,24 +149,47 @@ pub fn resolve_credential(
     })
 }
 
+enum SessionCookie<'a> {
+    Set { token: &'a RawToken, secure: bool },
+    Clear { secure: bool },
+}
+
+impl fmt::Display for SessionCookie<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("session=")?;
+        let secure = match self {
+            Self::Set { token, secure } => {
+                // `RawToken`'s base64url charset cannot inject cookie attributes
+                // or headers through the separators used here (#344 item 3).
+                write!(formatter, "{token}")?;
+                secure
+            }
+            Self::Clear { secure } => secure,
+        };
+
+        formatter.write_str("; HttpOnly; SameSite=Lax; Path=/")?;
+        if *secure {
+            formatter.write_str("; Secure")?;
+        }
+        if matches!(self, Self::Clear { .. }) {
+            formatter.write_str("; Max-Age=0")?;
+        }
+        Ok(())
+    }
+}
+
 /// Builds the `Set-Cookie` header value that stores the session token. `secure`
 /// appends the `; Secure` attribute (production/HTTPS deployments).
 #[must_use]
 pub fn session_cookie_header(token: &RawToken, secure: bool) -> String {
-    let secure_attr = if secure { "; Secure" } else { "" };
-    // `token` is a `RawToken`, so its value is base64url by construction: the
-    // charset cannot contain the `;`/newline separators a cookie header uses, so
-    // interpolating it here (via its `Display`) cannot inject extra attributes or
-    // headers (#344 item 3).
-    format!("session={token}; HttpOnly; SameSite=Lax; Path=/{secure_attr}")
+    SessionCookie::Set { token, secure }.to_string()
 }
 
 /// Builds the `Set-Cookie` header value that clears the session cookie
 /// (`Max-Age=0`). `secure` mirrors [`session_cookie_header`].
 #[must_use]
 pub fn clear_session_cookie_header(secure: bool) -> String {
-    let secure_attr = if secure { "; Secure" } else { "" };
-    format!("session=; HttpOnly; SameSite=Lax; Path=/{secure_attr}; Max-Age=0")
+    SessionCookie::Clear { secure }.to_string()
 }
 
 #[cfg(test)]
