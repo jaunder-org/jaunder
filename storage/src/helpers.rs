@@ -496,6 +496,8 @@ pub(crate) fn hash_password_operation(password: &password::Password) -> HashPass
     if password.as_ref() == "force-hash-error-for-test-coverage" {
         return forced_hash_failure;
     }
+    #[cfg(not(any(test, feature = "test-utils")))]
+    let _ = password;
 
     password::hash
 }

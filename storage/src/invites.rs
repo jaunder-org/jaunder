@@ -9,6 +9,7 @@ use sqlx::{Database, Pool};
 use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::helpers::{self, InviteTokenStateRow, TokenState};
+use crate::sql::RowCount;
 use common::ids::UserId;
 use common::time::UtcInstant;
 
@@ -75,6 +76,12 @@ pub trait InviteStorage: Send + Sync {
 
     /// Returns a list of all invite codes in the system.
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>>;
+
+    /// Deletes consumed invites and unused invites expired for at least 24 hours.
+    ///
+    /// Each call drains fixed-size batches at the supplied instant, releasing the
+    /// database connection after every statement.
+    async fn prune_invites(&self, now: UtcInstant) -> sqlx::Result<u64>;
 }
 
 /// Generic [`InviteStorage`] backed by any [`Backend`] database.
@@ -84,6 +91,8 @@ pub trait InviteStorage: Send + Sync {
 pub struct InviteStore<DB: Database> {
     pool: Pool<DB>,
 }
+
+const PRUNE_BATCH_SIZE: i64 = 100;
 
 impl<DB: Database> InviteStore<DB> {
     #[must_use]
@@ -98,7 +107,9 @@ where
     DB: Backend,
     helpers::InviteRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     InviteTokenStateRow: for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    usize: sqlx::ColumnIndex<DB::Row>,
+    for<'q> RowCount: sqlx::Decode<'q, DB> + sqlx::Type<DB>,
     // `InviteCode` binds/decodes as itself via the ADR-0071 sqlx bridge.
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
@@ -199,6 +210,35 @@ where
             .map(helpers::invite_record_from_row)
             .collect())
     }
+
+    async fn prune_invites(&self, now: UtcInstant) -> sqlx::Result<u64> {
+        let unused_cutoff = UtcInstant::from(now.value() - chrono::Duration::hours(24));
+        let mut deleted = 0;
+
+        loop {
+            // A pool-executed statement acquires and releases its connection within
+            // the batch, so a large retained backlog cannot hold a write lock.
+            let batch = sqlx::query_scalar::<_, RowCount>(
+                "DELETE FROM invites
+                 WHERE code IN (
+                     SELECT code FROM invites
+                     WHERE used_at IS NOT NULL OR expires_at <= $1
+                     ORDER BY code
+                     LIMIT $2
+                 )
+                 RETURNING CAST(1 AS BIGINT)",
+            )
+            .bind(unused_cutoff)
+            .bind(PRUNE_BATCH_SIZE)
+            .fetch_all(&self.pool)
+            .await?
+            .len() as u64;
+            deleted += batch;
+            if batch == 0 {
+                return Ok(deleted);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -276,5 +316,67 @@ mod tests {
         base.close_pool().await;
         let result = state.invites.list_invites().await;
         assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn prune_invites_removes_eligible_rows_without_touching_valid_invites(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
+        let eligible_at = UtcInstant::from(now.value() - chrono::Duration::hours(24));
+        let valid_until = UtcInstant::from(now.value() + chrono::Duration::hours(1));
+
+        let invites = Arc::clone(&env.state.invites);
+        env.state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { invites.create_invite(transaction, eligible_at).await })
+            })
+            .await
+            .unwrap();
+        let invites = Arc::clone(&env.state.invites);
+        env.state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { invites.create_invite(transaction, valid_until).await })
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(env.state.invites.prune_invites(now).await.unwrap(), 1);
+        let invites = env.state.invites.list_invites().await.unwrap();
+        assert_eq!(invites.len(), 1);
+        assert_eq!(invites[0].expires_at, valid_until);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn prune_invites_removes_consumed_rows_and_reports_closed_pool(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
+        let expires_at = UtcInstant::from(now.value() + chrono::Duration::hours(1));
+        let invites = Arc::clone(&state.invites);
+        let outcome = state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+            })
+            .await
+            .unwrap();
+        let code = crate::test_support::confirmed_for(outcome, "invite fixture setup");
+        crate::with_closeable_pool!(base.pool(), pool, {
+            sqlx::query("UPDATE invites SET used_at = $1 WHERE code = $2")
+                .bind(now)
+                .bind(&code)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
+
+        assert_eq!(state.invites.prune_invites(now).await.unwrap(), 1);
+        base.close_pool().await;
+        assert!(state.invites.prune_invites(now).await.is_err());
     }
 }
