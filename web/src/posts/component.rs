@@ -12,6 +12,7 @@ use leptos_router::NavigateOptions;
 use leptos_router::hooks::{use_navigate, use_params_map};
 
 use client::telemetry;
+use common::permalink_route::PermalinkRoute;
 use common::seed::Page;
 // `Summary` is module-qualified at its use site: this file already has
 // `PostSummary` and `TagSummary` in scope, and a bare `Summary` among them says
@@ -31,8 +32,8 @@ use crate::media::MediaUpload;
 use super::render;
 use crate::posts::{
     ComposeState, Create, Delete, DraftRowDisplay, EditPublicationState, InvalidSchedule,
-    ListingRoute, LoadedPublication, NamedAudienceState, PermalinkRoute, PublicationIntent,
-    Publish, SavedPost, ScheduledEditState, Unpublish, UnpublishedPost,
+    ListingRoute, LoadedPublication, NamedAudienceState, PublicationIntent, Publish, SavedPost,
+    ScheduledEditState, Unpublish, UnpublishedPost,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx;

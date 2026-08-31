@@ -26,6 +26,7 @@ pub mod media;
 pub mod org;
 pub mod pagination;
 pub mod password;
+pub mod permalink_route;
 pub mod pg_identifier;
 pub mod pg_role_password;
 pub mod post_body;

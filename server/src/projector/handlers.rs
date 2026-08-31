@@ -6,12 +6,13 @@ use axum::{
     routing::get,
 };
 use common::pagination::PageSize;
+use common::permalink_route::PermalinkRoute;
 use common::seed::PageSeed;
-use common::slug::Slug;
 use common::tag::Tag;
-use common::time::{PermalinkDate, UtcInstant};
+use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
+use serde::{Deserialize, Deserializer};
 
 use crate::soft_path::SoftPath;
 use std::{future::Future, sync::Arc};
@@ -43,44 +44,40 @@ where
         .layer(Extension(shell))
 }
 
-/// The permalink route's five path segments: soft-parsed `username`/`slug` around the numeric
-/// `year`/`month`/`day`. A `type` alias to keep the `Path<…>` under clippy's type-complexity
-/// threshold. `SoftPath` gives a malformed `username`/`slug` the SPA shell (client-rendered
-/// 404) rather than axum's pre-handler 400 — the projector-vs-atompub boundary split (ADR-0063
-/// §4): atompub handlers are strictly typed (400-on-malformed API); the public projector
-/// serves the shell.
-type PermalinkPath = (
-    SoftPath<Username>,
-    SoftPath<i32>,
-    SoftPath<u32>,
-    SoftPath<u32>,
-    SoftPath<Slug>,
-);
+/// A decoded permalink capture set, softly parsed as one all-or-nothing route value.
+///
+/// The public projector keeps its shell fallback for semantic misses (#697): only decoding or
+/// tuple-shape failures are extractor errors. This private adapter applies ADR-0063 §4 at the
+/// route boundary, so no raw permalink components enter handler logic.
+struct PermalinkPath(Option<PermalinkRoute>);
+
+impl<'de> Deserialize<'de> for PermalinkPath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (username, year, month, day, slug) =
+            <(String, String, String, String, String)>::deserialize(deserializer)?;
+        Ok(Self(PermalinkRoute::parse(
+            &username, &year, &month, &day, &slug,
+        )))
+    }
+}
 
 async fn permalink(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
-    Path((username, year, month, day, slug)): Path<PermalinkPath>,
+    Path(PermalinkPath(route)): Path<PermalinkPath>,
 ) -> Response {
-    // The three `SoftPath` date segments are already `Option`s (soft-deserialized);
-    // present + a real date, else `None` → the shell (soft-404) below.
-    let date = Option::<i32>::from(year)
-        .zip(Option::<u32>::from(month))
-        .zip(Option::<u32>::from(day))
-        .and_then(|((y, m), d)| PermalinkDate::from_ymd(y, m, d));
-    let (Some(username), Some(date), Some(slug)) = (username.into(), date, slug.into()) else {
-        // An unparseable segment — or an impossible date (e.g. month 13) — is never
-        // public content: let the client route it (it may be a server URL the SPA
-        // reloads for), a uniform soft-404 (#583).
+    let Some(route) = route else {
+        // A semantically invalid decoded permalink is never public content: let the client
+        // resolve it, preserving the projector's uniform shell soft-404.
         return document::shell_response(&shell);
     };
     let result = storage::fetch_post_record(
         posts.as_ref(),
         &ViewerIdentity::Anonymous,
-        &username,
-        date,
-        &slug,
+        &route.username,
+        route.date,
+        &route.slug,
         UtcInstant::now(),
     )
     .await;

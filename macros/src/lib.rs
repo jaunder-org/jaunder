@@ -488,6 +488,12 @@ pub fn sqlx_bridge_derive(item: TokenStream) -> TokenStream {
 /// author keeps the non-uniform derives (`VariantArray`, `EnumMessage`, `Default`, …) and
 /// `serialize_all`. `strum` does all the actual token/`Display`/`FromStr` work.
 ///
+/// `no_serde` suppresses **only** the generated `Serialize`/`Deserialize` bridge. Use it
+/// when an enum already has ordinary derived serde whose wire representation intentionally
+/// differs from its lowercase strum grammar, as `FeedFormat` does. This is the opt-out
+/// ADR-0091 prescribes when absence of the token serde bridge is a needed wire boundary;
+/// it leaves the injected strum derives, generated error, and optional `sqlx` bridge intact.
+///
 /// # It must be the item's first *active* attribute
 ///
 /// An attribute macro only receives the attributes written **below** it; anything above
@@ -500,14 +506,13 @@ pub fn sqlx_bridge_derive(item: TokenStream) -> TokenStream {
 /// attributes are inert, so they neither expand nor collide — they simply stack onto the
 /// enum along with the injected derives.
 ///
-/// # The adopting crate must depend on `strum` and `serde`
+/// # The adopting crate must depend on `strum`, and normally `serde`
 ///
-/// The injected derives are emitted as `::strum::…` and the serde bridge as `::serde::…`,
-/// so both must be dependencies of the crate under exactly those names. The serde bridge
-/// is unconditional — there is no opt-out — because every closed string enum in this repo
-/// either crosses the wire already or is one field away from doing so. Without the
-/// dependencies the error is "cannot find derive macro in this scope" or an unresolved
-/// `::serde` path, neither of which points back here.
+/// The injected derives are emitted as `::strum::…` and the default serde bridge as
+/// `::serde::…`, so an ordinary adopter needs both dependencies under exactly those names.
+/// An adopter using `no_serde` needs `serde` only if its own derives do. Without the
+/// dependencies the error is "cannot find derive macro in this scope" or an unresolved path,
+/// neither of which points back here.
 ///
 /// The generated error type is always `pub`, regardless of the enum's own visibility: it
 /// is registered by name across crate boundaries (`host`'s `validation_from!`), so a

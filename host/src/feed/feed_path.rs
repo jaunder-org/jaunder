@@ -105,12 +105,7 @@ where
 pub fn parse(path: &str) -> Option<(FeedSurface, FeedFormat)> {
     let rest = path.strip_prefix('/')?;
     let (head, ext) = rest.rsplit_once('.')?;
-    let format = match ext {
-        "rss" => FeedFormat::Rss,
-        "atom" => FeedFormat::Atom,
-        "json" => FeedFormat::Json,
-        _ => return None,
-    };
+    let format = ext.parse::<FeedFormat>().ok()?;
     // Head must be "feed" (site) or end in "/feed"
     let surface_part = if head == "feed" {
         return Some((FeedSurface::Site, format));
@@ -289,6 +284,13 @@ mod tests {
     #[test]
     fn rejects_unknown_extension() {
         assert!(parse("/feed.xml").is_none());
+    }
+
+    #[test]
+    fn rejects_case_variant_extensions() {
+        for path in ["/feed.RSS", "/feed.Atom", "/feed.JSON"] {
+            assert!(parse(path).is_none(), "rejects {path}");
+        }
     }
 
     #[test]

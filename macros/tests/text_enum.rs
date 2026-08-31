@@ -13,6 +13,18 @@ pub enum Colour {
     Blue,
 }
 
+#[macros::text_enum(
+    no_serde,
+    error = InvalidWireColour,
+    message = "wire colour must be \"red\" or \"blue\""
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[strum(serialize_all = "snake_case")]
+pub enum WireColour {
+    Red,
+    Blue,
+}
+
 #[test]
 fn token_round_trips_through_the_injected_derives() {
     assert_eq!(Colour::Red.as_ref(), "red");
@@ -38,4 +50,15 @@ fn serde_round_trips_the_token_and_reports_the_declared_message() {
     );
     let err = serde_json::from_str::<Colour>("\"green\"").unwrap_err();
     assert!(err.to_string().contains("colour must be"));
+}
+
+#[test]
+fn no_serde_preserves_an_adopters_ordinary_serde_representation() {
+    assert_eq!(WireColour::Red.to_string(), "red");
+    assert_eq!("blue".parse::<WireColour>(), Ok(WireColour::Blue));
+    assert_eq!(serde_json::to_string(&WireColour::Red).unwrap(), "\"Red\"");
+    assert_eq!(
+        serde_json::from_str::<WireColour>("\"Blue\"").unwrap(),
+        WireColour::Blue
+    );
 }
