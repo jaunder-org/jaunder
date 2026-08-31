@@ -313,8 +313,8 @@ enforces `UNIQUE(user_id, key)`. A fresh keyed create writes its post and key
 row atomically; a uniqueness collision rolls the attempted creation back. The
 fresh keyed create returns `201`; when its original post remains available,
 same-user key reuse returns that original post as `200`, even when the new
-payload differs. Another user may use the same key independently. The proposed
-[bounded transient-data retention policy](adr/drafts/bounded-transient-data-retention.md)
+payload differs. Another user may use the same key independently. The
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
 replaces indefinite mapping retention with a one-hour semantic replay window: at
 `cutoff <= now`, the mapping no longer coordinates a replay, whether or not a
 later cleanup pass has physically removed it.
@@ -813,8 +813,8 @@ separately inspectable and redrivable
 [AtomPub does not enqueue, web enqueue is not atomic, and triggers are coarse](https://github.com/jaunder-org/jaunder/issues/1051).
 [Configuration changes do not invalidate caches, worker/regenerator snapshots can differ, configuration access errors can collapse to `NoHub`, HTTP failures retry alike, `Retry-After` is ignored, budgets are shared, and terminal rows lack redrive](https://github.com/jaunder-org/jaunder/issues/1052).
 
-The proposed
-[bounded transient-data retention policy](adr/drafts/bounded-transient-data-retention.md)
+The
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
 makes completed feed events cleanup-eligible immediately and retains exhausted
 events for seven days before making them cleanup-eligible. It is terminal-row
 retention, not a recovery or redrive decision for #1052, and does not apply to
@@ -927,12 +927,11 @@ pass.
   deleting the session in the Sessions UI
   ([ADR-0014](adr/0014-atompub-authentication.md)).
 
-The proposed
-[bounded transient-data retention policy](adr/drafts/bounded-transient-data-retention.md)
+The
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
 separates permanent sessions and App Passwords from credentials with expiry: an
 expired credential remains retained for 24 hours after expiry, while a consumed
-credential is cleanup-eligible immediately. It is a proposed retention and
-operations contract, not a claim that current storage cleanup implements it.
+credential is cleanup-eligible immediately.
 
 - A token for user X reaches only `/atompub/X/*`. The enforcer is
   `server::atompub::require_user_match` (`server/src/atompub/guards.rs:13`),
@@ -1037,8 +1036,8 @@ split by the **entropy of the value being validated**:
   issuance as a throttle
   ([ADR-0022](adr/0022-validate-before-expensive-work.md)).
 
-The proposed
-[bounded transient-data retention policy](adr/drafts/bounded-transient-data-retention.md)
+The
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
 governs retention after a credential enters its terminal state; it does not
 alter the cheap-reject and atomic-claim security properties above.
 
@@ -1445,8 +1444,8 @@ determinants follow the same rule: record bounded decisions and stable internal
 IDs, never passwords, tokens, raw emails, invite codes, request bodies,
 arbitrary source text, or whole-struct dumps.
 
-The proposed
-[bounded transient-data retention policy](adr/drafts/bounded-transient-data-retention.md)
+The
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
 adds PII- and secret-free structured OpenTelemetry signals at transient-data
 state transitions: expiry, consumption, completion, exhaustion, and cleanup. The
 operator, rather than Jaunder, owns long-term telemetry retention.
