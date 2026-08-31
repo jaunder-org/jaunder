@@ -482,9 +482,9 @@ mod tests {
         let storage_path = dir.path().join("not-a-directory");
         fs::write(&storage_path, "ordinary file").unwrap();
 
-        let Err(error) = StartupLockGuard::acquire(&storage_path) else {
-            panic!("a file cannot serve as the startup lock directory");
-        };
+        let error = StartupLockGuard::acquire(&storage_path)
+            .err()
+            .expect("a file cannot serve as the startup lock directory");
 
         assert_eq!(
             error.to_string(),
@@ -514,14 +514,15 @@ mod tests {
         fs::create_dir(&reservation_path).unwrap();
         let lock = StartupLockGuard::acquire(dir.path()).expect("startup lock");
 
-        let Err(error) = lock.reserve(
-            reservation_path.clone(),
-            discovery_path.clone(),
-            addr(),
-            own_start_time(),
-        ) else {
-            panic!("a directory cannot receive a runtime reservation");
-        };
+        let error = lock
+            .reserve(
+                reservation_path.clone(),
+                discovery_path.clone(),
+                addr(),
+                own_start_time(),
+            )
+            .err()
+            .expect("a directory cannot receive a runtime reservation");
 
         assert_eq!(
             error.to_string(),

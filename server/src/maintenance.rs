@@ -104,19 +104,17 @@ where
     match result {
         Ok(pruned) => {
             metrics::retention_run(domain, CleanupResult::Success);
+            let domain = domain.label();
             tracing::info!(
-                retention.domain = domain.label(),
+                retention.domain = domain,
                 pruned,
                 "database.maintenance.completed"
             );
         }
         Err(error) => {
             metrics::retention_run(domain, CleanupResult::Failure);
-            tracing::warn!(
-                retention.domain = domain.label(),
-                error = %error,
-                "database.maintenance.failed"
-            );
+            let domain = domain.label();
+            tracing::warn!(retention.domain = domain, error = %error, "database.maintenance.failed");
             error::report_swallowed(
                 ErrorKind::Storage,
                 ErrorClass::Transient,
