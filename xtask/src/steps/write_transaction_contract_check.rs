@@ -116,9 +116,9 @@ const INTERNAL_CAPABILITY_TRAITS: &[&str] = &[
 
 const BYPASS_EXCLUDED_PATHS: &[&str] = &[
     // The sole application transaction factory. Test-only raw-SQL lock fixtures
-    // live in `storage/src/test_support.rs` and are excluded by `cfg(test)`.
+    // live in `storage/src/test_support/backend.rs` and are excluded by `cfg(test)`.
     "storage/src/write_scope.rs",
-    "storage/src/test_support.rs",
+    "storage/src/test_support/backend.rs",
 ];
 
 fn path_ends_in(path: &syn::Path, name: &str) -> bool {
