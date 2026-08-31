@@ -433,6 +433,7 @@ mod tests {
         "jaunder.db.pool.idle",
         "jaunder.db.pool.max",
         "jaunder.posts",
+        "jaunder.atompub.idempotency_keys",
         "jaunder.storage.retention_runs",
         "jaunder.storage.retention_pruned",
         "jaunder.atompub.requests",
@@ -465,6 +466,9 @@ mod tests {
         backup_bytes(1024);
         backup_pruned(3);
         post(PostEvent::Published);
+        idempotency(IdempotencyEvent::Created);
+        idempotency(IdempotencyEvent::Replayed);
+        idempotency(IdempotencyEvent::Expired);
         retention_run(Domain::Invites, CleanupResult::Success);
         retention_pruned(Domain::Invites, 3);
         atompub_request("POST /feed", AtompubResult::ClientError);
@@ -708,6 +712,16 @@ mod tests {
                 ("error.disposition", "boundary"),
                 ("telemetry.origin", "server"),
             ])]
+        );
+
+        assert_eq!(
+            counter_attributes(&metrics, "jaunder.atompub.idempotency_keys"),
+            vec![
+                attrs1([("event", "created")]),
+                attrs1([("event", "replayed")]),
+                attrs1([("event", "expired")]),
+            ],
+            "idempotency events must remain bounded to the declared lifecycle values"
         );
 
         let retention_runs = counter_attributes(&metrics, "jaunder.storage.retention_runs");

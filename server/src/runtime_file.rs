@@ -679,23 +679,28 @@ mod tests {
     }
 
     #[test]
-    fn active_guard_update_failure_is_reported_and_leaves_path_unpublished() {
+    fn active_guard_update_failure_reports_and_preserves_live_reservation() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("missing").join("runtime.json");
-        let guard = RuntimeFileGuard {
-            path: Some(path.clone()),
-        };
+        let path = dir.path().join("runtime.json");
+        let start_time = own_start_time();
+        let guard = RuntimeFileGuard::reserve(path.clone(), addr(), start_time)
+            .expect("initial live reservation");
+        let original = fs::read(&path).expect("read initial live reservation");
+        let tmp_path = path.with_extension("tmp");
+        fs::create_dir(&tmp_path).expect("block atomic replacement write");
+        let replacement_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 45678);
 
-        let ((), trace) = capture(|| guard.update(addr(), 1));
+        let ((), trace) = capture(|| guard.update(replacement_addr, start_time));
 
         assert_one_report(&trace, "server.runtime_file.write");
-        assert!(
-            !path.exists(),
-            "a failed update must not publish a replacement runtime file"
+        assert_eq!(
+            fs::read(&path).expect("read preserved live reservation"),
+            original,
+            "a failed address update must preserve the existing live identity"
         );
         assert!(
-            !path.with_extension("tmp").exists(),
-            "a write failure before serialization must not leave a temporary file"
+            tmp_path.is_dir(),
+            "the failed update must not replace the blocking temporary path"
         );
     }
 
