@@ -3,18 +3,22 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use chrono::Datelike;
 use common::tag::MAX_TAGS_PER_POST;
-use common::test_support::parse_row_limit;
+use common::test_support::{parse_post_body, parse_row_limit, parse_slug, parse_tag_label};
+use common::time::UtcInstant;
+use common::visibility::{AudienceBase, AudienceSelection};
 use server_fn::ServerFn;
 use storage::PostFormat;
-use web::posts::SavedPost;
+use web::posts::{PostInputs, SavedPost};
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{confirmed_mutation, create_user_and_session, post_form, post_json};
+use crate::helpers::{
+    confirmed_mutation, create_post_json, create_user_and_session, post_form, post_json,
+};
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix, confirmed_for};
 
-use super::fixtures::{create_post_json, login_and_state};
+use super::fixtures::login_and_state;
 
 async fn create_audience_confirmed(
     state: &Arc<storage::AppState>,
@@ -42,12 +46,13 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
     // Title embedded as # heading in the body (verbatim storage)
     let (status, body) = create_post_json(
         &state,
-        "# Hello World
-
-**bold**",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(
+                parse_post_body("# Hello World\n\n**bold**"),
+                PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -99,12 +104,17 @@ async fn create_post_retries_slug_conflicts_for_same_user_and_date(#[case] backe
     // Title embedded as # heading; two posts with same heading produce conflicting slugs
     let (first_status, first_body) = create_post_json(
         &state,
-        "# Repeated Title
-
-first",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(
+                parse_post_body(
+                    "# Repeated Title
+        
+        first",
+                ),
+                PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -112,12 +122,17 @@ first",
 
     let (second_status, second_body) = create_post_json(
         &state,
-        "# Repeated Title
-
-second",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(
+                parse_post_body(
+                    "# Repeated Title
+        
+        second",
+                ),
+                PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -136,10 +151,11 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
 
     let (status, body) = create_post_json(
         &state,
-        "*bold*",
-        "org",
-        Some("Custom-Slug"),
-        false,
+        PostInputs {
+            slug_override: Some(parse_slug("Custom-Slug")),
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("*bold*"), PostFormat::Org)
+        },
         Some(&cookie),
     )
     .await;
@@ -182,10 +198,10 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
 
     let (status, body) = create_post_json(
         &state,
-        "Titleless note",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("Titleless note"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -217,12 +233,13 @@ async fn create_post_extracts_markdown_heading_title(#[case] backend: Backend) {
 
     let (status, body) = create_post_json(
         &state,
-        "# Extracted Title
-
-Body text",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(
+                parse_post_body("# Extracted Title\n\nBody text"),
+                PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -279,12 +296,17 @@ async fn create_post_rejects(
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) = create_post_json(
+    let (status, body) = post_json(
         &state,
-        request_body,
-        format,
-        slug_override,
-        false,
+        <web::posts::Create as ServerFn>::PATH,
+        serde_json::json!({
+            "post": {
+                "body": request_body,
+                "format": format,
+                "slug_override": slug_override,
+                "publish": false,
+            }
+        }),
         Some(&cookie),
     )
     .await;
@@ -303,18 +325,13 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
     let cookie = create_user_and_session(&state).await.cookie();
 
     let future = chrono::Utc.with_ymd_and_hms(2099, 1, 1, 0, 0, 0).unwrap();
-    let payload = serde_json::json!({
-        "post": {
-            "body": "scheduled body",
-            "format": "markdown",
-            "publish": true,
-            "publish_at": future.to_rfc3339(),
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        payload,
+        PostInputs {
+            publish: Some(true),
+            publish_at: Some(UtcInstant::from(future)),
+            ..PostInputs::new(parse_post_body("scheduled body"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -362,10 +379,10 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
 
     let (status, body) = create_post_json(
         &state,
-        "live now body",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("live now body"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -411,19 +428,16 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
 async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
     let (_base, state, cookie) = login_and_state(backend).await;
 
-    let payload = serde_json::json!({
-        "post": {
-            "body": "# Tagged via API\n\nbody",
-            "format": "markdown",
-            "slug_override": null,
-            "publish": true,
-            "tags": ["Rust", "web-dev"],
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        payload,
+        PostInputs {
+            publish: Some(true),
+            tags: Some(vec![parse_tag_label("Rust"), parse_tag_label("web-dev")]),
+            ..PostInputs::new(
+                parse_post_body("# Tagged via API\n\nbody"),
+                PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -453,20 +467,21 @@ async fn create_org_header_merges_structured_metadata_and_stores_canonical_body(
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
-    let payload = serde_json::json!({
-        "post": {
-            "body": "#+TITLE: Header title\n#+DESCRIPTION: Header summary\n#+KEYWORDS: header, ignored\n#+PROPERTY: JAUNDER_AUDIENCE public\n#+PROPERTY: JAUNDER_STATUS published\n#+PROPERTY: JAUNDER_SLUG header-title\n#+PROPERTY: JAUNDER_FORMAT org\n#+UNKNOWN: preserved\n\nBody",
-            "format": "org",
-            "publish": false,
-            "tags": [],
-            "summary": "Structured summary",
-            "audience": { "base": "private", "named": [] },
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        payload,
+        PostInputs {
+            publish: Some(false),
+            tags: Some(Vec::new()),
+            summary: Some(common::test_support::parse_post_summary("Structured summary")),
+            audience: Some(AudienceSelection {
+                base: AudienceBase::Private,
+                named: Vec::new(),
+            }),
+            ..PostInputs::new(
+                parse_post_body("#+TITLE: Header title\n#+DESCRIPTION: Header summary\n#+KEYWORDS: header, ignored\n#+PROPERTY: JAUNDER_AUDIENCE public\n#+PROPERTY: JAUNDER_STATUS published\n#+PROPERTY: JAUNDER_SLUG header-title\n#+PROPERTY: JAUNDER_FORMAT org\n#+UNKNOWN: preserved\n\nBody"),
+                PostFormat::Org,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -506,16 +521,14 @@ async fn create_org_header_merges_structured_metadata_and_stores_canonical_body(
 async fn create_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
-    let payload = serde_json::json!({
-        "post": {
-            "body": "#+TITLE: Header lifecycle\n#+PROPERTY: JAUNDER_STATUS published\n\nBody",
-            "format": "org",
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        payload,
+        PostInputs::new(
+            parse_post_body(
+                "#+TITLE: Header lifecycle\n#+PROPERTY: JAUNDER_STATUS published\n\nBody",
+            ),
+            PostFormat::Org,
+        ),
         Some(&cookie),
     )
     .await;
@@ -568,22 +581,16 @@ async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] ba
     )
     .await;
 
-    let payload = |audience_id| {
-        serde_json::json!({
-            "post": {
-                "body": format!("#+TITLE: Named\n#+PROPERTY: JAUNDER_AUDIENCE named:{audience_id}\n#+PROPERTY: JAUNDER_STATUS draft\n\nBody"),
-                "format": "org",
-                "publish": false,
-            }
-        })
+    let post = |audience_id| PostInputs {
+        publish: Some(false),
+        ..PostInputs::new(
+            parse_post_body(&format!(
+                "#+TITLE: Named\n#+PROPERTY: JAUNDER_AUDIENCE named:{audience_id}\n#+PROPERTY: JAUNDER_STATUS draft\n\nBody"
+            )),
+            PostFormat::Org,
+        )
     };
-    let (status, body) = post_json(
-        &state,
-        <web::posts::Create as ServerFn>::PATH,
-        payload(owned),
-        Some(&cookie),
-    )
-    .await;
+    let (status, body) = create_post_json(&state, post(owned), Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: SavedPost = confirmed_mutation(&body);
     let (status, body) = post_form(
@@ -597,17 +604,11 @@ async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] ba
     let selection: common::visibility::AudienceSelection = serde_json::from_str(&body).unwrap();
     assert_eq!(selection.named, vec![owned]);
 
-    let (foreign_status, foreign_body) = post_json(
+    let (foreign_status, foreign_body) =
+        create_post_json(&state, post(foreign), Some(&cookie)).await;
+    let (unknown_status, unknown_body) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        payload(foreign),
-        Some(&cookie),
-    )
-    .await;
-    let (unknown_status, unknown_body) = post_json(
-        &state,
-        <web::posts::Create as ServerFn>::PATH,
-        payload(common::ids::AudienceId::from(999_999)),
+        post(common::ids::AudienceId::from(999_999)),
         Some(&cookie),
     )
     .await;
@@ -647,17 +648,15 @@ async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] ba
 async fn create_org_publish_now_overrides_header_draft(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
-    let payload = serde_json::json!({
-        "post": {
-            "body": "#+TITLE: Publish now\n#+PROPERTY: JAUNDER_STATUS draft\n\nBody",
-            "format": "org",
-            "publish": true,
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        payload,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(
+                parse_post_body("#+TITLE: Publish now\n#+PROPERTY: JAUNDER_STATUS draft\n\nBody"),
+                PostFormat::Org,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -674,51 +673,41 @@ async fn create_org_metadata_failures_do_not_create_rows(#[case] backend: Backen
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
+    let structured_publish_at = UtcInstant::from(
+        chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+            .expect("valid test instant")
+            .to_utc(),
+    );
     let cases = [
-        (
-            "#+PROPERTY: JAUNDER_STATUS draft",
-            serde_json::json!({ "publish": false }),
-        ),
+        ("#+PROPERTY: JAUNDER_STATUS draft", false, None),
         (
             "#+PROPERTY: JAUNDER_STATUS scheduled\n#+DATE: [2026-02-30 Mon 12:00]\n#+PROPERTY: JAUNDER_DATE_TZ UTC\n\nBody",
-            serde_json::json!({ "publish": false }),
+            false,
+            None,
         ),
         (
             "#+TITLE: Expected slug\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_SLUG wrong\n\nBody",
-            serde_json::json!({ "publish": false }),
+            false,
+            None,
         ),
         (
             "#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_FORMAT markdown\n\nBody",
-            serde_json::json!({ "publish": false }),
+            false,
+            None,
         ),
         (
             "#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_DATE_UTC 2020-01-01T00:00:01Z\n\nBody",
-            serde_json::json!({
-                "publish": true,
-                "publish_at": "2020-01-01T00:00:00Z",
-            }),
+            true,
+            Some(structured_publish_at),
         ),
     ];
-    for (org_body, lifecycle) in cases {
-        let mut post = serde_json::json!({
-            "body": org_body,
-            "format": "org",
-        });
-        post.as_object_mut()
-            .expect("test payload is an object")
-            .extend(
-                lifecycle
-                    .as_object()
-                    .expect("test lifecycle is an object")
-                    .clone(),
-            );
-        let (status, body) = post_json(
-            &state,
-            <web::posts::Create as ServerFn>::PATH,
-            serde_json::json!({ "post": post }),
-            Some(&cookie),
-        )
-        .await;
+    for (org_body, publish, publish_at) in cases {
+        let post = PostInputs {
+            publish: Some(publish),
+            publish_at,
+            ..PostInputs::new(parse_post_body(org_body), PostFormat::Org)
+        };
+        let (status, body) = create_post_json(&state, post, Some(&cookie)).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     }
     let drafts = state

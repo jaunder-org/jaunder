@@ -3,18 +3,23 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use common::ids::PostId;
 use common::tag::MAX_TAGS_PER_POST;
+use common::test_support::{parse_post_body, parse_slug, parse_tag_label};
 use server_fn::ServerFn;
-use web::posts::SavedPost;
+use storage::PostFormat;
+use web::posts::{PostInputs, SavedPost};
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{confirmed_mutation, create_user_and_session, post_form, post_json};
+use crate::helpers::{
+    confirmed_mutation, create_post_json, create_user_and_session, post_form, post_json,
+    update_post_json,
+};
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
 use super::fixtures::{
-    create_post_json, get_post_form, list_drafts, list_local_timeline, list_user_posts,
-    login_and_state, publish_post_form, update_post_json,
+    get_post_form, list_drafts, list_local_timeline, list_user_posts, login_and_state,
+    publish_post_form,
 };
 
 async fn unpublish_post_form(
@@ -37,8 +42,15 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) =
-        create_post_json(&state, "original", "markdown", None, false, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("original"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
     let post_id = created.post_id;
@@ -47,12 +59,14 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     let (status, body) = update_post_json(
         &state,
         post_id,
-        "# Updated Title
-
-**new body**",
-        "markdown",
-        Some("updated-slug"),
-        false,
+        PostInputs {
+            slug_override: Some(parse_slug("updated-slug")),
+            publish: Some(false),
+            ..PostInputs::new(
+                parse_post_body("# Updated Title\n\n**new body**"),
+                PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -84,8 +98,15 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) =
-        create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
     let post_id = created.post_id;
@@ -94,10 +115,11 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
     let (status, body) = update_post_json(
         &state,
         post_id,
-        "new body",
-        "markdown",
-        Some("new-slug"),
-        true,
+        PostInputs {
+            slug_override: Some(parse_slug("new-slug")),
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("new body"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -117,8 +139,15 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) =
-        create_post_json(&state, "draft body", "markdown", None, false, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("draft body"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
     assert!(created.published_at.is_none());
@@ -127,10 +156,10 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
     let (status, body) = update_post_json(
         &state,
         post_id,
-        "draft body",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("draft body"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -150,10 +179,10 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
 
     let (status, body) = create_post_json(
         &state,
-        "body",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
+        },
         Some(&author_cookie),
     )
     .await;
@@ -163,10 +192,10 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
     let (status, body) = update_post_json(
         &state,
         created.post_id,
-        "hacked",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("hacked"), PostFormat::Markdown)
+        },
         Some(&stranger_cookie),
     )
     .await;
@@ -194,18 +223,30 @@ async fn update_post_rejects(
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) =
-        create_post_json(&state, "original", "markdown", None, false, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("original"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
-    let (status, body) = update_post_json(
+    let (status, body) = post_json(
         &state,
-        created.post_id,
-        update_body,
-        update_format,
-        None,
-        false,
+        <web::posts::Update as ServerFn>::PATH,
+        serde_json::json!({
+            "post_id": created.post_id,
+            "post": {
+                "body": update_body,
+                "format": update_format,
+                "slug_override": null,
+                "publish": false,
+            }
+        }),
         Some(&cookie),
     )
     .await;
@@ -223,10 +264,10 @@ async fn update_post_returns_not_found_for_missing_post(#[case] backend: Backend
     let (status, body) = update_post_json(
         &state,
         PostId::from(99999),
-        "body",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -242,8 +283,15 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
 
-    let (status, body) =
-        create_post_json(&state, "body", "markdown", None, false, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
@@ -263,10 +311,10 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
     let (status, body) = update_post_json(
         &state,
         created.post_id,
-        "body",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -282,8 +330,15 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
 
-    let (status, body) =
-        create_post_json(&state, "draft body", "markdown", None, false, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("draft body"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
     assert!(created.published_at.is_none());
@@ -319,10 +374,10 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
 
     let (status, body) = create_post_json(
         &state,
-        "secret",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("secret"), PostFormat::Markdown)
+        },
         Some(&author_cookie),
     )
     .await;
@@ -345,8 +400,15 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] bac
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("Post not found"), "body: {body}");
 
-    let (status, body) =
-        create_post_json(&state, "body", "markdown", None, false, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
     let posts = Arc::clone(&state.posts);
@@ -387,8 +449,15 @@ async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) =
-        create_post_json(&state, "gone", "markdown", None, true, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("gone"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
@@ -414,8 +483,15 @@ async fn delete_post_rejects_non_author(#[case] backend: Backend) {
     let author_cookie = create_user_and_session(&state).await.cookie();
     let stranger_cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) =
-        create_post_json(&state, "mine", "markdown", None, true, Some(&author_cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("mine"), PostFormat::Markdown)
+        },
+        Some(&author_cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
@@ -430,8 +506,15 @@ async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) =
-        create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
@@ -446,8 +529,15 @@ async fn delete_post_returns_not_found_for_already_deleted_post(#[case] backend:
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let (status, body) =
-        create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
@@ -470,12 +560,17 @@ async fn deleted_post_excluded_from_timelines_and_returns_404_at_permalink(
 
     let (status, body) = create_post_json(
         &state,
-        "# Deletable Post
-
-body",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(
+                parse_post_body(
+                    "# Deletable Post
+        
+        body",
+                ),
+                PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -527,12 +622,17 @@ async fn unpublish_post_reverts_published_post_to_draft(#[case] backend: Backend
 
     let (status, body) = create_post_json(
         &state,
-        "# Unpublish Me
-
-body",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(
+                parse_post_body(
+                    "# Unpublish Me
+        
+        body",
+                ),
+                PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -577,8 +677,15 @@ async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
     let cookie = create_user_and_session(&state).await.cookie();
 
     let body_text = "# Moved Permalink\n\nbody";
-    let (status, body) =
-        create_post_json(&state, body_text, "markdown", None, false, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body(body_text), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let draft = confirmed_mutation::<SavedPost>(&body);
     assert!(draft.published_at.is_none(), "should start as a draft");
@@ -586,19 +693,14 @@ async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
     // `publish` stamps `now`, so the backdate has to come through `update`'s
     // explicit `publish_at`.
     let backdated = chrono::Utc.with_ymd_and_hms(2020, 3, 5, 12, 0, 0).unwrap();
-    let payload = serde_json::json!({
-        "post_id": draft.post_id,
-        "post": {
-            "body": body_text,
-            "format": "markdown",
-            "publish": true,
-            "publish_at": backdated.to_rfc3339(),
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = update_post_json(
         &state,
-        <web::posts::Update as ServerFn>::PATH,
-        payload,
+        draft.post_id,
+        PostInputs {
+            publish: Some(true),
+            publish_at: Some(common::time::UtcInstant::from(backdated)),
+            ..PostInputs::new(parse_post_body(body_text), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -635,12 +737,17 @@ async fn unpublish_post_rejects_non_author(#[case] backend: Backend) {
 
     let (status, body) = create_post_json(
         &state,
-        "# Others Post
-
-body",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(
+                parse_post_body(
+                    "# Others Post
+        
+        body",
+                ),
+                PostFormat::Markdown,
+            )
+        },
         Some(&author_cookie),
     )
     .await;
@@ -658,19 +765,13 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
     let (_base, state, cookie) = login_and_state(backend).await;
 
     // Create with two tags.
-    let create_payload = serde_json::json!({
-        "post": {
-            "body": "# Diff Me\n\nbody",
-            "format": "markdown",
-            "slug_override": null,
-            "publish": false,
-            "tags": ["rust", "old-tag"],
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        create_payload,
+        PostInputs {
+            publish: Some(false),
+            tags: Some(vec![parse_tag_label("rust"), parse_tag_label("old-tag")]),
+            ..PostInputs::new(parse_post_body("# Diff Me\n\nbody"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -678,20 +779,14 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
     let created = confirmed_mutation::<SavedPost>(&body);
 
     // Update: replace old-tag with new-tag, keep rust.
-    let update_payload = serde_json::json!({
-        "post_id": created.post_id,
-        "post": {
-            "body": "# Diff Me\n\nbody",
-            "format": "markdown",
-            "slug_override": null,
-            "publish": false,
-            "tags": ["rust", "new-tag"],
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = update_post_json(
         &state,
-        <web::posts::Update as ServerFn>::PATH,
-        update_payload,
+        created.post_id,
+        PostInputs {
+            publish: Some(false),
+            tags: Some(vec![parse_tag_label("rust"), parse_tag_label("new-tag")]),
+            ..PostInputs::new(parse_post_body("# Diff Me\n\nbody"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -718,19 +813,13 @@ async fn update_post_rejects_over_limit_tags_without_mutating_post_or_tags(
 ) {
     let (_base, state, cookie) = login_and_state(backend).await;
     let original_body = "# Original Title\n\noriginal body";
-    let create_payload = serde_json::json!({
-        "post": {
-            "body": original_body,
-            "format": "markdown",
-            "slug_override": null,
-            "publish": false,
-            "tags": ["original-tag"],
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        create_payload,
+        PostInputs {
+            publish: Some(false),
+            tags: Some(vec![parse_tag_label("original-tag")]),
+            ..PostInputs::new(parse_post_body(original_body), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -801,39 +890,30 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
     let (_base, state, cookie) = login_and_state(backend).await;
 
     // Create with one tag.
-    let create_payload = serde_json::json!({
-        "post": {
-            "body": "# Untouched\n\nbody",
-            "format": "markdown",
-            "slug_override": null,
-            "publish": false,
-            "tags": ["keep"],
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        create_payload,
+        PostInputs {
+            publish: Some(false),
+            tags: Some(vec![parse_tag_label("keep")]),
+            ..PostInputs::new(parse_post_body("# Untouched\n\nbody"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
-    // Update without including the tags key (None on the server side).
-    let update_payload = serde_json::json!({
-        "post_id": created.post_id,
-        "post": {
-            "body": "# Untouched edited\n\nbody",
-            "format": "markdown",
-            "slug_override": null,
-            "publish": false,
-        }
-    });
-    let (status, body) = post_json(
+    // `None` leaves the existing tag set unchanged.
+    let (status, body) = update_post_json(
         &state,
-        <web::posts::Update as ServerFn>::PATH,
-        update_payload,
+        created.post_id,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(
+                parse_post_body("# Untouched edited\n\nbody"),
+                PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -861,8 +941,15 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
-    let (status, body) =
-        create_post_json(&state, "original", "org", None, false, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("original"), PostFormat::Org)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
@@ -870,18 +957,13 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
         "#+TITLE: Canonical title\n#+KEYWORDS: org-tag, other\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n\nUpdated body",
         created.post_id
     );
-    let update_payload = serde_json::json!({
-        "post_id": created.post_id,
-        "post": {
-            "body": org_body,
-            "format": "org",
-            "publish": false,
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = update_post_json(
         &state,
-        <web::posts::Update as ServerFn>::PATH,
-        update_payload,
+        created.post_id,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body(&org_body), PostFormat::Org)
+        },
         Some(&cookie),
     )
     .await;
@@ -909,18 +991,16 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
         vec!["org-tag", "other"]
     );
 
-    let rejection_payload = serde_json::json!({
-        "post_id": updated.post_id,
-        "post": {
-            "body": "#+TITLE: rejected\n#+PROPERTY: JAUNDER_ID 999\n\nRejected body",
-            "format": "org",
-            "publish": false,
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = update_post_json(
         &state,
-        <web::posts::Update as ServerFn>::PATH,
-        rejection_payload,
+        updated.post_id,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(
+                parse_post_body("#+TITLE: rejected\n#+PROPERTY: JAUNDER_ID 999\n\nRejected body"),
+                PostFormat::Org,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -961,21 +1041,26 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
 async fn update_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
-    let (status, body) =
-        create_post_json(&state, "original", "org", None, false, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("original"), PostFormat::Org)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
-    let payload = serde_json::json!({
-        "post_id": created.post_id,
-        "post": {
-            "body": "#+TITLE: Header lifecycle\n#+PROPERTY: JAUNDER_STATUS published\n\nUpdated body",
-            "format": "org",
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = update_post_json(
         &state,
-        <web::posts::Update as ServerFn>::PATH,
-        payload,
+        created.post_id,
+        PostInputs::new(
+            parse_post_body(
+                "#+TITLE: Header lifecycle\n#+PROPERTY: JAUNDER_STATUS published\n\nUpdated body",
+            ),
+            PostFormat::Org,
+        ),
         Some(&cookie),
     )
     .await;
@@ -992,8 +1077,15 @@ async fn update_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backen
 async fn update_non_org_requires_publish_presence(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
-    let (status, body) =
-        create_post_json(&state, "original", "markdown", None, false, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("original"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
     let payload = serde_json::json!({
@@ -1019,8 +1111,15 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
-    let (status, body) =
-        create_post_json(&state, "original", "org", None, false, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("original"), PostFormat::Org)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
     let before = state
@@ -1042,18 +1141,16 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
         before.tags.iter().map(|tag| &tag.tag_display),
         before.published_at.is_none(),
     );
-    let matching_payload = serde_json::json!({
-        "post_id": created.post_id,
-        "post": {
-            "body": format!("#+TITLE: Changed\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n#+PROPERTY: JAUNDER_SYNCED {current_etag}\n\nChanged body", created.post_id),
-            "format": "org",
-            "publish": false,
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = update_post_json(
         &state,
-        <web::posts::Update as ServerFn>::PATH,
-        matching_payload,
+        created.post_id,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(
+                parse_post_body(&format!("#+TITLE: Changed\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n#+PROPERTY: JAUNDER_SYNCED {current_etag}\n\nChanged body", created.post_id)),
+                PostFormat::Org,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -1071,18 +1168,16 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
         .unwrap()
         .expect("changed post exists");
 
-    let stale_payload = serde_json::json!({
-        "post_id": changed.post_id,
-        "post": {
-            "body": format!("#+TITLE: Stale\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n#+PROPERTY: JAUNDER_SYNCED {current_etag}\n\nStale body", changed.post_id),
-            "format": "org",
-            "publish": false,
-        }
-    });
-    let (status, body) = post_json(
+    let (status, body) = update_post_json(
         &state,
-        <web::posts::Update as ServerFn>::PATH,
-        stale_payload,
+        changed.post_id,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(
+                parse_post_body(&format!("#+TITLE: Stale\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n#+PROPERTY: JAUNDER_SYNCED {current_etag}\n\nStale body", changed.post_id)),
+                PostFormat::Org,
+            )
+        },
         Some(&cookie),
     )
     .await;

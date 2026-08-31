@@ -10,6 +10,7 @@
 
 mod atompub;
 mod http;
+mod posts;
 mod registrar;
 mod session;
 mod site_config;
@@ -35,6 +36,7 @@ pub use http::{
     post_server_fn_with_mailer, post_server_fn_with_media_ownership_resolver,
     post_server_fn_with_secure_flag, post_server_fn_with_ua,
 };
+pub use posts::{create_post_json, update_post_json};
 pub use registrar::{REGISTERED_SERVER_FN_COUNT, ensure_server_fns_registered};
 pub use session::{
     SeededSession, assert_no_email, assert_one_absolute_link_email, create_operator_and_session,

@@ -451,6 +451,26 @@ pub struct PostInputs {
     pub audience: Option<AudienceSelection>,
 }
 
+impl PostInputs {
+    /// Constructs post inputs with only the required author-supplied fields.
+    ///
+    /// Every optional control remains omitted so endpoint lifecycle policy can
+    /// distinguish absent input from an explicit value.
+    #[must_use]
+    pub fn new(body: PostBody, format: PostFormat) -> Self {
+        Self {
+            body,
+            format,
+            slug_override: None,
+            publish: None,
+            publish_at: None,
+            tags: None,
+            summary: None,
+            audience: None,
+        }
+    }
+}
+
 /// Creates a post for the authenticated user.
 ///
 /// `publish_at` is an optional UTC instant supplied by the compose form's
@@ -1164,6 +1184,24 @@ mod tests {
         let base: Slug = "hello-world".parse().unwrap();
         assert_eq!(candidate_slug(&base, 1).unwrap().as_ref(), "hello-world-2");
         assert_eq!(candidate_slug(&base, 2).unwrap().as_ref(), "hello-world-3");
+    }
+
+    #[test]
+    fn post_inputs_new_preserves_required_fields_and_omits_optional_fields() {
+        use super::PostInputs;
+        use common::render::PostFormat;
+
+        let body = parse_post_body("valid body");
+        let post = PostInputs::new(body.clone(), PostFormat::Markdown);
+
+        assert_eq!(post.body, body);
+        assert_eq!(post.format, PostFormat::Markdown);
+        assert_eq!(post.slug_override, None);
+        assert_eq!(post.publish, None);
+        assert_eq!(post.publish_at, None);
+        assert_eq!(post.tags, None);
+        assert_eq!(post.summary, None);
+        assert_eq!(post.audience, None);
     }
 
     // #498: the create/update RPC input contracts carry `format` as a typed

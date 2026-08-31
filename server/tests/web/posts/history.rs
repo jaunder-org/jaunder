@@ -7,11 +7,11 @@ use rstest::*;
 use rstest_reuse::*;
 use server_fn::ServerFn;
 use storage::test_support::{Backend, TestEnv, backends};
-use web::posts::{PostRevisionHistory, RevisionHistoryPage, SavedPost};
+use web::posts::{PostInputs, PostRevisionHistory, RevisionHistoryPage, SavedPost};
 
-use crate::helpers::{confirmed_mutation, create_user_and_session, post_json};
-
-use super::fixtures::{create_post_json, update_post_json};
+use crate::helpers::{
+    confirmed_mutation, create_post_json, create_user_and_session, post_json, update_post_json,
+};
 
 async fn list_history(
     state: &Arc<storage::AppState>,
@@ -102,10 +102,13 @@ async fn revision_history_http_exposes_page_current_and_detail_fields(#[case] ba
     let cookie = session.cookie();
     let (status, body) = create_post_json(
         &state,
-        "# First\n\noriginal body",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(
+                common::test_support::parse_post_body("# First\n\noriginal body"),
+                storage::PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -114,10 +117,13 @@ async fn revision_history_http_exposes_page_current_and_detail_fields(#[case] ba
     let (status, body) = update_post_json(
         &state,
         post.post_id,
-        "# Second\n\nupdated body",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(
+                common::test_support::parse_post_body("# Second\n\nupdated body"),
+                storage::PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -173,10 +179,13 @@ async fn revision_history_http_hides_foreign_missing_and_mismatched_resources(
     let stranger_cookie = create_user_and_session(&state).await.cookie();
     let (status, body) = create_post_json(
         &state,
-        "# Private\n\noriginal body",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(
+                common::test_support::parse_post_body("# Private\n\noriginal body"),
+                storage::PostFormat::Markdown,
+            )
+        },
         Some(&owner_cookie),
     )
     .await;
@@ -185,10 +194,13 @@ async fn revision_history_http_hides_foreign_missing_and_mismatched_resources(
     let (status, body) = update_post_json(
         &state,
         post.post_id,
-        "# Changed\n\nupdated body",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(
+                common::test_support::parse_post_body("# Changed\n\nupdated body"),
+                storage::PostFormat::Markdown,
+            )
+        },
         Some(&owner_cookie),
     )
     .await;

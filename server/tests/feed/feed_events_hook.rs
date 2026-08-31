@@ -1,13 +1,16 @@
 use axum::http::StatusCode;
-use serde_json::json;
+use common::test_support::{parse_post_body, parse_tag_label};
 use server_fn::ServerFn;
+use storage::PostFormat;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{confirmed_mutation, create_user_and_session, post_form, post_json};
+use crate::helpers::{
+    confirmed_mutation, create_post_json, create_user_and_session, post_form, update_post_json,
+};
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
-use web::posts::SavedPost;
+use web::posts::{PostInputs, SavedPost};
 
 async fn claim_pending(state: &std::sync::Arc<storage::AppState>) -> Vec<storage::FeedEventRecord> {
     let feed_events = state.feed_events.clone();
@@ -47,20 +50,13 @@ async fn create_published_post_enqueues_expected_feeds(
 
     let session = create_user_and_session(&state).await;
 
-    let body = json!({
-        "post": {
-            "body": "Test post",
-            "format": "markdown",
-            "slug_override": None::<String>,
-            "publish": true,
-            "tags": tags
-        }
-    });
-
-    let (status, _response) = post_json(
+    let (status, _response) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        body,
+        PostInputs {
+            publish: Some(true),
+            tags: tags.map(|tags| tags.into_iter().map(|tag| parse_tag_label(&tag)).collect()),
+            ..PostInputs::new(parse_post_body("Test post"), PostFormat::Markdown)
+        },
         Some(&session.cookie()),
     )
     .await;
@@ -84,20 +80,13 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
 
-    let create_body = json!({
-        "post": {
-            "body": "Test post",
-            "format": "markdown",
-            "slug_override": None::<String>,
-            "publish": true,
-            "tags": Some(vec!["rust".to_string(), "web".to_string()])
-        }
-    });
-
-    let (status, create_response) = post_json(
+    let (status, create_response) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        create_body,
+        PostInputs {
+            publish: Some(true),
+            tags: Some(vec![parse_tag_label("rust"), parse_tag_label("web")]),
+            ..PostInputs::new(parse_post_body("Test post"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -110,21 +99,14 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
     let _initial_batch = claim_pending(&state).await;
 
     // Union should be {leptos, rust, web} = 3 tags
-    let update_body = json!({
-        "post_id": post_id,
-        "post": {
-            "body": "Updated post",
-            "format": "markdown",
-            "slug_override": None::<String>,
-            "publish": false,
-            "tags": Some(vec!["rust".to_string(), "leptos".to_string()])
-        }
-    });
-
-    let (status, _) = post_json(
+    let (status, _) = update_post_json(
         &state,
-        <web::posts::Update as ServerFn>::PATH,
-        update_body,
+        common::ids::PostId::from(post_id),
+        PostInputs {
+            publish: Some(false),
+            tags: Some(vec![parse_tag_label("rust"), parse_tag_label("leptos")]),
+            ..PostInputs::new(parse_post_body("Updated post"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -149,20 +131,13 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
 
-    let create_body = json!({
-        "post": {
-            "body": "Test post",
-            "format": "markdown",
-            "slug_override": None::<String>,
-            "publish": true,
-            "tags": Some(vec!["rust".to_string()])
-        }
-    });
-
-    let (status, create_response) = post_json(
+    let (status, create_response) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        create_body,
+        PostInputs {
+            publish: Some(true),
+            tags: Some(vec![parse_tag_label("rust")]),
+            ..PostInputs::new(parse_post_body("Test post"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -203,20 +178,13 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
 
-    let create_body = json!({
-        "post": {
-            "body": "Test post",
-            "format": "markdown",
-            "slug_override": None::<String>,
-            "publish": true,
-            "tags": Some(vec!["rust".to_string()])
-        }
-    });
-
-    let (status, create_response) = post_json(
+    let (status, create_response) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        create_body,
+        PostInputs {
+            publish: Some(true),
+            tags: Some(vec![parse_tag_label("rust")]),
+            ..PostInputs::new(parse_post_body("Test post"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;
@@ -257,20 +225,13 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
 
-    let create_body = json!({
-        "post": {
-            "body": "Test draft",
-            "format": "markdown",
-            "slug_override": None::<String>,
-            "publish": false,
-            "tags": Some(vec!["rust".to_string()])
-        }
-    });
-
-    let (status, create_response) = post_json(
+    let (status, create_response) = create_post_json(
         &state,
-        <web::posts::Create as ServerFn>::PATH,
-        create_body,
+        PostInputs {
+            publish: Some(false),
+            tags: Some(vec![parse_tag_label("rust")]),
+            ..PostInputs::new(parse_post_body("Test draft"), PostFormat::Markdown)
+        },
         Some(&cookie),
     )
     .await;

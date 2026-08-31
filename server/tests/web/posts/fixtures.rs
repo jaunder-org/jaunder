@@ -8,58 +8,6 @@ use server_fn::ServerFn;
 use crate::helpers::{create_user_and_session, post_form, post_json};
 use storage::test_support::{Backend, TestBase, TestEnv};
 
-pub(super) async fn create_post_json(
-    state: &Arc<storage::AppState>,
-    body: &str,
-    format: &str,
-    slug_override: Option<&str>,
-    publish: bool,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
-    let payload = serde_json::json!({
-        "post": {
-            "body": body,
-            "format": format,
-            "slug_override": slug_override,
-            "publish": publish,
-        }
-    });
-    post_json(
-        state,
-        <web::posts::Create as ServerFn>::PATH,
-        payload,
-        cookie,
-    )
-    .await
-}
-
-pub(super) async fn update_post_json(
-    state: &Arc<storage::AppState>,
-    post_id: PostId,
-    body: &str,
-    format: &str,
-    slug_override: Option<&str>,
-    publish: bool,
-    cookie: Option<&str>,
-) -> (StatusCode, String) {
-    let payload = serde_json::json!({
-        "post_id": post_id,
-        "post": {
-            "body": body,
-            "format": format,
-            "slug_override": slug_override,
-            "publish": publish,
-        }
-    });
-    post_json(
-        state,
-        <web::posts::Update as ServerFn>::PATH,
-        payload,
-        cookie,
-    )
-    .await
-}
-
 pub(super) async fn get_post_form(
     state: &Arc<storage::AppState>,
     username: &str,

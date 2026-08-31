@@ -1,16 +1,18 @@
 use axum::http::StatusCode;
 use chrono::Datelike;
+use common::render::PostFormat;
 use common::seed::AuthoredPost;
 use common::tag::TagLabel;
-use web::posts::SavedPost;
+use common::test_support::parse_post_body;
+use web::posts::{PostInputs, SavedPost};
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{confirmed_mutation, create_user_and_session};
+use crate::helpers::{confirmed_mutation, create_post_json, create_user_and_session};
 use storage::test_support::{Backend, TestEnv, backends};
 
-use super::fixtures::{create_post_json, get_post_form};
+use super::fixtures::get_post_form;
 
 #[apply(backends)]
 #[tokio::test]
@@ -21,12 +23,17 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
 
     let (status, body) = create_post_json(
         &state,
-        "# Permalink
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(
+                parse_post_body(
+                    "# Permalink
 
 **bold**",
-        "markdown",
-        None,
-        true,
+                ),
+                PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -105,10 +112,13 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
 
     let (status, body) = create_post_json(
         &state,
-        "# Tagged Post\n\nbody",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(
+                parse_post_body("# Tagged Post\n\nbody"),
+                PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
