@@ -2261,7 +2261,7 @@ the test suites. The gates that run them are the next section.
 
 The harness — the `Backend` enum, `TestEnv`, per-test DB provisioning, and the
 rstest templates — lives inside `storage` as the `test_support` module, gated
-`#[cfg(any(test, feature = "test-support"))]` (`storage/src/lib.rs:45-49`)
+`#[cfg(any(test, feature = "test-support"))]` (`storage/src/lib.rs:47-51`)
 ([ADR-0033](adr/0033-shared-db-test-harness-crate.md)). Its
 `storage/src/test_support/mod.rs` facade declares the nine cohesive leaves
 (`backend`, `feeds`, `invites`, `mail`, `media`, `post_service`, `postgres`,
@@ -2276,7 +2276,7 @@ feature. A separate crate is impossible: it must return `storage::AppState`, so
 The four templates live with their backend provisioning in
 `storage/src/test_support/backend.rs`: `backends` and `backends_matrix` (both
 dual; the second is the `#[values]`-based variant), plus `sqlite_only` and
-`postgres_only` (`backend.rs:453-480`). The backend axis of `backends_matrix` is
+`postgres_only` (`backend.rs:560-590`). The backend axis of `backends_matrix` is
 `#[values]`-based because a `#[case]`-based axis cannot coexist with a test's
 own named `#[case]` rows; it composes as rows × backends, and the attribute
 order is `#[apply(backends_matrix)]`, then the `#[case::name(..)]` rows, then
@@ -2285,7 +2285,7 @@ Each template is `#[export]`ed, so it expands to a name-mangled `macro_rules!`
 that a plain `use storage::test_support::backends;` brings into scope and
 `#[apply(backends)]` then resolves **by bare name** — no
 `#[apply(path::to::template)]` and no `pub use` re-export (ADR-0124;
-`storage/src/test_support/backend.rs:462-480`). That is why the templates stay
+`storage/src/test_support/backend.rs:572-590`). That is why the templates stay
 in `storage::test_support` rather than moving to a consumer.
 
 A storage test is homed by what it proves
