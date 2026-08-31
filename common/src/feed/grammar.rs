@@ -3,7 +3,13 @@ use serde::{Deserialize, Serialize};
 use crate::{media::ContentType, tag::Tag, username::Username};
 
 /// The public representation format of a Syndication Feed.
+#[macros::text_enum(
+    no_serde,
+    error = InvalidFeedFormat,
+    message = "feed format must be \"rss\", \"atom\", or \"json\""
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[strum(serialize_all = "snake_case")]
 pub enum FeedFormat {
     Rss,
     Atom,
@@ -13,11 +19,7 @@ pub enum FeedFormat {
 impl FeedFormat {
     #[must_use]
     pub fn ext(self) -> &'static str {
-        match self {
-            Self::Rss => "rss",
-            Self::Atom => "atom",
-            Self::Json => "json",
-        }
+        (&self).into()
     }
 
     /// The media `Content-Type` served for this representation.
@@ -75,5 +77,41 @@ mod tests {
             FeedFormat::Json.content_type(),
             parse_content_type("application/feed+json")
         );
+    }
+
+    #[test]
+    fn parses_only_lowercase_public_extensions_with_the_declared_error() {
+        for (extension, format) in [
+            ("rss", FeedFormat::Rss),
+            ("atom", FeedFormat::Atom),
+            ("json", FeedFormat::Json),
+        ] {
+            let parsed: FeedFormat = extension.parse().expect("public extension parses");
+            assert_eq!(parsed, format);
+            assert_eq!(parsed.ext(), extension);
+        }
+
+        for extension in ["", "RSS", "Atom", "JSON", "xml", "rsss"] {
+            let err = extension
+                .parse::<FeedFormat>()
+                .expect_err("rejects non-public extension");
+            assert_eq!(
+                err.to_string(),
+                "feed format must be \"rss\", \"atom\", or \"json\"",
+                "rejects {extension:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn format_serde_representation_remains_the_variant_name() {
+        for (format, wire) in [
+            (FeedFormat::Rss, "\"Rss\""),
+            (FeedFormat::Atom, "\"Atom\""),
+            (FeedFormat::Json, "\"Json\""),
+        ] {
+            assert_eq!(serde_json::to_string(&format).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<FeedFormat>(wire).unwrap(), format);
+        }
     }
 }

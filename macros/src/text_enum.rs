@@ -7,8 +7,9 @@
 //!
 //! `strum` still does all the real work — the token mapping, `Display`, `FromStr`,
 //! `VariantArray`, `EnumMessage`. This macro writes the derives the author would have
-//! written, plus the pieces strum has no opinion about: the named parse error, the serde
-//! bridge, and (opt-in) the sqlx bridge.
+//! written, plus the pieces strum has no opinion about: the named parse error, the default
+//! serde bridge (or `no_serde` for a separately derived representation), and (opt-in) the
+//! sqlx bridge.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -25,6 +26,9 @@ struct Opts {
     /// `sqlx` — emit the storage bridge. Off by default: most of these enums are
     /// wire-only, so "this one is stored" is worth declaring.
     sqlx: bool,
+    /// `no_serde` — leave serialization to explicit derives when the enum's existing wire
+    /// representation is intentionally different from its strum token grammar.
+    no_serde: bool,
     /// `error = <Ident>` — the generated parse error's name. Stated rather than derived
     /// from the enum's name because it is public API: `host`'s `validation_from!`
     /// registers these across a crate boundary, so the name must be greppable here.
@@ -43,19 +47,23 @@ pub(crate) fn expand(attr: TokenStream, item: &TokenStream) -> TokenStream {
     if let Err(e) = crate::require_enum_shape(&input, "text_enum", "enum X { A, B }") {
         return with_item(&e.to_compile_error(), item);
     }
-    if let Err(e) = reject_const_into_str(&input) {
-        return with_item(&e.to_compile_error(), item);
-    }
     let opts = match parse_opts(attr) {
         Ok(o) => o,
         Err(e) => return with_item(&e.to_compile_error(), item),
     };
+    if let Err(e) = reject_const_into_str(&input, &opts) {
+        return with_item(&e.to_compile_error(), item);
+    }
 
     let name = &input.ident;
     let parse_fn = format_ident!("__{}_parse_err", snake_case(name));
     let injected = injected_derives(&input);
     let error_ty = error_type(&opts.error, &opts.message, name);
-    let serde = serde_impls(name);
+    let serde = if opts.no_serde {
+        quote! {}
+    } else {
+        serde_impls(name)
+    };
     let sqlx = if opts.sqlx {
         sqlx_bridge(name)
     } else {
@@ -246,9 +254,15 @@ fn snake_case(ident: &syn::Ident) -> String {
     out
 }
 
-/// `#[strum(const_into_str)]` suppresses the `From<&X> for &'static str` that both the
-/// serde and sqlx sides read the token through, so it cannot be combined with this macro.
-fn reject_const_into_str(input: &DeriveInput) -> syn::Result<()> {
+/// `#[strum(const_into_str)]` suppresses the `From<&X> for &'static str` that the
+/// generated serde and sqlx bridges read the token through. It is compatible with
+/// `no_serde` when the sqlx bridge is also absent, because then only strum consumes the
+/// static token conversion.
+fn reject_const_into_str(input: &DeriveInput, opts: &Opts) -> syn::Result<()> {
+    if opts.no_serde && !opts.sqlx {
+        return Ok(());
+    }
+
     for attr in &input.attrs {
         if !attr.path().is_ident("strum") {
             continue;
@@ -274,19 +288,21 @@ fn reject_const_into_str(input: &DeriveInput) -> syn::Result<()> {
     Ok(())
 }
 
-/// Reads `sqlx`, `error = <Ident>`, and `message = "<literal>"`. `error` and `message` are
-/// mandatory and come as a pair; anything else is a spanned error, so a typo fails loudly
-/// rather than silently dropping a bridge.
+/// Reads `sqlx`, `no_serde`, `error = <Ident>`, and `message = "<literal>"`. `error` and
+/// `message` are mandatory and come as a pair; anything else is a spanned error, so a typo
+/// fails loudly rather than silently dropping a bridge.
 fn parse_opts(attr: TokenStream) -> syn::Result<Opts> {
     let span = proc_macro2::Span::call_site();
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(attr)?;
     let mut sqlx = false;
+    let mut no_serde = false;
     let mut error: Option<syn::Ident> = None;
     let mut message: Option<syn::LitStr> = None;
 
     for meta in &metas {
         match meta {
             Meta::Path(p) if p.is_ident("sqlx") => sqlx = true,
+            Meta::Path(p) if p.is_ident("no_serde") => no_serde = true,
             Meta::NameValue(nv) if nv.path.is_ident("error") => {
                 let Expr::Path(p) = &nv.value else {
                     return Err(syn::Error::new_spanned(
@@ -311,8 +327,8 @@ fn parse_opts(attr: TokenStream) -> syn::Result<Opts> {
             other => {
                 return Err(syn::Error::new_spanned(
                     other,
-                    "unknown `text_enum` option (expected `sqlx`, `error = <Ident>`, or \
-                     `message = \"…\"`)",
+                    "unknown `text_enum` option (expected `sqlx`, `no_serde`, \
+                     `error = <Ident>`, or `message = \"…\"`)",
                 ));
             }
         }
@@ -321,6 +337,7 @@ fn parse_opts(attr: TokenStream) -> syn::Result<Opts> {
     match (error, message) {
         (Some(error), Some(message)) => Ok(Opts {
             sqlx,
+            no_serde,
             error,
             message,
         }),
@@ -605,5 +622,63 @@ mod tests {
             "pub enum X { A }",
         ));
         assert!(!out.contains("::sqlx::"));
+    }
+
+    #[test]
+    fn no_serde_omits_only_the_serde_bridge() {
+        let out = norm(&expand_str(
+            r#"no_serde, error = InvalidX, message = "b""#,
+            "pub enum X { A }",
+        ));
+        assert!(
+            !out.contains("::serde::"),
+            "`no_serde` must suppress the generated serde impls"
+        );
+        for token in [
+            "::strum::AsRefStr",
+            "::strum::Display",
+            "::strum::EnumString",
+            "::strum::IntoStaticStr",
+            "parse_err_ty=InvalidX",
+            "fn__x_parse_err(_:&str)->InvalidX",
+        ] {
+            assert!(
+                out.contains(&norm_s(token)),
+                "`no_serde` must retain {token}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_serde_can_coexist_with_the_sqlx_bridge() {
+        let out = norm(&expand_str(
+            r#"no_serde, sqlx, error = InvalidX, message = "b""#,
+            "pub enum X { A }",
+        ));
+        assert!(!out.contains("::serde::"));
+        assert!(out.contains("::sqlx::"));
+    }
+
+    #[test]
+    fn no_serde_without_sqlx_allows_const_into_str() {
+        let out = expand_str(
+            r#"no_serde, error = InvalidX, message = "b""#,
+            r"#[strum(const_into_str)] pub enum X { A }",
+        )
+        .to_string();
+        assert!(!out.contains("compile_error"));
+    }
+
+    #[test]
+    fn default_options_still_emit_the_serde_bridge() {
+        let out = norm(&expand_str(
+            r#"error = InvalidX, message = "b""#,
+            "pub enum X { A }",
+        ));
+        assert!(
+            out.contains("::serde::Serialize"),
+            "serde remains the default macro surface"
+        );
+        assert!(out.contains("::serde::Deserialize"));
     }
 }

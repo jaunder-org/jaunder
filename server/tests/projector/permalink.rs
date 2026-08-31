@@ -78,9 +78,49 @@ async fn permalink_unknown_serves_spa_shell(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn permalink_non_numeric_date_serves_shell(#[case] backend: Backend) {
+    // A decoded five-segment permalink with a non-numeric date remains a projector soft miss:
+    // the shell, never axum's pre-handler 400 (#697, ADR-0063 §4).
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let resp = projector_app(&state)
+        .oneshot(get("/~ghost/not-a-year/1/2/missing"))
+        .await
+        .expect("request");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "non-numeric date → SPA shell"
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("test-shell"), "served the SPA shell: {html}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn permalink_overflowing_date_serves_shell(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let resp = projector_app(&state)
+        .oneshot(get("/~ghost/2147483648/1/2/missing"))
+        .await
+        .expect("request");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "overflowing date → SPA shell"
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("test-shell"), "served the SPA shell: {html}");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn permalink_impossible_date_serves_shell(#[case] backend: Backend) {
-    // An impossible date (month 13, day 40) must be a soft-404 (SPA shell), not a
-    // 400/500 — the `SoftPath` date assembly resolves it to `None` (#583).
     let TestEnv { state, base: _base } = backend.setup().await;
     let resp = projector_app(&state)
         .oneshot(get("/~ghost/2026/13/40/missing"))

@@ -376,12 +376,18 @@ async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: B
     );
 }
 
-// These surfaces must 404 when the request targets something the canonical
-// validators reject: an unknown extension, a tag with a leading hyphen, a
-// username with a dot, or a user-tag whose tag segment is invalid. The handler
-// must 404 rather than construct an invalid surface.
+// Feed extensions soft-parse at every public feed route, so both unknown and
+// case-variant extensions reach the handler and become 404s rather than Axum
+// extractor 400s. The remaining cases cover invalid route-value soft misses.
 #[apply(backends_matrix)]
-#[case::unknown_extension("/~alice/feed.xml")]
+#[case::site_unknown_extension("/feed.xml")]
+#[case::site_case_variant_extension("/feed.RSS")]
+#[case::site_tag_unknown_extension("/tags/rust/feed.xml")]
+#[case::site_tag_case_variant_extension("/tags/rust/feed.RSS")]
+#[case::user_unknown_extension("/~alice/feed.xml")]
+#[case::user_case_variant_extension("/~alice/feed.RSS")]
+#[case::user_tag_unknown_extension("/~alice/tags/rust/feed.xml")]
+#[case::user_tag_case_variant_extension("/~alice/tags/rust/feed.RSS")]
 #[case::invalid_tag("/tags/-rust/feed.rss")]
 #[case::invalid_username("/~al.ice/feed.rss")]
 #[case::invalid_user_tag("/~alice/tags/-rust/feed.rss")]
@@ -401,7 +407,7 @@ async fn handler_rejects_invalid_request_with_404(backend: Backend, #[case] uri:
     assert_eq!(
         resp.status(),
         StatusCode::NOT_FOUND,
-        "should return 404 for a request the canonical validator rejects: {uri}"
+        "should return 404 for an invalid public feed route: {uri}"
     );
 }
 

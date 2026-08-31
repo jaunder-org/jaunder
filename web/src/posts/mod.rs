@@ -26,7 +26,7 @@ mod history_component;
 pub(crate) mod render;
 
 // Pure, host-tested parsing/formatting logic (ADR-0070 §6, ADR-0055): the
-// permalink route-param decoder and the draft-row display computation, extracted
+// router-specific permalink adapter and draft-row display computation, extracted
 // out of the wasm-only components so they stay host-compiled and coverage-measured.
 mod parse;
 
@@ -42,10 +42,9 @@ mod page_state;
 mod compose_state;
 mod edit_state;
 
-// Re-exported at the (public) `crate::posts::…` path so the pure `parse` fns are
-// reachable exported items on the host build too — consumed only by the wasm-only
-// `component`, an unexported `parse` fn would fail the host build as `dead_code`.
-pub use parse::{DraftRowDisplay, PermalinkRoute, draft_row_display, parse_permalink_route};
+// Re-exported at the public `crate::posts::…` path so the host build keeps the
+// wasm-only component's router adapter reachable.
+pub use parse::{DraftRowDisplay, draft_row_display, parse_permalink_route};
 
 // Same reason as `parse` above: `page_state`'s only caller is the wasm-only
 // `component`, so without these the host build sees every one of them as `dead_code`.

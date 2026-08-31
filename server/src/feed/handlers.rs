@@ -19,15 +19,6 @@ use super::regenerate;
 use crate::soft_path::SoftPath;
 use web::error::InternalError;
 
-fn parse_format(ext: &str) -> Option<FeedFormat> {
-    match ext {
-        "rss" => Some(FeedFormat::Rss),
-        "atom" => Some(FeedFormat::Atom),
-        "json" => Some(FeedFormat::Json),
-        _ => None,
-    }
-}
-
 /// Retains a cache-read failure as the typed source of the sanitized boundary
 /// carrier.
 #[must_use]
@@ -126,9 +117,9 @@ pub async fn feed_site(
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     headers: HeaderMap,
-    Path(ext): Path<String>,
+    Path(format): Path<SoftPath<FeedFormat>>,
 ) -> Response {
-    let Some(format) = parse_format(&ext) else {
+    let Some(format) = format.into() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     serve(
@@ -147,9 +138,9 @@ pub async fn feed_site_tag(
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     headers: HeaderMap,
-    Path((tag, ext)): Path<(SoftPath<Tag>, String)>,
+    Path((tag, format)): Path<(SoftPath<Tag>, SoftPath<FeedFormat>)>,
 ) -> Response {
-    let Some(format) = parse_format(&ext) else {
+    let Some(format) = format.into() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let Some(tag) = tag.into() else {
@@ -171,9 +162,9 @@ pub async fn feed_user(
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     headers: HeaderMap,
-    Path((username, ext)): Path<(SoftPath<Username>, String)>,
+    Path((username, format)): Path<(SoftPath<Username>, SoftPath<FeedFormat>)>,
 ) -> Response {
-    let Some(format) = parse_format(&ext) else {
+    let Some(format) = format.into() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let Some(username) = username.into() else {
@@ -195,9 +186,9 @@ pub async fn feed_user_tag(
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     headers: HeaderMap,
-    Path((username, tag, ext)): Path<(SoftPath<Username>, SoftPath<Tag>, String)>,
+    Path((username, tag, format)): Path<(SoftPath<Username>, SoftPath<Tag>, SoftPath<FeedFormat>)>,
 ) -> Response {
-    let Some(format) = parse_format(&ext) else {
+    let Some(format) = format.into() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let (Some(username), Some(tag)) = (username.into(), tag.into()) else {
@@ -409,7 +400,7 @@ mod tests {
             Extension(empty_site_config()),
             Extension(empty_posts()),
             HeaderMap::new(),
-            Path("bogus".to_owned()),
+            Path(SoftPath::parse("bogus")),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -428,7 +419,7 @@ mod tests {
             Extension(empty_site_config()),
             Extension(empty_posts()),
             HeaderMap::new(),
-            Path("rss".to_owned()),
+            Path(SoftPath::parse("rss")),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -442,7 +433,7 @@ mod tests {
             Extension(empty_site_config()),
             Extension(empty_posts()),
             HeaderMap::new(),
-            Path((SoftPath::parse("rust"), "bogus".to_owned())),
+            Path((SoftPath::parse("rust"), SoftPath::parse("bogus"))),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -459,7 +450,7 @@ mod tests {
             Path((
                 SoftPath::parse("alice"),
                 SoftPath::parse("rust"),
-                "bogus".to_owned(),
+                SoftPath::parse("bogus"),
             )),
         )
         .await;
@@ -482,7 +473,7 @@ mod tests {
             Path((
                 SoftPath::parse("alice"),
                 SoftPath::parse("rust"),
-                "rss".to_owned(),
+                SoftPath::parse("rss"),
             )),
         )
         .await;
