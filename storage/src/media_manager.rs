@@ -307,7 +307,16 @@ impl MediaManager {
         target_path: PathBuf,
         hash_dir: PathBuf,
     ) -> anyhow::Result<(TargetDisposition, MutationOutcome<()>)> {
-        let _content_lock = self.content_locks.acquire_one(&media_ref.sha256).await?;
+        let _content_lock = match self.content_locks.acquire_one(&media_ref.sha256).await {
+            Ok(content_lock) => content_lock,
+            Err(error) => {
+                return Self::finish_temp_cleanup(
+                    Err(error.into()),
+                    fs::remove_file(&tmp_path).await,
+                    "storage.media.content_lock_temp_cleanup",
+                );
+            }
+        };
         let disposition = match Self::handle_deduplication(&tmp_path, &target_path, &hash_dir).await
         {
             Ok(disposition) => disposition,
@@ -1034,6 +1043,56 @@ mod tests {
         assert!(
             !tmp_path.exists(),
             "a scope begin failure must remove the prepared temp file"
+        );
+    }
+
+    // guard:no-backend — filesystem lock acquisition fails before the database scope.
+    #[tokio::test]
+    async fn upload_content_lock_failure_removes_temp_file() {
+        let temp = TempDir::new().unwrap();
+        let media_path = temp.path().join("media");
+        fs::write(&media_path, b"not-a-directory").await.unwrap();
+        let mut media = crate::MockMediaStorage::new();
+        media
+            .expect_get_user_upload_usage()
+            .times(1)
+            .returning(|_| Ok(parse_byte_size("0")));
+        let manager = MediaManager::new(
+            Arc::new(media),
+            Arc::new(crate::MockSiteConfigStorage::new()),
+            WriteScope::mock(),
+            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+        );
+        let metadata = UploadMetadata {
+            filename: parse_filename("content-lock-failed.png"),
+            content_type: parse_content_type("image/png"),
+            sha256_hex: parse_content_hash(
+                "deadbeef00000000000000000000000000000000000000000000000000000000",
+            ),
+            size_bytes: parse_byte_size("7"),
+        };
+        let tmp_path = temp.path().join("upload.tmp");
+        fs::write(&tmp_path, b"png-ish").await.unwrap();
+
+        assert!(
+            manager
+                .finalize_upload(
+                    UserId::from(1),
+                    metadata,
+                    &tmp_path,
+                    UserQuota::try_from(100_i64).unwrap(),
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            !tmp_path.exists(),
+            "an OS content-lock failure must remove the prepared temp file"
+        );
+        assert_eq!(
+            fs::read(media_path).await.unwrap(),
+            b"not-a-directory",
+            "cleanup must retain the path that caused lock acquisition to fail"
         );
     }
 
