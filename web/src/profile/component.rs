@@ -95,20 +95,15 @@ pub fn ProfilePage() -> impl IntoView {
                     update_action
                         .value()
                         .get()
-                        .and_then(|result: Result<MutationOutcome<()>, WebError>| match result {
-                            Ok(MutationOutcome::Confirmed(())) => None,
-                            Ok(MutationOutcome::CommitIndeterminate(())) => {
-                                Some(
-                                    view! {
-                                        <p class="error">
-                                            "Your profile may have been updated, but its status could not be confirmed. Refresh to check."
-                                        </p>
-                                    }
-                                        .into_any(),
-                                )
-                            }
-                            Err(error) => {
-                                Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
+                        .and_then(|result: Result<MutationOutcome<()>, WebError>| {
+                            match crate::mutation_feedback::classify(
+                                result,
+                                "Your profile may have been updated, but its status could not be confirmed. Refresh to check.",
+                            ) {
+                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => None,
+                                crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                    Some(view! { <p class="error">{message}</p> }.into_any())
+                                }
                             }
                         })
                 }}
@@ -160,15 +155,18 @@ fn DefaultPostFormatControl() -> impl IntoView {
                             action
                                 .value()
                                 .get()
-                                .and_then(|result: Result<MutationOutcome<()>, WebError>| match result {
-                                    Ok(MutationOutcome::Confirmed(())) => None,
-                                    Ok(MutationOutcome::CommitIndeterminate(())) => {
-                                        Some(
-                                            "Save acknowledgement was lost; reload to verify the default post format."
-                                                .to_owned(),
-                                        )
+                                .and_then(|result: Result<MutationOutcome<()>, WebError>| {
+                                    match crate::mutation_feedback::classify(
+                                        result,
+                                        "Save acknowledgement was lost; reload to verify the default post format.",
+                                    ) {
+                                        crate::mutation_feedback::MutationFeedback::Confirmed(
+                                            (),
+                                        ) => None,
+                                        crate::mutation_feedback::MutationFeedback::Error(
+                                            message,
+                                        ) => Some(message),
                                     }
-                                    Err(error) => Some(error.to_string()),
                                 })
                                 .map(|error| view! { <p class="error">{error}</p> })
                         }}

@@ -36,26 +36,23 @@ pub fn SiteSettingsPage() -> impl IntoView {
                     update_action
                         .value()
                         .get()
-                        .map(|result: Result<MutationOutcome<()>, WebError>| match result {
-                            Ok(MutationOutcome::Confirmed(())) => {
-                                view! {
-                                    <p class="j-settings-saved" role="status">
-                                        "Site settings saved."
-                                    </p>
+                        .map(|result: Result<MutationOutcome<()>, WebError>| {
+                            match crate::mutation_feedback::classify(
+                                result,
+                                "Save acknowledgement was lost; reload to verify the settings.",
+                            ) {
+                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
+                                    view! {
+                                        <p class="j-settings-saved" role="status">
+                                            "Site settings saved."
+                                        </p>
+                                    }
+                                        .into_any()
                                 }
-                                    .into_any()
-                            }
-                            Ok(MutationOutcome::CommitIndeterminate(())) => {
-                                view! {
-                                    <p class="error j-settings-error">
-                                        "Save acknowledgement was lost; reload to verify the settings."
-                                    </p>
+                                crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                    view! { <p class="error j-settings-error">{message}</p> }
+                                        .into_any()
                                 }
-                                    .into_any()
-                            }
-                            Err(error) => {
-                                view! { <p class="error j-settings-error">{error.to_string()}</p> }
-                                    .into_any()
                             }
                         })
                 }}

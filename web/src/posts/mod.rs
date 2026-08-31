@@ -51,9 +51,9 @@ pub use parse::{DraftRowDisplay, draft_row_display, parse_permalink_route};
 pub use page_state::{
     AuthenticatedHistoryState, HistoryCollectionDisplay, HistoryDisplayRow, HistoryListState,
     ListingRoute, NamedAudienceState, authenticated_history_state, current_history_rows,
-    load_authenticated_history, notify, notify_with_fallback, publish_redirect,
-    revision_collection_displays, revision_history_rows, seeded_page, tag_query, user_query,
-    user_tag_query, with_post_id,
+    load_authenticated_history, notify, notify_create_settlement, notify_with_fallback,
+    publish_redirect, revision_collection_displays, revision_history_rows, seeded_page, tag_query,
+    user_query, user_tag_query, with_post_id,
 };
 
 // Same reason again: the composer and editor state seams are consumed by the

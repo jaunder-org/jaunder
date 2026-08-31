@@ -365,12 +365,11 @@ fn membership_feedback(
     result: Option<Result<MutationOutcome<()>, WebError>>,
     indeterminate_message: &'static str,
 ) -> Option<AnyView> {
-    match result? {
-        Ok(MutationOutcome::Confirmed(())) => None,
-        Ok(MutationOutcome::CommitIndeterminate(())) => {
-            Some(view! { <p class="error">{indeterminate_message}</p> }.into_any())
+    match crate::mutation_feedback::classify(result?, indeterminate_message) {
+        crate::mutation_feedback::MutationFeedback::Confirmed(()) => None,
+        crate::mutation_feedback::MutationFeedback::Error(message) => {
+            Some(view! { <p class="error">{message}</p> }.into_any())
         }
-        Err(error) => Some(view! { <p class="error">{error.to_string()}</p> }.into_any()),
     }
 }
 

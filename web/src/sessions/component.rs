@@ -24,20 +24,15 @@ pub fn SessionsPage() -> impl IntoView {
                     revoke_action
                         .value()
                         .get()
-                        .and_then(|result| match result {
-                            Ok(MutationOutcome::Confirmed(())) => None,
-                            Ok(MutationOutcome::CommitIndeterminate(())) => {
-                                Some(
-                                    view! {
-                                        <p class="error">
-                                            "The session may have been revoked, but its status could not be confirmed. Refresh to check."
-                                        </p>
-                                    }
-                                        .into_any(),
-                                )
-                            }
-                            Err(error) => {
-                                Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
+                        .and_then(|result| {
+                            match crate::mutation_feedback::classify(
+                                result,
+                                "The session may have been revoked, but its status could not be confirmed. Refresh to check.",
+                            ) {
+                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => None,
+                                crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                    Some(view! { <p class="error">{message}</p> }.into_any())
+                                }
                             }
                         })
                 }}

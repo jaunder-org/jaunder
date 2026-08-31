@@ -233,6 +233,15 @@ impl MediaManager {
         )
     }
 
+    fn scope_error(error: WriteScopeError<anyhow::Error>) -> anyhow::Error {
+        match error {
+            WriteScopeError::Operation(error) => error,
+            WriteScopeError::Begin(error) => {
+                anyhow::anyhow!(MediaError::Internal(Box::new(error)))
+            }
+        }
+    }
+
     /// Content-addresses the temp file at `target_path`, distinguishing a
     /// pre-existing target from one created by this upload.
     async fn handle_deduplication(
@@ -297,55 +306,65 @@ impl MediaManager {
     ) -> anyhow::Result<(TargetDisposition, MutationOutcome<()>)> {
         let media = Arc::clone(&self.media);
         let tmp_path_for_begin = tmp_path.clone();
-        let outcome =
-            match self
-                .write_scope
-                .run(move |transaction| {
-                    Box::pin(async move {
-                        media.lock_media_reference(transaction, &media_ref).await?;
-                        let disposition =
-                            match Self::handle_deduplication(&tmp_path, &target_path, &hash_dir)
-                                .await
-                            {
-                                Ok(disposition) => disposition,
-                                Err(error) => {
-                                    return Self::finish_temp_cleanup(
-                                        Err(error),
-                                        fs::remove_file(&tmp_path).await,
-                                        "storage.media.placement_temp_cleanup",
-                                    );
-                                }
-                            };
-                        match media.create_media(transaction, &record).await {
-                            Ok(()) | Err(CreateMediaError::AlreadyExists) => Ok(disposition),
-                            Err(CreateMediaError::Internal(error)) => {
-                                tracing::error!(error = %error, "create_media failed");
-                                let error = anyhow::anyhow!(MediaError::Internal(Box::new(error)));
-                                if disposition.was_created_by_upload() {
-                                    Self::finish_temp_cleanup(
-                                        Err(error),
-                                        fs::remove_file(&target_path).await,
-                                        "storage.media.create_target_cleanup",
-                                    )
-                                } else {
-                                    Err(error)
-                                }
+        let outcome = match self
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    if let Err(error) = media.lock_media_reference(transaction, &media_ref).await {
+                        return Self::finish_temp_cleanup(
+                            Err(anyhow::anyhow!(MediaError::Internal(Box::new(error)))),
+                            fs::remove_file(&tmp_path).await,
+                            "storage.media.lock_temp_cleanup",
+                        );
+                    }
+                    let disposition = match Self::handle_deduplication(
+                        &tmp_path,
+                        &target_path,
+                        &hash_dir,
+                    )
+                    .await
+                    {
+                        Ok(disposition) => disposition,
+                        Err(error) => {
+                            return Self::finish_temp_cleanup(
+                                Err(error),
+                                fs::remove_file(&tmp_path).await,
+                                "storage.media.placement_temp_cleanup",
+                            );
+                        }
+                    };
+                    match media.create_media(transaction, &record).await {
+                        Ok(()) | Err(CreateMediaError::AlreadyExists) => Ok(disposition),
+                        Err(CreateMediaError::Internal(error)) => {
+                            tracing::error!(error = %error, "create_media failed");
+                            let error = anyhow::anyhow!(MediaError::Internal(Box::new(error)));
+                            if disposition.was_created_by_upload() {
+                                Self::finish_temp_cleanup(
+                                    Err(error),
+                                    fs::remove_file(&target_path).await,
+                                    "storage.media.create_target_cleanup",
+                                )
+                            } else {
+                                Err(error)
                             }
                         }
-                    })
+                    }
                 })
-                .await
-            {
-                Ok(outcome) => outcome,
-                Err(WriteScopeError::Operation(error)) => return Err(error),
-                Err(WriteScopeError::Begin(error)) => {
-                    return Self::finish_temp_cleanup(
-                        Err(anyhow::anyhow!(MediaError::Internal(Box::new(error)))),
-                        fs::remove_file(&tmp_path_for_begin).await,
-                        "storage.media.begin_temp_cleanup",
-                    );
-                }
-            };
+            })
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(error @ WriteScopeError::Operation(_)) => {
+                return Err(Self::scope_error(error));
+            }
+            Err(error @ WriteScopeError::Begin(_)) => {
+                return Self::finish_temp_cleanup(
+                    Err(Self::scope_error(error)),
+                    fs::remove_file(&tmp_path_for_begin).await,
+                    "storage.media.begin_temp_cleanup",
+                );
+            }
+        };
         let disposition = *outcome.value();
         Ok((disposition, outcome.map(|_| ())))
     }
@@ -523,12 +542,7 @@ impl MediaManager {
                 })
             })
             .await
-            .map_err(|error| match error {
-                WriteScopeError::Operation(error) => error,
-                WriteScopeError::Begin(error) => {
-                    anyhow::anyhow!(MediaError::Internal(Box::new(error)))
-                }
-            })?;
+            .map_err(Self::scope_error)?;
         if matches!(
             outcome,
             MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
@@ -555,12 +569,7 @@ impl MediaManager {
                 })
                 .await
                 .map(drop)
-                .map_err(|error| match error {
-                    WriteScopeError::Operation(error) => error,
-                    WriteScopeError::Begin(error) => {
-                        anyhow::anyhow!(MediaError::Internal(Box::new(error)))
-                    }
-                });
+                .map_err(Self::scope_error);
             return Ok(Self::finish_reclaim(outcome, reclaim));
         }
         Ok(outcome)
@@ -871,6 +880,53 @@ mod tests {
         assert!(
             !tmp_path.exists(),
             "a scope begin failure must remove the prepared temp file"
+        );
+    }
+
+    // guard:no-backend — mock media lock fails before filesystem placement
+    #[tokio::test]
+    async fn upload_lock_failure_removes_temp_file() {
+        let temp = TempDir::new().unwrap();
+        let mut media = crate::MockMediaStorage::new();
+        media
+            .expect_get_user_upload_usage()
+            .times(1)
+            .returning(|_| Ok(parse_byte_size("0")));
+        media
+            .expect_lock_media_reference()
+            .times(1)
+            .returning(|_, _| Err(sqlx::Error::PoolClosed));
+        let manager = MediaManager::new(
+            Arc::new(media),
+            Arc::new(crate::MockSiteConfigStorage::new()),
+            WriteScope::mock(),
+            Arc::new(temp.path().to_path_buf()),
+        );
+        let metadata = UploadMetadata {
+            filename: parse_filename("lock-failed.png"),
+            content_type: parse_content_type("image/png"),
+            sha256_hex: parse_content_hash(
+                "deadbeef00000000000000000000000000000000000000000000000000000000",
+            ),
+            size_bytes: parse_byte_size("7"),
+        };
+        let tmp_path = temp.path().join("upload.tmp");
+        fs::write(&tmp_path, b"png-ish").await.unwrap();
+
+        assert!(
+            manager
+                .finalize_upload(
+                    UserId::from(1),
+                    metadata,
+                    &tmp_path,
+                    UserQuota::try_from(100_i64).unwrap(),
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            !tmp_path.exists(),
+            "an identity-lock failure must remove the prepared temp file"
         );
     }
 

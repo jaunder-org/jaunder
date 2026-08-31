@@ -113,7 +113,6 @@ pub async fn login(
         }
         MutationOutcome::CommitIndeterminate((raw_token, session)) => {
             server::set_session_cookie(&raw_token);
-            leptos_axum::redirect("/");
             Ok(MutationOutcome::CommitIndeterminate(session))
         }
     }

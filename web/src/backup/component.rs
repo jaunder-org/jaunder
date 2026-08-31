@@ -38,15 +38,16 @@ pub fn BackupSettingsPage() -> impl IntoView {
                     update_action
                         .value()
                         .get()
-                        .and_then(|result: Result<MutationOutcome<()>, WebError>| match result {
-                            Ok(MutationOutcome::Confirmed(())) => None,
-                            Ok(MutationOutcome::CommitIndeterminate(())) => {
-                                Some(
-                                    "Save acknowledgement was lost; reload to verify the settings."
-                                        .to_owned(),
-                                )
+                        .and_then(|result: Result<MutationOutcome<()>, WebError>| {
+                            match crate::mutation_feedback::classify(
+                                result,
+                                "Save acknowledgement was lost; reload to verify the settings.",
+                            ) {
+                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => None,
+                                crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                    Some(message)
+                                }
                             }
-                            Err(error) => Some(error.to_string()),
                         })
                         .map(|error| {
                             view! { <p class="error j-settings-error">{error}</p> }

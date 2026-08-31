@@ -186,7 +186,6 @@ pub async fn register(
         }
         MutationOutcome::CommitIndeterminate(raw_token) => {
             auth::set_session_cookie(&raw_token);
-            leptos_axum::redirect("/");
             Ok(MutationOutcome::CommitIndeterminate(()))
         }
     }

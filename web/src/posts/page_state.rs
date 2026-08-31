@@ -164,6 +164,26 @@ pub fn user_tag_query(username: Option<Username>, tag: Option<Tag>) -> WebResult
     Ok((user_query(username)?, tag_query(tag)?))
 }
 
+/// Notifies post-create parents and reports whether success UI may reset.
+///
+/// A possibly committed published post must revalidate its parent timeline, but
+/// only a confirmed post may drive success UI or reset the composer.
+#[must_use]
+pub fn notify_create_settlement(
+    outcome: MutationOutcome<SavedPost>,
+    on_mutation: Option<Callback<bool>>,
+    on_success: Callback<SavedPost>,
+) -> bool {
+    let published = outcome.value().published_at.is_some();
+    if let Some(on_mutation) = on_mutation {
+        on_mutation.run(published);
+    }
+    let MutationOutcome::Confirmed(created) = outcome else {
+        return false;
+    };
+    on_success.run(created);
+    true
+}
 /// Where an update settles the browser, shaped for `on_settled_ok`'s read closure:
 /// `Some(Ok(permalink))` only when the update **confirmed** publication.
 ///
@@ -741,6 +761,32 @@ mod tests {
             published_at,
             permalink: parse_root_relative_url("/~alice/2026/01/02/hello"),
         }
+    }
+
+    #[test]
+    fn create_settlement_revalidates_both_outcomes_but_confirms_only_one() {
+        let owner = Owner::new();
+        owner.set();
+        let mutation_count = RwSignal::new(0_u8);
+        let success_count = RwSignal::new(0_u8);
+        let on_mutation =
+            Callback::new(move |_published| mutation_count.update(|count| *count += 1));
+        let on_success = Callback::new(move |_created| success_count.update(|count| *count += 1));
+        let published_at = "2026-01-02T00:00:00Z".parse().expect("a real instant");
+
+        assert!(notify_create_settlement(
+            MutationOutcome::Confirmed(saved_post(Some(published_at))),
+            Some(on_mutation),
+            on_success,
+        ));
+        assert!(!notify_create_settlement(
+            MutationOutcome::CommitIndeterminate(saved_post(Some(published_at))),
+            Some(on_mutation),
+            on_success,
+        ));
+        assert_eq!(mutation_count.get_untracked(), 2);
+        assert_eq!(success_count.get_untracked(), 1);
+        drop(owner);
     }
 
     #[test]

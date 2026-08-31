@@ -57,20 +57,19 @@ pub fn EmailPage() -> impl IntoView {
                     request_action
                         .value()
                         .get()
-                        .map(|r: Result<MutationOutcome<()>, WebError>| match r {
-                            Ok(MutationOutcome::Confirmed(())) => {
-                                view! { <p>"Check your email for a verification link."</p> }
-                                    .into_any()
-                            }
-                            Ok(MutationOutcome::CommitIndeterminate(())) => {
-                                view! {
-                                    <p class="error">
-                                        "The verification email may have been requested, but its status could not be confirmed. Refresh to check."
-                                    </p>
+                        .map(|result: Result<MutationOutcome<()>, WebError>| {
+                            match crate::mutation_feedback::classify(
+                                result,
+                                "The verification email may have been requested, but its status could not be confirmed. Refresh to check.",
+                            ) {
+                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
+                                    view! { <p>"Check your email for a verification link."</p> }
+                                        .into_any()
                                 }
-                                    .into_any()
+                                crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                    view! { <p class="error">{message}</p> }.into_any()
+                                }
                             }
-                            Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                         })
                 }}
             </div>
@@ -102,21 +101,15 @@ pub fn VerifyEmailPage() -> impl IntoView {
                     view! { <p class="j-loading">"Verifying\u{2026}"</p> }
                 }>
                     {move || Suspend::new(async move {
-                        match result.await {
-                            Ok(MutationOutcome::Confirmed(())) => {
+                        match crate::mutation_feedback::classify(
+                            result.await,
+                            "Your email may have been verified, but its status could not be confirmed. Refresh to check.",
+                        ) {
+                            crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
                                 view! { <p>"Your email address has been verified."</p> }.into_any()
                             }
-                            Ok(MutationOutcome::CommitIndeterminate(())) => {
-                                view! {
-                                    <p class="error">
-                                        "Your email may have been verified, but its status could not be confirmed. Refresh to check."
-                                    </p>
-                                }
-                                    .into_any()
-                            }
-                            Err(e) => {
-                                let msg = e.to_string();
-                                view! { <p class="error">{msg}</p> }.into_any()
+                            crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                view! { <p class="error">{message}</p> }.into_any()
                             }
                         }
                     })}

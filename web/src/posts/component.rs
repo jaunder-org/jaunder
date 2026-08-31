@@ -287,12 +287,11 @@ fn mutation_feedback<T>(
     result: Result<MutationOutcome<T>, WebError>,
     indeterminate_message: &'static str,
 ) -> Option<AnyView> {
-    match result {
-        Ok(MutationOutcome::Confirmed(_)) => None,
-        Ok(MutationOutcome::CommitIndeterminate(_)) => {
-            Some(view! { <p class="error">{indeterminate_message}</p> }.into_any())
+    match crate::mutation_feedback::classify(result, indeterminate_message) {
+        crate::mutation_feedback::MutationFeedback::Confirmed(_) => None,
+        crate::mutation_feedback::MutationFeedback::Error(message) => {
+            Some(view! { <p class="error">{message}</p> }.into_any())
         }
-        Err(error) => Some(view! { <p class="error">{error.to_string()}</p> }.into_any()),
     }
 }
 
@@ -660,6 +659,7 @@ pub fn PostCreateForm(
     compact: bool,
     #[prop(optional)] username: Option<Username>,
     #[prop(into)] on_success: Callback<SavedPost>,
+    #[prop(optional)] on_mutation: Option<Callback<bool>>,
     #[prop(default = 6)] rows: u32,
     #[prop(default = "What\u{2019}s on your mind?")] placeholder: &'static str,
     /// Called on every textarea input event (compact mode only).
@@ -679,15 +679,14 @@ pub fn PostCreateForm(
         move |default| state.audience.set(default),
     );
 
-    // Only a confirmed create identifies a durable post for the parent callback.
+    // Revalidate parent state after either outcome, but reserve success UI and
+    // form reset for a confirmed create.
     on_settled_ok(
         move || create_action.value().get(),
-        move |outcome| match outcome {
-            MutationOutcome::Confirmed(created) => {
-                on_success.run(created);
+        move |outcome| {
+            if super::notify_create_settlement(outcome, on_mutation, on_success) {
                 state.reset();
             }
-            MutationOutcome::CommitIndeterminate(_) => {}
         },
     );
 
@@ -892,7 +891,9 @@ pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl 
         };
         flash.set(Some((url, msg)));
         set_timeout(move || flash.set(None), Duration::from_secs(30));
-        if created.published_at.is_some() {
+    });
+    let on_mutation = Callback::new(move |published: bool| {
+        if published {
             on_publish.update(|v| *v += 1);
         }
     });
@@ -903,6 +904,7 @@ pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl 
                 compact=true
                 username=username
                 on_success=on_success
+                on_mutation=on_mutation
                 rows=6
                 placeholder="What\u{2019}s on your mind?"
                 on_input=Callback::new(move |()| flash.set(None))

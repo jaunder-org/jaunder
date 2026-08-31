@@ -42,24 +42,23 @@ pub fn ForgotPasswordPage() -> impl IntoView {
                     request_action
                         .value()
                         .get()
-                        .map(|r: Result<MutationOutcome<()>, WebError>| match r {
-                            Ok(MutationOutcome::Confirmed(())) => {
-                                view! {
-                                    <p>
-                                        "If there is a verified email address on file, a reset link has been sent. Check your email."
-                                    </p>
+                        .map(|result: Result<MutationOutcome<()>, WebError>| {
+                            match crate::mutation_feedback::classify(
+                                result,
+                                "The reset link may have been requested, but its status could not be confirmed. Refresh to check.",
+                            ) {
+                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
+                                    view! {
+                                        <p>
+                                            "If there is a verified email address on file, a reset link has been sent. Check your email."
+                                        </p>
+                                    }
+                                        .into_any()
                                 }
-                                    .into_any()
-                            }
-                            Ok(MutationOutcome::CommitIndeterminate(())) => {
-                                view! {
-                                    <p class="error">
-                                        "The reset link may have been requested, but its status could not be confirmed. Refresh to check."
-                                    </p>
+                                crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                    view! { <p class="error">{message}</p> }.into_any()
                                 }
-                                    .into_any()
                             }
-                            Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                         })
                 }}
             </div>
@@ -118,19 +117,18 @@ pub fn ResetPasswordPage() -> impl IntoView {
                     confirm_action
                         .value()
                         .get()
-                        .map(|r: Result<MutationOutcome<()>, WebError>| match r {
-                            Ok(MutationOutcome::Confirmed(())) => {
-                                view! { <Redirect path="/login" /> }.into_any()
-                            }
-                            Ok(MutationOutcome::CommitIndeterminate(())) => {
-                                view! {
-                                    <p class="error">
-                                        "Your password may have been reset, but its status could not be confirmed. Refresh to check."
-                                    </p>
+                        .map(|result: Result<MutationOutcome<()>, WebError>| {
+                            match crate::mutation_feedback::classify(
+                                result,
+                                "Your password may have been reset, but its status could not be confirmed. Refresh to check.",
+                            ) {
+                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
+                                    view! { <Redirect path="/login" /> }.into_any()
                                 }
-                                    .into_any()
+                                crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                    view! { <p class="error">{message}</p> }.into_any()
+                                }
                             }
-                            Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                         })
                 }}
             </div>
