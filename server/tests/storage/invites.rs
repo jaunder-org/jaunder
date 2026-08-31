@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::storage::fixtures::{password, username};
 use chrono::Utc;
 use common::MutationOutcome;
 use common::test_support::parse_display_name;
@@ -8,9 +9,10 @@ use host::invite::InviteCode;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, CloseablePool, SeedUser, backends};
-use storage::{AppState, RegisterWithInviteError, WriteScopeError};
-
-use crate::storage::fixtures::{password, username};
+use storage::{
+    AppState, WriteScopeError,
+    account_mutations::{self, RegisterWithInviteError, RegisterWithInviteInput},
+};
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_and_list_invites_includes_it(#[case] backend: Backend) {
@@ -285,7 +287,7 @@ async fn invite_list_operations(#[case] backend: Backend) {
     assert!(unused_count >= 2);
 }
 
-async fn create_invite(state: &AppState, expires_at: UtcInstant) -> InviteCode {
+pub(super) async fn create_invite(state: &AppState, expires_at: UtcInstant) -> InviteCode {
     let invites = Arc::clone(&state.invites);
     let outcome = state
         .write_scope
@@ -320,21 +322,25 @@ async fn create_user_with_invite_result(
     is_operator: bool,
     code: InviteCode,
 ) -> Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>> {
-    let atomic = Arc::clone(&state.atomic);
+    let users = Arc::clone(&state.users);
+    let invites = Arc::clone(&state.invites);
     state
         .write_scope
         .run(|transaction| {
             Box::pin(async move {
-                atomic
-                    .create_user_with_invite(
-                        transaction,
-                        &username,
-                        &password,
-                        display_name.as_ref(),
+                account_mutations::register_with_invite(
+                    transaction,
+                    RegisterWithInviteInput {
+                        users: users.as_ref(),
+                        invites: invites.as_ref(),
+                        username: &username,
+                        password: &password,
+                        display_name: display_name.as_ref(),
                         is_operator,
-                        &code,
-                    )
-                    .await
+                        invite_code: &code,
+                    },
+                )
+                .await
             })
         })
         .await

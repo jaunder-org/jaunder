@@ -40,9 +40,6 @@ pub use audiences::PostgresAudienceStorage;
 mod bootstrap;
 pub use bootstrap::{PgBootstrapError, create_postgres_database_and_role};
 
-pub(crate) mod atomic;
-pub use atomic::PostgresAtomicOps;
-
 mod open;
 pub(crate) use open::database_is_empty;
 pub(crate) use open::open_postgres_database_with_pool;

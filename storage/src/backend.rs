@@ -25,6 +25,9 @@ pub trait Backend: sqlx::Database {
     fn write_connection(
         transaction: &mut crate::WriteTransaction,
     ) -> Result<&mut Self::Connection, sqlx::Error>;
+
+    /// Creates this backend's sealed write capability from its connection pool.
+    fn write_scope(pool: sqlx::Pool<Self>) -> crate::WriteScope;
 }
 
 impl Backend for sqlx::Sqlite {
@@ -35,6 +38,10 @@ impl Backend for sqlx::Sqlite {
     ) -> Result<&mut Self::Connection, sqlx::Error> {
         crate::write_scope::sqlite_connection(transaction)
     }
+
+    fn write_scope(pool: sqlx::Pool<Self>) -> crate::WriteScope {
+        crate::WriteScope::sqlite(pool)
+    }
 }
 
 impl Backend for sqlx::Postgres {
@@ -44,5 +51,9 @@ impl Backend for sqlx::Postgres {
         transaction: &mut crate::WriteTransaction,
     ) -> Result<&mut Self::Connection, sqlx::Error> {
         crate::write_scope::postgres_connection(transaction)
+    }
+
+    fn write_scope(pool: sqlx::Pool<Self>) -> crate::WriteScope {
+        crate::WriteScope::postgres(pool)
     }
 }

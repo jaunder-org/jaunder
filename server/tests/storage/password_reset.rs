@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
+use super::fixtures::password;
 use common::MutationOutcome;
 use common::test_support::parse_raw_token;
 use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, backends};
-use storage::{AppState, ConfirmPasswordResetError, UsePasswordResetError, WriteScopeError};
-
-use super::fixtures::password;
+use storage::{
+    AppState, UsePasswordResetError, WriteScopeError,
+    account_mutations::{self, ConfirmPasswordResetError},
+};
 #[apply(backends)]
 #[tokio::test]
 async fn confirm_password_reset_hash_failure_returns_internal(#[case] backend: Backend) {
@@ -50,6 +52,30 @@ async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
     )
     .await;
 
+    let sessions = Arc::clone(&state.sessions);
+    let label = common::test_support::parse_session_label("Existing device");
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                sessions
+                    .create_session(transaction, user.user_id, &label)
+                    .await
+            })
+        })
+        .await
+        .expect("session fixture setup should succeed");
+    storage::test_support::confirmed_for(outcome, "session fixture setup");
+    assert_eq!(
+        state
+            .sessions
+            .list_sessions(user.user_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
     confirm_password_reset(state, reset_token, password("new_password123")).await;
 
     let users = Arc::clone(&state.users);
@@ -68,6 +94,14 @@ async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
         .unwrap();
     let authenticated = storage::test_support::confirmed_for(outcome, "authentication");
     assert_eq!(authenticated.user_id, user.user_id);
+    assert!(
+        state
+            .sessions
+            .list_sessions(user.user_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[apply(backends)]
@@ -237,14 +271,22 @@ async fn confirm_password_reset_result(
     raw_token: common::token::RawToken,
     password: host::password::Password,
 ) -> Result<MutationOutcome<()>, WriteScopeError<ConfirmPasswordResetError>> {
-    let atomic = Arc::clone(&state.atomic);
+    let password_resets = Arc::clone(&state.password_resets);
+    let users = Arc::clone(&state.users);
+    let sessions = Arc::clone(&state.sessions);
     state
         .write_scope
         .run(|transaction| {
             Box::pin(async move {
-                atomic
-                    .confirm_password_reset(transaction, &raw_token, &password)
-                    .await
+                account_mutations::confirm_password_reset(
+                    transaction,
+                    password_resets.as_ref(),
+                    users.as_ref(),
+                    sessions.as_ref(),
+                    &raw_token,
+                    &password,
+                )
+                .await
             })
         })
         .await

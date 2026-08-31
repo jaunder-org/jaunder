@@ -1,13 +1,14 @@
 //! Invite code storage.
 
 use async_trait::async_trait;
+use thiserror::Error;
 
 use host::invite::InviteCode;
 use sqlx::{Database, Pool};
 
 use crate::WriteTransaction;
 use crate::backend::Backend;
-use crate::helpers;
+use crate::helpers::{self, InviteTokenStateRow, TokenState};
 use common::ids::UserId;
 use common::time::UtcInstant;
 
@@ -26,6 +27,23 @@ pub struct InviteRecord {
     pub used_by: Option<UserId>,
 }
 
+/// Errors returned while checking or conditionally claiming an invite.
+#[derive(Debug, Error)]
+pub enum UseInviteError {
+    /// The invite code does not exist.
+    #[error("invite code not found")]
+    NotFound,
+    /// The invite code has expired.
+    #[error("invite code has expired")]
+    Expired,
+    /// The invite code has already been consumed.
+    #[error("invite code has already been used")]
+    AlreadyUsed,
+    /// An unexpected database error occurred.
+    #[error(transparent)]
+    Internal(#[from] sqlx::Error),
+}
+
 /// Async operations on the `invites` table.
 ///
 /// This trait manages the lifecycle of invite codes used for registration.
@@ -39,6 +57,21 @@ pub trait InviteStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         expires_at: UtcInstant,
     ) -> sqlx::Result<InviteCode>;
+
+    /// Verifies that an invite is currently usable without acquiring a write
+    /// capability. Account registration calls this before password preparation.
+    async fn precheck_invite(&self, code: &InviteCode) -> Result<(), UseInviteError>;
+
+    /// Conditionally consumes an invite and attributes it to `user_id`.
+    ///
+    /// The update rechecks that the invite remains unused and unexpired. A
+    /// concurrent claimant receives [`UseInviteError::AlreadyUsed`].
+    async fn claim_invite(
+        &self,
+        transaction: &mut WriteTransaction,
+        code: &InviteCode,
+        user_id: UserId,
+    ) -> Result<(), UseInviteError>;
 
     /// Returns a list of all invite codes in the system.
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>>;
@@ -64,6 +97,7 @@ impl<DB> InviteStorage for InviteStore<DB>
 where
     DB: Backend,
     helpers::InviteRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    InviteTokenStateRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `InviteCode` binds/decodes as itself via the ADR-0071 sqlx bridge.
     String: sqlx::Type<DB>,
@@ -93,6 +127,61 @@ where
             .await?;
 
         Ok(code)
+    }
+
+    async fn precheck_invite(&self, code: &InviteCode) -> Result<(), UseInviteError> {
+        let now = UtcInstant::now();
+        let row = sqlx::query_as::<_, InviteTokenStateRow>(
+            "SELECT used_at, expires_at FROM invites WHERE code = $1",
+        )
+        .bind(code)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match helpers::classify_invite_token_state(row, now) {
+            TokenState::Missing => Err(UseInviteError::NotFound),
+            TokenState::AlreadyUsed => Err(UseInviteError::AlreadyUsed),
+            TokenState::Expired => Err(UseInviteError::Expired),
+            TokenState::Claimable => Ok(()),
+        }
+    }
+
+    async fn claim_invite(
+        &self,
+        transaction: &mut WriteTransaction,
+        code: &InviteCode,
+        user_id: UserId,
+    ) -> Result<(), UseInviteError> {
+        let now = UtcInstant::now();
+        let connection = DB::write_connection(transaction)?;
+        // RETURNING detects the conditional claim generically; sqlx exposes
+        // `rows_affected` only on concrete backend result types.
+        let claimed = sqlx::query_as::<_, InviteTokenStateRow>(
+            "UPDATE invites SET used_at = $1, used_by = $2
+             WHERE code = $3 AND used_at IS NULL AND expires_at > $1
+             RETURNING used_at, expires_at",
+        )
+        .bind(now)
+        .bind(user_id)
+        .bind(code)
+        .fetch_optional(&mut *connection)
+        .await?;
+
+        if claimed.is_some() {
+            return Ok(());
+        }
+
+        let row = sqlx::query_as::<_, InviteTokenStateRow>(
+            "SELECT used_at, expires_at FROM invites WHERE code = $1",
+        )
+        .bind(code)
+        .fetch_optional(&mut *connection)
+        .await?;
+        match helpers::classify_invite_token_state(row, now) {
+            TokenState::Missing => Err(UseInviteError::NotFound),
+            TokenState::Expired => Err(UseInviteError::Expired),
+            TokenState::AlreadyUsed | TokenState::Claimable => Err(UseInviteError::AlreadyUsed),
+        }
     }
 
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>> {

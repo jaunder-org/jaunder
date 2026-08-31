@@ -45,7 +45,7 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
             "mark_exhausted",
         ],
     ),
-    ("InviteStorage", &["create_invite"]),
+    ("InviteStorage", &["create_invite", "claim_invite"]),
     ("MediaStorage", &["create_media", "try_delete_media"]),
     (
         "PasswordResetStorage",
@@ -65,7 +65,12 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     ),
     (
         "SessionStorage",
-        &["create_session", "authenticate", "revoke_session"],
+        &[
+            "create_session",
+            "authenticate",
+            "revoke_session",
+            "revoke_all_for_user",
+        ],
     ),
     (
         "SiteConfigStorage",
@@ -89,10 +94,6 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
             "set_email",
             "set_password",
         ],
-    ),
-    (
-        "AtomicOps",
-        &["create_user_with_invite", "confirm_password_reset"],
     ),
 ];
 

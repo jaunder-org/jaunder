@@ -9,6 +9,7 @@ mod listing;
 mod lookups;
 mod media;
 mod password_reset;
+mod postgres;
 mod posts;
 mod resolution;
 mod sessions;

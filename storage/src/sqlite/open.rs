@@ -6,40 +6,10 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode},
 };
 
-use super::{
-    SqliteAtomicOps, SqliteAudienceStorage, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
-    SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
-    SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
-    SqliteUserConfigStorage, SqliteUserStorage,
-};
 use crate::backup::CatalogTableName;
 use crate::db::StorageRuntimeConfig;
 use crate::sql::Exists;
-use crate::{AppState, WriteScope, instance_identity, posts};
-
-fn make_sqlite_app_state(pool: SqlitePool) -> Arc<AppState> {
-    let users: Arc<dyn crate::UserStorage> = Arc::new(SqliteUserStorage::new(pool.clone()));
-    Arc::new(AppState {
-        site_config: Arc::new(SqliteSiteConfigStorage::new(pool.clone())),
-        users: Arc::clone(&users),
-        sessions: Arc::new(SqliteSessionStorage::new(pool.clone())),
-        invites: Arc::new(SqliteInviteStorage::new(pool.clone())),
-        atomic: Arc::new(SqliteAtomicOps::new(users)),
-        email_verifications: Arc::new(SqliteEmailVerificationStorage::new(pool.clone())),
-        password_resets: Arc::new(SqlitePasswordResetStorage::new(pool.clone())),
-        posts: Arc::new(SqlitePostStorage::new(pool.clone())),
-        subscriptions: Arc::new(SqliteSubscriptionStorage::new(
-            pool.clone(),
-            Arc::new(common::visibility::OpenSubscriptionPolicy),
-        )),
-        audiences: Arc::new(SqliteAudienceStorage::new(pool.clone())),
-        media: Arc::new(SqliteMediaStorage::new(pool.clone())),
-        user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
-        feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
-        feed_events: Arc::new(SqliteFeedEventStorage::new(pool.clone())),
-        write_scope: WriteScope::sqlite(pool),
-    })
-}
+use crate::{AppState, instance_identity, make_app_state, posts};
 
 /// Resolves application `SQLite` options from the runtime connection snapshot.
 #[must_use]
@@ -83,7 +53,7 @@ pub(crate) async fn open_sqlite_database_with_pool(
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     let instance_id = instance_identity::ensure_instance_identity(&pool).await?;
     posts::backfill_post_media_references(&pool).await?;
-    Ok((make_sqlite_app_state(pool.clone()), pool, instance_id))
+    Ok((make_app_state(pool.clone()), pool, instance_id))
 }
 
 /// Returns `true` if the `SQLite` database holds no user data — every table

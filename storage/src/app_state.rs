@@ -3,9 +3,11 @@
 use std::sync::Arc;
 
 use super::{
-    AtomicOps, AudienceStorage, EmailVerificationStorage, FeedCacheStorage, FeedEventStorage,
-    InviteStorage, MediaStorage, PasswordResetStorage, PostStorage, SessionStorage,
-    SiteConfigStorage, SubscriptionStorage, UserConfigStorage, UserStorage, WriteScope,
+    AudienceStorage, AudienceStore, Backend, EmailVerificationStorage, EmailVerificationStore,
+    FeedCacheStorage, FeedCacheStore, FeedEventStorage, FeedEventStore, InviteStorage, InviteStore,
+    MediaStorage, MediaStore, PasswordResetStorage, PasswordResetStore, PostStorage, PostStore,
+    SessionStorage, SessionStore, SiteConfigStorage, SiteConfigStore, SubscriptionStorage,
+    SubscriptionStore, UserConfigStorage, UserConfigStore, UserStorage, UserStore, WriteScope,
 };
 
 /// Bundle of every storage handle the application needs.
@@ -31,11 +33,6 @@ pub struct AppState {
     pub sessions: Arc<dyn SessionStorage>,
     /// Interface for invite code management.
     pub invites: Arc<dyn InviteStorage>,
-    /// Cross-table atomic operations.
-    ///
-    /// These operations span multiple storage traits and are implemented as
-    /// atomic transactions in the concrete backend.
-    pub atomic: Arc<dyn AtomicOps>,
     /// Storage for email verification tokens.
     pub email_verifications: Arc<dyn EmailVerificationStorage>,
     /// Storage for password reset tokens.
@@ -58,6 +55,45 @@ pub struct AppState {
     pub write_scope: WriteScope,
 }
 
+/// Constructs every application storage handle over one concrete database pool.
+pub(crate) fn make_app_state<DB>(pool: sqlx::Pool<DB>) -> Arc<AppState>
+where
+    DB: Backend,
+    SiteConfigStore<DB>: SiteConfigStorage,
+    UserStore<DB>: UserStorage,
+    SessionStore<DB>: SessionStorage,
+    InviteStore<DB>: InviteStorage,
+    EmailVerificationStore<DB>: EmailVerificationStorage,
+    PasswordResetStore<DB>: PasswordResetStorage,
+    PostStore<DB>: PostStorage,
+    SubscriptionStore<DB>: SubscriptionStorage,
+    AudienceStore<DB>: AudienceStorage,
+    MediaStore<DB>: MediaStorage,
+    UserConfigStore<DB>: UserConfigStorage,
+    FeedCacheStore<DB>: FeedCacheStorage,
+    FeedEventStore<DB>: FeedEventStorage,
+{
+    Arc::new(AppState {
+        site_config: Arc::new(SiteConfigStore::new(pool.clone())),
+        users: Arc::new(UserStore::new(pool.clone())),
+        sessions: Arc::new(SessionStore::new(pool.clone())),
+        invites: Arc::new(InviteStore::new(pool.clone())),
+        email_verifications: Arc::new(EmailVerificationStore::new(pool.clone())),
+        password_resets: Arc::new(PasswordResetStore::new(pool.clone())),
+        posts: Arc::new(PostStore::new(pool.clone())),
+        subscriptions: Arc::new(SubscriptionStore::new(
+            pool.clone(),
+            Arc::new(common::visibility::OpenSubscriptionPolicy),
+        )),
+        audiences: Arc::new(AudienceStore::new(pool.clone())),
+        media: Arc::new(MediaStore::new(pool.clone())),
+        user_config: Arc::new(UserConfigStore::new(pool.clone())),
+        feed_cache: Arc::new(FeedCacheStore::new(pool.clone())),
+        feed_events: Arc::new(FeedEventStore::new(pool.clone())),
+        write_scope: DB::write_scope(pool),
+    })
+}
+
 impl AppState {
     /// Borrows the site configuration store.
     #[must_use]
@@ -69,5 +105,42 @@ impl AppState {
     #[must_use]
     pub fn users(&self) -> &dyn UserStorage {
         self.users.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::{Backend, backends};
+    use rstest::*;
+    use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn opening_constructs_every_app_state_handle(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let state = &env.state;
+
+        let _ = (
+            state.site_config.as_ref(),
+            state.users.as_ref(),
+            state.sessions.as_ref(),
+            state.invites.as_ref(),
+            state.email_verifications.as_ref(),
+            state.password_resets.as_ref(),
+            state.posts.as_ref(),
+            state.subscriptions.as_ref(),
+            state.audiences.as_ref(),
+            state.media.as_ref(),
+            state.user_config.as_ref(),
+            state.feed_cache.as_ref(),
+            state.feed_events.as_ref(),
+        );
+        assert!(
+            state
+                .write_scope
+                .run(|_| Box::pin(async { Ok::<(), std::convert::Infallible>(()) }))
+                .await
+                .is_ok()
+        );
     }
 }

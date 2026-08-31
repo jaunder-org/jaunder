@@ -97,6 +97,13 @@ pub trait SessionStorage: Send + Sync {
         token_hash: &TokenHash,
     ) -> sqlx::Result<()>;
 
+    /// Revokes every active session belonging to `user_id`.
+    async fn revoke_all_for_user(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+    ) -> sqlx::Result<()>;
+
     /// Returns a list of all active sessions for a user.
     async fn list_sessions(&self, user_id: UserId) -> sqlx::Result<Vec<SessionRecord>>;
 }
@@ -235,6 +242,19 @@ where
         let connection = DB::write_connection(transaction)?;
         sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
             .bind(token_hash)
+            .execute(&mut *connection)
+            .await?;
+        Ok(())
+    }
+
+    async fn revoke_all_for_user(
+        &self,
+        transaction: &mut WriteTransaction,
+        user_id: UserId,
+    ) -> sqlx::Result<()> {
+        let connection = DB::write_connection(transaction)?;
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+            .bind(user_id)
             .execute(&mut *connection)
             .await?;
         Ok(())

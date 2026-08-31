@@ -10,8 +10,8 @@
 // lint-suppression:allow approved in #294; cfg-gated mockall-generated matcher signature suppression
 #![cfg_attr(any(test, feature = "test-utils"), expect(clippy::ref_option_ref))]
 
+pub mod account_mutations;
 mod app_state;
-mod atomic;
 mod audiences;
 mod backend;
 mod backup;
@@ -51,7 +51,6 @@ mod write_scope;
 pub mod test_support;
 
 pub use app_state::*;
-pub use atomic::*;
 pub use audiences::*;
 pub use backend::*;
 pub use backup::{
@@ -73,7 +72,7 @@ pub use media_ownership::*;
 pub use password::*;
 pub use post_service::*;
 pub use postgres::{
-    PgBootstrapError, PostgresAtomicOps, PostgresAudienceStorage, PostgresEmailVerificationStorage,
+    PgBootstrapError, PostgresAudienceStorage, PostgresEmailVerificationStorage,
     PostgresFeedCacheStorage, PostgresFeedEventStorage, PostgresInviteStorage,
     PostgresMediaStorage, PostgresPasswordResetStorage, PostgresPostStorage,
     PostgresSessionStorage, PostgresSiteConfigStorage, PostgresSubscriptionStorage,
@@ -85,7 +84,7 @@ pub use sessions::*;
 pub use site_config::*;
 pub use smtp::*;
 pub use sqlite::{
-    SqliteAtomicOps, SqliteAudienceStorage, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
+    SqliteAudienceStorage, SqliteEmailVerificationStorage, SqliteFeedCacheStorage,
     SqliteFeedEventStorage, SqliteInviteStorage, SqliteMediaStorage, SqlitePasswordResetStorage,
     SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
     SqliteUserConfigStorage, SqliteUserStorage,
