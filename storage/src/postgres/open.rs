@@ -91,8 +91,9 @@ mod tests {
         };
 
         for slug in ["alpha", "beta", "gamma"] {
+            let tag = parse_tag(slug);
             sqlx::query("INSERT INTO tags (tag_slug) VALUES ($1)")
-                .bind(slug)
+                .bind(tag)
                 .execute(pool)
                 .await
                 .expect("seed tag");

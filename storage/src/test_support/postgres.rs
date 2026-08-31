@@ -263,17 +263,31 @@ pub async fn unique_postgres_url(
 /// cloned from. Cloning via `CREATE DATABASE ... TEMPLATE` block-copies an
 /// already-migrated schema, so each test pays a fast copy instead of re-running
 /// every migration.
-const TEMPLATE_DB: &str = "jaunder_test_template";
+#[derive(Debug, macros::SqlxBridge)]
+pub(crate) struct TemplateDatabaseName(String);
+
+impl TemplateDatabaseName {
+    fn new() -> Self {
+        Self("jaunder_test_template".to_owned())
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Advisory-lock key serialising template creation across nextest's
 /// process-per-test workers. The first worker migrates the template; the rest
 /// see it already exists and skip straight to cloning.
-const TEMPLATE_LOCK_KEY: i64 = 78_316_621;
+#[derive(Clone, Copy, Debug, macros::SqlxBridge)]
+pub(crate) struct TemplateDatabaseLockKey(i64);
 
-/// Ensures [`TEMPLATE_DB`] exists and is fully migrated. Safe to call
-/// concurrently from many processes: creation is guarded by a session-level
-/// advisory lock taken on the bootstrap connection.
-async fn ensure_template_db(config: &PostgresTestConfig) {
+const TEMPLATE_LOCK_KEY: TemplateDatabaseLockKey = TemplateDatabaseLockKey(78_316_621);
+
+/// Ensures `template` exists and is fully migrated. Safe to call concurrently
+/// from many processes: creation is guarded by a session-level advisory lock
+/// taken on the bootstrap connection.
+async fn ensure_template_db(config: &PostgresTestConfig, template: &TemplateDatabaseName) {
     let bootstrap: sqlx::postgres::PgConnectOptions = config.bootstrap_url().parse().unwrap();
     let mut admin = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
 
@@ -286,7 +300,7 @@ async fn ensure_template_db(config: &PostgresTestConfig) {
     let exists = sqlx::query_scalar::<_, Exists>(
         "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
     )
-    .bind(TEMPLATE_DB)
+    .bind(template)
     .fetch_one(&mut admin)
     .await
     .unwrap()
@@ -298,7 +312,7 @@ async fn ensure_template_db(config: &PostgresTestConfig) {
         let owner = options.get_username();
         sqlx::query(&format!(
             "CREATE DATABASE {} OWNER {}",
-            quote_identifier(TEMPLATE_DB),
+            quote_identifier(template.as_str()),
             quote_identifier(owner),
         ))
         .execute(&mut admin)
@@ -308,7 +322,7 @@ async fn ensure_template_db(config: &PostgresTestConfig) {
         // Migrate the template through its own pool, then close it: a database
         // can only serve as a CREATE DATABASE template when nobody is connected
         // to it.
-        let pool = sqlx::PgPool::connect(&postgres_url_with_db_name(config, TEMPLATE_DB))
+        let pool = sqlx::PgPool::connect(&postgres_url_with_db_name(config, template.as_str()))
             .await
             .unwrap();
         sqlx::migrate!("../storage/migrations/postgres")
@@ -335,7 +349,8 @@ async fn ensure_template_db(config: &PostgresTestConfig) {
 pub async fn template_postgres_url(
     config: &PostgresTestConfig,
 ) -> (DbConnectOptions, PostgresDbGuard) {
-    ensure_template_db(config).await;
+    let template = TemplateDatabaseName::new();
+    ensure_template_db(config, &template).await;
 
     let DbConnectOptions::Postgres { options, .. } = config.test_url().parse().unwrap() else {
         unreachable!("PostgreSQL test URL always yields PostgreSQL options")
@@ -349,7 +364,7 @@ pub async fn template_postgres_url(
         "CREATE DATABASE {} OWNER {} TEMPLATE {}",
         quote_identifier(&db_name),
         quote_identifier(owner),
-        quote_identifier(TEMPLATE_DB),
+        quote_identifier(template.as_str()),
     ))
     .execute(&mut admin)
     .await

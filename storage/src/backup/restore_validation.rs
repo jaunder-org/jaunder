@@ -26,7 +26,10 @@ use host::feed::{FeedEventStatus, FeedPath};
 use host::invite::InviteCode;
 use host::stored_password_hash::StoredPasswordHash;
 
-use super::format::{self, BackupManifest};
+use super::{
+    RestoreText,
+    format::{self, BackupManifest},
+};
 
 #[derive(Debug, Clone)]
 pub struct BackupRestoreOutcome {
@@ -172,16 +175,6 @@ where
     R: RestoreTableRow,
 {
     R::from_restore(row).validate(report);
-}
-
-/// A lossless textual cell from an NDJSON backup row.
-#[derive(Debug, macros::SqlxBridge)]
-struct RestoreText(String);
-
-impl RestoreText {
-    fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 struct RestoreColumn<T> {
@@ -442,9 +435,8 @@ impl RestoreTableRow for UserConfigRestoreRow {
 }
 
 fn restore_text(row: &RestoreRowMap, column: &str) -> Option<RestoreText> {
-    format::json_value_as_restore_text(row.get(column)?).map(RestoreText)
+    format::json_value_as_restore_text(row.get(column)?).map(RestoreText::new)
 }
-
 fn push_issue(
     report: &mut RestoreValidationReport,
     table: &str,

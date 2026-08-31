@@ -21,6 +21,31 @@ impl CatalogTableName {
         &self.0
     }
 }
+/// A database name supplied by a `PostgreSQL` test connection URL.
+#[cfg(test)]
+#[derive(Debug, macros::SqlxBridge)]
+pub(crate) struct CatalogDatabaseName(String);
+
+#[cfg(test)]
+impl CatalogDatabaseName {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl From<String> for CatalogDatabaseName {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for CatalogTableName {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
 /// A column name supplied by a database catalog.
 #[derive(Debug, macros::SqlxBridge)]
 pub(crate) struct CatalogColumnName(String);

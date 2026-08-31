@@ -85,7 +85,7 @@ Out:
     corruption fixtures still insert the intended invalid column value and still
     exercise decode rejection.
 
-- [ ] Task 4: Type administrative restore and test-database roles
+- [x] Task 4: Type administrative restore and test-database roles
   - Ownership: `storage/src/backup/**`, both backup dialects, PostgreSQL
     teardown, `storage/src/test_support.rs`, and `storage/src/postgres/open.rs`.
     Do not edit `storage/src/sql.rs` or xtask gate files.

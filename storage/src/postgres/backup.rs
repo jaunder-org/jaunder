@@ -11,7 +11,7 @@ use sqlx::{PgConnection, PgPool, Row};
 use crate::backup::{
     self, BackupError, BackupManifest, BackupMode, BackupRowJson, CatalogColumnName,
     CatalogNullability, CatalogTableName, CatalogTypeName, ColumnInfo, MigrationVersion,
-    RestoreValidationReport,
+    RestoreBindValue, RestoreText, RestoreValidationReport,
 };
 use crate::helpers;
 use crate::sql;
@@ -77,7 +77,8 @@ pub(crate) async fn export_database(
         let schema_checksum = schema_checksum(&mut connection).await?;
 
         for table in &tables {
-            let columns = columns(&mut connection, table).await?;
+            let table_name = CatalogTableName::from(table.as_str());
+            let columns = columns(&mut connection, &table_name).await?;
             export_table(&mut connection, destination_path, table, &columns).await?;
         }
 
@@ -143,7 +144,8 @@ pub(crate) async fn restore_database(
                 .map_err(map_restore_error)?;
         }
         for table in backup::restore_table_order(&manifest.tables) {
-            let columns = columns(&mut connection, table).await?;
+            let table_name = CatalogTableName::from(table);
+            let columns = columns(&mut connection, &table_name).await?;
             import_table(
                 &mut connection,
                 source_path,
@@ -228,7 +230,7 @@ async fn import_table(
                     column.name
                 ))
             })?;
-            query = query.bind(backup::json_value_as_restore_text(value));
+            query = bind_restore_value(query, RestoreBindValue::from_json(value));
         }
         query
             .execute(&mut *connection)
@@ -237,6 +239,20 @@ async fn import_table(
     }
 
     Ok(())
+}
+
+fn bind_restore_value(
+    query: sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    value: RestoreBindValue,
+) -> sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    match value {
+        RestoreBindValue::Null => query.bind(Option::<RestoreText>::None),
+        RestoreBindValue::Boolean(value) => query.bind(value.into_text()),
+        RestoreBindValue::Integer(value) => query.bind(value.into_text()),
+        RestoreBindValue::Real { text, .. } => query.bind(text),
+        RestoreBindValue::Text(value) => query.bind(value),
+        RestoreBindValue::Json(value) => query.bind(value.into_text()),
+    }
 }
 
 fn insert_sql(table: &str, columns: &[ColumnInfo]) -> String {
@@ -316,7 +332,7 @@ async fn repair_sequences(connection: &mut PgConnection) -> Result<(), BackupErr
 
 async fn columns(
     connection: &mut PgConnection,
-    table: &str,
+    table: &CatalogTableName,
 ) -> Result<Vec<ColumnInfo>, BackupError> {
     let rows = sqlx::query(
         "SELECT column_name, udt_name
@@ -324,7 +340,6 @@ async fn columns(
          WHERE table_schema = 'public' AND table_name = $1
          ORDER BY ordinal_position",
     )
-    // sqlx-newtype-bind:allow permanent-primitive — Postgres catalog table names are introspection inputs, not domain values.
     .bind(table)
     .fetch_all(&mut *connection)
     .await?;

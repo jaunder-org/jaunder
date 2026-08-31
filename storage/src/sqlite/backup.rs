@@ -11,7 +11,7 @@ use sqlx::{Row, SqliteConnection, SqlitePool, error::ErrorKind};
 use crate::backup::{
     self, BackupError, BackupManifest, BackupMode, BackupRowJson, CatalogColumnName,
     CatalogDefinition, CatalogTableName, CatalogTypeName, ColumnInfo, MigrationVersion,
-    RestoreValidationReport,
+    RestoreBindValue, RestoreText, RestoreValidationReport,
 };
 use crate::helpers;
 use crate::sql;
@@ -92,7 +92,8 @@ pub(crate) async fn export_database(
         let schema_checksum = schema_checksum(&mut connection).await?;
 
         for table in &tables {
-            let columns = columns(&mut connection, table).await?;
+            let table_name = CatalogTableName::from(table.as_str());
+            let columns = columns(&mut connection, &table_name).await?;
             export_table(&mut connection, destination_path, table, &columns).await?;
         }
 
@@ -156,7 +157,8 @@ pub(crate) async fn restore_database(
                 .map_err(map_restore_error)?;
         }
         for table in backup::restore_table_order(&manifest.tables) {
-            let columns = columns(&mut connection, table).await?;
+            let table_name = CatalogTableName::from(table);
+            let columns = columns(&mut connection, &table_name).await?;
             import_table(
                 &mut connection,
                 source_path,
@@ -244,7 +246,7 @@ async fn import_table(
             let value = row.get(column).ok_or_else(|| {
                 BackupError::InvalidBackup(format!("table {table} row is missing column {column}"))
             })?;
-            query = bind_json_value(query, value);
+            query = bind_restore_value(query, RestoreBindValue::from_json(value));
         }
         query
             .execute(&mut *connection)
@@ -271,36 +273,18 @@ fn insert_sql(table: &str, columns: &[String]) -> String {
     )
 }
 
-/// Binds backup NDJSON cell values, not domain values. The backup format is a
-/// table-shaped wire snapshot; each column's domain type re-enters through the
-/// live schema on restore, so this generic JSON bridge is intentionally outside
-/// the ADR-0063 newtype boundary.
-fn bind_json_value<'q>(
+/// Binds the closed set of backup NDJSON cell roles for `SQLite` restore.
+fn bind_restore_value<'q>(
     query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
-    value: &serde_json::Value,
+    value: RestoreBindValue,
 ) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
     match value {
-        serde_json::Value::Null => query.bind(Option::<String>::None),
-        serde_json::Value::Bool(value) => {
-            let value: bool = *value;
-            // sqlx-newtype-bind:allow permanent-primitive — backup JSON bool cells are wire snapshot values retyped by the live schema on restore.
-            query.bind(value)
-        }
-        serde_json::Value::Number(value) => {
-            // Preserve integer affinity: bind as i64 (including u64 that fits) so
-            // large ids round-trip exactly, falling back to f64 only for
-            // genuinely non-integral numbers.
-            if let Some(value) = value.as_i64() {
-                // sqlx-newtype-bind:allow permanent-primitive — backup JSON integer cells are wire snapshot values retyped by the live schema on restore.
-                query.bind(value)
-            } else if value.as_u64().and_then(|v| i64::try_from(v).ok()).is_some() {
-                unreachable!("as_i64 already claims every u64 that fits in i64")
-            } else {
-                query.bind(value.as_f64())
-            }
-        }
-        serde_json::Value::String(value) => query.bind(value.clone()),
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => query.bind(value.to_string()),
+        RestoreBindValue::Null => query.bind(Option::<RestoreText>::None),
+        RestoreBindValue::Boolean(value) => query.bind(value),
+        RestoreBindValue::Integer(value) => query.bind(value),
+        RestoreBindValue::Real { value, .. } => query.bind(value),
+        RestoreBindValue::Text(value) => query.bind(value),
+        RestoreBindValue::Json(value) => query.bind(value),
     }
 }
 
@@ -320,9 +304,12 @@ async fn validate_foreign_keys(connection: &mut SqliteConnection) -> Result<(), 
 
 async fn columns(
     connection: &mut SqliteConnection,
-    table: &str,
+    table: &CatalogTableName,
 ) -> Result<Vec<ColumnInfo>, BackupError> {
-    let sql = format!("PRAGMA table_info({})", sql::quote_identifier(table));
+    let sql = format!(
+        "PRAGMA table_info({})",
+        sql::quote_identifier(table.as_str())
+    );
     let rows = sqlx::query(&sql).fetch_all(&mut *connection).await?;
     rows.into_iter()
         .map(|row| {
@@ -547,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn bind_json_value_accepts_all_json_shapes() {
+    fn restore_bind_value_accepts_all_json_shapes() {
         for value in [
             serde_json::Value::Null,
             serde_json::json!(true),
@@ -559,7 +546,7 @@ mod tests {
             serde_json::json!({"key": "value"}),
         ] {
             let query = sqlx::query("SELECT ?1");
-            let _query = bind_json_value(query, &value);
+            let _query = bind_restore_value(query, RestoreBindValue::from_json(&value));
         }
     }
 }
