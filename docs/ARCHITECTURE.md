@@ -2260,30 +2260,33 @@ the test suites. The gates that run them are the next section.
 ### The dual-backend harness
 
 The harness — the `Backend` enum, `TestEnv`, per-test DB provisioning, and the
-rstest templates — lives _inside_ `storage`, as the single module file
-`storage/src/test_support.rs` gated
-`#[cfg(any(test, feature = "test-support"))]` (`storage/src/lib.rs:42`)
-([ADR-0033](adr/0033-shared-db-test-harness-crate.md)). `storage`'s own tests
+rstest templates — lives inside `storage` as the `test_support` module, gated
+`#[cfg(any(test, feature = "test-support"))]` (`storage/src/lib.rs:45-49`)
+([ADR-0033](adr/0033-shared-db-test-harness-crate.md)). Its
+`storage/src/test_support/mod.rs` facade declares the nine cohesive leaves
+(`backend`, `feeds`, `invites`, `mail`, `media`, `post_service`, `postgres`,
+`posts`, and `users`) and re-exports their public harness surface
+([ADR-0128](adr/0128-mod-rs-assembles-module-surface.md)). `storage`'s own tests
 reach it through `cfg(test)`; external test crates enable the `test-support`
 feature. A separate crate is impossible: it must return `storage::AppState`, so
 `storage`'s tests would dev-depend on a crate that depends on `storage`, and
 `storage`'s own test target then links two distinct instances of itself
 (`E0308: multiple different versions of crate storage`).
 
-There are four templates, not three: `backends` and `backends_matrix` (both
+The four templates live with their backend provisioning in
+`storage/src/test_support/backend.rs`: `backends` and `backends_matrix` (both
 dual; the second is the `#[values]`-based variant), plus `sqlite_only` and
-`postgres_only` (`storage/src/test_support.rs:418-448`). The backend axis of
-`backends_matrix` is `#[values]`-based because a `#[case]`-based axis cannot
-coexist with a test's own named `#[case]` rows; it composes as rows × backends,
-and the attribute order is `#[apply(backends_matrix)]`, then the
-`#[case::name(..)]` rows, then `#[tokio::test]`
-([ADR-0124](adr/0124-rstest-reuse-cross-module-templates.md)). Each template is
-`#[export]`ed, so it expands to a name-mangled `macro_rules!` that a plain
-`use storage::test_support::backends;` brings into scope and
+`postgres_only` (`backend.rs:453-480`). The backend axis of `backends_matrix` is
+`#[values]`-based because a `#[case]`-based axis cannot coexist with a test's
+own named `#[case]` rows; it composes as rows × backends, and the attribute
+order is `#[apply(backends_matrix)]`, then the `#[case::name(..)]` rows, then
+`#[tokio::test]` ([ADR-0124](adr/0124-rstest-reuse-cross-module-templates.md)).
+Each template is `#[export]`ed, so it expands to a name-mangled `macro_rules!`
+that a plain `use storage::test_support::backends;` brings into scope and
 `#[apply(backends)]` then resolves **by bare name** — no
 `#[apply(path::to::template)]` and no `pub use` re-export (ADR-0124;
-`storage/src/test_support.rs:430-434`). That is why the templates stay in
-`storage::test_support` rather than moving to a consumer.
+`storage/src/test_support/backend.rs:462-480`). That is why the templates stay
+in `storage::test_support` rather than moving to a consumer.
 
 A storage test is homed by what it proves
 ([ADR-0053](adr/0053-storage-test-homing-and-dual-backend.md)): a backend-common
