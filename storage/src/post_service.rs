@@ -86,6 +86,7 @@ pub async fn create_rendered_post(
     storage: Arc<dyn PostStorage>,
     feed_events: Arc<dyn FeedEventStorage>,
     content: RenderedPostContent,
+    now: UtcInstant,
 ) -> Result<MutationOutcome<PostRecord>, CreatePostError> {
     let input = render_post_input(content);
     let _media_locks = content_locks
@@ -103,7 +104,7 @@ pub async fn create_rendered_post(
             let storage = Arc::clone(&storage);
             let feed_events = Arc::clone(&feed_events);
             Box::pin(async move {
-                let record = storage.create_post(transaction, &input).await?;
+                let record = storage.create_post(transaction, &input, now).await?;
                 let feed_paths = affected_feed_urls(
                     &record.author_username,
                     record.tags.iter().map(|tag| &tag.tag_slug),
@@ -509,6 +510,34 @@ pub async fn perform_post_creation(
     feed_events: Arc<dyn FeedEventStorage>,
     input: PostCreation<'_>,
 ) -> Result<MutationOutcome<PostRecord>, PerformCreationError> {
+    perform_post_creation_at(
+        write_scope,
+        content_locks,
+        storage,
+        feed_events,
+        UtcInstant::now(),
+        input,
+    )
+    .await
+}
+
+/// Performs post creation against one explicit request clock.
+///
+/// `AtomPub` supplies its request clock so an Idempotency Key mapping and its
+/// replay cutoff cannot be extended by an implicit storage clock.
+///
+/// # Errors
+///
+/// Returns `Err(PerformCreationError)` if slug validation fails, attempts to
+/// find a unique slug are exhausted, or storage fails.
+pub async fn perform_post_creation_at(
+    write_scope: &WriteScope,
+    content_locks: &MediaContentLocks,
+    storage: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    now: UtcInstant,
+    input: PostCreation<'_>,
+) -> Result<MutationOutcome<PostRecord>, PerformCreationError> {
     let PostCreation {
         user_id,
         body,
@@ -565,6 +594,7 @@ pub async fn perform_post_creation(
                 tags: tags.clone(),
                 expectations: expectations.clone(),
             },
+            now,
         )
         .await
         {
@@ -825,7 +855,7 @@ mod tests {
         let mut storage = crate::MockPostStorage::new();
         storage
             .expect_create_post()
-            .returning(|_, _| Err(CreatePostError::Internal(sqlx::Error::RowNotFound)));
+            .returning(|_, _, _| Err(CreatePostError::Internal(sqlx::Error::RowNotFound)));
         let write_scope = mock_write_scope();
         let feed_events = crate::MockFeedEventStorage::new();
         let storage: Arc<dyn PostStorage> = Arc::new(storage);
@@ -2161,17 +2191,114 @@ mod tests {
         .unwrap();
 
         let mapped = storage
-            .post_id_for_idempotency_key(user_id, &key)
+            .post_id_for_idempotency_key(user_id, &key, UtcInstant::now())
             .await
             .unwrap();
         let record = confirmed(record);
         assert_eq!(mapped, Some(record.post_id));
 
         let missing = storage
-            .post_id_for_idempotency_key(user_id, &missing_key)
+            .post_id_for_idempotency_key(user_id, &missing_key, UtcInstant::now())
             .await
             .unwrap();
         assert_eq!(missing, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn idempotency_mapping_expires_at_the_inclusive_cutoff_and_prunes(
+        #[case] backend: Backend,
+    ) {
+        use chrono::TimeZone;
+
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = Arc::clone(&env.state.posts);
+        let key = parse_idempotency_key("retained-key");
+        let created_at = UtcInstant::from(
+            chrono::Utc
+                .with_ymd_and_hms(2026, 8, 31, 12, 0, 0)
+                .single()
+                .expect("fixed instant"),
+        );
+        let cutoff = UtcInstant::from(created_at.value() + chrono::Duration::hours(1));
+
+        let first = confirmed(
+            perform_post_creation_at(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
+                created_at,
+                creation_with_key(user_id, parse_post_body("first body"), Some(&key)),
+            )
+            .await
+            .expect("first keyed create"),
+        );
+
+        assert_eq!(
+            storage
+                .post_id_for_idempotency_key(
+                    user_id,
+                    &key,
+                    UtcInstant::from(cutoff.value() - chrono::Duration::seconds(1)),
+                )
+                .await
+                .expect("pre-cutoff lookup"),
+            Some(first.post_id)
+        );
+        assert_eq!(
+            storage
+                .post_id_for_idempotency_key(user_id, &key, cutoff)
+                .await
+                .expect("cutoff lookup"),
+            None
+        );
+
+        let replacement = confirmed(
+            perform_post_creation_at(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
+                cutoff,
+                creation_with_key(user_id, parse_post_body("replacement body"), Some(&key)),
+            )
+            .await
+            .expect("cutoff reuse creates a replacement"),
+        );
+        assert_ne!(replacement.post_id, first.post_id);
+        assert!(
+            storage
+                .get_post_by_id(
+                    first.post_id,
+                    &common::visibility::ViewerIdentity::local(user_id),
+                )
+                .await
+                .expect("original post lookup")
+                .is_some(),
+            "idempotency expiry must not alter the original Post"
+        );
+        assert_eq!(
+            storage
+                .prune_expired_idempotency_keys(UtcInstant::from(
+                    cutoff.value() + chrono::Duration::hours(1),
+                ))
+                .await
+                .expect("prune expired mapping"),
+            1
+        );
+        assert_eq!(
+            storage
+                .post_id_for_idempotency_key(
+                    user_id,
+                    &key,
+                    UtcInstant::from(cutoff.value() + chrono::Duration::hours(1)),
+                )
+                .await
+                .expect("lookup after pruning"),
+            None
+        );
     }
 
     #[apply(backends)]
@@ -2208,14 +2335,14 @@ mod tests {
 
         assert_eq!(
             storage
-                .post_id_for_idempotency_key(user_a, &key)
+                .post_id_for_idempotency_key(user_a, &key, UtcInstant::now())
                 .await
                 .unwrap(),
             Some(post_a.post_id)
         );
         assert_eq!(
             storage
-                .post_id_for_idempotency_key(user_b, &key)
+                .post_id_for_idempotency_key(user_b, &key, UtcInstant::now())
                 .await
                 .unwrap(),
             Some(post_b.post_id)

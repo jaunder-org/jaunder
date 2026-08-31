@@ -540,11 +540,12 @@ pub async fn collection_post(
     };
     let idempotency_key = idempotency_key_from_headers(&headers);
 
-    let created = storage::perform_post_creation(
+    let created = storage::perform_post_creation_at(
         &write_scope,
         services.content_locks(),
         Arc::clone(&posts),
         Arc::clone(&feed_events),
+        request_clock,
         storage::PostCreation {
             user_id: auth_user.user_id,
             body,
@@ -571,7 +572,7 @@ pub async fn collection_post(
     if let Err(storage::PerformCreationError::IdempotencyConflict) = &created {
         let key = idempotency_key.as_ref().ok_or(HandlerError::Invariant)?;
         let post_id = posts
-            .post_id_for_idempotency_key(auth_user.user_id, key)
+            .post_id_for_idempotency_key(auth_user.user_id, key, request_clock)
             .await?
             .ok_or(HandlerError::Invariant)?;
         // If the original was soft-deleted between the create and this replay, a
@@ -581,6 +582,7 @@ pub async fn collection_post(
             .await?
             .ok_or(HandlerError::NotFound)?;
         let base = super::required_base_url(site_config).await?;
+        host::metrics::idempotency(host::metrics::IdempotencyEvent::Replayed);
         return post_entry_response(StatusCode::OK, &post, &base, &username);
     }
 
@@ -590,6 +592,9 @@ pub async fn collection_post(
         Ok(created) => created,
         Err(status) => return Ok(status.into_response()),
     };
+    if idempotency_key.is_some() {
+        host::metrics::idempotency(host::metrics::IdempotencyEvent::Created);
+    }
     let base = super::required_base_url(site_config).await?;
     let post = posts
         .get_post_by_id(created.post_id, &viewer)

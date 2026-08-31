@@ -1047,6 +1047,7 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
+            common::time::UtcInstant::now(),
         )
         .await
         .unwrap(),
@@ -1096,6 +1097,7 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
+            common::time::UtcInstant::now(),
         )
         .await
         .unwrap(),
@@ -1152,6 +1154,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
             idempotency_key: None,
             expectations: PostBookkeepingExpectation::default(),
         },
+        now,
     )
     .await
     .unwrap_err();

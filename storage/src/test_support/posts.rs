@@ -348,7 +348,11 @@ impl SeedRawPost {
         let outcome = state
             .write_scope
             .run(move |transaction| {
-                Box::pin(async move { posts.create_post(transaction, &input).await })
+                Box::pin(async move {
+                    posts
+                        .create_post(transaction, &input, common::time::UtcInstant::now())
+                        .await
+                })
             })
             .await
             .map_err(|error| match error {

@@ -1944,8 +1944,8 @@ mod server_tests {
         let mut posts = MockPostStorage::new();
         posts
             .expect_create_post()
-            .withf(|_transaction, input| input.tags.len() == 2)
-            .returning(|_transaction, _input| Ok(owned_post(UserId::from(1))));
+            .withf(|_transaction, input, _now| input.tags.len() == 2)
+            .returning(|_transaction, _input, _now| Ok(owned_post(UserId::from(1))));
         let owner = mutation_owner(posts);
         let result = create(post_inputs(Some(vec![
             parse_tag_label("rust"),

@@ -45,6 +45,7 @@ enum_attr!(CacheResult { Hit => "hit", Miss => "miss" });
 enum_attr!(BackupResult { Success => "success", Failure => "failure" });
 enum_attr!(PostEvent { Created => "created", Updated => "updated", Published => "published", Deleted => "deleted" });
 enum_attr!(AtompubResult { Ok => "ok", ClientError => "client_error", ServerError => "server_error" });
+enum_attr!(IdempotencyEvent { Created => "created", Replayed => "replayed", Expired => "expired" });
 
 struct Instruments {
     logins: Counter<u64>,
@@ -66,6 +67,7 @@ struct Instruments {
     backup_pruned: Counter<u64>,
     posts: Counter<u64>,
     atompub_requests: Counter<u64>,
+    idempotency_keys: Counter<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -140,6 +142,7 @@ static M: LazyLock<Instruments> = LazyLock::new(|| {
         backup_pruned: m.u64_counter("jaunder.backup.pruned").build(),
         posts: m.u64_counter("jaunder.posts").build(),
         atompub_requests: m.u64_counter("jaunder.atompub.requests").build(),
+        idempotency_keys: m.u64_counter("jaunder.atompub.idempotency_keys").build(),
     }
 });
 
@@ -350,6 +353,12 @@ pub fn backup_pruned(count: u64) {
 
 pub fn post(event: PostEvent) {
     M.posts.add(1, &kv("event", event.as_str()));
+}
+
+/// Records a bounded `AtomPub` Idempotency Key lifecycle event without attaching
+/// the client-supplied key or any Post content.
+pub fn idempotency(event: IdempotencyEvent) {
+    M.idempotency_keys.add(1, &kv("event", event.as_str()));
 }
 
 pub fn atompub_request(op: &'static str, result: AtompubResult) {
