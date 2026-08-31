@@ -44,34 +44,24 @@ impl DatabaseMaintenance {
     pub(crate) async fn run_at(&self, now: UtcInstant) {
         report_cleanup(
             metrics::RetentionDomain::IdempotencyKeys,
-            "idempotency_keys",
-            "server.maintenance.idempotency_keys",
             self.posts.prune_expired_idempotency_keys(now).await,
         );
         report_cleanup(
             metrics::RetentionDomain::Invites,
-            "invites",
-            "server.maintenance.invites",
             self.invites.prune_invites(now).await,
         );
         report_cleanup(
             metrics::RetentionDomain::EmailVerifications,
-            "email_verifications",
-            "server.maintenance.email_verifications",
             self.email_verifications
                 .prune_email_verifications(now)
                 .await,
         );
         report_cleanup(
             metrics::RetentionDomain::PasswordResets,
-            "password_resets",
-            "server.maintenance.password_resets",
             self.password_resets.prune_password_resets(now).await,
         );
         report_cleanup(
             metrics::RetentionDomain::FeedEvents,
-            "feed_events",
-            "server.maintenance.feed_events",
             self.feed_events.prune_terminal_events(now).await,
         );
     }
@@ -105,29 +95,30 @@ impl DatabaseMaintenance {
     }
 }
 
-fn report_cleanup<E>(
-    domain: metrics::RetentionDomain,
-    domain_name: &'static str,
-    context: &'static str,
-    result: Result<u64, E>,
-) where
+fn report_cleanup<E>(domain: metrics::RetentionDomain, result: Result<u64, E>)
+where
     E: Error + 'static,
 {
     match result {
         Ok(pruned) => {
             metrics::retention_cleanup(domain, metrics::RetentionResult::Success, pruned);
             tracing::info!(
-                retention.domain = domain_name,
+                retention.domain = domain.label(),
                 pruned,
                 "database.maintenance.completed"
             );
         }
         Err(error) => {
             metrics::retention_cleanup(domain, metrics::RetentionResult::Failure, 0);
+            tracing::warn!(
+                retention.domain = domain.label(),
+                error = %error,
+                "database.maintenance.failed"
+            );
             error::report_swallowed(
                 error::ErrorKind::Storage,
                 error::ErrorClass::Transient,
-                context,
+                "server.maintenance",
                 error::SwallowedSource::Error(&error),
             );
         }

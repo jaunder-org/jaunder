@@ -46,13 +46,30 @@ enum_attr!(BackupResult { Success => "success", Failure => "failure" });
 enum_attr!(PostEvent { Created => "created", Updated => "updated", Published => "published", Deleted => "deleted" });
 enum_attr!(AtompubResult { Ok => "ok", ClientError => "client_error", ServerError => "server_error" });
 enum_attr!(IdempotencyEvent { Created => "created", Replayed => "replayed", Expired => "expired" });
-enum_attr!(RetentionDomain {
-    IdempotencyKeys => "idempotency_keys",
-    Invites => "invites",
-    EmailVerifications => "email_verifications",
-    PasswordResets => "password_resets",
-    FeedEvents => "feed_events"
-});
+/// Closed set of retention domains emitted by metrics and maintenance logs.
+#[derive(Clone, Copy, Debug)]
+pub enum RetentionDomain {
+    IdempotencyKeys,
+    Invites,
+    EmailVerifications,
+    PasswordResets,
+    FeedEvents,
+}
+
+impl RetentionDomain {
+    /// Returns the bounded structured label shared by retention telemetry.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::IdempotencyKeys => "idempotency_keys",
+            Self::Invites => "invites",
+            Self::EmailVerifications => "email_verifications",
+            Self::PasswordResets => "password_resets",
+            Self::FeedEvents => "feed_events",
+        }
+    }
+}
+
 enum_attr!(RetentionResult { Success => "success", Failure => "failure" });
 
 struct Instruments {
@@ -375,13 +392,13 @@ pub fn idempotency(event: IdempotencyEvent) {
 /// Records one bounded retention-domain outcome and its successful prune count.
 pub fn retention_cleanup(domain: RetentionDomain, result: RetentionResult, pruned: u64) {
     let attributes = [
-        KeyValue::new("domain", domain.as_str()),
+        KeyValue::new("domain", domain.label()),
         KeyValue::new("result", result.as_str()),
     ];
     M.retention_runs.add(1, &attributes);
     if matches!(result, RetentionResult::Success) {
         M.retention_pruned
-            .add(pruned, &kv("domain", domain.as_str()));
+            .add(pruned, &kv("domain", domain.label()));
     }
 }
 
@@ -810,17 +827,14 @@ mod tests {
         assert_eq!(IdempotencyEvent::Replayed.as_str(), "replayed");
         assert_eq!(IdempotencyEvent::Expired.as_str(), "expired");
 
+        assert_eq!(RetentionDomain::IdempotencyKeys.label(), "idempotency_keys");
+        assert_eq!(RetentionDomain::Invites.label(), "invites");
         assert_eq!(
-            RetentionDomain::IdempotencyKeys.as_str(),
-            "idempotency_keys"
-        );
-        assert_eq!(RetentionDomain::Invites.as_str(), "invites");
-        assert_eq!(
-            RetentionDomain::EmailVerifications.as_str(),
+            RetentionDomain::EmailVerifications.label(),
             "email_verifications"
         );
-        assert_eq!(RetentionDomain::PasswordResets.as_str(), "password_resets");
-        assert_eq!(RetentionDomain::FeedEvents.as_str(), "feed_events");
+        assert_eq!(RetentionDomain::PasswordResets.label(), "password_resets");
+        assert_eq!(RetentionDomain::FeedEvents.label(), "feed_events");
         assert_eq!(RetentionResult::Success.as_str(), "success");
         assert_eq!(RetentionResult::Failure.as_str(), "failure");
     }

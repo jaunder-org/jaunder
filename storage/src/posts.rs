@@ -339,6 +339,19 @@ pub enum CreatePostError {
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
 }
+/// The result of a successful post creation before its enclosing transaction
+/// has committed.
+pub struct CreatedPost {
+    pub record: PostRecord,
+    /// Whether the transaction retired an expired mapping before replacing it.
+    pub idempotency_key_expired: bool,
+}
+
+const IDEMPOTENCY_REPLAY_WINDOW_HOURS: i64 = 1;
+
+fn idempotency_replay_cutoff(now: UtcInstant) -> UtcInstant {
+    UtcInstant::from(now.value() - chrono::Duration::hours(IDEMPOTENCY_REPLAY_WINDOW_HOURS))
+}
 
 /// Errors that can occur when updating a post.
 #[derive(Debug, Error)]
@@ -1073,12 +1086,14 @@ pub trait PostStorage: Send + Sync {
     ///
     /// A keyed create uses `now` both to retire an expired mapping in this
     /// transaction and to establish the replacement mapping's replay window.
+    /// The returned expiry observation is not telemetry until the caller's
+    /// transaction has been confirmed committed.
     async fn create_post(
         &self,
         transaction: &mut WriteTransaction,
         input: &CreatePostInput,
         now: UtcInstant,
-    ) -> Result<PostRecord, CreatePostError>;
+    ) -> Result<CreatedPost, CreatePostError>;
 
     /// Creates `inputs.len()` posts in an existing write transaction, returning their new
     /// ids in input order. All-or-nothing: any failure (e.g. a slug conflict on
@@ -1946,9 +1961,10 @@ where
         transaction: &mut WriteTransaction,
         input: &CreatePostInput,
         now: UtcInstant,
-    ) -> Result<PostRecord, CreatePostError> {
+    ) -> Result<CreatedPost, CreatePostError> {
         let connection = DB::write_connection(transaction)?;
-        let post_id = write_post_in_tx::<DB>(connection, input, now).await?;
+        let (post_id, idempotency_key_expired) =
+            write_post_in_tx::<DB>(connection, input, now).await?;
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format,
                     p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
@@ -1956,10 +1972,14 @@ where
              FROM posts p JOIN users u ON p.user_id = u.user_id WHERE p.post_id = $1",
             tags = DB::TAGS_SUBQUERY,
         );
-        Ok(sqlx::query_as::<_, PostRecord>(&sql)
+        let record = sqlx::query_as::<_, PostRecord>(&sql)
             .bind(post_id)
             .fetch_one(connection)
-            .await?)
+            .await?;
+        Ok(CreatedPost {
+            record,
+            idempotency_key_expired,
+        })
     }
 
     #[tracing::instrument(
@@ -1986,7 +2006,8 @@ where
         DB::lock_media_references(connection, &media).await?;
         let mut ids = Vec::with_capacity(inputs.len());
         for input in inputs {
-            ids.push(write_post_in_tx::<DB>(connection, input, UtcInstant::now()).await?);
+            let (post_id, _) = write_post_in_tx::<DB>(connection, input, UtcInstant::now()).await?;
+            ids.push(post_id);
         }
         Ok(ids)
     }
@@ -2002,7 +2023,7 @@ where
         key: &IdempotencyKey,
         now: UtcInstant,
     ) -> Result<Option<PostId>, sqlx::Error> {
-        let cutoff = UtcInstant::from(now.value() - chrono::Duration::hours(1));
+        let cutoff = idempotency_replay_cutoff(now);
         sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM idempotency_keys
              WHERE user_id = $1 AND key = $2 AND created_at > $3",
@@ -2021,7 +2042,7 @@ where
     )]
     async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, sqlx::Error> {
         const BATCH_SIZE: i64 = 100;
-        let cutoff = UtcInstant::from(now.value() - chrono::Duration::hours(1));
+        let cutoff = idempotency_replay_cutoff(now);
         let mut deleted = 0;
 
         loop {
@@ -3735,7 +3756,7 @@ pub(crate) async fn write_post_in_tx<DB>(
     conn: &mut DB::Connection,
     input: &CreatePostInput,
     now: UtcInstant,
-) -> Result<PostId, CreatePostError>
+) -> Result<(PostId, bool), CreatePostError>
 where
     DB: PostDialect,
     for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -3758,24 +3779,22 @@ where
 {
     DB::lock_media_references(conn, &media_lock_set(input.rendered.media())).await?;
 
-    if let Some(key) = input.idempotency_key.as_ref() {
-        let cutoff = UtcInstant::from(now.value() - chrono::Duration::hours(1));
-        let expired = sqlx::query_scalar::<_, RowCount>(
+    let idempotency_key_expired = if let Some(key) = input.idempotency_key.as_ref() {
+        sqlx::query_scalar::<_, RowCount>(
             "DELETE FROM idempotency_keys
              WHERE user_id = $1 AND key = $2 AND created_at <= $3
              RETURNING CAST(1 AS BIGINT)",
         )
         .bind(input.user_id)
         .bind(key)
-        .bind(cutoff)
+        .bind(idempotency_replay_cutoff(now))
         .fetch_optional(&mut *conn)
         .await
         .map_err(CreatePostError::Internal)?
-        .is_some();
-        if expired {
-            host::metrics::idempotency(host::metrics::IdempotencyEvent::Expired);
-        }
-    }
+        .is_some()
+    } else {
+        false
+    };
 
     let post_id = sqlx::query_scalar::<_, PostId>(
         "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
@@ -3821,7 +3840,7 @@ where
         .map_err(map_idempotency_insert_error)?;
     }
 
-    Ok(post_id)
+    Ok((post_id, idempotency_key_expired))
 }
 
 /// Replaces a post's `post_audiences` rows to exactly match `audiences`.
@@ -4461,6 +4480,7 @@ mod tests {
                 .expect("post creation succeeds"),
             "post creation fixture",
         )
+        .record
     }
 
     async fn publish_post_scoped(

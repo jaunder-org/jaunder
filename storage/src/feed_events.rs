@@ -361,7 +361,6 @@ pub struct FeedEventStore<DB: Database> {
 const INSERT_FEED_EVENT: &str = "INSERT INTO feed_events (feed_url) VALUES ($1)";
 
 /// The maximum rows one terminal-retention statement may delete.
-const TERMINAL_PRUNE_BATCH: u64 = 200;
 const TERMINAL_PRUNE_LIMIT: RowLimit = RowLimit::at_most(200);
 impl<DB: Database> FeedEventStore<DB> {
     #[must_use]
@@ -539,7 +538,7 @@ where
         loop {
             let batch = DB::prune_terminal_events(&self.pool, now, TERMINAL_PRUNE_LIMIT).await?;
             deleted += batch;
-            if batch < TERMINAL_PRUNE_BATCH {
+            if batch < TERMINAL_PRUNE_LIMIT.value().unsigned_abs() {
                 return Ok(deleted);
             }
             #[cfg(test)]
@@ -1632,7 +1631,7 @@ mod tests {
         let env = backend.setup().await;
         let now = fixture_instant(900_000);
         crate::with_closeable_pool!(env.base.pool(), pool, {
-            for index in 0..=TERMINAL_PRUNE_BATCH {
+            for index in 0..=TERMINAL_PRUNE_LIMIT.value().unsigned_abs() {
                 sqlx::query(
                     "INSERT INTO feed_events (feed_url, status, next_attempt_at, terminal_at) \
                      VALUES ($1, 'done', $2, $2)",
@@ -1651,7 +1650,7 @@ mod tests {
                 .prune_terminal_events(now)
                 .await
                 .expect("drain terminal rows"),
-            TERMINAL_PRUNE_BATCH + 1
+            TERMINAL_PRUNE_LIMIT.value().unsigned_abs() + 1
         );
     }
 
@@ -1661,7 +1660,7 @@ mod tests {
         let env = backend.setup().await;
         let now = fixture_instant(900_000);
         crate::with_closeable_pool!(env.base.pool(), pool, {
-            for index in 0..=TERMINAL_PRUNE_BATCH {
+            for index in 0..=TERMINAL_PRUNE_LIMIT.value().unsigned_abs() {
                 sqlx::query(
                     "INSERT INTO feed_events (feed_url, status, next_attempt_at, terminal_at) \
                      VALUES ($1, 'done', $2, $2)",
@@ -1698,7 +1697,7 @@ mod tests {
                 .await
                 .expect("cleanup task")
                 .expect("cleanup result"),
-            TERMINAL_PRUNE_BATCH + 1
+            TERMINAL_PRUNE_LIMIT.value().unsigned_abs() + 1
         );
         assert_eq!(
             env.base

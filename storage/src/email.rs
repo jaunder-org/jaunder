@@ -48,6 +48,13 @@ impl From<UseEmailVerificationError> for host::error::InternalError {
         }
     }
 }
+/// The email-verification consumption that must be observed only after commit
+/// confirmation.
+#[derive(Debug)]
+pub struct EmailVerificationConsumption {
+    pub user_id: UserId,
+    pub email: Email,
+}
 
 /// Storage for email verification tokens.
 ///
@@ -72,7 +79,8 @@ pub trait EmailVerificationStorage: Send + Sync {
 
     /// Validates a raw verification token and marks it as used.
     ///
-    /// Returns the associated `(user_id, email)` on success.
+    /// Returns the consumption on success. Its caller must log the consumption
+    /// only after the enclosing transaction is confirmed committed.
     ///
     /// # Errors
     ///
@@ -82,7 +90,7 @@ pub trait EmailVerificationStorage: Send + Sync {
         &self,
         transaction: &mut WriteTransaction,
         raw_token: &RawToken,
-    ) -> Result<(UserId, Email), UseEmailVerificationError>;
+    ) -> Result<EmailVerificationConsumption, UseEmailVerificationError>;
 
     /// Deletes consumed verification tokens and unused tokens expired for at
     /// least 24 hours, draining bounded batches at the supplied instant.
@@ -168,7 +176,7 @@ where
         &self,
         transaction: &mut WriteTransaction,
         raw_token: &RawToken,
-    ) -> Result<(UserId, Email), UseEmailVerificationError> {
+    ) -> Result<EmailVerificationConsumption, UseEmailVerificationError> {
         let token_hash = token::hash(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
 
         let now = UtcInstant::now();
@@ -194,13 +202,7 @@ where
         .map_err(UseEmailVerificationError::Internal)?;
 
         if let Some((user_id, email)) = claimed {
-            tracing::info!(
-                credential.kind = "email_verification",
-                credential.outcome = "consumed",
-                user.id = %user_id,
-                "credential consumed"
-            );
-            return Ok((user_id, email));
+            return Ok(EmailVerificationConsumption { user_id, email });
         }
 
         // A successful claim miss is the only path that reaches the domain
@@ -303,10 +305,9 @@ mod tests {
             })
             .await
             .unwrap();
-        let (claimed_user, claimed_email) =
-            crate::test_support::confirmed_for(outcome, "email verification");
-        assert_eq!(claimed_user, user_id);
-        assert_eq!(claimed_email, email);
+        let consumption = crate::test_support::confirmed_for(outcome, "email verification");
+        assert_eq!(consumption.user_id, user_id);
+        assert_eq!(consumption.email, email);
     }
 
     #[apply(backends)]

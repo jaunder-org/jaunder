@@ -51,7 +51,8 @@ pub trait PasswordResetStorage: Send + Sync {
 
     /// Validates a raw reset token and marks it as used.
     ///
-    /// Returns the associated `user_id` on success.
+    /// Returns the consumption on success. Its caller must log the consumption
+    /// only after the enclosing transaction is confirmed committed.
     ///
     /// # Errors
     ///
@@ -61,7 +62,7 @@ pub trait PasswordResetStorage: Send + Sync {
         &self,
         transaction: &mut WriteTransaction,
         raw_token: &RawToken,
-    ) -> Result<UserId, UsePasswordResetError>;
+    ) -> Result<crate::PasswordResetConsumption, UsePasswordResetError>;
 
     /// Deletes consumed reset tokens and unused tokens expired for at least 24
     /// hours, draining bounded batches at the supplied instant.
@@ -128,7 +129,7 @@ where
         &self,
         transaction: &mut WriteTransaction,
         raw_token: &RawToken,
-    ) -> Result<UserId, UsePasswordResetError> {
+    ) -> Result<crate::PasswordResetConsumption, UsePasswordResetError> {
         let token_hash = token::hash(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
 
         let now = UtcInstant::now();
@@ -150,13 +151,7 @@ where
         .await?;
 
         if let Some((user_id,)) = claimed {
-            tracing::info!(
-                credential.kind = "password_reset",
-                credential.outcome = "consumed",
-                user.id = %user_id,
-                "credential consumed"
-            );
-            return Ok(user_id);
+            return Ok(crate::PasswordResetConsumption { user_id });
         }
         let row = sqlx::query_as::<_, TokenStateRow>(
             "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
@@ -244,8 +239,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let claimed = crate::test_support::confirmed_for(outcome, "password reset");
-        assert_eq!(claimed, user_id);
+        let consumption = crate::test_support::confirmed_for(outcome, "password reset");
+        assert_eq!(consumption.user_id, user_id);
     }
 
     #[apply(backends)]
@@ -329,7 +324,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            crate::test_support::confirmed_for(valid, "valid password reset"),
+            crate::test_support::confirmed_for(valid, "valid password reset").user_id,
             user_id
         );
         assert_eq!(

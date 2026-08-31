@@ -148,8 +148,8 @@ async fn create_password_reset_and_use_returns_user_id(#[case] backend: Backend)
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = create_password_reset(state, user_id, expires_at).await;
 
-    let returned_user_id = use_password_reset(state, raw_token).await;
-    assert_eq!(returned_user_id, user_id);
+    let consumption = use_password_reset(state, raw_token).await;
+    assert_eq!(consumption.user_id, user_id);
 }
 
 #[apply(backends)]
@@ -241,7 +241,7 @@ async fn create_password_reset(
 async fn use_password_reset(
     state: &AppState,
     raw_token: common::token::RawToken,
-) -> common::ids::UserId {
+) -> storage::PasswordResetConsumption {
     let outcome = use_password_reset_result(state, raw_token)
         .await
         .expect("password reset should succeed");
@@ -251,7 +251,10 @@ async fn use_password_reset(
 async fn use_password_reset_result(
     state: &AppState,
     raw_token: common::token::RawToken,
-) -> Result<MutationOutcome<common::ids::UserId>, WriteScopeError<UsePasswordResetError>> {
+) -> Result<
+    MutationOutcome<storage::PasswordResetConsumption>,
+    WriteScopeError<UsePasswordResetError>,
+> {
     let password_resets = Arc::clone(&state.password_resets);
     state
         .write_scope

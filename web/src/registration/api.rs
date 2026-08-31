@@ -33,7 +33,7 @@ use {
 #[cfg(feature = "server")]
 fn classify_registration_scope_result(
     scope_result: Result<
-        MutationOutcome<common::token::RawToken>,
+        MutationOutcome<(common::token::RawToken, Option<UserId>)>,
         storage::WriteScopeError<InternalError>,
     >,
     span: &tracing::Span,
@@ -41,7 +41,7 @@ fn classify_registration_scope_result(
     is_invite_registration: bool,
 ) -> crate::error::InternalResult<MutationOutcome<common::token::RawToken>> {
     match scope_result {
-        Ok(MutationOutcome::Confirmed(token)) => {
+        Ok(MutationOutcome::Confirmed((token, invite_consumed))) => {
             metrics::registration(
                 RegistrationSource::Web,
                 metric_policy,
@@ -50,9 +50,17 @@ fn classify_registration_scope_result(
             if is_invite_registration {
                 metrics::invite(InviteEvent::Redeemed);
             }
+            if let Some(user_id) = invite_consumed {
+                tracing::info!(
+                    credential.kind = "invite",
+                    credential.outcome = "consumed",
+                    user.id = %user_id,
+                    "credential consumed"
+                );
+            }
             Ok(MutationOutcome::Confirmed(token))
         }
-        Ok(MutationOutcome::CommitIndeterminate(token)) => {
+        Ok(MutationOutcome::CommitIndeterminate((token, _))) => {
             span.record("registration.outcome", "commit_indeterminate");
             Ok(MutationOutcome::CommitIndeterminate(token))
         }
@@ -149,7 +157,7 @@ pub async fn register(
     let scope_result = write_scope
         .run(|transaction| {
             Box::pin(async move {
-                let user_id_result: Result<UserId, InternalError> = match policy {
+                let user_id_result: Result<(UserId, Option<UserId>), InternalError> = match policy {
                     RegistrationPolicy::Open => {
                         operation_span.record("registration.outcome", "create_user");
                         let Some(password) = prepared_password.as_ref() else {
@@ -161,6 +169,7 @@ pub async fn register(
                                 "web.registration.register.create_user"
                             ))
                             .await
+                            .map(|user_id| (user_id, None))
                             .map_err(Into::into)
                     }
                     RegistrationPolicy::InviteOnly => {
@@ -185,6 +194,7 @@ pub async fn register(
                                 "web.registration.register.create_user_with_invite"
                             ))
                             .await
+                            .map(|user_id| (user_id, Some(user_id)))
                             .map_err(Into::into)
                         } else {
                             operation_span.record("registration.outcome", "invite_required");
@@ -196,7 +206,7 @@ pub async fn register(
                         Err(InternalError::validation("registration is closed"))
                     }
                 };
-                let user_id = user_id_result?;
+                let (user_id, invite_consumed) = user_id_result?;
                 let signup_label = SessionLabel::from_lossy("Sign-up session");
                 sessions
                     .create_session(transaction, user_id, &signup_label)
@@ -204,6 +214,7 @@ pub async fn register(
                         "web.registration.register.create_session"
                     ))
                     .await
+                    .map(|token| (token, invite_consumed))
                     .map_err(InternalError::storage)
             })
         })
@@ -228,7 +239,7 @@ mod tests {
     fn scope_result_preserves_indeterminate_token_without_confirmed_metrics() {
         let token = parse_raw_token("token");
         let outcome = classify_registration_scope_result(
-            Ok(MutationOutcome::CommitIndeterminate(token.clone())),
+            Ok(MutationOutcome::CommitIndeterminate((token.clone(), None))),
             &Span::none(),
             host::metrics::RegistrationPolicy::Open,
             false,

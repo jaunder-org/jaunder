@@ -3,12 +3,15 @@
 //! caller (the elisp test harness). See ADR-0035.
 //!
 //! Contents: `{ "ip": <ip>, "port": <port>, "pid": <pid>, "start_time": <jiffies> }`.
-//! The `pid` + `start_time` (from `/proc/<pid>/stat` field 22) identify the exact
-//! writer *process* — the start-up mutex (#141) refuses to start when they name a
-//! live instance and treats a dead/mismatched holder as stale. A further follow-on
-//! adds an `admin_token` (admin channel, #142).
+//! The JSON file remains the out-of-process discovery contract. The adjacent
+//! OS-backed `.lock` file is the startup mutex: its kernel lock, not its
+//! on-disk existence, determines whether another live instance owns the data
+//! directory. We still inspect the JSON identity during rollout so a live legacy
+//! process without the lock remains protected.
 
+use anyhow::Context;
 use host::error;
+use std::fs::{File, OpenOptions};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -183,13 +186,81 @@ fn remove_runtime_file_with(path: &Path, remove: fn(&Path) -> std::io::Result<()
     }
 }
 
-/// RAII guard: writes the runtime file on construction, removes it on `Drop`.
+/// The advisory-lock path associated with `runtime.json`.
+///
+/// Unlike the discoverability file, this path is never removed: kernel-managed
+/// file locks are released when a process dies, so a leftover file is harmless.
+fn lock_path(runtime_path: &Path) -> PathBuf {
+    runtime_path.with_extension("lock")
+}
+
+/// An OS-backed exclusive lock held from before temporary-upload cleanup until
+/// shutdown. Its file may outlive its holder; only the live kernel lock matters.
+pub struct StartupLockGuard {
+    _file: File,
+}
+
+impl StartupLockGuard {
+    /// Acquires the exclusive lock for `runtime_path`, failing rather than
+    /// continuing when another live process owns it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lock directory or file cannot be created, or
+    /// when another live process already holds the exclusive lock.
+    pub fn acquire(runtime_path: &Path) -> anyhow::Result<Self> {
+        if let Some(parent) = runtime_path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("cannot create startup lock directory {}", parent.display())
+            })?;
+        }
+        let path = lock_path(runtime_path);
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("cannot open startup lock {}", path.display()))?;
+        file.try_lock()
+            .with_context(|| format!("cannot acquire exclusive startup lock {}", path.display()))?;
+        Ok(Self { _file: file })
+    }
+
+    /// Adds runtime-file publication to the held startup lock. The lock remains
+    /// live if discovery publication fails, matching its existing best-effort
+    /// behavior without weakening startup safety.
+    #[must_use]
+    pub fn publish(self, path: PathBuf, addr: SocketAddr, start_time: u64) -> RuntimeGuard {
+        RuntimeGuard {
+            runtime_file: RuntimeFileGuard::write(path, addr, start_time),
+            _lock: self,
+        }
+    }
+}
+
+/// Holds both the OS-backed startup lock and the discoverability file. Fields
+/// drop in declaration order, so the runtime file is removed before the lock is
+/// released.
+pub struct RuntimeGuard {
+    runtime_file: RuntimeFileGuard,
+    _lock: StartupLockGuard,
+}
+
+impl RuntimeGuard {
+    /// The active runtime-file path, if publication succeeded.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        self.runtime_file.path()
+    }
+}
+
+/// RAII guard for the discoverability file: writes it on construction and
+/// removes it on `Drop`.
 ///
 /// Removal is signal-robust on a normal service stop (#140): the graceful
 /// shutdown hook in `cmd_serve` lets the serve loop return so `Drop` runs on
 /// `SIGINT`/`SIGTERM`, and its forced-exit path removes the file explicitly via
 /// [`remove_runtime_file`] before `process::exit`. A hard `SIGKILL` still skips
-/// both (recovered by the #141 stale-detection follow-on).
+/// both, but releases [`StartupLockGuard`]'s OS lock automatically.
 pub struct RuntimeFileGuard {
     path: Option<PathBuf>,
 }
@@ -304,6 +375,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn startup_lock_excludes_concurrent_contender() {
+        let dir = TempDir::new().unwrap();
+        let runtime_path = dir.path().join("runtime.json");
+        let first = StartupLockGuard::acquire(&runtime_path).expect("first lock");
+
+        let second = StartupLockGuard::acquire(&runtime_path);
+        assert!(
+            second.is_err(),
+            "a live holder must prevent another contender from starting"
+        );
+
+        drop(first);
+        StartupLockGuard::acquire(&runtime_path).expect("released lock is acquirable");
+    }
+
+    #[test]
+    fn stale_startup_lock_file_does_not_block_acquisition() {
+        let dir = TempDir::new().unwrap();
+        let runtime_path = dir.path().join("runtime.json");
+        let lock_path = lock_path(&runtime_path);
+        std::fs::write(&lock_path, "left by a dead process").unwrap();
+
+        let lock = StartupLockGuard::acquire(&runtime_path).expect("stale file is not a lock");
+        drop(lock);
+        assert!(
+            lock_path.exists(),
+            "lock-file cleanup is neither needed nor safe"
+        );
+        StartupLockGuard::acquire(&runtime_path).expect("stale file remains harmless");
+    }
+
+    #[test]
+    fn runtime_guard_removes_discovery_file_before_releasing_lock() {
+        let dir = TempDir::new().unwrap();
+        let runtime_path = dir.path().join("runtime.json");
+        let lock = StartupLockGuard::acquire(&runtime_path).expect("startup lock");
+        let guard = lock.publish(runtime_path.clone(), addr(), 0);
+        assert!(runtime_path.exists(), "guard publishes runtime discovery");
+
+        drop(guard);
+        assert!(
+            !runtime_path.exists(),
+            "guard preserves removal-on-drop behavior"
+        );
+        StartupLockGuard::acquire(&runtime_path).expect("drop releases startup lock");
+    }
     fn denied_remove(_: &Path) -> std::io::Result<()> {
         Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,

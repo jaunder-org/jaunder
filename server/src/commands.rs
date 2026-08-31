@@ -820,8 +820,8 @@ pub struct PreparedServer {
     backup_scheduler: Option<tokio_cron_scheduler::JobScheduler>,
     maintenance_scheduler: tokio_cron_scheduler::JobScheduler,
     feed_scheduler: tokio_cron_scheduler::JobScheduler,
-    /// Removes the runtime-info file on drop (see ADR-0035).
-    runtime_guard: runtime_file::RuntimeFileGuard,
+    /// Owns the OS-backed startup lock and removes the runtime-info file on drop.
+    runtime_guard: runtime_file::RuntimeGuard,
     pub saturation_metrics: Option<PreparedSaturationMetrics>,
 }
 
@@ -891,13 +891,18 @@ pub async fn prepare_server(
     capture: Option<&ServeCapturePaths>,
 ) -> anyhow::Result<PreparedServer> {
     // Establish our own start-time up front (before opening the DB): if `/proc` is
-    // unusable we cannot enforce the start-up mutex, so refuse rather than serve with
-    // a silently-broken guard (#141). Threaded into the post-bind runtime-file write.
+    // unusable we cannot preserve legacy runtime-file detection, so refuse rather
+    // than serve with a silently-broken guard (#141).
     let start_time = runtime_file::require_start_time_at(Path::new("/proc/self/stat"))?;
 
-    // Start-up mutex: if the runtime file names a live writer process, refuse before
-    // opening the DB / touching a data dir another instance owns (#141).
     let runtime_path = runtime_file::resolve_runtime_path(runtime_file, &storage.storage_path);
+    // This is the actual startup mutex. It is acquired before cleanup and retained
+    // through the serve lifetime, so a concurrent process cannot delete uploads
+    // belonging to the active instance. A stale lock *file* is safe: the OS lock
+    // itself is released when its process dies.
+    let startup_lock = runtime_file::StartupLockGuard::acquire(&runtime_path)?;
+    // Keep checking the legacy runtime file during rollout: an older live process
+    // has no OS lock, but still must be allowed to protect its active uploads.
     match runtime_file::check_startup_mutex(&runtime_path)? {
         runtime_file::StartupCheck::Refuse { pid } => anyhow::bail!(
             "another jaunder instance is already running on data dir {} (pid {pid}); \
@@ -906,8 +911,8 @@ pub async fn prepare_server(
         ),
         runtime_file::StartupCheck::Stale | runtime_file::StartupCheck::Proceed => {}
     }
-    // The mutex above proves no valid upload can be active. Establish a clean
-    // transient area before any upload-capable server state is prepared.
+    // The exclusive OS lock above proves no valid upload can be active. Establish
+    // a clean transient area before any upload-capable server state is prepared.
     storage::MediaManager::prepare_temporary_upload_directory(&storage.storage_path)
         .await
         .context("failed to prepare media temporary upload directory")?;
@@ -965,13 +970,9 @@ pub async fn prepare_server(
     // `local_addr` cannot fail on a just-bound listener; fall back to the
     // requested `bind` rather than add a never-taken error branch.
     let addr = listener.local_addr().unwrap_or(bind);
-    // Reuse the path already resolved for the mutex check (no re-resolve / clone).
-    let runtime_guard = runtime_file::RuntimeFileGuard::for_serve(
-        Some(runtime_path),
-        &storage.storage_path,
-        addr,
-        start_time,
-    );
+    // Publish discovery only after the listener has a bound address, while retaining
+    // the lock acquired before all line-of-business startup work.
+    let runtime_guard = startup_lock.publish(runtime_path, addr, start_time);
 
     Ok(PreparedServer {
         listener,
@@ -985,9 +986,10 @@ pub async fn prepare_server(
 }
 
 /// Serves `router` on `listener`, draining in-flight requests when `shutdown`
-/// resolves, then returns. Owns `runtime_guard`, so a normal return drops it and
-/// removes the runtime file — the covered removal path. The forced-exit path (see
-/// [`spawn_shutdown_supervisor`]) removes the file explicitly instead.
+/// resolves, then returns. Owns `runtime_guard`, so a normal return removes the
+/// runtime file and releases the OS startup lock. The forced-exit path (see
+/// [`spawn_shutdown_supervisor`]) removes the runtime file explicitly instead;
+/// process exit releases the OS lock.
 ///
 /// # Errors
 ///
@@ -995,11 +997,9 @@ pub async fn prepare_server(
 async fn serve_with_shutdown(
     listener: tokio::net::TcpListener,
     router: axum::Router,
-    // Held only for its `Drop`, which removes runtime.json when this function
-    // returns (the graceful path). Underscore-named so it lives to scope end
-    // rather than dropping immediately.
-    _runtime_guard: runtime_file::RuntimeFileGuard,
-    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    // Held to scope end: its drop removes runtime.json and releases the OS lock.
+    _runtime_guard: runtime_file::RuntimeGuard,
+    shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown)
@@ -2240,11 +2240,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_server_refuses_on_live_holder_before_db_open() {
-        // A planted runtime.json naming a live writer (our own pid + real
-        // start-time) must make prepare_server refuse *before* opening/creating
-        // the DB (#141). Uses dev mode (prod == false) so, absent the mutex, it
-        // would auto-init — proving the refusal precedes that.
+    async fn prepare_server_refuses_on_live_lock_before_cleanup() {
+        // Holding the OS-backed guard must refuse the contender before it can
+        // delete temporary uploads or create the dev-mode database.
         let temp = TempDir::new().expect("temp dir");
         let db_path = temp.path().join("jaunder.db");
         let storage = sqlite_storage_args(&temp);
@@ -2252,28 +2250,17 @@ mod tests {
         std::fs::create_dir_all(&tmp_dir).expect("create temporary directory");
         let stale_upload = tmp_dir.join("stale-upload");
         std::fs::write(&stale_upload, b"stale").expect("write stale upload");
-        let start = runtime_file::require_start_time_at(std::path::Path::new("/proc/self/stat"))
-            .expect("read own start-time");
-        std::fs::write(
-            temp.path().join("runtime.json"),
-            serde_json::json!({
-                "ip": "127.0.0.1", "port": 1,
-                "pid": std::process::id(), "start_time": start,
-            })
-            .to_string(),
-        )
-        .expect("plant runtime file");
+        let _lock = runtime_file::StartupLockGuard::acquire(&temp.path().join("runtime.json"))
+            .expect("hold startup lock");
 
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
-        // `.err()` discards the Ok(PreparedServer) (which isn't Debug) and keeps the
-        // error, so the whole check is one covered assertion (no standalone panic line).
         let telemetry = test_telemetry(None);
         let err = prepare_server(&storage, bind, false, None, &telemetry, None)
             .await
             .err();
         assert!(
-            err.is_some_and(|e| e.to_string().contains("already running")),
-            "prepare_server must refuse when a live writer holds runtime.json"
+            err.is_some_and(|e| e.to_string().contains("exclusive startup lock")),
+            "prepare_server must refuse when a live process holds the OS lock"
         );
         assert!(
             !db_path.exists(),
@@ -2298,7 +2285,9 @@ mod tests {
         let path = dir.path().join("runtime.json");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let guard = runtime_file::RuntimeFileGuard::write(path.clone(), addr, 0);
+        let guard = runtime_file::StartupLockGuard::acquire(&path)
+            .expect("startup lock")
+            .publish(path.clone(), addr, 0);
         assert!(path.exists(), "guard wrote the runtime file");
 
         // Installs the SIGINT/SIGTERM handlers synchronously, so the raise below

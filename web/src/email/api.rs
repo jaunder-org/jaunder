@@ -85,19 +85,37 @@ pub async fn verify(token: RawToken) -> WebResult<MutationOutcome<()>> {
 
     // `token` is a `RawToken` wire arg — its serde bridge already rejected a
     // malformed shape on decode, so no in-body re-parse is needed.
-    write_scope
+    let outcome = write_scope
         .run(|transaction| {
             Box::pin(async move {
-                let (user_id, email_addr) = email_verifications
+                let consumption = email_verifications
                     .use_email_verification(transaction, &token)
                     .await
                     .map_err(InternalError::storage)?;
                 users
-                    .set_email(transaction, user_id, Some(&email_addr), true)
+                    .set_email(
+                        transaction,
+                        consumption.user_id,
+                        Some(&consumption.email),
+                        true,
+                    )
                     .await
-                    .map_err(InternalError::storage)
+                    .map_err(InternalError::storage)?;
+                Ok(consumption.user_id)
             })
         })
         .await
-        .map_err(from_write_scope_error)
+        .map_err(from_write_scope_error)?;
+    match outcome {
+        MutationOutcome::Confirmed(user_id) => {
+            tracing::info!(
+                credential.kind = "email_verification",
+                credential.outcome = "consumed",
+                user.id = %user_id,
+                "credential consumed"
+            );
+            Ok(MutationOutcome::Confirmed(()))
+        }
+        MutationOutcome::CommitIndeterminate(_) => Ok(MutationOutcome::CommitIndeterminate(())),
+    }
 }

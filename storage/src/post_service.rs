@@ -99,15 +99,15 @@ pub async fn create_rendered_post(
         )
         .await
         .map_err(|error| CreatePostError::Internal(sqlx::Error::Io(error)))?;
-    write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             let storage = Arc::clone(&storage);
             let feed_events = Arc::clone(&feed_events);
             Box::pin(async move {
-                let record = storage.create_post(transaction, &input, now).await?;
+                let created = storage.create_post(transaction, &input, now).await?;
                 let feed_paths = affected_feed_urls(
-                    &record.author_username,
-                    record.tags.iter().map(|tag| &tag.tag_slug),
+                    &created.record.author_username,
+                    created.record.tags.iter().map(|tag| &tag.tag_slug),
                 );
                 feed_events
                     .enqueue_many(transaction, &feed_paths)
@@ -115,11 +115,22 @@ pub async fn create_rendered_post(
                     .map_err(|error| match error {
                         crate::FeedEventError::Db(error) => CreatePostError::Internal(error),
                     })?;
-                Ok(record)
+                Ok(created)
             })
         })
         .await
-        .map_err(map_create_post_scope_error)
+        .map_err(map_create_post_scope_error)?;
+    match outcome {
+        MutationOutcome::Confirmed(created) => {
+            if created.idempotency_key_expired {
+                host::metrics::idempotency(host::metrics::IdempotencyEvent::Expired);
+            }
+            Ok(MutationOutcome::Confirmed(created.record))
+        }
+        MutationOutcome::CommitIndeterminate(created) => {
+            Ok(MutationOutcome::CommitIndeterminate(created.record))
+        }
+    }
 }
 
 /// Renders `body` per `format` and assembles the [`CreatePostInput`] without

@@ -26,10 +26,10 @@ async fn create_email_verification_and_use_returns_user_id_and_email(#[case] bac
     )
     .await;
 
-    let (returned_user_id, returned_email) = use_email_verification(state, raw_token.clone()).await;
+    let consumption = use_email_verification(state, raw_token.clone()).await;
 
-    assert_eq!(returned_user_id, user_id);
-    assert_eq!(returned_email, "alice@example.com");
+    assert_eq!(consumption.user_id, user_id);
+    assert_eq!(consumption.email, "alice@example.com");
 }
 
 #[apply(backends)]
@@ -137,9 +137,9 @@ async fn second_email_verification_supersedes_first(#[case] backend: Backend) {
     .await;
 
     // Second token works normally.
-    let (uid, email) = use_email_verification(state, second_token).await;
-    assert_eq!(uid, user_id);
-    assert_eq!(email, "alice2@example.com");
+    let consumption = use_email_verification(state, second_token).await;
+    assert_eq!(consumption.user_id, user_id);
+    assert_eq!(consumption.email, "alice2@example.com");
 
     // First token is now either NotFound or Expired.
     let err = use_email_verification_result(state, first_token)
@@ -222,7 +222,7 @@ async fn create_email_verification(
 async fn use_email_verification(
     state: &AppState,
     raw_token: common::token::RawToken,
-) -> (common::ids::UserId, common::email::Email) {
+) -> storage::EmailVerificationConsumption {
     let outcome = use_email_verification_result(state, raw_token)
         .await
         .expect("email verification should succeed");
@@ -233,7 +233,7 @@ async fn use_email_verification_result(
     state: &AppState,
     raw_token: common::token::RawToken,
 ) -> Result<
-    MutationOutcome<(common::ids::UserId, common::email::Email)>,
+    MutationOutcome<storage::EmailVerificationConsumption>,
     WriteScopeError<UseEmailVerificationError>,
 > {
     let email_verifications = Arc::clone(&state.email_verifications);

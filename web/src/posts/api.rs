@@ -1945,7 +1945,12 @@ mod server_tests {
         posts
             .expect_create_post()
             .withf(|_transaction, input, _now| input.tags.len() == 2)
-            .returning(|_transaction, _input, _now| Ok(owned_post(UserId::from(1))));
+            .returning(|_transaction, _input, _now| {
+                Ok(storage::CreatedPost {
+                    record: owned_post(UserId::from(1)),
+                    idempotency_key_expired: false,
+                })
+            });
         let owner = mutation_owner(posts);
         let result = create(post_inputs(Some(vec![
             parse_tag_label("rust"),

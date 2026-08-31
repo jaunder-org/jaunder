@@ -359,7 +359,7 @@ impl SeedRawPost {
                 crate::WriteScopeError::Operation(error) => error,
                 crate::WriteScopeError::Begin(error) => CreatePostError::Internal(error),
             })?;
-        let post_id = confirmed_for(outcome, "seed raw post").post_id;
+        let post_id = confirmed_for(outcome, "seed raw post").record.post_id;
         Ok(SeededPost {
             post_id,
             slug,

@@ -130,8 +130,17 @@ pub async fn confirm(request: ConfirmPasswordResetRequest) -> WebResult<Mutation
         })
         .await
         .map_err(map_write_scope_error)?;
-    if matches!(&outcome, MutationOutcome::Confirmed(())) {
-        metrics::password_reset(PasswordResetEvent::Completed);
+    match outcome {
+        MutationOutcome::Confirmed(consumption) => {
+            tracing::info!(
+                credential.kind = "password_reset",
+                credential.outcome = "consumed",
+                user.id = %consumption.user_id,
+                "credential consumed"
+            );
+            metrics::password_reset(PasswordResetEvent::Completed);
+            Ok(MutationOutcome::Confirmed(()))
+        }
+        MutationOutcome::CommitIndeterminate(_) => Ok(MutationOutcome::CommitIndeterminate(())),
     }
-    Ok(outcome)
 }
