@@ -714,15 +714,18 @@ mod tests {
             ])]
         );
 
+        let idempotency = counter_attributes(&metrics, "jaunder.atompub.idempotency_keys");
         assert_eq!(
-            counter_attributes(&metrics, "jaunder.atompub.idempotency_keys"),
-            vec![
-                attrs1([("event", "created")]),
-                attrs1([("event", "replayed")]),
-                attrs1([("event", "expired")]),
-            ],
-            "idempotency events must remain bounded to the declared lifecycle values"
+            idempotency.len(),
+            3,
+            "idempotency events must remain bounded to the declared lifecycle values: {idempotency:?}"
         );
+        for event in ["created", "replayed", "expired"] {
+            assert!(
+                idempotency.contains(&attrs1([("event", event)])),
+                "idempotency event={event} was not exported: {idempotency:?}"
+            );
+        }
 
         let retention_runs = counter_attributes(&metrics, "jaunder.storage.retention_runs");
         assert!(
