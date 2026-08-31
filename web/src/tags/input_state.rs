@@ -173,11 +173,7 @@ mod tests {
     use leptos::prelude::*;
 
     fn summary(display: &str) -> TagSummary {
-        let label: common::tag::TagLabel = display.parse().unwrap();
-        TagSummary {
-            slug: label.slug(),
-            display: label,
-        }
+        display.parse::<common::tag::TagLabel>().unwrap().into()
     }
 
     /// Run `body` under a fresh reactive `Owner` (the `web::reactive`/`forms::Field`

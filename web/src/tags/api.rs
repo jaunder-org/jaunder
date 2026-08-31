@@ -49,16 +49,12 @@ pub async fn list(prefix: Option<String>, limit: Option<PageSize>) -> WebResult<
     let records = posts.list_tags(prefix.as_deref(), resolved_limit).await?;
     Ok(records
         .into_iter()
-        .map(|rec| TagSummary {
-            slug: rec.tag_slug.clone(),
-            display: TagLabel::from(rec.tag_slug),
-        })
+        .map(|rec| TagLabel::from(rec.tag_slug).into())
         .collect())
 }
 
 #[cfg(test)]
 mod tests {
-    use common::seed::TagSummary;
     use common::tag::TagLabel;
 
     /// #416 agreement: the `TagInput` commit path validates the raw token with
@@ -70,19 +66,6 @@ mod tests {
         assert!("Rust".parse::<TagLabel>().is_ok());
         assert_eq!(" ab ".parse::<TagLabel>().unwrap().as_ref(), "ab");
         assert!("bad tag".parse::<TagLabel>().is_err());
-    }
-
-    /// Committing "Rust" yields a `TagSummary` whose `slug` is the canonical
-    /// lowercase and whose `display` preserves the author's casing (Decision 4).
-    #[test]
-    fn tag_summary_preserves_casing_with_canonical_slug() {
-        let label: TagLabel = "Rust".parse().unwrap();
-        let summary = TagSummary {
-            slug: label.slug(),
-            display: label,
-        };
-        assert_eq!(summary.slug, "rust");
-        assert_eq!(summary.display, "Rust");
     }
 
     /// The server-side surface. Gated as a group rather than per item because
