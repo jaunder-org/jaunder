@@ -5,7 +5,11 @@ use common::{
 };
 use host::etag;
 use host::feed::{self, FeedItem, FeedMetadata, FeedPath, FeedTitle, HybridWindow};
-use storage::{FeedCacheRow, FeedCacheStorage, PostRecord, PostStorage, SiteConfigStorage};
+use std::sync::Arc;
+use storage::{
+    FeedCacheRow, FeedCacheStorage, PostRecord, PostStorage, SiteConfigStorage, WriteScope,
+    WriteScopeError,
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -16,34 +20,38 @@ pub enum RegenerateError {
     BaseUrlRequired,
     #[error("storage error: {0}")]
     Storage(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("feed cache commit acknowledgement was indeterminate")]
+    CacheCommitIndeterminate,
 }
 
 /// Regenerates a feed for the given URL by fetching published posts and
 /// rendering the feed in the requested format, then upserting the result
-/// into the feed cache.
+/// through its own cache-write scope.
 ///
 /// Every URL in the returned feed body is absolute, composed from the required
-/// `site.base_url` via [`common::tagged_url::compose`] (#560): the feed self/canonical
-/// URLs and each per-item permalink. `site.base_url` is a precondition — regeneration
-/// errors with `RegenerateError::BaseUrlRequired` when it is unset, so no relative
-/// `atom:id` is ever emitted.
+/// [`common::tagged_url::BaseUrl`] via [`common::tagged_url::compose`] (#560):
+/// the feed self/canonical URLs and each per-item permalink. `site.base_url` is
+/// a precondition — regeneration errors with [`RegenerateError::BaseUrlRequired`]
+/// when it is unset, so no relative `atom:id` is ever emitted.
 ///
 /// # Errors
 ///
-/// Returns `RegenerateError::BaseUrlRequired` if `site.base_url` is unset,
-/// `RegenerateError::Storage` if any database operation fails.
-/// (`RegenerateError::BadUrl` is retained as a defensive, never-hit guard: a
-/// `FeedPath` argument is always parseable, so that arm cannot fire.)
+/// Returns [`RegenerateError::BaseUrlRequired`] if `site.base_url` is unset,
+/// [`RegenerateError::Storage`] if any read or cache write scope operation fails,
+/// [`RegenerateError::CacheCommitIndeterminate`] if the cache write may have
+/// committed but its acknowledgement was lost, or [`RegenerateError::BadUrl`] for
+/// the defensive, never-hit parse guard.
 pub async fn regenerate_feed(
     site_config: &dyn SiteConfigStorage,
     posts: &dyn PostStorage,
-    feed_cache: &dyn FeedCacheStorage,
-    feed_path: &FeedPath,
+    feed_cache: Arc<dyn FeedCacheStorage>,
+    write_scope: &WriteScope,
+    feed_path: FeedPath,
 ) -> Result<FeedCacheRow, RegenerateError> {
     // A `FeedPath` is always parseable, so this never yields `None`; `BadUrl` is
     // retained as a mapped (never-hit) error rather than an `expect()`/panic.
     let (surface, format) =
-        feed::parse(feed_path).ok_or_else(|| RegenerateError::BadUrl(feed_path.to_string()))?; // cov:ignore
+        feed::parse(&feed_path).ok_or_else(|| RegenerateError::BadUrl(feed_path.to_string()))?; // cov:ignore
 
     let feeds = site_config.get_feeds_config().await.map_err(storage_err)?;
     let identity = site_config.get_identity().await.map_err(storage_err)?;
@@ -76,7 +84,7 @@ pub async fn regenerate_feed(
 
     let items = build_feed_items(base, &published);
 
-    let self_url: FeedUrl = tagged_url::compose(base, feed_path);
+    let self_url: FeedUrl = tagged_url::compose(base, &feed_path);
     let canonical_path = match &surface {
         FeedSurface::Site => "/".to_owned(),
         // urlencoding::encode (external) takes &str.
@@ -121,13 +129,40 @@ pub async fn regenerate_feed(
         unreachable!("renderer output and feed path share the parsed format")
     };
 
-    feed_cache.upsert(row.clone()).await.map_err(storage_err)?;
+    let row_for_upsert = row.clone();
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move { feed_cache.upsert(transaction, row_for_upsert).await })
+        })
+        .await
+        .map_err(regenerate_write_scope_error)?;
+    confirmed_cache_outcome(&outcome)?;
 
     Ok(row)
 }
 
+fn confirmed_cache_outcome(
+    outcome: &common::mutation::MutationOutcome<()>,
+) -> Result<(), RegenerateError> {
+    match outcome {
+        common::mutation::MutationOutcome::Confirmed(()) => Ok(()),
+        common::mutation::MutationOutcome::CommitIndeterminate(()) => {
+            Err(RegenerateError::CacheCommitIndeterminate)
+        }
+    }
+}
+
 fn storage_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> RegenerateError {
     RegenerateError::Storage(Box::new(e))
+}
+
+fn regenerate_write_scope_error(
+    error: WriteScopeError<storage::FeedCacheError>,
+) -> RegenerateError {
+    match error {
+        WriteScopeError::Operation(error) => storage_err(error),
+        WriteScopeError::Begin(error) => storage_err(error),
+    }
 }
 
 /// Builds the feed's items from the records the listing query already returned.
@@ -182,6 +217,57 @@ mod tests {
         assert!(source.downcast_ref::<sqlx::Error>().is_some());
     }
 
+    #[test]
+    fn confirmed_cache_outcome_passes_through_confirmed_write() {
+        let outcome = confirmed_cache_outcome(&common::mutation::MutationOutcome::Confirmed(()));
+
+        assert!(matches!(outcome, Ok(())));
+    }
+
+    #[test]
+    fn confirmed_cache_outcome_maps_indeterminate_commit() {
+        let error =
+            confirmed_cache_outcome(&common::mutation::MutationOutcome::CommitIndeterminate(()))
+                .expect_err("indeterminate cache commits must be surfaced");
+
+        assert!(matches!(error, RegenerateError::CacheCommitIndeterminate));
+    }
+
+    #[test]
+    fn regenerate_write_scope_operation_preserves_cache_sqlx_source() {
+        use std::error::Error;
+
+        let error = regenerate_write_scope_error(WriteScopeError::Operation(
+            storage::FeedCacheError::Db(sqlx::Error::RowNotFound),
+        ));
+
+        let RegenerateError::Storage(source) = &error else {
+            unreachable!("write operation errors must map to RegenerateError::Storage");
+        };
+        let cache = source
+            .downcast_ref::<storage::FeedCacheError>()
+            .expect("storage source should retain the cache error");
+        assert!(matches!(
+            cache
+                .source()
+                .and_then(|source| source.downcast_ref::<sqlx::Error>()),
+            Some(sqlx::Error::RowNotFound)
+        ));
+    }
+
+    #[test]
+    fn regenerate_write_scope_begin_preserves_sqlx_source() {
+        let error = regenerate_write_scope_error(WriteScopeError::Begin(sqlx::Error::PoolTimedOut));
+
+        let RegenerateError::Storage(source) = &error else {
+            unreachable!("write scope begin errors must map to RegenerateError::Storage");
+        };
+        assert!(matches!(
+            source.downcast_ref::<sqlx::Error>(),
+            Some(sqlx::Error::PoolTimedOut)
+        ));
+    }
+
     // guard:no-backend — mock store
     #[tokio::test]
     async fn regenerate_user_tag_feed_emits_typed_composed_title_and_base_anchored_url() {
@@ -208,15 +294,18 @@ mod tests {
             .returning(|_, _, _, _| Ok(vec![]));
 
         let mut feed_cache = storage::MockFeedCacheStorage::new();
-        feed_cache.expect_upsert().returning(|_| Ok(()));
+        feed_cache.expect_upsert().returning(|_, _| Ok(()));
+        let feed_cache: Arc<dyn FeedCacheStorage> = Arc::new(feed_cache);
+        let feed_path = "/~alice/tags/rust/feed.json"
+            .parse::<FeedPath>()
+            .expect("valid feed path");
 
         let row = regenerate_feed(
             &site_config,
             &posts,
-            &feed_cache,
-            &"/~alice/tags/rust/feed.json"
-                .parse::<FeedPath>()
-                .expect("valid feed path"),
+            feed_cache,
+            &storage::test_support::mock_write_scope(),
+            feed_path,
         )
         .await
         .expect("user-tag feed regenerates");
@@ -257,12 +346,15 @@ mod tests {
             .returning(|_, _, _, _| Ok(vec![]));
 
         let feed_cache = storage::MockFeedCacheStorage::new();
+        let feed_cache: Arc<dyn FeedCacheStorage> = Arc::new(feed_cache);
+        let feed_path = "/feed.rss".parse::<FeedPath>().expect("valid feed path");
 
         let err = regenerate_feed(
             &site_config,
             &posts,
-            &feed_cache,
-            &"/feed.rss".parse::<FeedPath>().expect("valid feed path"),
+            feed_cache,
+            &storage::test_support::mock_write_scope(),
+            feed_path,
         )
         .await
         .expect_err("regeneration without base_url must error");

@@ -16,12 +16,33 @@
 pub trait Backend: sqlx::Database {
     /// Value of the `db.system` span field (`"sqlite"` | `"postgres"`).
     const DB_SYSTEM: &'static str;
+
+    /// Borrows this backend's concrete connection from a sealed write capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `transaction` does not hold a connection for this backend.
+    fn write_connection(
+        transaction: &mut crate::WriteTransaction,
+    ) -> Result<&mut Self::Connection, sqlx::Error>;
 }
 
 impl Backend for sqlx::Sqlite {
     const DB_SYSTEM: &'static str = "sqlite";
+
+    fn write_connection(
+        transaction: &mut crate::WriteTransaction,
+    ) -> Result<&mut Self::Connection, sqlx::Error> {
+        crate::write_scope::sqlite_connection(transaction)
+    }
 }
 
 impl Backend for sqlx::Postgres {
     const DB_SYSTEM: &'static str = "postgres";
+
+    fn write_connection(
+        transaction: &mut crate::WriteTransaction,
+    ) -> Result<&mut Self::Connection, sqlx::Error> {
+        crate::write_scope::postgres_connection(transaction)
+    }
 }

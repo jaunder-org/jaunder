@@ -15,7 +15,8 @@ use host::{
     metrics,
 };
 use storage::{
-    FeedCacheStorage, FeedEventRecord, FeedEventStorage, PostStorage, SiteConfigStorage,
+    FeedCacheStorage, FeedEventError, FeedEventRecord, FeedEventStorage, PostStorage,
+    SiteConfigStorage, WriteScope, WriteTransaction,
 };
 use tokio::sync::Mutex;
 
@@ -43,6 +44,19 @@ fn report_continuation(
     );
 }
 
+/// Converts a mutation outcome into its confirmed value for a feed operation.
+fn require_confirmed_mutation<T>(
+    outcome: common::mutation::MutationOutcome<T>,
+    operation: &str,
+) -> anyhow::Result<T> {
+    match outcome {
+        common::mutation::MutationOutcome::Confirmed(value) => Ok(value),
+        common::mutation::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
+            "{operation} commit acknowledgement was indeterminate"
+        )),
+    }
+}
+
 /// The background feed worker: the deps it needs to regenerate feeds and ping
 /// the `WebSub` hub, declared explicitly as constructor parameters rather than
 /// reached through a shared bundle (see [ADR-0016]).
@@ -52,6 +66,7 @@ pub struct FeedWorker {
     site_config: Arc<dyn SiteConfigStorage>,
     posts: Arc<dyn PostStorage>,
     feed_cache: Arc<dyn FeedCacheStorage>,
+    write_scope: Arc<WriteScope>,
     feed_events: Arc<dyn FeedEventStorage>,
     websub: Arc<dyn WebSubClient>,
     /// The instant of the previous [`go_live_pass`](Self::go_live_pass), or
@@ -61,13 +76,14 @@ pub struct FeedWorker {
 }
 
 impl FeedWorker {
-    /// Builds a feed worker from exactly the storage handles and the `WebSub`
-    /// publisher it uses.
+    /// Builds a feed worker from exactly the storage handles, write scope, and
+    /// `WebSub` publisher it uses.
     #[must_use]
     pub fn new(
         site_config: Arc<dyn SiteConfigStorage>,
         posts: Arc<dyn PostStorage>,
         feed_cache: Arc<dyn FeedCacheStorage>,
+        write_scope: Arc<WriteScope>,
         feed_events: Arc<dyn FeedEventStorage>,
         websub: Arc<dyn WebSubClient>,
     ) -> Self {
@@ -75,6 +91,7 @@ impl FeedWorker {
             site_config,
             posts,
             feed_cache,
+            write_scope,
             feed_events,
             websub,
             last_tick: Mutex::new(None),
@@ -93,16 +110,37 @@ impl FeedWorker {
         self.posts.as_ref()
     }
 
-    /// Borrows the rendered-feed cache store.
-    #[must_use]
-    pub fn feed_cache(&self) -> &dyn FeedCacheStorage {
-        self.feed_cache.as_ref()
+    async fn claim_pending_batch(&self) -> anyhow::Result<Vec<FeedEventRecord>> {
+        let feed_events = Arc::clone(&self.feed_events);
+        require_confirmed_mutation(
+            self.write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        feed_events
+                            .claim_pending_batch(
+                                transaction,
+                                BATCH_LIMIT,
+                                chrono::Duration::from_std(LEASE_TIMEOUT)
+                                    .unwrap_or(chrono::Duration::seconds(300)),
+                            )
+                            .await
+                    })
+                })
+                .await?,
+            "feed-event claim",
+        )
     }
 
-    /// Borrows the feed-regeneration event store.
-    #[must_use]
-    pub fn feed_events(&self) -> &dyn FeedEventStorage {
-        self.feed_events.as_ref()
+    async fn write_event_status(
+        &self,
+        operation: impl for<'scope> FnOnce(
+            &'scope mut WriteTransaction,
+        ) -> futures_util::future::BoxFuture<
+            'scope,
+            Result<(), FeedEventError>,
+        >,
+    ) -> anyhow::Result<()> {
+        require_confirmed_mutation(self.write_scope.run(operation).await?, "feed-event status")
     }
 
     /// Enqueues feed regeneration for posts that crossed into "live" since the
@@ -123,7 +161,8 @@ impl FeedWorker {
     ///
     /// # Errors
     ///
-    /// Returns an error if a storage read or feed-event enqueue fails.
+    /// Returns an error if a storage read, transaction acquisition, feed-event
+    /// enqueue, or commit acknowledgement fails.
     pub async fn go_live_pass(&self, now: UtcInstant) -> anyhow::Result<()> {
         let mut last_tick = self.last_tick.lock().await;
         let urls = match *last_tick {
@@ -149,7 +188,15 @@ impl FeedWorker {
         // storage call at all), a normal tick one, and a post-outage catch-up
         // as many bounded holds as it needs — never one unbounded hold.
         for chunk in urls.chunks(ENQUEUE_CHUNK) {
-            self.feed_events().enqueue_many(chunk).await?;
+            let feed_events = Arc::clone(&self.feed_events);
+            let paths = chunk.to_vec();
+            let outcome = self
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move { feed_events.enqueue_many(transaction, &paths).await })
+                })
+                .await?;
+            require_confirmed_mutation(outcome, "feed-event enqueue")?;
         }
         *last_tick = Some(now);
         Ok(())
@@ -170,21 +217,14 @@ impl FeedWorker {
             );
         }
 
-        let claimed = match self
-            .feed_events()
-            .claim_pending_batch(
-                BATCH_LIMIT,
-                chrono::Duration::from_std(LEASE_TIMEOUT).unwrap_or(chrono::Duration::seconds(300)),
-            )
-            .await
-        {
-            Ok(c) => c,
-            Err(e) => {
+        let claimed = match self.claim_pending_batch().await {
+            Ok(claimed) => claimed,
+            Err(error) => {
                 report_continuation(
                     host::error::ErrorKind::Storage,
                     host::error::ErrorClass::Transient,
                     "server.feed.claim_pending",
-                    &e,
+                    error.as_ref(),
                 );
                 return;
             }
@@ -248,8 +288,9 @@ impl FeedWorker {
         match regenerate::regenerate_feed(
             self.site_config(),
             self.posts(),
-            self.feed_cache(),
-            &feed_path,
+            Arc::clone(&self.feed_cache),
+            self.write_scope.as_ref(),
+            feed_path.clone(),
         )
         .await
         {
@@ -258,12 +299,23 @@ impl FeedWorker {
                 metrics::feed_regen_duration_ms(
                     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 );
-                if let Err(error) = self.feed_events().mark_regenerated(&ids).await {
+                let feed_events = Arc::clone(&self.feed_events);
+                let regenerated_ids = ids.clone();
+                if let Err(error) = self
+                    .write_event_status(move |transaction| {
+                        Box::pin(async move {
+                            feed_events
+                                .mark_regenerated(transaction, &regenerated_ids)
+                                .await
+                        })
+                    })
+                    .await
+                {
                     report_continuation(
                         host::error::ErrorKind::Storage,
                         host::error::ErrorClass::Transient,
                         "server.feed.status_write.190",
-                        &error,
+                        error.as_ref(),
                     );
                 }
                 let item_bytes = row.representation().body().len();
@@ -322,14 +374,7 @@ impl FeedWorker {
                 Ok(()) => {
                     metrics::websub_ping(metrics::PingOutcome::Success);
                     tracing::info!(feed_url = %feed_url, hub = %hub, attempt, "feed.websub.ping.succeeded");
-                    if let Err(error) = self.feed_events().mark_pinged(ids).await {
-                        report_continuation(
-                            host::error::ErrorKind::Storage,
-                            host::error::ErrorClass::Transient,
-                            "server.feed.status_write.mark_pinged",
-                            &error,
-                        );
-                    }
+                    self.mark_pinged(ids).await;
                 }
                 Err(e) => {
                     report_continuation(
@@ -342,14 +387,24 @@ impl FeedWorker {
                     let next_attempt_idx = attempt_usize.saturating_sub(1);
                     if next_attempt_idx >= BACKOFFS_SECS.len() {
                         metrics::websub_ping(metrics::PingOutcome::Exhausted);
-                        if let Err(error) =
-                            self.feed_events().mark_exhausted(ids, &e.to_string()).await
+                        let feed_events = Arc::clone(&self.feed_events);
+                        let ids = ids.to_vec();
+                        let error_message = e.to_string();
+                        if let Err(error) = self
+                            .write_event_status(move |transaction| {
+                                Box::pin(async move {
+                                    feed_events
+                                        .mark_exhausted(transaction, &ids, &error_message)
+                                        .await
+                                })
+                            })
+                            .await
                         {
                             report_continuation(
                                 host::error::ErrorKind::Storage,
                                 host::error::ErrorClass::Transient,
                                 "server.feed.status_write.249",
-                                &error,
+                                error.as_ref(),
                             );
                         }
                     } else {
@@ -358,16 +413,24 @@ impl FeedWorker {
                         );
                         let next = UtcInstant::from(Utc::now() + delay);
                         metrics::websub_ping(metrics::PingOutcome::Failed);
+                        let feed_events = Arc::clone(&self.feed_events);
+                        let ids = ids.to_vec();
+                        let error_message = e.to_string();
                         if let Err(error) = self
-                            .feed_events()
-                            .mark_failed(ids, &e.to_string(), next)
+                            .write_event_status(move |transaction| {
+                                Box::pin(async move {
+                                    feed_events
+                                        .mark_failed(transaction, &ids, &error_message, next)
+                                        .await
+                                })
+                            })
                             .await
                         {
                             report_continuation(
                                 host::error::ErrorKind::Storage,
                                 host::error::ErrorClass::Transient,
                                 "server.feed.status_write.257",
-                                &error,
+                                error.as_ref(),
                             );
                         }
                     }
@@ -376,14 +439,25 @@ impl FeedWorker {
         } else {
             // No hub configured — treat as complete.
             metrics::websub_ping(metrics::PingOutcome::NoHub);
-            if let Err(error) = self.feed_events().mark_pinged(ids).await {
-                report_continuation(
-                    host::error::ErrorKind::Storage,
-                    host::error::ErrorClass::Transient,
-                    "server.feed.status_write.mark_pinged",
-                    &error,
-                );
-            }
+            self.mark_pinged(ids).await;
+        }
+    }
+
+    async fn mark_pinged(&self, ids: &[FeedEventId]) {
+        let feed_events = Arc::clone(&self.feed_events);
+        let ids = ids.to_vec();
+        if let Err(error) = self
+            .write_event_status(move |transaction| {
+                Box::pin(async move { feed_events.mark_pinged(transaction, &ids).await })
+            })
+            .await
+        {
+            report_continuation(
+                host::error::ErrorKind::Storage,
+                host::error::ErrorClass::Transient,
+                "server.feed.status_write.mark_pinged",
+                error.as_ref(),
+            );
         }
     }
 
@@ -402,12 +476,24 @@ impl FeedWorker {
         let attempt_usize = usize::try_from(attempt).unwrap_or(0);
         let next_attempt_idx = attempt_usize.saturating_sub(1);
         if next_attempt_idx >= BACKOFFS_SECS.len() {
-            if let Err(error) = self.feed_events().mark_exhausted(ids, &e.to_string()).await {
+            let feed_events = Arc::clone(&self.feed_events);
+            let ids = ids.to_vec();
+            let error_message = e.to_string();
+            if let Err(error) = self
+                .write_event_status(move |transaction| {
+                    Box::pin(async move {
+                        feed_events
+                            .mark_exhausted(transaction, &ids, &error_message)
+                            .await
+                    })
+                })
+                .await
+            {
                 report_continuation(
                     host::error::ErrorKind::Storage,
                     host::error::ErrorClass::Transient,
                     "server.feed.status_write.288",
-                    &error,
+                    error.as_ref(),
                 );
             }
         } else {
@@ -417,16 +503,24 @@ impl FeedWorker {
                         i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
                     ),
             );
+            let feed_events = Arc::clone(&self.feed_events);
+            let ids = ids.to_vec();
+            let error_message = e.to_string();
             if let Err(error) = self
-                .feed_events()
-                .mark_failed(ids, &e.to_string(), next)
+                .write_event_status(move |transaction| {
+                    Box::pin(async move {
+                        feed_events
+                            .mark_failed(transaction, &ids, &error_message, next)
+                            .await
+                    })
+                })
                 .await
             {
                 report_continuation(
                     host::error::ErrorKind::Storage,
                     host::error::ErrorClass::Transient,
                     "server.feed.status_write.295",
-                    &error,
+                    error.as_ref(),
                 );
             }
         }
@@ -491,7 +585,7 @@ mod tests {
     use crate::websub::NoopWebSubClient;
     use common::site::SiteIdentity;
     use host::feed::FeedEventStatus;
-    use storage::{FeedEventError, FeedEventRecord};
+    use storage::{FeedEventError, FeedEventRecord, test_support::mock_write_scope};
 
     fn event(id: i64, feed_url: &str, attempts: i32) -> FeedEventRecord {
         let now = UtcInstant::now();
@@ -507,6 +601,32 @@ mod tests {
             regenerated_at: None,
             pinged_at: None,
         }
+    }
+
+    #[test]
+    fn confirmed_mutation_outcome_returns_value() {
+        assert_eq!(
+            require_confirmed_mutation(
+                common::mutation::MutationOutcome::Confirmed("confirmed"),
+                "feed-event claim",
+            )
+            .expect("confirmed outcome"),
+            "confirmed"
+        );
+    }
+
+    #[test]
+    fn indeterminate_mutation_outcome_preserves_operation_message() {
+        let error = require_confirmed_mutation(
+            common::mutation::MutationOutcome::CommitIndeterminate(()),
+            "feed-event enqueue",
+        )
+        .expect_err("indeterminate outcome");
+
+        assert_eq!(
+            error.to_string(),
+            "feed-event enqueue commit acknowledgement was indeterminate"
+        );
     }
 
     #[derive(Clone)]
@@ -574,6 +694,7 @@ mod tests {
             Arc::new(site_config),
             Arc::new(posts),
             Arc::new(feed_cache),
+            Arc::new(mock_write_scope()),
             Arc::new(feed_events),
             Arc::new(NoopWebSubClient),
         )
@@ -587,6 +708,7 @@ mod tests {
             Arc::new(storage::MockSiteConfigStorage::new()),
             Arc::new(storage::MockPostStorage::new()),
             Arc::new(storage::MockFeedCacheStorage::new()),
+            Arc::new(mock_write_scope()),
             Arc::new(feed_events),
             websub,
         )
@@ -622,7 +744,7 @@ mod tests {
 
     fn successful_feed_cache() -> storage::MockFeedCacheStorage {
         let mut cache = storage::MockFeedCacheStorage::new();
-        cache.expect_upsert().times(1).returning(|_| Ok(()));
+        cache.expect_upsert().times(1).returning(|_, _| Ok(()));
         cache
     }
 
@@ -656,12 +778,15 @@ mod tests {
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _| Ok(vec![event(1, "/feed.rss", 0)]));
+            .returning(|_, _, _| Ok(vec![event(1, "/feed.rss", 0)]));
         events
             .expect_mark_regenerated()
             .times(1)
-            .returning(|_| Ok(()));
-        events.expect_mark_pinged().times(1).returning(|_| Ok(()));
+            .returning(|_, _| Ok(()));
+        events
+            .expect_mark_pinged()
+            .times(1)
+            .returning(|_, _| Ok(()));
         let worker = worker(
             site_config,
             successful_tick_posts(),
@@ -702,12 +827,15 @@ mod tests {
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _| Ok(vec![event(1, "/feed.rss", 0)]));
+            .returning(|_, _, _| Ok(vec![event(1, "/feed.rss", 0)]));
         events
             .expect_mark_regenerated()
             .times(1)
-            .returning(|_| Ok(()));
-        events.expect_mark_pinged().times(1).returning(|_| Ok(()));
+            .returning(|_, _| Ok(()));
+        events
+            .expect_mark_pinged()
+            .times(1)
+            .returning(|_, _| Ok(()));
         let worker = worker(
             site_config,
             successful_tick_posts(),
@@ -742,8 +870,11 @@ mod tests {
         events
             .expect_mark_regenerated()
             .times(1)
-            .returning(|_| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
-        events.expect_mark_pinged().times(1).returning(|_| Ok(()));
+            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+        events
+            .expect_mark_pinged()
+            .times(1)
+            .returning(|_, _| Ok(()));
         let worker = worker(site_config, posts, successful_feed_cache(), events);
         let identity = test_identity();
 
@@ -767,7 +898,7 @@ mod tests {
         events
             .expect_mark_pinged()
             .times(1)
-            .returning(|_| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
         let hub = "https://hub.example/".parse().expect("hub URL");
         let identity = test_identity();
@@ -793,7 +924,7 @@ mod tests {
         events
             .expect_mark_exhausted()
             .times(1)
-            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(FailingWebSubClient));
         let hub = "https://hub.example/".parse().expect("hub URL");
         let identity = test_identity();
@@ -821,7 +952,7 @@ mod tests {
         events
             .expect_mark_failed()
             .times(1)
-            .returning(|_, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(FailingWebSubClient));
         let hub = "https://hub.example/".parse().expect("hub URL");
         let identity = test_identity();
@@ -849,7 +980,7 @@ mod tests {
         events
             .expect_mark_failed()
             .times(1)
-            .returning(|_, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
         let record = event(1, "/feed.rss", 0);
         let error =
@@ -880,7 +1011,7 @@ mod tests {
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
         // No mark_* expectation is set: any call after the claim error would
         // panic as an unexpected call, proving the tick returned early.
         let w = worker(
@@ -914,7 +1045,7 @@ mod tests {
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _| Ok(vec![]));
+            .returning(|_, _, _| Ok(vec![]));
         let w = worker(
             storage::MockSiteConfigStorage::new(),
             posts,
@@ -938,7 +1069,7 @@ mod tests {
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _| Ok(vec![]));
+            .returning(|_, _, _| Ok(vec![]));
         let w = worker(
             storage::MockSiteConfigStorage::new(),
             posts,
@@ -965,7 +1096,7 @@ mod tests {
         events
             .expect_mark_failed()
             .times(1)
-            .returning(|_, error, _| {
+            .returning(|_, _, error, _| {
                 assert_eq!(error, "WebSub transport failed");
                 Ok(())
             });
@@ -1007,7 +1138,7 @@ mod tests {
         events
             .expect_mark_pinged()
             .times(1)
-            .returning(|_| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
         let (guard, output) = trace_capture();
         worker
@@ -1050,8 +1181,8 @@ mod tests {
         events
             .expect_enqueue_many()
             .times(1)
-            .withf(|paths| paths.len() == 3)
-            .returning(|_| Ok(()));
+            .withf(|_, paths| paths.len() == 3)
+            .returning(|_, _| Ok(()));
         events.expect_enqueue().times(0);
         let w = worker(
             storage::MockSiteConfigStorage::new(),
@@ -1062,6 +1193,40 @@ mod tests {
         w.go_live_pass(UtcInstant::now())
             .await
             .expect("catch-up pass");
+    }
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn go_live_catchup_bounds_each_enqueue_batch() {
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(1)
+            .returning(|_| {
+                Ok((0..=ENQUEUE_CHUNK)
+                    .map(|index| {
+                        format!("/tags/{index}/feed.rss")
+                            .parse()
+                            .expect("valid feed path in test")
+                    })
+                    .collect())
+            });
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_enqueue_many()
+            .times(2)
+            .withf(|_, paths| paths.len() <= ENQUEUE_CHUNK)
+            .returning(|_, _| Ok(()));
+        events.expect_enqueue().times(0);
+        let w = worker(
+            storage::MockSiteConfigStorage::new(),
+            posts,
+            storage::MockFeedCacheStorage::new(),
+            events,
+        );
+
+        w.go_live_pass(UtcInstant::now())
+            .await
+            .expect("bounded catch-up pass");
     }
 
     // guard:no-backend — mock store
@@ -1096,8 +1261,8 @@ mod tests {
         events
             .expect_enqueue_many()
             .times(1)
-            .withf(|paths| paths.len() == 9)
-            .returning(|_| Ok(()));
+            .withf(|_, paths| paths.len() == 9)
+            .returning(|_, _| Ok(()));
         events.expect_enqueue().times(0);
         let w = worker(
             storage::MockSiteConfigStorage::new(),
@@ -1147,18 +1312,21 @@ mod tests {
             .times(0..)
             .returning(|_, _, _, _| Ok(vec![]));
         let mut cache = storage::MockFeedCacheStorage::new();
-        cache.expect_upsert().times(0..).returning(|_| Ok(()));
+        cache.expect_upsert().times(0..).returning(|_, _| Ok(()));
         let mut events = storage::MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _| Ok(vec![event(1, "/feed.rss", 0)]));
+            .returning(|_, _, _| Ok(vec![event(1, "/feed.rss", 0)]));
         events
             .expect_mark_regenerated()
             .times(1)
-            .returning(|_| Ok(()));
+            .returning(|_, _| Ok(()));
         // No hub configured -> the tick treats the event as complete (mark_pinged).
-        events.expect_mark_pinged().times(1).returning(|_| Ok(()));
+        events
+            .expect_mark_pinged()
+            .times(1)
+            .returning(|_, _| Ok(()));
         let w = worker(site_config, posts, cache, events);
         w.tick().await;
     }
@@ -1192,11 +1360,11 @@ mod tests {
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _| Ok(vec![event(1, "/feed.rss", 10)]));
+            .returning(|_, _, _| Ok(vec![event(1, "/feed.rss", 10)]));
         events
             .expect_mark_exhausted()
             .times(1)
-            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
         let w = worker(
             site_config,
             posts,
@@ -1250,11 +1418,11 @@ mod tests {
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _| Ok(vec![event(1, "/feed.rss", 0)]));
+            .returning(|_, _, _| Ok(vec![event(1, "/feed.rss", 0)]));
         events
             .expect_mark_failed()
             .times(1)
-            .returning(|_, _, _| Ok(()));
+            .returning(|_, _, _, _| Ok(()));
         let w = worker(site_config, posts, cache, events);
         w.tick().await;
     }
@@ -1273,7 +1441,7 @@ mod tests {
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _| Ok(vec![]));
+            .returning(|_, _, _| Ok(vec![]));
         let w = worker(
             storage::MockSiteConfigStorage::new(),
             posts,

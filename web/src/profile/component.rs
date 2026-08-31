@@ -1,9 +1,7 @@
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput, ValidatedTextarea};
 use crate::topbar::Topbar;
-use common::bio::Bio;
-use common::display_name::DisplayName;
-use common::render::PostFormat;
+use common::{MutationOutcome, bio::Bio, display_name::DisplayName, render::PostFormat};
 use leptos::prelude::*;
 
 use super::DefaultPostFormatState;
@@ -97,8 +95,17 @@ pub fn ProfilePage() -> impl IntoView {
                     update_action
                         .value()
                         .get()
-                        .and_then(|r: Result<(), WebError>| r.err())
-                        .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                        .and_then(|result: Result<MutationOutcome<()>, WebError>| {
+                            match crate::mutation_feedback::classify(
+                                result,
+                                "Your profile may have been updated, but its status could not be confirmed. Refresh to check.",
+                            ) {
+                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => None,
+                                crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                    Some(view! { <p class="error">{message}</p> }.into_any())
+                                }
+                            }
+                        })
                 }}
             </div>
         </div>
@@ -144,6 +151,25 @@ fn DefaultPostFormatControl() -> impl IntoView {
                         <div class="j-form-body">
                             <DefaultPostFormatBody state=state />
                         </div>
+                        {move || {
+                            action
+                                .value()
+                                .get()
+                                .and_then(|result: Result<MutationOutcome<()>, WebError>| {
+                                    match crate::mutation_feedback::classify(
+                                        result,
+                                        "Save acknowledgement was lost; reload to verify the default post format.",
+                                    ) {
+                                        crate::mutation_feedback::MutationFeedback::Confirmed(
+                                            (),
+                                        ) => None,
+                                        crate::mutation_feedback::MutationFeedback::Error(
+                                            message,
+                                        ) => Some(message),
+                                    }
+                                })
+                                .map(|error| view! { <p class="error">{error}</p> })
+                        }}
                         <div class="j-form-actions">
                             <button
                                 type="button"

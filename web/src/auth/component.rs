@@ -3,12 +3,11 @@
 //! [`marker_storage`](super::marker_storage) binding) directly, no `cfg` gates
 //! inside this file.
 
-use super::{Login, LoginRequest, Logout, SessionUser};
+use super::{Login, Logout, SessionUser};
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
 use crate::topbar::Topbar;
-use common::password::ProfferedPassword;
-use common::username::Username;
+use common::{MutationOutcome, password::PasswordShape, username::Username};
 use leptos::prelude::*;
 
 /// Login page.
@@ -20,8 +19,14 @@ pub fn LoginPage() -> impl IntoView {
     // reactive signal so the chrome flips without a document reload, and mirrors it
     // into the advisory marker (#181, ADR-0044) for the next pre-paint boot.
     Effect::new(move |_| {
-        if let Some(Ok(session)) = login_action.value().get() {
-            super::set_session(session);
+        if let Some(Ok(outcome)) = login_action.value().get() {
+            match outcome {
+                MutationOutcome::Confirmed(session)
+                | MutationOutcome::CommitIndeterminate(session) => {
+                    super::set_session(session);
+                    super::use_session().reconcile.refetch();
+                }
+            }
         }
     });
 
@@ -34,9 +39,17 @@ pub fn LoginPage() -> impl IntoView {
                     login_action
                         .value()
                         .get()
-                        .map(|r: Result<SessionUser, WebError>| match r {
-                            Ok(_) => {
+                        .map(|r: Result<MutationOutcome<SessionUser>, WebError>| match r {
+                            Ok(MutationOutcome::Confirmed(_)) => {
                                 view! { <p class="j-loading">"Logging in\u{2026}"</p> }.into_any()
+                            }
+                            Ok(MutationOutcome::CommitIndeterminate(_)) => {
+                                view! {
+                                    <p class="error">
+                                        "Your sign-in may have succeeded, but its status could not be confirmed. Refresh to check."
+                                    </p>
+                                }
+                                    .into_any()
                             }
                             Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                         })
@@ -46,22 +59,20 @@ pub fn LoginPage() -> impl IntoView {
     }
 }
 
-/// Native login form: parsed domain values are assembled directly into the
-/// cohesive request instead of being harvested back through browser strings.
+/// Native login form: validates typed domain values before dispatching the
+/// generated flat server-function input.
 #[component]
 fn LoginForm(action: ServerAction<Login>) -> impl IntoView {
     let username = Field::<Username>::new();
-    let password = Field::<ProfferedPassword>::new();
+    let password = Field::<PasswordShape>::new();
     let (disabled, submit) = forms::server_action_submit(action, move || {
         username
             .parsed()
-            .zip(password.parsed())
+            .zip(password.value.get().parse().ok())
             .map(|(username, password)| Login {
-                request: LoginRequest {
-                    username,
-                    password,
-                    label: None,
-                },
+                username,
+                password,
+                label: None,
             })
     });
 
@@ -78,7 +89,7 @@ fn LoginForm(action: ServerAction<Login>) -> impl IntoView {
                     field=username
                     transform=str::to_lowercase
                 />
-                <ValidatedInput<ProfferedPassword>
+                <ValidatedInput<PasswordShape>
                     label="Password"
                     name="password"
                     input_type="password"
@@ -108,8 +119,13 @@ pub fn LogoutPage() -> impl IntoView {
     // goes anonymous without a reload) and removes the advisory marker (#181,
     // ADR-0044). The server clears the real cookie.
     Effect::new(move |_| {
-        if let Some(Ok(())) = logout_action.value().get() {
-            super::clear_session();
+        if let Some(Ok(outcome)) = logout_action.value().get() {
+            match outcome {
+                MutationOutcome::Confirmed(()) | MutationOutcome::CommitIndeterminate(()) => {
+                    super::clear_session();
+                    super::use_session().reconcile.refetch();
+                }
+            }
         }
     });
 
@@ -126,8 +142,22 @@ pub fn LogoutPage() -> impl IntoView {
                     logout_action
                         .value()
                         .get()
-                        .and_then(Result::err)
-                        .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                        .and_then(|result: Result<MutationOutcome<()>, WebError>| match result {
+                            Ok(MutationOutcome::Confirmed(())) => None,
+                            Ok(MutationOutcome::CommitIndeterminate(())) => {
+                                Some(
+                                    view! {
+                                        <p class="error">
+                                            "Your sign-out may have succeeded, but its status could not be confirmed. Refresh to check."
+                                        </p>
+                                    }
+                                        .into_any(),
+                                )
+                            }
+                            Err(error) => {
+                                Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
+                            }
+                        })
                 }}
             </div>
         </div>

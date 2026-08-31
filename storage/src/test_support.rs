@@ -21,10 +21,11 @@ use crate::posts::{
 };
 use crate::sql::{Exists, quote_identifier};
 use crate::{
-    AppState, DbConnectOptions, PostFormat, PostRecord, StorageRuntimeConfig,
+    AppState, DbConnectOptions, PostFormat, PostRecord, StorageRuntimeConfig, WriteScope,
     resolved_postgres_options,
 };
 
+use common::MutationOutcome;
 use common::ids::{PostId, TagId, UserId};
 use common::mailer::{MailSender, NoopMailSender};
 use common::media::{
@@ -64,6 +65,65 @@ use tempfile::TempDir;
 // `rstest`/`case` attributes the expansion emits are resolved at the *apply* site
 // in consumer crates, not here.
 use rstest_reuse::template;
+
+#[cfg(any(test, feature = "test-utils"))]
+/// Creates the mock write scope used by downstream storage-trait unit tests.
+///
+/// The scope is minted here at the storage test composition root so test callers
+/// cannot choose a backend or construct its transaction capability.
+#[must_use]
+pub fn mock_write_scope() -> WriteScope {
+    WriteScope::mock()
+}
+
+/// Mints a SQLite-backed write scope for a test fixture that owns its pool.
+#[must_use]
+pub fn sqlite_write_scope(pool: sqlx::SqlitePool) -> WriteScope {
+    WriteScope::sqlite(pool)
+}
+
+/// Persists a site-config fixture through a confirmed caller-owned write scope.
+///
+/// # Errors
+///
+/// Returns an error when the storage operation fails.
+pub async fn set_site_config(
+    env: &TestEnv,
+    key: host::config_key::SiteConfigKey,
+    value: &str,
+) -> anyhow::Result<()> {
+    let site_config = Arc::clone(&env.state.site_config);
+    let value = value.to_owned();
+    confirmed(
+        env.state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { site_config.set(transaction, key, &value).await })
+            })
+            .await?,
+    );
+    Ok(())
+}
+/// Extracts a mutation value, requiring that commit acknowledgement is confirmed.
+///
+/// # Panics
+///
+/// Panics when commit acknowledgement is indeterminate.
+pub fn confirmed<T>(outcome: MutationOutcome<T>) -> T {
+    confirmed_for(outcome, "fixture mutation")
+}
+
+/// Extracts a mutation value, requiring a confirmed commit for `action`.
+///
+/// # Panics
+///
+/// Panics when commit acknowledgement is indeterminate.
+pub fn confirmed_for<T>(outcome: MutationOutcome<T>, action: &str) -> T {
+    match outcome {
+        MutationOutcome::Confirmed(value) => value,
+        MutationOutcome::CommitIndeterminate(_) => panic!("{action} requires a confirmed commit"),
+    }
+}
 
 /// The storage backend a test runs against. Backend-parametrized tests take a
 /// `#[case] backend: Backend` and call [`Backend::setup`].
@@ -244,12 +304,11 @@ impl CloseablePool {
     ) -> Result<PostWriteLock<'_>, sqlx::Error> {
         let held = match self {
             CloseablePool::Sqlite(pool) => {
-                let mut conn = pool.acquire().await?;
                 // IMMEDIATE, mirroring `SqlitePostStorage::set_post_tags`: takes
                 // the write lock up front rather than upgrading a shared lock,
-                // which `busy_timeout` cannot rescue (ADR-0021).
-                sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
-                HeldWrite::Sqlite(conn)
+                // which `busy_timeout` cannot rescue (ADR-0021). SQLx tracks
+                // this custom begin, so drop schedules rollback before pool reuse.
+                HeldWrite::Sqlite(pool.begin_with("BEGIN IMMEDIATE").await?)
             }
             CloseablePool::Postgres(pool) => {
                 let mut tx = pool.begin().await?;
@@ -357,14 +416,9 @@ impl MediaReferenceWriteLock<'_> {
 
 /// A held post write lock, from [`CloseablePool::lock_post_for_write`].
 ///
-/// **The two arms do not behave the same on drop.** The Postgres arm is a real
-/// `Transaction`, which rolls back when dropped. The `SQLite` arm's
-/// `BEGIN IMMEDIATE` was issued as a raw statement, so sqlx's transaction-depth
-/// tracking never saw it: dropping the guard returns the connection to the pool
-/// **with the write transaction still open**, holding a database-wide write lock.
-/// A test that panics between `lock_post_for_write` and
-/// [`commit`](PostWriteLock::commit) therefore wedges the rest of that test's
-/// writes rather than failing cleanly. Commit (or end the test) promptly.
+/// Both arms own a tracked `SQLx` [`Transaction`]. Dropping an unfinished guard
+/// starts rollback before its connection can be reused, so neither uncommitted
+/// tags nor `SQLite`'s `BEGIN IMMEDIATE` write lock escape the guard.
 pub struct PostWriteLock<'a> {
     /// The post the lock was taken for. Held so [`add_tag`](PostWriteLock::add_tag)
     /// cannot be aimed at a post other than the one that is locked.
@@ -374,7 +428,7 @@ pub struct PostWriteLock<'a> {
 
 /// The backend-specific half of a [`PostWriteLock`].
 enum HeldWrite<'a> {
-    Sqlite(PoolConnection<Sqlite>),
+    Sqlite(Transaction<'a, Sqlite>),
     Postgres(Transaction<'a, Postgres>),
 }
 
@@ -432,9 +486,7 @@ impl PostWriteLock<'_> {
     /// Returns the `sqlx::Error` if the commit fails.
     pub async fn commit(self) -> Result<(), sqlx::Error> {
         match self.held {
-            HeldWrite::Sqlite(mut conn) => {
-                sqlx::query("COMMIT").execute(&mut *conn).await?;
-            }
+            HeldWrite::Sqlite(tx) => tx.commit().await?,
             HeldWrite::Postgres(tx) => tx.commit().await?,
         }
         Ok(())
@@ -447,6 +499,56 @@ impl PostWriteLock<'_> {
 pub struct TestEnv {
     pub state: Arc<AppState>,
     pub base: TestBase,
+}
+
+impl TestEnv {
+    #[must_use]
+    pub fn media_content_locks(&self) -> crate::MediaContentLocks {
+        crate::MediaContentLocks::new(Arc::new(self.base.path().to_path_buf()))
+    }
+}
+
+/// Creates the shared lock seam for fixture Post writers that receive only an
+/// [`AppState`], not their enclosing [`TestEnv`].
+#[must_use]
+pub fn fixture_media_content_locks() -> crate::MediaContentLocks {
+    crate::MediaContentLocks::new(Arc::new(
+        std::env::temp_dir().join("jaunder-test-media-content-locks"),
+    ))
+}
+/// Reconciles post tags through a scope and requires a confirmed setup write.
+///
+/// Fixture setup needs a durable row before its assertions run, so an
+/// unacknowledged commit is not usable as a successful setup result.
+///
+/// # Errors
+///
+/// Returns the scope's begin or tagging error when the setup write fails before
+/// commit.
+///
+/// # Panics
+///
+/// Panics when commit acknowledgement is indeterminate because fixture setup
+/// requires a confirmed durable write.
+pub async fn set_post_tags_confirmed(
+    write_scope: &crate::WriteScope,
+    posts: Arc<dyn crate::PostStorage>,
+    post_id: PostId,
+    user_id: UserId,
+    desired: &[TagLabel],
+) -> Result<(), crate::WriteScopeError<crate::TaggingError>> {
+    let desired = desired.to_vec();
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                posts
+                    .set_post_tags(transaction, post_id, user_id, &desired)
+                    .await
+            })
+        })
+        .await?;
+    confirmed_for(outcome, "tag fixture setup");
+    Ok(())
 }
 
 /// Owns a test's temp dir and, on Postgres, a [`PostgresDbGuard`] that drops the
@@ -1025,11 +1127,35 @@ pub async fn seed_posts(
             )
         })
         .collect();
-    state
-        .posts
-        .create_posts(&inputs)
+    let posts = Arc::clone(&state.posts);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { posts.create_posts(transaction, &inputs).await })
+        })
         .await
-        .expect("seed posts should be created")
+        .expect("seed posts should be created");
+    confirmed_for(outcome, "seed posts")
+}
+
+/// Creates supplied storage-layer inputs through one state-owned write capability.
+///
+/// # Panics
+///
+/// Fixture writes require a confirmed commit.
+pub async fn create_posts_confirmed(
+    state: &Arc<AppState>,
+    inputs: Vec<CreatePostInput>,
+) -> Vec<PostId> {
+    let posts = Arc::clone(&state.posts);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { posts.create_posts(transaction, &inputs).await })
+        })
+        .await
+        .expect("create post fixture should succeed");
+    confirmed_for(outcome, "create post fixture")
 }
 
 /// A user seeded by [`SeedUser::seed`] — its id plus its **autogenerated**
@@ -1115,16 +1241,29 @@ impl<'a> SeedUser<'a> {
         let n = SEED_SEQ.fetch_add(1, Ordering::Relaxed);
         let username = parse_username(&format!("user{n}"));
         let display_name = self.display_name.map(parse_display_name);
-        let user_id = state
-            .users
-            .create_user(
-                &username,
-                &host::test_support::parse_password(self.password),
-                display_name.as_ref(),
-                self.is_operator,
-            )
+        let users = Arc::clone(&state.users);
+        let create_username = username.clone();
+        let password = crate::prepare_password(host::test_support::parse_password(self.password))
+            .await
+            .expect("user fixture password preparation should succeed");
+        let outcome = state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    users
+                        .create_user(
+                            transaction,
+                            &create_username,
+                            &password,
+                            display_name.as_ref(),
+                            self.is_operator,
+                        )
+                        .await
+                })
+            })
             .await
             .expect("seed user should be created");
+        let user_id = confirmed_for(outcome, "seed user");
         SeededUser { user_id, username }
     }
 }
@@ -1212,8 +1351,11 @@ impl SeedPost {
     ///
     /// If the post cannot be created — happy-path setup only, like [`SeedUser::seed`].
     pub async fn seed(self, state: &Arc<AppState>) -> PostRecord {
-        crate::perform_post_creation(
-            state.posts.as_ref(),
+        let outcome = crate::perform_post_creation(
+            &state.write_scope,
+            &fixture_media_content_locks(),
+            Arc::clone(&state.posts),
+            Arc::clone(&state.feed_events),
             crate::PostCreation {
                 user_id: self.user_id,
                 body: self.body,
@@ -1230,7 +1372,8 @@ impl SeedPost {
             },
         )
         .await
-        .expect("seed post should be created")
+        .expect("seed post should be created");
+        confirmed_for(outcome, "seed post")
     }
 }
 
@@ -1401,15 +1544,31 @@ impl SeedRawPost {
     /// is violated.
     pub async fn create(self, state: &Arc<AppState>) -> Result<SeededPost, CreatePostError> {
         let input = self.into_input();
-        let post_id = state.posts.create_post(&input).await?;
+        let slug = input.slug.clone();
+        let title = input
+            .title
+            .clone()
+            .expect("SeedRawPost always autogenerates a title");
+        let published_at = input.published_at;
+        let rendered_html = input.rendered.clone().into_html();
+        let posts = Arc::clone(&state.posts);
+        let outcome = state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { posts.create_post(transaction, &input).await })
+            })
+            .await
+            .map_err(|error| match error {
+                crate::WriteScopeError::Operation(error) => error,
+                crate::WriteScopeError::Begin(error) => CreatePostError::Internal(error),
+            })?;
+        let post_id = confirmed_for(outcome, "seed raw post").post_id;
         Ok(SeededPost {
             post_id,
-            slug: input.slug,
-            title: input
-                .title
-                .expect("SeedRawPost always autogenerates a title"),
-            published_at: input.published_at,
-            rendered_html: input.rendered.into_html(),
+            slug,
+            title,
+            published_at,
+            rendered_html,
         })
     }
 
@@ -1601,20 +1760,25 @@ pub fn media_url_for(name: &str) -> String {
 /// If the row cannot be created — happy-path setup only, like [`SeedUser::seed`].
 pub async fn seed_media(state: &Arc<AppState>, user_id: UserId, name: &str) -> MediaRef {
     let media = media_ref_for(name);
-    state
-        .media
-        .create_media(&MediaRecord {
-            user_id,
-            sha256: media.sha256.clone(),
-            filename: media.filename.clone(),
-            source: media.source,
-            content_type: detect_content_type(&media.filename),
-            size_bytes: parse_byte_size("1"),
-            source_url: None,
-            created_at: UtcInstant::now(),
+    let record = MediaRecord {
+        user_id,
+        sha256: media.sha256.clone(),
+        filename: media.filename.clone(),
+        source: media.source,
+        content_type: detect_content_type(&media.filename),
+        size_bytes: parse_byte_size("1"),
+        source_url: None,
+        created_at: UtcInstant::now(),
+    };
+    let media_store = Arc::clone(&state.media);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { media_store.create_media(transaction, &record).await })
         })
         .await
         .expect("seed media should be created");
+    confirmed_for(outcome, "seed media");
     media
 }
 
@@ -1703,8 +1867,11 @@ async fn create_via_service(
     body: PostBody,
     published_at: Option<UtcInstant>,
 ) -> PostId {
-    crate::perform_post_creation(
-        state.posts.as_ref(),
+    let outcome = crate::perform_post_creation(
+        &state.write_scope,
+        &fixture_media_content_locks(),
+        Arc::clone(&state.posts),
+        Arc::clone(&state.feed_events),
         crate::PostCreation {
             user_id,
             body,
@@ -1721,8 +1888,8 @@ async fn create_via_service(
         },
     )
     .await
-    .expect("post creation via the service path should succeed")
-    .post_id
+    .expect("post creation via the service path should succeed");
+    confirmed_for(outcome, "post creation fixture").post_id
 }
 /// Edits a post's body through [`perform_post_update`](crate::perform_post_update) —
 /// the service-layer twin of [`create_post_via_service`], so an edit's re-render and
@@ -1738,8 +1905,11 @@ pub async fn update_post_body_via_service(
     editor_user_id: UserId,
     body: PostBody,
 ) {
-    crate::perform_post_update(
-        state.posts.as_ref(),
+    let outcome = crate::perform_post_update(
+        &state.write_scope,
+        &fixture_media_content_locks(),
+        Arc::clone(&state.posts),
+        Arc::clone(&state.feed_events),
         crate::PostUpdate {
             post_id,
             editor_user_id,
@@ -1753,10 +1923,12 @@ pub async fn update_post_body_via_service(
             expectations: PostBookkeepingExpectation::default(),
             audiences: vec![AudienceTarget::Public],
             tags: Vec::new(),
+            previous_tag_slugs: vec![],
         },
     )
     .await
     .expect("post update via the service path should succeed");
+    confirmed_for(outcome, "post update fixture");
 }
 
 #[cfg(test)]
@@ -1764,8 +1936,8 @@ mod tests {
     use super::{
         AudienceTarget, Backend, CreatePostError, DbConnectOptions, PostFormat, PostSummary,
         PostgresDbGuard, PostgresTestConfig, SeedPost, SeedRawPost, SeedUser, UtcInstant, backends,
-        bootstrap_url, parse_post_title, raw_media_filename_exists, recorded_postgres_url,
-        report_drop_outcome, seed_media, splice_db_name, sqlite_url,
+        bootstrap_url, confirmed_for, parse_post_title, raw_media_filename_exists,
+        recorded_postgres_url, report_drop_outcome, seed_media, splice_db_name, sqlite_url,
     };
 
     // The free renderer, to pin that the builder's HTML is exactly `render(body)` — the
@@ -1775,6 +1947,16 @@ mod tests {
     use host::render::render;
     use rstest::*;
     use rstest_reuse::*;
+    use std::sync::Arc;
+
+    #[test]
+    #[should_panic(expected = "fixture action requires a confirmed commit")]
+    fn confirmed_for_rejects_indeterminate_commit() {
+        confirmed_for(
+            common::MutationOutcome::CommitIndeterminate(()),
+            "fixture action",
+        );
+    }
 
     #[apply(backends)]
     #[tokio::test]
@@ -1792,14 +1974,21 @@ mod tests {
         assert!(!u.is_operator);
         assert!(u.display_name.is_none());
         // The default password authenticates — proves `seed` used `password123`.
-        state
-            .users
-            .authenticate(
-                &user.username,
-                &host::test_support::parse_password("password123"),
-            )
+        let users = Arc::clone(&state.users);
+        let username = user.username.clone();
+        let password = host::test_support::parse_password("password123");
+        let authentication = users
+            .prepare_authentication(&username, &password)
+            .await
+            .expect("default password prepares authentication");
+        let outcome = state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { users.authenticate(transaction, authentication).await })
+            })
             .await
             .expect("default password authenticates");
+        assert!(matches!(outcome, common::MutationOutcome::Confirmed(_)));
     }
 
     #[apply(backends)]
@@ -1824,14 +2013,21 @@ mod tests {
         assert!(u.is_operator);
         assert_eq!(u.display_name.expect("display name set"), "Bob B");
         // The overridden password authenticates — not the default.
-        state
-            .users
-            .authenticate(
-                &user.username,
-                &host::test_support::parse_password("hunter2xyz"),
-            )
+        let users = Arc::clone(&state.users);
+        let username = user.username.clone();
+        let password = host::test_support::parse_password("hunter2xyz");
+        let authentication = users
+            .prepare_authentication(&username, &password)
+            .await
+            .expect("overridden password prepares authentication");
+        let outcome = state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { users.authenticate(transaction, authentication).await })
+            })
             .await
             .expect("overridden password authenticates");
+        assert!(matches!(outcome, common::MutationOutcome::Confirmed(_)));
     }
 
     #[apply(backends)]

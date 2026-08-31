@@ -16,7 +16,7 @@ use common::ids::UserId;
 use common::time::UtcInstant;
 use common::username::Username;
 use std::sync::Arc;
-use storage::{MockSessionStorage, SessionRecord, SessionStorage};
+use storage::{MockSessionStorage, SessionRecord, SessionStorage, test_support::mock_write_scope};
 
 /// Builds request `Parts` carrying a Bearer credential whose session store
 /// authenticates as `(user_id, username)`. Provide it into the reactive owner
@@ -26,16 +26,17 @@ pub(crate) fn auth_parts(user_id: UserId, username: &str) -> Parts {
     let mut mock = MockSessionStorage::new();
     // `require_auth` only ever calls `authenticate`, which must resolve to the
     // fixed user so `auth::User` extraction succeeds.
-    mock.expect_authenticate().returning(move |_raw_token| {
-        Ok(SessionRecord {
-            token_hash: common::token::TokenHash::from_digest("hash"),
-            user_id,
-            username: username.clone(),
-            label: "test".parse().expect("valid session label"),
-            created_at: UtcInstant::now(),
-            last_used_at: UtcInstant::now(),
-        })
-    });
+    mock.expect_authenticate()
+        .returning(move |_transaction, _raw_token| {
+            Ok(SessionRecord {
+                token_hash: common::token::TokenHash::from_digest("hash"),
+                user_id,
+                username: username.clone(),
+                label: "test".parse().expect("valid session label"),
+                created_at: UtcInstant::now(),
+                last_used_at: UtcInstant::now(),
+            })
+        });
     let sessions: Arc<dyn SessionStorage> = Arc::new(mock);
     let request = Request::builder()
         .header(header::AUTHORIZATION, "Bearer test-token")
@@ -43,5 +44,6 @@ pub(crate) fn auth_parts(user_id: UserId, username: &str) -> Parts {
         .unwrap();
     let (mut parts, ()) = request.into_parts();
     parts.extensions.insert(sessions);
+    parts.extensions.insert(mock_write_scope());
     parts
 }

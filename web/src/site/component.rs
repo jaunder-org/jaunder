@@ -2,6 +2,7 @@ use super::UpdateIdentity;
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
+use common::MutationOutcome;
 use common::site::{SiteIdentity, SiteTitle};
 use common::tagged_url::BaseUrl;
 use leptos::prelude::*;
@@ -35,18 +36,23 @@ pub fn SiteSettingsPage() -> impl IntoView {
                     update_action
                         .value()
                         .get()
-                        .map(|result: Result<(), WebError>| match result {
-                            Ok(()) => {
-                                view! {
-                                    <p class="j-settings-saved" role="status">
-                                        "Site settings saved."
-                                    </p>
+                        .map(|result: Result<MutationOutcome<()>, WebError>| {
+                            match crate::mutation_feedback::classify(
+                                result,
+                                "Save acknowledgement was lost; reload to verify the settings.",
+                            ) {
+                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
+                                    view! {
+                                        <p class="j-settings-saved" role="status">
+                                            "Site settings saved."
+                                        </p>
+                                    }
+                                        .into_any()
                                 }
-                                    .into_any()
-                            }
-                            Err(error) => {
-                                view! { <p class="error j-settings-error">{error.to_string()}</p> }
-                                    .into_any()
+                                crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                    view! { <p class="error j-settings-error">{message}</p> }
+                                        .into_any()
+                                }
                             }
                         })
                 }}

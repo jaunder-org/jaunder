@@ -1,11 +1,17 @@
 use crate::error::WebResult;
+use common::MutationOutcome;
 use common::site::{SiteIdentity, SiteTitle};
 use common::tagged_url::BaseUrl;
 
 #[cfg(feature = "server")]
 use {
-    crate::auth, crate::error::InternalError, leptos::prelude::*, std::sync::Arc,
-    storage::SiteConfigStorage,
+    crate::{
+        auth,
+        error::{InternalError, from_write_scope_error},
+    },
+    leptos::prelude::*,
+    std::sync::Arc,
+    storage::{SiteConfigStorage, WriteScope},
 };
 
 #[macros::server]
@@ -19,7 +25,10 @@ pub async fn get_identity() -> WebResult<SiteIdentity> {
 }
 
 #[macros::server]
-pub async fn update_identity(title: SiteTitle, base_url: Option<BaseUrl>) -> WebResult<()> {
+pub async fn update_identity(
+    title: SiteTitle,
+    base_url: Option<BaseUrl>,
+) -> WebResult<MutationOutcome<()>> {
     auth::require_operator().await?;
 
     // `base_url` is a typed `Option<BaseUrl>` wire arg (ADR-0065): the
@@ -28,10 +37,18 @@ pub async fn update_identity(title: SiteTitle, base_url: Option<BaseUrl>) -> Web
     // no server-side parse/`non_empty` bridge is needed.
     let identity = SiteIdentity { title, base_url };
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    site_config
-        .set_identity(&identity)
+    let write_scope = expect_context::<WriteScope>();
+    write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                site_config
+                    .set_identity(transaction, &identity)
+                    .await
+                    .map_err(InternalError::storage)
+            })
+        })
         .await
-        .map_err(InternalError::storage)
+        .map_err(from_write_scope_error)
 }
 
 /// Whether to show the "site base URL not configured" warning banner (#575):

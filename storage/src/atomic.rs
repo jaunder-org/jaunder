@@ -108,6 +108,7 @@ pub trait AtomicOps: Send + Sync {
     /// Returns [`RegisterWithInviteError`] if any part of the transaction fails.
     async fn create_user_with_invite(
         &self,
+        transaction: &mut crate::WriteTransaction,
         username: &Username,
         password: &Password,
         display_name: Option<&DisplayName>,
@@ -125,6 +126,7 @@ pub trait AtomicOps: Send + Sync {
     /// Returns [`ConfirmPasswordResetError`] if any part of the transaction fails.
     async fn confirm_password_reset(
         &self,
+        transaction: &mut crate::WriteTransaction,
         raw_token: &RawToken,
         new_password: &Password,
     ) -> Result<(), ConfirmPasswordResetError>;
@@ -133,8 +135,8 @@ pub trait AtomicOps: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, CloseablePool, SeedUser, backends, parse_invite_code};
-    use common::test_support::{parse_display_name, parse_username};
+    use crate::test_support::{Backend, SeedUser, backends};
+    use common::test_support::parse_username;
     use host::config_key::SiteConfigKey;
     use rstest::*;
     use rstest_reuse::*;
@@ -158,13 +160,18 @@ mod tests {
     }
 
     async fn seed_invite(state: &std::sync::Arc<crate::AppState>) -> InviteCode {
+        let expires_at =
+            common::time::UtcInstant::from(chrono::Utc::now() + chrono::Duration::hours(1));
+        let invites = std::sync::Arc::clone(&state.invites);
         state
-            .invites
-            .create_invite(common::time::UtcInstant::from(
-                chrono::Utc::now() + chrono::Duration::hours(1),
-            ))
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+            })
             .await
             .unwrap()
+            .value()
+            .clone()
     }
 
     #[apply(backends)]
@@ -175,12 +182,31 @@ mod tests {
         let username = parse_username("alice");
         let password: Password =
             host::test_support::parse_password("force-hash-error-for-test-coverage");
+        let atomic = std::sync::Arc::clone(&env.state.atomic);
         let result = env
             .state
-            .atomic
-            .create_user_with_invite(&username, &password, None, false, &code)
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    atomic
+                        .create_user_with_invite(
+                            transaction,
+                            &username,
+                            &password,
+                            None,
+                            false,
+                            &code,
+                        )
+                        .await
+                })
+            })
             .await;
-        assert!(matches!(result, Err(RegisterWithInviteError::Internal(_))));
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Operation(
+                RegisterWithInviteError::Internal(_)
+            ))
+        ));
     }
 
     #[apply(backends)]
@@ -198,22 +224,38 @@ mod tests {
             .unwrap();
         let username = parse_username("alice");
         let password: Password = host::test_support::parse_password("password123");
+        let atomic = std::sync::Arc::clone(&env.state.atomic);
         let result = env
             .state
-            .atomic
-            .create_user_with_invite(&username, &password, None, false, &code)
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    atomic
+                        .create_user_with_invite(
+                            transaction,
+                            &username,
+                            &password,
+                            None,
+                            false,
+                            &code,
+                        )
+                        .await
+                })
+            })
             .await;
-        assert!(matches!(result, Err(RegisterWithInviteError::Internal(_))));
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Operation(
+                RegisterWithInviteError::Internal(_)
+            ))
+        ));
     }
 
     #[apply(backends)]
     #[tokio::test]
-    async fn storage_methods_on_closed_pool_return_errors(#[case] backend: Backend) {
+    async fn closed_pool_fails_site_config_reads_and_writes(#[case] backend: Backend) {
         let env = backend.setup().await;
         env.base.close_pool().await;
-        let username = parse_username("alice");
-        let password: Password = host::test_support::parse_password("password123");
-        let display_name = parse_display_name("Alice");
 
         assert!(
             env.state
@@ -223,79 +265,14 @@ mod tests {
                 .is_err()
         );
         assert!(
-            env.state
-                .site_config
-                .set(SiteConfigKey::SiteRegistrationPolicy, "open")
-                .await
-                .is_err()
+            crate::test_support::set_site_config(
+                &env,
+                SiteConfigKey::SiteRegistrationPolicy,
+                "open",
+            )
+            .await
+            .is_err()
         );
-        assert!(
-            env.state
-                .atomic
-                .create_user_with_invite(
-                    &username,
-                    &password,
-                    Some(&display_name),
-                    false,
-                    &parse_invite_code("code"),
-                )
-                .await
-                .is_err()
-        );
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn confirm_password_reset_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let (raw_token, _) = host::token::generate_hashed();
-        env.base.close_pool().await;
-        let password = host::test_support::parse_password("password123");
-
-        let result = env
-            .state
-            .atomic
-            .confirm_password_reset(&raw_token, &password)
-            .await;
-
-        assert!(matches!(
-            result,
-            Err(ConfirmPasswordResetError::Internal(_))
-        ));
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn continuation_reporting_password_reset_not_found_survives_injected_rollback_failure(
-        #[case] backend: Backend,
-    ) {
-        let env = backend.setup().await;
-        let (raw_token, _) = host::token::generate_hashed();
-        let password = host::test_support::parse_password("password123");
-        let primary = env
-            .state
-            .atomic
-            .confirm_password_reset(&raw_token, &password)
-            .await;
-        assert!(matches!(&primary, Err(ConfirmPasswordResetError::NotFound)));
-
-        let (result, trace) = crate::helpers::swallowed_test::capture(|| match backend {
-            Backend::Sqlite => crate::sqlite::atomic::finish_password_reset_rejection(
-                primary,
-                Err(sqlx::Error::PoolClosed),
-            ),
-            Backend::Postgres => crate::postgres::atomic::finish_password_reset_rejection(
-                primary,
-                Err(sqlx::Error::PoolClosed),
-            ),
-        });
-
-        assert!(matches!(result, Err(ConfirmPasswordResetError::NotFound)));
-        let context = match backend {
-            Backend::Sqlite => "storage.sqlite.password_reset.rollback",
-            Backend::Postgres => "storage.postgres.password_reset.rollback",
-        };
-        crate::helpers::swallowed_test::assert_one_report(&trace, context);
     }
 
     #[apply(backends)]
@@ -303,56 +280,49 @@ mod tests {
     async fn password_reset_hash_failure_retains_source_chain(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let expires_at =
+            common::time::UtcInstant::from(chrono::Utc::now() + chrono::Duration::hours(1));
+        let password_resets = std::sync::Arc::clone(&env.state.password_resets);
         let raw_token = env
             .state
-            .password_resets
-            .create_password_reset(
-                user_id,
-                common::time::UtcInstant::from(chrono::Utc::now() + chrono::Duration::hours(1)),
-            )
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    password_resets
+                        .create_password_reset(transaction, user_id, expires_at)
+                        .await
+                })
+            })
             .await
-            .unwrap();
-        let password = host::test_support::parse_password("password123");
-        let expected = crate::helpers::forced_hash_failure(&password).unwrap_err();
+            .unwrap()
+            .value()
+            .clone();
+        let password = host::test_support::parse_password("force-hash-error-for-test-coverage");
 
-        let result = match env.base.pool() {
-            CloseablePool::Sqlite(pool) => {
-                crate::sqlite::SqliteAtomicOps::new(pool.clone())
-                    .confirm_password_reset_with(
-                        &raw_token,
-                        &password,
-                        crate::helpers::forced_hash_failure,
-                    )
-                    .await
-            }
-            CloseablePool::Postgres(pool) => {
-                crate::postgres::PostgresAtomicOps::new(pool.clone())
-                    .confirm_password_reset_with(
-                        &raw_token,
-                        &password,
-                        crate::helpers::forced_hash_failure,
-                    )
-                    .await
-            }
-        };
-
-        let error = result.unwrap_err();
-        let ConfirmPasswordResetError::Internal(sqlx::Error::Io(io_error)) = &error else {
+        let atomic = std::sync::Arc::clone(&env.state.atomic);
+        let result = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    atomic
+                        .confirm_password_reset(transaction, &raw_token, &password)
+                        .await
+                })
+            })
+            .await;
+        let Err(crate::WriteScopeError::Operation(ConfirmPasswordResetError::Internal(
+            sqlx::Error::Io(io_error),
+        ))) = result
+        else {
             panic!("expected SQL I/O password-reset failure");
         };
-        let password_error = io_error
-            .get_ref()
-            .and_then(|source| source.downcast_ref::<host::password::PasswordError>())
-            .expect("sqlx io::Error retains PasswordError");
-        let (
-            host::password::PasswordError::HashingFailed(actual),
-            host::password::PasswordError::HashingFailed(expected),
-        ) = (password_error, &expected)
-        else {
-            panic!("expected typed hashing failures");
-        };
-
-        assert_eq!(actual, expected);
+        assert!(
+            io_error
+                .get_ref()
+                .and_then(|source| source.downcast_ref::<host::password::PasswordError>())
+                .is_some()
+        );
     }
 
     // Each variant maps to a fixed `(kind, public_message)` pair.

@@ -54,7 +54,7 @@ mod tests {
     use common::smtp_port::SmtpPort;
     use common::smtp_tls_mode::SmtpTlsMode;
     use host::config_key::SiteConfigKey;
-    use storage::test_support::{Backend, backends};
+    use storage::test_support::{Backend, backends, confirmed};
 
     // guard:no-backend — builds a mailer over a mockall SiteConfigStorage whose reads
     // are all absent; no live database backend
@@ -85,10 +85,20 @@ mod tests {
         // smtp.host set → load_smtp_config returns Ok(Some(cfg)) → LettreMailSender arm
         let env = backend.setup().await;
         let store = &*env.state.site_config;
-        store
-            .set(SiteConfigKey::SmtpHost, "localhost")
-            .await
-            .unwrap();
+        let config = Arc::clone(&env.state.site_config);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config
+                            .set(transaction, SiteConfigKey::SmtpHost, "localhost")
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
         build_mailer(store, None)
             .await
             .expect("present valid SMTP builds the transport");

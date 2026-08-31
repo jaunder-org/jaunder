@@ -29,7 +29,6 @@ use std::future::Future;
 
 use leptos::prelude::*;
 
-use common::ids::PostId;
 use common::revision_history::{
     RevisionHistoryAudience, RevisionHistoryDetail, RevisionHistoryTag,
 };
@@ -38,6 +37,7 @@ use common::seed::{Page, PageSeed, RenderedPost};
 use common::tag::Tag;
 use common::username::Username;
 use common::visibility::AudienceSelection;
+use common::{MutationOutcome, ids::PostId};
 
 use crate::audiences;
 use crate::error::{WebError, WebResult};
@@ -164,24 +164,49 @@ pub fn user_tag_query(username: Option<Username>, tag: Option<Tag>) -> WebResult
     Ok((user_query(username)?, tag_query(tag)?))
 }
 
+/// Notifies post-create parents and reports whether success UI may reset.
+///
+/// A possibly committed published post must revalidate its parent timeline, but
+/// only a confirmed post may drive success UI or reset the composer.
+#[must_use]
+pub fn notify_create_settlement(
+    outcome: MutationOutcome<SavedPost>,
+    on_mutation: Option<Callback<bool>>,
+    on_success: Callback<SavedPost>,
+) -> bool {
+    let published = outcome.value().published_at.is_some();
+    if let Some(on_mutation) = on_mutation {
+        on_mutation.run(published);
+    }
+    let MutationOutcome::Confirmed(created) = outcome else {
+        return false;
+    };
+    on_success.run(created);
+    true
+}
 /// Where an update settles the browser, shaped for `on_settled_ok`'s read closure:
-/// `Some(Ok(permalink))` only when the update **published** the post.
+/// `Some(Ok(permalink))` only when the update **confirmed** publication.
 ///
 /// Editor → permalink is always a route change, so a fresh `PostPage` mount refetches
-/// — no explicit invalidation needed (#592). A settled-but-still-draft update, a
-/// failed one, and "not settled yet" all mean *nothing to navigate to*, and
-/// `on_settled_ok` skips all three identically, so collapsing them here leaves the
-/// component with no branch at all.
+/// — no explicit invalidation needed (#592). A confirmed-but-still-draft update, an
+/// indeterminate or failed update, and "not settled yet" all mean *nothing to navigate
+/// to*. In particular, an indeterminate commit must not masquerade as confirmed by
+/// redirecting to a post whose publication status the server could not establish.
 ///
 /// The permalink stays a [`RootRelativeUrl`] all the way to `use_navigate`, which takes
 /// `&str` by deref — unwrapping it here would trade the type for an allocation.
 #[must_use]
 pub fn publish_redirect<E>(
-    settled: Option<Result<SavedPost, E>>,
+    settled: Option<Result<MutationOutcome<SavedPost>, E>>,
 ) -> Option<Result<RootRelativeUrl, E>> {
-    let updated = settled?.ok()?;
-    let published = updated.published_at.is_some();
-    published.then_some(updated.permalink).map(Ok)
+    let MutationOutcome::Confirmed(updated) = settled?.ok()? else {
+        return None;
+    };
+    updated
+        .published_at
+        .is_some()
+        .then_some(updated.permalink)
+        .map(Ok)
 }
 
 /// Fire an optional parent callback, when the caller supplied one.
@@ -739,12 +764,38 @@ mod tests {
     }
 
     #[test]
+    fn create_settlement_revalidates_both_outcomes_but_confirms_only_one() {
+        let owner = Owner::new();
+        owner.set();
+        let mutation_count = RwSignal::new(0_u8);
+        let success_count = RwSignal::new(0_u8);
+        let on_mutation =
+            Callback::new(move |_published| mutation_count.update(|count| *count += 1));
+        let on_success = Callback::new(move |_created| success_count.update(|count| *count += 1));
+        let published_at = "2026-01-02T00:00:00Z".parse().expect("a real instant");
+
+        assert!(notify_create_settlement(
+            MutationOutcome::Confirmed(saved_post(Some(published_at))),
+            Some(on_mutation),
+            on_success,
+        ));
+        assert!(!notify_create_settlement(
+            MutationOutcome::CommitIndeterminate(saved_post(Some(published_at))),
+            Some(on_mutation),
+            on_success,
+        ));
+        assert_eq!(mutation_count.get_untracked(), 2);
+        assert_eq!(success_count.get_untracked(), 1);
+        drop(owner);
+    }
+
+    #[test]
     fn a_published_update_redirects_to_its_typed_permalink() {
+        let outcome = MutationOutcome::Confirmed(saved_post(Some(
+            "2026-01-02T00:00:00Z".parse().expect("a real instant"),
+        )));
         assert_eq!(
-            publish_redirect::<WebError>(Some(Ok(saved_post(Some(
-                "2026-01-02T00:00:00Z".parse().expect("a real instant")
-            )))))
-            .expect("a published update navigates"),
+            publish_redirect::<WebError>(Some(Ok(outcome))).expect("a published update navigates"),
             Ok(parse_root_relative_url("/~alice/2026/01/02/hello")),
         );
     }
@@ -753,17 +804,23 @@ mod tests {
     fn a_still_unpublished_update_stays_put() {
         // The editor must not navigate away when the author saved a draft — the
         // invariant the `published_at.is_some()` gate exists to keep.
-        assert_eq!(
-            publish_redirect::<WebError>(Some(Ok(saved_post(None)))),
-            None
-        );
+        let outcome = MutationOutcome::Confirmed(saved_post(None));
+        assert_eq!(publish_redirect::<WebError>(Some(Ok(outcome))), None);
     }
 
     #[test]
-    fn an_unsettled_or_failed_update_navigates_nowhere() {
+    fn an_unsettled_failed_or_indeterminate_update_navigates_nowhere() {
         assert_eq!(publish_redirect::<WebError>(None), None);
         assert_eq!(
             publish_redirect(Some(Err(WebError::validation("boom")))),
+            None
+        );
+        assert_eq!(
+            publish_redirect::<WebError>(Some(Ok(MutationOutcome::CommitIndeterminate(
+                saved_post(Some(
+                    "2026-01-02T00:00:00Z".parse().expect("a real instant"),
+                )),
+            )))),
             None
         );
     }

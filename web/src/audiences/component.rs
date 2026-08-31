@@ -6,15 +6,15 @@ use super::{
     AddSubscriber, AudienceMembershipRequest, Create, Delete, RemoveSubscriber, Rename,
     RenameAudienceRequest,
 };
-use crate::error::WebResult;
+use crate::error::{WebError, WebResult};
 use crate::forms::{self, ValidatedBareInput};
 use crate::icon::Icons;
 use crate::reactive::{Invalidator, invalidator_scope};
 use crate::topbar::Topbar;
 use client::reactive;
-use common::audience::AudienceName;
 use common::ids::{AudienceId, SubscriptionId};
 use common::list_state::ListState;
+use common::{MutationOutcome, audience::AudienceName};
 use leptos::prelude::*;
 use reactive_stores::{Field, Patch, Store};
 
@@ -185,12 +185,21 @@ fn CreateAudienceForm() -> impl IntoView {
                 |m| view! { <p class="error">{m}</p> }.into_any(),
             )}
             // Server-action error (e.g. a duplicate name).
-            {move || {
-                create_action
-                    .value()
-                    .get()
-                    .and_then(Result::err)
-                    .map(|e| view! { <p class="error">{e.to_string()}</p> })
+            {move || match create_action.value().get() {
+                Some(Err(error)) => {
+                    Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
+                }
+                Some(Ok(MutationOutcome::CommitIndeterminate(_))) => {
+                    Some(
+                        view! {
+                            <p class="error">
+                                "The audience may have been created, but its status could not be confirmed. Refresh to check."
+                            </p>
+                        }
+                            .into_any(),
+                    )
+                }
+                Some(Ok(MutationOutcome::Confirmed(_))) | None => None,
             }}
         </section>
     }
@@ -241,12 +250,21 @@ fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView 
                     Signal::derive(move || name.is_touched()),
                     |m| view! { <p class="error">{m}</p> }.into_any(),
                 )}
-                {move || {
-                    rename_action
-                        .value()
-                        .get()
-                        .and_then(Result::err)
-                        .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                {move || match rename_action.value().get() {
+                    Some(Err(error)) => {
+                        Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
+                    }
+                    Some(Ok(MutationOutcome::CommitIndeterminate(()))) => {
+                        Some(
+                            view! {
+                                <p class="error">
+                                    "The audience may have been renamed, but its status could not be confirmed. Refresh to check."
+                                </p>
+                            }
+                                .into_any(),
+                        )
+                    }
+                    Some(Ok(MutationOutcome::Confirmed(()))) | None => None,
                 }}
             </form>
             <ActionForm action=delete_action>
@@ -254,6 +272,22 @@ fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView 
                 <button type="submit" class="j-btn is-danger">
                     "Delete"
                 </button>
+                {move || match delete_action.value().get() {
+                    Some(Err(error)) => {
+                        Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
+                    }
+                    Some(Ok(MutationOutcome::CommitIndeterminate(()))) => {
+                        Some(
+                            view! {
+                                <p class="error">
+                                    "The audience may have been deleted, but its status could not be confirmed. Refresh to check."
+                                </p>
+                            }
+                                .into_any(),
+                        )
+                    }
+                    Some(Ok(MutationOutcome::Confirmed(()))) | None => None,
+                }}
             </ActionForm>
         </div>
     }
@@ -327,6 +361,18 @@ fn MemberChecklist(audience_id: AudienceId) -> impl IntoView {
     }
 }
 
+fn membership_feedback(
+    result: Option<Result<MutationOutcome<()>, WebError>>,
+    indeterminate_message: &'static str,
+) -> Option<AnyView> {
+    match crate::mutation_feedback::classify(result?, indeterminate_message) {
+        crate::mutation_feedback::MutationFeedback::Confirmed(()) => None,
+        crate::mutation_feedback::MutationFeedback::Error(message) => {
+            Some(view! { <p class="error">{message}</p> }.into_any())
+        }
+    }
+}
+
 /// One subscriber row of a [`MemberChecklist`]: a "Remove" form when the subscriber is
 /// already in the audience, an "Add" form when they are not.
 ///
@@ -373,11 +419,10 @@ fn MemberToggle(
                             "Remove"
                         </button>
                         {move || {
-                            remove_action
-                                .value()
-                                .get()
-                                .and_then(Result::err)
-                                .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                            membership_feedback(
+                                remove_action.value().get(),
+                                "The subscriber may have been removed, but its status could not be confirmed. Refresh to check.",
+                            )
                         }}
                     </form>
                 </li>
@@ -396,11 +441,10 @@ fn MemberToggle(
                             "Add"
                         </button>
                         {move || {
-                            add_action
-                                .value()
-                                .get()
-                                .and_then(Result::err)
-                                .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                            membership_feedback(
+                                add_action.value().get(),
+                                "The subscriber may have been added, but its status could not be confirmed. Refresh to check.",
+                            )
                         }}
                     </form>
                 </li>

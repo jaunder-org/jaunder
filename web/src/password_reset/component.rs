@@ -5,9 +5,7 @@ use super::{Confirm, ConfirmPasswordResetRequest, Request};
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
 use crate::topbar::Topbar;
-use common::password::ProfferedPassword;
-use common::token::RawToken;
-use common::username::Username;
+use common::{MutationOutcome, password::PasswordShape, token::RawToken, username::Username};
 use leptos::prelude::*;
 use leptos_router::components::Redirect;
 
@@ -44,16 +42,23 @@ pub fn ForgotPasswordPage() -> impl IntoView {
                     request_action
                         .value()
                         .get()
-                        .map(|r: Result<(), WebError>| match r {
-                            Ok(()) => {
-                                view! {
-                                    <p>
-                                        "If there is a verified email address on file, a reset link has been sent. Check your email."
-                                    </p>
+                        .map(|result: Result<MutationOutcome<()>, WebError>| {
+                            match crate::mutation_feedback::classify(
+                                result,
+                                "The reset link may have been requested, but its status could not be confirmed. Refresh to check.",
+                            ) {
+                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
+                                    view! {
+                                        <p>
+                                            "If there is a verified email address on file, a reset link has been sent. Check your email."
+                                        </p>
+                                    }
+                                        .into_any()
                                 }
-                                    .into_any()
+                                crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                    view! { <p class="error">{message}</p> }.into_any()
+                                }
                             }
-                            Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                         })
                 }}
             </div>
@@ -75,11 +80,11 @@ pub fn ResetPasswordPage() -> impl IntoView {
         .get("token")
         .and_then(|value| value.parse::<RawToken>().ok());
     let confirm_action = ServerAction::<Confirm>::new();
-    let new_password = Field::<ProfferedPassword>::new();
+    let new_password = Field::<PasswordShape>::new();
     let (disabled, submit) = forms::server_action_submit(confirm_action, move || {
         token
             .clone()
-            .zip(new_password.parsed())
+            .zip(new_password.value.get().parse().ok())
             .map(|(token, new_password)| Confirm {
                 request: ConfirmPasswordResetRequest {
                     token,
@@ -93,7 +98,7 @@ pub fn ResetPasswordPage() -> impl IntoView {
         <div class="j-scroll">
             <div class="j-page">
                 <form on:submit=submit>
-                    <ValidatedInput<ProfferedPassword>
+                    <ValidatedInput<PasswordShape>
                         label="New password"
                         name="new_password"
                         input_type="password"
@@ -112,9 +117,18 @@ pub fn ResetPasswordPage() -> impl IntoView {
                     confirm_action
                         .value()
                         .get()
-                        .map(|r: Result<(), WebError>| match r {
-                            Ok(()) => view! { <Redirect path="/login" /> }.into_any(),
-                            Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                        .map(|result: Result<MutationOutcome<()>, WebError>| {
+                            match crate::mutation_feedback::classify(
+                                result,
+                                "Your password may have been reset, but its status could not be confirmed. Refresh to check.",
+                            ) {
+                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
+                                    view! { <Redirect path="/login" /> }.into_any()
+                                }
+                                crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                    view! { <p class="error">{message}</p> }.into_any()
+                                }
+                            }
                         })
                 }}
             </div>

@@ -12,8 +12,7 @@ use leptos_router::NavigateOptions;
 use leptos_router::hooks::{use_navigate, use_params_map};
 
 use client::telemetry;
-use common::permalink_route::PermalinkRoute;
-use common::seed::Page;
+use common::{MutationOutcome, permalink_route::PermalinkRoute, seed::Page};
 // `Summary` is module-qualified at its use site: this file already has
 // `PostSummary` and `TagSummary` in scope, and a bare `Summary` among them says
 // nothing about which one it is.
@@ -284,6 +283,70 @@ fn primary_post_action(
     }
 }
 
+fn mutation_feedback<T>(
+    result: Result<MutationOutcome<T>, WebError>,
+    indeterminate_message: &'static str,
+) -> Option<AnyView> {
+    match crate::mutation_feedback::classify(result, indeterminate_message) {
+        crate::mutation_feedback::MutationFeedback::Confirmed(_) => None,
+        crate::mutation_feedback::MutationFeedback::Error(message) => {
+            Some(view! { <p class="error">{message}</p> }.into_any())
+        }
+    }
+}
+
+fn post_action_column(
+    is_author: bool,
+    edit_url: RootRelativeUrl,
+    history_url: String,
+    primary_action: AnyView,
+    delete_action: ServerAction<Delete>,
+    post_id: PostId,
+) -> Option<AnyView> {
+    is_author.then(move || {
+        view! {
+            <div class="j-post-acts">
+                <a class="j-btn" href=edit_url.to_string()>
+                    "Edit"
+                </a>
+                <a class="j-btn" data-test="post-history-link" href=history_url>
+                    "History"
+                </a>
+                {primary_action}
+                <button
+                    type="button"
+                    class="j-btn is-danger"
+                    on:click=move |_| {
+                        dispatch_after_confirm(
+                            "Delete this post?",
+                            ClientErrorContext::DeleteConfirm,
+                            || {
+                                delete_action.dispatch(Delete { post_id });
+                            },
+                        );
+                    }
+                >
+                    "Delete"
+                </button>
+            </div>
+        }
+        .into_any()
+    })
+}
+
+fn notify_unpublish_outcome(
+    outcome: &MutationOutcome<SavedPost>,
+    on_unpublish: Option<Callback<()>>,
+    on_mutate: Option<Callback<()>>,
+) {
+    match outcome {
+        MutationOutcome::Confirmed(_) => {
+            super::notify_with_fallback(on_unpublish, on_mutate);
+        }
+        MutationOutcome::CommitIndeterminate(_) => super::notify(on_mutate),
+    }
+}
+
 #[component]
 pub fn PostCard<'a>(
     post: &'a RenderedPost,
@@ -320,75 +383,79 @@ pub fn PostCard<'a>(
 
     on_settled_ok(
         move || delete_action.value().get(),
-        move |()| {
-            deleted.set(true);
+        move |outcome| {
+            match outcome {
+                MutationOutcome::Confirmed(()) => deleted.set(true),
+                MutationOutcome::CommitIndeterminate(()) => {}
+            }
             super::notify(on_mutate);
         },
     );
     on_settled_ok(
         move || unpublish_action.value().get(),
-        // Unpublish prefers its own callback and falls back to the shared mutate one —
-        // a per-caller policy, so it is the host-tested `notify_with_fallback` (#306).
-        // The returned `SavedPost` is deliberately unread: this caller navigates to
-        // /drafts regardless (#783 tracks using the moved permalink here).
-        move |_| super::notify_with_fallback(on_unpublish, on_mutate),
+        move |outcome| notify_unpublish_outcome(&outcome, on_unpublish, on_mutate),
     );
-    // Client-only navigation side-effect (web-style-guide §9): react to the
-    // resolved publish action, mirroring EditPostPage's publish redirect.
     let navigate = use_navigate();
     on_settled_ok(
         move || publish_action.value().get(),
-        move |published: SavedPost| {
-            // Publishing can move the permalink (a draft's URL is created_at-based;
-            // once published it becomes published_at-based), so navigate client-side to
-            // the server-returned canonical permalink rather than the now-stale current
-            // URL. When it does NOT move (a same-UTC-day publish → identical URL), the
-            // navigate is a no-op, so also fire `on_publish` to refetch the current page's
-            // resource — otherwise a permalink page would keep showing the draft state
-            // (#592). The unpublish path navigates to /drafts; this is its mirror.
-            navigate(&published.permalink, NavigateOptions::default());
+        move |outcome| {
+            match outcome {
+                MutationOutcome::Confirmed(published) => {
+                    navigate(&published.permalink, NavigateOptions::default());
+                }
+                MutationOutcome::CommitIndeterminate(_) => {}
+            }
             super::notify(on_publish);
         },
     );
 
     let primary_action = primary_post_action(is_draft, post_id, publish_action, unpublish_action);
 
-    // Additive action column (#181, ADR-0044 D4): edit / publish-or-unpublish /
-    // delete. The timestamp deliberately stays in the (coincident) content-column
-    // header rather than moving here, so the owner's own post doesn't diverge from
-    // the anon paint.
-    let action_col = is_author.then(move || {
-        view! {
-            <div class="j-post-acts">
-                <a class="j-btn" href=String::from(edit_url)>
-                    "Edit"
-                </a>
-                <a class="j-btn" data-test="post-history-link" href=history_url>
-                    "History"
-                </a>
-                {primary_action}
-                <button
-                    type="button"
-                    class="j-btn is-danger"
-                    on:click=move |_| {
-                        dispatch_after_confirm(
-                            "Delete this post?",
-                            ClientErrorContext::DeleteConfirm,
-                            || {
-                                delete_action.dispatch(Delete { post_id });
-                            },
-                        );
-                    }
-                >
-                    "Delete"
-                </button>
-            </div>
-        }
-    });
+    let action_col = post_action_column(
+        is_author,
+        edit_url,
+        history_url,
+        primary_action,
+        delete_action,
+        post_id,
+    );
 
     view! {
         {move || {
             deleted.get().then(|| view! { <p class="success">"Post deleted."</p> }.into_any())
+        }}
+        {move || {
+            delete_action
+                .value()
+                .get()
+                .and_then(|result| {
+                    mutation_feedback(
+                        result,
+                        "The post may have been deleted, but its status could not be confirmed. Refresh to check.",
+                    )
+                })
+        }}
+        {move || {
+            publish_action
+                .value()
+                .get()
+                .and_then(|result| {
+                    mutation_feedback(
+                        result,
+                        "The post may have been published, but its status could not be confirmed. Refresh to check.",
+                    )
+                })
+        }}
+        {move || {
+            unpublish_action
+                .value()
+                .get()
+                .and_then(|result| {
+                    mutation_feedback(
+                        result,
+                        "The post may have been unpublished, but its status could not be confirmed. Refresh to check.",
+                    )
+                })
         }}
         <PostDisplay post=post banner=banner tag_context=tag_context>
             {action_col}
@@ -592,6 +659,7 @@ pub fn PostCreateForm(
     compact: bool,
     #[prop(optional)] username: Option<Username>,
     #[prop(into)] on_success: Callback<SavedPost>,
+    #[prop(optional)] on_mutation: Option<Callback<bool>>,
     #[prop(default = 6)] rows: u32,
     #[prop(default = "What\u{2019}s on your mind?")] placeholder: &'static str,
     /// Called on every textarea input event (compact mode only).
@@ -611,13 +679,14 @@ pub fn PostCreateForm(
         move |default| state.audience.set(default),
     );
 
-    // A successful create hands the result to the parent and empties the composer for
-    // the next post.
+    // Revalidate parent state after either outcome, but reserve success UI and
+    // form reset for a confirmed create.
     on_settled_ok(
         move || create_action.value().get(),
-        move |created| {
-            on_success.run(created);
-            state.reset();
+        move |outcome| {
+            if super::notify_create_settlement(outcome, on_mutation, on_success) {
+                state.reset();
+            }
         },
     );
 
@@ -787,8 +856,22 @@ fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
             action
                 .value()
                 .get()
-                .and_then(Result::err)
-                .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                .and_then(|result: Result<MutationOutcome<SavedPost>, WebError>| match result {
+                    Ok(MutationOutcome::Confirmed(_)) => None,
+                    Ok(MutationOutcome::CommitIndeterminate(_)) => {
+                        Some(
+                            view! {
+                                <p class="error">
+                                    "The post may have been saved, but its status could not be confirmed. Refresh to check."
+                                </p>
+                            }
+                                .into_any(),
+                        )
+                    }
+                    Err(error) => {
+                        Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
+                    }
+                })
         }}
     }
 }
@@ -808,7 +891,9 @@ pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl 
         };
         flash.set(Some((url, msg)));
         set_timeout(move || flash.set(None), Duration::from_secs(30));
-        if created.published_at.is_some() {
+    });
+    let on_mutation = Callback::new(move |published: bool| {
+        if published {
             on_publish.update(|v| *v += 1);
         }
     });
@@ -819,6 +904,7 @@ pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl 
                 compact=true
                 username=username
                 on_success=on_success
+                on_mutation=on_mutation
                 rows=6
                 placeholder="What\u{2019}s on your mind?"
                 on_input=Callback::new(move |()| flash.set(None))
@@ -1495,11 +1581,12 @@ fn MediaSection() -> impl IntoView {
     }
 }
 
-/// The save summary under the editor: the draft-saved block (slug + permalink) when the
-/// post stayed unpublished, a "Redirecting…" notice when a publish is about to navigate
-/// away, or the error. Nothing at all until the update action has a value.
+/// The save summary under the editor: the draft-saved block (slug + permalink) when a
+/// draft save is confirmed, a "Redirecting…" notice when confirmed publication is about
+/// to navigate away, or error-like refresh guidance when the commit is indeterminate.
+/// A server error is rendered directly, and nothing appears until the action has a value.
 ///
-/// Split out of [`EditPostPage`] (#306); this component owns that three-way decision.
+/// Split out of [`EditPostPage`] (#306); this component owns that outcome decision.
 #[component]
 fn EditSaveOutcome(action: ServerAction<super::Update>) -> impl IntoView {
     view! {
@@ -1507,8 +1594,8 @@ fn EditSaveOutcome(action: ServerAction<super::Update>) -> impl IntoView {
             action
                 .value()
                 .get()
-                .map(|result: Result<SavedPost, WebError>| match result {
-                    Ok(updated) if updated.published_at.is_none() => {
+                .map(|result: Result<MutationOutcome<SavedPost>, WebError>| match result {
+                    Ok(MutationOutcome::Confirmed(updated)) if updated.published_at.is_none() => {
                         let slug_value = updated.slug.to_string();
                         let slug_for_attr = slug_value.clone();
                         view! {
@@ -1525,7 +1612,17 @@ fn EditSaveOutcome(action: ServerAction<super::Update>) -> impl IntoView {
                         }
                             .into_any()
                     }
-                    Ok(_) => view! { <p>"Redirecting\u{2026}"</p> }.into_any(),
+                    Ok(MutationOutcome::Confirmed(_)) => {
+                        view! { <p>"Redirecting\u{2026}"</p> }.into_any()
+                    }
+                    Ok(MutationOutcome::CommitIndeterminate(_)) => {
+                        view! {
+                            <p class="error">
+                                "The post may have been saved, but its status could not be confirmed. Refresh to check."
+                            </p>
+                        }
+                            .into_any()
+                    }
                     Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                 })
         }}
@@ -1567,12 +1664,20 @@ pub fn DraftsPage() -> impl IntoView {
                     publish_action
                         .value()
                         .get()
-                        .map(|result: Result<SavedPost, WebError>| match result {
-                            Ok(published) => {
+                        .map(|result: Result<MutationOutcome<SavedPost>, WebError>| match result {
+                            Ok(MutationOutcome::Confirmed(published)) => {
                                 view! {
                                     <p class="success">
                                         "Post published. "
                                         <a href=published.permalink.to_string()>"View permalink"</a>
+                                    </p>
+                                }
+                                    .into_any()
+                            }
+                            Ok(MutationOutcome::CommitIndeterminate(_)) => {
+                                view! {
+                                    <p class="error">
+                                        "The post may have been published, but its status could not be confirmed. Refresh to check."
                                     </p>
                                 }
                                     .into_any()
@@ -1584,8 +1689,18 @@ pub fn DraftsPage() -> impl IntoView {
                     delete_action
                         .value()
                         .get()
-                        .map(|result| match result {
-                            Ok(()) => view! { <p class="success">"Draft deleted."</p> }.into_any(),
+                        .map(|result: Result<MutationOutcome<()>, WebError>| match result {
+                            Ok(MutationOutcome::Confirmed(())) => {
+                                view! { <p class="success">"Draft deleted."</p> }.into_any()
+                            }
+                            Ok(MutationOutcome::CommitIndeterminate(())) => {
+                                view! {
+                                    <p class="error">
+                                        "The draft may have been deleted, but its status could not be confirmed. Refresh to check."
+                                    </p>
+                                }
+                                    .into_any()
+                            }
                             Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
                         })
                 }}

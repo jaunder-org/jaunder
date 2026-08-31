@@ -49,15 +49,14 @@ impl MediaDialect for Postgres {
     }
 
     async fn try_delete_media(
-        pool: &Pool<Self>,
+        conn: &mut <Self as sqlx::Database>::Connection,
         user_id: UserId,
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
         force: bool,
     ) -> sqlx::Result<bool> {
-        let mut tx = pool.begin().await?;
-        Self::lock_media_reference(&mut *tx, media).await?;
+        Self::lock_media_reference(conn, media).await?;
         let mut query = QueryBuilder::<Postgres>::new(String::new());
         posts::push_media_reference_evidence_cte(&mut query, evidence);
         query.push("DELETE FROM media WHERE user_id = ");
@@ -89,21 +88,19 @@ impl MediaDialect for Postgres {
             .push(")) RETURNING 1");
         let removed = query
             .build_query_scalar::<i32>()
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut *conn)
             .await?
             .is_some();
-        tx.commit().await?;
         Ok(removed)
     }
 
     async fn media_entry_is_reclaimable(
-        pool: &Pool<Self>,
+        conn: &mut <Self as sqlx::Database>::Connection,
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
     ) -> sqlx::Result<bool> {
-        let mut tx = pool.begin().await?;
-        Self::lock_media_reference(&mut *tx, media).await?;
+        Self::lock_media_reference(conn, media).await?;
         let mut query = QueryBuilder::<Postgres>::new(String::new());
         posts::push_media_reference_evidence_cte(&mut query, evidence);
         query.push("SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM media WHERE source = ");
@@ -117,12 +114,10 @@ impl MediaDialect for Postgres {
         posts::push_any_media_reference_from_where(&mut query, media);
         posts::push_live_media_reference_predicate(&mut query, current_instance_id);
         query.push(")");
-        let reclaimable = query
+        Ok(query
             .build_query_scalar::<i32>()
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut *conn)
             .await?
-            .is_some();
-        tx.commit().await?;
-        Ok(reclaimable)
+            .is_some())
     }
 }

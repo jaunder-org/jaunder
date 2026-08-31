@@ -6,13 +6,14 @@
 
 use leptos::prelude::*;
 
+use common::MutationOutcome;
 use common::client_telemetry::ClientErrorContext;
 use common::pagination::{PageOffset, PageSize};
-
 use common::root_relative_url::RootRelativeUrl;
 
 use super::{
     Delete, DeleteMediaRequest, Item, MediaDeletion, UploadCallbacks, UploadState, UsageData,
+    delete_invalidates_media_resources,
 };
 use crate::error::{WebError, WebResult};
 use crate::forms;
@@ -23,16 +24,19 @@ use client::telemetry;
 /// uploads the chosen file via the [`super::upload`] multipart `#[server]`
 /// fn (no navigation).
 ///
-/// `on_uploaded` / `on_error`, when provided, fire with the media URL or a
-/// human-readable error. When `show_result` is set the widget also renders the
-/// uploaded URL (read-only, click-to-select) and any error inline below the button
-/// — the self-contained mode the compose form uses.
+/// `on_uploaded`, `on_indeterminate`, and `on_error`, when provided, distinguish a
+/// confirmed URL from an uncertain commit and a human-readable error. When
+/// `show_result` is set the widget renders the confirmed URL read-only and any error
+/// inline below the button — the self-contained mode the compose form uses.
 #[component]
 pub fn MediaUpload(
-    /// Called with the `/media/upload/...` URL when the upload succeeds.
+    /// Called with the `/media/upload/...` URL when the upload is confirmed.
     #[prop(into, optional)]
     on_uploaded: Option<Callback<RootRelativeUrl>>,
-    /// Called with an error message when the upload fails.
+    /// Called when the upload commit may have succeeded but cannot be confirmed.
+    #[prop(into, optional)]
+    on_indeterminate: Option<Callback<()>>,
+    /// Called with an error message when the upload fails or is indeterminate.
     #[prop(into, optional)]
     on_error: Option<Callback<String>>,
     /// When true, render the uploaded URL and any error inline below the button.
@@ -74,6 +78,7 @@ pub fn MediaUpload(
                 super::upload(form_data).await,
                 UploadCallbacks {
                     on_uploaded,
+                    on_indeterminate,
                     on_error,
                 },
             );
@@ -136,12 +141,12 @@ fn uploaded_url_view(url: RootRelativeUrl) -> impl IntoView {
 #[component]
 pub fn MediaPage() -> impl IntoView {
     let delete_action = ServerAction::<Delete>::new();
-    let successful_deletes = RwSignal::new(0_u32);
+    let delete_version = RwSignal::new(0_u32);
     Effect::new(move |_| {
-        if let Some(Ok(result)) = delete_action.value().get()
-            && result.deleted
+        if let Some(Ok(outcome)) = delete_action.value().get()
+            && delete_invalidates_media_resources(&outcome)
         {
-            successful_deletes.update(|version| *version += 1);
+            delete_version.update(|version| *version += 1);
         }
     });
     let upload_version = RwSignal::new(0u32);
@@ -156,12 +161,12 @@ pub fn MediaPage() -> impl IntoView {
     });
 
     let usage = Resource::new(
-        move || (successful_deletes.get(), upload_version.get()),
+        move || (delete_version.get(), upload_version.get()),
         |_: (u32, u32)| super::get_usage(),
     );
 
     let media_list = Resource::new(
-        move || (successful_deletes.get(), upload_version.get()),
+        move || (delete_version.get(), upload_version.get()),
         |_: (u32, u32)| {
             super::list_mine(None, Some(PageSize::default()), Some(PageOffset::default()))
         },
@@ -178,9 +183,13 @@ pub fn MediaPage() -> impl IntoView {
                     on_uploaded=Callback::new(move |_url: RootRelativeUrl| {
                         upload_version.update(|v| *v += 1);
                     })
+                    on_indeterminate=Callback::new(move |()| {
+                        upload_version.update(|v| *v += 1);
+                    })
                     on_error=Callback::new(move |msg: String| {
                         leptos::logging::warn!("upload error: {msg}");
                     })
+                    show_result=true
                 />
             </div>
             <MediaUsagePanel usage=usage />
@@ -300,11 +309,11 @@ fn MediaDeleteOutcome(
             delete_action
                 .value()
                 .get()
-                .map(|result: Result<MediaDeletion, WebError>| match result {
-                    Ok(r) if r.deleted => {
+                .map(|result: Result<MutationOutcome<MediaDeletion>, WebError>| match result {
+                    Ok(MutationOutcome::Confirmed(r)) if r.deleted => {
                         view! { <p class="success">"Media deleted."</p> }.into_any()
                     }
-                    Ok(r) => {
+                    Ok(MutationOutcome::Confirmed(r)) => {
                         let ids = r
                             .referenced_in_posts
                             .iter()
@@ -322,6 +331,14 @@ fn MediaDeleteOutcome(
                                     .get()
                                     .map(|request| force_delete_form(request, delete_action))
                             }}
+                        }
+                            .into_any()
+                    }
+                    Ok(MutationOutcome::CommitIndeterminate(_)) => {
+                        view! {
+                            <p class="error">
+                                "Delete status is unknown. Reload and verify whether the media was deleted."
+                            </p>
                         }
                             .into_any()
                     }

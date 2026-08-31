@@ -3,17 +3,18 @@
 
 use super::model::{SubscriberSummary, Summary};
 use crate::error::WebResult;
-use common::audience::AudienceName;
 use common::ids::{AudienceId, SubscriptionId};
+use common::{MutationOutcome, audience::AudienceName};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "server")]
 use {
     super::model,
     crate::auth,
+    crate::error::{InternalError, from_write_scope_error},
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{AudienceStorage, SubscriptionStorage},
+    storage::{AudienceStorage, SubscriptionStorage, WriteScope},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,36 +31,64 @@ pub struct AudienceMembershipRequest {
 
 /// Creates a named audience owned by the authenticated author.
 #[macros::server(skip_all)]
-pub async fn create(name: AudienceName) -> WebResult<AudienceId> {
+pub async fn create(name: AudienceName) -> WebResult<MutationOutcome<AudienceId>> {
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
     let auth = auth::require_auth().await?;
+    let write_scope = expect_context::<WriteScope>();
     // `name` arrives already validated (typed wire arg, client-pre-validated via the
     // direct-bound `AudienceName` field, per ADR-0065): its serde bridge routes
     // through `AudienceName::from_str`, so the empty/whitespace rule ran on decode.
-    let id = audiences.create_audience(auth.user_id, &name).await?;
-    Ok(id)
+    write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                audiences
+                    .create_audience(transaction, auth.user_id, &name)
+                    .await
+                    .map_err(InternalError::from)
+            })
+        })
+        .await
+        .map_err(from_write_scope_error)
 }
 
 /// Renames an audience the authenticated author owns.
 #[macros::server(skip_all)]
-pub async fn rename(request: RenameAudienceRequest) -> WebResult<()> {
+pub async fn rename(request: RenameAudienceRequest) -> WebResult<MutationOutcome<()>> {
     let RenameAudienceRequest { audience_id, name } = request;
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
     let auth = auth::require_auth().await?;
+    let write_scope = expect_context::<WriteScope>();
     // `name` arrives already validated (see `create`).
-    audiences
-        .rename_audience(auth.user_id, audience_id, &name)
-        .await?;
-    Ok(())
+    write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                audiences
+                    .rename_audience(transaction, auth.user_id, audience_id, &name)
+                    .await
+                    .map_err(InternalError::from)
+            })
+        })
+        .await
+        .map_err(from_write_scope_error)
 }
 
 /// Deletes an audience the authenticated author owns (and its memberships).
 #[macros::server]
-pub async fn delete(audience_id: AudienceId) -> WebResult<()> {
+pub async fn delete(audience_id: AudienceId) -> WebResult<MutationOutcome<()>> {
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
     let auth = auth::require_auth().await?;
-    audiences.delete_audience(auth.user_id, audience_id).await?;
-    Ok(())
+    let write_scope = expect_context::<WriteScope>();
+    write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                audiences
+                    .delete_audience(transaction, auth.user_id, audience_id)
+                    .await
+                    .map_err(InternalError::storage)
+            })
+        })
+        .await
+        .map_err(from_write_scope_error)
 }
 
 /// Lists the authenticated author's named audiences.
@@ -85,33 +114,51 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
 /// the composite FKs reject a cross-author pairing), so passing the session's
 /// `user_id` is the authorization.
 #[macros::server(skip_all)]
-pub async fn add_subscriber(request: AudienceMembershipRequest) -> WebResult<()> {
+pub async fn add_subscriber(request: AudienceMembershipRequest) -> WebResult<MutationOutcome<()>> {
     let AudienceMembershipRequest {
         audience_id,
         subscription_id,
     } = request;
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
     let auth = auth::require_auth().await?;
-    audiences
-        .add_member(auth.user_id, audience_id, subscription_id)
-        .await?;
-    Ok(())
+    let write_scope = expect_context::<WriteScope>();
+    write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                audiences
+                    .add_member(transaction, auth.user_id, audience_id, subscription_id)
+                    .await
+                    .map_err(InternalError::from)
+            })
+        })
+        .await
+        .map_err(from_write_scope_error)
 }
 
 /// Removes a subscription from an audience the authenticated author owns.
 /// `remove_member` is author-scoped, so a cross-author `audience_id` is a no-op.
 #[macros::server(skip_all)]
-pub async fn remove_subscriber(request: AudienceMembershipRequest) -> WebResult<()> {
+pub async fn remove_subscriber(
+    request: AudienceMembershipRequest,
+) -> WebResult<MutationOutcome<()>> {
     let AudienceMembershipRequest {
         audience_id,
         subscription_id,
     } = request;
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
     let auth = auth::require_auth().await?;
-    audiences
-        .remove_member(auth.user_id, audience_id, subscription_id)
-        .await?;
-    Ok(())
+    let write_scope = expect_context::<WriteScope>();
+    write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                audiences
+                    .remove_member(transaction, auth.user_id, audience_id, subscription_id)
+                    .await
+                    .map_err(InternalError::storage)
+            })
+        })
+        .await
+        .map_err(from_write_scope_error)
 }
 
 /// Lists the `subscription_id`s assigned to an audience the author owns.

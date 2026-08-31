@@ -40,9 +40,9 @@ special case this subsumes, not a blessed alternative.
 
 2. **`action::<A>()` is success-gated** — it fires only on `Some(Ok(_))`, after
    the mutation commits: never on dispatch (which races the write and reads
-   stale), never on failure. This assumes **`Err` ⟹ no committed mutation**;
-   that invariant is enforced separately (the ast-grep heuristic gate #362 and
-   the structural storage-API rework #363), not by this ADR.
+   stale), never on failure. The `Err` ⟹ no committed mutation invariant is
+   enforced separately by #363's structural storage-API contract, not by this
+   ADR; the former #362 ast-grep heuristic is retired.
 
 3. **Scoping is by type, not machinery.** The primitive is single-scope. A
    _local_ scope (action + resource in one component) is a bare `Invalidator`. A
@@ -65,9 +65,9 @@ special case this subsumes, not a blessed alternative.
   `MemberChecklist`).
 - **Correct read-after-write by construction** — success-gating refetches only
   after the mutation lands, contingent on the `Err`⟹no-mutation precondition
-  tracked in #362/#363.
+  enforced by #363.
 - **The counter is encapsulated, not exposed.** No component writes
   `update(|n| *n += 1)` or a raw `RwSignal<u32>` for revalidation again.
 - **Relationships.** Extends ADR-0056 (co-located Leptos-CSR verticals) — this
-  is the reactive plumbing those decomposed verticals need. Depends on #362/#363
-  for the correctness precondition of its success-gated rule.
+  is the reactive plumbing those decomposed verticals need. Depends on #363 for
+  the correctness precondition of its success-gated rule.

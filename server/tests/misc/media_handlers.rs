@@ -15,7 +15,8 @@ use server_fn::ServerFn;
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
 use crate::helpers::{
-    MultipartFile, body_string, create_user_and_session, make_app, post_multipart,
+    MultipartFile, body_string, confirmed_mutation, create_user_and_session, make_app,
+    post_multipart,
 };
 
 /// Captures one request-boundary error event and its `jaunder.errors` point.
@@ -151,7 +152,7 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     let storage = TempDir::new().unwrap();
 
     // Upload via the `upload_media` server fn so a file lands on `storage`'s disk;
-    // the fn returns 200 with the bare `UploadedMedia` JSON.
+    // the fn returns 200 with a confirmed `UploadedMedia` mutation payload.
     let (status, body) = post_multipart(
         &state,
         &storage,
@@ -166,7 +167,7 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK, "upload must succeed");
 
-    let upload_json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let upload_json: serde_json::Value = confirmed_mutation(&body);
     let url = upload_json["url"].as_str().unwrap().to_owned();
 
     // A fresh app over the SAME storage serves the persisted file.
@@ -263,7 +264,7 @@ async fn serve_returns_404_when_recorded_file_disappears_after_router_setup(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "seed upload");
-    let upload: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let upload: serde_json::Value = confirmed_mutation(&body);
     let url = upload["url"].as_str().expect("uploaded media URL");
 
     // Build the router while both metadata and bytes exist, then remove only the
@@ -415,7 +416,7 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let upload_json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let upload_json: serde_json::Value = confirmed_mutation(&body);
     let url = upload_json["url"].as_str().unwrap().to_owned();
     let sha256 = upload_json["sha256"].as_str().unwrap().to_owned();
     // The ETag the serve handler now emits (sha256-prefixed) — built via the door so the

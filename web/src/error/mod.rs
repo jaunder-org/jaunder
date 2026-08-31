@@ -8,6 +8,8 @@ mod wire;
 // `project` keeps its `crate::error::project` path for `web`'s own tests (the only
 // in-crate caller outside this module — `auth::server`'s projection assertions);
 // production code reaches it through `server_boundary`.
+#[cfg(feature = "server")]
+pub(crate) use server::from_write_scope_error;
 #[cfg(all(test, feature = "server"))]
 pub(crate) use server::project;
 #[cfg(feature = "server")]

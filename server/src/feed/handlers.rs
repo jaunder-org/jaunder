@@ -13,7 +13,7 @@ use common::{
 };
 use host::feed::FeedPath;
 use host::metrics;
-use storage::{FeedCacheStorage, PostStorage, SiteConfigStorage};
+use storage::{FeedCacheStorage, PostStorage, SiteConfigStorage, WriteScope};
 
 use super::regenerate;
 use crate::soft_path::SoftPath;
@@ -37,6 +37,7 @@ async fn serve(
     feed_cache: Arc<dyn FeedCacheStorage>,
     site_config: Arc<dyn SiteConfigStorage>,
     posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
     headers: HeaderMap,
     surface: FeedSurface,
     format: FeedFormat,
@@ -55,8 +56,9 @@ async fn serve(
             match regenerate::regenerate_feed(
                 site_config.as_ref(),
                 posts.as_ref(),
-                feed_cache.as_ref(),
-                &feed_path,
+                Arc::clone(&feed_cache),
+                &write_scope,
+                feed_path.clone(),
             )
             .await
             {
@@ -116,6 +118,7 @@ pub async fn feed_site(
     Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(write_scope): Extension<WriteScope>,
     headers: HeaderMap,
     Path(format): Path<SoftPath<FeedFormat>>,
 ) -> Response {
@@ -126,6 +129,7 @@ pub async fn feed_site(
         feed_cache,
         site_config,
         posts,
+        write_scope,
         headers,
         FeedSurface::Site,
         format,
@@ -137,6 +141,7 @@ pub async fn feed_site_tag(
     Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(write_scope): Extension<WriteScope>,
     headers: HeaderMap,
     Path((tag, format)): Path<(SoftPath<Tag>, SoftPath<FeedFormat>)>,
 ) -> Response {
@@ -150,6 +155,7 @@ pub async fn feed_site_tag(
         feed_cache,
         site_config,
         posts,
+        write_scope,
         headers,
         FeedSurface::SiteTag { tag },
         format,
@@ -161,6 +167,7 @@ pub async fn feed_user(
     Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(write_scope): Extension<WriteScope>,
     headers: HeaderMap,
     Path((username, format)): Path<(SoftPath<Username>, SoftPath<FeedFormat>)>,
 ) -> Response {
@@ -174,6 +181,7 @@ pub async fn feed_user(
         feed_cache,
         site_config,
         posts,
+        write_scope,
         headers,
         FeedSurface::User { username },
         format,
@@ -185,6 +193,7 @@ pub async fn feed_user_tag(
     Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(write_scope): Extension<WriteScope>,
     headers: HeaderMap,
     Path((username, tag, format)): Path<(SoftPath<Username>, SoftPath<Tag>, SoftPath<FeedFormat>)>,
 ) -> Response {
@@ -198,6 +207,7 @@ pub async fn feed_user_tag(
         feed_cache,
         site_config,
         posts,
+        write_scope,
         headers,
         FeedSurface::UserTag { username, tag },
         format,
@@ -252,6 +262,7 @@ mod tests {
             Arc::new(cache),
             Arc::new(site_config),
             empty_posts(),
+            storage::test_support::mock_write_scope(),
             HeaderMap::new(),
             FeedSurface::Site,
             FeedFormat::Rss,
@@ -272,6 +283,7 @@ mod tests {
             Arc::new(cache),
             empty_site_config(),
             empty_posts(),
+            storage::test_support::mock_write_scope(),
             HeaderMap::new(),
             FeedSurface::Site,
             FeedFormat::Rss,
@@ -298,6 +310,7 @@ mod tests {
             Arc::new(cache),
             empty_site_config(),
             empty_posts(),
+            storage::test_support::mock_write_scope(),
             headers,
             FeedSurface::Site,
             FeedFormat::Rss,
@@ -326,6 +339,7 @@ mod tests {
             Arc::new(cache),
             empty_site_config(),
             empty_posts(),
+            storage::test_support::mock_write_scope(),
             headers,
             FeedSurface::Site,
             FeedFormat::Rss,
@@ -356,6 +370,7 @@ mod tests {
             Arc::new(cache),
             empty_site_config(),
             empty_posts(),
+            storage::test_support::mock_write_scope(),
             headers,
             FeedSurface::Site,
             FeedFormat::Rss,
@@ -384,6 +399,7 @@ mod tests {
             Arc::new(cache),
             empty_site_config(),
             empty_posts(),
+            storage::test_support::mock_write_scope(),
             headers,
             FeedSurface::Site,
             FeedFormat::Rss,
@@ -399,6 +415,7 @@ mod tests {
             Extension(Arc::new(storage::MockFeedCacheStorage::new()) as Arc<dyn FeedCacheStorage>),
             Extension(empty_site_config()),
             Extension(empty_posts()),
+            Extension(storage::test_support::mock_write_scope()),
             HeaderMap::new(),
             Path(SoftPath::parse("bogus")),
         )
@@ -418,6 +435,7 @@ mod tests {
             Extension(Arc::new(cache) as Arc<dyn FeedCacheStorage>),
             Extension(empty_site_config()),
             Extension(empty_posts()),
+            Extension(storage::test_support::mock_write_scope()),
             HeaderMap::new(),
             Path(SoftPath::parse("rss")),
         )
@@ -432,6 +450,7 @@ mod tests {
             Extension(Arc::new(storage::MockFeedCacheStorage::new()) as Arc<dyn FeedCacheStorage>),
             Extension(empty_site_config()),
             Extension(empty_posts()),
+            Extension(storage::test_support::mock_write_scope()),
             HeaderMap::new(),
             Path((SoftPath::parse("rust"), SoftPath::parse("bogus"))),
         )
@@ -446,6 +465,7 @@ mod tests {
             Extension(Arc::new(storage::MockFeedCacheStorage::new()) as Arc<dyn FeedCacheStorage>),
             Extension(empty_site_config()),
             Extension(empty_posts()),
+            Extension(storage::test_support::mock_write_scope()),
             HeaderMap::new(),
             Path((
                 SoftPath::parse("alice"),
@@ -469,6 +489,7 @@ mod tests {
             Extension(Arc::new(cache) as Arc<dyn FeedCacheStorage>),
             Extension(empty_site_config()),
             Extension(empty_posts()),
+            Extension(storage::test_support::mock_write_scope()),
             HeaderMap::new(),
             Path((
                 SoftPath::parse("alice"),

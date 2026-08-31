@@ -7,7 +7,13 @@
 
 import { expect, type Locator, type Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
-import { BASE_URL, click, waitForSelector } from "./helpers";
+import {
+  BASE_URL,
+  click,
+  confirmedMutation,
+  type MutationOutcome,
+  waitForSelector,
+} from "./helpers";
 import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 
@@ -72,7 +78,13 @@ export async function createPostViaApi(
     res.ok(),
     `posts::create failed (${res.status()}): ${await res.text()}`,
   ).toBeTruthy();
-  return (await res.json()) as { post_id: number; permalink: string };
+  return confirmedMutation(
+    (await res.json()) as MutationOutcome<{
+      post_id: number;
+      permalink: string;
+    }>,
+    "posts::create",
+  );
 }
 
 /** Compose and submit a post through the `/posts/new` UI: fill the body (and the

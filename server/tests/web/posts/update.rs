@@ -9,7 +9,7 @@ use web::posts::SavedPost;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_user_and_session, post_form, post_json};
+use crate::helpers::{confirmed_mutation, create_user_and_session, post_form, post_json};
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
 use super::fixtures::{
@@ -40,7 +40,7 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "original", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
     let post_id = created.post_id;
 
     // Title embedded as # heading; slug_override takes precedence over the derived slug
@@ -58,7 +58,7 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "update body: {body}");
-    let updated: SavedPost = serde_json::from_str(&body).unwrap();
+    let updated = confirmed_mutation::<SavedPost>(&body);
     assert_eq!(updated.slug, "updated-slug");
     assert!(updated.published_at.is_none());
 
@@ -87,7 +87,7 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
     let post_id = created.post_id;
     let original_slug = created.slug.clone();
 
@@ -103,7 +103,7 @@ async fn update_post_freezes_slug_when_published(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "update body: {body}");
-    let updated: SavedPost = serde_json::from_str(&body).unwrap();
+    let updated = confirmed_mutation::<SavedPost>(&body);
     assert_eq!(
         updated.slug, original_slug,
         "slug must not change after publication"
@@ -120,7 +120,7 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "draft body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
     assert!(created.published_at.is_none());
     let post_id = created.post_id;
 
@@ -136,7 +136,7 @@ async fn update_post_publishes_draft(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "update body: {body}");
-    let updated: SavedPost = serde_json::from_str(&body).unwrap();
+    let updated = confirmed_mutation::<SavedPost>(&body);
     assert!(updated.published_at.is_some());
     assert!(!updated.permalink.as_ref().is_empty());
 }
@@ -158,7 +158,7 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     let (status, body) = update_post_json(
         &state,
@@ -197,7 +197,7 @@ async fn update_post_rejects(
     let (status, body) =
         create_post_json(&state, "original", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     let (status, body) = update_post_json(
         &state,
@@ -245,11 +245,18 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
+    let posts = Arc::clone(&state.posts);
     state
-        .posts
-        .soft_delete_post(created.post_id, session.user_id)
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                posts
+                    .soft_delete_post(transaction, created.post_id, session.user_id)
+                    .await
+            })
+        })
         .await
         .unwrap();
 
@@ -278,12 +285,12 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
     let (status, body) =
         create_post_json(&state, "draft body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
     assert!(created.published_at.is_none());
 
     let (status, body) = publish_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "publish body: {body}");
-    let published: SavedPost = serde_json::from_str(&body).unwrap();
+    let published = confirmed_mutation::<SavedPost>(&body);
     assert_eq!(published.post_id, created.post_id);
     assert!(
         published
@@ -320,7 +327,7 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     let (status, body) = publish_post_form(&state, created.post_id, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -341,10 +348,17 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] bac
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
+    let posts = Arc::clone(&state.posts);
     state
-        .posts
-        .soft_delete_post(created.post_id, session.user_id)
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                posts
+                    .soft_delete_post(transaction, created.post_id, session.user_id)
+                    .await
+            })
+        })
         .await
         .unwrap();
 
@@ -376,7 +390,7 @@ async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "gone", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
@@ -403,7 +417,7 @@ async fn delete_post_rejects_non_author(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "mine", "markdown", None, true, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     let (status, body) = delete_post_form(&state, created.post_id, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -419,7 +433,7 @@ async fn delete_post_rejects_unauthenticated(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     let (status, body) = delete_post_form(&state, created.post_id, None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -435,7 +449,7 @@ async fn delete_post_returns_not_found_for_already_deleted_post(#[case] backend:
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "first delete body: {body}");
@@ -466,7 +480,7 @@ body",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
     let permalink = String::from(created.permalink);
 
     // Presence before deletion proves the exclusions below are the delete's doing.
@@ -523,7 +537,7 @@ body",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
     assert!(created.published_at.is_some(), "should be published");
 
     let (status, body) = unpublish_post_form(&state, created.post_id, Some(&cookie)).await;
@@ -566,7 +580,7 @@ async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, body_text, "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let draft: SavedPost = serde_json::from_str(&body).unwrap();
+    let draft = confirmed_mutation::<SavedPost>(&body);
     assert!(draft.published_at.is_none(), "should start as a draft");
 
     // `publish` stamps `now`, so the backdate has to come through `update`'s
@@ -589,7 +603,7 @@ async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "update body: {body}");
-    let published: SavedPost = serde_json::from_str(&body).unwrap();
+    let published = confirmed_mutation::<SavedPost>(&body);
     assert!(
         published.permalink.contains("/2020/03/05/"),
         "published permalink should carry the backdated date: {}",
@@ -598,7 +612,7 @@ async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
 
     let (status, body) = unpublish_post_form(&state, draft.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "unpublish body: {body}");
-    let unpublished: SavedPost = serde_json::from_str(&body).unwrap();
+    let unpublished = confirmed_mutation::<SavedPost>(&body);
     assert!(unpublished.published_at.is_none(), "reverted to draft");
     assert_eq!(
         unpublished.permalink, draft.permalink,
@@ -631,7 +645,7 @@ body",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     let (status, body) = unpublish_post_form(&state, created.post_id, Some(&other_cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -661,7 +675,7 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     // Update: replace old-tag with new-tag, keep rust.
     let update_payload = serde_json::json!({
@@ -721,7 +735,7 @@ async fn update_post_rejects_over_limit_tags_without_mutating_post_or_tags(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     let original = state
         .posts
@@ -804,7 +818,7 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     // Update without including the tags key (None on the server side).
     let update_payload = serde_json::json!({
@@ -850,7 +864,7 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
     let (status, body) =
         create_post_json(&state, "original", "org", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     let org_body = format!(
         "#+TITLE: Canonical title\n#+KEYWORDS: org-tag, other\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n\nUpdated body",
@@ -872,7 +886,7 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "update body: {body}");
-    let updated: SavedPost = serde_json::from_str(&body).unwrap();
+    let updated = confirmed_mutation::<SavedPost>(&body);
     let record = state
         .posts
         .get_post_by_id(
@@ -950,7 +964,7 @@ async fn update_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backen
     let (status, body) =
         create_post_json(&state, "original", "org", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
     let payload = serde_json::json!({
         "post_id": created.post_id,
         "post": {
@@ -966,7 +980,7 @@ async fn update_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backen
     )
     .await;
     assert_eq!(status, StatusCode::OK, "update body: {body}");
-    let updated: SavedPost = serde_json::from_str(&body).unwrap();
+    let updated = confirmed_mutation::<SavedPost>(&body);
     assert!(
         updated.published_at.is_some(),
         "an omitted transport lifecycle must leave the valid Org header effective"
@@ -981,7 +995,7 @@ async fn update_non_org_requires_publish_presence(#[case] backend: Backend) {
     let (status, body) =
         create_post_json(&state, "original", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
     let payload = serde_json::json!({
         "post_id": created.post_id,
         "post": {
@@ -1008,7 +1022,7 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
     let (status, body) =
         create_post_json(&state, "original", "org", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
     let before = state
         .posts
         .get_post_by_id(
@@ -1044,7 +1058,7 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "matching sync update: {body}");
-    let changed: SavedPost = serde_json::from_str(&body).unwrap();
+    let changed = confirmed_mutation::<SavedPost>(&body);
     let before_stale = state
         .posts
         .get_post_by_id(

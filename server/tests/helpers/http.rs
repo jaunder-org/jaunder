@@ -11,7 +11,7 @@ use axum::{
 use common::mailer::MailSender;
 use common::media::MediaReferenceForm;
 use common::tagged_url::BaseUrl;
-use storage::test_support::{Backend, TestEnv, noop_mailer};
+use storage::test_support::{Backend, TestEnv, confirmed_for, noop_mailer};
 use storage::{
     ForeignEvidenceSink, InstanceId, MediaReferenceEvidence, MediaReferenceOwnershipResolver,
     PersistedMediaReference,
@@ -21,6 +21,11 @@ use tower::ServiceExt;
 
 use super::registrar::ensure_server_fns_registered;
 use super::session::tmp_storage_path;
+pub fn confirmed_mutation<T: serde::de::DeserializeOwned>(body: &str) -> T {
+    let outcome: common::MutationOutcome<T> =
+        serde_json::from_str(body).expect("parse mutation outcome");
+    confirmed_for(outcome, "integration test backend")
+}
 
 /// Read a response body fully and decode it as UTF-8.
 pub async fn body_string(response: axum::response::Response) -> String {

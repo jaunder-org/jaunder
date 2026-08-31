@@ -1,11 +1,14 @@
+use std::sync::Arc;
+
 use chrono::Utc;
+use common::MutationOutcome;
 use common::test_support::parse_display_name;
 use common::time::UtcInstant;
 use host::invite::InviteCode;
 use rstest::*;
 use rstest_reuse::*;
-use storage::RegisterWithInviteError;
 use storage::test_support::{Backend, CloseablePool, SeedUser, backends};
+use storage::{AppState, RegisterWithInviteError, WriteScopeError};
 
 use crate::storage::fixtures::{password, username};
 #[apply(backends)]
@@ -15,7 +18,7 @@ async fn create_invite_and_list_invites_includes_it(#[case] backend: Backend) {
     let state = &env.state;
 
     let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
-    let code = state.invites.create_invite(expires_at).await.unwrap();
+    let code = create_invite(state, expires_at).await;
 
     let list = state.invites.list_invites().await.unwrap();
     assert_eq!(list.len(), 1);
@@ -89,19 +92,16 @@ async fn create_user_with_invite_creates_user_and_marks_invite_used(#[case] back
     let state = &env.state;
 
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123457Z".parse().unwrap();
-    let code = state.invites.create_invite(expires_at).await.unwrap();
-
-    let user_id = state
-        .atomic
-        .create_user_with_invite(
-            &username("alice"),
-            &password("password123"),
-            Some(&parse_display_name("Alice")),
-            false,
-            &code,
-        )
-        .await
-        .unwrap();
+    let code = create_invite(state, expires_at).await;
+    let user_id = create_user_with_invite(
+        state,
+        username("alice"),
+        password("password123"),
+        Some(parse_display_name("Alice")),
+        false,
+        code.clone(),
+    )
+    .await;
 
     let record = state.users.get_user(user_id).await.unwrap().unwrap();
     assert_eq!(record.username, "alice");
@@ -120,31 +120,31 @@ async fn create_user_with_invite_second_call_returns_already_used(#[case] backen
     let state = &env.state;
 
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123457Z".parse().unwrap();
-    let code = state.invites.create_invite(expires_at).await.unwrap();
+    let code = create_invite(state, expires_at).await;
 
-    state
-        .atomic
-        .create_user_with_invite(
-            &username("alice"),
-            &password("password123"),
-            None,
-            false,
-            &code,
-        )
-        .await
-        .unwrap();
+    create_user_with_invite(
+        state,
+        username("alice"),
+        password("password123"),
+        None,
+        false,
+        code.clone(),
+    )
+    .await;
 
-    let err = state
-        .atomic
-        .create_user_with_invite(
-            &username("bob"),
-            &password("password123"),
-            None,
-            false,
-            &code,
-        )
-        .await
-        .unwrap_err();
+    let err = create_user_with_invite_result(
+        state,
+        username("bob"),
+        password("password123"),
+        None,
+        false,
+        code,
+    )
+    .await
+    .unwrap_err();
+    let WriteScopeError::Operation(err) = err else {
+        unreachable!("expected invite registration operation error, got {err:?}");
+    };
 
     assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
 
@@ -165,19 +165,21 @@ async fn create_user_with_invite_expired_returns_invite_expired(#[case] backend:
     let state = &env.state;
 
     let expires_at: UtcInstant = "2000-01-02T03:04:05.123455Z".parse().unwrap();
-    let code = state.invites.create_invite(expires_at).await.unwrap();
+    let code = create_invite(state, expires_at).await;
 
-    let err = state
-        .atomic
-        .create_user_with_invite(
-            &username("alice"),
-            &password("password123"),
-            None,
-            false,
-            &code,
-        )
-        .await
-        .unwrap_err();
+    let err = create_user_with_invite_result(
+        state,
+        username("alice"),
+        password("password123"),
+        None,
+        false,
+        code,
+    )
+    .await
+    .unwrap_err();
+    let WriteScopeError::Operation(err) = err else {
+        unreachable!("expected invite registration operation error, got {err:?}");
+    };
 
     assert!(matches!(err, RegisterWithInviteError::InviteExpired));
 
@@ -197,17 +199,19 @@ async fn create_user_with_invite_unknown_code_returns_not_found(#[case] backend:
     let env = backend.setup().await;
     let state = &env.state;
 
-    let err = state
-        .atomic
-        .create_user_with_invite(
-            &username("alice"),
-            &password("password123"),
-            None,
-            false,
-            &"no-such-code".parse::<InviteCode>().unwrap(),
-        )
-        .await
-        .unwrap_err();
+    let err = create_user_with_invite_result(
+        state,
+        username("alice"),
+        password("password123"),
+        None,
+        false,
+        "no-such-code".parse().unwrap(),
+    )
+    .await
+    .unwrap_err();
+    let WriteScopeError::Operation(err) = err else {
+        unreachable!("expected invite registration operation error, got {err:?}");
+    };
 
     assert!(matches!(err, RegisterWithInviteError::InviteNotFound));
 
@@ -233,19 +237,21 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
     let user = SeedUser::new().seed(state).await;
 
     let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
-    let code = state.invites.create_invite(expires_at).await.unwrap();
+    let code = create_invite(state, expires_at).await;
 
-    let err = state
-        .atomic
-        .create_user_with_invite(
-            &user.username,
-            &password("other_password"),
-            None,
-            false,
-            &code,
-        )
-        .await
-        .unwrap_err();
+    let err = create_user_with_invite_result(
+        state,
+        user.username.clone(),
+        password("other_password"),
+        None,
+        false,
+        code,
+    )
+    .await
+    .unwrap_err();
+    let WriteScopeError::Operation(err) = err else {
+        unreachable!("expected invite registration operation error, got {err:?}");
+    };
 
     assert!(matches!(err, RegisterWithInviteError::UsernameTaken));
 
@@ -263,17 +269,9 @@ async fn invite_list_operations(#[case] backend: Backend) {
     let future = UtcInstant::from(now.value() + chrono::Duration::hours(1));
     let past = UtcInstant::from(now.value() - chrono::Duration::hours(1));
 
-    let _invite1 = state
-        .invites
-        .create_invite(future)
-        .await
-        .expect("create_invite 1 failed");
+    let _invite1 = create_invite(state, future).await;
 
-    let _invite2 = state
-        .invites
-        .create_invite(past)
-        .await
-        .expect("create_invite 2 failed");
+    let _invite2 = create_invite(state, past).await;
 
     let invites = state
         .invites
@@ -285,4 +283,59 @@ async fn invite_list_operations(#[case] backend: Backend) {
 
     let unused_count = invites.iter().filter(|i| i.used_at.is_none()).count();
     assert!(unused_count >= 2);
+}
+
+async fn create_invite(state: &AppState, expires_at: UtcInstant) -> InviteCode {
+    let invites = Arc::clone(&state.invites);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+        })
+        .await
+        .expect("invite fixture setup should succeed");
+    storage::test_support::confirmed_for(outcome, "invite fixture setup")
+}
+
+async fn create_user_with_invite(
+    state: &AppState,
+    username: common::username::Username,
+    password: host::password::Password,
+    display_name: Option<common::display_name::DisplayName>,
+    is_operator: bool,
+    code: InviteCode,
+) -> common::ids::UserId {
+    let outcome =
+        create_user_with_invite_result(state, username, password, display_name, is_operator, code)
+            .await
+            .expect("invite registration should succeed");
+    storage::test_support::confirmed_for(outcome, "invite registration")
+}
+
+async fn create_user_with_invite_result(
+    state: &AppState,
+    username: common::username::Username,
+    password: host::password::Password,
+    display_name: Option<common::display_name::DisplayName>,
+    is_operator: bool,
+    code: InviteCode,
+) -> Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>> {
+    let atomic = Arc::clone(&state.atomic);
+    state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                atomic
+                    .create_user_with_invite(
+                        transaction,
+                        &username,
+                        &password,
+                        display_name.as_ref(),
+                        is_operator,
+                        &code,
+                    )
+                    .await
+            })
+        })
+        .await
 }

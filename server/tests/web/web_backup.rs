@@ -36,24 +36,16 @@ async fn operator_gets_default_backup_settings(#[case] backend: Backend) {
 async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_operator_and_session(&state).await.cookie();
-    state
-        .site_config
-        .set(SiteConfigKey::BackupDestinationPath, "/srv/backups")
+    crate::helpers::set_site_config(&state, SiteConfigKey::BackupDestinationPath, "/srv/backups")
         .await
         .unwrap();
-    state
-        .site_config
-        .set(SiteConfigKey::BackupSchedule, "0 30 2 * * *")
+    crate::helpers::set_site_config(&state, SiteConfigKey::BackupSchedule, "0 30 2 * * *")
         .await
         .unwrap();
-    state
-        .site_config
-        .set(SiteConfigKey::BackupRetentionCount, "4")
+    crate::helpers::set_site_config(&state, SiteConfigKey::BackupRetentionCount, "4")
         .await
         .unwrap();
-    state
-        .site_config
-        .set(SiteConfigKey::BackupMode, "archive")
+    crate::helpers::set_site_config(&state, SiteConfigKey::BackupMode, "archive")
         .await
         .unwrap();
 
@@ -78,24 +70,16 @@ async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
 async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_operator_and_session(&state).await.cookie();
-    state
-        .site_config
-        .set(SiteConfigKey::BackupDestinationPath, "/srv/backups")
+    crate::helpers::set_site_config(&state, SiteConfigKey::BackupDestinationPath, "/srv/backups")
         .await
         .unwrap();
-    state
-        .site_config
-        .set(SiteConfigKey::BackupSchedule, "not-a-schedule")
+    crate::helpers::set_site_config(&state, SiteConfigKey::BackupSchedule, "not-a-schedule")
         .await
         .unwrap();
-    state
-        .site_config
-        .set(SiteConfigKey::BackupRetentionCount, "daily")
+    crate::helpers::set_site_config(&state, SiteConfigKey::BackupRetentionCount, "daily")
         .await
         .unwrap();
-    state
-        .site_config
-        .set(SiteConfigKey::BackupMode, "surprise")
+    crate::helpers::set_site_config(&state, SiteConfigKey::BackupMode, "surprise")
         .await
         .unwrap();
 
@@ -278,9 +262,7 @@ async fn backup_warning_visible_for_operator_without_destination(#[case] backend
 async fn backup_warning_hidden_when_destination_configured(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_operator_and_session(&state).await.cookie();
-    state
-        .site_config
-        .set(SiteConfigKey::BackupDestinationPath, "/srv/backups")
+    crate::helpers::set_site_config(&state, SiteConfigKey::BackupDestinationPath, "/srv/backups")
         .await
         .unwrap();
 
@@ -301,14 +283,10 @@ async fn backup_warning_hidden_when_destination_configured(#[case] backend: Back
 async fn backup_warning_visible_when_configured_schedule_is_invalid(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_operator_and_session(&state).await.cookie();
-    state
-        .site_config
-        .set(SiteConfigKey::BackupDestinationPath, "/srv/backups")
+    crate::helpers::set_site_config(&state, SiteConfigKey::BackupDestinationPath, "/srv/backups")
         .await
         .unwrap();
-    state
-        .site_config
-        .set(SiteConfigKey::BackupSchedule, "not-a-schedule")
+    crate::helpers::set_site_config(&state, SiteConfigKey::BackupSchedule, "not-a-schedule")
         .await
         .unwrap();
 

@@ -6,7 +6,7 @@ use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::profile;
 use crate::topbar::Topbar;
-use common::email::Email;
+use common::{MutationOutcome, email::Email};
 use leptos::prelude::*;
 
 /// Email settings page — shows current email and verification status;
@@ -57,12 +57,19 @@ pub fn EmailPage() -> impl IntoView {
                     request_action
                         .value()
                         .get()
-                        .map(|r: Result<(), WebError>| match r {
-                            Ok(()) => {
-                                view! { <p>"Check your email for a verification link."</p> }
-                                    .into_any()
+                        .map(|result: Result<MutationOutcome<()>, WebError>| {
+                            match crate::mutation_feedback::classify(
+                                result,
+                                "The verification email may have been requested, but its status could not be confirmed. Refresh to check.",
+                            ) {
+                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
+                                    view! { <p>"Check your email for a verification link."</p> }
+                                        .into_any()
+                                }
+                                crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                    view! { <p class="error">{message}</p> }.into_any()
+                                }
                             }
-                            Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                         })
                 }}
             </div>
@@ -94,13 +101,15 @@ pub fn VerifyEmailPage() -> impl IntoView {
                     view! { <p class="j-loading">"Verifying\u{2026}"</p> }
                 }>
                     {move || Suspend::new(async move {
-                        match result.await {
-                            Ok(()) => {
+                        match crate::mutation_feedback::classify(
+                            result.await,
+                            "Your email may have been verified, but its status could not be confirmed. Refresh to check.",
+                        ) {
+                            crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
                                 view! { <p>"Your email address has been verified."</p> }.into_any()
                             }
-                            Err(e) => {
-                                let msg = e.to_string();
-                                view! { <p class="error">{msg}</p> }.into_any()
+                            crate::mutation_feedback::MutationFeedback::Error(message) => {
+                                view! { <p class="error">{message}</p> }.into_any()
                             }
                         }
                     })}

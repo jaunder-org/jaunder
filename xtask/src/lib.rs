@@ -65,6 +65,7 @@ mod steps {
     pub mod thin_components;
     pub mod traced_context_check;
     pub mod wasm_budget;
+    pub mod write_transaction_contract_check;
     pub mod xlang_literal_check;
 }
 pub use result::{CommandResult, Mode, StepResult};
@@ -617,6 +618,10 @@ const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
     HostGateStep::ResultOnly {
         name: "target-arch-placement",
         run: steps::target_arch_placement_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "write-transaction-contract",
+        run: steps::write_transaction_contract_check::run,
     },
     HostGateStep::ResultOnly {
         name: "common-host-target-closure",
@@ -1327,6 +1332,7 @@ mod cli_tests {
     #[test]
     fn host_gate_order_prioritizes_cheap_actionable_feedback() {
         let names = host_gate_step_names_for_test(Mode::Check);
+        let write_transaction_contract = position(&names, "write-transaction-contract");
         let target_closure = position(&names, "common-host-target-closure");
 
         let fmt = position(&names, "fmt");
@@ -1341,6 +1347,10 @@ mod cli_tests {
         assert!(
             target_closure < clippy,
             "target-resolved repository-shape checks run before compile checks"
+        );
+        assert!(
+            write_transaction_contract < clippy,
+            "write-transaction contract runs before compile checks"
         );
         assert!(
             flow_docs < clippy,

@@ -5,8 +5,31 @@ use server_fn::ServerFn;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_user_and_session, post_form, post_json};
+use crate::helpers::{confirmed_mutation, create_user_and_session, post_form, post_json};
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+use web::posts::SavedPost;
+
+async fn claim_pending(state: &std::sync::Arc<storage::AppState>) -> Vec<storage::FeedEventRecord> {
+    let feed_events = state.feed_events.clone();
+    storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    feed_events
+                        .claim_pending_batch(transaction, 100, chrono::Duration::seconds(86400))
+                        .await
+                })
+            })
+            .await
+            .expect("claim batch"),
+        "claim batch acknowledgement",
+    )
+}
+
+fn confirmed_post_id(response: &str) -> i64 {
+    i64::from(confirmed_mutation::<SavedPost>(response).post_id)
+}
 
 // Creating a published post enqueues the Site and User feeds (3 formats each =
 // 6 rows), plus 2 rows per tag (SiteTag + UserTag) × 3 formats. With no tags
@@ -44,11 +67,7 @@ async fn create_published_post_enqueues_expected_feeds(
 
     assert_eq!(status, StatusCode::OK);
 
-    let batch = state
-        .feed_events
-        .claim_pending_batch(100, chrono::Duration::seconds(86400))
-        .await
-        .expect("claim batch");
+    let batch = claim_pending(&state).await;
 
     assert_eq!(
         batch.len(),
@@ -85,19 +104,10 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 
     assert_eq!(status, StatusCode::OK);
 
-    let create_json: serde_json::Value =
-        serde_json::from_str(&create_response).expect("parse create response");
-    let post_id = create_json
-        .get("post_id")
-        .and_then(serde_json::Value::as_i64)
-        .expect("get post_id");
+    let post_id = confirmed_post_id(&create_response);
 
     // Drain initial create events
-    let _initial_batch = state
-        .feed_events
-        .claim_pending_batch(100, chrono::Duration::seconds(86400))
-        .await
-        .expect("claim batch");
+    let _initial_batch = claim_pending(&state).await;
 
     // Union should be {leptos, rust, web} = 3 tags
     let update_body = json!({
@@ -121,17 +131,13 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 
     assert_eq!(status, StatusCode::OK);
 
-    let update_batch = state
-        .feed_events
-        .claim_pending_batch(100, chrono::Duration::seconds(86400))
-        .await
-        .expect("claim batch");
+    let update_batch = claim_pending(&state).await;
 
     // Expected: Site (3) + User (3) + 3 tags × (SiteTag + UserTag) × 3 formats = 6 + 18 = 24 rows
     assert_eq!(
         update_batch.len(),
         24,
-        "Expected 24 feed events from update with tag change"
+        "Expected 24 feed events from update with tag change: {update_batch:?}"
     );
 }
 
@@ -163,19 +169,10 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
 
     assert_eq!(status, StatusCode::OK);
 
-    let create_json: serde_json::Value =
-        serde_json::from_str(&create_response).expect("parse create response");
-    let post_id = create_json
-        .get("post_id")
-        .and_then(serde_json::Value::as_i64)
-        .expect("get post_id");
+    let post_id = confirmed_post_id(&create_response);
 
     // Drain initial create events
-    let _initial_batch = state
-        .feed_events
-        .claim_pending_batch(100, chrono::Duration::seconds(86400))
-        .await
-        .expect("claim batch");
+    let _initial_batch = claim_pending(&state).await;
 
     let unpublish_body = format!("post_id={post_id}");
     let (status, _) = post_form(
@@ -188,11 +185,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
 
     assert_eq!(status, StatusCode::OK);
 
-    let unpublish_batch = state
-        .feed_events
-        .claim_pending_batch(100, chrono::Duration::seconds(86400))
-        .await
-        .expect("claim batch");
+    let unpublish_batch = claim_pending(&state).await;
 
     // Expected: Site (3) + User (3) + 1 tag × (SiteTag + UserTag) × 3 formats = 6 + 6 = 12 rows
     assert_eq!(
@@ -230,19 +223,10 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
 
-    let create_json: serde_json::Value =
-        serde_json::from_str(&create_response).expect("parse create response");
-    let post_id = create_json
-        .get("post_id")
-        .and_then(serde_json::Value::as_i64)
-        .expect("get post_id");
+    let post_id = confirmed_post_id(&create_response);
 
     // Drain initial create events
-    let _initial_batch = state
-        .feed_events
-        .claim_pending_batch(100, chrono::Duration::seconds(86400))
-        .await
-        .expect("claim batch");
+    let _initial_batch = claim_pending(&state).await;
 
     let delete_body = format!("post_id={post_id}");
     let (status, _) = post_form(
@@ -255,11 +239,7 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
 
-    let delete_batch = state
-        .feed_events
-        .claim_pending_batch(100, chrono::Duration::seconds(86400))
-        .await
-        .expect("claim batch");
+    let delete_batch = claim_pending(&state).await;
 
     // Expected: Site (3) + User (3) + 1 tag × (SiteTag + UserTag) × 3 formats = 6 + 6 = 12 rows
     assert_eq!(
@@ -297,19 +277,10 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
 
-    let create_json: serde_json::Value =
-        serde_json::from_str(&create_response).expect("parse create response");
-    let post_id = create_json
-        .get("post_id")
-        .and_then(serde_json::Value::as_i64)
-        .expect("get post_id");
+    let post_id = confirmed_post_id(&create_response);
 
     // Drain any events from create (drafts still enqueue as per spec)
-    let _initial_batch = state
-        .feed_events
-        .claim_pending_batch(100, chrono::Duration::seconds(86400))
-        .await
-        .expect("claim batch");
+    let _initial_batch = claim_pending(&state).await;
 
     let delete_body = format!("post_id={post_id}");
     let (status, _) = post_form(
@@ -322,11 +293,7 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
 
-    let delete_batch = state
-        .feed_events
-        .claim_pending_batch(100, chrono::Duration::seconds(86400))
-        .await
-        .expect("claim batch");
+    let delete_batch = claim_pending(&state).await;
 
     // Expected: 0 rows (draft posts don't affect feeds)
     assert_eq!(

@@ -10,6 +10,7 @@
 //! `author_user_id` into the membership insert and lets the FKs reject a
 //! cross-author pairing (ADR-0019, same-owner invariant).
 
+use crate::WriteTransaction;
 use async_trait::async_trait;
 use common::audience::AudienceName;
 use common::ids::{AudienceId, SubscriptionId, UserId};
@@ -143,6 +144,7 @@ pub trait AudienceStorage: Send + Sync {
     /// `UNIQUE (author_user_id, name)` violation to [`AudienceError::DuplicateName`].
     async fn create_audience(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         name: &AudienceName,
     ) -> Result<AudienceId, AudienceError>;
@@ -152,19 +154,19 @@ pub trait AudienceStorage: Send + Sync {
     /// on a name collision.
     async fn rename_audience(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         audience_id: AudienceId,
         name: &AudienceName,
     ) -> Result<(), AudienceError>;
-
     /// Deletes an audience the author owns and its membership rows in one
     /// transaction (the migrations declare no `ON DELETE CASCADE`).
     async fn delete_audience(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         audience_id: AudienceId,
     ) -> sqlx::Result<()>;
-
     /// Lists the author's audiences, ordered by `audience_id`.
     async fn list_audiences(&self, author_user_id: UserId) -> sqlx::Result<Vec<AudienceRecord>>;
 
@@ -174,6 +176,7 @@ pub trait AudienceStorage: Send + Sync {
     /// [`AudienceError::Storage`].
     async fn add_member(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         audience_id: AudienceId,
         subscription_id: SubscriptionId,
@@ -183,6 +186,7 @@ pub trait AudienceStorage: Send + Sync {
     /// (including when `audience_id` belongs to another author).
     async fn remove_member(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         audience_id: AudienceId,
         subscription_id: SubscriptionId,
@@ -235,20 +239,22 @@ where
 {
     #[tracing::instrument(
         name = "storage.audiences.create",
-        skip(self),
+        skip(self, transaction),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn create_audience(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         name: &AudienceName,
     ) -> Result<AudienceId, AudienceError> {
+        let connection = DB::write_connection(transaction).map_err(AudienceError::Storage)?;
         match sqlx::query_as::<_, (AudienceId,)>(
             "INSERT INTO audiences (author_user_id, name) VALUES ($1, $2) RETURNING audience_id",
         )
         .bind(author_user_id)
         .bind(name)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *connection)
         .await
         {
             Ok((id,)) => Ok(id),
@@ -261,17 +267,19 @@ where
 
     #[tracing::instrument(
         name = "storage.audiences.rename",
-        skip(self),
+        skip(self, transaction),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn rename_audience(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         audience_id: AudienceId,
         name: &AudienceName,
     ) -> Result<(), AudienceError> {
         // `RETURNING` so a no-match is detected generically (via `fetch_optional`)
         // without `rows_affected()`, which sqlx exposes only on concrete results.
+        let connection = DB::write_connection(transaction).map_err(AudienceError::Storage)?;
         let result = sqlx::query_as::<_, (AudienceId,)>(
             "UPDATE audiences SET name = $1 WHERE author_user_id = $2 AND audience_id = $3 \
              RETURNING audience_id",
@@ -279,7 +287,7 @@ where
         .bind(name)
         .bind(author_user_id)
         .bind(audience_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *connection)
         .await;
         match result {
             Ok(Some(_)) => Ok(()),
@@ -293,26 +301,26 @@ where
 
     #[tracing::instrument(
         name = "storage.audiences.delete",
-        skip(self),
+        skip(self, transaction),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn delete_audience(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         audience_id: AudienceId,
     ) -> sqlx::Result<()> {
-        let mut tx = self.pool.begin().await?;
+        let connection = DB::write_connection(transaction)?;
         sqlx::query("DELETE FROM audience_members WHERE author_user_id = $1 AND audience_id = $2")
             .bind(author_user_id)
             .bind(audience_id)
-            .execute(&mut *tx)
+            .execute(&mut *connection)
             .await?;
         sqlx::query("DELETE FROM audiences WHERE author_user_id = $1 AND audience_id = $2")
             .bind(author_user_id)
             .bind(audience_id)
-            .execute(&mut *tx)
+            .execute(&mut *connection)
             .await?;
-        tx.commit().await?;
         Ok(())
     }
 
@@ -341,15 +349,17 @@ where
 
     #[tracing::instrument(
         name = "storage.audiences.add_member",
-        skip(self),
+        skip(self, transaction),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn add_member(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         audience_id: AudienceId,
         subscription_id: SubscriptionId,
     ) -> Result<(), AudienceError> {
+        let connection = DB::write_connection(transaction).map_err(AudienceError::Storage)?;
         sqlx::query(
             "INSERT INTO audience_members (audience_id, subscription_id, author_user_id) \
              VALUES ($1, $2, $3) \
@@ -358,22 +368,24 @@ where
         .bind(audience_id)
         .bind(subscription_id)
         .bind(author_user_id)
-        .execute(&self.pool)
+        .execute(&mut *connection)
         .await?;
         Ok(())
     }
 
     #[tracing::instrument(
         name = "storage.audiences.remove_member",
-        skip(self),
+        skip(self, transaction),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn remove_member(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         audience_id: AudienceId,
         subscription_id: SubscriptionId,
     ) -> sqlx::Result<()> {
+        let connection = DB::write_connection(transaction)?;
         sqlx::query(
             "DELETE FROM audience_members \
              WHERE author_user_id = $1 AND audience_id = $2 AND subscription_id = $3",
@@ -381,7 +393,7 @@ where
         .bind(author_user_id)
         .bind(audience_id)
         .bind(subscription_id)
-        .execute(&self.pool)
+        .execute(&mut *connection)
         .await?;
         Ok(())
     }
@@ -412,30 +424,49 @@ where
 mod tests {
     use super::{AudienceError, InvalidAudienceTargets, validate_named_audience_targets};
     use crate::test_support::{Backend, SeedUser, backends};
+    use common::audience::AudienceName;
+    use common::ids::AudienceId;
     use common::test_support::parse_audience_name;
     use common::time::UtcInstant;
     use common::visibility::AudienceTarget;
     use host::error::{ErrorKind, InternalError};
     use rstest::*;
     use rstest_reuse::*;
+    use std::sync::Arc;
+
+    async fn create_audience_confirmed(
+        state: &Arc<crate::AppState>,
+        author_user_id: common::ids::UserId,
+        name: &AudienceName,
+    ) -> AudienceId {
+        let audiences = Arc::clone(&state.audiences);
+        let write_scope = state.write_scope.clone();
+        let name = name.clone();
+        crate::test_support::confirmed_for(
+            write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        audiences
+                            .create_audience(transaction, author_user_id, &name)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+            "audience fixture setup",
+        )
+    }
 
     #[apply(backends)]
     #[tokio::test]
     async fn audience_created_at_round_trips_and_list_preserves_id_order(#[case] backend: Backend) {
         let env = backend.setup().await;
         let author = SeedUser::new().seed(&env.state).await.user_id;
-        let first_id = env
-            .state
-            .audiences
-            .create_audience(author, &parse_audience_name("Close Friends"))
-            .await
-            .unwrap();
-        let second_id = env
-            .state
-            .audiences
-            .create_audience(author, &parse_audience_name("Family"))
-            .await
-            .unwrap();
+        let first_id =
+            create_audience_confirmed(&env.state, author, &parse_audience_name("Close Friends"))
+                .await;
+        let second_id =
+            create_audience_confirmed(&env.state, author, &parse_audience_name("Family")).await;
         let first_created_at = "2026-01-02T03:04:05.654321Z".parse::<UtcInstant>().unwrap();
         let second_created_at = "2026-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap();
 
@@ -499,18 +530,12 @@ mod tests {
         let env = backend.setup().await;
         let author = SeedUser::new().seed(&env.state).await;
         let other = SeedUser::new().seed(&env.state).await;
-        let owned = env
-            .state
-            .audiences
-            .create_audience(author.user_id, &parse_audience_name("Owned"))
-            .await
-            .unwrap();
-        let foreign = env
-            .state
-            .audiences
-            .create_audience(other.user_id, &parse_audience_name("Foreign"))
-            .await
-            .unwrap();
+        let owned =
+            create_audience_confirmed(&env.state, author.user_id, &parse_audience_name("Owned"))
+                .await;
+        let foreign =
+            create_audience_confirmed(&env.state, other.user_id, &parse_audience_name("Foreign"))
+                .await;
 
         validate_named_audience_targets(
             env.state.audiences.as_ref(),

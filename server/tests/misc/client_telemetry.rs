@@ -18,7 +18,7 @@ use opentelemetry_sdk::metrics::{
 use rstest::*;
 use rstest_reuse::*;
 use storage::{
-    SessionStorage,
+    SessionStorage, WriteScope,
     test_support::{Backend, TestEnv, backends},
 };
 use tower::ServiceExt;
@@ -127,11 +127,12 @@ fn limiter() -> Arc<jaunder::client_telemetry::ClientTelemetryLimiter> {
 
 fn app(
     sessions: Arc<dyn SessionStorage>,
+    write_scope: WriteScope,
     limiter: Arc<jaunder::client_telemetry::ClientTelemetryLimiter>,
 ) -> Router {
     // This constructor is deliberately narrower than the production composition
-    // root: the route is proven to need only its session store and limiter.
-    jaunder::client_telemetry::router(sessions, limiter)
+    // root: the route is proven to need only its session store, write scope, and limiter.
+    jaunder::client_telemetry::router(sessions, write_scope, limiter)
 }
 
 fn request(
@@ -211,18 +212,29 @@ async fn missing_malformed_unknown_and_revoked_cookies_return_401(#[case] backen
         ),
     ];
     for request in cases {
-        let observation = observe(app(sessions.clone(), limiter()), request).await;
+        let observation = observe(
+            app(sessions.clone(), state.write_scope.clone(), limiter()),
+            request,
+        )
+        .await;
         assert_silent_rejection(&observation, StatusCode::UNAUTHORIZED);
     }
 
     let token_hash = host::token::hash(&session.token).expect("hash session token");
+    let sessions_for_revoke = Arc::clone(&sessions);
     state
-        .sessions
-        .revoke_session(&token_hash)
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                sessions_for_revoke
+                    .revoke_session(transaction, &token_hash)
+                    .await
+            })
+        })
         .await
         .expect("revoke session");
     let observation = observe(
-        app(sessions, limiter()),
+        app(sessions, state.write_scope.clone(), limiter()),
         request(
             body,
             Some("application/json"),
@@ -249,7 +261,7 @@ async fn bearer_and_basic_without_cookie_return_401(#[case] backend: Backend) {
 
     for authorization in [&bearer, &basic] {
         let observation = observe(
-            app(sessions.clone(), limiter()),
+            app(sessions.clone(), state.write_scope.clone(), limiter()),
             request(
                 event_json(),
                 Some("application/json"),
@@ -280,7 +292,7 @@ async fn malformed_json_unsupported_version_unknown_enum_and_unknown_field_retur
 
     for body in bodies {
         let observation = observe(
-            app(sessions.clone(), limiter()),
+            app(sessions.clone(), state.write_scope.clone(), limiter()),
             request(body, Some("application/json"), Some(&cookie), None),
         )
         .await;
@@ -298,7 +310,7 @@ async fn missing_and_text_content_types_return_415(#[case] backend: Backend) {
 
     for content_type in [None, Some("text/plain")] {
         let observation = observe(
-            app(sessions.clone(), limiter()),
+            app(sessions.clone(), state.write_scope.clone(), limiter()),
             request(event_json(), content_type, Some(&cookie), None),
         )
         .await;
@@ -322,7 +334,7 @@ async fn body_limit_accepts_1024_for_decode_and_rejects_1025(#[case] backend: Ba
         body.extend(std::iter::repeat_n(' ', size - 1));
         assert_eq!(body.len(), size);
         let observation = observe(
-            app(sessions.clone(), limiter()),
+            app(sessions.clone(), state.write_scope.clone(), limiter()),
             request(body, Some("application/json"), Some(&cookie), None),
         )
         .await;
@@ -336,7 +348,7 @@ async fn closed_session_storage_returns_silent_500(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let sessions: Arc<dyn SessionStorage> = state.sessions.clone();
-    let app = app(sessions, limiter());
+    let app = app(sessions, state.write_scope.clone(), limiter());
     base.close_pool().await;
 
     let observation = observe(
@@ -359,7 +371,7 @@ async fn sixth_event_for_one_user_returns_silent_429(#[case] backend: Backend) {
     let session = create_user_and_session(&state).await;
     let sessions: Arc<dyn SessionStorage> = state.sessions.clone();
     let limiter = limiter();
-    let app = app(sessions, limiter);
+    let app = app(sessions, state.write_scope.clone(), limiter);
     let cookie = session.cookie();
 
     for _ in 0..5 {
@@ -392,7 +404,7 @@ async fn valid_cookie_returns_204_and_reports_one_client_swallow(#[case] backend
     let sessions: Arc<dyn SessionStorage> = state.sessions.clone();
 
     let observation = observe(
-        app(sessions, limiter()),
+        app(sessions, state.write_scope.clone(), limiter()),
         request(
             event_json(),
             Some("application/json"),
@@ -456,7 +468,7 @@ async fn valid_cookie_wins_when_valid_bearer_or_basic_is_also_present(#[case] ba
     let authorization_session = create_user_and_session(&state).await;
     let sessions: Arc<dyn SessionStorage> = state.sessions.clone();
     let limiter = limiter();
-    let app = app(sessions, limiter);
+    let app = app(sessions, state.write_scope.clone(), limiter);
 
     // Exhaust the Authorization user's bucket through the only accepted credential
     // source, its cookie. If Authorization were consulted below, both requests would

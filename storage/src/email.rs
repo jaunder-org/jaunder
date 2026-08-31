@@ -1,5 +1,6 @@
 //! Email verification token storage.
 
+use crate::WriteTransaction;
 use async_trait::async_trait;
 
 use sqlx::{Database, Pool};
@@ -62,6 +63,7 @@ pub trait EmailVerificationStorage: Send + Sync {
     /// Returns the raw (un-hashed) token to be delivered to the user.
     async fn create_email_verification(
         &self,
+        transaction: &mut WriteTransaction,
         user_id: UserId,
         email: &Email,
         expires_at: UtcInstant,
@@ -77,6 +79,7 @@ pub trait EmailVerificationStorage: Send + Sync {
     /// or already used.
     async fn use_email_verification(
         &self,
+        transaction: &mut WriteTransaction,
         raw_token: &RawToken,
     ) -> Result<(UserId, Email), UseEmailVerificationError>;
 }
@@ -115,14 +118,14 @@ where
 {
     async fn create_email_verification(
         &self,
+        transaction: &mut WriteTransaction,
         user_id: UserId,
         email: &Email,
         expires_at: UtcInstant,
     ) -> sqlx::Result<RawToken> {
         let (raw_token, token_hash) = token::generate_hashed();
         let now = UtcInstant::now();
-
-        let mut tx = self.pool.begin().await?;
+        let connection = DB::write_connection(transaction)?;
 
         // Supersede any existing pending token for this user by setting its
         // expires_at to its created_at, making it appear immediately expired.
@@ -133,7 +136,7 @@ where
         )
         .bind(user_id)
         .bind(now)
-        .execute(&mut *tx)
+        .execute(&mut *connection)
         .await?;
 
         sqlx::query(
@@ -146,16 +149,15 @@ where
         .bind(email)
         .bind(now)
         .bind(expires_at)
-        .execute(&mut *tx)
+        .execute(&mut *connection)
         .await?;
-
-        tx.commit().await?;
 
         Ok(raw_token)
     }
 
     async fn use_email_verification(
         &self,
+        transaction: &mut WriteTransaction,
         raw_token: &RawToken,
     ) -> Result<(UserId, Email), UseEmailVerificationError> {
         let token_hash = token::hash(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
@@ -168,6 +170,8 @@ where
         // succeed. RETURNING supplies the verified address without a second
         // round-trip. SQL and decode failures are infrastructure failures;
         // only a successful `Ok(None)` is a domain miss to disambiguate below.
+        let connection =
+            DB::write_connection(transaction).map_err(UseEmailVerificationError::Internal)?;
         let claimed = sqlx::query_as::<_, (UserId, Email)>(
             "UPDATE email_verifications SET used_at = $1
              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
@@ -176,7 +180,7 @@ where
         .bind(now)
         .bind(&token_hash)
         .bind(now)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *connection)
         .await
         .map_err(UseEmailVerificationError::Internal)?;
 
@@ -201,10 +205,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, SeedUser, TestEnv, backends};
+    use crate::test_support::{Backend, SeedUser, backends};
     use common::test_support::parse_email;
     use rstest::*;
     use rstest_reuse::*;
+    use std::sync::Arc;
 
     #[apply(backends)]
     #[tokio::test]
@@ -219,19 +224,43 @@ mod tests {
         // `create_email_verification` binds the `TokenHash` and the `Email`;
         // `use_email_verification` re-binds the hash to claim the row and decodes
         // the `email` column straight back into `Email` via the sqlx bridge (#438).
-        let raw_token = env
+        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let verification_email = email.clone();
+        let outcome = env
             .state
-            .email_verifications
-            .create_email_verification(user_id, &email, expires_at)
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    email_verifications
+                        .create_email_verification(
+                            transaction,
+                            user_id,
+                            &verification_email,
+                            expires_at,
+                        )
+                        .await
+                })
+            })
             .await
             .unwrap();
+        let raw_token =
+            crate::test_support::confirmed_for(outcome, "email-verification fixture setup");
 
-        let (claimed_user, claimed_email) = env
+        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let outcome = env
             .state
-            .email_verifications
-            .use_email_verification(&raw_token)
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    email_verifications
+                        .use_email_verification(transaction, &raw_token)
+                        .await
+                })
+            })
             .await
             .unwrap();
+        let (claimed_user, claimed_email) =
+            crate::test_support::confirmed_for(outcome, "email verification");
         assert_eq!(claimed_user, user_id);
         assert_eq!(claimed_email, email);
     }
@@ -245,12 +274,21 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let email = parse_email("alice@example.com");
         let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-        let raw_token = env
+        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let outcome = env
             .state
-            .email_verifications
-            .create_email_verification(user_id, &email, expires_at)
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    email_verifications
+                        .create_email_verification(transaction, user_id, &email, expires_at)
+                        .await
+                })
+            })
             .await
             .unwrap();
+        let raw_token =
+            crate::test_support::confirmed_for(outcome, "email-verification fixture setup");
 
         // Overwrite the `email` column with a value `Email::from_str` rejects,
         // binding it as a raw `&str` so the bad value actually lands in the column.
@@ -267,16 +305,25 @@ mod tests {
         // bridge; a corrupt value is a data-integrity fault, surfaced as
         // `Internal(ColumnDecode)` — distinct from the not-found path (covers the
         // decode arm of the claim query's error mapping).
+        let email_verifications = Arc::clone(&env.state.email_verifications);
         let err = env
             .state
-            .email_verifications
-            .use_email_verification(&raw_token)
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    email_verifications
+                        .use_email_verification(transaction, &raw_token)
+                        .await
+                })
+            })
             .await
             .unwrap_err();
         assert!(
             matches!(
                 err,
-                UseEmailVerificationError::Internal(sqlx::Error::ColumnDecode { .. })
+                crate::WriteScopeError::Operation(UseEmailVerificationError::Internal(
+                    sqlx::Error::ColumnDecode { .. }
+                ))
             ),
             "expected Internal(ColumnDecode), got: {err:?}"
         );
@@ -298,49 +345,5 @@ mod tests {
         let mapped: InternalError =
             UseEmailVerificationError::Internal(sqlx::Error::RowNotFound).into();
         assert_eq!(mapped.kind(), ErrorKind::Storage);
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn create_email_verification_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let expires_at = UtcInstant::now();
-        let email = parse_email("test@example.com");
-        let result = state
-            .email_verifications
-            .create_email_verification(UserId::from(1), &email, expires_at)
-            .await;
-        assert!(result.is_err());
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn use_email_verification_with_closed_pool_returns_internal(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let email = parse_email("alice@example.com");
-        let raw_token = env
-            .state
-            .email_verifications
-            .create_email_verification(
-                user_id,
-                &email,
-                "2099-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap(),
-            )
-            .await
-            .unwrap();
-        env.base.close_pool().await;
-
-        let result = env
-            .state
-            .email_verifications
-            .use_email_verification(&raw_token)
-            .await;
-
-        assert!(matches!(
-            result,
-            Err(UseEmailVerificationError::Internal(_))
-        ));
     }
 }

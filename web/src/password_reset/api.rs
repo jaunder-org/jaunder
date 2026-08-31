@@ -3,7 +3,7 @@
 
 #[cfg(feature = "server")]
 use {
-    crate::error::InternalError,
+    crate::error::{InternalError, from_write_scope_error as map_write_scope_error},
     crate::mail,
     chrono::Duration,
     common::mailer::{EmailMessage, MailSender},
@@ -13,20 +13,19 @@ use {
     host::password,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{AtomicOps, PasswordResetStorage, SiteConfigStorage, UserStorage},
+    storage::{AtomicOps, PasswordResetStorage, SiteConfigStorage, UserStorage, WriteScope},
 };
 
 use crate::error::WebResult;
 // `Username` / `ProfferedPassword` / `RawToken` are ungated: they type the
 // request wire arguments, so generated inputs reference them on both client and
 // server builds.
-use common::password::ProfferedPassword;
-use common::token::RawToken;
-use common::username::Username;
+use common::{MutationOutcome, password::ProfferedPassword, token::RawToken, username::Username};
 
 #[macros::server]
-pub async fn request(username: Username) -> WebResult<()> {
+pub async fn request(username: Username) -> WebResult<MutationOutcome<()>> {
     let users = expect_context::<Arc<dyn UserStorage>>();
+    let write_scope = expect_context::<WriteScope>();
     let password_resets = expect_context::<Arc<dyn PasswordResetStorage>>();
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     let mailer = expect_context::<Arc<dyn MailSender>>();
@@ -58,12 +57,20 @@ pub async fn request(username: Username) -> WebResult<()> {
     let base_url = mail::require_base_url(&*site_config).await?;
 
     let expires_at = UtcInstant::from(chrono::Utc::now() + Duration::hours(1));
-    let raw_token = password_resets
-        .create_password_reset(user_id, expires_at)
-        .await?;
+    let outcome = write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                password_resets
+                    .create_password_reset(transaction, user_id, expires_at)
+                    .await
+                    .map_err(InternalError::storage)
+            })
+        })
+        .await
+        .map_err(map_write_scope_error)?;
 
     let reset_url: MailConfirmUrl = tagged_url::compose(&base_url, "/reset-password");
-    let link = format!("{reset_url}?token={raw_token}");
+    let link = format!("{reset_url}?token={}", outcome.value());
     let message = EmailMessage {
         from: None,
         to: vec![verified_email],
@@ -75,8 +82,10 @@ pub async fn request(username: Username) -> WebResult<()> {
 
     mail::send_recording_metrics(&*mailer, &message, EmailKind::PasswordReset).await?;
 
-    metrics::password_reset(PasswordResetEvent::Requested);
-    Ok(())
+    if matches!(&outcome, MutationOutcome::Confirmed(_)) {
+        metrics::password_reset(PasswordResetEvent::Requested);
+    }
+    Ok(outcome.map(|_| ()))
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -86,11 +95,12 @@ pub struct ConfirmPasswordResetRequest {
 }
 
 #[macros::server(skip_all)]
-pub async fn confirm(request: ConfirmPasswordResetRequest) -> WebResult<()> {
+pub async fn confirm(request: ConfirmPasswordResetRequest) -> WebResult<MutationOutcome<()>> {
     let ConfirmPasswordResetRequest {
         token,
         new_password,
     } = request;
+    let write_scope = expect_context::<WriteScope>();
     let atomic = expect_context::<Arc<dyn AtomicOps>>();
 
     // `new_password` is the inbound-secret twin (ADR-0063); convert into the
@@ -98,8 +108,19 @@ pub async fn confirm(request: ConfirmPasswordResetRequest) -> WebResult<()> {
     // arg — its serde bridge already rejected a malformed shape on decode.
     let password = password::Password::try_from(new_password)?;
 
-    atomic.confirm_password_reset(&token, &password).await?;
-
-    metrics::password_reset(PasswordResetEvent::Completed);
-    Ok(())
+    let outcome = write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                atomic
+                    .confirm_password_reset(transaction, &token, &password)
+                    .await
+                    .map_err(InternalError::storage)
+            })
+        })
+        .await
+        .map_err(map_write_scope_error)?;
+    if matches!(&outcome, MutationOutcome::Confirmed(())) {
+        metrics::password_reset(PasswordResetEvent::Completed);
+    }
+    Ok(outcome)
 }

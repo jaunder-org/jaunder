@@ -117,10 +117,12 @@ pub fn create_router_with_media_reference_ownership_resolver(
     let site_config_ext = state.site_config.clone();
     let media_ext = state.media.clone();
     let feed_cache_ext = state.feed_cache.clone();
+    let feed_events_ext = state.feed_events.clone();
     // The `auth::User` extractor (web crate) authenticates the session cookie /
     // bearer token, so the raw HTTP handlers and the Leptos request `Parts`
     // need the session store reachable as a request extension.
     let sessions_ext = state.sessions.clone();
+    let write_scope_ext = state.write_scope.clone();
     let instance_header = instance_id.to_string().parse::<HeaderValue>()?;
     let server_fn_instance_id = instance_id.clone();
     let server_fn_media_ownership_resolver = media_ownership_resolver.clone();
@@ -128,8 +130,13 @@ pub fn create_router_with_media_reference_ownership_resolver(
     let server_fn_mailer = mailer;
     let serve_assets = ServeEmbed::<StaticAssets>::new();
     let storage_path_ext = Arc::new(storage_path);
+    let media_content_locks_ext = Arc::new(storage::MediaContentLocks::new(Arc::clone(
+        &storage_path_ext,
+    )));
+    let server_fn_media_content_locks = Arc::clone(&media_content_locks_ext);
     let client_telemetry = crate::client_telemetry::router(
         sessions_ext.clone(),
+        write_scope_ext.clone(),
         Arc::new(crate::client_telemetry::ClientTelemetryLimiter::new()),
     );
     let app = Router::new()
@@ -144,9 +151,11 @@ pub fn create_router_with_media_reference_ownership_resolver(
                 let resolver = server_fn_media_ownership_resolver.clone();
                 let state = server_fn_state.clone();
                 let mailer = server_fn_mailer.clone();
+                let media_content_locks = Arc::clone(&server_fn_media_content_locks);
                 leptos_axum::handle_server_fns_with_context(
                     move || {
                         context::provide_app_state_contexts(&state);
+                        context::provide_media_content_locks_context(&media_content_locks);
                         context::provide_mailer_context(&mailer);
                         context::provide_media_ownership_context(&resolver, &instance_id);
                         provide_context(web::auth::CookieSettings {
@@ -198,6 +207,7 @@ pub fn create_router_with_media_reference_ownership_resolver(
         .layer(axum::Extension(media_ownership_resolver))
         .layer(axum::Extension(instance_id))
         .layer(axum::Extension(storage_path_ext))
+        .layer(axum::Extension(media_content_locks_ext))
         .layer(axum::Extension(posts_ext))
         .layer(axum::Extension(audiences_ext))
         .layer(axum::Extension(users_ext))
@@ -205,7 +215,9 @@ pub fn create_router_with_media_reference_ownership_resolver(
         .layer(axum::Extension(site_config_ext))
         .layer(axum::Extension(media_ext))
         .layer(axum::Extension(feed_cache_ext))
+        .layer(axum::Extension(feed_events_ext))
         .layer(axum::Extension(sessions_ext))
+        .layer(axum::Extension(write_scope_ext))
         .layer(axum::middleware::from_fn_with_state(
             secure_cookies,
             retire_session_cookie,

@@ -132,11 +132,15 @@ async fn list_tags_uses_default_limit_when_unspecified(#[case] backend: Backend)
     let labels: Vec<TagLabel> = (0..20)
         .map(|n| format!("tag{n:02}").parse().expect("valid tag label"))
         .collect();
-    state
-        .posts
-        .set_post_tags(post, user_id, &labels)
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post,
+        user_id,
+        &labels,
+    )
+    .await
+    .unwrap();
 
     let (status, body) = post_json(
         &state,

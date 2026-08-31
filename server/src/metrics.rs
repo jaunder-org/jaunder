@@ -992,12 +992,20 @@ mod tests {
         )
         .await
         .expect("open database");
-        opened
+        let feed_events = opened.state.feed_events.clone();
+        let feed_path = storage::test_support::fp("/feed.rss");
+        let outcome = opened
             .state
-            .feed_events
-            .enqueue(&storage::test_support::fp("/feed.rss"))
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { feed_events.enqueue(transaction, &feed_path).await })
+            })
             .await
             .expect("enqueue feed event");
+        assert!(matches!(
+            outcome,
+            common::mutation::MutationOutcome::Confirmed(_)
+        ));
         let media_root = base.path().join("media");
         std::fs::create_dir_all(media_root.join("cached")).expect("cached media directory");
         std::fs::write(media_root.join("cached/orphan"), b"orphan").expect("orphan media file");

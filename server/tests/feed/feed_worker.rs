@@ -9,10 +9,39 @@ use host::{
 };
 use jaunder::feed::worker::FeedWorker;
 use storage::FeedCacheRow;
-use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, fp};
+use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, confirmed_for, fp};
 
 use rstest::*;
 use rstest_reuse::*;
+
+async fn event_write<T>(
+    state: &Arc<storage::AppState>,
+    callback: impl for<'scope> FnOnce(
+        &'scope mut storage::WriteTransaction,
+    ) -> futures_util::future::BoxFuture<
+        'scope,
+        Result<T, storage::FeedEventError>,
+    >,
+) -> T {
+    confirmed_for(
+        state
+            .write_scope
+            .run(callback)
+            .await
+            .expect("feed-event write"),
+        "feed-event write acknowledgement",
+    )
+}
+
+async fn upsert_cache(state: &Arc<storage::AppState>, row: FeedCacheRow) {
+    let feed_cache = Arc::clone(&state.feed_cache);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| Box::pin(async move { feed_cache.upsert(transaction, row).await }))
+        .await
+        .expect("seed cached feed");
+    confirmed_for(outcome, "seed cached feed");
+}
 
 /// Test double whose `WebSub` client always reports the hub refused the ping,
 /// so the worker exercises its ping-failure backoff path.
@@ -39,6 +68,7 @@ fn make_worker(
         state.site_config.clone(),
         state.posts.clone(),
         state.feed_cache.clone(),
+        Arc::new(state.write_scope.clone()),
         state.feed_events.clone(),
         websub,
     )
@@ -55,11 +85,12 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
     let post = SeedRawPost::new(user.user_id).seed(&state).await;
 
     let feed_path = fp(&format!("/~{}/feed.rss", user.username));
-    state
-        .feed_events
-        .enqueue(&feed_path)
-        .await
-        .expect("enqueue feed event");
+    let event_feed_path = feed_path.clone();
+    let feed_events = Arc::clone(&state.feed_events);
+    event_write(&state, move |transaction| {
+        Box::pin(async move { feed_events.enqueue(transaction, &event_feed_path).await })
+    })
+    .await;
 
     make_worker(&state, capture.clone()).tick().await;
 
@@ -76,11 +107,15 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
             .contains(post.title.as_ref())
     );
 
-    let pending = state
-        .feed_events
-        .claim_pending_batch(10, chrono::Duration::minutes(5))
-        .await
-        .expect("claim pending");
+    let feed_events = Arc::clone(&state.feed_events);
+    let pending = event_write(&state, move |transaction| {
+        Box::pin(async move {
+            feed_events
+                .claim_pending_batch(transaction, 10, chrono::Duration::minutes(5))
+                .await
+        })
+    })
+    .await;
     assert!(pending.is_empty(), "event should be done, not pending");
 }
 
@@ -94,18 +129,20 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
 
     SeedRawPost::new(user.user_id).seed(&state).await;
 
-    state
-        .site_config
-        .set(SiteConfigKey::FeedsWebsubHubUrl, "https://hub.example.com/")
-        .await
-        .expect("set hub url");
+    crate::helpers::set_site_config(
+        &state,
+        SiteConfigKey::FeedsWebsubHubUrl,
+        "https://hub.example.com/",
+    )
+    .await
+    .expect("set hub url");
 
     let feed_path = fp(&format!("/~{}/feed.rss", user.username));
-    state
-        .feed_events
-        .enqueue(&feed_path)
-        .await
-        .expect("enqueue feed event");
+    let feed_events = Arc::clone(&state.feed_events);
+    event_write(&state, move |transaction| {
+        Box::pin(async move { feed_events.enqueue(transaction, &feed_path).await })
+    })
+    .await;
 
     make_worker(&state, capture.clone()).tick().await;
 
@@ -132,19 +169,23 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
 
     SeedRawPost::new(user.user_id).seed(&state).await;
 
-    state
-        .site_config
-        .set(SiteConfigKey::FeedsWebsubHubUrl, "https://hub.example.com/")
-        .await
-        .expect("set hub url");
+    crate::helpers::set_site_config(
+        &state,
+        SiteConfigKey::FeedsWebsubHubUrl,
+        "https://hub.example.com/",
+    )
+    .await
+    .expect("set hub url");
 
     let feed_path = fp(&format!("/~{}/feed.rss", user.username));
+    let feed_events = Arc::clone(&state.feed_events);
     for _ in 0..5 {
-        state
-            .feed_events
-            .enqueue(&feed_path)
-            .await
-            .expect("enqueue feed event");
+        let feed_events = Arc::clone(&feed_events);
+        let feed_path = feed_path.clone();
+        event_write(&state, move |transaction| {
+            Box::pin(async move { feed_events.enqueue(transaction, &feed_path).await })
+        })
+        .await;
     }
 
     make_worker(&state, capture.clone()).tick().await;
@@ -182,18 +223,21 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
 
     let post = SeedRawPost::new(user.user_id).seed(&state).await;
 
-    state
-        .site_config
-        .set(SiteConfigKey::FeedsWebsubHubUrl, "https://hub.example.com/")
-        .await
-        .expect("set hub url");
+    crate::helpers::set_site_config(
+        &state,
+        SiteConfigKey::FeedsWebsubHubUrl,
+        "https://hub.example.com/",
+    )
+    .await
+    .expect("set hub url");
 
     let feed_path = fp(&format!("/~{}/feed.rss", user.username));
-    state
-        .feed_events
-        .enqueue(&feed_path)
-        .await
-        .expect("enqueue feed event");
+    let event_feed_path = feed_path.clone();
+    let feed_events = Arc::clone(&state.feed_events);
+    event_write(&state, move |transaction| {
+        Box::pin(async move { feed_events.enqueue(transaction, &event_feed_path).await })
+    })
+    .await;
 
     // Run the worker - ping will fail
     make_worker(&state, std::sync::Arc::new(FailingWebSubClient))
@@ -201,11 +245,15 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
         .await;
 
     // Immediately after failure, the event should NOT be claimable (scheduled for future retry)
-    let immediately_claimable = state
-        .feed_events
-        .claim_pending_batch(10, chrono::Duration::minutes(5))
-        .await
-        .expect("claim pending");
+    let feed_events = Arc::clone(&state.feed_events);
+    let immediately_claimable = event_write(&state, move |transaction| {
+        Box::pin(async move {
+            feed_events
+                .claim_pending_batch(transaction, 10, chrono::Duration::minutes(5))
+                .await
+        })
+    })
+    .await;
     assert!(
         immediately_claimable.is_empty(),
         "event should be scheduled for retry, not immediately claimable"
@@ -241,25 +289,23 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
 
     let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
     // A cached site feed generated at t0 (stale).
-    state
-        .feed_cache
-        .upsert(
-            FeedCacheRow::new(
-                fp("/feed.atom"),
-                SyndicationFeedRepresentation::try_from_stored(
-                    FeedFormat::Atom,
-                    FeedFormat::Atom.content_type(),
-                    "stale".to_string(),
-                )
-                .expect("matching stored representation metadata"),
-                parse_etag("\"etag\""),
-                UtcInstant::from(t0),
-                UtcInstant::from(t0),
+    upsert_cache(
+        &state,
+        FeedCacheRow::new(
+            fp("/feed.atom"),
+            SyndicationFeedRepresentation::try_from_stored(
+                FeedFormat::Atom,
+                FeedFormat::Atom.content_type(),
+                "stale".to_string(),
             )
-            .expect("matching cache row formats"),
+            .expect("matching stored representation metadata"),
+            parse_etag("\"etag\""),
+            UtcInstant::from(t0),
+            UtcInstant::from(t0),
         )
-        .await
-        .expect("seed cached feed");
+        .expect("matching cache row formats"),
+    )
+    .await;
 
     // A post that went live at t1 > t0 while the worker was "down".
     let t1 = t0 + Duration::hours(1);
@@ -275,11 +321,15 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
         .await
         .expect("go-live pass");
 
-    let pending = state
-        .feed_events
-        .claim_pending_batch(100, chrono::Duration::minutes(5))
-        .await
-        .expect("claim pending");
+    let feed_events = Arc::clone(&state.feed_events);
+    let pending = event_write(&state, move |transaction| {
+        Box::pin(async move {
+            feed_events
+                .claim_pending_batch(transaction, 100, chrono::Duration::minutes(5))
+                .await
+        })
+    })
+    .await;
     assert!(
         pending.iter().any(|r| r.feed_path == "/feed.atom"),
         "startup catch-up must enqueue the stale site feed: {:?}",
@@ -318,11 +368,15 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
         .await
         .expect("window pass");
 
-    let pending = state
-        .feed_events
-        .claim_pending_batch(100, chrono::Duration::minutes(5))
-        .await
-        .expect("claim pending");
+    let feed_events = Arc::clone(&state.feed_events);
+    let pending = event_write(&state, move |transaction| {
+        Box::pin(async move {
+            feed_events
+                .claim_pending_batch(transaction, 100, chrono::Duration::minutes(5))
+                .await
+        })
+    })
+    .await;
     let urls: Vec<&FeedPath> = pending.iter().map(|r| &r.feed_path).collect();
     assert!(
         urls.iter().any(|u| u.contains(&*user.username)),
@@ -344,36 +398,47 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
     let user = SeedUser::new().seed(&state).await;
     SeedRawPost::new(user.user_id).seed(&state).await;
 
-    state
-        .site_config
-        .set(SiteConfigKey::FeedsWebsubHubUrl, "https://hub.example.com/")
-        .await
-        .expect("set hub url");
+    crate::helpers::set_site_config(
+        &state,
+        SiteConfigKey::FeedsWebsubHubUrl,
+        "https://hub.example.com/",
+    )
+    .await
+    .expect("set hub url");
 
     let feed_path = fp(&format!("/~{}/feed.rss", user.username));
-    state
-        .feed_events
-        .enqueue(&feed_path)
-        .await
-        .expect("enqueue");
+    let feed_events = Arc::clone(&state.feed_events);
+    event_write(&state, move |transaction| {
+        Box::pin(async move { feed_events.enqueue(transaction, &feed_path).await })
+    })
+    .await;
 
     // Drive the attempt count up to the backoff-table length by repeatedly
     // claiming and re-queuing with a past retry time (so it stays claimable).
     // The next real ping failure then exceeds the table and exhausts the event.
     let past = UtcInstant::from(Utc::now() - chrono::Duration::hours(1));
+    let feed_events = Arc::clone(&state.feed_events);
     for _ in 0..6 {
-        let claimed = state
-            .feed_events
-            .claim_pending_batch(10, chrono::Duration::minutes(5))
-            .await
-            .expect("claim pending");
+        let claim_events = Arc::clone(&feed_events);
+        let claimed = event_write(&state, move |transaction| {
+            Box::pin(async move {
+                claim_events
+                    .claim_pending_batch(transaction, 10, chrono::Duration::minutes(5))
+                    .await
+            })
+        })
+        .await;
         let ids: Vec<FeedEventId> = claimed.iter().map(|r| r.id).collect();
         assert!(!ids.is_empty(), "event should be claimable while seeding");
-        state
-            .feed_events
-            .mark_failed(&ids, "seed", past)
-            .await
-            .expect("mark failed");
+        let mark_failed_events = Arc::clone(&feed_events);
+        event_write(&state, move |transaction| {
+            Box::pin(async move {
+                mark_failed_events
+                    .mark_failed(transaction, &ids, "seed", past)
+                    .await
+            })
+        })
+        .await;
     }
 
     make_worker(&state, std::sync::Arc::new(FailingWebSubClient))
@@ -382,11 +447,15 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
 
     // Exhausted events move to a terminal status and are no longer claimable,
     // even with a fully-elapsed retry window.
-    let claimable = state
-        .feed_events
-        .claim_pending_batch(10, chrono::Duration::minutes(5))
-        .await
-        .expect("claim pending");
+    let feed_events = Arc::clone(&state.feed_events);
+    let claimable = event_write(&state, move |transaction| {
+        Box::pin(async move {
+            feed_events
+                .claim_pending_batch(transaction, 10, chrono::Duration::minutes(5))
+                .await
+        })
+    })
+    .await;
     assert!(
         claimable.is_empty(),
         "exhausted event should not be claimable"

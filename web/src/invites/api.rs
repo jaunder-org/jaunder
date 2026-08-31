@@ -4,21 +4,20 @@
 #[cfg(feature = "server")]
 use {
     crate::auth,
-    crate::error::InternalError,
+    crate::error::{InternalError, from_write_scope_error as map_write_scope_error},
     crate::mail,
     chrono::Utc,
     common::mailer::{EmailMessage, MailSender},
     common::tagged_url::{self, MailConfirmUrl},
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{InviteStorage, RegistrationPolicy, SiteConfigStorage},
+    storage::{InviteStorage, RegistrationPolicy, SiteConfigStorage, WriteScope},
 };
 
 use crate::error::WebResult;
-use common::email::Email;
-use common::ids::UserId;
-use common::invite::InviteTtlHours;
-use common::time::UtcInstant;
+use common::{
+    MutationOutcome, email::Email, ids::UserId, invite::InviteTtlHours, time::UtcInstant,
+};
 use serde::{Deserialize, Serialize};
 
 /// Invite metadata returned by [`list`].
@@ -45,12 +44,13 @@ pub struct CreateInviteRequest {
 /// authentication. The code is never returned to the client (#400) — it is delivered
 /// only as the link in the email (mirrors `password_reset::request`).
 #[macros::server(skip_all)]
-pub async fn create(request: CreateInviteRequest) -> WebResult<()> {
+pub async fn create(request: CreateInviteRequest) -> WebResult<MutationOutcome<()>> {
     let CreateInviteRequest {
         expires_in_hours,
         recipient_email,
     } = request;
     let _auth = auth::require_auth().await?;
+    let write_scope = expect_context::<WriteScope>();
     let invites = expect_context::<Arc<dyn InviteStorage>>();
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     let mailer = expect_context::<Arc<dyn MailSender>>();
@@ -67,17 +67,23 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<()> {
     let hours = expires_in_hours.unwrap_or_default().value();
     let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(hours));
 
-    let code = invites
-        .create_invite(expires_at)
+    let outcome = write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                invites
+                    .create_invite(transaction, expires_at)
+                    .await
+                    .map_err(InternalError::storage)
+            })
+        })
         .await
-        .map_err(InternalError::storage)?;
-    host::metrics::invite(host::metrics::InviteEvent::Created);
+        .map_err(map_write_scope_error)?;
 
     // Deliberate egress of the secret via `AsRef` (InviteCode has no Display/serde).
     // Compose base + `/register` (correct slash boundary) then append the code as a
     // raw query param, preserving its exact spelling.
     let register_url: MailConfirmUrl = tagged_url::compose(&base_url, "/register");
-    let link = format!("{register_url}?invite_code={}", code.as_ref());
+    let link = format!("{register_url}?invite_code={}", outcome.value().as_ref());
     let message = EmailMessage {
         from: None,
         to: vec![recipient_email],
@@ -87,7 +93,10 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<()> {
         ),
     };
     mail::send_recording_metrics(&*mailer, &message, host::metrics::EmailKind::Invite).await?;
-    Ok(())
+    if matches!(&outcome, MutationOutcome::Confirmed(_)) {
+        host::metrics::invite(host::metrics::InviteEvent::Created);
+    }
+    Ok(outcome.map(|_| ()))
 }
 
 /// Returns invite metadata (never the raw codes). Requires `invite_only` registration

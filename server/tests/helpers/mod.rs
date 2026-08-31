@@ -12,6 +12,7 @@ mod atompub;
 mod http;
 mod registrar;
 mod session;
+mod site_config;
 mod websub_capturing;
 
 // Three items are deliberately absent from the re-export lists below —
@@ -26,8 +27,8 @@ pub use atompub::{
     atompub_put_xml, atompub_upload, atompub_xml,
 };
 pub use http::{
-    ForeignReferenceResolver, MultipartFile, TestHttpResponse, body_string, get_asset, make_app,
-    make_app_with_media_ownership_resolver, post_form, post_form_with_bearer,
+    ForeignReferenceResolver, MultipartFile, TestHttpResponse, body_string, confirmed_mutation,
+    get_asset, make_app, make_app_with_media_ownership_resolver, post_form, post_form_with_bearer,
     post_form_with_credentials, post_form_with_mailer, post_form_with_secure_flag, post_json,
     post_json_with_credentials, post_multipart, post_server_fn, post_server_fn_request_fixture,
     post_server_fn_request_fixture_with_mailer, post_server_fn_request_fixture_with_secure_flag,
@@ -40,5 +41,6 @@ pub use session::{
     create_session_for, create_user_and_session, session_cookie, setup_with_base_url,
     tmp_storage_path, token_from_set_cookie,
 };
+pub use site_config::{delete_site_config, set_site_config};
 // The capturing WebSub client used by `feed_worker.rs`.
 pub use websub_capturing::CapturingWebSubClient;

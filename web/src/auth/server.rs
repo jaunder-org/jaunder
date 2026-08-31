@@ -16,7 +16,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use storage::{SessionStorage, UserStorage};
+use storage::{SessionStorage, UserStorage, WriteScope, WriteScopeError};
 
 // `CookieSettings` lives in `host` (pure config data); re-exported so the
 // `web::auth::CookieSettings` path (the `server` crate provides it into leptos
@@ -56,6 +56,7 @@ pub enum Rejection {
     MissingToken,
     InvalidAuthorization,
     MissingSessionStorage,
+    MissingWriteScope,
     Session {
         transport: CredentialTransport,
         error: storage::SessionAuthError,
@@ -67,6 +68,7 @@ impl IntoResponse for Rejection {
     fn into_response(self) -> Response {
         match self {
             Rejection::MissingSessionStorage
+            | Rejection::MissingWriteScope
             | Rejection::Session {
                 error: storage::SessionAuthError::Internal(_),
                 ..
@@ -104,28 +106,45 @@ where
             .extensions
             .get::<Arc<dyn SessionStorage>>()
             .ok_or(Rejection::MissingSessionStorage)?;
+        let write_scope = parts
+            .extensions
+            .get::<WriteScope>()
+            .ok_or(Rejection::MissingWriteScope)?;
+        let token = credential.token.clone();
 
-        match sessions.authenticate(&credential.token).await {
-            Ok(record) => {
-                metrics::session_validation(metrics::SessionOutcome::Ok);
-                verify_basic_username(&record.username, credential.expected_username.as_ref())?;
-                if session_cookie_present
-                    && transport != CredentialTransport::Cookie
-                    && let Some(retirement) = retire_cookie
-                {
-                    retirement.request();
-                }
-                Ok(User {
-                    user_id: record.user_id,
-                    username: record.username,
-                    token_hash: record.token_hash,
-                })
-            }
-            Err(error) => {
+        let record = match write_scope
+            .run(move |transaction| {
+                let sessions = sessions.clone();
+                let token = token.clone();
+                Box::pin(async move { sessions.authenticate(transaction, &token).await })
+            })
+            .await
+        {
+            Ok(outcome) => outcome.value().clone(),
+            Err(WriteScopeError::Operation(error)) => {
                 metrics::session_validation(storage::session_outcome(&error));
-                Err(Rejection::Session { transport, error })
+                return Err(Rejection::Session { transport, error });
             }
+            Err(WriteScopeError::Begin(error)) => {
+                return Err(Rejection::Session {
+                    transport,
+                    error: storage::SessionAuthError::Internal(error),
+                });
+            }
+        };
+        metrics::session_validation(metrics::SessionOutcome::Ok);
+        verify_basic_username(&record.username, credential.expected_username.as_ref())?;
+        if session_cookie_present
+            && transport != CredentialTransport::Cookie
+            && let Some(retirement) = retire_cookie
+        {
+            retirement.request();
         }
+        Ok(User {
+            user_id: record.user_id,
+            username: record.username,
+            token_hash: record.token_hash,
+        })
     }
 }
 
@@ -236,6 +255,7 @@ pub(crate) fn auth_rejection_error(error: Rejection) -> InternalError {
         Rejection::MissingSessionStorage => {
             InternalError::server_message("missing SessionStorage context")
         }
+        Rejection::MissingWriteScope => InternalError::server_message("missing WriteScope context"),
         Rejection::BasicUsernameMismatch => {
             InternalError::unauthorized("basic auth username mismatch")
         }
@@ -421,6 +441,12 @@ mod tests {
         let missing_state = auth_rejection_error(Rejection::MissingSessionStorage);
         assert!(matches!(
             crate::error::project(missing_state.kind(), missing_state.public_message()),
+            crate::error::WebError::Server { .. }
+        ));
+
+        let missing_scope = auth_rejection_error(Rejection::MissingWriteScope);
+        assert!(matches!(
+            crate::error::project(missing_scope.kind(), missing_scope.public_message()),
             crate::error::WebError::Server { .. }
         ));
 

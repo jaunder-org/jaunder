@@ -40,7 +40,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 common = { workspace = true, features = ["test-support", "test-utils"] }
 host = { path = "../host", features = ["test-utils"] }
-storage = { workspace = true, features = ["test-utils"] }
+storage = { workspace = true, features = ["test-support", "test-utils"] }
 # Decodes the profile default-format ActionForm's `format=<token>` body the same
 # way server_fn's default Url codec does, so the wire-reject test exercises the
 # real path. Version-matched to the leptos-transitive vendor to avoid a rebuild.

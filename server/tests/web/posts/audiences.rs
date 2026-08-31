@@ -8,7 +8,7 @@ use web::posts::SavedPost;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_user_and_session, post_form, post_json};
+use crate::helpers::{confirmed_mutation, create_user_and_session, post_form, post_json};
 use storage::test_support::{Backend, TestEnv, backends};
 
 use super::fixtures::create_post_json;
@@ -71,7 +71,7 @@ async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Ba
     let (status, body) =
         create_post_json(&state, "Hello", "markdown", None, true, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
 
     let (status, body) = post_form(
         &state,
@@ -123,7 +123,7 @@ async fn post_audience_selection_rejects_non_owner(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
 
     // A different user must not learn another author's targeting.
     let (status, body) = post_form(

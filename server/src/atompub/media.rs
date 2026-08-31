@@ -1,6 +1,5 @@
 //! `AtomPub` media collection upload/fetch/delete handlers.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Extension;
@@ -17,8 +16,8 @@ use common::tagged_url::{self, BaseUrl, EditMediaUriUrl, EditUriUrl};
 use common::username::Username;
 use host::atompub::{self, MediaLinkEntry};
 use storage::{
-    InstanceId, MediaManager, MediaRecord, MediaReferenceOwnershipResolver, MediaStorage,
-    PostStorage, SiteConfigStorage,
+    InstanceId, MediaContentLocks, MediaManager, MediaRecord, MediaReferenceOwnershipResolver,
+    MediaStorage, PostStorage, SiteConfigStorage, WriteScope,
 };
 use web::auth;
 
@@ -30,9 +29,17 @@ type MemberDeleteExtensions = (
     Extension<Arc<dyn MediaStorage>>,
     Extension<Arc<dyn PostStorage>>,
     Extension<Arc<dyn SiteConfigStorage>>,
-    Extension<Arc<PathBuf>>,
+    Extension<Arc<MediaContentLocks>>,
     Extension<InstanceId>,
     Extension<Arc<dyn MediaReferenceOwnershipResolver>>,
+    Extension<WriteScope>,
+);
+
+type CollectionPostExtensions = (
+    Extension<Arc<dyn MediaStorage>>,
+    Extension<Arc<dyn SiteConfigStorage>>,
+    Extension<Arc<MediaContentLocks>>,
+    Extension<WriteScope>,
 );
 
 /// Builds the media-link entry for a stored media record.
@@ -85,9 +92,12 @@ fn media_link_entry(record: &MediaRecord, base: &BaseUrl, username: &Username) -
 /// `403` wrong user; `4xx`/`5xx` from the upload pipeline; `500` on storage failure.
 #[tracing::instrument(name = "atompub.media.collection_post", skip_all)]
 pub async fn collection_post(
-    Extension(media): Extension<Arc<dyn MediaStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
-    Extension(storage_path): Extension<Arc<PathBuf>>,
+    (
+        Extension(media),
+        Extension(site_config),
+        Extension(content_locks),
+        Extension(write_scope),
+    ): CollectionPostExtensions,
     auth_user: auth::User,
     Path(username): Path<Username>,
     headers: HeaderMap,
@@ -123,10 +133,20 @@ pub async fn collection_post(
         .await?
         .is_some();
 
-    let manager = storage::MediaManager::new(media.clone(), site_config.clone(), storage_path);
-    let upload = manager
-        .upload_bytes(auth_user.user_id, &filename, content_type, &body)
-        .await?;
+    let manager = storage::MediaManager::new(
+        media.clone(),
+        site_config.clone(),
+        write_scope,
+        content_locks,
+    );
+    let upload = match super::mutation::confirmed_or_accepted(
+        manager
+            .upload_bytes(auth_user.user_id, &filename, content_type, &body)
+            .await?,
+    ) {
+        Ok(upload) => upload,
+        Err(status) => return Ok(status.into_response()),
+    };
 
     let record = media
         .get_media(
@@ -232,9 +252,10 @@ pub(super) async fn member_delete(
         Extension(media),
         Extension(posts),
         Extension(site_config),
-        Extension(storage_path),
+        Extension(content_locks),
         Extension(instance_id),
         Extension(resolver),
+        Extension(write_scope),
     ): MemberDeleteExtensions,
     auth_user: auth::User,
     Path(address): Path<MediaMemberAddress>,
@@ -266,11 +287,16 @@ pub(super) async fn member_delete(
         identity.base_url.as_ref(),
     )
     .await;
-    let manager = MediaManager::new(media, site_config, storage_path);
-    let outcome = manager
-        .delete_media(auth_user.user_id, &media_ref, &instance_id, &evidence, true)
-        .await
-        .map_err(map_delete_error)?;
+    let manager = MediaManager::new(media, site_config, write_scope, content_locks);
+    let outcome = match super::mutation::confirmed_or_accepted(
+        manager
+            .delete_media(auth_user.user_id, &media_ref, &instance_id, &evidence, true)
+            .await
+            .map_err(map_delete_error)?,
+    ) {
+        Ok(outcome) => outcome,
+        Err(status) => return Ok(status.into_response()),
+    };
     if outcome == storage::TryDeleteOutcome::RefusedReferenced {
         return Err(StatusCode::CONFLICT.into());
     }

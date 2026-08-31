@@ -10,6 +10,7 @@ use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
 
 use common::{
+    MutationOutcome,
     ids::{PostId, RevisionId},
     pagination::PageSize,
     post_body::PostBody,
@@ -21,6 +22,7 @@ use common::{
     slug::Slug,
     tag::TagLabel,
     time::{PermalinkDate, UtcInstant},
+    trace_field::TraceField,
     username::Username,
     visibility::AudienceSelection,
 };
@@ -28,7 +30,6 @@ use common::{
 use common::seed::{AuthoredPost, Page, PageCursor};
 
 use crate::error::WebResult;
-use common::trace_field::TraceField;
 
 // The audience-picker DTO and its converters live in `common::visibility` (beside
 // `AudienceBase`/`AudienceTarget`); the server fn bodies below use these two to
@@ -44,20 +45,25 @@ use common::visibility::{self, AudienceTarget};
 #[cfg(feature = "server")]
 use {
     super::server,
-    crate::{auth, error::InternalError, feed_events, viewer},
+    crate::{
+        auth,
+        error::{InternalError, from_write_scope_error},
+        viewer,
+    },
     common::{
         org::{
             self, OrgNormalization, OrgOperation, OrgStructuredMetadata, Presence, PublicationState,
         },
         tag::{self, Tag},
     },
-    host::metrics,
+    host::{feed, metrics},
     leptos::prelude::*,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
-        self, AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, PerformUpdateError,
-        PostBookkeepingExpectation, PostCreation, PostLifecycle, PostRecord, PostRevisionDetail,
-        PostRevisionMetadata, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
+        self, AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MediaContentLocks,
+        PerformUpdateError, PostBookkeepingExpectation, PostCreation, PostLifecycle, PostRecord,
+        PostRevisionDetail, PostRevisionMetadata, PostStorage, PostUpdate, PublishUpdate,
+        SiteConfigStorage, WriteScope,
     },
 };
 
@@ -453,7 +459,7 @@ pub struct PostInputs {
 /// server and the wasm client). The browser converts the author's local
 /// `datetime-local` value to UTC before sending.
 #[macros::server(input = Json, skip_all)]
-pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
+pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<SavedPost>> {
     let request_clock = UtcInstant::now();
     let PostInputs {
         body,
@@ -543,8 +549,14 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
         )
     };
 
-    let record = storage::perform_post_creation(
-        posts.as_ref(),
+    let write_scope = expect_context::<WriteScope>();
+    let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+    let content_locks = expect_context::<Arc<MediaContentLocks>>();
+    let outcome = storage::perform_post_creation(
+        &write_scope,
+        content_locks.as_ref(),
+        Arc::clone(&posts),
+        Arc::clone(&feed_events),
         PostCreation {
             user_id: auth.user_id,
             body,
@@ -556,34 +568,22 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
             summary,
             audiences,
             idempotency_key: None,
-            tags: validated_tags.clone(),
+            tags: validated_tags,
             expectations,
         },
     )
     .await?;
 
-    let published_at = record.published_at;
-    // The canonical permalink is always available — for a draft it is the
-    // created_at-based URL the permalink view renders for the author.
-    let permalink = record.permalink();
-
-    let created = SavedPost {
+    let outcome = outcome.map(|record| SavedPost {
         post_id: record.post_id,
-        slug: record.slug,
-        published_at,
-        permalink,
-    };
-
-    let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-    // Slugs are known without a read-back: set_post_tags stores exactly
-    // TagLabel::slug() for each desired label (#771).
-    let tag_slugs: BTreeSet<Tag> = validated_tags.iter().map(TagLabel::slug).collect();
-    feed_events::enqueue_feed_events(feed_events.as_ref(), &auth.username, &tag_slugs)
-        .await
-        .map_err(InternalError::storage)?;
-
-    metrics::post(metrics::PostEvent::Created);
-    Ok(created)
+        slug: record.slug.clone(),
+        published_at: record.published_at,
+        permalink: record.permalink(),
+    });
+    if matches!(&outcome, MutationOutcome::Confirmed(_)) {
+        metrics::post(metrics::PostEvent::Created);
+    }
+    Ok(outcome)
 }
 
 /// Retrieves a post by its permalink.
@@ -652,7 +652,7 @@ pub async fn get_preview(post_id: PostId) -> WebResult<EditPostPreview> {
 /// `publish_at` is an optional UTC instant from the editor's datetime control.
 /// See `create` for why it crosses the boundary as a [`UtcInstant`].
 #[macros::server(input = Json, skip_all)]
-pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
+pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutcome<SavedPost>> {
     let request_clock = UtcInstant::now();
     let PostInputs {
         body,
@@ -670,10 +670,6 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
     let old = posts
         .get_post_by_id(post_id, &viewer::viewer_identity().await?)
         .await?;
-    let old_tag_slugs: BTreeSet<Tag> = old
-        .as_ref()
-        .map(|p| p.tags.iter().map(|t| t.tag_slug.clone()).collect())
-        .unwrap_or_default();
     let old_tags: Vec<TagLabel> = old
         .as_ref()
         .map(|post| {
@@ -682,6 +678,10 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
                 .map(|tag| tag.tag_display.clone())
                 .collect()
         })
+        .unwrap_or_default();
+    let old_tag_slugs: Vec<Tag> = old
+        .as_ref()
+        .map(|post| post.tags.iter().map(|tag| tag.tag_slug.clone()).collect())
         .unwrap_or_default();
 
     // Validate tags up-front so a malformed input rejects before any post
@@ -757,8 +757,14 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
     };
     let new_tags = new_tags.unwrap_or(old_tags);
 
-    let record = storage::perform_post_update(
-        posts.as_ref(),
+    let write_scope = expect_context::<WriteScope>();
+    let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+    let content_locks = expect_context::<Arc<MediaContentLocks>>();
+    let outcome = storage::perform_post_update(
+        &write_scope,
+        content_locks.as_ref(),
+        Arc::clone(&posts),
+        Arc::clone(&feed_events),
         PostUpdate {
             post_id,
             editor_user_id: auth.user_id,
@@ -769,7 +775,8 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
             publish,
             summary,
             audiences,
-            tags: new_tags.clone(),
+            tags: new_tags,
+            previous_tag_slugs: old_tag_slugs,
             request_clock,
             expectations,
         },
@@ -779,25 +786,16 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
         PerformUpdateError::StaleContent => InternalError::conflict(error.to_string()),
         error => error.into(),
     })?;
-    let mut all_tag_slugs = old_tag_slugs;
-    all_tag_slugs.extend(new_tags.iter().map(TagLabel::slug));
-
-    let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-    feed_events::enqueue_feed_events(feed_events.as_ref(), &auth.username, &all_tag_slugs)
-        .await
-        .map_err(InternalError::storage)?;
-
-    let published_at = record.published_at;
-    // The canonical permalink is always available (created_at-based for a draft).
-    let permalink = record.permalink();
-
-    metrics::post(metrics::PostEvent::Updated);
-    Ok(SavedPost {
+    let outcome = outcome.map(|record| SavedPost {
         post_id,
-        slug: record.slug,
-        published_at,
-        permalink,
-    })
+        slug: record.slug.clone(),
+        published_at: record.published_at,
+        permalink: record.permalink(),
+    });
+    if matches!(&outcome, MutationOutcome::Confirmed(_)) {
+        metrics::post(metrics::PostEvent::Updated);
+    }
+    Ok(outcome)
 }
 
 /// Returns the audience-picker selection for a new post: the site-wide
@@ -923,87 +921,133 @@ pub async fn list_scheduled(
 
 /// Publishes an existing draft owned by the authenticated user.
 #[macros::server]
-pub async fn publish(post_id: PostId) -> WebResult<SavedPost> {
+pub async fn publish(post_id: PostId) -> WebResult<MutationOutcome<SavedPost>> {
     let auth = auth::require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
-
-    // Publication is one timestamp, not an edit: `publish_post` applies the
-    // ownership and soft-delete guard itself and rewrites nothing else, so the
-    // post's body, rendered HTML, audience targeting and media rows all survive
-    // (#711).
-    let updated = posts.publish_post(post_id, auth.user_id).await?;
-
-    let published_at = updated
-        .published_at
-        .ok_or_else(|| InternalError::not_found("Post"))?;
-
-    let tag_slugs: BTreeSet<Tag> = updated.tags.iter().map(|t| t.tag_slug.clone()).collect();
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-    feed_events::enqueue_feed_events(feed_events.as_ref(), &updated.author_username, &tag_slugs)
+    let write_scope = expect_context::<WriteScope>();
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                let updated = posts
+                    .publish_post(transaction, post_id, auth.user_id)
+                    .await
+                    .map_err(|error| InternalError::from(PerformUpdateError::from(error)))?;
+                if updated.published_at.is_none() {
+                    return Err(InternalError::not_found("Post"));
+                }
+                let tag_slugs: BTreeSet<Tag> = updated
+                    .tags
+                    .iter()
+                    .map(|tag| tag.tag_slug.clone())
+                    .collect();
+                feed_events
+                    .enqueue_many(
+                        transaction,
+                        &feed::affected_feed_urls(&updated.author_username, &tag_slugs),
+                    )
+                    .await
+                    .map_err(InternalError::storage)?;
+                Ok(updated)
+            })
+        })
         .await
-        .map_err(InternalError::storage)?;
-
-    metrics::post(metrics::PostEvent::Published);
-    Ok(SavedPost {
-        post_id: updated.post_id,
-        slug: updated.slug.clone(),
-        published_at: Some(published_at),
-        permalink: updated.permalink(),
-    })
-}
-
-/// Soft-deletes a post owned by the authenticated user.
-#[macros::server]
-pub async fn delete(post_id: PostId) -> WebResult<()> {
-    let auth = auth::require_auth().await?;
-    let posts = expect_context::<Arc<dyn PostStorage>>();
-
-    let existing = posts
-        .get_post_by_id(post_id, &viewer::viewer_identity().await?)
-        .await?
-        .ok_or_else(|| InternalError::not_found("Post"))?;
-
-    if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
-        return Err(InternalError::not_found("Post"));
-    }
-
-    posts.soft_delete_post(post_id, auth.user_id).await?;
-
-    if existing.published_at.is_some() {
-        let tag_slugs: BTreeSet<Tag> = existing.tags.iter().map(|t| t.tag_slug.clone()).collect();
-        let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-        feed_events::enqueue_feed_events(
-            feed_events.as_ref(),
-            &existing.author_username,
-            &tag_slugs,
-        )
-        .await
-        .map_err(InternalError::storage)?;
-    }
-
-    metrics::post(metrics::PostEvent::Deleted);
-    Ok(())
-}
-
-/// Reverts a published post owned by the authenticated user back to draft status.
-#[macros::server]
-pub async fn unpublish(post_id: PostId) -> WebResult<SavedPost> {
-    let auth = auth::require_auth().await?;
-    let posts = expect_context::<Arc<dyn PostStorage>>();
-    let updated = posts.unpublish_post(post_id, auth.user_id).await?;
-
-    let tag_slugs: BTreeSet<Tag> = updated.tags.iter().map(|t| t.tag_slug.clone()).collect();
-    let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-    feed_events::enqueue_feed_events(feed_events.as_ref(), &updated.author_username, &tag_slugs)
-        .await
-        .map_err(InternalError::storage)?;
-
-    Ok(SavedPost {
+        .map_err(from_write_scope_error)?;
+    let outcome = outcome.map(|updated| SavedPost {
         post_id: updated.post_id,
         slug: updated.slug.clone(),
         published_at: updated.published_at,
         permalink: updated.permalink(),
-    })
+    });
+    if matches!(&outcome, MutationOutcome::Confirmed(_)) {
+        metrics::post(metrics::PostEvent::Published);
+    }
+    Ok(outcome)
+}
+
+/// Soft-deletes a post owned by the authenticated user.
+#[macros::server]
+pub async fn delete(post_id: PostId) -> WebResult<MutationOutcome<()>> {
+    let auth = auth::require_auth().await?;
+    let posts = expect_context::<Arc<dyn PostStorage>>();
+    let existing = posts
+        .get_post_by_id(post_id, &viewer::viewer_identity().await?)
+        .await?
+        .ok_or_else(|| InternalError::not_found("Post"))?;
+    if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
+        return Err(InternalError::not_found("Post"));
+    }
+    let feed_paths = existing.published_at.map(|_| {
+        let tag_slugs: BTreeSet<Tag> = existing
+            .tags
+            .iter()
+            .map(|tag| tag.tag_slug.clone())
+            .collect();
+        feed::affected_feed_urls(&existing.author_username, &tag_slugs)
+    });
+    let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+    let write_scope = expect_context::<WriteScope>();
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                posts
+                    .soft_delete_post(transaction, post_id, auth.user_id)
+                    .await
+                    .map_err(|error| InternalError::from(PerformUpdateError::from(error)))?;
+                if let Some(feed_paths) = feed_paths {
+                    feed_events
+                        .enqueue_many(transaction, &feed_paths)
+                        .await
+                        .map_err(InternalError::storage)?;
+                }
+                Ok(())
+            })
+        })
+        .await
+        .map_err(from_write_scope_error)?;
+    if matches!(outcome, MutationOutcome::Confirmed(())) {
+        metrics::post(metrics::PostEvent::Deleted);
+    }
+    Ok(outcome)
+}
+
+/// Reverts a published post owned by the authenticated user back to draft status.
+#[macros::server]
+pub async fn unpublish(post_id: PostId) -> WebResult<MutationOutcome<SavedPost>> {
+    let auth = auth::require_auth().await?;
+    let posts = expect_context::<Arc<dyn PostStorage>>();
+    let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+    let write_scope = expect_context::<WriteScope>();
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                let updated = posts
+                    .unpublish_post(transaction, post_id, auth.user_id)
+                    .await
+                    .map_err(|error| InternalError::from(PerformUpdateError::from(error)))?;
+                let tag_slugs: BTreeSet<Tag> = updated
+                    .tags
+                    .iter()
+                    .map(|tag| tag.tag_slug.clone())
+                    .collect();
+                feed_events
+                    .enqueue_many(
+                        transaction,
+                        &feed::affected_feed_urls(&updated.author_username, &tag_slugs),
+                    )
+                    .await
+                    .map_err(InternalError::storage)?;
+                Ok(updated)
+            })
+        })
+        .await
+        .map_err(from_write_scope_error)?;
+    Ok(outcome.map(|updated| SavedPost {
+        post_id: updated.post_id,
+        slug: updated.slug.clone(),
+        published_at: updated.published_at,
+        permalink: updated.permalink(),
+    }))
 }
 
 #[cfg(test)]
@@ -1263,20 +1307,24 @@ mod server_tests {
     };
     use crate::error::WebError;
     use crate::test_support::auth_parts;
-    use common::ids::{PostId, UserId};
     use common::pagination::PageSize;
     use common::revision_history::{RevisionHistoryAudience, RevisionHistoryTag};
     use common::slug::Slug;
     use common::tag::TagLabel;
     use common::test_support::{parse_post_body, parse_tag_label, parse_username};
     use common::time::UtcInstant;
+    use common::{
+        MutationOutcome,
+        ids::{PostId, UserId},
+    };
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
     use storage::{
-        AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MockAudienceStorage,
-        MockFeedEventStorage, MockPostStorage, PostFormat, PostRecord, PostRevisionMetadata,
-        PostRevisionPage, PostStorage, UpdatePostError,
+        AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MediaContentLocks,
+        MockAudienceStorage, MockFeedEventStorage, MockPostStorage, PostFormat, PostRecord,
+        PostRevisionMetadata, PostRevisionPage, PostStorage, UpdatePostError,
+        test_support::{fixture_media_content_locks, mock_write_scope},
     };
     fn owned_post(user_id: UserId) -> PostRecord {
         let now = UtcInstant::now();
@@ -1308,8 +1356,14 @@ mod server_tests {
         let mut posts = MockPostStorage::new();
         posts
             .expect_publish_post()
-            .returning(move |_id, _user| outcome());
+            .returning(move |_transaction, _id, _user| outcome());
         provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
+        provide_context(mock_write_scope());
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_enqueue_many()
+            .returning(|_transaction, _paths| Ok(()));
+        provide_context(Arc::new(events) as Arc<dyn FeedEventStorage>);
         owner
     }
 
@@ -1608,8 +1662,12 @@ mod server_tests {
         provide_context(auth_parts(UserId::from(1), "alice"));
         provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
         provide_context(Arc::new(MockAudienceStorage::new()) as Arc<dyn AudienceStorage>);
+        provide_context(mock_write_scope());
+        provide_context(Arc::new(fixture_media_content_locks()) as Arc<MediaContentLocks>);
         let mut events = MockFeedEventStorage::new();
-        events.expect_enqueue_many().returning(|_| Ok(()));
+        events
+            .expect_enqueue_many()
+            .returning(|_transaction, _paths| Ok(()));
         provide_context(Arc::new(events) as Arc<dyn FeedEventStorage>);
         owner
     }
@@ -1623,15 +1681,17 @@ mod server_tests {
         posts
             .expect_unpublish_post()
             .times(1)
-            .withf(|post_id, user_id| *post_id == PostId::from(1) && *user_id == UserId::from(1))
-            .returning(move |_post_id, _user_id| Ok(returned.clone()));
+            .withf(|_transaction, post_id, user_id| {
+                *post_id == PostId::from(1) && *user_id == UserId::from(1)
+            })
+            .returning(move |_transaction, _post_id, _user_id| Ok(returned.clone()));
         let owner = mutation_owner(posts);
 
         let saved = unpublish(PostId::from(1)).await;
         drop(owner);
         assert!(matches!(
             saved,
-            Ok(saved)
+            Ok(MutationOutcome::Confirmed(saved))
                 if saved.post_id == PostId::from(1)
                     && saved.published_at.is_none()
                     && saved.permalink == expected_permalink
@@ -1818,14 +1878,11 @@ mod server_tests {
     }
     #[tokio::test]
     async fn unpublish_masks_storage_unauthorized_as_not_found() {
-        let owner = Owner::new();
-        owner.set();
-        provide_context(auth_parts(UserId::from(1), "alice"));
         let mut posts = MockPostStorage::new();
         posts
             .expect_unpublish_post()
-            .returning(|_post_id, _user_id| Err(UpdatePostError::Unauthorized));
-        provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
+            .returning(|_transaction, _post_id, _user_id| Err(UpdatePostError::Unauthorized));
+        let owner = mutation_owner(posts);
 
         let result = unpublish(PostId::from(1)).await;
         drop(owner);
@@ -1855,11 +1912,8 @@ mod server_tests {
         let mut posts = MockPostStorage::new();
         posts
             .expect_create_post()
-            .withf(|input| input.tags.len() == 2)
-            .returning(|_input| Ok(PostId::from(1)));
-        posts
-            .expect_get_post_by_id()
-            .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
+            .withf(|_transaction, input| input.tags.len() == 2)
+            .returning(|_transaction, _input| Ok(owned_post(UserId::from(1))));
         let owner = mutation_owner(posts);
         let result = create(post_inputs(Some(vec![
             parse_tag_label("rust"),
@@ -1879,8 +1933,8 @@ mod server_tests {
             .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
         posts
             .expect_update_post()
-            .withf(|_id, _user, input| input.tags.len() == 2)
-            .returning(|_id, _user, _input| Ok(owned_post(UserId::from(1))));
+            .withf(|_transaction, _id, _user, input| input.tags.len() == 2)
+            .returning(|_transaction, _id, _user, _input| Ok(owned_post(UserId::from(1))));
         let owner = mutation_owner(posts);
         let result = update(
             PostId::from(1),
@@ -1901,8 +1955,8 @@ mod server_tests {
             .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
         posts
             .expect_update_post()
-            .withf(|_id, _user, input| input.tags.is_empty())
-            .returning(|_id, _user, _input| Ok(owned_post(UserId::from(1))));
+            .withf(|_transaction, _id, _user, input| input.tags.is_empty())
+            .returning(|_transaction, _id, _user, _input| Ok(owned_post(UserId::from(1))));
 
         let owner = mutation_owner(posts);
         let result = update(PostId::from(1), post_inputs(None)).await;
@@ -1921,11 +1975,11 @@ mod server_tests {
             .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
         posts
             .expect_update_post()
-            .withf(|_id, _user, input| {
+            .withf(|_transaction, _id, _user, input| {
                 input.summary.as_deref() == Some("structured summary")
                     && input.audiences == [AudienceTarget::Subscribers]
             })
-            .returning(|_id, _user, _input| Ok(owned_post(UserId::from(1))));
+            .returning(|_transaction, _id, _user, _input| Ok(owned_post(UserId::from(1))));
         let owner = mutation_owner(posts);
         let result = update(
             PostId::from(1),
@@ -1957,7 +2011,7 @@ mod server_tests {
             .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
         posts
             .expect_update_post()
-            .returning(|_id, _user, _input| Err(UpdatePostError::StaleContent));
+            .returning(|_transaction, _id, _user, _input| Err(UpdatePostError::StaleContent));
         let owner = mutation_owner(posts);
         let result = update(
             PostId::from(1),

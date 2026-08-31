@@ -14,15 +14,16 @@ use super::{
 };
 use crate::backup::CatalogTableName;
 use crate::sql::Exists;
-use crate::{instance_identity, posts};
+use crate::{WriteScope, instance_identity, posts};
 
 fn make_postgres_app_state(pool: PgPool) -> Arc<crate::AppState> {
+    let users: Arc<dyn crate::UserStorage> = Arc::new(PostgresUserStorage::new(pool.clone()));
     Arc::new(crate::AppState {
         site_config: Arc::new(PostgresSiteConfigStorage::new(pool.clone())),
-        users: Arc::new(PostgresUserStorage::new(pool.clone())),
+        users: Arc::clone(&users),
         sessions: Arc::new(PostgresSessionStorage::new(pool.clone())),
         invites: Arc::new(PostgresInviteStorage::new(pool.clone())),
-        atomic: Arc::new(PostgresAtomicOps::new(pool.clone())),
+        atomic: Arc::new(PostgresAtomicOps::new(users)),
         email_verifications: Arc::new(PostgresEmailVerificationStorage::new(pool.clone())),
         password_resets: Arc::new(PostgresPasswordResetStorage::new(pool.clone())),
         posts: Arc::new(PostgresPostStorage::new(pool.clone())),
@@ -34,7 +35,8 @@ fn make_postgres_app_state(pool: PgPool) -> Arc<crate::AppState> {
         media: Arc::new(PostgresMediaStorage::new(pool.clone())),
         user_config: Arc::new(PostgresUserConfigStorage::new(pool.clone())),
         feed_cache: Arc::new(PostgresFeedCacheStorage::new(pool.clone())),
-        feed_events: Arc::new(PostgresFeedEventStorage::new(pool)),
+        feed_events: Arc::new(PostgresFeedEventStorage::new(pool.clone())),
+        write_scope: WriteScope::postgres(pool),
     })
 }
 

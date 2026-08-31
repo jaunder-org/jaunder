@@ -5,9 +5,9 @@ use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
 use crate::registration;
 use crate::topbar::Topbar;
-use common::email::Email;
-use common::invite::InviteTtlHours;
-use common::registration::RegistrationPolicy;
+use common::{
+    MutationOutcome, email::Email, invite::InviteTtlHours, registration::RegistrationPolicy,
+};
 use leptos::prelude::*;
 
 /// Invites page — lists invites (metadata only; raw codes are never sent to the client,
@@ -21,7 +21,9 @@ pub fn InvitesPage() -> impl IntoView {
     let create_action = ServerAction::<Create>::new();
     let successful_creates = RwSignal::new(0_u32);
     Effect::new(move |_| {
-        if let Some(Ok(())) = create_action.value().get() {
+        if let Some(Ok(MutationOutcome::Confirmed(()) | MutationOutcome::CommitIndeterminate(()))) =
+            create_action.value().get()
+        {
             successful_creates.update(|version| *version += 1);
         }
     });
@@ -120,14 +122,22 @@ fn InviteCreateOutcome(action: ServerAction<Create>) -> impl IntoView {
             action
                 .value()
                 .get()
-                .map(|r: Result<(), WebError>| match r {
-                    Ok(()) => {
+                .map(|r: Result<MutationOutcome<()>, WebError>| match r {
+                    Ok(MutationOutcome::Confirmed(())) => {
                         let to = action
                             .input()
                             .get()
                             .map(|args| args.request.recipient_email.to_string())
                             .unwrap_or_default();
                         view! { <p class="j-form-note">"Invitation emailed to " {to} "."</p> }
+                            .into_any()
+                    }
+                    Ok(MutationOutcome::CommitIndeterminate(())) => {
+                        view! {
+                            <p class="error">
+                                "The invitation may have been created, but its status could not be confirmed. Refresh to check."
+                            </p>
+                        }
                             .into_any()
                     }
                     Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),

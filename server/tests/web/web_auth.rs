@@ -61,21 +61,17 @@ fn register_input(
     invite_code: Option<&str>,
 ) -> web::registration::Register {
     web::registration::Register {
-        request: web::registration::RegistrationRequest {
-            username: username.parse().expect("valid test username"),
-            password: password.parse().expect("valid test password"),
-            invite_code: invite_code.map(|code| code.parse().expect("valid test invite code")),
-        },
+        username: username.parse().expect("valid test username"),
+        password: password.parse().expect("valid test password"),
+        invite_code: invite_code.map(|code| code.parse().expect("valid test invite code")),
     }
 }
 
 fn login_input(username: &str, password: &str, label: Option<&str>) -> web::auth::Login {
     web::auth::Login {
-        request: web::auth::LoginRequest {
-            username: username.parse().expect("valid test username"),
-            password: password.parse().expect("valid test password"),
-            label: label.map(|label| label.parse().expect("valid test session label")),
-        },
+        username: username.parse().expect("valid test username"),
+        password: password.parse().expect("valid test password"),
+        label: label.map(|label| label.parse().expect("valid test session label")),
     }
 }
 
@@ -160,6 +156,21 @@ async fn post_register(
     status
 }
 
+async fn create_registration_invite(state: &storage::AppState) -> host::invite::InviteCode {
+    let invites = std::sync::Arc::clone(&state.invites);
+    let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
+    storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+            })
+            .await
+            .expect("create registration fixture invite"),
+        "registration fixture setup",
+    )
+}
+
 // guard:low-level-db — observes one sqlite-backed server-fn span directly.
 #[tokio::test]
 async fn register_records_decision_determinants_on_the_server_fn_span() {
@@ -171,31 +182,19 @@ async fn register_records_decision_determinants_on_the_server_fn_span() {
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let TestEnv { state, base: _base } = Backend::Sqlite.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
-    let ignored_open_code = state
-        .invites
-        .create_invite(UtcInstant::from(Utc::now() + chrono::Duration::hours(24)))
-        .await
-        .unwrap();
+    let ignored_open_code = create_registration_invite(&state).await;
     assert_eq!(
         post_register(&state, "detopen", Some(ignored_open_code.as_ref())).await,
         StatusCode::OK
     );
 
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
-    let code = state
-        .invites
-        .create_invite(UtcInstant::from(Utc::now() + chrono::Duration::hours(24)))
-        .await
-        .unwrap();
+    let code = create_registration_invite(&state).await;
     assert_eq!(
         post_register(&state, "detinvite", Some(code.as_ref())).await,
         StatusCode::OK
@@ -205,9 +204,7 @@ async fn register_records_decision_determinants_on_the_server_fn_span() {
         StatusCode::OK
     );
 
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "closed")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "closed")
         .await
         .unwrap();
     assert_ne!(
@@ -259,9 +256,7 @@ async fn register_records_decision_determinants_on_the_server_fn_span() {
 #[tokio::test]
 async fn register_nested_request_maps_open_fields(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
 
@@ -287,24 +282,36 @@ async fn register_nested_request_maps_open_fields(#[case] backend: Backend) {
         .await
         .unwrap()
         .expect("user should exist after registration");
-    let authenticated = state
-        .users
-        .authenticate(
-            &"alice".parse::<Username>().unwrap(),
-            &"password123".parse::<Password>().unwrap(),
-        )
+    let users = std::sync::Arc::clone(&state.users);
+    let username = "alice".parse::<Username>().unwrap();
+    let password = "password123".parse::<Password>().unwrap();
+    let authentication = users
+        .prepare_authentication(&username, &password)
+        .await
+        .unwrap();
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { users.authenticate(transaction, authentication).await })
+        })
         .await
         .expect("registration password should authenticate");
+    let authenticated =
+        storage::test_support::confirmed_for(outcome, "registration authentication");
     assert_eq!(authenticated.user_id, user.user_id);
 
     // …and the cookie actually establishes a session for that user. A
     // `starts_with("session=")` check alone would pass against a cookie carrying a
     // token that authenticates nothing.
-    let record = state
-        .sessions
-        .authenticate(&cookie_token)
+    let sessions = std::sync::Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &cookie_token).await })
+        })
         .await
         .expect("the register cookie authenticates");
+    let record = storage::test_support::confirmed_for(outcome, "session authentication");
     assert_eq!(record.user_id, user.user_id);
 }
 
@@ -312,9 +319,7 @@ async fn register_nested_request_maps_open_fields(#[case] backend: Backend) {
 #[tokio::test]
 async fn register_duplicate_username_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
 
@@ -345,13 +350,19 @@ async fn register_duplicate_username_returns_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn register_nested_request_maps_invite_code(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
+    let invites = std::sync::Arc::clone(&state.invites);
     let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
-    let code = state.invites.create_invite(expires_at).await.unwrap();
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+        })
+        .await
+        .unwrap();
+    let code = storage::test_support::confirmed_for(outcome, "invite fixture setup");
 
     let (status, set_cookie, _body) = post_server_fn_with_secure_flag(
         &state,
@@ -371,14 +382,22 @@ async fn register_nested_request_maps_invite_code(#[case] backend: Backend) {
         .await
         .unwrap();
     let user = user.expect("user should exist after invite registration");
-    let authenticated = state
-        .users
-        .authenticate(
-            &"bob".parse::<Username>().unwrap(),
-            &"password123".parse::<Password>().unwrap(),
-        )
+    let users = std::sync::Arc::clone(&state.users);
+    let username = "bob".parse::<Username>().unwrap();
+    let password = "password123".parse::<Password>().unwrap();
+    let authentication = users
+        .prepare_authentication(&username, &password)
+        .await
+        .unwrap();
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { users.authenticate(transaction, authentication).await })
+        })
         .await
         .expect("invite registration password should authenticate");
+    let authenticated =
+        storage::test_support::confirmed_for(outcome, "invite registration authentication");
     assert_eq!(authenticated.user_id, user.user_id);
 
     let invites = state.invites.list_invites().await.unwrap();
@@ -389,14 +408,141 @@ async fn register_nested_request_maps_invite_code(#[case] backend: Backend) {
     assert!(invite.used_at.is_some(), "invite should be marked as used");
 }
 
+/// A later session insert failure rolls back every open-registration mutation.
+#[apply(backends)]
+#[tokio::test]
+async fn register_open_session_failure_rolls_back_user(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
+        .await
+        .unwrap();
+    match backend {
+        Backend::Sqlite => {
+            base.pool()
+                .execute(
+                    "CREATE TRIGGER fail_session_insert BEFORE INSERT ON sessions \
+                     BEGIN SELECT RAISE(FAIL, 'blocked'); END",
+                )
+                .await
+                .unwrap();
+        }
+        Backend::Postgres => {
+            base.pool()
+                .execute(
+                    "CREATE FUNCTION fail_session_insert() RETURNS trigger AS $$ \
+                     BEGIN RAISE EXCEPTION 'blocked'; END; $$ LANGUAGE plpgsql",
+                )
+                .await
+                .unwrap();
+            base.pool()
+                .execute(
+                    "CREATE TRIGGER fail_session_insert BEFORE INSERT ON sessions \
+                     FOR EACH ROW EXECUTE FUNCTION fail_session_insert()",
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    let (status, _, _) = post_server_fn_with_secure_flag(
+        &state,
+        &register_input("rolledback", "password123", None),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        state
+            .users
+            .get_user_by_username(&"rolledback".parse().unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// A later session insert failure rolls back both invite consumption and user creation.
+#[apply(backends)]
+#[tokio::test]
+async fn register_invite_session_failure_rolls_back_user_and_invite(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "invite_only")
+        .await
+        .unwrap();
+    let invites = std::sync::Arc::clone(&state.invites);
+    let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
+    let code = storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+            })
+            .await
+            .unwrap(),
+        "invite fixture",
+    );
+    match backend {
+        Backend::Sqlite => {
+            base.pool()
+                .execute(
+                    "CREATE TRIGGER fail_session_insert BEFORE INSERT ON sessions \
+                     BEGIN SELECT RAISE(FAIL, 'blocked'); END",
+                )
+                .await
+                .unwrap();
+        }
+        Backend::Postgres => {
+            base.pool()
+                .execute(
+                    "CREATE FUNCTION fail_session_insert() RETURNS trigger AS $$ \
+                     BEGIN RAISE EXCEPTION 'blocked'; END; $$ LANGUAGE plpgsql",
+                )
+                .await
+                .unwrap();
+            base.pool()
+                .execute(
+                    "CREATE TRIGGER fail_session_insert BEFORE INSERT ON sessions \
+                     FOR EACH ROW EXECUTE FUNCTION fail_session_insert()",
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    let (status, _, _) = post_server_fn_with_secure_flag(
+        &state,
+        &register_input("inviterolledback", "password123", Some(code.as_ref())),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        state
+            .users
+            .get_user_by_username(&"inviterolledback".parse().unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let invite = state
+        .invites
+        .list_invites()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|invite| invite.code.as_ref() == code.as_ref())
+        .unwrap();
+    assert!(invite.used_at.is_none());
+}
+
 // M2.9.10: `register` with InviteOnly policy and missing code returns error.
 #[apply(backends)]
 #[tokio::test]
 async fn register_invite_only_missing_code_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
 
@@ -426,9 +572,7 @@ async fn register_invite_only_missing_code_returns_error(#[case] backend: Backen
 #[tokio::test]
 async fn register_invite_only_invalid_code_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
 
@@ -448,15 +592,21 @@ async fn register_invite_only_invalid_code_returns_error(#[case] backend: Backen
 #[tokio::test]
 async fn register_invite_only_expired_code_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
 
     // Create an already-expired invite.
-    let expires_at = UtcInstant::from(Utc::now() - chrono::Duration::hours(1));
-    let code = state.invites.create_invite(expires_at).await.unwrap();
+    let invites = std::sync::Arc::clone(&state.invites);
+    let expires_at = UtcInstant::from(Utc::now() - chrono::Duration::hours(24));
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+        })
+        .await
+        .unwrap();
+    let code = storage::test_support::confirmed_for(outcome, "invite fixture setup");
 
     let (status, _, _) = post_server_fn_with_secure_flag(
         &state,
@@ -502,9 +652,7 @@ async fn register_closed_policy_returns_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn login_correct_password_sets_session_cookie(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_server_fn_with_secure_flag(
@@ -537,9 +685,7 @@ async fn login_correct_password_sets_session_cookie(#[case] backend: Backend) {
 #[tokio::test]
 async fn login_returns_session_user_without_token(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_server_fn_with_secure_flag(
@@ -565,7 +711,7 @@ async fn login_returns_session_user_without_token(#[case] backend: Backend) {
     assert_body_carries_no_token("login", &body, &token);
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(body.trim()).expect("valid login JSON body"),
-        serde_json::json!({"username": "alice", "is_operator": false}),
+        serde_json::json!({"Confirmed": {"username": "alice", "is_operator": false}}),
     );
 }
 
@@ -589,9 +735,7 @@ async fn login_unknown_user_returns_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn login_nested_request_maps_distinct_fields(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_server_fn_with_secure_flag(
@@ -612,7 +756,15 @@ async fn login_nested_request_maps_distinct_fields(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
     let raw_token = session_token_of(set_cookie);
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let sessions = std::sync::Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+        })
+        .await
+        .unwrap();
+    let record = storage::test_support::confirmed_for(outcome, "session authentication");
     assert_eq!(record.label, "Issue 417 device");
 }
 
@@ -620,9 +772,7 @@ async fn login_nested_request_maps_distinct_fields(#[case] backend: Backend) {
 #[tokio::test]
 async fn login_nested_request_without_label_uses_user_agent(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_server_fn_with_secure_flag(
@@ -644,7 +794,15 @@ async fn login_nested_request_without_label_uses_user_agent(#[case] backend: Bac
 
     assert_eq!(status, StatusCode::OK);
     let raw_token = session_token_of(set_cookie);
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let sessions = std::sync::Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+        })
+        .await
+        .unwrap();
+    let record = storage::test_support::confirmed_for(outcome, "session authentication");
     assert_eq!(record.label, "Issue 417 browser");
 }
 
@@ -652,9 +810,7 @@ async fn login_nested_request_without_label_uses_user_agent(#[case] backend: Bac
 #[tokio::test]
 async fn login_rejects_whitespace_only_label(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_server_fn_with_secure_flag(
@@ -689,9 +845,7 @@ async fn login_rejects_whitespace_only_label(#[case] backend: Backend) {
 #[tokio::test]
 async fn login_rejects_overlong_label(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_server_fn_with_secure_flag(
@@ -727,9 +881,7 @@ async fn login_rejects_overlong_label(#[case] backend: Backend) {
 #[tokio::test]
 async fn login_bounds_long_user_agent_at_session_label_cap(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_server_fn_with_secure_flag(
@@ -754,7 +906,15 @@ async fn login_bounds_long_user_agent_at_session_label_cap(#[case] backend: Back
 
     assert_eq!(status, StatusCode::OK);
     let raw_token = session_token_of(set_cookie);
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let sessions = std::sync::Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+        })
+        .await
+        .unwrap();
+    let record = storage::test_support::confirmed_for(outcome, "session authentication");
     assert_eq!(record.label, "a".repeat(250).as_str());
 }
 
@@ -764,9 +924,7 @@ async fn login_bounds_long_user_agent_at_session_label_cap(#[case] backend: Back
 #[tokio::test]
 async fn login_truncates_user_agent_past_session_label_cap(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_server_fn_with_secure_flag(
@@ -790,7 +948,15 @@ async fn login_truncates_user_agent_past_session_label_cap(#[case] backend: Back
 
     assert_eq!(status, StatusCode::OK);
     let raw_token = session_token_of(set_cookie);
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let sessions = std::sync::Arc::clone(&state.sessions);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+        })
+        .await
+        .unwrap();
+    let record = storage::test_support::confirmed_for(outcome, "session authentication");
     assert_eq!(record.label.chars().count(), MAX_SESSION_LABEL_CHARS);
 }
 
@@ -799,9 +965,7 @@ async fn login_truncates_user_agent_past_session_label_cap(#[case] backend: Back
 #[tokio::test]
 async fn login_wrong_password_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_server_fn_with_secure_flag(
@@ -869,9 +1033,7 @@ async fn logout_revokes_session_and_clears_cookie(#[case] backend: Backend) {
 #[tokio::test]
 async fn register_invalid_username_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .expect("failed to set registration policy");
 
@@ -901,9 +1063,7 @@ async fn register_invalid_username_returns_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn register_short_password_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .expect("failed to set registration policy");
 
@@ -941,9 +1101,7 @@ async fn register_short_password_returns_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn login_nested_request_rejects_invalid_username_before_handler(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_server_fn_with_secure_flag(
@@ -997,9 +1155,7 @@ async fn login_nested_request_rejects_invalid_username_before_handler(#[case] ba
 #[tokio::test]
 async fn login_nested_request_rejects_short_password_before_handler(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_server_fn_with_secure_flag(
@@ -1203,9 +1359,7 @@ async fn debug_api_routes_exist(#[case] backend: Backend) {
 #[tokio::test]
 async fn get_registration_policy_returns_correct_value(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
 
@@ -1270,9 +1424,7 @@ async fn logout_clears_cookie_without_secure_attribute_when_disabled(#[case] bac
 #[tokio::test]
 async fn register_sets_cookie_without_secure_attribute_when_disabled(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
 

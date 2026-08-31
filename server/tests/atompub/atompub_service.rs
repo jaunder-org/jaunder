@@ -53,6 +53,7 @@ fn with_site_config(
         user_config: state.user_config.clone(),
         feed_cache: state.feed_cache.clone(),
         feed_events: state.feed_events.clone(),
+        write_scope: state.write_scope.clone(),
     })
 }
 
@@ -65,15 +66,15 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
     // Give the user a tagged post so the service document's category list is
     // non-empty (exercises the tag-collection path in `service_document`).
     let post = session.seed_post().seed(&state).await;
-    state
-        .posts
-        .set_post_tags(
-            post.post_id,
-            session.user_id,
-            &["rust".parse::<TagLabel>().unwrap()],
-        )
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post.post_id,
+        session.user_id,
+        &["rust".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
     let app = make_app(&state, &base);
     let uri = parse_root_relative_url("/atompub/service");
 

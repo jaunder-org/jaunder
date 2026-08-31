@@ -4,20 +4,25 @@
 //! body, and performs the storage write with slug-collision retry. Shared by
 //! the `web` and `server` `AtomPub` front-ends.
 
+use std::collections::HashSet;
+use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
-    CreatePostError, CreatePostInput, PostBookkeepingExpectation, PostFormat, PostRecord,
-    PostStorage, PublishUpdate, UpdatePostError, UpdatePostInput,
+    CreatePostError, CreatePostInput, FeedEventStorage, MediaContentLocks,
+    PostBookkeepingExpectation, PostFormat, PostRecord, PostStorage, PublishUpdate,
+    UpdatePostError, UpdatePostInput, WriteScope, WriteScopeError,
 };
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, UserId};
+use common::mutation::MutationOutcome;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::slug::{InvalidSlug, Slug};
 use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
+use host::feed::affected_feed_urls;
 
 // ---------------------------------------------------------------------------
 // Orchestration helpers
@@ -51,17 +56,69 @@ pub struct RenderedPostContent {
     pub expectations: PostBookkeepingExpectation,
 }
 
-/// Renders `body` according to `format` and creates the post via storage.
+/// Converts a post-creation write-scope failure into its public service error.
+fn map_create_post_scope_error(error: WriteScopeError<CreatePostError>) -> CreatePostError {
+    match error {
+        WriteScopeError::Operation(error) => error,
+        WriteScopeError::Begin(error) => CreatePostError::Internal(error),
+    }
+}
+
+/// Converts a post-update write-scope failure into its public service error.
+fn map_post_update_scope_error(error: WriteScopeError<UpdatePostError>) -> PerformUpdateError {
+    match error {
+        WriteScopeError::Operation(error) => error.into(),
+        WriteScopeError::Begin(error) => PerformUpdateError::Storage(error),
+    }
+}
+
+/// Renders `body` according to `format` and creates the post through one caller-owned
+/// write scope.
 ///
 /// # Errors
 ///
-/// Returns `Err(CreatePostError)` if the storage layer returns an error.
+/// Returns the Post creation failure or a feed-event enqueue failure mapped to
+/// [`CreatePostError::Internal`]. A scope acquisition failure is also mapped to
+/// [`CreatePostError::Internal`].
 pub async fn create_rendered_post(
-    storage: &dyn PostStorage,
+    write_scope: &WriteScope,
+    content_locks: &MediaContentLocks,
+    storage: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
     content: RenderedPostContent,
-) -> Result<PostId, CreatePostError> {
+) -> Result<MutationOutcome<PostRecord>, CreatePostError> {
     let input = render_post_input(content);
-    storage.create_post(&input).await
+    let _media_locks = content_locks
+        .acquire(
+            input
+                .rendered
+                .media()
+                .iter()
+                .map(common::media::MediaReference::media),
+        )
+        .await
+        .map_err(|error| CreatePostError::Internal(sqlx::Error::Io(error)))?;
+    write_scope
+        .run(move |transaction| {
+            let storage = Arc::clone(&storage);
+            let feed_events = Arc::clone(&feed_events);
+            Box::pin(async move {
+                let record = storage.create_post(transaction, &input).await?;
+                let feed_paths = affected_feed_urls(
+                    &record.author_username,
+                    record.tags.iter().map(|tag| &tag.tag_slug),
+                );
+                feed_events
+                    .enqueue_many(transaction, &feed_paths)
+                    .await
+                    .map_err(|error| match error {
+                        crate::FeedEventError::Db(error) => CreatePostError::Internal(error),
+                    })?;
+                Ok(record)
+            })
+        })
+        .await
+        .map_err(map_create_post_scope_error)
 }
 
 /// Renders `body` per `format` and assembles the [`CreatePostInput`] without
@@ -215,6 +272,9 @@ pub struct PostUpdate<'a> {
     pub audiences: Vec<AudienceTarget>,
     /// Tags replacing the current set within the update transaction.
     pub tags: Vec<common::tag::TagLabel>,
+    /// Tag slugs attached to the post before this update. Their feeds must be
+    /// regenerated too when the replacement removes them.
+    pub previous_tag_slugs: Vec<common::tag::Tag>,
     /// The request clock reused if this update publishes a draft without a date.
     pub request_clock: UtcInstant,
     /// Non-authoritative Org bookkeeping expected to match the locked row.
@@ -231,9 +291,12 @@ pub struct PostUpdate<'a> {
 ///
 /// Returns `Err(PerformUpdateError)` if rendering fails or the storage layer returns an error.
 pub async fn perform_post_update(
-    storage: &dyn PostStorage,
+    write_scope: &WriteScope,
+    content_locks: &MediaContentLocks,
+    storage: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
     input: PostUpdate<'_>,
-) -> Result<PostRecord, PerformUpdateError> {
+) -> Result<MutationOutcome<PostRecord>, PerformUpdateError> {
     let PostUpdate {
         post_id,
         editor_user_id,
@@ -245,6 +308,7 @@ pub async fn perform_post_update(
         summary,
         audiences,
         tags,
+        previous_tag_slugs,
         request_clock,
         expectations,
     } = input;
@@ -265,6 +329,7 @@ pub async fn perform_post_update(
     };
 
     let rendered = host::render::render_with_media(&body, &format);
+    let updated_tag_slugs: Vec<_> = tags.iter().map(common::tag::TagLabel::slug).collect();
     let input = UpdatePostInput {
         title,
         slug,
@@ -278,10 +343,43 @@ pub async fn perform_post_update(
         request_clock,
         expectations,
     };
-    storage
-        .update_post(post_id, editor_user_id, &input)
+    let _media_locks = content_locks
+        .acquire(
+            input
+                .rendered
+                .media()
+                .iter()
+                .map(common::media::MediaReference::media),
+        )
         .await
-        .map_err(PerformUpdateError::from)
+        .map_err(|error| PerformUpdateError::Storage(sqlx::Error::Io(error)))?;
+    write_scope
+        .run(move |transaction| {
+            let storage = Arc::clone(&storage);
+            let feed_events = Arc::clone(&feed_events);
+            Box::pin(async move {
+                let record = storage
+                    .update_post(transaction, post_id, editor_user_id, &input)
+                    .await?;
+                let mut tag_slugs = HashSet::new();
+                let feed_paths = affected_feed_urls(
+                    &record.author_username,
+                    previous_tag_slugs
+                        .iter()
+                        .chain(updated_tag_slugs.iter())
+                        .filter(|tag| tag_slugs.insert(*tag)),
+                );
+                feed_events
+                    .enqueue_many(transaction, &feed_paths)
+                    .await
+                    .map_err(|error| match error {
+                        crate::FeedEventError::Db(error) => UpdatePostError::Internal(error),
+                    })?;
+                Ok::<PostRecord, UpdatePostError>(record)
+            })
+        })
+        .await
+        .map_err(map_post_update_scope_error)
 }
 
 // ---------------------------------------------------------------------------
@@ -405,9 +503,12 @@ pub struct PostCreation<'a> {
 /// Returns `Err(PerformCreationError)` if slug validation fails, attempts to
 /// find a unique slug are exhausted, or storage fails.
 pub async fn perform_post_creation(
-    storage: &dyn PostStorage,
+    write_scope: &WriteScope,
+    content_locks: &MediaContentLocks,
+    storage: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
     input: PostCreation<'_>,
-) -> Result<PostRecord, PerformCreationError> {
+) -> Result<MutationOutcome<PostRecord>, PerformCreationError> {
     let PostCreation {
         user_id,
         body,
@@ -447,7 +548,10 @@ pub async fn perform_post_creation(
             .is_some_and(|expected| expected == &slug);
 
         match create_rendered_post(
-            storage,
+            write_scope,
+            content_locks,
+            Arc::clone(&storage),
+            Arc::clone(&feed_events),
             RenderedPostContent {
                 user_id,
                 title: title.clone(),
@@ -464,18 +568,7 @@ pub async fn perform_post_creation(
         )
         .await
         {
-            Ok(post_id) => {
-                // Re-read as the author so the fetch succeeds regardless of the
-                // post's targeting (a private/subscribers/named post is invisible
-                // to an Anonymous viewer).
-                let viewer = common::visibility::ViewerIdentity::local(user_id);
-                let record = storage
-                    .get_post_by_id(post_id, &viewer)
-                    .await
-                    .map_err(PerformCreationError::Storage)?
-                    .ok_or(PerformCreationError::CreatedNotFound)?;
-                return Ok(record);
-            }
+            Ok(outcome) => return Ok(outcome),
             Err(CreatePostError::SlugConflict) if is_expected_slug => {
                 return Err(PerformCreationError::BookkeepingMismatch);
             }
@@ -505,14 +598,47 @@ pub async fn perform_post_creation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "test-utils")]
+    use crate::test_support::mock_write_scope;
     use crate::test_support::{
-        Backend, SeedUser, backends, fetch_post_media, media_ref_for, media_url_for, seed_media,
+        Backend, SeedUser, backends, confirmed, fetch_post_media, media_ref_for, media_url_for,
+        seed_media,
     };
     use common::idempotency_key::IdempotencyKey;
     use common::media::{MediaReferenceForm, MediaReferenceKind};
     use common::test_support::{parse_post_body, parse_post_title, parse_row_limit, parse_slug};
+    #[cfg(feature = "test-utils")]
+    use common::test_support::{parse_tag, parse_tag_label};
+
     use rstest::*;
     use rstest_reuse::*;
+    #[test]
+    fn create_post_scope_error_maps_operation_and_begin() {
+        assert!(matches!(
+            map_create_post_scope_error(WriteScopeError::Operation(CreatePostError::SlugConflict)),
+            CreatePostError::SlugConflict
+        ));
+
+        let error = map_create_post_scope_error(WriteScopeError::Begin(sqlx::Error::PoolClosed));
+        let CreatePostError::Internal(source) = error else {
+            unreachable!("scope_error maps scope begin failures to CreatePostError::Internal");
+        };
+        assert!(matches!(source, sqlx::Error::PoolClosed));
+    }
+
+    #[test]
+    fn post_update_scope_error_maps_operation_and_begin() {
+        assert!(matches!(
+            map_post_update_scope_error(WriteScopeError::Operation(UpdatePostError::NotFound)),
+            PerformUpdateError::NotFound
+        ));
+
+        let error = map_post_update_scope_error(WriteScopeError::Begin(sqlx::Error::PoolClosed));
+        let PerformUpdateError::Storage(source) = error else {
+            unreachable!("scope_error maps scope begin failures to PerformUpdateError::Storage");
+        };
+        assert!(matches!(source, sqlx::Error::PoolClosed));
+    }
 
     // -- perform_post_creation tests --
 
@@ -520,10 +646,15 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_success(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
         let record = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -542,6 +673,7 @@ mod tests {
         .await
         .unwrap();
 
+        let record = confirmed(record);
         assert_eq!(record.user_id, user_id);
         assert_eq!(record.slug, "hello-world");
         // Canonicalized on write (#811): the stored body carries a terminating newline.
@@ -554,15 +686,20 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_returns_a_private_post(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
         // No audience target at all: the post is visible to its author and to
         // nobody else. Every other create test targets Public, so this is the
         // only one that can observe that the post-create re-read resolves *as
         // the author* rather than incidentally as an anonymous reader.
         let title = parse_post_title("Private Note");
         let record = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("Private note."),
@@ -581,6 +718,7 @@ mod tests {
         .await
         .unwrap();
 
+        let record = confirmed(record);
         assert_eq!(record.user_id, user_id);
         assert_eq!(record.slug, "private-note");
 
@@ -602,13 +740,18 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_uses_explicit_title(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
         // The body has no heading, so any title must come from the explicit arg,
         // which also seeds the slug.
         let title = parse_post_title("Explicit Title");
         let record = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("Body without a heading."),
@@ -627,6 +770,7 @@ mod tests {
         .await
         .unwrap();
 
+        let record = confirmed(record);
         assert_eq!(record.title.as_deref(), Some("Explicit Title"));
         assert_eq!(record.slug, "explicit-title");
     }
@@ -635,14 +779,19 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_slug_override(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
         // The override arrives already validated as a `Slug` (the wire/CLI boundary
         // parses it); an invalid override cannot reach this layer — that rejection
         // lives at the boundary (web `field_error` + the serde bridge).
         let slug: Slug = parse_slug("my-custom-slug");
         let record = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -661,6 +810,7 @@ mod tests {
         .await
         .unwrap();
 
+        let record = confirmed(record);
         assert_eq!(record.slug, "my-custom-slug");
     }
 
@@ -675,10 +825,18 @@ mod tests {
         let mut storage = crate::MockPostStorage::new();
         storage
             .expect_create_post()
-            .returning(|_input| Err(CreatePostError::Internal(sqlx::Error::RowNotFound)));
-
+            .returning(|_, _| Err(CreatePostError::Internal(sqlx::Error::RowNotFound)));
+        let write_scope = mock_write_scope();
+        let feed_events = crate::MockFeedEventStorage::new();
+        let storage: Arc<dyn PostStorage> = Arc::new(storage);
+        let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
+        let temp = tempfile::tempdir().unwrap();
+        let content_locks = MediaContentLocks::new(Arc::new(temp.path().to_path_buf()));
         let err = perform_post_creation(
-            &storage,
+            &write_scope,
+            &content_locks,
+            Arc::clone(&storage),
+            feed_events,
             PostCreation {
                 user_id: UserId::from(1),
                 body: parse_post_body("Hello, world!"),
@@ -699,17 +857,135 @@ mod tests {
 
         assert!(matches!(err, PerformCreationError::Storage(_)));
     }
+    #[cfg(feature = "test-utils")]
+    #[apply(backends)]
+    #[tokio::test]
+    async fn feed_enqueue_failure_rolls_back_the_created_post(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let mut feed_events = crate::MockFeedEventStorage::new();
+        feed_events
+            .expect_enqueue_many()
+            .returning(|_, _| Err(crate::FeedEventError::Db(sqlx::Error::RowNotFound)));
+        let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
 
+        let error = perform_post_creation(
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&env.state.posts),
+            feed_events,
+            PostCreation {
+                user_id: seeded_user.user_id,
+                body: parse_post_body("Post must not survive a failed feed enqueue."),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 1,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
+                idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .expect_err("feed enqueue fails after the post insert");
+        assert!(matches!(error, PerformCreationError::Storage(_)));
+        assert!(
+            env.state
+                .posts
+                .list_collection_by_user(seeded_user.user_id, None, parse_row_limit("10"))
+                .await
+                .expect("post collection loads")
+                .is_empty(),
+            "the enclosing write scope must roll back the earlier post insert"
+        );
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[apply(backends)]
+    #[tokio::test]
+    async fn feed_enqueue_failure_rolls_back_update_after_enqueuing_old_and_new_tag_feeds(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let previous_tag_slugs = vec![parse_tag("old"), parse_tag("shared")];
+        let expected_tag_slugs = [parse_tag("old"), parse_tag("shared"), parse_tag("new")];
+        let expected_feed_paths =
+            affected_feed_urls(&seeded_user.username, expected_tag_slugs.iter());
+        let mut feed_events = crate::MockFeedEventStorage::new();
+        feed_events
+            .expect_enqueue_many()
+            .withf(move |_, feed_paths| feed_paths == expected_feed_paths)
+            .returning(|_, _| Err(crate::FeedEventError::Db(sqlx::Error::RowNotFound)));
+        let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
+        let post = crate::test_support::SeedRawPost::new(seeded_user.user_id)
+            .tags(["old", "shared"])
+            .seed(&env.state)
+            .await;
+
+        let error = perform_post_update(
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&env.state.posts),
+            feed_events,
+            PostUpdate {
+                post_id: post.post_id,
+                editor_user_id: seeded_user.user_id,
+                body: parse_post_body("Changed body."),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                publish: PublishUpdate::Publish { at: None },
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: vec![parse_tag_label("shared"), parse_tag_label("new")],
+                previous_tag_slugs,
+                request_clock: UtcInstant::now(),
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .expect_err("feed enqueue fails after the post update");
+        assert!(matches!(error, PerformUpdateError::Storage(_)));
+
+        let post = env
+            .state
+            .posts
+            .get_post_by_id(
+                post.post_id,
+                &common::visibility::ViewerIdentity::local(seeded_user.user_id),
+            )
+            .await
+            .expect("post loads")
+            .expect("post remains");
+        assert_eq!(post.body, "seed body");
+        assert_eq!(
+            post.tags
+                .into_iter()
+                .map(|tag| tag.tag_slug)
+                .collect::<Vec<_>>(),
+            vec![parse_tag("old"), parse_tag("shared")],
+            "the enclosing write scope must roll back the earlier tag replacement"
+        );
+    }
     #[apply(backends)]
     #[tokio::test]
     async fn test_perform_post_creation_symbol_only_title_falls_back_to_post(
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
         let record = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("!!!"),
@@ -730,6 +1006,7 @@ mod tests {
 
         // Never hard-fails: a title with no usable characters lands on the
         // synthetic `post` fallback rather than NoSlugFromPost.
+        let record = confirmed(record);
         assert_eq!(record.slug, "post");
     }
 
@@ -737,10 +1014,15 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_unicode_title_preserves_slug(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
         let record = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("# 日本語\n\nbody"),
@@ -759,6 +1041,7 @@ mod tests {
         .await
         .unwrap();
 
+        let record = confirmed(record);
         assert_eq!(record.slug, "日本語");
     }
 
@@ -791,11 +1074,16 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_slug_conflict_retries(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
 
         let r1 = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -815,7 +1103,10 @@ mod tests {
         .unwrap();
 
         let r2 = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -835,7 +1126,10 @@ mod tests {
         .unwrap();
 
         let r3 = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -854,9 +1148,9 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(r1.slug, "hello-world");
-        assert_eq!(r2.slug, "hello-world-2");
-        assert_eq!(r3.slug, "hello-world-3");
+        assert_eq!(confirmed(r1).slug, "hello-world");
+        assert_eq!(confirmed(r2).slug, "hello-world-2");
+        assert_eq!(confirmed(r3).slug, "hello-world-3");
     }
 
     #[apply(backends)]
@@ -865,9 +1159,10 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let storage = &*env.state.posts;
+        let storage = Arc::clone(&env.state.posts);
         let expected = parse_slug("expected");
         let expected_second = parse_slug("expected-2");
+
         let create = |user_id, expectations| PostCreation {
             user_id,
             body: parse_post_body("Expected"),
@@ -885,7 +1180,10 @@ mod tests {
 
         let first_free_user = SeedUser::new().seed(&env.state).await.user_id;
         let first_free = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             create(
                 first_free_user,
                 PostBookkeepingExpectation {
@@ -896,12 +1194,16 @@ mod tests {
         )
         .await
         .unwrap();
+        let first_free = confirmed(first_free);
         assert_eq!(first_free.slug, expected);
 
         let earlier_free_user = SeedUser::new().seed(&env.state).await.user_id;
         assert!(matches!(
             perform_post_creation(
-                storage,
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
                 create(
                     earlier_free_user,
                     PostBookkeepingExpectation {
@@ -923,7 +1225,10 @@ mod tests {
 
         let conflict_before_expected_user = SeedUser::new().seed(&env.state).await.user_id;
         perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             create(
                 conflict_before_expected_user,
                 PostBookkeepingExpectation::default(),
@@ -932,7 +1237,10 @@ mod tests {
         .await
         .unwrap();
         let collision_winner = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             create(
                 conflict_before_expected_user,
                 PostBookkeepingExpectation {
@@ -943,11 +1251,15 @@ mod tests {
         )
         .await
         .unwrap();
+        let collision_winner = confirmed(collision_winner);
         assert_eq!(collision_winner.slug, expected_second);
 
         let occupied_expected_user = SeedUser::new().seed(&env.state).await.user_id;
         perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             create(
                 occupied_expected_user,
                 PostBookkeepingExpectation::default(),
@@ -957,7 +1269,10 @@ mod tests {
         .unwrap();
         assert!(matches!(
             perform_post_creation(
-                storage,
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
                 create(
                     occupied_expected_user,
                     PostBookkeepingExpectation {
@@ -987,7 +1302,8 @@ mod tests {
         use common::time::UtcInstant;
 
         let env = backend.setup().await;
-        let storage = &*env.state.posts;
+        let storage = Arc::clone(&env.state.posts);
+
         let create = |user_id, expectations| PostCreation {
             user_id,
             body: parse_post_body("Mismatch"),
@@ -1006,7 +1322,10 @@ mod tests {
         let format_user = SeedUser::new().seed(&env.state).await.user_id;
         assert!(matches!(
             perform_post_creation(
-                storage,
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
                 create(
                     format_user,
                     PostBookkeepingExpectation {
@@ -1029,7 +1348,10 @@ mod tests {
         let publication_user = SeedUser::new().seed(&env.state).await.user_id;
         assert!(matches!(
             perform_post_creation(
-                storage,
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
                 create(
                     publication_user,
                     PostBookkeepingExpectation {
@@ -1054,8 +1376,10 @@ mod tests {
     #[tokio::test]
     async fn bookkeeping_update_uses_final_draft_or_published_slug(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let storage = &*env.state.posts;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = Arc::clone(&env.state.posts);
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
         let draft = crate::test_support::SeedRawPost::new(user_id)
             .draft()
             .seed(&env.state)
@@ -1075,6 +1399,7 @@ mod tests {
             summary: None,
             audiences: vec![AudienceTarget::Public],
             tags: Vec::new(),
+            previous_tag_slugs: vec![],
             request_clock: UtcInstant::now(),
             expectations: PostBookkeepingExpectation {
                 slug: Some(expected_slug),
@@ -1082,17 +1407,27 @@ mod tests {
             },
         };
 
-        let updated_draft =
-            perform_post_update(storage, update(draft.post_id, changed_slug.clone()))
-                .await
-                .unwrap();
-        assert_eq!(updated_draft.slug, changed_slug);
+        let updated_draft = perform_post_update(
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
+            update(draft.post_id, changed_slug.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(confirmed(updated_draft).slug, changed_slug);
 
-        let updated_published =
-            perform_post_update(storage, update(published.post_id, published.slug.clone()))
-                .await
-                .unwrap();
-        assert_eq!(updated_published.slug, published.slug);
+        let updated_published = perform_post_update(
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
+            update(published.post_id, published.slug.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(confirmed(updated_published).slug, published.slug);
     }
 
     #[apply(backends)]
@@ -1101,15 +1436,20 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let storage = &*env.state.posts;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = Arc::clone(&env.state.posts);
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
         let draft = crate::test_support::SeedRawPost::new(user_id)
             .draft()
             .seed(&env.state)
             .await;
         let clock: UtcInstant = "2042-07-01T12:00:00Z".parse().unwrap();
         let record = perform_post_update(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostUpdate {
                 post_id: draft.post_id,
                 editor_user_id: user_id,
@@ -1121,13 +1461,14 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 tags: Vec::new(),
+                previous_tag_slugs: vec![],
                 request_clock: clock,
                 expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
         .unwrap();
-        assert_eq!(record.published_at, Some(clock));
+        assert_eq!(confirmed(record).published_at, Some(clock));
     }
 
     #[apply(backends)]
@@ -1136,8 +1477,10 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let storage = &*env.state.posts;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = Arc::clone(&env.state.posts);
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
         let post = crate::test_support::SeedRawPost::new(user_id)
             .draft()
             .seed(&env.state)
@@ -1165,13 +1508,17 @@ mod tests {
             summary: None,
             audiences: vec![AudienceTarget::Public],
             tags: Vec::new(),
+            previous_tag_slugs: vec![],
             request_clock: UtcInstant::now(),
             expectations,
         };
 
         assert!(matches!(
             perform_post_update(
-                storage,
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
                 update(PostBookkeepingExpectation {
                     post_id: Some(PostId::from(999_999)),
                     ..Default::default()
@@ -1182,7 +1529,10 @@ mod tests {
         ));
         assert!(matches!(
             perform_post_update(
-                storage,
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
                 update(PostBookkeepingExpectation {
                     format: Some(PostFormat::Html),
                     ..Default::default()
@@ -1193,7 +1543,10 @@ mod tests {
         ));
         assert!(matches!(
             perform_post_update(
-                storage,
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
                 update(PostBookkeepingExpectation {
                     published_at: Some(Some("2026-08-26T12:00:00Z".parse().unwrap())),
                     ..Default::default()
@@ -1204,7 +1557,10 @@ mod tests {
         ));
         assert!(matches!(
             perform_post_update(
-                storage,
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
                 update(PostBookkeepingExpectation {
                     content_etag: Some(host::etag::sha256_of(b"stale")),
                     ..Default::default()
@@ -1232,11 +1588,16 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_slug_exhaustion(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
 
         let r1 = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -1256,7 +1617,10 @@ mod tests {
         .unwrap();
 
         let r2 = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -1264,7 +1628,7 @@ mod tests {
                 format: PostFormat::Markdown,
                 slug_override: None,
                 published_at: None,
-                max_attempts: 2,
+                max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 tags: Vec::new(),
@@ -1275,11 +1639,14 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(r1.slug, "hello-world");
-        assert_eq!(r2.slug, "hello-world-2");
+        assert_eq!(confirmed(r1).slug, "hello-world");
+        assert_eq!(confirmed(r2).slug, "hello-world-2");
 
         let err = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -1305,12 +1672,17 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_canonicalizes_org_body(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
         // Title is derived from the original body's #+TITLE:, then the stored body is
         // canonicalized: the #+TITLE: line is stripped while #+FOO: and content stay.
         let record = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("#+TITLE: Hi\n#+FOO: x\n\nHello"),
@@ -1329,6 +1701,7 @@ mod tests {
         .await
         .unwrap();
 
+        let record = confirmed(record);
         assert_eq!(record.title.as_deref(), Some("Hi"));
         assert!(
             !record.body.contains("#+TITLE:"),
@@ -1343,12 +1716,17 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_update_canonicalizes_org_body(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
         // Canonicalization runs on the update path too: a re-saved Org body has its
         // #+TITLE: stripped while an unrecognized #+FOO: and the content survive.
         let created = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("#+TITLE: First\n\noriginal"),
@@ -1366,9 +1744,13 @@ mod tests {
         )
         .await
         .unwrap();
+        let created = confirmed(created);
 
         let record = perform_post_update(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostUpdate {
                 post_id: created.post_id,
                 editor_user_id: user_id,
@@ -1380,6 +1762,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 tags: Vec::new(),
+                previous_tag_slugs: vec![],
                 request_clock: UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1387,6 +1770,7 @@ mod tests {
         .await
         .unwrap();
 
+        let record = confirmed(record);
         assert_eq!(record.title.as_deref(), Some("Second"));
         assert!(
             !record.body.contains("#+TITLE:"),
@@ -1405,8 +1789,10 @@ mod tests {
     #[tokio::test]
     async fn perform_post_creation_rejects_title_only_org_body(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
 
         // ADR-0024 canonicalization treats a leading `* heading` as the title *source*
         // and strips it, so this body leaves nothing to store (#811 decision 2).
@@ -1425,29 +1811,46 @@ mod tests {
             expectations: PostBookkeepingExpectation::default(),
         };
 
-        let err = perform_post_creation(storage, creation("* My Title\n", PostFormat::Org))
-            .await
-            .expect_err("a title-only Org post has nothing left to store");
+        let err = perform_post_creation(
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
+            creation("* My Title\n", PostFormat::Org),
+        )
+        .await
+        .expect_err("a title-only Org post has nothing left to store");
         assert!(matches!(err, PerformCreationError::EmptyPost), "{err:?}");
 
         // The discriminator: the same bytes are ordinary content in Markdown, so the
         // rejection is Org's title-stripping and not the `PostBody` parse.
-        perform_post_creation(storage, creation("* My Title\n", PostFormat::Markdown))
-            .await
-            .expect("the same bytes are content, not a title source, in Markdown");
+        perform_post_creation(
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
+            creation("* My Title\n", PostFormat::Markdown),
+        )
+        .await
+        .expect("the same bytes are content, not a title source, in Markdown");
     }
 
     #[apply(backends)]
     #[tokio::test]
     async fn perform_post_update_rejects_title_only_org_body(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
 
         // The update path rejects it too — editing a post down to nothing but its title
         // is the same nonsense as creating one that way.
         let created = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("* My Title\n\nreal content"),
@@ -1465,9 +1868,13 @@ mod tests {
         )
         .await
         .unwrap();
+        let created = confirmed(created);
 
         let err = perform_post_update(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostUpdate {
                 post_id: created.post_id,
                 editor_user_id: user_id,
@@ -1479,6 +1886,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 tags: Vec::new(),
+                previous_tag_slugs: vec![],
                 request_clock: UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1492,13 +1900,18 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_markdown_body_keeps_its_heading(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
         // Every format canonicalizes (#811); what distinguishes them is that only Org
         // treats its title source as a *header* and strips it. A Markdown `# H1` is
         // content and survives. Whitespace is canonicalized for both, hence the newline.
         let record = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("# H1\n\nBody text"),
@@ -1517,6 +1930,7 @@ mod tests {
         .await
         .unwrap();
 
+        let record = confirmed(record);
         assert_eq!(record.body, "# H1\n\nBody text\n");
     }
 
@@ -1524,13 +1938,18 @@ mod tests {
     #[tokio::test]
     async fn test_perform_post_creation_org_title_rendered_once(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
         // Double-title regression: the title text from the #+TITLE: line must not
         // survive into the stored body (hence rendered_html), so the page chrome's
         // title is the only place it appears. record.title still carries it.
         let record = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             PostCreation {
                 user_id,
                 body: parse_post_body("#+TITLE: Distinct Headline\n\nParagraph body"),
@@ -1549,6 +1968,7 @@ mod tests {
         .await
         .unwrap();
 
+        let record = confirmed(record);
         assert_eq!(record.title.as_deref(), Some("Distinct Headline"));
         assert!(
             !record.body.contains("Distinct Headline"),
@@ -1594,14 +2014,19 @@ mod tests {
     #[tokio::test]
     async fn perform_post_creation_dedups_on_idempotency_key(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
         let key = parse_idempotency_key("k");
         seed_media(&env.state, user_id, "original.jpg").await;
         seed_media(&env.state, user_id, "attempted.jpg").await;
 
         let first = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             creation_with_key(
                 user_id,
                 parse_post_body(&format!("<img src=\"{}\">", media_url_for("original.jpg"))),
@@ -1610,6 +2035,7 @@ mod tests {
         )
         .await
         .unwrap();
+        let first = confirmed(first);
 
         // The duplicate reaches the post, audience, and media writes before its
         // idempotency insert collides; the transaction must roll every attempted row back.
@@ -1619,7 +2045,15 @@ mod tests {
             Some(&key),
         );
         replay.audiences = vec![AudienceTarget::Subscribers];
-        let err = perform_post_creation(storage, replay).await.unwrap_err();
+        let err = perform_post_creation(
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
+            replay,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, PerformCreationError::IdempotencyConflict));
 
         let posts = storage
@@ -1669,11 +2103,16 @@ mod tests {
     #[tokio::test]
     async fn perform_post_creation_sanitizes_stored_rendered_html(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
 
         let record = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             creation_with_key(
                 user_id,
                 parse_post_body(
@@ -1685,6 +2124,7 @@ mod tests {
         .await
         .unwrap();
 
+        let record = confirmed(record);
         let html = &record.rendered_html;
         assert!(!html.contains("<script"), "{html}");
         assert!(!html.contains("onerror"), "{html}");
@@ -1703,13 +2143,18 @@ mod tests {
     #[tokio::test]
     async fn post_id_for_idempotency_key_maps(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let seeded_user = SeedUser::new().seed(&env.state).await;
+        let user_id = seeded_user.user_id;
+
+        let storage = Arc::clone(&env.state.posts);
         let key = parse_idempotency_key("k");
         let missing_key = parse_idempotency_key("unknown");
 
         let record = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             creation_with_key(user_id, parse_post_body("Body"), Some(&key)),
         )
         .await
@@ -1719,6 +2164,7 @@ mod tests {
             .post_id_for_idempotency_key(user_id, &key)
             .await
             .unwrap();
+        let record = confirmed(record);
         assert_eq!(mapped, Some(record.post_id));
 
         let missing = storage
@@ -1734,22 +2180,30 @@ mod tests {
         let env = backend.setup().await;
         let user_a = SeedUser::new().seed(&env.state).await.user_id;
         let user_b = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
+        let storage = Arc::clone(&env.state.posts);
         let key = parse_idempotency_key("k");
 
         // The same key string from two users creates two independent posts.
         let post_a = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             creation_with_key(user_a, parse_post_body("A body"), Some(&key)),
         )
         .await
         .unwrap();
         let post_b = perform_post_creation(
-            storage,
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
             creation_with_key(user_b, parse_post_body("B body"), Some(&key)),
         )
         .await
         .unwrap();
+        let post_a = confirmed(post_a);
+        let post_b = confirmed(post_b);
         assert_ne!(post_a.post_id, post_b.post_id);
 
         assert_eq!(

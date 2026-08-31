@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use axum::{
     body::Body,
     http::{HeaderValue, Method, Request, StatusCode, header},
 };
+use common::MutationOutcome;
 use common::ids::PostId;
 use common::root_relative_url::RootRelativeUrl;
 use common::tag::{MAX_TAGS_PER_POST, TagLabel};
@@ -503,14 +506,25 @@ async fn malformed_username_path_returns_400(#[case] backend: Backend) {
 async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
-    // Set default format to Markdown so text entries round-trip properly
-    storage::set_default_post_format(
-        state.user_config.as_ref(),
-        session.user_id,
-        storage::PostFormat::Markdown,
-    )
-    .await
-    .unwrap();
+    // Set default format to Markdown so text entries round-trip properly.
+    let user_config = Arc::clone(&state.user_config);
+    let user_id = session.user_id;
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                storage::set_default_post_format(
+                    user_config.as_ref(),
+                    transaction,
+                    user_id,
+                    storage::PostFormat::Markdown,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    assert!(matches!(outcome, MutationOutcome::Confirmed(())));
     let app = make_app(&state, &base);
 
     let xml = entry_xml("Hello", "text", "the body");
@@ -724,15 +738,15 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
 
     let post = session.seed_post().seed(&state).await;
 
-    state
-        .posts
-        .set_post_tags(
-            post.post_id,
-            session.user_id,
-            &["original-tag".parse::<TagLabel>().unwrap()],
-        )
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post.post_id,
+        session.user_id,
+        &["original-tag".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
 
     let app = make_app(&state, &base);
 
@@ -1252,22 +1266,38 @@ async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let author = create_user_and_session(&state).await;
     let foreign = create_user_and_session(&state).await;
-    let owned = state
-        .audiences
-        .create_audience(
-            author.user_id,
-            &common::test_support::parse_audience_name("Owned"),
-        )
-        .await
-        .expect("create author's audience");
-    let foreign_audience = state
-        .audiences
-        .create_audience(
-            foreign.user_id,
-            &common::test_support::parse_audience_name("Foreign"),
-        )
-        .await
-        .expect("create foreign audience");
+    let owned_name = common::test_support::parse_audience_name("Owned");
+    let audiences = Arc::clone(&state.audiences);
+    let owned = storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    audiences
+                        .create_audience(transaction, author.user_id, &owned_name)
+                        .await
+                })
+            })
+            .await
+            .expect("create author's audience"),
+        "author's audience fixture",
+    );
+    let foreign_name = common::test_support::parse_audience_name("Foreign");
+    let audiences = Arc::clone(&state.audiences);
+    let foreign_audience = storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    audiences
+                        .create_audience(transaction, foreign.user_id, &foreign_name)
+                        .await
+                })
+            })
+            .await
+            .expect("create foreign audience"),
+        "foreign audience fixture",
+    );
 
     let owned_xml = entry_xml(
         "Audience",
@@ -1489,15 +1519,15 @@ async fn update_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
     let session = create_user_and_session(&state).await;
     let post = session.seed_post().seed(&state).await;
 
-    state
-        .posts
-        .set_post_tags(
-            post.post_id,
-            session.user_id,
-            &["original-tag".parse::<TagLabel>().unwrap()],
-        )
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post.post_id,
+        session.user_id,
+        &["original-tag".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
 
     let app = make_app(&state, &base);
 
@@ -2031,11 +2061,20 @@ async fn create_widens_each_default_audience(
 
     // AtomPub has no audience field, so post creation is the per-Post boundary
     // that widens this instance-wide default.
-    state
-        .site_config
-        .set_default_audience(&default_audience)
-        .await
-        .unwrap();
+    let site_config = std::sync::Arc::clone(&state.site_config);
+    storage::test_support::confirmed(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    site_config
+                        .set_default_audience(transaction, &default_audience)
+                        .await
+                })
+            })
+            .await
+            .unwrap(),
+    );
 
     let app = make_app(&state, &base);
     let xml = entry_xml("Hello", "text", "the body");

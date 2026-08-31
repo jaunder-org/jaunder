@@ -14,6 +14,19 @@ pub use host::error::{
     ErrorClass, ErrorKind, InternalError, InternalResult, SwallowedSource, report_swallowed,
 };
 
+/// Converts a write-scope failure into the web's internal error carrier.
+///
+/// Every web mutation must use this seam so begin failures remain storage errors
+/// and operation failures preserve their typed application classification.
+pub(crate) fn from_write_scope_error(
+    error: storage::WriteScopeError<InternalError>,
+) -> InternalError {
+    match error {
+        storage::WriteScopeError::Operation(error) => error,
+        storage::WriteScopeError::Begin(error) => InternalError::storage(error),
+    }
+}
+
 /// Emits the boundary telemetry for a failed `#[server]` **argument decode**.
 ///
 /// Arg deserialization happens in leptos's `from_req`, *before* the generated

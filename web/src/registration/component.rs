@@ -3,15 +3,14 @@
 //! [`marker_storage`](crate::auth::marker_storage) binding) directly, no `cfg`
 //! gates inside this file.
 
-use super::{Register, RegistrationRequest};
+use super::Register;
 use crate::auth::{self, SessionUser};
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
 use crate::topbar::Topbar;
-use common::invite::ProfferedInviteCode;
-use common::password::ProfferedPassword;
-use common::registration::RegistrationPolicy;
-use common::username::Username;
+use common::{
+    MutationOutcome, password::PasswordShape, registration::RegistrationPolicy, username::Username,
+};
 use leptos::prelude::*;
 
 /// Guidance shown on `/register` in invite-only mode when the URL carries no invite
@@ -52,13 +51,18 @@ pub fn RegisterPage() -> impl IntoView {
     // live `username` field, which the user could have edited between submit and
     // response. The server still owns the real cookie.
     Effect::new(move |_| {
-        if let Some(Ok(())) = register_action.value().get()
+        if let Some(Ok(outcome)) = register_action.value().get()
             && let Some(input) = register_action.input().get()
         {
-            auth::set_session(SessionUser {
-                username: input.request.username.clone(),
-                is_operator: false,
-            });
+            match outcome {
+                MutationOutcome::Confirmed(()) | MutationOutcome::CommitIndeterminate(()) => {
+                    auth::set_session(SessionUser {
+                        username: input.username.clone(),
+                        is_operator: false,
+                    });
+                    auth::use_session().reconcile.refetch();
+                }
+            }
         }
     });
 
@@ -95,8 +99,22 @@ pub fn RegisterPage() -> impl IntoView {
                     register_action
                         .value()
                         .get()
-                        .and_then(|r: Result<(), WebError>| r.err())
-                        .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                        .and_then(|r: Result<MutationOutcome<()>, WebError>| match r {
+                            Ok(MutationOutcome::Confirmed(())) => None,
+                            Ok(MutationOutcome::CommitIndeterminate(())) => {
+                                Some(
+                                    view! {
+                                        <p class="error">
+                                            "Your account may have been created, but its status could not be confirmed. Refresh to check."
+                                        </p>
+                                    }
+                                        .into_any(),
+                                )
+                            }
+                            Err(error) => {
+                                Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
+                            }
+                        })
                 }}
             </div>
         </div>
@@ -110,20 +128,17 @@ fn RegistrationForm(
     show_invite_note: bool,
 ) -> impl IntoView {
     let username = Field::<Username>::new();
-    let password = Field::<ProfferedPassword>::new();
-    let parsed_invite = (!invite_code.is_empty())
-        .then(|| invite_code.parse::<ProfferedInviteCode>().ok())
-        .flatten();
+    let password = Field::<PasswordShape>::new();
     let (disabled, submit) = forms::server_action_submit(action, move || {
         username
             .parsed()
-            .zip(password.parsed())
+            .zip(password.value.get().parse().ok())
             .map(|(username, password)| Register {
-                request: RegistrationRequest {
-                    username,
-                    password,
-                    invite_code: parsed_invite.clone(),
-                },
+                username,
+                password,
+                invite_code: (!invite_code.is_empty())
+                    .then(|| invite_code.parse().ok())
+                    .flatten(),
             })
     });
 
@@ -140,7 +155,7 @@ fn RegistrationForm(
                     field=username
                     transform=str::to_lowercase
                 />
-                <ValidatedInput<ProfferedPassword>
+                <ValidatedInput<PasswordShape>
                     label="Password"
                     name="password"
                     input_type="password"

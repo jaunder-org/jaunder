@@ -13,7 +13,7 @@ use host::config_key::UserConfigKey;
 use host::password::Password;
 use jaunder::cli::StorageArgs;
 use std::sync::Arc;
-use storage::test_support::{SeedRawPost, fp};
+use storage::test_support::{SeedRawPost, confirmed_for, fp};
 use storage::{AppState, MediaRecord, open_existing_database};
 
 /// SHA-256 the media-table fixture row is keyed by; any stable value works, since
@@ -56,16 +56,29 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         .expect("open database");
     let username: Username = "backupuser".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
-    let author = state
-        .users
-        .create_user(
-            &username,
-            &password,
-            Some(&parse_display_name("Backup User")),
-            true,
-        )
+    let users = Arc::clone(&state.users);
+    let display_name = parse_display_name("Backup User");
+    let password_for_author = storage::prepare_password(password.clone())
+        .await
+        .expect("prepare author password");
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                users
+                    .create_user(
+                        transaction,
+                        &username,
+                        &password_for_author,
+                        Some(&display_name),
+                        true,
+                    )
+                    .await
+            })
+        })
         .await
         .expect("create user");
+    let author = confirmed_for(outcome, "backup fixture user");
     let public = SeedRawPost::new(author)
         .published_at(fixture_published_at())
         .tags(["Backup-Test"])
@@ -97,36 +110,81 @@ async fn seed_named_audience_post(
     password: &Password,
 ) -> (UserId, PostId) {
     let viewer_name: Username = "viewer".parse().expect("valid username");
-    let viewer = state
-        .users
-        .create_user(
-            &viewer_name,
-            password,
-            Some(&parse_display_name("Viewer")),
-            false,
-        )
+    let users = Arc::clone(&state.users);
+    let display_name = parse_display_name("Viewer");
+    let password = storage::prepare_password(password.clone())
+        .await
+        .expect("prepare viewer password");
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                users
+                    .create_user(
+                        transaction,
+                        &viewer_name,
+                        &password,
+                        Some(&display_name),
+                        false,
+                    )
+                    .await
+            })
+        })
         .await
         .expect("create viewer");
+    let viewer = confirmed_for(outcome, "backup fixture viewer");
     let local = state
         .subscriptions
         .local_channel_id()
         .await
         .expect("local channel");
-    let subscription = state
-        .subscriptions
-        .subscribe(author, &local_subscriber_identity(local, viewer))
-        .await
-        .expect("subscribe viewer");
-    let audience = state
-        .audiences
-        .create_audience(author, &parse_audience_name("friends"))
-        .await
-        .expect("create audience");
-    state
-        .audiences
-        .add_member(author, audience, subscription)
-        .await
-        .expect("add audience member");
+    let subscriber = local_subscriber_identity(local, viewer);
+    let subscriptions = Arc::clone(&state.subscriptions);
+    let subscription = confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    subscriptions
+                        .subscribe(transaction, author, &subscriber)
+                        .await
+                })
+            })
+            .await
+            .expect("subscribe viewer"),
+        "backup fixture subscription",
+    );
+    let audience_name = parse_audience_name("friends");
+    let audiences = Arc::clone(&state.audiences);
+    let audience = confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    audiences
+                        .create_audience(transaction, author, &audience_name)
+                        .await
+                })
+            })
+            .await
+            .expect("create audience"),
+        "backup fixture audience",
+    );
+    let audiences = Arc::clone(&state.audiences);
+    confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    audiences
+                        .add_member(transaction, author, audience, subscription)
+                        .await
+                })
+            })
+            .await
+            .expect("add audience member"),
+        "backup fixture audience membership",
+    );
     let named_post = SeedRawPost::new(author)
         .published_at(fixture_published_at())
         .audiences(vec![AudienceTarget::Named(audience)])
@@ -139,30 +197,52 @@ async fn seed_named_audience_post(
 /// Seeds the side tables: a `user_config` row, a media-table row, and a
 /// `feed_events` row.
 async fn seed_side_tables(state: &AppState, author: UserId) {
-    state
-        .user_config
-        .set(author, UserConfigKey::DefaultPostFormat, "org")
-        .await
-        .expect("set user config");
-    state
-        .media
-        .create_media(&MediaRecord {
-            user_id: author,
-            sha256: parse_content_hash(FIXTURE_MEDIA_SHA256),
-            filename: parse_filename("my%20photo.jpg"),
-            source: MediaSource::Upload,
-            content_type: parse_content_type("image/jpeg"),
-            size_bytes: parse_byte_size("4"),
-            source_url: None,
-            created_at: fixture_published_at(),
-        })
-        .await
-        .expect("create media row");
-    state
-        .feed_events
-        .enqueue(&fp("/feed.rss"))
-        .await
-        .expect("enqueue feed event");
+    let user_config = Arc::clone(&state.user_config);
+    let key = UserConfigKey::DefaultPostFormat;
+    let value = String::from("org");
+    confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { user_config.set(transaction, author, key, &value).await })
+            })
+            .await
+            .expect("set user config"),
+        "backup fixture user config",
+    );
+    let media = Arc::clone(&state.media);
+    let record = MediaRecord {
+        user_id: author,
+        sha256: parse_content_hash(FIXTURE_MEDIA_SHA256),
+        filename: parse_filename("my%20photo.jpg"),
+        source: MediaSource::Upload,
+        content_type: parse_content_type("image/jpeg"),
+        size_bytes: parse_byte_size("4"),
+        source_url: None,
+        created_at: fixture_published_at(),
+    };
+    confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { media.create_media(transaction, &record).await })
+            })
+            .await
+            .expect("create media row"),
+        "backup fixture media",
+    );
+    let feed_events = Arc::clone(&state.feed_events);
+    let feed_path = fp("/feed.rss");
+    confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { feed_events.enqueue(transaction, &feed_path).await })
+            })
+            .await
+            .expect("enqueue feed event"),
+        "backup fixture feed event",
+    );
 }
 
 pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixtureIds) {

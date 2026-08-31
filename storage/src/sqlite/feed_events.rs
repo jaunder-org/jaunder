@@ -27,33 +27,46 @@ fn finish_purge(
 
 /// Deletes claimed rows whose `feed_url` cannot decode. Partitioning reports
 /// the aggregate decode failure; only a failed cleanup is reported here.
-async fn purge_corrupt(pool: &Pool<Sqlite>, ids: &[FeedEventId]) -> Result<(), sqlx::Error> {
+async fn purge_corrupt(
+    connection: &mut sqlx::SqliteConnection,
+    ids: &[FeedEventId],
+) -> Result<(), sqlx::Error> {
     if ids.is_empty() {
         return Ok(());
     }
+    sqlx::query("SAVEPOINT feed_event_purge")
+        .execute(&mut *connection)
+        .await?;
     let ph = placeholders(ids.len());
     let sql = format!("DELETE FROM feed_events WHERE id IN ({ph})");
     let mut query = sqlx::query(&sql);
     for id in ids {
         query = query.bind(*id);
     }
-    query.execute(pool).await?;
+    let result = query.execute(&mut *connection).await;
+    if let Err(error) = result {
+        sqlx::query("ROLLBACK TO SAVEPOINT feed_event_purge")
+            .execute(&mut *connection)
+            .await?;
+        sqlx::query("RELEASE SAVEPOINT feed_event_purge")
+            .execute(&mut *connection)
+            .await?;
+        return Err(error);
+    }
+    sqlx::query("RELEASE SAVEPOINT feed_event_purge")
+        .execute(&mut *connection)
+        .await?;
     Ok(())
 }
 
 #[async_trait]
 impl FeedEventDialect for Sqlite {
     async fn claim_pending_batch(
-        pool: &Pool<Sqlite>,
+        connection: &mut sqlx::SqliteConnection,
         now: UtcInstant,
         lease_cutoff: UtcInstant,
         limit: FeedEventClaimLimit,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
-        // The write-first transaction retains SQLite's immediate write-lock behavior
-        // (ADR-0021) while holding the atomic UPDATE … RETURNING claim until every
-        // row decodes and conversion partitions feed-URL purge candidates. Dropping
-        // it rolls back any non-URL decode error; commit precedes existing URL purge.
-        let mut tx = pool.begin().await?;
         let rows = sqlx::query_as::<_, ClaimedFeedEventRow>(
             "UPDATE feed_events SET status = 'claimed', claimed_at = $1 \
              WHERE id IN ( \
@@ -70,15 +83,14 @@ impl FeedEventDialect for Sqlite {
         .bind(now)
         .bind(lease_cutoff)
         .bind(limit)
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut *connection)
         .await?
         .into_iter()
         .map(ClaimedRow::from)
         .collect();
 
         let (records, corrupt) = feed_events::partition_claimed(rows);
-        tx.commit().await?;
-        let purge = purge_corrupt(pool, &corrupt).await;
+        let purge = purge_corrupt(connection, &corrupt).await;
         Ok(finish_purge(records, purge))
     }
 
@@ -100,7 +112,7 @@ impl FeedEventDialect for Sqlite {
     }
 
     async fn mark_regenerated(
-        pool: &Pool<Sqlite>,
+        connection: &mut sqlx::SqliteConnection,
         ids: &[FeedEventId],
     ) -> Result<(), FeedEventError> {
         let now = UtcInstant::now();
@@ -110,11 +122,14 @@ impl FeedEventDialect for Sqlite {
         for id in ids {
             q = q.bind(*id);
         }
-        q.execute(pool).await?;
+        q.execute(&mut *connection).await?;
         Ok(())
     }
 
-    async fn mark_pinged(pool: &Pool<Sqlite>, ids: &[FeedEventId]) -> Result<(), FeedEventError> {
+    async fn mark_pinged(
+        connection: &mut sqlx::SqliteConnection,
+        ids: &[FeedEventId],
+    ) -> Result<(), FeedEventError> {
         let now = UtcInstant::now();
         let ph = placeholders(ids.len());
         let sql =
@@ -123,12 +138,12 @@ impl FeedEventDialect for Sqlite {
         for id in ids {
             q = q.bind(*id);
         }
-        q.execute(pool).await?;
+        q.execute(&mut *connection).await?;
         Ok(())
     }
 
     async fn mark_failed(
-        pool: &Pool<Sqlite>,
+        connection: &mut sqlx::SqliteConnection,
         ids: &[FeedEventId],
         error: &str,
         next_attempt_at: UtcInstant,
@@ -144,12 +159,12 @@ impl FeedEventDialect for Sqlite {
         for id in ids {
             q = q.bind(*id);
         }
-        q.execute(pool).await?;
+        q.execute(&mut *connection).await?;
         Ok(())
     }
 
     async fn mark_exhausted(
-        pool: &Pool<Sqlite>,
+        connection: &mut sqlx::SqliteConnection,
         ids: &[FeedEventId],
         error: &str,
     ) -> Result<(), FeedEventError> {
@@ -161,7 +176,7 @@ impl FeedEventDialect for Sqlite {
         for id in ids {
             q = q.bind(*id);
         }
-        q.execute(pool).await?;
+        q.execute(&mut *connection).await?;
         Ok(())
     }
 }
@@ -181,8 +196,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::finish_purge;
+    use crate::FeedEventRecord;
     use crate::test_support::{Backend, fp, sqlite_only};
-    use crate::{FeedEventError, FeedEventRecord};
     use chrono::Duration;
     use common::{ids::FeedEventId, time::UtcInstant};
     use host::feed::FeedEventStatus;
@@ -225,23 +240,40 @@ mod tests {
         // automated coverage suite, so these lines are accepted-uncovered.
         let env = backend.setup().await;
         let feed_events = env.state.feed_events.clone();
+        let write_scope = env.state.write_scope.clone();
 
         // Seed a populated queue with distinct valid feed paths.
         for i in 0..200 {
+            let feed_events = Arc::clone(&feed_events);
             let url = fp(&format!("/tags/t{i}/feed.rss"));
-            feed_events.enqueue(&url).await.expect("enqueue");
+            write_scope
+                .run(move |transaction| {
+                    Box::pin(async move { feed_events.enqueue(transaction, &url).await })
+                })
+                .await
+                .expect("enqueue");
         }
 
         // Many concurrent claimers re-contending the same rows (zero lease keeps
         // every row claimable each pass → maximal UPDATE-upgrade contention).
         let mut handles = Vec::new();
         for _ in 0..16 {
-            let fe = Arc::clone(&feed_events);
+            let feed_events = Arc::clone(&feed_events);
+            let write_scope = write_scope.clone();
             handles.push(tokio::spawn(async move {
                 for _ in 0..50 {
-                    fe.claim_pending_batch(200, Duration::zero()).await?;
+                    let feed_events = Arc::clone(&feed_events);
+                    write_scope
+                        .run(move |transaction| {
+                            Box::pin(async move {
+                                feed_events
+                                    .claim_pending_batch(transaction, 200, Duration::zero())
+                                    .await
+                            })
+                        })
+                        .await?;
                 }
-                Ok::<(), FeedEventError>(())
+                Ok::<(), anyhow::Error>(())
             }));
         }
 

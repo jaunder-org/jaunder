@@ -157,19 +157,23 @@ be a thin shell over a near-total dialect
 ### Dependency injection and AppState
 
 `storage::AppState` (`storage/src/app_state.rs`) is a bundle of fourteen trait
-handles — thirteen `Arc<dyn *Storage>` plus `Arc<dyn AtomicOps>` — built by
-`open_database` at the composition root. It holds storage only; services
-(mailer, WebSub client, background workers) are constructed in `server` and
-injected per-consumer as constructor parameters, and there is no services
-bundle. The durable invariant: no type may be both a heterogeneous dependency
-holder and passed beyond the composition root
+handles — thirteen `Arc<dyn *Storage>` plus `Arc<dyn AtomicOps>` — and the
+factory-minted, sealed `WriteScope`, all built by `open_database` at the
+composition root. It holds storage dependencies only; services (mailer, WebSub
+client, background workers) are constructed in `server` and injected
+per-consumer as constructor parameters, and there is no services bundle. The
+durable invariant: no type may be both a heterogeneous dependency holder and
+passed beyond the composition root
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
 
-The web layer takes its dependencies per-trait via Leptos context.
-`server::provide_app_state_contexts` (`server/src/context.rs:25`) publishes
-thirteen of the handles (all but `feed_cache`, which no `#[server]` fn needs),
-and each server fn fetches exactly what it uses —
-`expect_context::<Arc<dyn UserStorage>>()`. The helper lives in `server`, not
+The web layer takes its dependencies per-trait via Leptos context and receives
+`WriteScope` and `MediaContentLocks` as separate context values.
+`server::provide_app_state_contexts` (`server/src/context.rs:27`) publishes
+thirteen of the handles (all but `feed_cache`, which no `#[server]` fn needs)
+plus the separately injected scope; the router composition root separately
+provides the media coordinator. Each server fn fetches exactly what it uses —
+`expect_context::<Arc<dyn UserStorage>>()`, `expect_context::<WriteScope>()`, or
+`expect_context::<Arc<MediaContentLocks>>()`. The helper lives in `server`, not
 `storage`, because using Leptos context as the DI mechanism is an
 application-wiring decision
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)). Nothing in the
@@ -185,11 +189,10 @@ parentless root owner strong for the whole future by itself. The ADR-0016
 superseded-and-historical inside the ADR
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
 
-Operations that must span multiple traits atomically (`create_user_with_invite`,
-`confirm_password_reset`) live on the `AtomicOps` trait
-(`storage/src/atomic.rs`) and run as single transactions in the concrete backend
-([ADR-0001](adr/0001-storage-backends.md),
-[ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
+The two multi-trait operations on `AtomicOps` (`create_user_with_invite`,
+`confirm_password_reset`) are part of the same audited write surface: each
+receives the caller's mutable `WriteTransaction` capability and composes within
+its `WriteScope`, rather than owning a storage-side transaction.
 
 ### Query and transaction discipline
 
@@ -199,12 +202,10 @@ Operations that must span multiple traits atomically (`create_user_with_invite`,
   stable under concurrent inserts ([ADR-0004](adr/0004-pagination-strategy.md)).
 - **SQLite transactions.** SQLite dialect code avoids read-then-write deferred
   transactions (the shared→reserved lock upgrade that yields unretryable
-  `SQLITE_BUSY` under WAL concurrency): "read to validate, then write" is
-  expressed as a single autocommit `UPDATE/INSERT/DELETE … WHERE … RETURNING`,
-  and genuinely multi-statement transactions open with `BEGIN IMMEDIATE`
-  (`storage/src/sqlite/posts.rs:53`, `storage/src/sqlite/atomic.rs:48`). Where
-  the same operation is generic, Postgres reaches the same serialization with
-  `SELECT … FOR UPDATE` instead
+  `SQLITE_BUSY` under WAL concurrency). Audited application mutations receive
+  the transaction minted by `WriteScope`; its SQLite adapter opens
+  `BEGIN IMMEDIATE`, while PostgreSQL reaches the required serialization with
+  its operation-specific row locks, including `SELECT … FOR UPDATE`
   ([ADR-0021](adr/0021-sqlite-transaction-discipline.md)).
 - **Bounded write-lock occupancy.** SQLite has one write lock and `busy_timeout`
   polls rather than queues, so churn — not hold length — is what starves a
@@ -334,6 +335,35 @@ Details in the testing section.
   ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)); no such type
   exists in `storage`, and every non-serve CLI command still constructs the full
   `AppState` via `open_existing_database` (`server/src/commands.rs`).
+
+- **Structural write scopes and mutation outcomes.** A factory-minted, sealed,
+  backend-erased `WriteScope` is injected separately beside the exact storage
+  traits
+  ([structural write scopes and mutation outcomes](adr/drafts/structural-write-scopes-and-mutation-outcomes.md)).
+  Its explicit `run` boundary supplies a sealed mutable `WriteTransaction`
+  capability, never storage lookup or arbitrary SQL. The closed audited
+  application surface has exactly 48 declarations: Audience (5), Email
+  Verification (2), Feed Cache (2), Feed Event (7), Invite (1), Media (2),
+  Password Reset (2), Post (7), Session (3), Site Config (6), Subscription (2),
+  User Config (2), User (5), and AtomicOps (2). Each takes
+  `&mut WriteTransaction`; there are no pool-backed, auto-committing,
+  standalone, or compatibility mutation paths. The structural gate derives the
+  observed declarations, compares them with the closed 48-method list, rejects
+  unknown, missing, and duplicate declarations, and rejects production
+  transaction starts that bypass the `WriteScope`/`WriteTransaction`
+  composition. It excludes administrative lifecycle work, dialect code, and
+  internal helpers. Callback failure is rollback-confirmed; a failed commit
+  acknowledgement is commit-indeterminate. Typed `MutationOutcome<T>` preserves
+  that algebra through server responses and client revalidation, while the
+  owning scope span records the bounded outcome. SQLite scopes retain
+  `BEGIN IMMEDIATE`; PostgreSQL operations retain their required row locks; and
+  the post-tag plus media-reconciliation paths retain their ordering,
+  rollback-on-drop, and injected-error behaviour. A separately injected,
+  cross-process `MediaContentLocks` capability serializes media placement and
+  reclamation with Post create/update for each content hash, in stable order for
+  multi-reference Posts. Writers acquire it before their short database
+  identity-lock scopes and retain it through filesystem cleanup, so no database
+  transaction spans filesystem I/O and no Post reference can race file removal.
 
 ## Content model
 

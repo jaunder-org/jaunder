@@ -1,5 +1,4 @@
-use std::fmt::Write as _;
-use std::net::SocketAddr;
+use std::{fmt::Write as _, net::SocketAddr, sync::Arc};
 
 use axum::{
     body::Body,
@@ -232,16 +231,16 @@ async fn command_source_chain_cmd_smtp_test_quoted_sender_reaches_send(#[case] b
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
         .expect("open");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpHost, "mail.example.com")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpHost, "mail.example.com")
         .await
         .expect("set host");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpSender, "Acme, Inc <noreply@example.com>")
-        .await
-        .expect("set sender");
+    crate::helpers::set_site_config(
+        &state,
+        SiteConfigKey::SmtpSender,
+        "Acme, Inc <noreply@example.com>",
+    )
+    .await
+    .expect("set sender");
 
     let error = cmd_smtp_test(&args, &parse_email("to@example.com"))
         .await
@@ -270,9 +269,7 @@ async fn command_source_chain_cmd_smtp_test_send(#[case] backend: Backend) {
         (SiteConfigKey::SmtpPort, "1"),
         (SiteConfigKey::SmtpTlsMode, "plain"),
     ] {
-        state
-            .site_config
-            .set(key, value)
+        crate::helpers::set_site_config(&state, key, value)
             .await
             .expect("set SMTP config");
     }
@@ -484,9 +481,15 @@ async fn typed_account_command_source_app_password_lookup(#[case] backend: Backe
     let username: Username = "alice".parse().expect("valid username");
     let label = parse_session_label("CLI");
 
-    let error = app_password_create(&env.state, &username, &label)
-        .await
-        .unwrap_err();
+    let error = app_password_create(
+        &env.state.write_scope,
+        env.state.users(),
+        Arc::clone(&env.state.sessions),
+        &username,
+        label,
+    )
+    .await
+    .unwrap_err();
 
     assert_eq!(error.to_string(), "failed to look up user");
     assert!(
@@ -508,9 +511,15 @@ async fn typed_account_command_source_app_password_session_create(#[case] backen
         .unwrap();
     let label = parse_session_label("CLI");
 
-    let error = app_password_create(&env.state, &user.username, &label)
-        .await
-        .unwrap_err();
+    let error = app_password_create(
+        &env.state.write_scope,
+        env.state.users(),
+        Arc::clone(&env.state.sessions),
+        &user.username,
+        label,
+    )
+    .await
+    .unwrap_err();
 
     assert_eq!(error.to_string(), "failed to create app password");
     assert!(
@@ -1381,34 +1390,22 @@ async fn cmd_smtp_test_succeeds_with_mock_server(#[case] backend: Backend) {
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
         .expect("open db");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpHost, &server.host().to_string())
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpHost, &server.host().to_string())
         .await
         .expect("set host");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpPort, &server.port().to_string())
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpPort, &server.port().to_string())
         .await
         .expect("set port");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpTlsMode, "plain")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpTlsMode, "plain")
         .await
         .expect("set tls_mode");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpSender, "noreply@example.com")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpSender, "noreply@example.com")
         .await
         .expect("set sender");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpUsername, "user")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpUsername, "user")
         .await
         .expect("set username");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpPassword, "password")
+    crate::helpers::set_site_config(&state, SiteConfigKey::SmtpPassword, "password")
         .await
         .expect("set password");
 

@@ -6,7 +6,7 @@ use common::username::Username;
 use host::config_key::SiteConfigKey;
 use std::sync::Arc;
 
-use storage::test_support::{Backend, TestEnv};
+use storage::test_support::{Backend, TestEnv, confirmed_for};
 
 /// Returns a `PathBuf` pointing to a temporary directory usable as a storage
 /// root.  The caller is responsible for keeping the `TempDir` alive; this
@@ -75,11 +75,16 @@ impl SeededSession {
 /// session label lives, so a `create_session`-signature change (#325) touches
 /// only here.
 async fn issue_session(state: &Arc<storage::AppState>, user_id: UserId) -> RawToken {
-    state
-        .sessions
-        .create_session(user_id, &parse_session_label("test session"))
+    let sessions = Arc::clone(&state.sessions);
+    let label = parse_session_label("test session");
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
+        })
         .await
-        .expect("create session")
+        .expect("create session");
+    confirmed_for(outcome, "test session")
 }
 
 /// A session on an already-seeded `user_id`. Looks the username up so the
@@ -141,9 +146,7 @@ pub fn basic_header(username: &str, token: &RawToken) -> String {
 /// unset. `BaseUrl` canonicalizes this to `https://example.com/` (trailing
 /// slash), so composed URLs are prefixed with `https://example.com`.
 pub async fn seed_base_url(state: &Arc<storage::AppState>) {
-    state
-        .site_config
-        .set(SiteConfigKey::SiteBaseUrl, "https://example.com/")
+    crate::helpers::set_site_config(state, SiteConfigKey::SiteBaseUrl, "https://example.com/")
         .await
         .unwrap();
 }

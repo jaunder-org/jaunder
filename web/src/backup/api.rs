@@ -2,12 +2,18 @@ use crate::error::WebResult;
 // `BackupSchedule`/`BackupMode`/`RetentionCount` are unconditional: they're the typed
 // `#[server]` arguments, so the generated request struct must carry them on both the client
 // (serialize) and server (deserialize) sides.
+use common::MutationOutcome;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 
 #[cfg(feature = "server")]
 use {
-    crate::auth, crate::error::InternalError, leptos::prelude::*, std::sync::Arc,
-    storage::SiteConfigStorage,
+    crate::{
+        auth,
+        error::{InternalError, from_write_scope_error},
+    },
+    leptos::prelude::*,
+    std::sync::Arc,
+    storage::{SiteConfigStorage, WriteScope},
 };
 
 #[macros::server]
@@ -36,7 +42,7 @@ pub async fn update_settings(
     schedule: BackupSchedule,
     retention_count: RetentionCount,
     mode: BackupMode,
-) -> WebResult<()> {
+) -> WebResult<MutationOutcome<()>> {
     auth::require_operator().await?;
 
     // All four fields arrive already validated by the typed arg `Deserialize`: the required
@@ -51,8 +57,16 @@ pub async fn update_settings(
         mode,
     };
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    site_config
-        .set_backup_config(&config)
+    let write_scope = expect_context::<WriteScope>();
+    write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                site_config
+                    .set_backup_config(transaction, &config)
+                    .await
+                    .map_err(InternalError::storage)
+            })
+        })
         .await
-        .map_err(InternalError::storage)
+        .map_err(from_write_scope_error)
 }
