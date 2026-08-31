@@ -754,7 +754,7 @@ mod etag_tests {
             member_delete_update_error(storage::UpdatePostError::Internal(sqlx::Error::PoolClosed));
 
         let HandlerError::Internal(source) = &error else {
-            panic!("storage update errors must map to HandlerError::Internal");
+            unreachable!("storage update errors must map to HandlerError::Internal");
         };
         let update = source
             .downcast_ref::<storage::PerformUpdateError>()
@@ -776,7 +776,7 @@ mod etag_tests {
         let error = member_delete_feed_event_error(FeedEventError::Db(sqlx::Error::RowNotFound));
 
         let HandlerError::Internal(source) = &error else {
-            panic!("feed event database errors must map to HandlerError::Internal");
+            unreachable!("feed event database errors must map to HandlerError::Internal");
         };
         assert!(matches!(
             source.downcast_ref::<sqlx::Error>(),
@@ -803,7 +803,7 @@ mod etag_tests {
             member_delete_write_scope_error(WriteScopeError::Begin(sqlx::Error::PoolTimedOut));
 
         let HandlerError::Internal(source) = &error else {
-            panic!("write scope begin errors must map to HandlerError::Internal");
+            unreachable!("write scope begin errors must map to HandlerError::Internal");
         };
         assert!(matches!(
             source.downcast_ref::<sqlx::Error>(),

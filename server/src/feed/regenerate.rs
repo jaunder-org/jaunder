@@ -136,14 +136,20 @@ pub async fn regenerate_feed(
         })
         .await
         .map_err(regenerate_write_scope_error)?;
-    if matches!(
-        outcome,
-        common::mutation::MutationOutcome::CommitIndeterminate(())
-    ) {
-        return Err(RegenerateError::CacheCommitIndeterminate);
-    }
+    confirmed_cache_outcome(&outcome)?;
 
     Ok(row)
+}
+
+fn confirmed_cache_outcome(
+    outcome: &common::mutation::MutationOutcome<()>,
+) -> Result<(), RegenerateError> {
+    match outcome {
+        common::mutation::MutationOutcome::Confirmed(()) => Ok(()),
+        common::mutation::MutationOutcome::CommitIndeterminate(()) => {
+            Err(RegenerateError::CacheCommitIndeterminate)
+        }
+    }
 }
 
 fn storage_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> RegenerateError {
@@ -212,6 +218,22 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_cache_outcome_passes_through_confirmed_write() {
+        let outcome = confirmed_cache_outcome(&common::mutation::MutationOutcome::Confirmed(()));
+
+        assert!(matches!(outcome, Ok(())));
+    }
+
+    #[test]
+    fn confirmed_cache_outcome_maps_indeterminate_commit() {
+        let error =
+            confirmed_cache_outcome(&common::mutation::MutationOutcome::CommitIndeterminate(()))
+                .expect_err("indeterminate cache commits must be surfaced");
+
+        assert!(matches!(error, RegenerateError::CacheCommitIndeterminate));
+    }
+
+    #[test]
     fn regenerate_write_scope_operation_preserves_cache_sqlx_source() {
         use std::error::Error;
 
@@ -220,7 +242,7 @@ mod tests {
         ));
 
         let RegenerateError::Storage(source) = &error else {
-            panic!("write operation errors must map to RegenerateError::Storage");
+            unreachable!("write operation errors must map to RegenerateError::Storage");
         };
         let cache = source
             .downcast_ref::<storage::FeedCacheError>()
@@ -238,7 +260,7 @@ mod tests {
         let error = regenerate_write_scope_error(WriteScopeError::Begin(sqlx::Error::PoolTimedOut));
 
         let RegenerateError::Storage(source) = &error else {
-            panic!("write scope begin errors must map to RegenerateError::Storage");
+            unreachable!("write scope begin errors must map to RegenerateError::Storage");
         };
         assert!(matches!(
             source.downcast_ref::<sqlx::Error>(),

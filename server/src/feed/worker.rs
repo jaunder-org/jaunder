@@ -44,6 +44,19 @@ fn report_continuation(
     );
 }
 
+/// Converts a mutation outcome into its confirmed value for a feed operation.
+fn require_confirmed_mutation<T>(
+    outcome: common::mutation::MutationOutcome<T>,
+    operation: &str,
+) -> anyhow::Result<T> {
+    match outcome {
+        common::mutation::MutationOutcome::Confirmed(value) => Ok(value),
+        common::mutation::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
+            "{operation} commit acknowledgement was indeterminate"
+        )),
+    }
+}
+
 /// The background feed worker: the deps it needs to regenerate feeds and ping
 /// the `WebSub` hub, declared explicitly as constructor parameters rather than
 /// reached through a shared bundle (see [ADR-0016]).
@@ -97,41 +110,25 @@ impl FeedWorker {
         self.posts.as_ref()
     }
 
-    /// Borrows the rendered-feed cache store.
-    #[must_use]
-    pub fn feed_cache(&self) -> &dyn FeedCacheStorage {
-        self.feed_cache.as_ref()
-    }
-
-    /// Borrows the feed-regeneration event store.
-    #[must_use]
-    pub fn feed_events(&self) -> &dyn FeedEventStorage {
-        self.feed_events.as_ref()
-    }
-
     async fn claim_pending_batch(&self) -> anyhow::Result<Vec<FeedEventRecord>> {
         let feed_events = Arc::clone(&self.feed_events);
-        match self
-            .write_scope
-            .run(move |transaction| {
-                Box::pin(async move {
-                    feed_events
-                        .claim_pending_batch(
-                            transaction,
-                            BATCH_LIMIT,
-                            chrono::Duration::from_std(LEASE_TIMEOUT)
-                                .unwrap_or(chrono::Duration::seconds(300)),
-                        )
-                        .await
+        require_confirmed_mutation(
+            self.write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        feed_events
+                            .claim_pending_batch(
+                                transaction,
+                                BATCH_LIMIT,
+                                chrono::Duration::from_std(LEASE_TIMEOUT)
+                                    .unwrap_or(chrono::Duration::seconds(300)),
+                            )
+                            .await
+                    })
                 })
-            })
-            .await?
-        {
-            common::mutation::MutationOutcome::Confirmed(records) => Ok(records),
-            common::mutation::MutationOutcome::CommitIndeterminate(_) => {
-                anyhow::bail!("feed-event claim commit acknowledgement was indeterminate")
-            }
-        }
+                .await?,
+            "feed-event claim",
+        )
     }
 
     async fn write_event_status(
@@ -143,12 +140,7 @@ impl FeedWorker {
             Result<(), FeedEventError>,
         >,
     ) -> anyhow::Result<()> {
-        match self.write_scope.run(operation).await? {
-            common::mutation::MutationOutcome::Confirmed(()) => Ok(()),
-            common::mutation::MutationOutcome::CommitIndeterminate(()) => {
-                anyhow::bail!("feed-event status commit acknowledgement was indeterminate")
-            }
-        }
+        require_confirmed_mutation(self.write_scope.run(operation).await?, "feed-event status")
     }
 
     /// Enqueues feed regeneration for posts that crossed into "live" since the
@@ -204,12 +196,7 @@ impl FeedWorker {
                     Box::pin(async move { feed_events.enqueue_many(transaction, &paths).await })
                 })
                 .await?;
-            if matches!(
-                outcome,
-                common::mutation::MutationOutcome::CommitIndeterminate(())
-            ) {
-                anyhow::bail!("feed-event enqueue commit acknowledgement was indeterminate");
-            }
+            require_confirmed_mutation(outcome, "feed-event enqueue")?;
         }
         *last_tick = Some(now);
         Ok(())
@@ -614,6 +601,32 @@ mod tests {
             regenerated_at: None,
             pinged_at: None,
         }
+    }
+
+    #[test]
+    fn confirmed_mutation_outcome_returns_value() {
+        assert_eq!(
+            require_confirmed_mutation(
+                common::mutation::MutationOutcome::Confirmed("confirmed"),
+                "feed-event claim",
+            )
+            .expect("confirmed outcome"),
+            "confirmed"
+        );
+    }
+
+    #[test]
+    fn indeterminate_mutation_outcome_preserves_operation_message() {
+        let error = require_confirmed_mutation(
+            common::mutation::MutationOutcome::CommitIndeterminate(()),
+            "feed-event enqueue",
+        )
+        .expect_err("indeterminate outcome");
+
+        assert_eq!(
+            error.to_string(),
+            "feed-event enqueue commit acknowledgement was indeterminate"
+        );
     }
 
     #[derive(Clone)]

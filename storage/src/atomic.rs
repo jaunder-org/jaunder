@@ -135,8 +135,8 @@ pub trait AtomicOps: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, SeedUser, backends, parse_invite_code};
-    use common::test_support::{parse_display_name, parse_username};
+    use crate::test_support::{Backend, SeedUser, backends};
+    use common::test_support::parse_username;
     use host::config_key::SiteConfigKey;
     use rstest::*;
     use rstest_reuse::*;
@@ -253,12 +253,9 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn storage_methods_on_closed_pool_return_errors(#[case] backend: Backend) {
+    async fn closed_pool_fails_reads_writes_and_write_scope_begin(#[case] backend: Backend) {
         let env = backend.setup().await;
         env.base.close_pool().await;
-        let username = parse_username("alice");
-        let password: Password = host::test_support::parse_password("password123");
-        let display_name = parse_display_name("Alice");
 
         assert!(
             env.state
@@ -276,22 +273,15 @@ mod tests {
             .await
             .is_err()
         );
-        let atomic = std::sync::Arc::clone(&env.state.atomic);
-        let result = env
+        let result: Result<
+            common::MutationOutcome<()>,
+            crate::WriteScopeError<RegisterWithInviteError>,
+        > = env
             .state
             .write_scope
-            .run(move |transaction| {
-                Box::pin(async move {
-                    atomic
-                        .create_user_with_invite(
-                            transaction,
-                            &username,
-                            &password,
-                            Some(&display_name),
-                            false,
-                            &parse_invite_code("code"),
-                        )
-                        .await
+            .run(|_| {
+                Box::pin(async {
+                    unreachable!("transaction closure must not run after begin failure")
                 })
             })
             .await;
