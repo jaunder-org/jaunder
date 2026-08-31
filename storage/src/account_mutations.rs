@@ -67,6 +67,15 @@ impl From<crate::UseInviteError> for RegisterWithInviteError {
     }
 }
 
+impl From<CreateUserError> for RegisterWithInviteError {
+    fn from(error: CreateUserError) -> Self {
+        match error {
+            CreateUserError::UsernameTaken => Self::UsernameTaken,
+            CreateUserError::Internal(error) => Self::Internal(error),
+        }
+    }
+}
+
 /// Errors returned by [`confirm_password_reset`].
 #[derive(Debug, Error)]
 pub enum ConfirmPasswordResetError {
@@ -172,10 +181,7 @@ pub async fn register_with_invite(
             input.is_operator,
         )
         .await
-        .map_err(|error| match error {
-            CreateUserError::UsernameTaken => RegisterWithInviteError::UsernameTaken,
-            CreateUserError::Internal(error) => RegisterWithInviteError::Internal(error),
-        })?;
+        .map_err(RegisterWithInviteError::from)?;
     invites
         .claim_invite(transaction, input.invite_code, user_id)
         .await
@@ -229,6 +235,53 @@ pub async fn confirm_password_reset(
 mod tests {
     use super::*;
     use host::error::{ErrorKind, InternalError};
+
+    #[test]
+    fn registration_errors_map_to_their_public_error_kinds() {
+        for error in [
+            RegisterWithInviteError::InviteNotFound,
+            RegisterWithInviteError::InviteExpired,
+            RegisterWithInviteError::InviteAlreadyUsed,
+        ] {
+            let mapped: InternalError = error.into();
+            assert_eq!(mapped.kind(), ErrorKind::Validation);
+        }
+
+        let mapped: InternalError = RegisterWithInviteError::UsernameTaken.into();
+        assert_eq!(mapped.kind(), ErrorKind::Conflict);
+
+        let mapped: InternalError =
+            RegisterWithInviteError::Internal(sqlx::Error::RowNotFound).into();
+        assert_eq!(mapped.kind(), ErrorKind::Storage);
+    }
+
+    #[test]
+    fn subordinate_internal_errors_remain_internal() {
+        assert!(matches!(
+            RegisterWithInviteError::from(crate::UseInviteError::Internal(
+                sqlx::Error::RowNotFound
+            )),
+            RegisterWithInviteError::Internal(sqlx::Error::RowNotFound)
+        ));
+        assert!(matches!(
+            RegisterWithInviteError::from(CreateUserError::Internal(sqlx::Error::RowNotFound)),
+            RegisterWithInviteError::Internal(sqlx::Error::RowNotFound)
+        ));
+        assert!(matches!(
+            ConfirmPasswordResetError::from(crate::UsePasswordResetError::Internal(
+                sqlx::Error::RowNotFound
+            )),
+            ConfirmPasswordResetError::Internal(sqlx::Error::RowNotFound)
+        ));
+    }
+
+    #[test]
+    fn create_user_conflict_remains_a_registration_conflict() {
+        assert!(matches!(
+            RegisterWithInviteError::from(CreateUserError::UsernameTaken),
+            RegisterWithInviteError::UsernameTaken
+        ));
+    }
 
     #[test]
     fn reset_token_state_errors_map_to_client_validation() {
