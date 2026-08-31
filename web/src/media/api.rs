@@ -25,12 +25,9 @@ use {
     common::media::MediaRef,
     // Server-only: the delete guard's key. The CSR build never runs a query.
     leptos::prelude::*,
-    leptos::server_fn::error::ServerFnErrorErr,
-    leptos_axum::extract,
-    std::sync::Arc,
-    std::{collections::BTreeSet, path::PathBuf},
+    std::{collections::BTreeSet, sync::Arc},
     storage::{
-        self, DeleteMediaError, InstanceId, MediaError, MediaManager,
+        self, DeleteMediaError, InstanceId, MediaContentLocks, MediaError, MediaManager,
         MediaReferenceOwnershipResolver, MediaStorage, PostStorage, SiteConfigStorage,
         TryDeleteOutcome, WriteScope,
     },
@@ -150,9 +147,7 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MutationOutcome<Me
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     let write_scope = expect_context::<WriteScope>();
-    let axum::Extension(storage_path) = extract::<axum::Extension<Arc<PathBuf>>>()
-        .await
-        .map_err(map_storage_path_extract_error)?;
+    let content_locks = expect_context::<Arc<MediaContentLocks>>();
 
     let media_ref = MediaRef {
         source,
@@ -177,7 +172,7 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MutationOutcome<Me
 
     // The manager delegates the row decision to storage's one-statement guard, then
     // reclaims the file only when that decision deleted the row.
-    let manager = MediaManager::new(media.clone(), site_config, write_scope, storage_path);
+    let manager = MediaManager::new(media.clone(), site_config, write_scope, content_locks);
     let outcome = manager
         .delete_media(
             auth.user_id,
@@ -258,13 +253,6 @@ fn map_delete_error(err: anyhow::Error) -> InternalError {
     InternalError::server_boxed(err.into_boxed_dyn_error())
 }
 
-/// Preserves the typed server-fn extractor rejection for a missing storage-path
-/// extension. Missing composition state is a server invariant, never validation.
-#[cfg(feature = "server")]
-fn map_storage_path_extract_error(error: ServerFnErrorErr) -> InternalError {
-    InternalError::server(error).with_context("stage", "storage_path_extension")
-}
-
 /// Classifies every current multer error semantically. Malformed client framing
 /// and configured size limits are validation; stream I/O, poisoned shared state,
 /// and future unknown variants are server failures. Both paths retain the typed
@@ -303,11 +291,7 @@ pub async fn upload(data: MultipartData) -> WebResult<MutationOutcome<UploadedMe
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     let write_scope = expect_context::<WriteScope>();
 
-    // `storage_path` is an axum `Extension` (server/src/lib.rs), not a leptos
-    // context value, so pull it via the request extractor rather than expect_context.
-    let axum::Extension(storage_path) = extract::<axum::Extension<Arc<PathBuf>>>()
-        .await
-        .map_err(map_storage_path_extract_error)?;
+    let content_locks = expect_context::<Arc<MediaContentLocks>>();
 
     // `into_inner()` is `Some` on the server (the parsed multipart body).
     let mut multipart = data
@@ -338,7 +322,7 @@ pub async fn upload(data: MultipartData) -> WebResult<MutationOutcome<UploadedMe
         })
         .transpose()?; // cov:ignore
 
-    let manager = MediaManager::new(media, site_config, write_scope, storage_path);
+    let manager = MediaManager::new(media, site_config, write_scope, content_locks);
     manager
         .upload(auth.user_id, &filename, content_type, field)
         .await
@@ -349,10 +333,8 @@ pub async fn upload(data: MultipartData) -> WebResult<MutationOutcome<UploadedMe
 mod tests {
     use super::{
         DeleteMediaError, MediaError, map_delete_error, map_media_error, map_multipart_error,
-        map_storage_path_extract_error,
     };
     use crate::error::{ErrorKind, InternalError};
-    use leptos::server_fn::error::ServerFnErrorErr;
     use std::error::Error;
     use std::fmt;
 
@@ -428,23 +410,6 @@ mod tests {
             sqlx::Error::RowNotFound,
         )));
         assert_eq!(storage.kind(), ErrorKind::Internal);
-    }
-
-    #[test]
-    fn missing_storage_path_extension_retains_extractor_rejection() {
-        let rejection =
-            ServerFnErrorErr::ServerError("missing storage path Extension sentinel".to_owned());
-
-        let mapped = map_storage_path_extract_error(rejection);
-
-        assert_eq!(mapped.kind(), ErrorKind::Internal);
-        let source = typed_source::<ServerFnErrorErr>(&mapped)
-            .expect("extractor rejection remains a typed source");
-        assert!(
-            source
-                .to_string()
-                .contains("missing storage path Extension sentinel")
-        );
     }
 
     #[test]

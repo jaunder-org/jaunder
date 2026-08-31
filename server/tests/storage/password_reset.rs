@@ -66,12 +66,7 @@ async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
         })
         .await
         .unwrap();
-    let authenticated = match outcome {
-        MutationOutcome::Confirmed(user) => user,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("authentication requires a confirmed commit")
-        }
-    };
+    let authenticated = storage::test_support::confirmed_for(outcome, "authentication");
     assert_eq!(authenticated.user_id, user.user_id);
 }
 
@@ -196,12 +191,7 @@ async fn create_password_reset(
         })
         .await
         .expect("password-reset fixture setup should succeed");
-    match outcome {
-        MutationOutcome::Confirmed(raw_token) => raw_token,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("password-reset fixture setup requires a confirmed commit")
-        }
-    }
+    storage::test_support::confirmed_for(outcome, "password-reset fixture setup")
 }
 
 async fn use_password_reset(
@@ -211,12 +201,7 @@ async fn use_password_reset(
     let outcome = use_password_reset_result(state, raw_token)
         .await
         .expect("password reset should succeed");
-    match outcome {
-        MutationOutcome::Confirmed(user_id) => user_id,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("password reset requires a confirmed commit")
-        }
-    }
+    storage::test_support::confirmed_for(outcome, "password reset")
 }
 
 async fn use_password_reset_result(
@@ -244,12 +229,7 @@ async fn confirm_password_reset(
     let outcome = confirm_password_reset_result(state, raw_token, password)
         .await
         .expect("password reset confirmation should succeed");
-    match outcome {
-        MutationOutcome::Confirmed(()) => {}
-        MutationOutcome::CommitIndeterminate(()) => {
-            panic!("password reset confirmation requires a confirmed commit")
-        }
-    }
+    storage::test_support::confirmed_for(outcome, "password reset confirmation");
 }
 
 async fn confirm_password_reset_result(

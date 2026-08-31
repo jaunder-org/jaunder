@@ -161,12 +161,7 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
         })
         .await
         .unwrap();
-    let token1 = match outcome {
-        MutationOutcome::Confirmed(token) => token,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("session fixture setup requires a confirmed commit")
-        }
-    };
+    let token1 = storage::test_support::confirmed_for(outcome, "session fixture setup");
     // Create a session for user2 — should NOT appear in user1's list.
     let sessions = Arc::clone(&state.sessions);
     let user2_label = parse_session_label("dave-session");
@@ -227,12 +222,7 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
         })
         .await
         .unwrap();
-    let record_b = match outcome {
-        MutationOutcome::Confirmed(record) => record,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("session authentication requires a confirmed commit")
-        }
-    };
+    let record_b = storage::test_support::confirmed_for(outcome, "session authentication");
     let hash_b = record_b.token_hash;
 
     let cookie_a = session.cookie();
@@ -589,12 +579,7 @@ async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) 
         })
         .await
         .unwrap();
-    let record2 = match outcome {
-        MutationOutcome::Confirmed(record) => record,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("session authentication requires a confirmed commit")
-        }
-    };
+    let record2 = storage::test_support::confirmed_for(outcome, "session authentication");
 
     let (status, _) = post_form(
         &state,

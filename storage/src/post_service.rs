@@ -9,9 +9,9 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
-    CreatePostError, CreatePostInput, FeedEventStorage, PostBookkeepingExpectation, PostFormat,
-    PostRecord, PostStorage, PublishUpdate, UpdatePostError, UpdatePostInput, WriteScope,
-    WriteScopeError,
+    CreatePostError, CreatePostInput, FeedEventStorage, MediaContentLocks,
+    PostBookkeepingExpectation, PostFormat, PostRecord, PostStorage, PublishUpdate,
+    UpdatePostError, UpdatePostInput, WriteScope, WriteScopeError,
 };
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, UserId};
@@ -66,11 +66,22 @@ pub struct RenderedPostContent {
 /// [`CreatePostError::Internal`].
 pub async fn create_rendered_post(
     write_scope: &WriteScope,
+    content_locks: &MediaContentLocks,
     storage: Arc<dyn PostStorage>,
     feed_events: Arc<dyn FeedEventStorage>,
     content: RenderedPostContent,
 ) -> Result<MutationOutcome<PostRecord>, CreatePostError> {
     let input = render_post_input(content);
+    let _media_locks = content_locks
+        .acquire(
+            input
+                .rendered
+                .media()
+                .iter()
+                .map(common::media::MediaReference::media),
+        )
+        .await
+        .map_err(|error| CreatePostError::Internal(sqlx::Error::Io(error)))?;
     write_scope
         .run(move |transaction| {
             let storage = Arc::clone(&storage);
@@ -268,6 +279,7 @@ pub struct PostUpdate<'a> {
 /// Returns `Err(PerformUpdateError)` if rendering fails or the storage layer returns an error.
 pub async fn perform_post_update(
     write_scope: &WriteScope,
+    content_locks: &MediaContentLocks,
     storage: Arc<dyn PostStorage>,
     feed_events: Arc<dyn FeedEventStorage>,
     input: PostUpdate<'_>,
@@ -318,6 +330,16 @@ pub async fn perform_post_update(
         request_clock,
         expectations,
     };
+    let _media_locks = content_locks
+        .acquire(
+            input
+                .rendered
+                .media()
+                .iter()
+                .map(common::media::MediaReference::media),
+        )
+        .await
+        .map_err(|error| PerformUpdateError::Storage(sqlx::Error::Io(error)))?;
     write_scope
         .run(move |transaction| {
             let storage = Arc::clone(&storage);
@@ -472,6 +494,7 @@ pub struct PostCreation<'a> {
 /// find a unique slug are exhausted, or storage fails.
 pub async fn perform_post_creation(
     write_scope: &WriteScope,
+    content_locks: &MediaContentLocks,
     storage: Arc<dyn PostStorage>,
     feed_events: Arc<dyn FeedEventStorage>,
     input: PostCreation<'_>,
@@ -516,6 +539,7 @@ pub async fn perform_post_creation(
 
         match create_rendered_post(
             write_scope,
+            content_locks,
             Arc::clone(&storage),
             Arc::clone(&feed_events),
             RenderedPostContent {
@@ -588,6 +612,7 @@ mod tests {
         let storage = Arc::clone(&env.state.posts);
         let record = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -632,6 +657,7 @@ mod tests {
         let title = parse_post_title("Private Note");
         let record = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -683,6 +709,7 @@ mod tests {
         let title = parse_post_title("Explicit Title");
         let record = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -722,6 +749,7 @@ mod tests {
         let slug: Slug = parse_slug("my-custom-slug");
         let record = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -762,8 +790,11 @@ mod tests {
         let feed_events = crate::MockFeedEventStorage::new();
         let storage: Arc<dyn PostStorage> = Arc::new(storage);
         let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
+        let temp = tempfile::tempdir().unwrap();
+        let content_locks = MediaContentLocks::new(Arc::new(temp.path().to_path_buf()));
         let err = perform_post_creation(
             &write_scope,
+            &content_locks,
             Arc::clone(&storage),
             feed_events,
             PostCreation {
@@ -800,6 +831,7 @@ mod tests {
 
         let error = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&env.state.posts),
             feed_events,
             PostCreation {
@@ -856,6 +888,7 @@ mod tests {
 
         let error = perform_post_update(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&env.state.posts),
             feed_events,
             PostUpdate {
@@ -910,6 +943,7 @@ mod tests {
         let storage = Arc::clone(&env.state.posts);
         let record = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -946,6 +980,7 @@ mod tests {
         let storage = Arc::clone(&env.state.posts);
         let record = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -1006,6 +1041,7 @@ mod tests {
 
         let r1 = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -1028,6 +1064,7 @@ mod tests {
 
         let r2 = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -1050,6 +1087,7 @@ mod tests {
 
         let r3 = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -1103,6 +1141,7 @@ mod tests {
         let first_free_user = SeedUser::new().seed(&env.state).await.user_id;
         let first_free = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             create(
@@ -1122,6 +1161,7 @@ mod tests {
         assert!(matches!(
             perform_post_creation(
                 &env.state.write_scope,
+                &env.media_content_locks(),
                 Arc::clone(&storage),
                 Arc::clone(&env.state.feed_events),
                 create(
@@ -1146,6 +1186,7 @@ mod tests {
         let conflict_before_expected_user = SeedUser::new().seed(&env.state).await.user_id;
         perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             create(
@@ -1157,6 +1198,7 @@ mod tests {
         .unwrap();
         let collision_winner = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             create(
@@ -1175,6 +1217,7 @@ mod tests {
         let occupied_expected_user = SeedUser::new().seed(&env.state).await.user_id;
         perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             create(
@@ -1187,6 +1230,7 @@ mod tests {
         assert!(matches!(
             perform_post_creation(
                 &env.state.write_scope,
+                &env.media_content_locks(),
                 Arc::clone(&storage),
                 Arc::clone(&env.state.feed_events),
                 create(
@@ -1239,6 +1283,7 @@ mod tests {
         assert!(matches!(
             perform_post_creation(
                 &env.state.write_scope,
+                &env.media_content_locks(),
                 Arc::clone(&storage),
                 Arc::clone(&env.state.feed_events),
                 create(
@@ -1264,6 +1309,7 @@ mod tests {
         assert!(matches!(
             perform_post_creation(
                 &env.state.write_scope,
+                &env.media_content_locks(),
                 Arc::clone(&storage),
                 Arc::clone(&env.state.feed_events),
                 create(
@@ -1323,6 +1369,7 @@ mod tests {
 
         let updated_draft = perform_post_update(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             update(draft.post_id, changed_slug.clone()),
@@ -1333,6 +1380,7 @@ mod tests {
 
         let updated_published = perform_post_update(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             update(published.post_id, published.slug.clone()),
@@ -1359,6 +1407,7 @@ mod tests {
         let clock: UtcInstant = "2042-07-01T12:00:00Z".parse().unwrap();
         let record = perform_post_update(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostUpdate {
@@ -1427,6 +1476,7 @@ mod tests {
         assert!(matches!(
             perform_post_update(
                 &env.state.write_scope,
+                &env.media_content_locks(),
                 Arc::clone(&storage),
                 Arc::clone(&env.state.feed_events),
                 update(PostBookkeepingExpectation {
@@ -1440,6 +1490,7 @@ mod tests {
         assert!(matches!(
             perform_post_update(
                 &env.state.write_scope,
+                &env.media_content_locks(),
                 Arc::clone(&storage),
                 Arc::clone(&env.state.feed_events),
                 update(PostBookkeepingExpectation {
@@ -1453,6 +1504,7 @@ mod tests {
         assert!(matches!(
             perform_post_update(
                 &env.state.write_scope,
+                &env.media_content_locks(),
                 Arc::clone(&storage),
                 Arc::clone(&env.state.feed_events),
                 update(PostBookkeepingExpectation {
@@ -1466,6 +1518,7 @@ mod tests {
         assert!(matches!(
             perform_post_update(
                 &env.state.write_scope,
+                &env.media_content_locks(),
                 Arc::clone(&storage),
                 Arc::clone(&env.state.feed_events),
                 update(PostBookkeepingExpectation {
@@ -1502,6 +1555,7 @@ mod tests {
 
         let r1 = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -1524,6 +1578,7 @@ mod tests {
 
         let r2 = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -1549,6 +1604,7 @@ mod tests {
 
         let err = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -1584,6 +1640,7 @@ mod tests {
         // canonicalized: the #+TITLE: line is stripped while #+FOO: and content stay.
         let record = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -1627,6 +1684,7 @@ mod tests {
         // #+TITLE: stripped while an unrecognized #+FOO: and the content survive.
         let created = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -1650,6 +1708,7 @@ mod tests {
 
         let record = perform_post_update(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostUpdate {
@@ -1714,6 +1773,7 @@ mod tests {
 
         let err = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             creation("* My Title\n", PostFormat::Org),
@@ -1726,6 +1786,7 @@ mod tests {
         // rejection is Org's title-stripping and not the `PostBody` parse.
         perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             creation("* My Title\n", PostFormat::Markdown),
@@ -1747,6 +1808,7 @@ mod tests {
         // is the same nonsense as creating one that way.
         let created = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -1770,6 +1832,7 @@ mod tests {
 
         let err = perform_post_update(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostUpdate {
@@ -1806,6 +1869,7 @@ mod tests {
         // content and survives. Whitespace is canonicalized for both, hence the newline.
         let record = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -1843,6 +1907,7 @@ mod tests {
         // title is the only place it appears. record.title still carries it.
         let record = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             PostCreation {
@@ -1919,6 +1984,7 @@ mod tests {
 
         let first = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             creation_with_key(
@@ -1941,6 +2007,7 @@ mod tests {
         replay.audiences = vec![AudienceTarget::Subscribers];
         let err = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             replay,
@@ -2003,6 +2070,7 @@ mod tests {
 
         let record = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             creation_with_key(
@@ -2044,6 +2112,7 @@ mod tests {
 
         let record = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             creation_with_key(user_id, parse_post_body("Body"), Some(&key)),
@@ -2077,6 +2146,7 @@ mod tests {
         // The same key string from two users creates two independent posts.
         let post_a = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             creation_with_key(user_a, parse_post_body("A body"), Some(&key)),
@@ -2085,6 +2155,7 @@ mod tests {
         .unwrap();
         let post_b = perform_post_creation(
             &env.state.write_scope,
+            &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
             creation_with_key(user_b, parse_post_body("B body"), Some(&key)),

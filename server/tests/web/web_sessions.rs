@@ -209,12 +209,8 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
         })
         .await
         .unwrap();
-    let token_hash2 = match outcome {
-        MutationOutcome::Confirmed(record) => record.token_hash,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("session authentication requires a confirmed commit")
-        }
-    };
+    let token_hash2 =
+        storage::test_support::confirmed_for(outcome, "session authentication").token_hash;
 
     let body = format!("token_hash={token_hash2}");
     let (status, _) = post_form(
@@ -265,12 +261,8 @@ async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backen
         })
         .await
         .unwrap();
-    let bob_token_hash = match outcome {
-        MutationOutcome::Confirmed(record) => record.token_hash,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("session authentication requires a confirmed commit")
-        }
-    };
+    let bob_token_hash =
+        storage::test_support::confirmed_for(outcome, "session authentication").token_hash;
 
     // Alice tries to revoke Bob's session.
     let body = format!("token_hash={bob_token_hash}");

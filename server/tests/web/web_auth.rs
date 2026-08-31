@@ -1,6 +1,5 @@
 use axum::http::StatusCode;
 use chrono::Utc;
-use common::MutationOutcome;
 use common::session_label::MAX_SESSION_LABEL_CHARS;
 use common::time::UtcInstant;
 use common::token::RawToken;
@@ -160,19 +159,16 @@ async fn post_register(
 async fn create_registration_invite(state: &storage::AppState) -> host::invite::InviteCode {
     let invites = std::sync::Arc::clone(&state.invites);
     let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
-    match state
-        .write_scope
-        .run(|transaction| {
-            Box::pin(async move { invites.create_invite(transaction, expires_at).await })
-        })
-        .await
-        .expect("create registration fixture invite")
-    {
-        MutationOutcome::Confirmed(code) => code,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("registration fixture setup requires a confirmed commit")
-        }
-    }
+    storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+            })
+            .await
+            .expect("create registration fixture invite"),
+        "registration fixture setup",
+    )
 }
 
 // guard:low-level-db — observes one sqlite-backed server-fn span directly.
@@ -300,12 +296,8 @@ async fn register_nested_request_maps_open_fields(#[case] backend: Backend) {
         })
         .await
         .expect("registration password should authenticate");
-    let authenticated = match outcome {
-        MutationOutcome::Confirmed(user) => user,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("registration authentication requires a confirmed commit")
-        }
-    };
+    let authenticated =
+        storage::test_support::confirmed_for(outcome, "registration authentication");
     assert_eq!(authenticated.user_id, user.user_id);
 
     // …and the cookie actually establishes a session for that user. A
@@ -319,12 +311,7 @@ async fn register_nested_request_maps_open_fields(#[case] backend: Backend) {
         })
         .await
         .expect("the register cookie authenticates");
-    let record = match outcome {
-        MutationOutcome::Confirmed(record) => record,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("session authentication requires a confirmed commit")
-        }
-    };
+    let record = storage::test_support::confirmed_for(outcome, "session authentication");
     assert_eq!(record.user_id, user.user_id);
 }
 
@@ -375,12 +362,7 @@ async fn register_nested_request_maps_invite_code(#[case] backend: Backend) {
         })
         .await
         .unwrap();
-    let code = match outcome {
-        MutationOutcome::Confirmed(code) => code,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("invite fixture setup requires a confirmed commit")
-        }
-    };
+    let code = storage::test_support::confirmed_for(outcome, "invite fixture setup");
 
     let (status, set_cookie, _body) = post_server_fn_with_secure_flag(
         &state,
@@ -414,12 +396,8 @@ async fn register_nested_request_maps_invite_code(#[case] backend: Backend) {
         })
         .await
         .expect("invite registration password should authenticate");
-    let authenticated = match outcome {
-        MutationOutcome::Confirmed(user) => user,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("invite registration authentication requires a confirmed commit")
-        }
-    };
+    let authenticated =
+        storage::test_support::confirmed_for(outcome, "invite registration authentication");
     assert_eq!(authenticated.user_id, user.user_id);
 
     let invites = state.invites.list_invites().await.unwrap();
@@ -494,19 +472,16 @@ async fn register_invite_session_failure_rolls_back_user_and_invite(#[case] back
         .unwrap();
     let invites = std::sync::Arc::clone(&state.invites);
     let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
-    let code = match state
-        .write_scope
-        .run(|transaction| {
-            Box::pin(async move { invites.create_invite(transaction, expires_at).await })
-        })
-        .await
-        .unwrap()
-    {
-        MutationOutcome::Confirmed(code) => code,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("invite fixture requires a confirmed commit")
-        }
-    };
+    let code = storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { invites.create_invite(transaction, expires_at).await })
+            })
+            .await
+            .unwrap(),
+        "invite fixture",
+    );
     match backend {
         Backend::Sqlite => {
             base.pool()
@@ -631,12 +606,7 @@ async fn register_invite_only_expired_code_returns_error(#[case] backend: Backen
         })
         .await
         .unwrap();
-    let code = match outcome {
-        MutationOutcome::Confirmed(code) => code,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("invite fixture setup requires a confirmed commit")
-        }
-    };
+    let code = storage::test_support::confirmed_for(outcome, "invite fixture setup");
 
     let (status, _, _) = post_server_fn_with_secure_flag(
         &state,
@@ -794,12 +764,7 @@ async fn login_nested_request_maps_distinct_fields(#[case] backend: Backend) {
         })
         .await
         .unwrap();
-    let record = match outcome {
-        MutationOutcome::Confirmed(record) => record,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("session authentication requires a confirmed commit")
-        }
-    };
+    let record = storage::test_support::confirmed_for(outcome, "session authentication");
     assert_eq!(record.label, "Issue 417 device");
 }
 
@@ -837,12 +802,7 @@ async fn login_nested_request_without_label_uses_user_agent(#[case] backend: Bac
         })
         .await
         .unwrap();
-    let record = match outcome {
-        MutationOutcome::Confirmed(record) => record,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("session authentication requires a confirmed commit")
-        }
-    };
+    let record = storage::test_support::confirmed_for(outcome, "session authentication");
     assert_eq!(record.label, "Issue 417 browser");
 }
 
@@ -954,12 +914,7 @@ async fn login_bounds_long_user_agent_at_session_label_cap(#[case] backend: Back
         })
         .await
         .unwrap();
-    let record = match outcome {
-        MutationOutcome::Confirmed(record) => record,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("session authentication requires a confirmed commit")
-        }
-    };
+    let record = storage::test_support::confirmed_for(outcome, "session authentication");
     assert_eq!(record.label, "a".repeat(250).as_str());
 }
 
@@ -1001,12 +956,7 @@ async fn login_truncates_user_agent_past_session_label_cap(#[case] backend: Back
         })
         .await
         .unwrap();
-    let record = match outcome {
-        MutationOutcome::Confirmed(record) => record,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("session authentication requires a confirmed commit")
-        }
-    };
+    let record = storage::test_support::confirmed_for(outcome, "session authentication");
     assert_eq!(record.label.chars().count(), MAX_SESSION_LABEL_CHARS);
 }
 

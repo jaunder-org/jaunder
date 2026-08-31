@@ -29,23 +29,20 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
     let feed_events_for_claim = state.feed_events.clone();
     let claim_limit = 50;
     let claim_lease = chrono::Duration::minutes(5);
-    let claimed = match state
-        .write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                feed_events_for_claim
-                    .claim_pending_batch(transaction, claim_limit, claim_lease)
-                    .await
+    let claimed = storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    feed_events_for_claim
+                        .claim_pending_batch(transaction, claim_limit, claim_lease)
+                        .await
+                })
             })
-        })
-        .await
-        .unwrap()
-    {
-        common::mutation::MutationOutcome::Confirmed(claimed) => claimed,
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
-            panic!("claim acknowledgement was indeterminate")
-        }
-    };
+            .await
+            .unwrap(),
+        "claim acknowledgement",
+    );
     let ids: Vec<FeedEventId> = claimed.iter().map(|r| r.id).collect();
     assert!(!ids.is_empty());
 

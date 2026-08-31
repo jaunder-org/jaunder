@@ -78,12 +78,7 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         })
         .await
         .expect("create user");
-    let author = match outcome {
-        common::mutation::MutationOutcome::Confirmed(user_id) => user_id,
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
-            panic!("backup fixture user requires a confirmed commit")
-        }
-    };
+    let author = confirmed_for(outcome, "backup fixture user");
     let public = SeedRawPost::new(author)
         .published_at(fixture_published_at())
         .tags(["Backup-Test"])
@@ -137,12 +132,7 @@ async fn seed_named_audience_post(
         })
         .await
         .expect("create viewer");
-    let viewer = match outcome {
-        common::mutation::MutationOutcome::Confirmed(user_id) => user_id,
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
-            panic!("backup fixture viewer requires a confirmed commit")
-        }
-    };
+    let viewer = confirmed_for(outcome, "backup fixture viewer");
     let local = state
         .subscriptions
         .local_channel_id()

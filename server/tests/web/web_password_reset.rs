@@ -177,12 +177,7 @@ async fn confirm_nested_request_maps_token_and_password(#[case] backend: Backend
         })
         .await
         .unwrap();
-    let raw_token = match outcome {
-        MutationOutcome::Confirmed(raw_token) => raw_token,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("password-reset fixture setup requires a confirmed commit")
-        }
-    };
+    let raw_token = storage::test_support::confirmed_for(outcome, "password-reset fixture setup");
 
     let (status, _body) = post_server_fn_with_mailer(
         &state,
@@ -252,12 +247,7 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
         })
         .await
         .unwrap();
-    let raw_token = match outcome {
-        MutationOutcome::Confirmed(raw_token) => raw_token,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("password-reset fixture setup requires a confirmed commit")
-        }
-    };
+    let raw_token = storage::test_support::confirmed_for(outcome, "password-reset fixture setup");
 
     let (status, _body) = post_server_fn_with_mailer(
         &state,
@@ -378,12 +368,7 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
         })
         .await
         .unwrap();
-    let raw_token = match outcome {
-        MutationOutcome::Confirmed(raw_token) => raw_token,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("password-reset fixture setup requires a confirmed commit")
-        }
-    };
+    let raw_token = storage::test_support::confirmed_for(outcome, "password-reset fixture setup");
 
     let request = web::password_reset::Confirm {
         request: web::password_reset::ConfirmPasswordResetRequest {
@@ -424,12 +409,7 @@ async fn confirm_nested_request_rejects_short_password_before_handler(#[case] ba
         })
         .await
         .unwrap();
-    let raw_token = match outcome {
-        MutationOutcome::Confirmed(raw_token) => raw_token,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("password-reset fixture setup requires a confirmed commit")
-        }
-    };
+    let raw_token = storage::test_support::confirmed_for(outcome, "password-reset fixture setup");
 
     let (status, response_body) =
         post_server_fn_request_fixture_with_mailer::<web::password_reset::Confirm, _, _>(

@@ -226,12 +226,7 @@ async fn create_user(
     let outcome = create_user_result(state, username, password, display_name, is_operator)
         .await
         .expect("user fixture setup should succeed");
-    match outcome {
-        MutationOutcome::Confirmed(user_id) => user_id,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("user fixture setup requires a confirmed commit")
-        }
-    }
+    storage::test_support::confirmed_for(outcome, "user fixture setup")
 }
 
 async fn create_user_result(
@@ -271,12 +266,7 @@ async fn authenticate(
     let outcome = authenticate_result(state, username, password)
         .await
         .expect("authentication should succeed");
-    match outcome {
-        MutationOutcome::Confirmed(user) => user,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("authentication requires a confirmed commit")
-        }
-    }
+    storage::test_support::confirmed_for(outcome, "authentication")
 }
 
 async fn authenticate_result(
@@ -322,9 +312,7 @@ async fn update_profile(
         })
         .await
         .expect("profile update should succeed");
-    if matches!(outcome, MutationOutcome::CommitIndeterminate(())) {
-        panic!("profile update requires a confirmed commit");
-    }
+    storage::test_support::confirmed_for(outcome, "profile update");
 }
 
 async fn set_email(
@@ -345,9 +333,7 @@ async fn set_email(
         })
         .await
         .expect("set email should succeed");
-    if matches!(outcome, MutationOutcome::CommitIndeterminate(())) {
-        panic!("set email requires a confirmed commit");
-    }
+    storage::test_support::confirmed_for(outcome, "set email");
 }
 
 async fn set_password(state: &AppState, user_id: UserId, password: host::password::Password) {
@@ -362,7 +348,5 @@ async fn set_password(state: &AppState, user_id: UserId, password: host::passwor
         })
         .await
         .expect("set password should succeed");
-    if matches!(outcome, MutationOutcome::CommitIndeterminate(())) {
-        panic!("set password requires a confirmed commit");
-    }
+    storage::test_support::confirmed_for(outcome, "set password");
 }

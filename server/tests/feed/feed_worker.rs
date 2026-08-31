@@ -9,7 +9,7 @@ use host::{
 };
 use jaunder::feed::worker::FeedWorker;
 use storage::FeedCacheRow;
-use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, fp};
+use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, confirmed_for, fp};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -23,17 +23,14 @@ async fn event_write<T>(
         Result<T, storage::FeedEventError>,
     >,
 ) -> T {
-    match state
-        .write_scope
-        .run(callback)
-        .await
-        .expect("feed-event write")
-    {
-        common::mutation::MutationOutcome::Confirmed(value) => value,
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
-            panic!("feed-event write acknowledgement was indeterminate")
-        }
-    }
+    confirmed_for(
+        state
+            .write_scope
+            .run(callback)
+            .await
+            .expect("feed-event write"),
+        "feed-event write acknowledgement",
+    )
 }
 
 async fn upsert_cache(state: &Arc<storage::AppState>, row: FeedCacheRow) {
@@ -43,10 +40,7 @@ async fn upsert_cache(state: &Arc<storage::AppState>, row: FeedCacheRow) {
         .run(move |transaction| Box::pin(async move { feed_cache.upsert(transaction, row).await }))
         .await
         .expect("seed cached feed");
-    assert!(matches!(
-        outcome,
-        common::mutation::MutationOutcome::Confirmed(())
-    ));
+    confirmed_for(outcome, "seed cached feed");
 }
 
 /// Test double whose `WebSub` client always reports the hub refused the ping,

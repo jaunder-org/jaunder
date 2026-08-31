@@ -167,13 +167,15 @@ passed beyond the composition root
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
 
 The web layer takes its dependencies per-trait via Leptos context and receives
-`WriteScope` as a separate context value. `server::provide_app_state_contexts`
-(`server/src/context.rs:25`) publishes thirteen of the handles (all but
-`feed_cache`, which no `#[server]` fn needs) plus that separately injected
-scope, and each server fn fetches exactly what it uses —
-`expect_context::<Arc<dyn UserStorage>>()` or `expect_context::<WriteScope>()`.
-The helper lives in `server`, not `storage`, because using Leptos context as the
-DI mechanism is an application-wiring decision
+`WriteScope` and `MediaContentLocks` as separate context values.
+`server::provide_app_state_contexts` (`server/src/context.rs:27`) publishes
+thirteen of the handles (all but `feed_cache`, which no `#[server]` fn needs)
+plus the separately injected scope; the router composition root separately
+provides the media coordinator. Each server fn fetches exactly what it uses —
+`expect_context::<Arc<dyn UserStorage>>()`, `expect_context::<WriteScope>()`, or
+`expect_context::<Arc<MediaContentLocks>>()`. The helper lives in `server`, not
+`storage`, because using Leptos context as the DI mechanism is an
+application-wiring decision
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)). Nothing in the
 codebase now pins reactive-owner lifetime for this: `server_boundary`
 (`web/src/error/server.rs:99`) is a thin error-projection wrapper that awaits
@@ -356,10 +358,12 @@ Details in the testing section.
   owning scope span records the bounded outcome. SQLite scopes retain
   `BEGIN IMMEDIATE`; PostgreSQL operations retain their required row locks; and
   the post-tag plus media-reconciliation paths retain their ordering,
-  rollback-on-drop, and injected-error behaviour. Media placement and
-  reclamation use a cross-process, per-content file lock around their short
-  database identity-lock scopes, so no database transaction spans filesystem I/O
-  while failed uploads can still remove only targets they created.
+  rollback-on-drop, and injected-error behaviour. A separately injected,
+  cross-process `MediaContentLocks` capability serializes media placement and
+  reclamation with Post create/update for each content hash, in stable order for
+  multi-reference Posts. Writers acquire it before their short database
+  identity-lock scopes and retain it through filesystem cleanup, so no database
+  transaction spans filesystem I/O and no Post reference can race file removal.
 
 ## Content model
 

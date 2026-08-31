@@ -11,23 +11,20 @@ use web::posts::SavedPost;
 
 async fn claim_pending(state: &std::sync::Arc<storage::AppState>) -> Vec<storage::FeedEventRecord> {
     let feed_events = state.feed_events.clone();
-    match state
-        .write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                feed_events
-                    .claim_pending_batch(transaction, 100, chrono::Duration::seconds(86400))
-                    .await
+    storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    feed_events
+                        .claim_pending_batch(transaction, 100, chrono::Duration::seconds(86400))
+                        .await
+                })
             })
-        })
-        .await
-        .expect("claim batch")
-    {
-        common::mutation::MutationOutcome::Confirmed(events) => events,
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
-            panic!("claim batch acknowledgement was indeterminate")
-        }
-    }
+            .await
+            .expect("claim batch"),
+        "claim batch acknowledgement",
+    )
 }
 
 fn confirmed_post_id(response: &str) -> i64 {

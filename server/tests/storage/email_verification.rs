@@ -5,7 +5,7 @@ use common::test_support::parse_raw_token;
 use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
-use storage::test_support::{Backend, SeedUser, backends};
+use storage::test_support::{Backend, SeedUser, backends, confirmed_for};
 use storage::{AppState, UseEmailVerificationError, WriteScopeError};
 
 use super::fixtures::raw_exec;
@@ -216,12 +216,7 @@ async fn create_email_verification(
         })
         .await
         .expect("email-verification fixture setup should succeed");
-    match outcome {
-        MutationOutcome::Confirmed(raw_token) => raw_token,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("email-verification fixture setup requires a confirmed commit")
-        }
-    }
+    confirmed_for(outcome, "email-verification fixture setup")
 }
 
 async fn use_email_verification(
@@ -231,12 +226,7 @@ async fn use_email_verification(
     let outcome = use_email_verification_result(state, raw_token)
         .await
         .expect("email verification should succeed");
-    match outcome {
-        MutationOutcome::Confirmed(value) => value,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("email verification requires a confirmed commit")
-        }
-    }
+    confirmed_for(outcome, "email verification")
 }
 
 async fn use_email_verification_result(

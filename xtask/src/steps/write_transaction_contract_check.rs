@@ -195,10 +195,17 @@ fn pool_connection_acquisition(expression: &syn::Expr) -> bool {
         syn::Expr::Await(await_) => pool_connection_acquisition(await_.base.as_ref()),
         syn::Expr::Paren(paren) => pool_connection_acquisition(paren.expr.as_ref()),
         syn::Expr::Group(group) => pool_connection_acquisition(group.expr.as_ref()),
-        syn::Expr::MethodCall(call) => {
-            call.method == "acquire" && pool_like(call.receiver.as_ref())
-        }
+        syn::Expr::MethodCall(call) => call.method == "acquire",
         _ => false,
+    }
+}
+
+fn local_binding_name(pattern: &syn::Pat) -> Option<String> {
+    match pattern {
+        syn::Pat::Ident(ident) => Some(ident.ident.to_string()),
+        syn::Pat::Type(type_) => local_binding_name(type_.pat.as_ref()),
+        syn::Pat::Paren(paren) => local_binding_name(paren.pat.as_ref()),
+        _ => None,
     }
 }
 
@@ -275,8 +282,7 @@ impl<'ast> syn::visit::Visit<'ast> for BypassVisitor<'_> {
     }
 
     fn visit_local(&mut self, local: &'ast syn::Local) {
-        if let syn::Pat::Ident(ident) = &local.pat {
-            let name = ident.ident.to_string();
+        if let Some(name) = local_binding_name(&local.pat) {
             self.pool_connections.remove(&name);
             if local
                 .init
@@ -584,11 +590,13 @@ mod tests {
     #[test]
     fn acquired_pool_connection_transaction_start_fails_closed() {
         let acquired = format!(
-            "{} async fn bypass(db: sqlx::PgPool) {{ let mut connection = db.acquire().await?; connection.begin().await?; }}",
+            "{} async fn bypass(db: sqlx::PgPool) {{ let mut connection: sqlx::pool::PoolConnection<sqlx::Postgres> = (db.acquire().await?); connection.begin().await?; }}",
             complete_census()
         );
+        let mut sources = fixture(&acquired);
+        sources[0].0 = "web/src/acquired.rs".into();
         assert!(
-            problems(&fixture(&acquired))
+            problems(&sources)
                 .unwrap()
                 .contains("direct transaction start bypasses WriteScope::run")
         );
@@ -597,8 +605,9 @@ mod tests {
             "{} async fn bypass(db: sqlx::PgPool) {{ let mut connection = db.acquire().await?; connection.begin_with(\"BEGIN\").await?; }}",
             complete_census()
         );
+        sources[0].1 = begin_with;
         assert!(
-            problems(&fixture(&begin_with))
+            problems(&sources)
                 .unwrap()
                 .contains("direct transaction start bypasses WriteScope::run")
         );

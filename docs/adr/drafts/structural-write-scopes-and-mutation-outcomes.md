@@ -73,11 +73,13 @@ error-like rather than claiming a confirmed result.
 Callers acquire a scope only for the narrow set of mutations that must be
 atomic. They prepare validation, rendering, ordinary password hashing, streamed
 upload bytes, filesystem work, and network work before acquisition or after
-completion. Media upload and reclamation use a cross-process, per-content file
-lock to serialize target placement and cleanup around their short database
-identity-lock scopes; no database transaction spans filesystem I/O. Existing
-claim-before-Argon2 cases remain explicit. This preserves bounded SQLite
-write-lock occupancy.
+completion. A composition-root-owned, cross-process, per-content file-lock seam
+is shared by media upload/reclamation and Post create/update. Writers acquire
+multiple content hashes in stable order before their short database
+identity-lock scopes and retain them through placement or cleanup; no database
+transaction spans filesystem I/O. Existing claim-before-Argon2 cases remain
+explicit. This preserves bounded SQLite write-lock occupancy without permitting
+a Post reference writer to race file removal.
 
 The post-tag and media reconciliation paths prove the boundary while retaining
 SQLite `BEGIN IMMEDIATE`, PostgreSQL post-row and slug-ordered tag locks,

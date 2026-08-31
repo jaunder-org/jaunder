@@ -3,7 +3,6 @@
 //! result. Relocated from `server` (#517) so a `web` `#[server]` fn can construct
 //! it directly — its work is persistence and its deps are all `storage`'s.
 
-use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,8 +24,8 @@ use common::time::UtcInstant;
 use host::metrics::{self, UploadOutcome};
 
 use crate::{
-    CreateMediaError, MediaRecord, MediaReferenceEvidence, MediaStorage, SiteConfigStorage,
-    TryDeleteOutcome, WriteScope, WriteScopeError,
+    CreateMediaError, MediaContentLocks, MediaRecord, MediaReferenceEvidence, MediaStorage,
+    SiteConfigStorage, TryDeleteOutcome, WriteScope, WriteScopeError,
 };
 use common::MutationOutcome;
 
@@ -56,6 +55,7 @@ pub struct MediaManager {
     site_config: Arc<dyn SiteConfigStorage>,
     write_scope: WriteScope,
     storage_path: Arc<PathBuf>,
+    content_locks: Arc<MediaContentLocks>,
 }
 
 /// File metadata for upload finalization.
@@ -91,13 +91,14 @@ impl MediaManager {
         media: Arc<dyn MediaStorage>,
         site_config: Arc<dyn SiteConfigStorage>,
         write_scope: WriteScope,
-        storage_path: Arc<PathBuf>,
+        content_locks: Arc<MediaContentLocks>,
     ) -> Self {
         Self {
             media,
             site_config,
             write_scope,
-            storage_path,
+            storage_path: Arc::clone(content_locks.storage_path()),
+            content_locks,
         }
     }
 
@@ -242,25 +243,6 @@ impl MediaManager {
             }
         }
     }
-    /// Acquires the cross-process lock for one content-addressed hash.
-    ///
-    /// The lock serializes filesystem placement/reclamation with the short
-    /// database scopes without holding a database transaction across file I/O.
-    async fn acquire_content_lock(&self, hash: &ContentHash) -> anyhow::Result<File> {
-        let lock_dir = self.storage_path.join("media").join(".locks");
-        fs::create_dir_all(&lock_dir).await?;
-        let lock_path = lock_dir.join(format!("{hash}.lock"));
-        tokio::task::spawn_blocking(move || {
-            let file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(lock_path)?;
-            file.lock()?;
-            Ok::<_, io::Error>(file)
-        })
-        .await?
-        .map_err(anyhow::Error::from)
-    }
 
     /// Content-addresses the temp file at `target_path`, distinguishing a
     /// pre-existing target from one created by this upload.
@@ -325,7 +307,7 @@ impl MediaManager {
         target_path: PathBuf,
         hash_dir: PathBuf,
     ) -> anyhow::Result<(TargetDisposition, MutationOutcome<()>)> {
-        let _content_lock = self.acquire_content_lock(&media_ref.sha256).await?;
+        let _content_lock = self.content_locks.acquire_one(&media_ref.sha256).await?;
         let disposition = match Self::handle_deduplication(&tmp_path, &target_path, &hash_dir).await
         {
             Ok(disposition) => disposition,
@@ -519,7 +501,7 @@ impl MediaManager {
         evidence: &MediaReferenceEvidence,
         force: bool,
     ) -> anyhow::Result<MutationOutcome<TryDeleteOutcome>> {
-        let _content_lock = self.acquire_content_lock(&media.sha256).await?;
+        let _content_lock = self.content_locks.acquire_one(&media.sha256).await?;
         let storage = Arc::clone(&self.media);
         let media_for_write = media.clone();
         let instance_for_write = current_instance_id.clone();
@@ -803,7 +785,7 @@ mod tests {
             Arc::new(media),
             Arc::new(crate::MockSiteConfigStorage::new()),
             WriteScope::mock(),
-            Arc::new(temp.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
         );
         let metadata = UploadMetadata {
             filename: parse_filename("failed.png"),
@@ -853,7 +835,7 @@ mod tests {
             Arc::new(media),
             Arc::new(crate::MockSiteConfigStorage::new()),
             write_scope,
-            Arc::new(temp.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
         );
         let metadata = UploadMetadata {
             filename: parse_filename("begin-failed.png"),
@@ -900,7 +882,7 @@ mod tests {
             Arc::new(media),
             Arc::new(crate::MockSiteConfigStorage::new()),
             WriteScope::mock(),
-            Arc::new(temp.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
         );
         let metadata = UploadMetadata {
             filename: parse_filename("lock-failed.png"),
@@ -951,7 +933,7 @@ mod tests {
             Arc::new(media),
             Arc::new(crate::MockSiteConfigStorage::new()),
             WriteScope::mock(),
-            Arc::new(temp.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
         );
         let metadata = UploadMetadata {
             filename: parse_filename("failed-link.png"),
@@ -1199,7 +1181,9 @@ mod tests {
             env.state.media.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
-            Arc::new(env.base.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
         );
 
         // A tiny PNG signature + IHDR-ish bytes (content need not be a valid image).
@@ -1250,7 +1234,9 @@ mod tests {
             env.state
                 .write_scope
                 .with_commit_acknowledgement_loss_after_commit_for_test(),
-            Arc::new(env.base.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
         );
 
         let outcome = manager
@@ -1283,7 +1269,9 @@ mod tests {
             env.state.media.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
-            Arc::new(env.base.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
         );
 
         let err = manager
@@ -1313,7 +1301,9 @@ mod tests {
             env.state.media.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
-            Arc::new(env.base.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
         );
 
         let chunks = [
@@ -1355,7 +1345,9 @@ mod tests {
             env.state.media.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
-            Arc::new(env.base.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
         );
 
         let uploaded = manager
@@ -1406,7 +1398,9 @@ mod tests {
             env.state.media.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
-            Arc::new(env.base.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
         );
         let uploaded = confirmed_manager
             .upload_bytes(
@@ -1425,7 +1419,9 @@ mod tests {
             env.state
                 .write_scope
                 .with_commit_acknowledgement_loss_after_commit_for_test(),
-            Arc::new(env.base.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
         );
 
         let outcome = manager
@@ -1458,7 +1454,9 @@ mod tests {
             env.state.media.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
-            Arc::new(env.base.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
         );
         let uploaded = manager
             .upload_bytes(
@@ -1500,7 +1498,9 @@ mod tests {
             env.state.media.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
-            Arc::new(env.base.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
         );
 
         let uploaded = manager
@@ -1543,7 +1543,9 @@ mod tests {
             env.state.media.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
-            Arc::new(env.base.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
         );
 
         let uploaded = manager
@@ -1594,7 +1596,9 @@ mod tests {
             env.state.media.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
-            Arc::new(env.base.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
         );
 
         let first = manager
@@ -1659,7 +1663,9 @@ mod tests {
             env.state.media.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
-            Arc::new(env.base.path().to_path_buf()),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
         );
 
         let first = manager

@@ -294,12 +294,7 @@ async fn create_invite(state: &AppState, expires_at: UtcInstant) -> InviteCode {
         })
         .await
         .expect("invite fixture setup should succeed");
-    match outcome {
-        MutationOutcome::Confirmed(code) => code,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("invite fixture setup requires a confirmed commit")
-        }
-    }
+    storage::test_support::confirmed_for(outcome, "invite fixture setup")
 }
 
 async fn create_user_with_invite(
@@ -314,12 +309,7 @@ async fn create_user_with_invite(
         create_user_with_invite_result(state, username, password, display_name, is_operator, code)
             .await
             .expect("invite registration should succeed");
-    match outcome {
-        MutationOutcome::Confirmed(user_id) => user_id,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("invite registration requires a confirmed commit")
-        }
-    }
+    storage::test_support::confirmed_for(outcome, "invite registration")
 }
 
 async fn create_user_with_invite_result(

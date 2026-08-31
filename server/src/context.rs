@@ -15,9 +15,9 @@ use common::mailer::MailSender;
 use leptos::prelude::provide_context;
 use storage::{
     AppState, AtomicOps, AudienceStorage, EmailVerificationStorage, FeedEventStorage, InstanceId,
-    InviteStorage, MediaReferenceOwnershipResolver, MediaStorage, PasswordResetStorage,
-    PostStorage, SessionStorage, SiteConfigStorage, SubscriptionStorage, UserConfigStorage,
-    UserStorage, WriteScope,
+    InviteStorage, MediaContentLocks, MediaReferenceOwnershipResolver, MediaStorage,
+    PasswordResetStorage, PostStorage, SessionStorage, SiteConfigStorage, SubscriptionStorage,
+    UserConfigStorage, UserStorage, WriteScope,
 };
 
 /// Place every storage handle and the factory-minted write scope in `state` into
@@ -39,6 +39,12 @@ pub fn provide_app_state_contexts(state: &Arc<AppState>) {
     provide_context::<Arc<dyn UserConfigStorage>>(state.user_config.clone());
     provide_context::<Arc<dyn SiteConfigStorage>>(state.site_config.clone());
     provide_context::<Arc<dyn FeedEventStorage>>(state.feed_events.clone());
+}
+
+/// Places the shared media filesystem coordinator in the current Leptos
+/// request context.
+pub fn provide_media_content_locks_context(content_locks: &Arc<MediaContentLocks>) {
+    provide_context(Arc::clone(content_locks));
 }
 
 /// Places the immutable instance identity and live media-reference resolver in

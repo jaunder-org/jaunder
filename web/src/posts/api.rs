@@ -60,10 +60,10 @@ use {
     leptos::prelude::*,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
-        self, AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, PerformUpdateError,
-        PostBookkeepingExpectation, PostCreation, PostLifecycle, PostRecord, PostRevisionDetail,
-        PostRevisionMetadata, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
-        WriteScope,
+        self, AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MediaContentLocks,
+        PerformUpdateError, PostBookkeepingExpectation, PostCreation, PostLifecycle, PostRecord,
+        PostRevisionDetail, PostRevisionMetadata, PostStorage, PostUpdate, PublishUpdate,
+        SiteConfigStorage, WriteScope,
     },
 };
 
@@ -551,8 +551,10 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<SavedPost>> {
 
     let write_scope = expect_context::<WriteScope>();
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+    let content_locks = expect_context::<Arc<MediaContentLocks>>();
     let outcome = storage::perform_post_creation(
         &write_scope,
+        content_locks.as_ref(),
         Arc::clone(&posts),
         Arc::clone(&feed_events),
         PostCreation {
@@ -757,8 +759,10 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
 
     let write_scope = expect_context::<WriteScope>();
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
+    let content_locks = expect_context::<Arc<MediaContentLocks>>();
     let outcome = storage::perform_post_update(
         &write_scope,
+        content_locks.as_ref(),
         Arc::clone(&posts),
         Arc::clone(&feed_events),
         PostUpdate {

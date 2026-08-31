@@ -1,6 +1,5 @@
 //! `AtomPub` media collection upload/fetch/delete handlers.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Extension;
@@ -17,8 +16,8 @@ use common::tagged_url::{self, BaseUrl, EditMediaUriUrl, EditUriUrl};
 use common::username::Username;
 use host::atompub::{self, MediaLinkEntry};
 use storage::{
-    InstanceId, MediaManager, MediaRecord, MediaReferenceOwnershipResolver, MediaStorage,
-    PostStorage, SiteConfigStorage, WriteScope,
+    InstanceId, MediaContentLocks, MediaManager, MediaRecord, MediaReferenceOwnershipResolver,
+    MediaStorage, PostStorage, SiteConfigStorage, WriteScope,
 };
 use web::auth;
 
@@ -30,7 +29,7 @@ type MemberDeleteExtensions = (
     Extension<Arc<dyn MediaStorage>>,
     Extension<Arc<dyn PostStorage>>,
     Extension<Arc<dyn SiteConfigStorage>>,
-    Extension<Arc<PathBuf>>,
+    Extension<Arc<MediaContentLocks>>,
     Extension<InstanceId>,
     Extension<Arc<dyn MediaReferenceOwnershipResolver>>,
     Extension<WriteScope>,
@@ -39,7 +38,7 @@ type MemberDeleteExtensions = (
 type CollectionPostExtensions = (
     Extension<Arc<dyn MediaStorage>>,
     Extension<Arc<dyn SiteConfigStorage>>,
-    Extension<Arc<PathBuf>>,
+    Extension<Arc<MediaContentLocks>>,
     Extension<WriteScope>,
 );
 
@@ -96,7 +95,7 @@ pub async fn collection_post(
     (
         Extension(media),
         Extension(site_config),
-        Extension(storage_path),
+        Extension(content_locks),
         Extension(write_scope),
     ): CollectionPostExtensions,
     auth_user: auth::User,
@@ -138,7 +137,7 @@ pub async fn collection_post(
         media.clone(),
         site_config.clone(),
         write_scope,
-        storage_path,
+        content_locks,
     );
     let upload = match super::mutation::confirmed_or_accepted(
         manager
@@ -253,7 +252,7 @@ pub(super) async fn member_delete(
         Extension(media),
         Extension(posts),
         Extension(site_config),
-        Extension(storage_path),
+        Extension(content_locks),
         Extension(instance_id),
         Extension(resolver),
         Extension(write_scope),
@@ -288,7 +287,7 @@ pub(super) async fn member_delete(
         identity.base_url.as_ref(),
     )
     .await;
-    let manager = MediaManager::new(media, site_config, write_scope, storage_path);
+    let manager = MediaManager::new(media, site_config, write_scope, content_locks);
     let outcome = match super::mutation::confirmed_or_accepted(
         manager
             .delete_media(auth_user.user_id, &media_ref, &instance_id, &evidence, true)

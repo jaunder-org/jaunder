@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use common::MutationOutcome;
 use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
 use common::time::UtcInstant;
@@ -87,12 +86,8 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
         })
         .await
         .unwrap();
-    let raw_token = match outcome {
-        MutationOutcome::Confirmed(raw_token) => raw_token,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("email-verification fixture setup requires a confirmed commit")
-        }
-    };
+    let raw_token =
+        storage::test_support::confirmed_for(outcome, "email-verification fixture setup");
 
     let (status, _body) = post_form_with_mailer(
         &state,
@@ -121,21 +116,25 @@ async fn verify_email_set_failure_rolls_back_token_consumption(#[case] backend: 
     let email_for_token = email.clone();
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
     let verifications = Arc::clone(&state.email_verifications);
-    let raw_token = match state
-        .write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                verifications
-                    .create_email_verification(transaction, user_id, &email_for_token, expires_at)
-                    .await
+    let raw_token = storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    verifications
+                        .create_email_verification(
+                            transaction,
+                            user_id,
+                            &email_for_token,
+                            expires_at,
+                        )
+                        .await
+                })
             })
-        })
-        .await
-        .unwrap()
-    {
-        MutationOutcome::Confirmed(token) => token,
-        MutationOutcome::CommitIndeterminate(_) => panic!("fixture requires a confirmed commit"),
-    };
+            .await
+            .unwrap(),
+        "fixture",
+    );
     match backend {
         Backend::Sqlite => {
             base.pool()
@@ -229,12 +228,8 @@ async fn verify_email_with_expired_token_returns_error(#[case] backend: Backend)
         })
         .await
         .unwrap();
-    let raw_token = match outcome {
-        MutationOutcome::Confirmed(raw_token) => raw_token,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("email-verification fixture setup requires a confirmed commit")
-        }
-    };
+    let raw_token =
+        storage::test_support::confirmed_for(outcome, "email-verification fixture setup");
 
     let (status, _body) = post_form_with_mailer(
         &state,

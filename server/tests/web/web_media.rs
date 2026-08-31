@@ -10,7 +10,6 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 use web::media::{Item, MediaDeletion, UsageData};
 
-use common::MutationOutcome;
 use common::time::UtcInstant;
 use host::config_key::SiteConfigKey;
 use rstest::*;
@@ -47,30 +46,21 @@ async fn create_media(state: &storage::AppState, record: &MediaRecord) {
         Err(WriteScopeError::Operation(CreateMediaError::AlreadyExists)) => return,
         Err(error) => panic!("create_media failed: {error}"),
     };
-    match outcome {
-        MutationOutcome::Confirmed(()) => {}
-        MutationOutcome::CommitIndeterminate(()) => {
-            panic!("fixture media creation requires a confirmed commit")
-        }
-    }
+    storage::test_support::confirmed_for(outcome, "fixture media creation");
 }
 
 fn confirmed_media_deletion(body: &str) -> MediaDeletion {
-    match serde_json::from_str(body).expect("response should be a valid mutation outcome") {
-        MutationOutcome::Confirmed(deletion) => deletion,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("test fixture requires a confirmed media deletion")
-        }
-    }
+    storage::test_support::confirmed_for(
+        serde_json::from_str(body).expect("response should be a valid mutation outcome"),
+        "test fixture media deletion",
+    )
 }
 
 fn confirmed_upload(body: &str) -> UploadedMedia {
-    match serde_json::from_str(body).expect("response should be a valid mutation outcome") {
-        MutationOutcome::Confirmed(upload) => upload,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("test fixture requires a confirmed media upload")
-        }
-    }
+    storage::test_support::confirmed_for(
+        serde_json::from_str(body).expect("response should be a valid mutation outcome"),
+        "test fixture media upload",
+    )
 }
 
 struct BlockingOwnershipResolver {

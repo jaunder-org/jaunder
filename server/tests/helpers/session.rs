@@ -6,7 +6,7 @@ use common::username::Username;
 use host::config_key::SiteConfigKey;
 use std::sync::Arc;
 
-use storage::test_support::{Backend, TestEnv};
+use storage::test_support::{Backend, TestEnv, confirmed_for};
 
 /// Returns a `PathBuf` pointing to a temporary directory usable as a storage
 /// root.  The caller is responsible for keeping the `TempDir` alive; this
@@ -84,12 +84,7 @@ async fn issue_session(state: &Arc<storage::AppState>, user_id: UserId) -> RawTo
         })
         .await
         .expect("create session");
-    match outcome {
-        common::mutation::MutationOutcome::Confirmed(token) => token,
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => {
-            panic!("test session requires a confirmed commit")
-        }
-    }
+    confirmed_for(outcome, "test session")
 }
 
 /// A session on an already-seeded `user_id`. Looks the username up so the

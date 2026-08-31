@@ -251,6 +251,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     let rec = confirmed(
         perform_post_update(
             &state.write_scope,
+            &storage::test_support::fixture_media_content_locks(),
             Arc::clone(&state.posts),
             Arc::clone(&state.feed_events),
             update_input(
@@ -275,6 +276,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     let backdated = confirmed(
         perform_post_update(
             &state.write_scope,
+            &storage::test_support::fixture_media_content_locks(),
             Arc::clone(&state.posts),
             Arc::clone(&state.feed_events),
             update_input(
@@ -298,6 +300,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     let rec2 = confirmed(
         perform_post_update(
             &state.write_scope,
+            &storage::test_support::fixture_media_content_locks(),
             Arc::clone(&state.posts),
             Arc::clone(&state.feed_events),
             update_input(
@@ -321,6 +324,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     let rec3 = confirmed(
         perform_post_update(
             &state.write_scope,
+            &storage::test_support::fixture_media_content_locks(),
             Arc::clone(&state.posts),
             Arc::clone(&state.feed_events),
             update_input(draft, alice, &title, &p, PublishUpdate::Unpublish),
@@ -335,6 +339,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     let rec4 = confirmed(
         perform_post_update(
             &state.write_scope,
+            &storage::test_support::fixture_media_content_locks(),
             Arc::clone(&state.posts),
             Arc::clone(&state.feed_events),
             update_input(
@@ -1026,6 +1031,7 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
     let post_id = confirmed(
         create_rendered_post(
             &state.write_scope,
+            &storage::test_support::fixture_media_content_locks(),
             Arc::clone(&state.posts),
             Arc::clone(&state.feed_events),
             RenderedPostContent {
@@ -1074,6 +1080,7 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
     let post_id = confirmed(
         create_rendered_post(
             &state.write_scope,
+            &storage::test_support::fixture_media_content_locks(),
             Arc::clone(&state.posts),
             Arc::clone(&state.feed_events),
             RenderedPostContent {
@@ -1129,6 +1136,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
     // Second create with same slug+date conflicts
     let err = create_rendered_post(
         &state.write_scope,
+        &storage::test_support::fixture_media_content_locks(),
         Arc::clone(&state.posts),
         Arc::clone(&state.feed_events),
         RenderedPostContent {
@@ -1266,6 +1274,7 @@ async fn perform_post_update_markdown_renders_and_updates(#[case] backend: Backe
     let record = confirmed(
         perform_post_update(
             &state.write_scope,
+            &storage::test_support::fixture_media_content_locks(),
             Arc::clone(&state.posts),
             Arc::clone(&state.feed_events),
             PostUpdate {
@@ -1314,6 +1323,7 @@ async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
     let record = confirmed(
         perform_post_update(
             &state.write_scope,
+            &storage::test_support::fixture_media_content_locks(),
             Arc::clone(&state.posts),
             Arc::clone(&state.feed_events),
             PostUpdate {

@@ -204,12 +204,7 @@ async fn create_session(
         })
         .await
         .expect("session fixture setup should succeed");
-    match outcome {
-        MutationOutcome::Confirmed(token) => token,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("session fixture setup requires a confirmed commit")
-        }
-    }
+    storage::test_support::confirmed_for(outcome, "session fixture setup")
 }
 
 async fn authenticate(
@@ -219,12 +214,7 @@ async fn authenticate(
     let outcome = authenticate_result(state, raw_token)
         .await
         .expect("session authentication should succeed");
-    match outcome {
-        MutationOutcome::Confirmed(record) => record,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("session authentication requires a confirmed commit")
-        }
-    }
+    storage::test_support::confirmed_for(outcome, "session authentication")
 }
 
 async fn authenticate_result(
@@ -249,7 +239,5 @@ async fn revoke_session(state: &AppState, token_hash: common::token::TokenHash) 
         })
         .await
         .expect("session revocation should succeed");
-    if matches!(outcome, MutationOutcome::CommitIndeterminate(())) {
-        panic!("session revocation requires a confirmed commit");
-    }
+    storage::test_support::confirmed_for(outcome, "session revocation");
 }

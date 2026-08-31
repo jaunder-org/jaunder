@@ -500,6 +500,22 @@ pub struct TestEnv {
     pub state: Arc<AppState>,
     pub base: TestBase,
 }
+
+impl TestEnv {
+    #[must_use]
+    pub fn media_content_locks(&self) -> crate::MediaContentLocks {
+        crate::MediaContentLocks::new(Arc::new(self.base.path().to_path_buf()))
+    }
+}
+
+/// Creates the shared lock seam for fixture Post writers that receive only an
+/// [`AppState`], not their enclosing [`TestEnv`].
+#[must_use]
+pub fn fixture_media_content_locks() -> crate::MediaContentLocks {
+    crate::MediaContentLocks::new(Arc::new(
+        std::env::temp_dir().join("jaunder-test-media-content-locks"),
+    ))
+}
 /// Reconciles post tags through a scope and requires a confirmed setup write.
 ///
 /// Fixture setup needs a durable row before its assertions run, so an
@@ -1337,6 +1353,7 @@ impl SeedPost {
     pub async fn seed(self, state: &Arc<AppState>) -> PostRecord {
         let outcome = crate::perform_post_creation(
             &state.write_scope,
+            &fixture_media_content_locks(),
             Arc::clone(&state.posts),
             Arc::clone(&state.feed_events),
             crate::PostCreation {
@@ -1852,6 +1869,7 @@ async fn create_via_service(
 ) -> PostId {
     let outcome = crate::perform_post_creation(
         &state.write_scope,
+        &fixture_media_content_locks(),
         Arc::clone(&state.posts),
         Arc::clone(&state.feed_events),
         crate::PostCreation {
@@ -1889,6 +1907,7 @@ pub async fn update_post_body_via_service(
 ) {
     let outcome = crate::perform_post_update(
         &state.write_scope,
+        &fixture_media_content_locks(),
         Arc::clone(&state.posts),
         Arc::clone(&state.feed_events),
         crate::PostUpdate {

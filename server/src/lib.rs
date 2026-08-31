@@ -130,6 +130,10 @@ pub fn create_router_with_media_reference_ownership_resolver(
     let server_fn_mailer = mailer;
     let serve_assets = ServeEmbed::<StaticAssets>::new();
     let storage_path_ext = Arc::new(storage_path);
+    let media_content_locks_ext = Arc::new(storage::MediaContentLocks::new(Arc::clone(
+        &storage_path_ext,
+    )));
+    let server_fn_media_content_locks = Arc::clone(&media_content_locks_ext);
     let client_telemetry = crate::client_telemetry::router(
         sessions_ext.clone(),
         write_scope_ext.clone(),
@@ -147,9 +151,11 @@ pub fn create_router_with_media_reference_ownership_resolver(
                 let resolver = server_fn_media_ownership_resolver.clone();
                 let state = server_fn_state.clone();
                 let mailer = server_fn_mailer.clone();
+                let media_content_locks = Arc::clone(&server_fn_media_content_locks);
                 leptos_axum::handle_server_fns_with_context(
                     move || {
                         context::provide_app_state_contexts(&state);
+                        context::provide_media_content_locks_context(&media_content_locks);
                         context::provide_mailer_context(&mailer);
                         context::provide_media_ownership_context(&resolver, &instance_id);
                         provide_context(web::auth::CookieSettings {
@@ -201,6 +207,7 @@ pub fn create_router_with_media_reference_ownership_resolver(
         .layer(axum::Extension(media_ownership_resolver))
         .layer(axum::Extension(instance_id))
         .layer(axum::Extension(storage_path_ext))
+        .layer(axum::Extension(media_content_locks_ext))
         .layer(axum::Extension(posts_ext))
         .layer(axum::Extension(audiences_ext))
         .layer(axum::Extension(users_ext))

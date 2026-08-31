@@ -107,6 +107,7 @@ async fn seed_post_published_at(
     confirmed(
         create_rendered_post(
             &state.write_scope,
+            &storage::test_support::fixture_media_content_locks(),
             Arc::clone(&state.posts),
             Arc::clone(&state.feed_events),
             RenderedPostContent {

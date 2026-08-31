@@ -27,7 +27,8 @@ use host::atompub::{self, CollectionFeedTitle, Entry, FeedMeta};
 use host::{etag, feed};
 use storage::{
     AudienceStorage, CollectionCursor, FeedEventError, FeedEventStorage, InvalidAudienceTargets,
-    PostRecord, PostStorage, SiteConfigStorage, UserConfigStorage, WriteScope, WriteScopeError,
+    MediaContentLocks, PostRecord, PostStorage, SiteConfigStorage, UserConfigStorage, WriteScope,
+    WriteScopeError,
 };
 use web::auth;
 
@@ -49,6 +50,7 @@ pub struct PostServices {
     audiences: Arc<dyn AudienceStorage>,
     user_config: Arc<dyn UserConfigStorage>,
     site_config: Arc<dyn SiteConfigStorage>,
+    content_locks: Arc<MediaContentLocks>,
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for PostServices {
@@ -66,6 +68,9 @@ impl<S: Send + Sync> FromRequestParts<S> for PostServices {
                 .await?
                 .0,
             site_config: Extension::<Arc<dyn SiteConfigStorage>>::from_request_parts(parts, state)
+                .await?
+                .0,
+            content_locks: Extension::<Arc<MediaContentLocks>>::from_request_parts(parts, state)
                 .await?
                 .0,
         })
@@ -95,6 +100,12 @@ impl PostServices {
     #[must_use]
     pub fn site_config(&self) -> &dyn SiteConfigStorage {
         self.site_config.as_ref()
+    }
+
+    /// Borrows the media filesystem coordinator for Post writes.
+    #[must_use]
+    pub fn content_locks(&self) -> &MediaContentLocks {
+        self.content_locks.as_ref()
     }
 }
 
@@ -527,6 +538,7 @@ pub async fn collection_post(
 
     let created = storage::perform_post_creation(
         &write_scope,
+        services.content_locks(),
         Arc::clone(&posts),
         Arc::clone(&feed_events),
         storage::PostCreation {
@@ -546,7 +558,6 @@ pub async fn collection_post(
     )
     .await;
 
-    let base = super::required_base_url(site_config).await?;
     // Re-fetch as the authenticated owner so a non-Public default audience is not
     // hidden, and so the response entry carries the post's tags.
     let viewer = owner_viewer(&auth_user);
@@ -565,6 +576,7 @@ pub async fn collection_post(
             .get_post_by_id(post_id, &viewer)
             .await?
             .ok_or(HandlerError::NotFound)?;
+        let base = super::required_base_url(site_config).await?;
         return post_entry_response(StatusCode::OK, &post, &base, &username);
     }
 
@@ -574,6 +586,7 @@ pub async fn collection_post(
         Ok(created) => created,
         Err(status) => return Ok(status.into_response()),
     };
+    let base = super::required_base_url(site_config).await?;
     let post = posts
         .get_post_by_id(created.post_id, &viewer)
         .await?
@@ -670,6 +683,7 @@ pub async fn member_put(
     };
     let update_outcome = storage::perform_post_update(
         &write_scope,
+        services.content_locks(),
         Arc::clone(&posts),
         Arc::clone(&feed_events),
         storage::PostUpdate {

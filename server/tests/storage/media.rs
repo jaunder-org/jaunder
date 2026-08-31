@@ -7,7 +7,7 @@ use common::test_support::{
 use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
-use storage::test_support::{Backend, SeedUser, backends, seed_users};
+use storage::test_support::{Backend, SeedUser, backends, confirmed_for, seed_users};
 use storage::{
     CreateMediaError, DeleteMediaError, MediaRecord, MediaReferenceEvidence, TryDeleteOutcome,
 };
@@ -21,10 +21,7 @@ async fn create_media(state: &storage::AppState, record: MediaRecord) {
         })
         .await
         .expect("fixture media creation should succeed");
-    assert!(
-        matches!(outcome, common::MutationOutcome::Confirmed(())),
-        "fixture media creation requires a confirmed commit"
-    );
+    confirmed_for(outcome, "fixture media creation");
 }
 
 // ── MediaStorage tests ────────────────────────────────────────────────────────
@@ -284,9 +281,7 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
         })
         .await
         .expect("media deletion should succeed");
-    let common::MutationOutcome::Confirmed(outcome) = outcome else {
-        panic!("media deletion requires a confirmed commit");
-    };
+    let outcome = confirmed_for(outcome, "media deletion");
     assert_eq!(outcome, TryDeleteOutcome::Deleted);
 
     let fetched = state

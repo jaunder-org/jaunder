@@ -1268,42 +1268,36 @@ async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
     let foreign = create_user_and_session(&state).await;
     let owned_name = common::test_support::parse_audience_name("Owned");
     let audiences = Arc::clone(&state.audiences);
-    let owned = match state
-        .write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                audiences
-                    .create_audience(transaction, author.user_id, &owned_name)
-                    .await
+    let owned = storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    audiences
+                        .create_audience(transaction, author.user_id, &owned_name)
+                        .await
+                })
             })
-        })
-        .await
-        .expect("create author's audience")
-    {
-        MutationOutcome::Confirmed(audience) => audience,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("author's audience fixture requires a confirmed commit")
-        }
-    };
+            .await
+            .expect("create author's audience"),
+        "author's audience fixture",
+    );
     let foreign_name = common::test_support::parse_audience_name("Foreign");
     let audiences = Arc::clone(&state.audiences);
-    let foreign_audience = match state
-        .write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                audiences
-                    .create_audience(transaction, foreign.user_id, &foreign_name)
-                    .await
+    let foreign_audience = storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    audiences
+                        .create_audience(transaction, foreign.user_id, &foreign_name)
+                        .await
+                })
             })
-        })
-        .await
-        .expect("create foreign audience")
-    {
-        MutationOutcome::Confirmed(audience) => audience,
-        MutationOutcome::CommitIndeterminate(_) => {
-            panic!("foreign audience fixture requires a confirmed commit")
-        }
-    };
+            .await
+            .expect("create foreign audience"),
+        "foreign audience fixture",
+    );
 
     let owned_xml = entry_xml(
         "Audience",
