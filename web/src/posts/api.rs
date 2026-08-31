@@ -1321,9 +1321,10 @@ mod server_tests {
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
     use storage::{
-        AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MockAudienceStorage,
-        MockFeedEventStorage, MockPostStorage, PostFormat, PostRecord, PostRevisionMetadata,
-        PostRevisionPage, PostStorage, UpdatePostError, test_support::mock_write_scope,
+        AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MediaContentLocks,
+        MockAudienceStorage, MockFeedEventStorage, MockPostStorage, PostFormat, PostRecord,
+        PostRevisionMetadata, PostRevisionPage, PostStorage, UpdatePostError,
+        test_support::{fixture_media_content_locks, mock_write_scope},
     };
     fn owned_post(user_id: UserId) -> PostRecord {
         let now = UtcInstant::now();
@@ -1662,6 +1663,7 @@ mod server_tests {
         provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
         provide_context(Arc::new(MockAudienceStorage::new()) as Arc<dyn AudienceStorage>);
         provide_context(mock_write_scope());
+        provide_context(Arc::new(fixture_media_content_locks()) as Arc<MediaContentLocks>);
         let mut events = MockFeedEventStorage::new();
         events
             .expect_enqueue_many()
