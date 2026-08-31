@@ -1,3 +1,5 @@
+//! Postgres-specific per-test database configuration, clone provisioning, and RAII
+//! teardown. Backend-neutral environment setup and template selection live in [`super::backend`].
 use crate::DbConnectOptions;
 use crate::sql::{Exists, quote_identifier};
 

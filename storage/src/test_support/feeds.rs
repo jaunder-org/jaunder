@@ -1,3 +1,5 @@
+//! Feed-path fixture parsing for storage and server integration tests. This leaf owns
+//! only the canonical [`FeedPath`] constructor, not feed setup or persistence.
 use host::feed::FeedPath;
 
 /// Parses `s` into the canonical [`FeedPath`] identity key. The one shared

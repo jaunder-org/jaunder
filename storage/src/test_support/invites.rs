@@ -1,3 +1,5 @@
+//! Invite-code fixture parsing for tests. This leaf owns the `host`-typed literal
+//! constructor; invite creation and persistence remain with the storage under test.
 use host::invite::InviteCode;
 
 /// Parse `s` into a valid [`InviteCode`] for tests — the single place a test

@@ -1,5 +1,7 @@
-use super::confirmed_for;
+//! User fixture builders with process-unique generated identities and batch seeding.
+//! Authentication and user-storage behavior remain the responsibility of the tests under setup.
 
+use super::confirmed_for;
 use crate::AppState;
 
 use common::ids::UserId;

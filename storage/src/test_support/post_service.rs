@@ -1,5 +1,7 @@
-use super::{confirmed_for, fixture_media_content_locks};
+//! Service-layer post creation and update fixtures. These helpers exercise production
+//! rendering/extraction paths; raw storage-layer post inputs belong in [`super::posts`].
 
+use super::{confirmed_for, fixture_media_content_locks};
 use crate::{AppState, PostBookkeepingExpectation, PostFormat};
 
 use common::ids::{PostId, UserId};

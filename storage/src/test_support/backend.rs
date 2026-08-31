@@ -1,3 +1,6 @@
+//! Both-backend test environment provisioning, rstest templates, and test-held
+//! pool/transaction primitives. Postgres clone URL lifecycle lives in [`super::postgres`];
+//! this leaf selects and wires that lifecycle into a uniform harness surface.
 use super::postgres::{PG_URL_FILE, PostgresDbGuard, PostgresTestConfig, template_postgres_url};
 use crate::posts::{INSERT_POST_TAG, UPSERT_TAG_RETURNING_ID};
 use crate::{

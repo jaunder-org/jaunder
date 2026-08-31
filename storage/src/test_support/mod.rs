@@ -21,7 +21,6 @@ mod postgres;
 mod posts;
 mod users;
 
-pub use crate::with_closeable_pool;
 #[cfg(any(test, feature = "test-utils"))]
 pub use backend::mock_write_scope;
 pub use backend::{

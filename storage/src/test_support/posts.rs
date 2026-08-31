@@ -1,5 +1,7 @@
-use super::{confirmed_for, fixture_media_content_locks};
+//! Post fixture builders and batch seed helpers. It owns direct storage-layer inputs
+//! and production-rendered seed records; service-path fixtures live in [`super::post_service`].
 
+use super::{confirmed_for, fixture_media_content_locks};
 use crate::posts::{
     CreatePostError, CreatePostInput, PostBookkeepingExpectation, PublishUpdate, UpdatePostInput,
 };

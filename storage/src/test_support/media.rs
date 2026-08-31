@@ -1,3 +1,6 @@
+//! Media fixtures and inspection helpers: canonical media identities, seeded rows,
+//! backup mutation, and raw/current-reference assertions. Database provisioning and
+//! pool dispatch remain in [`super::backend`].
 use super::TestBase;
 use super::confirmed_for;
 use crate::media::MediaRecord;

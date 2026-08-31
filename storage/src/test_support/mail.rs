@@ -1,3 +1,5 @@
+//! The inert mail-sender fixture for tests whose contract excludes delivery. Mail
+//! capture and delivery assertions belong to their dedicated mail test support.
 use common::mailer::{MailSender, NoopMailSender};
 use std::sync::Arc;
 
