@@ -8,7 +8,9 @@ use common::{
     visibility::{AudienceTarget, ViewerIdentity},
 };
 use std::sync::Arc;
-use storage::test_support::{Backend, SeedRawPost, SeedUser, backends, fp};
+use storage::test_support::{
+    Backend, SeedRawPost, SeedUser, backends, confirmed_for as confirmed, fp,
+};
 use storage::{
     AppState, FeedCacheRow, GoLivePost, ListByTagError, PostBookkeepingExpectation, PostCursor,
     PostFormat, PostRecord, RenderedPostContent, create_rendered_post,
@@ -18,6 +20,18 @@ use rstest::*;
 use rstest_reuse::*;
 
 use super::fixtures::{anon_by_tag, anon_published};
+
+async fn soft_delete_post_confirmed(state: &AppState, post_id: PostId, user_id: UserId) {
+    let posts = Arc::clone(&state.posts);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { posts.soft_delete_post(transaction, post_id, user_id).await })
+        })
+        .await
+        .expect("soft_delete_post failed");
+    confirmed(outcome, "post deletion");
+}
 
 async fn anon_user_by_tag(
     state: &AppState,
@@ -80,24 +94,30 @@ async fn seed_post_published_at(
     slug: &str,
     published_at: common::time::UtcInstant,
 ) -> PostId {
-    create_rendered_post(
-        &*state.posts,
-        RenderedPostContent {
-            user_id,
-            title: None,
-            slug: slug.parse().expect("valid slug"),
-            body: parse_post_body(&format!("# {slug}\n\nbody")),
-            format: PostFormat::Markdown,
-            published_at: Some(published_at),
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            tags: vec![],
-            idempotency_key: None,
-            expectations: PostBookkeepingExpectation::default(),
-        },
+    confirmed(
+        create_rendered_post(
+            &state.write_scope,
+            Arc::clone(&state.posts),
+            Arc::clone(&state.feed_events),
+            RenderedPostContent {
+                user_id,
+                title: None,
+                slug: slug.parse().expect("valid slug"),
+                body: parse_post_body(&format!("# {slug}\n\nbody")),
+                format: PostFormat::Markdown,
+                published_at: Some(published_at),
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: vec![],
+                idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .expect("seed post should be created"),
+        "seed post creation",
     )
-    .await
-    .expect("seed post should be created")
+    .post_id
 }
 
 // Scheduled-publishing boundary tests (issue #70): each public read must hide a
@@ -463,11 +483,7 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
     let published = anon_published(state, "10").await;
     assert!(published.iter().any(|p| p.post_id == post_id));
 
-    state
-        .posts
-        .soft_delete_post(post_id, user_id)
-        .await
-        .unwrap();
+    soft_delete_post_confirmed(state, post_id, user_id).await;
 
     let published = anon_published(state, "10").await;
     assert!(!published.iter().any(|p| p.post_id == post_id));
@@ -1288,11 +1304,7 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    state
-        .posts
-        .soft_delete_post(post1, user)
-        .await
-        .expect("soft_delete_post failed");
+    soft_delete_post_confirmed(state, post1, user).await;
 
     let tag_slug: Tag = "haskell".parse().unwrap();
     let posts = anon_by_tag(state, &tag_slug, "50").await;
@@ -1578,11 +1590,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
         .expect("get_post_by_permalink failed");
     assert!(post.is_some());
 
-    state
-        .posts
-        .soft_delete_post(seeded.post_id, user.user_id)
-        .await
-        .expect("soft_delete_post failed");
+    soft_delete_post_confirmed(state, seeded.post_id, user.user_id).await;
 
     let post = state
         .posts

@@ -7,7 +7,7 @@ use web::posts::SavedPost;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::create_user_and_session;
+use crate::helpers::{confirmed_mutation, create_user_and_session};
 use storage::test_support::{Backend, TestEnv, backends};
 
 use super::fixtures::{create_post_json, get_post_form};
@@ -31,7 +31,7 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     let record = state
         .posts
@@ -113,7 +113,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     storage::test_support::set_post_tags_confirmed(
         &state.write_scope,

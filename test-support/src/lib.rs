@@ -88,11 +88,20 @@ pub async fn seed_posts_for_user(
         };
         inputs.push(seed_post_input(user.user_id, slug, body, published));
     }
-    state
-        .posts
-        .create_posts(&inputs)
+    let posts = Arc::clone(&state.posts);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { posts.create_posts(transaction, &inputs).await })
+        })
         .await
-        .map_err(|e| anyhow::anyhow!("batch seed of {count} posts failed: {e:?}"))
+        .map_err(|error| anyhow::anyhow!("batch seed of {count} posts failed: {error}"))?;
+    match outcome {
+        common::MutationOutcome::Confirmed(post_ids) => Ok(post_ids),
+        common::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
+            "batch seed of {count} posts commit acknowledgement was indeterminate"
+        )),
+    }
 }
 
 /// Create a fixture user through the real `UserStorage::create_user` path — the

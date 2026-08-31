@@ -117,6 +117,7 @@ pub fn create_router_with_media_reference_ownership_resolver(
     let site_config_ext = state.site_config.clone();
     let media_ext = state.media.clone();
     let feed_cache_ext = state.feed_cache.clone();
+    let feed_events_ext = state.feed_events.clone();
     // The `auth::User` extractor (web crate) authenticates the session cookie /
     // bearer token, so the raw HTTP handlers and the Leptos request `Parts`
     // need the session store reachable as a request extension.
@@ -207,6 +208,7 @@ pub fn create_router_with_media_reference_ownership_resolver(
         .layer(axum::Extension(site_config_ext))
         .layer(axum::Extension(media_ext))
         .layer(axum::Extension(feed_cache_ext))
+        .layer(axum::Extension(feed_events_ext))
         .layer(axum::Extension(sessions_ext))
         .layer(axum::Extension(write_scope_ext))
         .layer(axum::middleware::from_fn_with_state(

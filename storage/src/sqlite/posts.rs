@@ -20,32 +20,11 @@ type MediaRefRow = (
     common::media::MediaReferenceForm,
 );
 
-pub(crate) fn finish_lifecycle<T>(
-    error: sqlx::Error,
-    rollback: Result<(), sqlx::Error>,
-) -> Result<T, sqlx::Error> {
-    rollback?;
-    Err(error)
-}
-
-pub(crate) fn finish_post_update(
-    primary: Result<PostRecord, UpdatePostError>,
-    rollback: Result<(), sqlx::Error>,
-) -> Result<PostRecord, UpdatePostError> {
-    helpers::preserve_after_secondary(
-        primary,
-        rollback,
-        host::error::ErrorKind::Storage,
-        host::error::ErrorClass::Transient,
-        "storage.sqlite.post_update.rollback",
-    )
-}
-
 /// SQLite-backed post storage.
 pub type SqlitePostStorage = PostStore<Sqlite>;
 
 async fn apply_lifecycle_change(
-    conn: &mut sqlx::pool::PoolConnection<Sqlite>,
+    conn: &mut sqlx::SqliteConnection,
     post_id: PostId,
     publish: bool,
     delete: bool,
@@ -56,90 +35,72 @@ async fn apply_lifecycle_change(
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
             .bind(now)
             .bind(post_id)
-            .execute(&mut **conn)
+            .execute(&mut *conn)
             .await?;
     } else if publish {
         sqlx::query("UPDATE posts SET published_at = $1, updated_at = $1 WHERE post_id = $2")
             .bind(now)
             .bind(post_id)
-            .execute(&mut **conn)
+            .execute(&mut *conn)
             .await?;
     } else {
         sqlx::query("UPDATE posts SET published_at = NULL, updated_at = $1 WHERE post_id = $2")
             .bind(now)
             .bind(post_id)
-            .execute(&mut **conn)
+            .execute(&mut *conn)
             .await?;
     }
     Ok(())
 }
 
 async fn lifecycle_post(
-    pool: &Pool<Sqlite>,
+    transaction: &mut WriteTransaction,
     post_id: PostId,
     user_id: UserId,
     publish: bool,
     delete: bool,
 ) -> Result<Option<PostRecord>, sqlx::Error> {
-    let mut conn = pool.acquire().await?;
-    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
-    let result = async {
-        let state =
-            sqlx::query_as::<
-                _,
-                (
-                    UserId,
-                    Option<common::time::UtcInstant>,
-                    Option<common::time::UtcInstant>,
-                ),
-            >("SELECT user_id, deleted_at, published_at FROM posts WHERE post_id = $1")
-            .bind(post_id)
-            .fetch_optional(&mut *conn)
-            .await?;
-        let Some((owner, deleted_at, published_at)) = state else {
-            return Ok(None);
-        };
-        if owner != user_id || deleted_at.is_some() {
-            return Ok(None);
-        }
-        let changed =
-            delete || (publish && published_at.is_none()) || (!publish && published_at.is_some());
-        if changed {
-            apply_lifecycle_change(&mut conn, post_id, publish, delete).await?;
-        }
-        sqlx::query_as::<_, PostRecord>(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format,
-                    p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
-                    p.summary,
-                    COALESCE((SELECT json_group_array(json_object(
-                        'tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display
-                    ) ORDER BY t.tag_slug) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id
-                    WHERE pt.post_id = p.post_id), '[]') AS tags
-             FROM posts p JOIN users u ON u.user_id = p.user_id WHERE p.post_id = $1",
-        )
-        .bind(post_id)
-        .fetch_one(&mut *conn)
-        .await
-        .map(Some)
-    }
-    .await;
-    match result {
-        Ok(row) => {
-            sqlx::query("COMMIT").execute(&mut *conn).await?;
-            Ok(row)
-        }
-        Err(error) => finish_lifecycle(
-            error,
-            sqlx::query("ROLLBACK")
-                .execute(&mut *conn)
-                .await
-                .map(|_| ()),
+    let conn = sqlite_connection(transaction)?;
+    let state = sqlx::query_as::<
+        _,
+        (
+            UserId,
+            Option<common::time::UtcInstant>,
+            Option<common::time::UtcInstant>,
         ),
+    >("SELECT user_id, deleted_at, published_at FROM posts WHERE post_id = $1")
+    .bind(post_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some((owner, deleted_at, published_at)) = state else {
+        return Ok(None);
+    };
+    if owner != user_id || deleted_at.is_some() {
+        return Ok(None);
     }
+    let changed =
+        delete || (publish && published_at.is_none()) || (!publish && published_at.is_some());
+    if changed {
+        apply_lifecycle_change(conn, post_id, publish, delete).await?;
+    }
+    sqlx::query_as::<_, PostRecord>(
+        "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format,
+                p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                p.summary,
+                COALESCE((SELECT json_group_array(json_object(
+                    'tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display
+                ) ORDER BY t.tag_slug) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id
+                WHERE pt.post_id = p.post_id), '[]') AS tags
+         FROM posts p JOIN users u ON u.user_id = p.user_id WHERE p.post_id = $1",
+    )
+    .bind(post_id)
+    .fetch_one(&mut *conn)
+    .await
+    .map(Some)
 }
 
 async fn fetch_post(
-    conn: &mut sqlx::pool::PoolConnection<Sqlite>,
+    conn: &mut sqlx::SqliteConnection,
     post_id: PostId,
 ) -> Result<PostRecord, UpdatePostError> {
     sqlx::query_as::<_, PostRecord>(
@@ -155,13 +116,13 @@ async fn fetch_post(
          FROM posts p JOIN users u ON u.user_id = p.user_id WHERE p.post_id = $1",
     )
     .bind(post_id)
-    .fetch_one(&mut **conn)
+    .fetch_one(&mut *conn)
     .await
     .map_err(UpdatePostError::from)
 }
 
 async fn apply_post_update(
-    conn: &mut sqlx::pool::PoolConnection<Sqlite>,
+    conn: &mut sqlx::SqliteConnection,
     post_id: PostId,
     input: &UpdatePostInput,
     tag_diff: PostTagDiff<'_>,
@@ -184,28 +145,28 @@ async fn apply_post_update(
     .bind(input.title.as_ref()).bind(&input.slug).bind(&input.body).bind(input.format)
     .bind(input.rendered.html()).bind(unpublish).bind(explicit_published_at)
     .bind(explicit_published_at).bind(now).bind(now).bind(input.summary.as_ref()).bind(post_id)
-    .fetch_one(&mut **conn).await?;
-    posts::replace_post_audiences::<Sqlite>(&mut **conn, post_id, &input.audiences).await?;
+    .fetch_one(&mut *conn).await?;
+    posts::replace_post_audiences::<Sqlite>(&mut *conn, post_id, &input.audiences).await?;
     for label in tag_diff.to_add {
         let tag_id = sqlx::query_scalar::<_, TagId>(posts::UPSERT_TAG_RETURNING_ID)
             .bind(label.slug())
-            .fetch_one(&mut **conn)
+            .fetch_one(&mut *conn)
             .await?;
         sqlx::query(posts::INSERT_POST_TAG)
             .bind(post_id)
             .bind(tag_id)
             .bind(label)
-            .execute(&mut **conn)
+            .execute(&mut *conn)
             .await?;
     }
     for slug in tag_diff.to_remove {
         sqlx::query(posts::DELETE_POST_TAG_BY_SLUG)
             .bind(post_id)
             .bind(slug)
-            .execute(&mut **conn)
+            .execute(&mut *conn)
             .await?;
     }
-    posts::replace_post_media::<Sqlite>(&mut **conn, post_id, input.rendered.media()).await?;
+    posts::replace_post_media::<Sqlite>(&mut *conn, post_id, input.rendered.media()).await?;
     Ok(row)
 }
 
@@ -237,139 +198,116 @@ impl PostDialect for Sqlite {
         "DELETE FROM post_media WHERE post_id = ? AND subject_kind = 'current' AND revision_id = 0";
 
     async fn update_post(
-        pool: &Pool<Sqlite>,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError> {
-        // ADR-0021: take the write lock up front with BEGIN IMMEDIATE rather than a
-        // deferred BEGIN, so the SELECT->INSERT step performs no shared->reserved lock
-        // upgrade (the SQLITE_BUSY-on-upgrade failure mode). sqlx's Transaction issues
-        // its own deferred BEGIN, so drive the transaction manually on a raw connection,
-        // mirroring create_user_with_invite / sqlite/backup.rs.
-        let mut conn = pool.acquire().await?;
-        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
-
-        let result: Result<PostRecord, UpdatePostError> = async {
-            let existing = sqlx::query_as::<_, PostBookkeepingRow>(
-                "SELECT user_id, deleted_at, title, slug, body, format, rendered_html, summary, published_at
-                 FROM posts WHERE post_id = $1",
-            )
-            .bind(post_id)
-            .fetch_optional(&mut *conn)
-            .await?;
-
-            let existing = match existing {
-                None => return Err(UpdatePostError::NotFound),
-                Some(existing)
-                    if existing.user_id != editor_user_id || existing.deleted_at.is_some() =>
-                {
-                    return Err(UpdatePostError::Unauthorized);
-                }
-                Some(existing) => existing,
-            };
-            let tags = sqlx::query_scalar::<_, TagLabel>(
-                "SELECT pt.tag_display FROM post_tags pt
-                 JOIN tags t ON t.tag_id = pt.tag_id
-                 WHERE pt.post_id = $1 ORDER BY t.tag_slug",
-            )
+        let conn = sqlite_connection(transaction)?;
+        let existing = sqlx::query_as::<_, PostBookkeepingRow>(
+            "SELECT user_id, deleted_at, title, slug, body, format, rendered_html, summary, published_at
+             FROM posts WHERE post_id = $1",
+        )
+        .bind(post_id)
+        .fetch_optional(&mut *conn)
+        .await?;
+        let existing = match existing {
+            None => return Err(UpdatePostError::NotFound),
+            Some(existing)
+                if existing.user_id != editor_user_id || existing.deleted_at.is_some() =>
+            {
+                return Err(UpdatePostError::Unauthorized);
+            }
+            Some(existing) => existing,
+        };
+        let tags = sqlx::query_scalar::<_, TagLabel>(
+            "SELECT pt.tag_display FROM post_tags pt
+             JOIN tags t ON t.tag_id = pt.tag_id
+             WHERE pt.post_id = $1 ORDER BY t.tag_slug",
+        )
+        .bind(post_id)
+        .fetch_all(&mut *conn)
+        .await?;
+        if let Some(error) = posts::update_expectation_error(post_id, &existing, &tags, input) {
+            return Err(error);
+        }
+        let tag_rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
             .bind(post_id)
             .fetch_all(&mut *conn)
             .await?;
-            if let Some(error) = posts::update_expectation_error(post_id, &existing, &tags, input) {
-                return Err(error);
-            }
-            let tag_rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
-                .bind(post_id)
-                .fetch_all(&mut *conn)
-                .await?;
-            let existing_tags = posts::post_tags_from_rows(tag_rows);
-            let tag_diff = posts::post_tag_diff(&existing_tags, &input.tags);
-            let existing_audiences = sqlx::query_as::<_, (
+        let existing_tags = posts::post_tags_from_rows(tag_rows);
+        let tag_diff = posts::post_tag_diff(&existing_tags, &input.tags);
+        let existing_audiences = sqlx::query_as::<
+            _,
+            (
                 common::visibility::TargetKind,
                 Option<common::ids::AudienceId>,
-            )>(
-                "SELECT tk.name, pa.audience_id FROM post_audiences pa
-                 JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
-                 WHERE pa.post_id = $1",
-            )
-            .bind(post_id)
-            .fetch_all(&mut *conn)
-            .await?;
-            let old_media: Vec<MediaRefRow> = sqlx::query_as(
-                "SELECT source, sha256, filename, reference_kind, reference_form FROM post_media
-                 WHERE post_id = $1 AND subject_kind = 'current' AND revision_id = 0",
-            )
-            .bind(post_id)
-            .fetch_all(&mut *conn)
-            .await?;
-            let old_media_set: std::collections::BTreeSet<_> =
-                old_media.iter().cloned().collect();
-            let desired_media_set: std::collections::BTreeSet<_> = input
-                .rendered
-                .media()
-                .iter()
-                .map(|reference| {
-                    (
-                        reference.media().source,
-                        reference.media().sha256.clone(),
-                        reference.media().filename.clone(),
-                        reference.kind(),
-                        reference.reference_form().clone(),
-                    )
-                })
-                .collect();
-            if posts::update_scalar_is_noop(&existing, input)
-                && tag_diff.to_add.is_empty()
-                && tag_diff.to_remove.is_empty()
-                && posts::audiences_are_equal(&existing_audiences, &input.audiences)
-                && old_media_set == desired_media_set
-            {
-                return fetch_post(&mut conn, post_id).await;
-            }
-            apply_post_update(&mut conn, post_id, input, tag_diff).await
-        }
-        .await;
-
-        match result {
-            Ok(row) => {
-                sqlx::query("COMMIT").execute(&mut *conn).await?;
-                Ok(row)
-            }
-            Err(error) => finish_post_update(
-                Err(error),
-                sqlx::query("ROLLBACK")
-                    .execute(&mut *conn)
-                    .await
-                    .map(|_| ()),
             ),
+        >(
+            "SELECT tk.name, pa.audience_id FROM post_audiences pa
+             JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
+             WHERE pa.post_id = $1",
+        )
+        .bind(post_id)
+        .fetch_all(&mut *conn)
+        .await?;
+        let old_media: Vec<MediaRefRow> = sqlx::query_as(
+            "SELECT source, sha256, filename, reference_kind, reference_form FROM post_media
+             WHERE post_id = $1 AND subject_kind = 'current' AND revision_id = 0",
+        )
+        .bind(post_id)
+        .fetch_all(&mut *conn)
+        .await?;
+        let old_media_set: std::collections::BTreeSet<_> = old_media.iter().cloned().collect();
+        let desired_media_set: std::collections::BTreeSet<_> = input
+            .rendered
+            .media()
+            .iter()
+            .map(|reference| {
+                (
+                    reference.media().source,
+                    reference.media().sha256.clone(),
+                    reference.media().filename.clone(),
+                    reference.kind(),
+                    reference.reference_form().clone(),
+                )
+            })
+            .collect();
+        if posts::update_scalar_is_noop(&existing, input)
+            && tag_diff.to_add.is_empty()
+            && tag_diff.to_remove.is_empty()
+            && posts::audiences_are_equal(&existing_audiences, &input.audiences)
+            && old_media_set == desired_media_set
+        {
+            return fetch_post(conn, post_id).await;
         }
+        apply_post_update(conn, post_id, input, tag_diff).await
     }
 
     async fn publish_post(
-        pool: &Pool<Sqlite>,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<Option<PostRecord>, sqlx::Error> {
-        lifecycle_post(pool, post_id, user_id, true, false).await
+        lifecycle_post(transaction, post_id, user_id, true, false).await
     }
 
     async fn soft_delete_post(
-        pool: &Pool<Sqlite>,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<bool, sqlx::Error> {
-        Ok(lifecycle_post(pool, post_id, user_id, false, true)
+        Ok(lifecycle_post(transaction, post_id, user_id, false, true)
             .await?
             .is_some())
     }
 
     async fn unpublish_post(
-        pool: &Pool<Sqlite>,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<Option<PostRecord>, sqlx::Error> {
-        lifecycle_post(pool, post_id, user_id, false, false).await
+        lifecycle_post(transaction, post_id, user_id, false, false).await
     }
 
     async fn set_post_tags(

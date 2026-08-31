@@ -1,9 +1,16 @@
+use std::sync::Arc;
+
 use common::ids::PostId;
 use common::test_support::{parse_audience_name, parse_row_limit};
-use common::visibility::{AudienceTarget, ViewerIdentity, local_subscriber_identity};
+use common::visibility::{
+    AudienceTarget, SubscriberIdentity, ViewerIdentity, local_subscriber_identity,
+};
 use rstest::*;
 use rstest_reuse::*;
-use storage::test_support::{Backend, SeedRawPost, backends, seed_users};
+use storage::test_support::{
+    Backend, SeedRawPost, backends, confirmed_for as confirmed, seed_users,
+};
+use storage::{AudienceStorage, SubscriptionStorage, WriteScope};
 
 use super::fixtures::{channel_id_by_name, local_channel_id, raw_exec};
 
@@ -22,27 +29,32 @@ async fn resolution_matrix(#[case] backend: Backend) {
     let local = local_channel_id(backend, &env).await;
 
     let [a, s, m, n] = seed_users(state).await;
-    state
-        .subscriptions
-        .subscribe(a, &local_subscriber_identity(local, s))
-        .await
-        .unwrap();
-    let m_sub = state
-        .subscriptions
-        .subscribe(a, &local_subscriber_identity(local, m))
-        .await
-        .unwrap();
-    let g = state
-        .audiences
-        .create_audience(a, &parse_audience_name("G"))
-        .await
-        .unwrap();
-    let g2 = state
-        .audiences
-        .create_audience(a, &parse_audience_name("G2"))
-        .await
-        .unwrap();
-    state.audiences.add_member(a, g, m_sub).await.unwrap();
+    subscribe_confirmed(
+        &state.write_scope,
+        Arc::clone(&state.subscriptions),
+        a,
+        local_subscriber_identity(local, s),
+    )
+    .await;
+    let m_sub = subscribe_confirmed(
+        &state.write_scope,
+        Arc::clone(&state.subscriptions),
+        a,
+        local_subscriber_identity(local, m),
+    )
+    .await;
+    let g =
+        create_audience_confirmed(&state.write_scope, Arc::clone(&state.audiences), a, "G").await;
+    let g2 =
+        create_audience_confirmed(&state.write_scope, Arc::clone(&state.audiences), a, "G2").await;
+    add_member_confirmed(
+        &state.write_scope,
+        Arc::clone(&state.audiences),
+        a,
+        g,
+        m_sub,
+    )
+    .await;
 
     let make = |audiences: Vec<AudienceTarget>| SeedRawPost::new(a).audiences(audiences);
     let p_public = make(vec![AudienceTarget::Public]).seed(state).await.post_id;
@@ -159,4 +171,59 @@ async fn resolution_matrix(#[case] backend: Backend) {
             );
         }
     }
+}
+
+async fn subscribe_confirmed(
+    write_scope: &WriteScope,
+    subscriptions: Arc<dyn SubscriptionStorage>,
+    author: common::ids::UserId,
+    subscriber: SubscriberIdentity,
+) -> common::ids::SubscriptionId {
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                subscriptions
+                    .subscribe(transaction, author, &subscriber)
+                    .await
+            })
+        })
+        .await
+        .expect("subscription fixture setup should succeed");
+    confirmed(outcome, "subscription fixture setup")
+}
+
+async fn create_audience_confirmed(
+    write_scope: &WriteScope,
+    audiences: Arc<dyn AudienceStorage>,
+    author: common::ids::UserId,
+    name: &str,
+) -> common::ids::AudienceId {
+    let name = parse_audience_name(name);
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move { audiences.create_audience(transaction, author, &name).await })
+        })
+        .await
+        .expect("audience fixture setup should succeed");
+    confirmed(outcome, "audience fixture setup")
+}
+
+async fn add_member_confirmed(
+    write_scope: &WriteScope,
+    audiences: Arc<dyn AudienceStorage>,
+    author: common::ids::UserId,
+    audience: common::ids::AudienceId,
+    subscription: common::ids::SubscriptionId,
+) {
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                audiences
+                    .add_member(transaction, author, audience, subscription)
+                    .await
+            })
+        })
+        .await
+        .expect("audience membership fixture setup should succeed");
+    confirmed(outcome, "audience membership fixture setup");
 }

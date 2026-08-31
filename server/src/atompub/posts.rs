@@ -1,6 +1,6 @@
 //! `AtomPub` posts collection read/delete/create/update handlers.
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use axum::Extension;
 use axum::extract::rejection::ExtensionRejection;
@@ -10,7 +10,6 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
-use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::PostId;
 use common::org::{self, OrgOperation, OrgStructuredMetadata, Presence, PublicationState};
@@ -18,16 +17,17 @@ use common::pagination::PageSize;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::tag::TagLabel;
+use common::tag::{Tag, TagLabel};
 use common::tagged_url::{self, BaseUrl, EditUriUrl, FeedUrl, PaginationUrl};
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
+use common::{MutationOutcome, etag::ETag};
 use host::atompub::{self, CollectionFeedTitle, Entry, FeedMeta};
-use host::etag;
+use host::{etag, feed};
 use storage::{
-    AudienceStorage, CollectionCursor, InvalidAudienceTargets, PostRecord, PostStorage,
-    SiteConfigStorage, UserConfigStorage,
+    AudienceStorage, CollectionCursor, FeedEventError, FeedEventStorage, InvalidAudienceTargets,
+    PostRecord, PostStorage, SiteConfigStorage, UserConfigStorage, WriteScope, WriteScopeError,
 };
 use web::auth;
 
@@ -73,10 +73,10 @@ impl<S: Send + Sync> FromRequestParts<S> for PostServices {
 }
 
 impl PostServices {
-    /// Borrows the post store for one handler operation.
+    /// Clones the post-storage capability for an independent handler operation.
     #[must_use]
-    pub fn posts(&self) -> &dyn PostStorage {
-        self.posts.as_ref()
+    pub fn posts(&self) -> Arc<dyn PostStorage> {
+        Arc::clone(&self.posts)
     }
 
     /// Borrows the named-audience store for author-scoped target authorization.
@@ -404,7 +404,7 @@ pub async fn member_get(
 ) -> Result<Response, HandlerError> {
     let posts = services.posts();
     let site_config = services.site_config();
-    let post = owned_post(posts, &auth_user, &username, post_id).await?;
+    let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
     let base = super::required_base_url(site_config).await?;
     let entry = mapping::post_to_entry(&post, &base);
     let xml = atompub::entry_to_xml(&entry)?;
@@ -429,22 +429,47 @@ pub async fn member_get(
 #[tracing::instrument(name = "atompub.posts.member_delete", skip_all)]
 pub async fn member_delete(
     services: PostServices,
+    Extension(write_scope): Extension<WriteScope>,
+    Extension(feed_events): Extension<Arc<dyn FeedEventStorage>>,
     auth_user: auth::User,
     Path((username, post_id)): Path<(Username, PostId)>,
     headers: HeaderMap,
 ) -> Result<Response, HandlerError> {
     let posts = services.posts();
-    let post = owned_post(posts, &auth_user, &username, post_id).await?;
+    let feed_events = Arc::clone(&feed_events);
+    let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
 
     // Conditional delete: honour `If-Match` against the content ETag, as `member_put` does.
     if !if_match_satisfied(&headers, &etag_for(&post)) {
         return Err(HandlerError::PreconditionFailed);
     }
-
-    posts
-        .soft_delete_post(post.post_id, auth_user.user_id)
+    let tag_slugs: BTreeSet<Tag> = post.tags.iter().map(|tag| tag.tag_slug.clone()).collect();
+    let feed_paths = feed::affected_feed_urls(&post.author_username, &tag_slugs);
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                posts
+                    .soft_delete_post(transaction, post.post_id, auth_user.user_id)
+                    .await
+                    .map_err(|error| {
+                        HandlerError::from(storage::PerformUpdateError::from(error))
+                    })?;
+                feed_events
+                    .enqueue_many(transaction, &feed_paths)
+                    .await
+                    .map_err(|error| match error {
+                        FeedEventError::Db(error) => HandlerError::from(error),
+                    })
+            })
+        })
         .await
-        .map_err(storage::PerformUpdateError::from)?;
+        .map_err(|error| match error {
+            WriteScopeError::Operation(error) => error,
+            WriteScopeError::Begin(error) => HandlerError::from(error),
+        })?;
+    if matches!(outcome, MutationOutcome::CommitIndeterminate(())) {
+        return Err(HandlerError::Invariant);
+    }
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -458,12 +483,15 @@ pub async fn member_delete(
 #[tracing::instrument(name = "atompub.posts.collection_post", skip_all)]
 pub async fn collection_post(
     services: PostServices,
+    Extension(write_scope): Extension<WriteScope>,
+    Extension(feed_events): Extension<Arc<dyn FeedEventStorage>>,
     auth_user: auth::User,
     Path(username): Path<Username>,
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, HandlerError> {
     let posts = services.posts();
+    let feed_events = Arc::clone(&feed_events);
     let audiences = services.audiences();
     let user_config = services.user_config();
     let site_config = services.site_config();
@@ -498,7 +526,9 @@ pub async fn collection_post(
     let idempotency_key = idempotency_key_from_headers(&headers);
 
     let created = storage::perform_post_creation(
-        posts,
+        &write_scope,
+        Arc::clone(&posts),
+        Arc::clone(&feed_events),
         storage::PostCreation {
             user_id: auth_user.user_id,
             body,
@@ -538,8 +568,12 @@ pub async fn collection_post(
         return post_entry_response(StatusCode::OK, &post, &base, &username);
     }
 
-    // Fresh create: a non-conflict error propagates via `?`.
-    let created = created?;
+    // Fresh create: a non-conflict error propagates via `?`; AtomPub cannot
+    // safely claim a durable response when commit acknowledgement is lost.
+    let created = match created? {
+        MutationOutcome::Confirmed(post) => post,
+        MutationOutcome::CommitIndeterminate(_) => return Err(HandlerError::Invariant),
+    };
     let post = posts
         .get_post_by_id(created.post_id, &viewer)
         .await?
@@ -585,16 +619,24 @@ fn post_entry_response(
 #[tracing::instrument(name = "atompub.posts.member_put", skip_all)]
 pub async fn member_put(
     services: PostServices,
+    Extension(write_scope): Extension<WriteScope>,
+    Extension(feed_events): Extension<Arc<dyn FeedEventStorage>>,
     auth_user: auth::User,
     Path((username, post_id)): Path<(Username, PostId)>,
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, HandlerError> {
     let posts = services.posts();
+    let feed_events = Arc::clone(&feed_events);
     let audiences = services.audiences();
     let user_config = services.user_config();
     let site_config = services.site_config();
-    let current = owned_post(posts, &auth_user, &username, post_id).await?;
+    let current = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
+    let previous_tag_slugs = current
+        .tags
+        .iter()
+        .map(|tag| tag.tag_slug.clone())
+        .collect();
 
     if !if_match_satisfied(&headers, &etag_for(&current)) {
         return Err(HandlerError::PreconditionFailed);
@@ -626,8 +668,10 @@ pub async fn member_put(
         Presence::Present(audiences) => audiences,
         Presence::Absent => posts.get_post_audiences(post_id).await?,
     };
-    storage::perform_post_update(
-        posts,
+    let update_outcome = storage::perform_post_update(
+        &write_scope,
+        Arc::clone(&posts),
+        Arc::clone(&feed_events),
         storage::PostUpdate {
             post_id,
             editor_user_id: auth_user.user_id,
@@ -641,9 +685,13 @@ pub async fn member_put(
             summary,
             audiences,
             tags: categories,
+            previous_tag_slugs,
         },
     )
     .await?;
+    if matches!(update_outcome, MutationOutcome::CommitIndeterminate(_)) {
+        return Err(HandlerError::Invariant);
+    }
 
     let viewer = owner_viewer(&auth_user);
     let post = posts

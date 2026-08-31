@@ -9,7 +9,7 @@ use server_fn::ServerFn;
 use storage::test_support::{Backend, TestEnv, backends};
 use web::posts::{PostRevisionHistory, RevisionHistoryPage, SavedPost};
 
-use crate::helpers::{create_user_and_session, post_json};
+use crate::helpers::{confirmed_mutation, create_user_and_session, post_json};
 
 use super::fixtures::{create_post_json, update_post_json};
 
@@ -110,7 +110,7 @@ async fn revision_history_http_exposes_page_current_and_detail_fields(#[case] ba
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let post: SavedPost = serde_json::from_str(&body).unwrap();
+    let post: SavedPost = confirmed_mutation(&body);
     let (status, body) = update_post_json(
         &state,
         post.post_id,
@@ -181,7 +181,7 @@ async fn revision_history_http_hides_foreign_missing_and_mismatched_resources(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let post: SavedPost = serde_json::from_str(&body).unwrap();
+    let post: SavedPost = confirmed_mutation(&body);
     let (status, body) = update_post_json(
         &state,
         post.post_id,

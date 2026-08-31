@@ -15,7 +15,7 @@ use host::{
     metrics,
 };
 use storage::{
-    FeedCacheStorage, FeedEventRecord, FeedEventStorage, PostStorage, SiteConfigStorage,
+    FeedCacheStorage, FeedEventRecord, FeedEventStorage, PostStorage, SiteConfigStorage, WriteScope,
 };
 use tokio::sync::Mutex;
 
@@ -52,6 +52,7 @@ pub struct FeedWorker {
     site_config: Arc<dyn SiteConfigStorage>,
     posts: Arc<dyn PostStorage>,
     feed_cache: Arc<dyn FeedCacheStorage>,
+    write_scope: Arc<WriteScope>,
     feed_events: Arc<dyn FeedEventStorage>,
     websub: Arc<dyn WebSubClient>,
     /// The instant of the previous [`go_live_pass`](Self::go_live_pass), or
@@ -61,13 +62,14 @@ pub struct FeedWorker {
 }
 
 impl FeedWorker {
-    /// Builds a feed worker from exactly the storage handles and the `WebSub`
-    /// publisher it uses.
+    /// Builds a feed worker from exactly the storage handles, write scope, and
+    /// `WebSub` publisher it uses.
     #[must_use]
     pub fn new(
         site_config: Arc<dyn SiteConfigStorage>,
         posts: Arc<dyn PostStorage>,
         feed_cache: Arc<dyn FeedCacheStorage>,
+        write_scope: Arc<WriteScope>,
         feed_events: Arc<dyn FeedEventStorage>,
         websub: Arc<dyn WebSubClient>,
     ) -> Self {
@@ -75,6 +77,7 @@ impl FeedWorker {
             site_config,
             posts,
             feed_cache,
+            write_scope,
             feed_events,
             websub,
             last_tick: Mutex::new(None),
@@ -123,7 +126,8 @@ impl FeedWorker {
     ///
     /// # Errors
     ///
-    /// Returns an error if a storage read or feed-event enqueue fails.
+    /// Returns an error if a storage read, transaction acquisition, feed-event
+    /// enqueue, or commit acknowledgement fails.
     pub async fn go_live_pass(&self, now: UtcInstant) -> anyhow::Result<()> {
         let mut last_tick = self.last_tick.lock().await;
         let urls = match *last_tick {
@@ -149,7 +153,20 @@ impl FeedWorker {
         // storage call at all), a normal tick one, and a post-outage catch-up
         // as many bounded holds as it needs — never one unbounded hold.
         for chunk in urls.chunks(ENQUEUE_CHUNK) {
-            self.feed_events().enqueue_many(chunk).await?;
+            let feed_events = Arc::clone(&self.feed_events);
+            let paths = chunk.to_vec();
+            let outcome = self
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move { feed_events.enqueue_many(transaction, &paths).await })
+                })
+                .await?;
+            if matches!(
+                outcome,
+                common::mutation::MutationOutcome::CommitIndeterminate(())
+            ) {
+                anyhow::bail!("feed-event enqueue commit acknowledgement was indeterminate");
+            }
         }
         *last_tick = Some(now);
         Ok(())
@@ -491,7 +508,7 @@ mod tests {
     use crate::websub::NoopWebSubClient;
     use common::site::SiteIdentity;
     use host::feed::FeedEventStatus;
-    use storage::{FeedEventError, FeedEventRecord};
+    use storage::{FeedEventError, FeedEventRecord, test_support::mock_write_scope};
 
     fn event(id: i64, feed_url: &str, attempts: i32) -> FeedEventRecord {
         let now = UtcInstant::now();
@@ -574,6 +591,7 @@ mod tests {
             Arc::new(site_config),
             Arc::new(posts),
             Arc::new(feed_cache),
+            Arc::new(mock_write_scope()),
             Arc::new(feed_events),
             Arc::new(NoopWebSubClient),
         )
@@ -587,6 +605,7 @@ mod tests {
             Arc::new(storage::MockSiteConfigStorage::new()),
             Arc::new(storage::MockPostStorage::new()),
             Arc::new(storage::MockFeedCacheStorage::new()),
+            Arc::new(mock_write_scope()),
             Arc::new(feed_events),
             websub,
         )
@@ -1050,8 +1069,8 @@ mod tests {
         events
             .expect_enqueue_many()
             .times(1)
-            .withf(|paths| paths.len() == 3)
-            .returning(|_| Ok(()));
+            .withf(|_, paths| paths.len() == 3)
+            .returning(|_, _| Ok(()));
         events.expect_enqueue().times(0);
         let w = worker(
             storage::MockSiteConfigStorage::new(),
@@ -1062,6 +1081,40 @@ mod tests {
         w.go_live_pass(UtcInstant::now())
             .await
             .expect("catch-up pass");
+    }
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn go_live_catchup_bounds_each_enqueue_batch() {
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(1)
+            .returning(|_| {
+                Ok((0..=ENQUEUE_CHUNK)
+                    .map(|index| {
+                        format!("/tags/{index}/feed.rss")
+                            .parse()
+                            .expect("valid feed path in test")
+                    })
+                    .collect())
+            });
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_enqueue_many()
+            .times(2)
+            .withf(|_, paths| paths.len() <= ENQUEUE_CHUNK)
+            .returning(|_, _| Ok(()));
+        events.expect_enqueue().times(0);
+        let w = worker(
+            storage::MockSiteConfigStorage::new(),
+            posts,
+            storage::MockFeedCacheStorage::new(),
+            events,
+        );
+
+        w.go_live_pass(UtcInstant::now())
+            .await
+            .expect("bounded catch-up pass");
     }
 
     // guard:no-backend — mock store
@@ -1096,8 +1149,8 @@ mod tests {
         events
             .expect_enqueue_many()
             .times(1)
-            .withf(|paths| paths.len() == 9)
-            .returning(|_| Ok(()));
+            .withf(|_, paths| paths.len() == 9)
+            .returning(|_, _| Ok(()));
         events.expect_enqueue().times(0);
         let w = worker(
             storage::MockSiteConfigStorage::new(),

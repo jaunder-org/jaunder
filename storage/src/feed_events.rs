@@ -178,13 +178,16 @@ pub trait FeedEventStorage: Send + Sync {
     /// diagnosed in #766; a fan-out uses [`enqueue_many`](Self::enqueue_many).
     async fn enqueue(&self, feed_path: &FeedPath) -> Result<FeedEventId, FeedEventError>;
 
-    /// Insert `pending` rows for every path in `feed_paths`, in ONE write-first
-    /// transaction — a single write-lock acquisition for the whole batch.
-    /// Production fan-outs MUST use this, not per-row `enqueue`: per-row
-    /// autocommit loops are the `SQLite` lock-churn failure mode diagnosed in
-    /// #766. Duplicates are inserted as-is; the drain dedupes by grouping on
-    /// `feed_path`.
-    async fn enqueue_many(&self, feed_paths: &[FeedPath]) -> Result<(), FeedEventError>;
+    /// Insert `pending` rows for every path in `feed_paths` through the caller's
+    /// write transaction. Production fan-outs MUST use this, not per-row
+    /// `enqueue`: per-row autocommit loops are the `SQLite` lock-churn failure
+    /// mode diagnosed in #766. Duplicates are inserted as-is; the drain dedupes
+    /// by grouping on `feed_path`.
+    async fn enqueue_many(
+        &self,
+        transaction: &mut crate::WriteTransaction,
+        feed_paths: &[FeedPath],
+    ) -> Result<(), FeedEventError>;
 
     /// Atomically claim up to `limit` rows that are either:
     ///   * `status = 'pending' AND next_attempt_at <= now`, or
@@ -311,8 +314,6 @@ where
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
-    // `enqueue_many` executes on `&mut *tx` inside its batching transaction
-    // (#766); same precedent as the posts generic impl.
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
     (FeedEventId,): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -333,26 +334,21 @@ where
 
     #[tracing::instrument(
         name = "storage.feed_events.enqueue_many",
-        skip(self, feed_paths),
+        skip(self, transaction, feed_paths),
         fields(db.system = DB::DB_SYSTEM, count = feed_paths.len())
     )]
-    async fn enqueue_many(&self, feed_paths: &[FeedPath]) -> Result<(), FeedEventError> {
-        if feed_paths.is_empty() {
-            return Ok(());
-        }
-        // One write-first transaction: a single write-lock acquisition (and one
-        // WAL sync) for the whole batch, instead of one per row (#766). First
-        // statement is a write, so no deferred-upgrade hazard (ADR-0021) — and
-        // write-first is also the only shape available here: the generic impl
-        // has no dialect hook for `BEGIN IMMEDIATE`.
-        let mut tx = self.pool.begin().await?;
+    async fn enqueue_many(
+        &self,
+        transaction: &mut crate::WriteTransaction,
+        feed_paths: &[FeedPath],
+    ) -> Result<(), FeedEventError> {
+        let connection = DB::write_connection(transaction)?;
         for feed_path in feed_paths {
             sqlx::query(INSERT_FEED_EVENT)
                 .bind(feed_path)
-                .execute(&mut *tx)
+                .execute(&mut *connection)
                 .await?;
         }
-        tx.commit().await?;
         Ok(())
     }
 
@@ -466,12 +462,20 @@ mod tests {
     #[tokio::test]
     async fn enqueue_many_creates_pending_rows_in_one_batch(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let paths = [
+        let paths = vec![
             fp("/feed.rss"),
             fp("/~alice/feed.rss"),
             fp("/tags/t/feed.rss"),
         ];
-        env.state.feed_events.enqueue_many(&paths).await.unwrap();
+        let expected: std::collections::HashSet<_> = paths.iter().cloned().collect();
+        let feed_events = std::sync::Arc::clone(&env.state.feed_events);
+        env.state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { feed_events.enqueue_many(transaction, &paths).await })
+            })
+            .await
+            .unwrap();
 
         let claimed = env
             .state
@@ -482,7 +486,6 @@ mod tests {
         // FeedPath has no Ord (deliberate), so compare as sets.
         let urls: std::collections::HashSet<_> =
             claimed.iter().map(|r| r.feed_path.clone()).collect();
-        let expected: std::collections::HashSet<_> = paths.iter().cloned().collect();
         assert_eq!(urls, expected);
     }
 
@@ -492,8 +495,15 @@ mod tests {
         let env = backend.setup().await;
         // No dedupe: the drain groups by feed_path, so duplicate rows are
         // harmless — pin that enqueue_many does not silently collapse them.
-        let paths = [fp("/feed.rss"), fp("/feed.rss")];
-        env.state.feed_events.enqueue_many(&paths).await.unwrap();
+        let paths = vec![fp("/feed.rss"), fp("/feed.rss")];
+        let feed_events = std::sync::Arc::clone(&env.state.feed_events);
+        env.state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { feed_events.enqueue_many(transaction, &paths).await })
+            })
+            .await
+            .unwrap();
 
         let claimed = env
             .state
@@ -508,7 +518,14 @@ mod tests {
     #[tokio::test]
     async fn enqueue_many_empty_input_is_a_no_op(#[case] backend: Backend) {
         let env = backend.setup().await;
-        env.state.feed_events.enqueue_many(&[]).await.unwrap();
+        let feed_events = std::sync::Arc::clone(&env.state.feed_events);
+        env.state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { feed_events.enqueue_many(transaction, &[]).await })
+            })
+            .await
+            .unwrap();
 
         let claimed = env
             .state

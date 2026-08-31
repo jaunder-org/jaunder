@@ -1,7 +1,7 @@
 use super::state::{self, SubscribePaint};
 use super::{Subscribe, Unsubscribe};
 use crate::auth;
-use common::username::Username;
+use common::{MutationOutcome, username::Username};
 use leptos::prelude::*;
 
 /// Subscribe / Unsubscribe control shown on a user's profile (timeline) page.
@@ -120,12 +120,23 @@ fn SubscriptionActionError(
 ) -> impl IntoView {
     view! {
         {move || {
-            subscribe
-                .value()
-                .get()
-                .and_then(Result::err)
-                .or_else(|| unsubscribe.value().get().and_then(Result::err))
-                .map(|e| view! { <p class="error">{e.to_string()}</p> })
+            let outcome = subscribe.value().get().or_else(|| unsubscribe.value().get());
+            match outcome {
+                Some(Err(error)) => {
+                    Some(view! { <p class="error">{error.to_string()}</p> }.into_any())
+                }
+                Some(Ok(MutationOutcome::CommitIndeterminate(()))) => {
+                    Some(
+                        view! {
+                            <p class="error">
+                                "Your subscription may have changed, but its status could not be confirmed. Refresh to check."
+                            </p>
+                        }
+                            .into_any(),
+                    )
+                }
+                Some(Ok(MutationOutcome::Confirmed(()))) | None => None,
+            }
         }}
     }
 }

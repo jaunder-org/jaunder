@@ -5,8 +5,13 @@ use server_fn::ServerFn;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_user_and_session, post_form, post_json};
+use crate::helpers::{confirmed_mutation, create_user_and_session, post_form, post_json};
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+use web::posts::SavedPost;
+
+fn confirmed_post_id(response: &str) -> i64 {
+    i64::from(confirmed_mutation::<SavedPost>(response).post_id)
+}
 
 // Creating a published post enqueues the Site and User feeds (3 formats each =
 // 6 rows), plus 2 rows per tag (SiteTag + UserTag) × 3 formats. With no tags
@@ -85,12 +90,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
 
     assert_eq!(status, StatusCode::OK);
 
-    let create_json: serde_json::Value =
-        serde_json::from_str(&create_response).expect("parse create response");
-    let post_id = create_json
-        .get("post_id")
-        .and_then(serde_json::Value::as_i64)
-        .expect("get post_id");
+    let post_id = confirmed_post_id(&create_response);
 
     // Drain initial create events
     let _initial_batch = state
@@ -131,7 +131,7 @@ async fn update_with_tag_change_enqueues_old_and_new_tags(#[case] backend: Backe
     assert_eq!(
         update_batch.len(),
         24,
-        "Expected 24 feed events from update with tag change"
+        "Expected 24 feed events from update with tag change: {update_batch:?}"
     );
 }
 
@@ -163,12 +163,7 @@ async fn unpublish_enqueues_site_and_user_and_tag_feeds(#[case] backend: Backend
 
     assert_eq!(status, StatusCode::OK);
 
-    let create_json: serde_json::Value =
-        serde_json::from_str(&create_response).expect("parse create response");
-    let post_id = create_json
-        .get("post_id")
-        .and_then(serde_json::Value::as_i64)
-        .expect("get post_id");
+    let post_id = confirmed_post_id(&create_response);
 
     // Drain initial create events
     let _initial_batch = state
@@ -230,12 +225,7 @@ async fn delete_published_post_enqueues_feeds(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
 
-    let create_json: serde_json::Value =
-        serde_json::from_str(&create_response).expect("parse create response");
-    let post_id = create_json
-        .get("post_id")
-        .and_then(serde_json::Value::as_i64)
-        .expect("get post_id");
+    let post_id = confirmed_post_id(&create_response);
 
     // Drain initial create events
     let _initial_batch = state
@@ -297,12 +287,7 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
 
     assert_eq!(status, StatusCode::OK);
 
-    let create_json: serde_json::Value =
-        serde_json::from_str(&create_response).expect("parse create response");
-    let post_id = create_json
-        .get("post_id")
-        .and_then(serde_json::Value::as_i64)
-        .expect("get post_id");
+    let post_id = confirmed_post_id(&create_response);
 
     // Drain any events from create (drafts still enqueue as per spec)
     let _initial_batch = state

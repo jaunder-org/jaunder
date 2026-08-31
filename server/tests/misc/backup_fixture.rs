@@ -13,7 +13,7 @@ use host::config_key::UserConfigKey;
 use host::password::Password;
 use jaunder::cli::StorageArgs;
 use std::sync::Arc;
-use storage::test_support::{SeedRawPost, fp};
+use storage::test_support::{SeedRawPost, confirmed_for, fp};
 use storage::{AppState, MediaRecord, open_existing_database};
 
 /// SHA-256 the media-table fixture row is keyed by; any stable value works, since
@@ -148,21 +148,53 @@ async fn seed_named_audience_post(
         .local_channel_id()
         .await
         .expect("local channel");
-    let subscription = state
-        .subscriptions
-        .subscribe(author, &local_subscriber_identity(local, viewer))
-        .await
-        .expect("subscribe viewer");
-    let audience = state
-        .audiences
-        .create_audience(author, &parse_audience_name("friends"))
-        .await
-        .expect("create audience");
-    state
-        .audiences
-        .add_member(author, audience, subscription)
-        .await
-        .expect("add audience member");
+    let subscriber = local_subscriber_identity(local, viewer);
+    let subscriptions = Arc::clone(&state.subscriptions);
+    let subscription = confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    subscriptions
+                        .subscribe(transaction, author, &subscriber)
+                        .await
+                })
+            })
+            .await
+            .expect("subscribe viewer"),
+        "backup fixture subscription",
+    );
+    let audience_name = parse_audience_name("friends");
+    let audiences = Arc::clone(&state.audiences);
+    let audience = confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    audiences
+                        .create_audience(transaction, author, &audience_name)
+                        .await
+                })
+            })
+            .await
+            .expect("create audience"),
+        "backup fixture audience",
+    );
+    let audiences = Arc::clone(&state.audiences);
+    confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    audiences
+                        .add_member(transaction, author, audience, subscription)
+                        .await
+                })
+            })
+            .await
+            .expect("add audience member"),
+        "backup fixture audience membership",
+    );
     let named_post = SeedRawPost::new(author)
         .published_at(fixture_published_at())
         .audiences(vec![AudienceTarget::Named(audience)])

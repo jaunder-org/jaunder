@@ -1,16 +1,21 @@
 use axum::http::StatusCode;
-use common::ids::{AudienceId, SubscriptionId};
+use common::MutationOutcome;
+use common::ids::{AudienceId, SubscriptionId, UserId};
 use common::test_support::parse_audience_name;
-use common::visibility::local_subscriber_identity;
+use common::visibility::{SubscriberIdentity, local_subscriber_identity};
 use server_fn::ServerFn;
 
 use rstest::*;
 use rstest_reuse::*;
+use std::sync::Arc;
 
 use crate::helpers::{
     create_user_and_session, post_form, post_server_fn, post_server_fn_request_fixture,
 };
-use storage::test_support::{Backend, SeedUser, TestEnv, backends};
+use storage::{
+    AppState,
+    test_support::{Backend, SeedUser, TestEnv, backends, confirmed_for as confirmed},
+};
 
 #[derive(serde::Serialize)]
 struct RenameAudienceDecodeFixture<'a> {
@@ -18,9 +23,68 @@ struct RenameAudienceDecodeFixture<'a> {
     name: &'a str,
 }
 
-/// Parses the JSON-encoded `i64` that `create_audience` returns.
+/// Parses the JSON-encoded confirmed audience id that `create_audience` returns.
 fn parse_id(body: &str) -> i64 {
-    body.trim().parse::<i64>().unwrap()
+    let outcome: MutationOutcome<AudienceId> =
+        serde_json::from_str(body).expect("parse create audience outcome");
+    i64::from(confirmed(outcome, "create audience"))
+}
+
+async fn create_audience_confirmed(
+    state: &AppState,
+    author: UserId,
+    name: common::audience::AudienceName,
+) -> AudienceId {
+    let audiences = Arc::clone(&state.audiences);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { audiences.create_audience(transaction, author, &name).await })
+        })
+        .await
+        .expect("audience fixture setup should succeed");
+    confirmed(outcome, "audience fixture setup")
+}
+
+async fn add_member_confirmed(
+    state: &AppState,
+    author: UserId,
+    audience: AudienceId,
+    subscription: SubscriptionId,
+) {
+    let audiences = Arc::clone(&state.audiences);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                audiences
+                    .add_member(transaction, author, audience, subscription)
+                    .await
+            })
+        })
+        .await
+        .expect("audience membership fixture setup should succeed");
+    confirmed(outcome, "audience membership fixture setup");
+}
+
+async fn subscribe_confirmed(
+    state: &AppState,
+    author: UserId,
+    subscriber: SubscriberIdentity,
+) -> SubscriptionId {
+    let subscriptions = Arc::clone(&state.subscriptions);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                subscriptions
+                    .subscribe(transaction, author, &subscriber)
+                    .await
+            })
+        })
+        .await
+        .expect("subscription fixture setup should succeed");
+    confirmed(outcome, "subscription fixture setup")
 }
 
 // create → list → rename → delete happy path.
@@ -196,25 +260,15 @@ async fn list_audience_members_returns_members(#[case] backend: Backend) {
     let subscriber = SeedUser::new().seed(&state).await.user_id;
     let cookie = author.cookie();
     let channel = state.subscriptions.local_channel_id().await.unwrap();
-    let sub_id = state
-        .subscriptions
-        .subscribe(
-            author.user_id,
-            &local_subscriber_identity(channel, subscriber),
-        )
-        .await
-        .unwrap();
-
-    let aud_id = state
-        .audiences
-        .create_audience(author.user_id, &parse_audience_name("Friends"))
-        .await
-        .unwrap();
-    state
-        .audiences
-        .add_member(author.user_id, aud_id, sub_id)
-        .await
-        .unwrap();
+    let sub_id = subscribe_confirmed(
+        &state,
+        author.user_id,
+        local_subscriber_identity(channel, subscriber),
+    )
+    .await;
+    let aud_id =
+        create_audience_confirmed(&state, author.user_id, parse_audience_name("Friends")).await;
+    add_member_confirmed(&state, author.user_id, aud_id, sub_id).await;
 
     let (status, body) = post_form(
         &state,
@@ -243,19 +297,13 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
     let subscriber = SeedUser::new().seed(&state).await.user_id;
     let cookie = author.cookie();
     let channel = state.subscriptions.local_channel_id().await.unwrap();
-    let sub_id = state
-        .subscriptions
-        .subscribe(
-            author.user_id,
-            &local_subscriber_identity(channel, subscriber),
-        )
-        .await
-        .unwrap();
-    state
-        .audiences
-        .create_audience(author.user_id, &parse_audience_name("Decoy"))
-        .await
-        .unwrap();
+    let sub_id = subscribe_confirmed(
+        &state,
+        author.user_id,
+        local_subscriber_identity(channel, subscriber),
+    )
+    .await;
+    create_audience_confirmed(&state, author.user_id, parse_audience_name("Decoy")).await;
 
     let (_s, body) = post_form(
         &state,
@@ -361,34 +409,22 @@ async fn remove_subscriber_nested_request_maps_both_ids(#[case] backend: Backend
     let subscriber = SeedUser::new().seed(&state).await.user_id;
     let cookie = author.cookie();
     let channel = state.subscriptions.local_channel_id().await.unwrap();
-    let subscription_id = state
-        .subscriptions
-        .subscribe(
-            author.user_id,
-            &local_subscriber_identity(channel, subscriber),
-        )
-        .await
-        .unwrap();
-    state
-        .audiences
-        .create_audience(author.user_id, &parse_audience_name("Decoy"))
-        .await
-        .unwrap();
-    let audience_id = state
-        .audiences
-        .create_audience(author.user_id, &parse_audience_name("Remove target"))
-        .await
-        .unwrap();
+    let subscription_id = subscribe_confirmed(
+        &state,
+        author.user_id,
+        local_subscriber_identity(channel, subscriber),
+    )
+    .await;
+    create_audience_confirmed(&state, author.user_id, parse_audience_name("Decoy")).await;
+    let audience_id =
+        create_audience_confirmed(&state, author.user_id, parse_audience_name("Remove target"))
+            .await;
     assert_ne!(
         i64::from(audience_id),
         i64::from(subscription_id),
         "sentinel ids must differ so a transposition cannot pass"
     );
-    state
-        .audiences
-        .add_member(author.user_id, audience_id, subscription_id)
-        .await
-        .unwrap();
+    add_member_confirmed(&state, author.user_id, audience_id, subscription_id).await;
 
     let (status, body) = post_server_fn(
         &state,
@@ -425,21 +461,14 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
     let subscriber = SeedUser::new().seed(&state).await.user_id;
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     // Alice owns an audience with a member.
-    let alice_sub = state
-        .subscriptions
-        .subscribe(alice, &local_subscriber_identity(channel, subscriber))
-        .await
-        .unwrap();
-    let alice_aud = state
-        .audiences
-        .create_audience(alice, &parse_audience_name("Secret"))
-        .await
-        .unwrap();
-    state
-        .audiences
-        .add_member(alice, alice_aud, alice_sub)
-        .await
-        .unwrap();
+    let alice_sub = subscribe_confirmed(
+        &state,
+        alice,
+        local_subscriber_identity(channel, subscriber),
+    )
+    .await;
+    let alice_aud = create_audience_confirmed(&state, alice, parse_audience_name("Secret")).await;
+    add_member_confirmed(&state, alice, alice_aud, alice_sub).await;
     let bob_cookie = create_user_and_session(&state).await.cookie();
 
     // Bob lists Alice's audience members → succeeds, but sees nothing of hers.
@@ -490,14 +519,12 @@ async fn list_my_subscribers_resolves_usernames(#[case] backend: Backend) {
     let subscriber = SeedUser::new().seed(&state).await;
     let cookie = author.cookie();
     let channel = state.subscriptions.local_channel_id().await.unwrap();
-    state
-        .subscriptions
-        .subscribe(
-            author.user_id,
-            &local_subscriber_identity(channel, subscriber.user_id),
-        )
-        .await
-        .unwrap();
+    subscribe_confirmed(
+        &state,
+        author.user_id,
+        local_subscriber_identity(channel, subscriber.user_id),
+    )
+    .await;
 
     let (status, body) = post_form(
         &state,
@@ -597,16 +624,13 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
     let subscriber = SeedUser::new().seed(&state).await.user_id;
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     // Alice owns a subscription and an audience (no members yet).
-    let alice_sub = state
-        .subscriptions
-        .subscribe(alice, &local_subscriber_identity(channel, subscriber))
-        .await
-        .unwrap();
-    let alice_aud = state
-        .audiences
-        .create_audience(alice, &parse_audience_name("Secret"))
-        .await
-        .unwrap();
+    let alice_sub = subscribe_confirmed(
+        &state,
+        alice,
+        local_subscriber_identity(channel, subscriber),
+    )
+    .await;
+    let alice_aud = create_audience_confirmed(&state, alice, parse_audience_name("Secret")).await;
     let bob_cookie = create_user_and_session(&state).await.cookie();
 
     // Bob tries to inject Alice's subscription into Alice's audience.
@@ -648,11 +672,7 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
 async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let alice = SeedUser::new().seed(&state).await.user_id;
-    let alice_aud = state
-        .audiences
-        .create_audience(alice, &parse_audience_name("Secret"))
-        .await
-        .unwrap();
+    let alice_aud = create_audience_confirmed(&state, alice, parse_audience_name("Secret")).await;
     let bob_cookie = create_user_and_session(&state).await.cookie();
 
     // Bob renames Alice's audience → refused (store NotFound); name unchanged.

@@ -20,9 +20,10 @@ use common::visibility::{
 use host::error::InternalResult;
 use sqlx::{Database, Pool, Row};
 
+use crate::WriteTransaction;
+use crate::backend::Backend;
 use crate::error::RequireRow;
 use crate::sql::Exists;
-
 /// A subscription row returned by [`SubscriptionStorage::list_subscribers`].
 #[derive(Clone, Debug)]
 pub struct SubscriptionRecord {
@@ -59,6 +60,7 @@ pub trait SubscriptionStorage: Send + Sync {
     /// upserts idempotently. Returns the (possibly pre-existing) `subscription_id`.
     async fn subscribe(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         subscriber: &SubscriberIdentity,
     ) -> sqlx::Result<SubscriptionId>;
@@ -66,6 +68,7 @@ pub trait SubscriptionStorage: Send + Sync {
     /// Removes a subscription. A no-op if it does not exist.
     async fn unsubscribe(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         subscriber: &SubscriberIdentity,
     ) -> sqlx::Result<()>;
@@ -195,7 +198,7 @@ impl<DB: Database> SubscriptionStore<DB> {
 #[async_trait]
 impl<DB> SubscriptionStorage for SubscriptionStore<DB>
 where
-    DB: SubscriptionDialect,
+    DB: SubscriptionDialect + Backend,
     (Exists,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SubscriptionId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (ChannelId,): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -209,13 +212,16 @@ where
     for<'q> &'q SubscriberRef: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     async fn subscribe(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         subscriber: &SubscriberIdentity,
     ) -> sqlx::Result<SubscriptionId> {
+        let connection = DB::write_connection(transaction)?;
         let status = self.policy.initial_status(author_user_id, subscriber);
         // The insert resolves the status *name* to its FK `status_id` (the column is
         // an integer FK, not a TEXT-token enum column). Bind the name as a typed
@@ -232,21 +238,23 @@ where
             .bind(&subscriber.subscriber_ref)
             // sqlx-newtype-bind:allow permanent-primitive — FK-normalized subscription status binds its lookup token, not a text column value.
             .bind(status_name)
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *connection)
             .await
             .map(|(id,)| id)
     }
 
     async fn unsubscribe(
         &self,
+        transaction: &mut WriteTransaction,
         author_user_id: UserId,
         subscriber: &SubscriberIdentity,
     ) -> sqlx::Result<()> {
+        let connection = DB::write_connection(transaction)?;
         sqlx::query(DB::DELETE_SUBSCRIPTION)
             .bind(author_user_id)
             .bind(subscriber.channel_id)
             .bind(&subscriber.subscriber_ref)
-            .execute(&self.pool)
+            .execute(&mut *connection)
             .await?;
         Ok(())
     }

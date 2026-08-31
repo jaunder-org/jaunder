@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use chrono::Utc;
 use common::ids::{AudienceId, PostId, UserId};
 use common::post_title::PostTitle;
@@ -12,7 +14,8 @@ use common::visibility::{AudienceTarget, ViewerIdentity};
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{
-    Backend, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends, media_url_for,
+    Backend, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends, confirmed, confirmed_for,
+    media_url_for,
 };
 use storage::{
     CreatePostError, PostBookkeepingExpectation, PostFormat, PostLifecycle, PostUpdate,
@@ -20,6 +23,68 @@ use storage::{
 };
 
 use super::fixtures::{anon_by_tag, open_pool};
+
+async fn create_audience_confirmed(
+    state: &storage::AppState,
+    author: UserId,
+    name: common::audience::AudienceName,
+) -> AudienceId {
+    let audiences = Arc::clone(&state.audiences);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { audiences.create_audience(transaction, author, &name).await })
+        })
+        .await
+        .expect("audience fixture setup should succeed");
+    confirmed_for(outcome, "audience fixture setup")
+}
+
+macro_rules! update_post {
+    ($state:expr, $post_id:expr, $user_id:expr, $update:expr) => {{
+        let posts = Arc::clone(&$state.posts);
+        let update = $update;
+        $state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    posts
+                        .update_post(transaction, $post_id, $user_id, &update)
+                        .await
+                })
+            })
+            .await
+    }};
+}
+
+macro_rules! soft_delete_post {
+    ($state:expr, $post_id:expr, $user_id:expr) => {{
+        let posts = Arc::clone(&$state.posts);
+        $state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    posts
+                        .soft_delete_post(transaction, $post_id, $user_id)
+                        .await
+                })
+            })
+            .await
+    }};
+}
+
+macro_rules! create_posts {
+    ($state:expr, $inputs:expr) => {{
+        let posts = Arc::clone(&$state.posts);
+        let inputs = ($inputs).clone();
+        $state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { posts.create_posts(transaction, &inputs).await })
+            })
+            .await
+    }};
+}
 
 // Post tests (backend-parametrized)
 
@@ -83,11 +148,7 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
         .format(PostFormat::Org)
         .unpublish()
         .build();
-    let record = state
-        .posts
-        .update_post(post_id, user_id, &update_input)
-        .await
-        .unwrap();
+    let record = confirmed(update_post!(state, post_id, user_id, update_input).unwrap());
 
     assert_eq!(record.title.as_deref(), Some("Updated Title"));
     assert_eq!(record.format, PostFormat::Org);
@@ -100,13 +161,12 @@ async fn post_update_not_found_returns_error(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let update_input = UpdateRawPost::new("nope").unpublish().build();
-    let err = state
-        .posts
-        .update_post(PostId::from(9999), UserId::from(1), &update_input)
-        .await
-        .unwrap_err();
+    let err = update_post!(state, PostId::from(9999), UserId::from(1), update_input).unwrap_err();
     assert!(
-        matches!(err, UpdatePostError::NotFound),
+        matches!(
+            err,
+            storage::WriteScopeError::Operation(UpdatePostError::NotFound)
+        ),
         "expected NotFound, got {err:?}"
     );
 }
@@ -121,21 +181,22 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
 
     let post_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
 
-    let err = state
-        .posts
-        .update_post(
-            post_id,
-            other,
-            &UpdateRawPost::new("hijacked")
-                .title("Hijacked")
-                .body(parse_post_body("Nope"))
-                .unpublish()
-                .build(),
-        )
-        .await
-        .expect_err("non-owner update must fail");
+    let err = update_post!(
+        state,
+        post_id,
+        other,
+        UpdateRawPost::new("hijacked")
+            .title("Hijacked")
+            .body(parse_post_body("Nope"))
+            .unpublish()
+            .build()
+    )
+    .expect_err("non-owner update must fail");
 
-    assert!(matches!(err, UpdatePostError::Unauthorized));
+    assert!(matches!(
+        err,
+        storage::WriteScopeError::Operation(UpdatePostError::Unauthorized)
+    ));
 }
 
 /// Builds a `PostUpdate` with the given publish verb and otherwise-valid,
@@ -159,6 +220,7 @@ fn update_input<'a>(
         summary: None,
         audiences: vec![AudienceTarget::Public],
         tags: vec![],
+        previous_tag_slugs: vec![],
         request_clock: common::time::UtcInstant::now(),
         expectations: PostBookkeepingExpectation::default(),
     }
@@ -186,18 +248,22 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
 
     // Publish { at: Some(future) } on a draft => scheduled at that instant.
     let future = UtcInstant::from(now + Duration::days(1));
-    let rec = perform_post_update(
-        &*state.posts,
-        update_input(
-            draft,
-            alice,
-            &title,
-            &p,
-            PublishUpdate::Publish { at: Some(future) },
-        ),
-    )
-    .await
-    .unwrap();
+    let rec = confirmed(
+        perform_post_update(
+            &state.write_scope,
+            Arc::clone(&state.posts),
+            Arc::clone(&state.feed_events),
+            update_input(
+                draft,
+                alice,
+                &title,
+                &p,
+                PublishUpdate::Publish { at: Some(future) },
+            ),
+        )
+        .await
+        .unwrap(),
+    );
     assert_eq!(
         rec.published_at,
         Some(future),
@@ -206,18 +272,22 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
 
     // Publish { at: Some(past) } stores the exact backdated instant.
     let past = UtcInstant::from(now - Duration::days(1));
-    let backdated = perform_post_update(
-        &*state.posts,
-        update_input(
-            draft,
-            alice,
-            &title,
-            &p,
-            PublishUpdate::Publish { at: Some(past) },
-        ),
-    )
-    .await
-    .unwrap();
+    let backdated = confirmed(
+        perform_post_update(
+            &state.write_scope,
+            Arc::clone(&state.posts),
+            Arc::clone(&state.feed_events),
+            update_input(
+                draft,
+                alice,
+                &title,
+                &p,
+                PublishUpdate::Publish { at: Some(past) },
+            ),
+        )
+        .await
+        .unwrap(),
+    );
     assert_eq!(
         backdated.published_at,
         Some(past),
@@ -225,18 +295,22 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     );
 
     // Publish { at: None } on an already-published post keeps the existing timestamp.
-    let rec2 = perform_post_update(
-        &*state.posts,
-        update_input(
-            draft,
-            alice,
-            &title,
-            &p,
-            PublishUpdate::Publish { at: None },
-        ),
-    )
-    .await
-    .unwrap();
+    let rec2 = confirmed(
+        perform_post_update(
+            &state.write_scope,
+            Arc::clone(&state.posts),
+            Arc::clone(&state.feed_events),
+            update_input(
+                draft,
+                alice,
+                &title,
+                &p,
+                PublishUpdate::Publish { at: None },
+            ),
+        )
+        .await
+        .unwrap(),
+    );
     assert_eq!(
         rec2.published_at,
         Some(past),
@@ -244,28 +318,36 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     );
 
     // Unpublish clears it.
-    let rec3 = perform_post_update(
-        &*state.posts,
-        update_input(draft, alice, &title, &p, PublishUpdate::Unpublish),
-    )
-    .await
-    .unwrap();
+    let rec3 = confirmed(
+        perform_post_update(
+            &state.write_scope,
+            Arc::clone(&state.posts),
+            Arc::clone(&state.feed_events),
+            update_input(draft, alice, &title, &p, PublishUpdate::Unpublish),
+        )
+        .await
+        .unwrap(),
+    );
     assert_eq!(rec3.published_at, None, "unpublish clears published_at");
 
     // Publish { at: None } on a never-published draft stamps ~now.
     let draft2 = SeedRawPost::new(alice).draft().seed(state).await.post_id;
-    let rec4 = perform_post_update(
-        &*state.posts,
-        update_input(
-            draft2,
-            alice,
-            &title,
-            &q,
-            PublishUpdate::Publish { at: None },
-        ),
-    )
-    .await
-    .unwrap();
+    let rec4 = confirmed(
+        perform_post_update(
+            &state.write_scope,
+            Arc::clone(&state.posts),
+            Arc::clone(&state.feed_events),
+            update_input(
+                draft2,
+                alice,
+                &title,
+                &q,
+                PublishUpdate::Publish { at: None },
+            ),
+        )
+        .await
+        .unwrap(),
+    );
     assert!(
         rec4.published_at.is_some(),
         "publish-now stamps a timestamp"
@@ -309,11 +391,7 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let author = SeedUser::new().seed(state).await.user_id;
-    let aud = state
-        .audiences
-        .create_audience(author, &parse_audience_name("Friends"))
-        .await
-        .unwrap();
+    let aud = create_audience_confirmed(state, author, parse_audience_name("Friends")).await;
 
     // Create targeting [Public, Named(aud)] → two rows.
     let post_id = SeedRawPost::new(author)
@@ -340,44 +418,47 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
         .unpublish();
 
     // Update to [Private] → zero rows.
-    state
-        .posts
-        .update_post(
+    confirmed(
+        update_post!(
+            state,
             post_id,
             author,
-            &edit
-                .clone()
+            edit.clone()
                 .audiences(vec![AudienceTarget::Private])
-                .build(),
+                .build()
         )
-        .await
-        .unwrap();
+        .unwrap(),
+    );
     assert!(
         post_audience_rows(backend, &env, post_id).await.is_empty(),
         "[Private] should leave no rows"
     );
 
     // Update to [] (empty) → also zero rows (equivalent to private).
-    state
-        .posts
-        .update_post(post_id, author, &edit.clone().audiences(vec![]).build())
-        .await
-        .unwrap();
+    confirmed(
+        update_post!(
+            state,
+            post_id,
+            author,
+            edit.clone().audiences(vec![]).build()
+        )
+        .unwrap(),
+    );
     assert!(
         post_audience_rows(backend, &env, post_id).await.is_empty(),
         "an empty audience vec should leave no rows"
     );
 
     // Update to [Subscribers] → one subscribers row.
-    state
-        .posts
-        .update_post(
+    confirmed(
+        update_post!(
+            state,
             post_id,
             author,
-            &edit.audiences(vec![AudienceTarget::Subscribers]).build(),
+            edit.audiences(vec![AudienceTarget::Subscribers]).build()
         )
-        .await
-        .unwrap();
+        .unwrap(),
+    );
     assert_eq!(
         post_audience_rows(backend, &env, post_id).await,
         vec![("subscribers".to_string(), None)],
@@ -395,11 +476,7 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let author = SeedUser::new().seed(state).await.user_id;
-    let aud = state
-        .audiences
-        .create_audience(author, &parse_audience_name("Friends"))
-        .await
-        .unwrap();
+    let aud = create_audience_confirmed(state, author, parse_audience_name("Friends")).await;
 
     // Public + Named(aud) → union read back (order-independent compare).
     let post_id = SeedRawPost::new(author)
@@ -428,18 +505,17 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
         .unpublish();
 
     // Subscribers-only.
-    state
-        .posts
-        .update_post(
+    confirmed(
+        update_post!(
+            state,
             post_id,
             author,
-            &edit
-                .clone()
+            edit.clone()
                 .audiences(vec![AudienceTarget::Subscribers])
-                .build(),
+                .build()
         )
-        .await
-        .unwrap();
+        .unwrap(),
+    );
     assert_eq!(
         state.posts.get_post_audiences(post_id).await.unwrap(),
         vec![AudienceTarget::Subscribers],
@@ -447,15 +523,15 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
     );
 
     // Private / empty → no rows → empty vec.
-    state
-        .posts
-        .update_post(
+    confirmed(
+        update_post!(
+            state,
             post_id,
             author,
-            &edit.audiences(vec![AudienceTarget::Private]).build(),
+            edit.audiences(vec![AudienceTarget::Private]).build()
         )
-        .await
-        .unwrap();
+        .unwrap(),
+    );
     assert!(
         state
             .posts
@@ -483,21 +559,19 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
         .await
         .post_id;
 
-    let update_result = state
-        .posts
-        .update_post(
-            post_id,
-            user,
-            &UpdateRawPost::new("second-slug")
-                .title("Updated")
-                .body(parse_post_body("Updated content"))
-                .unpublish()
-                .build(),
-        )
-        .await;
+    let update_result = update_post!(
+        state,
+        post_id,
+        user,
+        UpdateRawPost::new("second-slug")
+            .title("Updated")
+            .body(parse_post_body("Updated content"))
+            .unpublish()
+            .build()
+    );
 
     match update_result {
-        Err(UpdatePostError::Internal(_)) => {
+        Err(storage::WriteScopeError::Operation(UpdatePostError::Internal(_))) => {
             // Expected: unique constraint violation on slug
         }
         other => panic!("Expected Internal error, got {other:?}"),
@@ -523,11 +597,7 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
     .await
     .expect("set_post_tags failed");
 
-    state
-        .posts
-        .soft_delete_post(post_id, user)
-        .await
-        .expect("soft_delete_post failed");
+    confirmed(soft_delete_post!(state, post_id, user).expect("soft_delete_post failed"));
 
     // Try to get by ID (should still exist internally)
     let post = state
@@ -551,25 +621,19 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).draft().seed(state).await.post_id;
 
-    state
-        .posts
-        .soft_delete_post(post_id, user)
-        .await
-        .expect("soft_delete_post failed");
+    confirmed(soft_delete_post!(state, post_id, user).expect("soft_delete_post failed"));
 
     // The update's outcome on a soft-deleted post is not part of this contract,
     // so its result is deliberately unasserted.
-    let _result = state
-        .posts
-        .update_post(
-            post_id,
-            user,
-            &UpdateRawPost::new("updated-slug")
-                .title("Updated")
-                .body(parse_post_body("New content"))
-                .build(),
-        )
-        .await;
+    let _result = update_post!(
+        state,
+        post_id,
+        user,
+        UpdateRawPost::new("updated-slug")
+            .title("Updated")
+            .body(parse_post_body("New content"))
+            .build()
+    );
 
     // What is pinned: no update path resurrects a soft-deleted post.
     let post = state
@@ -604,18 +668,18 @@ async fn post_revisions_created(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).draft().seed(state).await.post_id;
 
-    let result = state
-        .posts
-        .update_post(
+    let result = confirmed(
+        update_post!(
+            state,
             post_id,
             user,
-            &UpdateRawPost::new("revision-test")
+            UpdateRawPost::new("revision-test")
                 .title("Updated")
                 .body(parse_post_body("Updated content"))
-                .build(),
+                .build()
         )
-        .await
-        .expect("update_post failed");
+        .expect("update_post failed"),
+    );
 
     assert_eq!(result.title.as_deref(), Some("Updated"));
     assert_eq!(result.body, "Updated content");
@@ -638,27 +702,27 @@ async fn owner_revision_history_is_keyset_ordered_and_scoped(#[case] backend: Ba
         (second, owner, "history-second"),
         (foreign, stranger, "history-foreign"),
     ] {
-        state
-            .posts
-            .update_post(
+        confirmed(
+            update_post!(
+                state,
                 post_id,
                 user_id,
-                &UpdateRawPost::new(slug).unpublish().build(),
+                UpdateRawPost::new(slug).unpublish().build()
             )
-            .await
-            .unwrap();
+            .unwrap(),
+        );
     }
-    state
-        .posts
-        .update_post(
+    confirmed(
+        update_post!(
+            state,
             first,
             owner,
-            &UpdateRawPost::new("history-first-again")
+            UpdateRawPost::new("history-first-again")
                 .unpublish()
-                .build(),
+                .build()
         )
-        .await
-        .unwrap();
+        .unwrap(),
+    );
 
     let first_page = state
         .posts
@@ -718,16 +782,16 @@ async fn revision_history_keeps_deleted_owner_post_and_hides_foreign_details(
     let stranger = SeedUser::new().seed(state).await.user_id;
     let post_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
 
-    state
-        .posts
-        .update_post(
+    confirmed(
+        update_post!(
+            state,
             post_id,
             owner,
-            &UpdateRawPost::new("captured-state").unpublish().build(),
+            UpdateRawPost::new("captured-state").unpublish().build()
         )
-        .await
-        .unwrap();
-    state.posts.soft_delete_post(post_id, owner).await.unwrap();
+        .unwrap(),
+    );
+    confirmed(soft_delete_post!(state, post_id, owner).unwrap());
 
     let page = state
         .posts
@@ -785,11 +849,8 @@ async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media
     let env = backend.setup().await;
     let state = &env.state;
     let owner = SeedUser::new().seed(state).await.user_id;
-    let named = state
-        .audiences
-        .create_audience(owner, &parse_audience_name("Revision readers"))
-        .await
-        .unwrap();
+    let named =
+        create_audience_confirmed(state, owner, parse_audience_name("Revision readers")).await;
     let media_url = media_url_for("revision-detail.png");
     let post_id = SeedRawPost::new(owner)
         .slug("complete-revision")
@@ -809,18 +870,18 @@ async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media
         .unwrap()
         .unwrap();
 
-    state
-        .posts
-        .update_post(
+    confirmed(
+        update_post!(
+            state,
             post_id,
             owner,
-            &UpdateRawPost::new("complete-revision-updated")
+            UpdateRawPost::new("complete-revision-updated")
                 .body(parse_post_body("after"))
                 .unpublish()
-                .build(),
+                .build()
         )
-        .await
-        .unwrap();
+        .unwrap(),
+    );
     let revision = state
         .posts
         .list_post_revision_history(owner, post_id, None, parse_page_size("10"))
@@ -931,11 +992,7 @@ async fn current_revision_summary_reports_draft_and_deleted_states(#[case] backe
     let owner = SeedUser::new().seed(state).await.user_id;
     let draft_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
     let deleted_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
-    state
-        .posts
-        .soft_delete_post(deleted_id, owner)
-        .await
-        .unwrap();
+    confirmed(soft_delete_post!(state, deleted_id, owner).unwrap());
 
     let draft = state
         .posts
@@ -966,24 +1023,29 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = create_rendered_post(
-        state.posts.as_ref(),
-        RenderedPostContent {
-            user_id,
-            title: Some(parse_post_title("Rendered Markdown")),
-            slug: "rendered-markdown".parse().unwrap(),
-            body: parse_post_body("**bold**"),
-            format: PostFormat::Markdown,
-            published_at: None,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            tags: vec![],
-            idempotency_key: None,
-            expectations: PostBookkeepingExpectation::default(),
-        },
+    let post_id = confirmed(
+        create_rendered_post(
+            &state.write_scope,
+            Arc::clone(&state.posts),
+            Arc::clone(&state.feed_events),
+            RenderedPostContent {
+                user_id,
+                title: Some(parse_post_title("Rendered Markdown")),
+                slug: "rendered-markdown".parse().unwrap(),
+                body: parse_post_body("**bold**"),
+                format: PostFormat::Markdown,
+                published_at: None,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: vec![],
+                idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .unwrap(),
     )
-    .await
-    .unwrap();
+    .post_id;
 
     let record = state
         .posts
@@ -1009,24 +1071,29 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let post_id = create_rendered_post(
-        state.posts.as_ref(),
-        RenderedPostContent {
-            user_id,
-            title: Some(parse_post_title("Rendered Org")),
-            slug: "rendered-org".parse().unwrap(),
-            body: parse_post_body("*bold*"),
-            format: PostFormat::Org,
-            published_at: None,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            tags: vec![],
-            idempotency_key: None,
-            expectations: PostBookkeepingExpectation::default(),
-        },
+    let post_id = confirmed(
+        create_rendered_post(
+            &state.write_scope,
+            Arc::clone(&state.posts),
+            Arc::clone(&state.feed_events),
+            RenderedPostContent {
+                user_id,
+                title: Some(parse_post_title("Rendered Org")),
+                slug: "rendered-org".parse().unwrap(),
+                body: parse_post_body("*bold*"),
+                format: PostFormat::Org,
+                published_at: None,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: vec![],
+                idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .unwrap(),
     )
-    .await
-    .unwrap();
+    .post_id;
 
     let record = state
         .posts
@@ -1061,7 +1128,9 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
 
     // Second create with same slug+date conflicts
     let err = create_rendered_post(
-        state.posts.as_ref(),
+        &state.write_scope,
+        Arc::clone(&state.posts),
+        Arc::clone(&state.feed_events),
         RenderedPostContent {
             user_id,
             title: Some(parse_post_title("Second Post")),
@@ -1118,7 +1187,7 @@ async fn create_post_foreign_key_violation_maps_to_internal(#[case] backend: Bac
 #[tokio::test]
 async fn create_posts_empty_slice_is_noop(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let ids = env.state.posts.create_posts(&[]).await.unwrap();
+    let ids = confirmed(create_posts!(&env.state, Vec::new()).unwrap());
     assert!(ids.is_empty());
 }
 
@@ -1131,7 +1200,7 @@ async fn create_posts_batches_all_rows_in_order(#[case] backend: Backend) {
 
     let inputs: Vec<_> = (0..3).map(|_| SeedRawPost::new(user_id).build()).collect();
 
-    let ids = state.posts.create_posts(&inputs).await.unwrap();
+    let ids = confirmed(create_posts!(state, inputs).unwrap());
     assert_eq!(ids.len(), 3);
 
     // Each id resolves to the matching row, and its Public audience is honored
@@ -1162,9 +1231,12 @@ async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) 
         SeedRawPost::new(user_id).slug(dup.as_ref()).build(),
     ];
 
-    let err = state.posts.create_posts(&inputs).await.unwrap_err();
+    let err = create_posts!(state, inputs).unwrap_err();
     assert!(
-        matches!(err, CreatePostError::SlugConflict),
+        matches!(
+            err,
+            storage::WriteScopeError::Operation(CreatePostError::SlugConflict)
+        ),
         "expected SlugConflict, got {err:?}"
     );
 
@@ -1191,25 +1263,30 @@ async fn perform_post_update_markdown_renders_and_updates(#[case] backend: Backe
     let post = SeedRawPost::new(user_id).draft().seed(state).await;
     let title = parse_post_title("Updated Title");
 
-    let record = perform_post_update(
-        state.posts.as_ref(),
-        PostUpdate {
-            post_id: post.post_id,
-            editor_user_id: user_id,
-            title: Some(&title),
-            slug_override: Some(&post.slug),
-            body: parse_post_body("**updated**"),
-            format: PostFormat::Markdown,
-            publish: PublishUpdate::Unpublish,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            tags: vec![],
-            request_clock: common::time::UtcInstant::now(),
-            expectations: PostBookkeepingExpectation::default(),
-        },
-    )
-    .await
-    .unwrap();
+    let record = confirmed(
+        perform_post_update(
+            &state.write_scope,
+            Arc::clone(&state.posts),
+            Arc::clone(&state.feed_events),
+            PostUpdate {
+                post_id: post.post_id,
+                editor_user_id: user_id,
+                title: Some(&title),
+                slug_override: Some(&post.slug),
+                body: parse_post_body("**updated**"),
+                format: PostFormat::Markdown,
+                publish: PublishUpdate::Unpublish,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: vec![],
+                previous_tag_slugs: vec![],
+                request_clock: common::time::UtcInstant::now(),
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .unwrap(),
+    );
 
     assert_eq!(record.title.as_deref(), Some("Updated Title"));
     assert!(
@@ -1234,25 +1311,30 @@ async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
 
     // `*bold org*` is emphasis, not a heading — `* ` (with the space) is what marks a
     // title source — so canonicalization leaves it alone and it must still render.
-    let record = perform_post_update(
-        state.posts.as_ref(),
-        PostUpdate {
-            post_id: post.post_id,
-            editor_user_id: user_id,
-            title: Some(&title),
-            slug_override: Some(&post.slug),
-            body: parse_post_body("*bold org*"),
-            format: PostFormat::Org,
-            publish: PublishUpdate::Unpublish,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-            tags: vec![],
-            request_clock: common::time::UtcInstant::now(),
-            expectations: PostBookkeepingExpectation::default(),
-        },
-    )
-    .await
-    .unwrap();
+    let record = confirmed(
+        perform_post_update(
+            &state.write_scope,
+            Arc::clone(&state.posts),
+            Arc::clone(&state.feed_events),
+            PostUpdate {
+                post_id: post.post_id,
+                editor_user_id: user_id,
+                title: Some(&title),
+                slug_override: Some(&post.slug),
+                body: parse_post_body("*bold org*"),
+                format: PostFormat::Org,
+                publish: PublishUpdate::Unpublish,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: vec![],
+                previous_tag_slugs: vec![],
+                request_clock: common::time::UtcInstant::now(),
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .unwrap(),
+    );
 
     assert_eq!(record.title.as_deref(), Some("Updated Org Title"));
     assert!(

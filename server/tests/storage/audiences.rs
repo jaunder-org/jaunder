@@ -1,15 +1,17 @@
+use std::sync::Arc;
+
+use common::MutationOutcome;
 use common::test_support::parse_audience_name;
-use common::visibility::local_subscriber_identity;
+use common::visibility::{SubscriberIdentity, local_subscriber_identity};
 use rstest::*;
 use rstest_reuse::*;
-use storage::AudienceError;
-use storage::test_support::{Backend, SeedUser, TestEnv, backends, seed_users};
+use storage::test_support::{
+    Backend, SeedUser, TestEnv, backends, confirmed_for as confirmed, seed_users,
+};
+use storage::{AppState, AudienceError, WriteScopeError};
 
 use super::fixtures::{local_channel_id, open_pool};
 
-// create → list → rename → delete round-trip. Every write is author-scoped and
-// the listing is ordered by `audience_id`; rename and delete mutate exactly the
-// targeted row.
 #[apply(backends)]
 #[tokio::test]
 async fn audience_create_list_rename_delete(#[case] backend: Backend) {
@@ -17,18 +19,9 @@ async fn audience_create_list_rename_delete(#[case] backend: Backend) {
     let state = &env.state;
     let author = SeedUser::new().seed(state).await.user_id;
 
-    let friends = state
-        .audiences
-        .create_audience(author, &parse_audience_name("Friends"))
-        .await
-        .unwrap();
-    let family = state
-        .audiences
-        .create_audience(author, &parse_audience_name("Family"))
-        .await
-        .unwrap();
+    let friends = create_audience_confirmed(state, author, parse_audience_name("Friends")).await;
+    let family = create_audience_confirmed(state, author, parse_audience_name("Family")).await;
 
-    // Listing is author-scoped and ordered by audience_id (insertion order).
     let listed = state.audiences.list_audiences(author).await.unwrap();
     assert_eq!(listed.len(), 2);
     assert_eq!(listed[0].audience_id, friends);
@@ -36,38 +29,22 @@ async fn audience_create_list_rename_delete(#[case] backend: Backend) {
     assert_eq!(listed[1].audience_id, family);
     assert_eq!(listed[1].name, "Family");
 
-    // Rename mutates exactly the targeted audience.
-    state
-        .audiences
-        .rename_audience(author, friends, &parse_audience_name("Close Friends"))
-        .await
-        .unwrap();
+    rename_audience_confirmed(state, author, friends, parse_audience_name("Close Friends")).await;
     let listed = state.audiences.list_audiences(author).await.unwrap();
     assert_eq!(listed[0].name, "Close Friends");
 
-    // Renaming an audience the author does not own is NotFound.
     let stranger = SeedUser::new().seed(state).await.user_id;
     assert!(matches!(
-        state
-            .audiences
-            .rename_audience(stranger, friends, &parse_audience_name("Hijacked"))
-            .await,
-        Err(AudienceError::NotFound)
+        rename_audience(state, stranger, friends, parse_audience_name("Hijacked")).await,
+        Err(WriteScopeError::Operation(AudienceError::NotFound))
     ));
 
-    // Delete removes exactly the targeted audience.
-    state
-        .audiences
-        .delete_audience(author, friends)
-        .await
-        .unwrap();
+    delete_audience_confirmed(state, author, friends).await;
     let listed = state.audiences.list_audiences(author).await.unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].audience_id, family);
 }
 
-// A duplicate `(author_user_id, name)` is mapped to DuplicateName on both create
-// and rename; a different author may reuse the same name.
 #[apply(backends)]
 #[tokio::test]
 async fn audience_duplicate_name_rejected(#[case] backend: Backend) {
@@ -75,43 +52,20 @@ async fn audience_duplicate_name_rejected(#[case] backend: Backend) {
     let state = &env.state;
     let [alice, bob] = seed_users(state).await;
 
-    state
-        .audiences
-        .create_audience(alice, &parse_audience_name("Friends"))
-        .await
-        .unwrap();
-    // Same author, same name → DuplicateName.
+    create_audience_confirmed(state, alice, parse_audience_name("Friends")).await;
     assert!(matches!(
-        state
-            .audiences
-            .create_audience(alice, &parse_audience_name("Friends"))
-            .await,
-        Err(AudienceError::DuplicateName)
+        create_audience(state, alice, parse_audience_name("Friends")).await,
+        Err(WriteScopeError::Operation(AudienceError::DuplicateName))
     ));
-    // Different author may reuse the name.
-    state
-        .audiences
-        .create_audience(bob, &parse_audience_name("Friends"))
-        .await
-        .unwrap();
+    create_audience_confirmed(state, bob, parse_audience_name("Friends")).await;
 
-    // Rename onto an existing name (same author) → DuplicateName.
-    let work = state
-        .audiences
-        .create_audience(alice, &parse_audience_name("Work"))
-        .await
-        .unwrap();
+    let work = create_audience_confirmed(state, alice, parse_audience_name("Work")).await;
     assert!(matches!(
-        state
-            .audiences
-            .rename_audience(alice, work, &parse_audience_name("Friends"))
-            .await,
-        Err(AudienceError::DuplicateName)
+        rename_audience(state, alice, work, parse_audience_name("Friends")).await,
+        Err(WriteScopeError::Operation(AudienceError::DuplicateName))
     ));
 }
 
-// add_member / list_members / remove_member happy path against a same-owner
-// subscription seeded via the wired SubscriptionStore.
 #[apply(backends)]
 #[tokio::test]
 async fn audience_membership_round_trip(#[case] backend: Backend) {
@@ -119,16 +73,8 @@ async fn audience_membership_round_trip(#[case] backend: Backend) {
     let state = &env.state;
     let [author, bob] = seed_users(state).await;
     let local = local_channel_id(backend, &env).await;
-    let sub = state
-        .subscriptions
-        .subscribe(author, &local_subscriber_identity(local, bob))
-        .await
-        .unwrap();
-    let audience = state
-        .audiences
-        .create_audience(author, &parse_audience_name("Friends"))
-        .await
-        .unwrap();
+    let sub = subscribe_confirmed(state, author, local_subscriber_identity(local, bob)).await;
+    let audience = create_audience_confirmed(state, author, parse_audience_name("Friends")).await;
 
     assert!(
         state
@@ -139,17 +85,8 @@ async fn audience_membership_round_trip(#[case] backend: Backend) {
             .is_empty()
     );
 
-    state
-        .audiences
-        .add_member(author, audience, sub)
-        .await
-        .unwrap();
-    // add_member is idempotent.
-    state
-        .audiences
-        .add_member(author, audience, sub)
-        .await
-        .unwrap();
+    add_member_confirmed(state, author, audience, sub).await;
+    add_member_confirmed(state, author, audience, sub).await;
     assert_eq!(
         state
             .audiences
@@ -159,11 +96,7 @@ async fn audience_membership_round_trip(#[case] backend: Backend) {
         vec![sub]
     );
 
-    state
-        .audiences
-        .remove_member(author, audience, sub)
-        .await
-        .unwrap();
+    remove_member_confirmed(state, author, audience, sub).await;
     assert!(
         state
             .audiences
@@ -174,10 +107,6 @@ async fn audience_membership_round_trip(#[case] backend: Backend) {
     );
 }
 
-// The same-owner invariant is enforced by the composite FKs: pairing an audience
-// with a subscription owned by a *different* author must be rejected by the DB
-// and surface as `AudienceError::Storage` (no app-level check). Complements the
-// raw-SQL `composite_fks_reject_cross_author_membership` test at the trait layer.
 #[apply(backends)]
 #[tokio::test]
 async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
@@ -185,27 +114,13 @@ async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
     let state = &env.state;
     let [alice, bob] = seed_users(state).await;
     let local = local_channel_id(backend, &env).await;
-    // Subscription owned by BOB.
-    let bob_sub = state
-        .subscriptions
-        .subscribe(bob, &local_subscriber_identity(local, alice))
-        .await
-        .unwrap();
-    // Audience owned by ALICE.
-    let alice_audience = state
-        .audiences
-        .create_audience(alice, &parse_audience_name("Friends"))
-        .await
-        .unwrap();
+    let bob_sub = subscribe_confirmed(state, bob, local_subscriber_identity(local, alice)).await;
+    let alice_audience =
+        create_audience_confirmed(state, alice, parse_audience_name("Friends")).await;
 
-    // Alice pairs her audience with Bob's subscription: the
-    // (subscription_id, author_user_id) FK fails → Storage error.
     assert!(matches!(
-        state
-            .audiences
-            .add_member(alice, alice_audience, bob_sub)
-            .await,
-        Err(AudienceError::Storage(_))
+        add_member(state, alice, alice_audience, bob_sub).await,
+        Err(WriteScopeError::Operation(AudienceError::Storage(_)))
     ));
     assert!(
         state
@@ -217,9 +132,6 @@ async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
     );
 }
 
-// `list_members` / `remove_member` are author-scoped: a different author can
-// neither see nor mutate another author's audience membership (the WHERE clause
-// filters by `author_user_id`, so a cross-author `audience_id` matches nothing).
 #[apply(backends)]
 #[tokio::test]
 async fn audience_members_are_author_scoped(#[case] backend: Backend) {
@@ -227,24 +139,11 @@ async fn audience_members_are_author_scoped(#[case] backend: Backend) {
     let state = &env.state;
     let [alice, bob] = seed_users(state).await;
     let local = local_channel_id(backend, &env).await;
-    // A subscription and audience both owned by ALICE, with the sub as a member.
-    let alice_sub = state
-        .subscriptions
-        .subscribe(alice, &local_subscriber_identity(local, bob))
-        .await
-        .unwrap();
-    let alice_audience = state
-        .audiences
-        .create_audience(alice, &parse_audience_name("Friends"))
-        .await
-        .unwrap();
-    state
-        .audiences
-        .add_member(alice, alice_audience, alice_sub)
-        .await
-        .unwrap();
+    let alice_sub = subscribe_confirmed(state, alice, local_subscriber_identity(local, bob)).await;
+    let alice_audience =
+        create_audience_confirmed(state, alice, parse_audience_name("Friends")).await;
+    add_member_confirmed(state, alice, alice_audience, alice_sub).await;
 
-    // Bob cannot list Alice's members...
     assert!(
         state
             .audiences
@@ -253,12 +152,7 @@ async fn audience_members_are_author_scoped(#[case] backend: Backend) {
             .unwrap()
             .is_empty()
     );
-    // ...and a Bob-scoped remove leaves Alice's membership untouched (no-op).
-    state
-        .audiences
-        .remove_member(bob, alice_audience, alice_sub)
-        .await
-        .unwrap();
+    remove_member_confirmed(state, bob, alice_audience, alice_sub).await;
     assert_eq!(
         state
             .audiences
@@ -269,12 +163,6 @@ async fn audience_members_are_author_scoped(#[case] backend: Backend) {
     );
 }
 
-// `delete_audience` must remove the audience's membership rows in the same
-// transaction, not just the `audiences` row. The schema declares no
-// `ON DELETE CASCADE` and SQLite enforces foreign keys off by default, so a
-// dropped `DELETE FROM audience_members` would silently orphan membership rows.
-// A raw `COUNT(*)` proves they are gone (`list_members` on a deleted audience is
-// trivially empty regardless, so it cannot catch the orphan).
 #[apply(backends)]
 #[tokio::test]
 async fn audience_delete_cascades_memberships(#[case] backend: Backend) {
@@ -282,34 +170,15 @@ async fn audience_delete_cascades_memberships(#[case] backend: Backend) {
     let state = &env.state;
     let [alice, bob] = seed_users(state).await;
     let local = local_channel_id(backend, &env).await;
-    let sub = state
-        .subscriptions
-        .subscribe(alice, &local_subscriber_identity(local, bob))
-        .await
-        .unwrap();
-    let audience = state
-        .audiences
-        .create_audience(alice, &parse_audience_name("Friends"))
-        .await
-        .unwrap();
-    state
-        .audiences
-        .add_member(alice, audience, sub)
-        .await
-        .unwrap();
+    let sub = subscribe_confirmed(state, alice, local_subscriber_identity(local, bob)).await;
+    let audience = create_audience_confirmed(state, alice, parse_audience_name("Friends")).await;
+    add_member_confirmed(state, alice, audience, sub).await;
 
-    // Precondition: the membership row exists.
     let members_sql =
         format!("SELECT COUNT(*) FROM audience_members WHERE audience_id = {audience}");
     assert_eq!(raw_scalar_i64(backend, &env, &members_sql).await, 1);
 
-    state
-        .audiences
-        .delete_audience(alice, audience)
-        .await
-        .unwrap();
-
-    // The membership row is gone, not orphaned.
+    delete_audience_confirmed(state, alice, audience).await;
     assert_eq!(
         raw_scalar_i64(backend, &env, &members_sql).await,
         0,
@@ -317,9 +186,160 @@ async fn audience_delete_cascades_memberships(#[case] backend: Backend) {
     );
 }
 
-// Reads a single `i64` (e.g. a `COUNT(*)`) on the FK-enabled pool for `backend`,
-// so a test can observe rows the trait API cannot reach (e.g. membership rows of a
-// deleted audience). Mirrors `raw_exec`'s per-backend pool selection.
+async fn create_audience(
+    state: &AppState,
+    author: common::ids::UserId,
+    name: common::audience::AudienceName,
+) -> Result<MutationOutcome<common::ids::AudienceId>, WriteScopeError<AudienceError>> {
+    let audiences = Arc::clone(&state.audiences);
+    state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { audiences.create_audience(transaction, author, &name).await })
+        })
+        .await
+}
+
+async fn create_audience_confirmed(
+    state: &AppState,
+    author: common::ids::UserId,
+    name: common::audience::AudienceName,
+) -> common::ids::AudienceId {
+    confirmed(
+        create_audience(state, author, name)
+            .await
+            .expect("audience fixture setup should succeed"),
+        "audience fixture setup",
+    )
+}
+
+async fn rename_audience(
+    state: &AppState,
+    author: common::ids::UserId,
+    audience: common::ids::AudienceId,
+    name: common::audience::AudienceName,
+) -> Result<MutationOutcome<()>, WriteScopeError<AudienceError>> {
+    let audiences = Arc::clone(&state.audiences);
+    state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                audiences
+                    .rename_audience(transaction, author, audience, &name)
+                    .await
+            })
+        })
+        .await
+}
+
+async fn rename_audience_confirmed(
+    state: &AppState,
+    author: common::ids::UserId,
+    audience: common::ids::AudienceId,
+    name: common::audience::AudienceName,
+) {
+    confirmed(
+        rename_audience(state, author, audience, name)
+            .await
+            .expect("audience rename should succeed"),
+        "audience rename",
+    );
+}
+
+async fn delete_audience_confirmed(
+    state: &AppState,
+    author: common::ids::UserId,
+    audience: common::ids::AudienceId,
+) {
+    let audiences = Arc::clone(&state.audiences);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                audiences
+                    .delete_audience(transaction, author, audience)
+                    .await
+            })
+        })
+        .await
+        .expect("audience deletion should succeed");
+    confirmed(outcome, "audience deletion");
+}
+
+async fn add_member(
+    state: &AppState,
+    author: common::ids::UserId,
+    audience: common::ids::AudienceId,
+    subscription: common::ids::SubscriptionId,
+) -> Result<MutationOutcome<()>, WriteScopeError<AudienceError>> {
+    let audiences = Arc::clone(&state.audiences);
+    state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                audiences
+                    .add_member(transaction, author, audience, subscription)
+                    .await
+            })
+        })
+        .await
+}
+
+async fn add_member_confirmed(
+    state: &AppState,
+    author: common::ids::UserId,
+    audience: common::ids::AudienceId,
+    subscription: common::ids::SubscriptionId,
+) {
+    confirmed(
+        add_member(state, author, audience, subscription)
+            .await
+            .expect("audience membership mutation should succeed"),
+        "audience membership mutation",
+    );
+}
+
+async fn remove_member_confirmed(
+    state: &AppState,
+    author: common::ids::UserId,
+    audience: common::ids::AudienceId,
+    subscription: common::ids::SubscriptionId,
+) {
+    let audiences = Arc::clone(&state.audiences);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                audiences
+                    .remove_member(transaction, author, audience, subscription)
+                    .await
+            })
+        })
+        .await
+        .expect("audience membership removal should succeed");
+    confirmed(outcome, "audience membership removal");
+}
+
+async fn subscribe_confirmed(
+    state: &AppState,
+    author: common::ids::UserId,
+    subscriber: SubscriberIdentity,
+) -> common::ids::SubscriptionId {
+    let subscriptions = Arc::clone(&state.subscriptions);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                subscriptions
+                    .subscribe(transaction, author, &subscriber)
+                    .await
+            })
+        })
+        .await
+        .expect("subscription fixture setup should succeed");
+    confirmed(outcome, "subscription fixture setup")
+}
+
 async fn raw_scalar_i64(backend: Backend, env: &TestEnv, sql: &str) -> i64 {
     match backend {
         Backend::Sqlite => sqlx::query_scalar::<_, i64>(sql)

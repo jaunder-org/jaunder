@@ -937,6 +937,7 @@ pub async fn prepare_server(
         db.site_config.clone(),
         db.posts.clone(),
         db.feed_cache.clone(),
+        Arc::new(db.write_scope.clone()),
         db.feed_events.clone(),
         websub,
     )

@@ -1058,14 +1058,19 @@ impl MediaReferenceEvidence {
 #[async_trait]
 pub trait PostStorage: Send + Sync {
     /// Creates a new post.
-    async fn create_post(&self, input: &CreatePostInput) -> Result<PostId, CreatePostError>;
+    async fn create_post(
+        &self,
+        transaction: &mut WriteTransaction,
+        input: &CreatePostInput,
+    ) -> Result<PostRecord, CreatePostError>;
 
-    /// Creates `inputs.len()` posts in a single transaction, returning their new
+    /// Creates `inputs.len()` posts in an existing write transaction, returning their new
     /// ids in input order. All-or-nothing: any failure (e.g. a slug conflict on
     /// one row) rolls the whole batch back and nothing persists. An empty slice
-    /// is a no-op returning an empty vec without opening a transaction.
+    /// is a no-op.
     async fn create_posts(
         &self,
+        transaction: &mut WriteTransaction,
         inputs: &[CreatePostInput],
     ) -> Result<Vec<PostId>, CreatePostError>;
 
@@ -1161,6 +1166,7 @@ pub trait PostStorage: Send + Sync {
     /// [`UpdatePostError::Unauthorized`] if the editor isn't the owner.
     async fn update_post(
         &self,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
@@ -1176,6 +1182,7 @@ pub trait PostStorage: Send + Sync {
     /// own it.
     async fn publish_post(
         &self,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<PostRecord, UpdatePostError>;
@@ -1189,6 +1196,7 @@ pub trait PostStorage: Send + Sync {
     /// does not own it.
     async fn soft_delete_post(
         &self,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<(), UpdatePostError>;
@@ -1203,6 +1211,7 @@ pub trait PostStorage: Send + Sync {
     /// own its live row.
     async fn unpublish_post(
         &self,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<PostRecord, UpdatePostError>;
@@ -1466,7 +1475,7 @@ pub trait PostDialect: Backend {
 
     /// Updates a post and records a revision, returning the updated record.
     async fn update_post(
-        pool: &Pool<Self>,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
@@ -1475,7 +1484,7 @@ pub trait PostDialect: Backend {
     /// Publishes a live owner's post through the backend's lifecycle revision
     /// transaction. A matching current state is returned unchanged.
     async fn publish_post(
-        pool: &Pool<Self>,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<Option<PostRecord>, sqlx::Error>;
@@ -1483,15 +1492,15 @@ pub trait PostDialect: Backend {
     /// Soft-deletes a live owner's row under the backend's lifecycle revision
     /// transaction. Returns false when ownership or liveness did not match.
     async fn soft_delete_post(
-        pool: &Pool<Self>,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<bool, sqlx::Error>;
 
     /// Reverts a live owner's publication state under the backend's lifecycle
-    /// revision transaction. A draft is returned unchanged.
+    /// transaction. A draft is returned unchanged.
     async fn unpublish_post(
-        pool: &Pool<Self>,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<Option<PostRecord>, sqlx::Error>;
@@ -1906,31 +1915,40 @@ where
 {
     #[tracing::instrument(
         name = "storage.posts.create",
-        skip(self, input),
+        skip(self, transaction, input),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn create_post(&self, input: &CreatePostInput) -> Result<PostId, CreatePostError> {
-        let mut tx = self.pool.begin().await?;
-        // On any error the `?` drops `tx`, which sqlx rolls back. (`&mut tx`
-        // coerces to `&mut DB::Connection` for the helper.)
-        let post_id = write_post_in_tx::<DB>(&mut tx, input).await?;
-        tx.commit().await?;
-        Ok(post_id)
+    async fn create_post(
+        &self,
+        transaction: &mut WriteTransaction,
+        input: &CreatePostInput,
+    ) -> Result<PostRecord, CreatePostError> {
+        let connection = DB::write_connection(transaction)?;
+        let post_id = write_post_in_tx::<DB>(connection, input).await?;
+        let sql = format!(
+            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format,
+                    p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                    p.summary, {tags} AS tags
+             FROM posts p JOIN users u ON p.user_id = u.user_id WHERE p.post_id = $1",
+            tags = DB::TAGS_SUBQUERY,
+        );
+        Ok(sqlx::query_as::<_, PostRecord>(&sql)
+            .bind(post_id)
+            .fetch_one(connection)
+            .await?)
     }
 
     #[tracing::instrument(
         name = "storage.posts.create_batch",
-        skip(self, inputs),
+        skip(self, transaction, inputs),
         fields(db.system = DB::DB_SYSTEM, count = inputs.len())
     )]
     async fn create_posts(
         &self,
+        transaction: &mut WriteTransaction,
         inputs: &[CreatePostInput],
     ) -> Result<Vec<PostId>, CreatePostError> {
-        if inputs.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut tx = self.pool.begin().await?;
+        let connection = DB::write_connection(transaction)?;
         let media = inputs
             .iter()
             .flat_map(|input| {
@@ -1941,13 +1959,11 @@ where
                     .map(|reference| reference.media().clone())
             })
             .collect();
-        DB::lock_media_references(&mut *tx, &media).await?;
+        DB::lock_media_references(connection, &media).await?;
         let mut ids = Vec::with_capacity(inputs.len());
         for input in inputs {
-            // `?` drops `tx` on error → whole-batch rollback (atomic seed).
-            ids.push(write_post_in_tx::<DB>(&mut tx, input).await?);
+            ids.push(write_post_in_tx::<DB>(connection, input).await?);
         }
-        tx.commit().await?;
         Ok(ids)
     }
 
@@ -2382,36 +2398,39 @@ where
 
     #[tracing::instrument(
         name = "storage.posts.update",
-        skip(self, input),
+        skip(self, transaction, input),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn update_post(
         &self,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError> {
-        DB::update_post(&self.pool, post_id, editor_user_id, input).await
+        DB::update_post(transaction, post_id, editor_user_id, input).await
     }
 
     #[tracing::instrument(
         name = "storage.posts.publish",
-        skip(self),
+        skip(self, transaction),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn publish_post(
         &self,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<PostRecord, UpdatePostError> {
-        if let Some(row) = DB::publish_post(&self.pool, post_id, user_id).await? {
+        if let Some(row) = DB::publish_post(transaction, post_id, user_id).await? {
             return Ok(row);
         }
+        let connection = DB::write_connection(transaction)?;
         let live = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
         )
         .bind(post_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *connection)
         .await?;
         Err(if live.is_some() {
             UpdatePostError::Unauthorized
@@ -2422,22 +2441,24 @@ where
 
     #[tracing::instrument(
         name = "storage.posts.soft_delete",
-        skip(self),
+        skip(self, transaction),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn soft_delete_post(
         &self,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<(), UpdatePostError> {
-        if DB::soft_delete_post(&self.pool, post_id, user_id).await? {
+        if DB::soft_delete_post(transaction, post_id, user_id).await? {
             return Ok(());
         }
+        let connection = DB::write_connection(transaction)?;
         let live = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
         )
         .bind(post_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *connection)
         .await?;
         Err(if live.is_some() {
             UpdatePostError::Unauthorized
@@ -2448,22 +2469,24 @@ where
 
     #[tracing::instrument(
         name = "storage.posts.unpublish",
-        skip(self),
+        skip(self, transaction),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn unpublish_post(
         &self,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<PostRecord, UpdatePostError> {
-        if let Some(row) = DB::unpublish_post(&self.pool, post_id, user_id).await? {
+        if let Some(row) = DB::unpublish_post(transaction, post_id, user_id).await? {
             return Ok(row);
         }
+        let connection = DB::write_connection(transaction)?;
         let live = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
         )
         .bind(post_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *connection)
         .await?;
         Err(if live.is_some() {
             UpdatePostError::Unauthorized
@@ -4282,9 +4305,9 @@ mod tests {
     use crate::feed_cache::FeedCacheRow;
     use crate::test_support::{
         Backend, CloseablePool, MEDIA_TEST_SHA256, SeedRawPost, SeedUser, TestEnv, UpdateRawPost,
-        backends, create_draft_via_service, create_post_via_service, fetch_post_media, fp,
-        media_ref_for, media_row_exists, media_url_for, seed_media, seed_users,
-        set_post_tags_confirmed, update_post_body_via_service,
+        backends, create_draft_via_service, create_post_via_service, create_posts_confirmed,
+        fetch_post_media, fp, media_ref_for, media_row_exists, media_url_for, seed_media,
+        seed_users, set_post_tags_confirmed, update_post_body_via_service,
     };
     use chrono::Utc;
     use common::test_support::{
@@ -4298,6 +4321,136 @@ mod tests {
     use sqlx::Row;
     use std::{sync::Arc, time::Duration};
     use tokio::sync::Barrier;
+    async fn update_post_scoped(
+        state: &Arc<crate::AppState>,
+        post_id: PostId,
+        editor_user_id: UserId,
+        input: UpdatePostInput,
+    ) -> Result<common::MutationOutcome<PostRecord>, crate::WriteScopeError<UpdatePostError>> {
+        let write_scope = state.write_scope.clone();
+        let posts = Arc::clone(&state.posts);
+        write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    posts
+                        .update_post(transaction, post_id, editor_user_id, &input)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn update_post_confirmed(
+        state: &Arc<crate::AppState>,
+        post_id: PostId,
+        editor_user_id: UserId,
+        input: UpdatePostInput,
+    ) -> PostRecord {
+        crate::test_support::confirmed_for(
+            update_post_scoped(state, post_id, editor_user_id, input)
+                .await
+                .expect("post update succeeds"),
+            "post update fixture",
+        )
+    }
+
+    async fn create_post_confirmed(
+        state: &Arc<crate::AppState>,
+        input: CreatePostInput,
+    ) -> PostRecord {
+        let posts = Arc::clone(&state.posts);
+        let write_scope = state.write_scope.clone();
+        crate::test_support::confirmed_for(
+            write_scope
+                .run(move |transaction| {
+                    Box::pin(async move { posts.create_post(transaction, &input).await })
+                })
+                .await
+                .expect("post creation succeeds"),
+            "post creation fixture",
+        )
+    }
+
+    async fn publish_post_scoped(
+        state: &Arc<crate::AppState>,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<common::MutationOutcome<PostRecord>, crate::WriteScopeError<UpdatePostError>> {
+        let posts = Arc::clone(&state.posts);
+        let write_scope = state.write_scope.clone();
+        write_scope
+            .run(move |transaction| {
+                Box::pin(async move { posts.publish_post(transaction, post_id, user_id).await })
+            })
+            .await
+    }
+
+    async fn publish_post_confirmed(
+        state: &Arc<crate::AppState>,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> PostRecord {
+        crate::test_support::confirmed_for(
+            publish_post_scoped(state, post_id, user_id)
+                .await
+                .expect("post publication succeeds"),
+            "post publication fixture",
+        )
+    }
+
+    async fn unpublish_post_scoped(
+        state: &Arc<crate::AppState>,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<common::MutationOutcome<PostRecord>, crate::WriteScopeError<UpdatePostError>> {
+        let posts = Arc::clone(&state.posts);
+        let write_scope = state.write_scope.clone();
+        write_scope
+            .run(move |transaction| {
+                Box::pin(async move { posts.unpublish_post(transaction, post_id, user_id).await })
+            })
+            .await
+    }
+
+    async fn unpublish_post_confirmed(
+        state: &Arc<crate::AppState>,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> PostRecord {
+        crate::test_support::confirmed_for(
+            unpublish_post_scoped(state, post_id, user_id)
+                .await
+                .expect("post unpublication succeeds"),
+            "post unpublication fixture",
+        )
+    }
+
+    async fn soft_delete_post_scoped(
+        state: &Arc<crate::AppState>,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<common::MutationOutcome<()>, crate::WriteScopeError<UpdatePostError>> {
+        let posts = Arc::clone(&state.posts);
+        let write_scope = state.write_scope.clone();
+        write_scope
+            .run(move |transaction| {
+                Box::pin(async move { posts.soft_delete_post(transaction, post_id, user_id).await })
+            })
+            .await
+    }
+
+    async fn soft_delete_post_confirmed(
+        state: &Arc<crate::AppState>,
+        post_id: PostId,
+        user_id: UserId,
+    ) {
+        crate::test_support::confirmed_for(
+            soft_delete_post_scoped(state, post_id, user_id)
+                .await
+                .expect("post deletion succeeds"),
+            "post deletion fixture",
+        );
+    }
 
     /// Guards the two dialect constants against drifting apart — the failure mode
     /// where one is edited and the other forgotten (#772; the rationale for the
@@ -4592,7 +4745,7 @@ mod tests {
             let barrier = Arc::clone(&barrier);
             async move {
                 barrier.wait().await;
-                state.posts.create_posts(&forward).await
+                create_posts_confirmed(&state, forward.to_vec()).await
             }
         });
         let reverse_create = tokio::spawn({
@@ -4600,7 +4753,7 @@ mod tests {
             let barrier = Arc::clone(&barrier);
             async move {
                 barrier.wait().await;
-                state.posts.create_posts(&reverse).await
+                create_posts_confirmed(&state, reverse.to_vec()).await
             }
         });
         barrier.wait().await;
@@ -4609,12 +4762,10 @@ mod tests {
             (
                 forward_create
                     .await
-                    .expect("forward batch task does not panic")
-                    .expect("forward batch succeeds"),
+                    .expect("forward batch task does not panic"),
                 reverse_create
                     .await
-                    .expect("reverse batch task does not panic")
-                    .expect("reverse batch succeeds"),
+                    .expect("reverse batch task does not panic"),
             )
         })
         .await
@@ -5058,7 +5209,6 @@ mod tests {
         let owner = SeedUser::new().seed(&env.state).await.user_id;
         let other = SeedUser::new().seed(&env.state).await.user_id;
         let post = SeedRawPost::new(owner).seed(&env.state).await.post_id;
-        let posts = &*env.state.posts;
 
         let missing = set_post_tags_confirmed(
             &env.state.write_scope,
@@ -5088,10 +5238,7 @@ mod tests {
             crate::WriteScopeError::Operation(TaggingError::Unauthorized)
         ));
 
-        posts
-            .soft_delete_post(post, owner)
-            .await
-            .expect("soft delete");
+        soft_delete_post_confirmed(&env.state, post, owner).await;
         let deleted = set_post_tags_confirmed(
             &env.state.write_scope,
             Arc::clone(&env.state.posts),
@@ -5393,12 +5540,7 @@ mod tests {
             .post_id;
         let input = UpdateRawPost::new("semantic-no-op").build();
 
-        let first = env
-            .state
-            .posts
-            .update_post(post, owner, &input)
-            .await
-            .expect("meaningful initial update");
+        let first = update_post_confirmed(&env.state, post, owner, input.clone()).await;
         let revision_count = env
             .base
             .pool()
@@ -5406,12 +5548,7 @@ mod tests {
             .await
             .expect("count revisions");
 
-        let unchanged = env
-            .state
-            .posts
-            .update_post(post, owner, &input)
-            .await
-            .expect("identical update is accepted");
+        let unchanged = update_post_confirmed(&env.state, post, owner, input).await;
 
         assert_eq!(unchanged.updated_at, first.updated_at);
         assert_eq!(
@@ -5448,12 +5585,7 @@ mod tests {
             .tags(["PriorTag", "AnotherTag"])
             .build();
         seed.title = Some(parse_post_title("Prior title"));
-        let post_id = env
-            .state
-            .posts
-            .create_post(&seed)
-            .await
-            .expect("seed prior post");
+        let post_id = create_post_confirmed(&env.state, seed).await.post_id;
         let prior = env
             .state
             .posts
@@ -5481,27 +5613,24 @@ mod tests {
         );
         let capture_clock = parse_utc_instant("2026-08-27T12:00:00Z");
 
-        let updated = env
-            .state
-            .posts
-            .update_post(
-                post_id,
-                owner,
-                &UpdateRawPost::new("revision-current-slug")
-                    .title("Current title")
-                    .body(parse_post_body(&format!(
-                        "<p><img src=\"{}\"></p>",
-                        media_url_for("revision-current.jpg")
-                    )))
-                    .format(PostFormat::Markdown)
-                    .summary(parse_post_summary("current summary"))
-                    .audiences(vec![AudienceTarget::Public])
-                    .tags(["CurrentTag"])
-                    .request_clock(capture_clock)
-                    .build(),
-            )
-            .await
-            .expect("update every mutable field");
+        let updated = update_post_confirmed(
+            &env.state,
+            post_id,
+            owner,
+            UpdateRawPost::new("revision-current-slug")
+                .title("Current title")
+                .body(parse_post_body(&format!(
+                    "<p><img src=\"{}\"></p>",
+                    media_url_for("revision-current.jpg")
+                )))
+                .format(PostFormat::Markdown)
+                .summary(parse_post_summary("current summary"))
+                .audiences(vec![AudienceTarget::Public])
+                .tags(["CurrentTag"])
+                .request_clock(capture_clock)
+                .build(),
+        )
+        .await;
 
         let revision_id = assert_complete_prior_revision(
             &env,
@@ -5568,23 +5697,21 @@ mod tests {
         let media = media_for_subject(&env, post_id, "current", RevisionId::from(0)).await;
         let clock = parse_utc_instant("2026-08-27T12:01:00Z");
 
-        env.state
-            .posts
-            .update_post(
-                post_id,
-                owner,
-                &UpdateRawPost::new("tag-only")
-                    .title(prior.title.as_ref().unwrap().as_ref())
-                    .body(body)
-                    .format(prior.format)
-                    .summary(prior.summary.clone())
-                    .audiences(audiences.clone())
-                    .tags(["NewTag"])
-                    .request_clock(clock)
-                    .build(),
-            )
-            .await
-            .expect("tag-only full update");
+        update_post_confirmed(
+            &env.state,
+            post_id,
+            owner,
+            UpdateRawPost::new("tag-only")
+                .title(prior.title.as_ref().unwrap().as_ref())
+                .body(body)
+                .format(prior.format)
+                .summary(prior.summary.clone())
+                .audiences(audiences.clone())
+                .tags(["NewTag"])
+                .request_clock(clock)
+                .build(),
+        )
+        .await;
 
         assert_complete_prior_revision(&env, post_id, &prior, &audiences, &media, clock).await;
         assert_eq!(
@@ -5633,23 +5760,21 @@ mod tests {
         let media = media_for_subject(&env, post_id, "current", RevisionId::from(0)).await;
         let clock = parse_utc_instant("2026-08-27T12:02:00Z");
 
-        env.state
-            .posts
-            .update_post(
-                post_id,
-                owner,
-                &UpdateRawPost::new("audience-only")
-                    .title(prior.title.as_ref().unwrap().as_ref())
-                    .body(body)
-                    .format(prior.format)
-                    .summary(prior.summary.clone())
-                    .audiences(vec![AudienceTarget::Public])
-                    .tags(["KeptTag"])
-                    .request_clock(clock)
-                    .build(),
-            )
-            .await
-            .expect("audience-only full update");
+        update_post_confirmed(
+            &env.state,
+            post_id,
+            owner,
+            UpdateRawPost::new("audience-only")
+                .title(prior.title.as_ref().unwrap().as_ref())
+                .body(body)
+                .format(prior.format)
+                .summary(prior.summary.clone())
+                .audiences(vec![AudienceTarget::Public])
+                .tags(["KeptTag"])
+                .request_clock(clock)
+                .build(),
+        )
+        .await;
 
         assert_complete_prior_revision(&env, post_id, &prior, &audiences, &media, clock).await;
         assert_eq!(
@@ -5699,26 +5824,24 @@ mod tests {
         let media = media_for_subject(&env, post_id, "current", RevisionId::from(0)).await;
         let clock = parse_utc_instant("2026-08-27T12:03:00Z");
 
-        env.state
-            .posts
-            .update_post(
-                post_id,
-                owner,
-                &UpdateRawPost::new("media-only")
-                    .title(prior.title.as_ref().unwrap().as_ref())
-                    .body(parse_post_body(&format!(
-                        "<img src=\"{}\">",
-                        media_url_for("media-only-current.jpg")
-                    )))
-                    .format(prior.format)
-                    .summary(prior.summary.clone())
-                    .audiences(audiences.clone())
-                    .tags(["KeptTag"])
-                    .request_clock(clock)
-                    .build(),
-            )
-            .await
-            .expect("media-only full update");
+        update_post_confirmed(
+            &env.state,
+            post_id,
+            owner,
+            UpdateRawPost::new("media-only")
+                .title(prior.title.as_ref().unwrap().as_ref())
+                .body(parse_post_body(&format!(
+                    "<img src=\"{}\">",
+                    media_url_for("media-only-current.jpg")
+                )))
+                .format(prior.format)
+                .summary(prior.summary.clone())
+                .audiences(audiences.clone())
+                .tags(["KeptTag"])
+                .request_clock(clock)
+                .build(),
+        )
+        .await;
 
         assert_complete_prior_revision(&env, post_id, &prior, &audiences, &media, clock).await;
         assert_eq!(
@@ -5892,89 +6015,6 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn continuation_reporting_post_not_found_results_survive_injected_rollback_failures(
-        #[case] backend: Backend,
-    ) {
-        let env = backend.setup().await;
-        let author = SeedUser::new().seed(&env.state).await.user_id;
-        let missing_post = PostId::from(999_999);
-        let update_input = UpdateRawPost::new("missing").build();
-
-        let update_primary = env
-            .state
-            .posts
-            .update_post(missing_post, author, &update_input)
-            .await;
-        assert!(matches!(&update_primary, Err(UpdatePostError::NotFound)));
-        let (update, trace) = crate::helpers::swallowed_test::capture(|| match backend {
-            Backend::Sqlite => crate::sqlite::posts::finish_post_update(
-                update_primary,
-                Err(sqlx::Error::PoolClosed),
-            ),
-            Backend::Postgres => crate::postgres::posts::finish_post_update_rejection(
-                update_primary,
-                Err(sqlx::Error::PoolClosed),
-            ),
-        });
-        assert!(matches!(update, Err(UpdatePostError::NotFound)));
-        let update_context = match backend {
-            Backend::Sqlite => "storage.sqlite.post_update.rollback",
-            Backend::Postgres => "storage.postgres.post_update.rollback_domain_rejection",
-        };
-        crate::helpers::swallowed_test::assert_one_report(&trace, update_context);
-
-        let posts = Arc::clone(&env.state.posts);
-        let write_scope = env.state.write_scope.clone();
-        let tags_primary = write_scope
-            .run(|transaction| {
-                Box::pin(async move {
-                    posts
-                        .set_post_tags(
-                            transaction,
-                            missing_post,
-                            author,
-                            &[parse_tag_label("rust")],
-                        )
-                        .await
-                })
-            })
-            .await;
-        assert!(matches!(
-            tags_primary,
-            Err(crate::WriteScopeError::Operation(
-                TaggingError::PostNotFound
-            ))
-        ));
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn lifecycle_rollback_preserves_secondary_error_precedence(#[case] backend: Backend) {
-        let primary = match backend {
-            Backend::Sqlite => {
-                crate::sqlite::posts::finish_lifecycle::<()>(sqlx::Error::RowNotFound, Ok(()))
-            }
-            Backend::Postgres => {
-                crate::postgres::posts::finish_lifecycle::<()>(sqlx::Error::RowNotFound, Ok(()))
-            }
-        };
-        assert!(matches!(primary, Err(sqlx::Error::RowNotFound)));
-
-        let rollback = match backend {
-            Backend::Sqlite => crate::sqlite::posts::finish_lifecycle::<()>(
-                sqlx::Error::RowNotFound,
-                Err(sqlx::Error::PoolClosed),
-            ),
-            Backend::Postgres => crate::postgres::posts::finish_lifecycle::<()>(
-                sqlx::Error::RowNotFound,
-                Err(sqlx::Error::PoolClosed),
-            ),
-        };
-        assert!(matches!(rollback, Err(sqlx::Error::PoolClosed)));
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
     async fn lifecycle_decode_failure_rolls_back_revision_and_state(#[case] backend: Backend) {
         let env = backend.setup().await;
         let owner = SeedUser::new().seed(&env.state).await.user_id;
@@ -6004,16 +6044,15 @@ mod tests {
             .expect("corrupt tag slug");
         });
 
-        let error = env
-            .state
-            .posts
-            .publish_post(post_id, owner)
+        let error = publish_post_scoped(&env.state, post_id, owner)
             .await
             .expect_err("malformed aggregate must reject publication");
         assert!(
             matches!(
                 &error,
-                UpdatePostError::Internal(sqlx::Error::ColumnDecode { index, .. }) if index == "\"tags\""
+                crate::WriteScopeError::Operation(UpdatePostError::Internal(
+                    sqlx::Error::ColumnDecode { index, .. }
+                )) if index == "\"tags\""
             ),
             "{error:?}"
         );
@@ -6241,7 +6280,6 @@ mod tests {
         // clears it. The returned record reflects the RETURNING row.
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
 
         // Seed with an initial summary so the first edit exercises replace-an-existing
         // value (not set-from-none); the second edit then clears it.
@@ -6261,21 +6299,17 @@ mod tests {
         };
 
         // An edit replaces the summary.
-        let changed = posts
-            .update_post(
-                post_id,
-                user_id,
-                &update(Some(parse_post_summary("edited summary"))),
-            )
-            .await
-            .unwrap();
+        let changed = update_post_confirmed(
+            &env.state,
+            post_id,
+            user_id,
+            update(Some(parse_post_summary("edited summary"))),
+        )
+        .await;
         assert_eq!(changed.summary, Some(parse_post_summary("edited summary")));
 
         // `None` clears it.
-        let cleared = posts
-            .update_post(post_id, user_id, &update(None))
-            .await
-            .unwrap();
+        let cleared = update_post_confirmed(&env.state, post_id, user_id, update(None)).await;
         assert_eq!(cleared.summary, None);
     }
 
@@ -6304,10 +6338,7 @@ mod tests {
             .await
             .unwrap();
 
-        let after = posts
-            .publish_post(seeded.post_id, user.user_id)
-            .await
-            .expect("publish succeeds");
+        let after = publish_post_confirmed(&env.state, seeded.post_id, user.user_id).await;
 
         assert!(after.published_at.is_some());
         assert_eq!(after.title, before.title);
@@ -6349,15 +6380,14 @@ mod tests {
         // re-publishing must not restamp it.
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
         let post_id = SeedRawPost::new(user_id)
             .draft()
             .seed(&env.state)
             .await
             .post_id;
 
-        let first = posts.publish_post(post_id, user_id).await.unwrap();
-        let second = posts.publish_post(post_id, user_id).await.unwrap();
+        let first = publish_post_confirmed(&env.state, post_id, user_id).await;
+        let second = publish_post_confirmed(&env.state, post_id, user_id).await;
 
         assert!(first.published_at.is_some());
         assert_eq!(first.published_at, second.published_at);
@@ -6389,12 +6419,14 @@ mod tests {
             .post_id;
 
         assert!(matches!(
-            posts.publish_post(PostId::from(999_999), owner).await,
-            Err(UpdatePostError::NotFound)
+            publish_post_scoped(&env.state, PostId::from(999_999), owner).await,
+            Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
         assert!(matches!(
-            posts.publish_post(post_id, stranger).await,
-            Err(UpdatePostError::Unauthorized)
+            publish_post_scoped(&env.state, post_id, stranger).await,
+            Err(crate::WriteScopeError::Operation(
+                UpdatePostError::Unauthorized
+            ))
         ));
         // The rejected publish wrote nothing: the post is still a draft.
         assert!(
@@ -6407,10 +6439,10 @@ mod tests {
                 .is_none()
         );
 
-        posts.soft_delete_post(post_id, owner).await.unwrap();
+        soft_delete_post_confirmed(&env.state, post_id, owner).await;
         assert!(matches!(
-            posts.publish_post(post_id, owner).await,
-            Err(UpdatePostError::NotFound)
+            publish_post_scoped(&env.state, post_id, owner).await,
+            Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
     }
 
@@ -6440,10 +6472,7 @@ mod tests {
             .await
             .unwrap();
 
-        let updated = posts
-            .unpublish_post(seeded.post_id, user.user_id)
-            .await
-            .expect("owner may unpublish a live post");
+        let updated = unpublish_post_confirmed(&env.state, seeded.post_id, user.user_id).await;
 
         assert_eq!(updated.post_id, before.post_id);
         assert_eq!(updated.user_id, before.user_id);
@@ -6523,14 +6552,16 @@ mod tests {
             .unwrap();
 
         assert!(matches!(
-            posts.soft_delete_post(PostId::from(999_999), owner).await,
-            Err(UpdatePostError::NotFound)
+            soft_delete_post_scoped(&env.state, PostId::from(999_999), owner).await,
+            Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
         assert!(matches!(
-            posts.soft_delete_post(post_id, stranger).await,
-            Err(UpdatePostError::Unauthorized)
+            soft_delete_post_scoped(&env.state, post_id, stranger).await,
+            Err(crate::WriteScopeError::Operation(
+                UpdatePostError::Unauthorized
+            ))
         ));
-        posts.soft_delete_post(post_id, owner).await.unwrap();
+        soft_delete_post_confirmed(&env.state, post_id, owner).await;
         assert_eq!(
             env.base
                 .pool()
@@ -6551,8 +6582,8 @@ mod tests {
         assert_eq!(revision.published_at, before.published_at);
         assert_eq!(revision.deleted_at, before.deleted_at);
         assert!(matches!(
-            posts.soft_delete_post(post_id, owner).await,
-            Err(UpdatePostError::NotFound)
+            soft_delete_post_scoped(&env.state, post_id, owner).await,
+            Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
         assert_eq!(
             env.base
@@ -6581,7 +6612,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let after = posts.unpublish_post(post_id, owner).await.unwrap();
+        let after = unpublish_post_confirmed(&env.state, post_id, owner).await;
         assert_eq!(after.published_at, None);
         assert_eq!(after.updated_at, before.updated_at);
         assert_eq!(
@@ -6609,12 +6640,14 @@ mod tests {
             .post_id;
 
         assert!(matches!(
-            posts.unpublish_post(PostId::from(999_999), owner).await,
-            Err(UpdatePostError::NotFound)
+            unpublish_post_scoped(&env.state, PostId::from(999_999), owner).await,
+            Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
         assert!(matches!(
-            posts.unpublish_post(post_id, stranger).await,
-            Err(UpdatePostError::Unauthorized)
+            unpublish_post_scoped(&env.state, post_id, stranger).await,
+            Err(crate::WriteScopeError::Operation(
+                UpdatePostError::Unauthorized
+            ))
         ));
         assert!(
             posts
@@ -6627,10 +6660,10 @@ mod tests {
             "the foreign rejection must not clear publication"
         );
 
-        posts.soft_delete_post(post_id, owner).await.unwrap();
+        soft_delete_post_confirmed(&env.state, post_id, owner).await;
         assert!(matches!(
-            posts.unpublish_post(post_id, owner).await,
-            Err(UpdatePostError::NotFound)
+            unpublish_post_scoped(&env.state, post_id, owner).await,
+            Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
         let publication_rows = format!(
             "SELECT COUNT(*) FROM posts WHERE post_id = {} AND published_at IS NOT NULL",
@@ -6647,12 +6680,8 @@ mod tests {
     async fn publish_post_with_closed_pool_returns_error(#[case] backend: Backend) {
         let env = backend.setup().await;
         env.base.close_pool().await;
-        let result = env
-            .state
-            .posts
-            .publish_post(PostId::from(1), UserId::from(1))
-            .await;
-        assert!(matches!(result, Err(UpdatePostError::Internal(_))));
+        let result = publish_post_scoped(&env.state, PostId::from(1), UserId::from(1)).await;
+        assert!(matches!(result, Err(crate::WriteScopeError::Begin(_))));
     }
 
     // -----------------------------------------------------------------------
@@ -6799,11 +6828,7 @@ mod tests {
             "precondition: the draft records its reference"
         );
 
-        env.state
-            .posts
-            .publish_post(post_id, user)
-            .await
-            .expect("publish succeeds");
+        publish_post_confirmed(&env.state, post_id, user).await;
 
         assert_eq!(
             fetch_post_media(&env.base, post_id).await,
@@ -6827,11 +6852,7 @@ mod tests {
         let foreign = create_post_via_service(&env.state, stranger, parse_post_body(&embed)).await;
         let unrelated =
             create_post_via_service(&env.state, owner, parse_post_body("no media")).await;
-        env.state
-            .posts
-            .soft_delete_post(deleted, owner)
-            .await
-            .expect("soft delete succeeds");
+        soft_delete_post_confirmed(&env.state, deleted, owner).await;
 
         let found = env
             .state
@@ -6921,12 +6942,7 @@ mod tests {
         let inputs: Vec<CreatePostInput> = (0..1201)
             .map(|_| SeedRawPost::new(user).body(body.clone()).build())
             .collect();
-        let ids = env
-            .state
-            .posts
-            .create_posts(&inputs)
-            .await
-            .expect("batch seed succeeds");
+        let ids = create_posts_confirmed(&env.state, inputs).await;
 
         let found = env
             .state
@@ -6968,7 +6984,7 @@ mod tests {
         let inputs: Vec<CreatePostInput> = (0..=MAX_MEDIA_REFERENCE_SNAPSHOT)
             .map(|_| SeedRawPost::new(user).body(body.clone()).build())
             .collect();
-        env.state.posts.create_posts(&inputs).await.unwrap();
+        create_posts_confirmed(&env.state, inputs).await;
 
         let snapshot = env.state.posts.list_media_references(&media).await.unwrap();
 
@@ -7457,8 +7473,9 @@ mod tests {
         // A post with no title exercises the `None` decode path for
         // `Option<PostTitle>`.
         let untitled_body = parse_post_body("body");
-        let untitled_id = posts
-            .create_post(&CreatePostInput {
+        let untitled_id = create_post_confirmed(
+            &env.state,
+            CreatePostInput {
                 user_id,
                 title: None,
                 slug: parse_slug("no-title"),
@@ -7471,9 +7488,10 @@ mod tests {
                 tags: Vec::new(),
                 expectations: PostBookkeepingExpectation::default(),
                 idempotency_key: None,
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .post_id;
         let untitled = posts
             .get_post_by_id(untitled_id, &ViewerIdentity::Anonymous)
             .await
@@ -7654,10 +7672,7 @@ mod tests {
             .published_at(UtcInstant::from(scheduled_at))
             .seed(&env.state)
             .await;
-        posts
-            .soft_delete_post(deleted.post_id, author)
-            .await
-            .expect("soft delete");
+        soft_delete_post_confirmed(&env.state, deleted.post_id, author).await;
 
         let draft_record = posts
             .get_post_by_id(draft.post_id, &ViewerIdentity::Local { user_id: author })

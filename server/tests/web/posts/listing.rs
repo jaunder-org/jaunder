@@ -9,7 +9,9 @@ use web::posts::{SavedPost, UnpublishedPost};
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_session_for, create_user_and_session, post_form, post_json};
+use crate::helpers::{
+    confirmed_mutation, create_session_for, create_user_and_session, post_form, post_json,
+};
 use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix};
 
 use super::fixtures::{
@@ -63,7 +65,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let first_draft: SavedPost = serde_json::from_str(&body).unwrap();
+    let first_draft: SavedPost = confirmed_mutation(&body);
 
     let (status, body) = create_post_json(
         &state,
@@ -75,7 +77,7 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let second_draft: SavedPost = serde_json::from_str(&body).unwrap();
+    let second_draft: SavedPost = confirmed_mutation(&body);
 
     let (status, body) = create_post_json(
         &state,
@@ -209,9 +211,16 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
         .seed(&state)
         .await
         .post_id;
+    let posts = Arc::clone(&state.posts);
     state
-        .posts
-        .soft_delete_post(deleted_id, author.user_id)
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                posts
+                    .soft_delete_post(transaction, deleted_id, author.user_id)
+                    .await
+            })
+        })
         .await
         .unwrap();
     let other_id = SeedRawPost::new(stranger.user_id)
@@ -521,10 +530,17 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
     let (status, body) =
         create_post_json(&state, "gone", "markdown", None, true, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let deleted: SavedPost = serde_json::from_str(&body).unwrap();
+    let deleted: SavedPost = confirmed_mutation(&body);
+    let posts = Arc::clone(&state.posts);
     state
-        .posts
-        .soft_delete_post(deleted.post_id, author.user_id)
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                posts
+                    .soft_delete_post(transaction, deleted.post_id, author.user_id)
+                    .await
+            })
+        })
         .await
         .unwrap();
 
@@ -651,7 +667,7 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
 
     // Apply two tags via the storage layer (the create_post tags param lands
     // in tags.5; here we just verify the timeline surface threads them
@@ -713,7 +729,7 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
             )
             .await;
             assert_eq!(status, StatusCode::OK, "create body: {body}");
-            serde_json::from_str::<SavedPost>(&body).unwrap()
+            confirmed_mutation::<SavedPost>(&body)
         }
     };
 

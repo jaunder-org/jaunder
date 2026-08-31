@@ -1082,11 +1082,16 @@ mod tests {
             parse_post_body(&format!("<img src=\"{form}\">")),
         )
         .await;
-        env.state
-            .posts
-            .soft_delete_post(post_id, owner)
+        let posts = Arc::clone(&env.state.posts);
+        let outcome = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { posts.soft_delete_post(transaction, post_id, owner).await })
+            })
             .await
             .expect("deletion captures the prior media subject");
+        assert!(matches!(outcome, common::MutationOutcome::Confirmed(())));
 
         let references = env
             .state

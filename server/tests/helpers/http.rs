@@ -21,6 +21,16 @@ use tower::ServiceExt;
 
 use super::registrar::ensure_server_fns_registered;
 use super::session::tmp_storage_path;
+pub fn confirmed_mutation<T: serde::de::DeserializeOwned>(body: &str) -> T {
+    let outcome: common::MutationOutcome<T> =
+        serde_json::from_str(body).expect("parse mutation outcome");
+    match outcome {
+        common::MutationOutcome::Confirmed(value) => value,
+        common::MutationOutcome::CommitIndeterminate(_) => {
+            panic!("integration test backend returned an indeterminate commit")
+        }
+    }
+}
 
 /// Read a response body fully and decode it as UTF-8.
 pub async fn body_string(response: axum::response::Response) -> String {

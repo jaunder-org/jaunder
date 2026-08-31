@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::http::StatusCode;
 use chrono::Datelike;
 use common::tag::MAX_TAGS_PER_POST;
@@ -9,10 +11,26 @@ use web::posts::SavedPost;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_user_and_session, post_form, post_json};
-use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+use crate::helpers::{confirmed_mutation, create_user_and_session, post_form, post_json};
+use storage::test_support::{Backend, TestEnv, backends, backends_matrix, confirmed_for};
 
 use super::fixtures::{create_post_json, login_and_state};
+
+async fn create_audience_confirmed(
+    state: &Arc<storage::AppState>,
+    author: common::ids::UserId,
+    name: common::audience::AudienceName,
+) -> common::ids::AudienceId {
+    let audiences = Arc::clone(&state.audiences);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { audiences.create_audience(transaction, author, &name).await })
+        })
+        .await
+        .expect("audience fixture setup should succeed");
+    confirmed_for(outcome, "audience fixture setup")
+}
 
 #[apply(backends)]
 #[tokio::test]
@@ -35,7 +53,7 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
     assert_eq!(created.slug, "hello-world");
     assert!(created.published_at.is_some());
 
@@ -105,7 +123,7 @@ second",
     .await;
 
     assert_eq!(second_status, StatusCode::OK, "body: {second_body}");
-    let created: SavedPost = serde_json::from_str(&second_body).unwrap();
+    let created: SavedPost = confirmed_mutation(&second_body);
     assert_eq!(created.slug, "repeated-title-2");
 }
 
@@ -127,7 +145,7 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
     assert_eq!(created.slug, "custom-slug");
     assert!(created.published_at.is_none());
     // A draft carries its canonical (created_at-based) permalink; the permalink
@@ -173,7 +191,7 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
     assert_eq!(created.slug, "titleless-note");
     let record = state
         .posts
@@ -210,7 +228,7 @@ Body text",
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
     assert_eq!(created.slug, "extracted-title");
     let record = state
         .posts
@@ -301,7 +319,7 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
 
     let record = state
         .posts
@@ -352,7 +370,7 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
 
     let record = state
         .posts
@@ -410,7 +428,7 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
 
     let stored_tags = state
         .posts
@@ -453,7 +471,7 @@ async fn create_org_header_merges_structured_metadata_and_stores_canonical_body(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
     let record = state
         .posts
         .get_post_by_id(
@@ -502,7 +520,7 @@ async fn create_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backen
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
     assert!(
         created.published_at.is_some(),
         "an omitted transport lifecycle must leave the valid Org header effective"
@@ -537,22 +555,18 @@ async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] ba
     let author = create_user_and_session(&state).await;
     let foreign = create_user_and_session(&state).await;
     let cookie = author.cookie();
-    let owned = state
-        .audiences
-        .create_audience(
-            author.user_id,
-            &common::test_support::parse_audience_name("Owned"),
-        )
-        .await
-        .unwrap();
-    let foreign = state
-        .audiences
-        .create_audience(
-            foreign.user_id,
-            &common::test_support::parse_audience_name("Foreign"),
-        )
-        .await
-        .unwrap();
+    let owned = create_audience_confirmed(
+        &state,
+        author.user_id,
+        common::test_support::parse_audience_name("Owned"),
+    )
+    .await;
+    let foreign = create_audience_confirmed(
+        &state,
+        foreign.user_id,
+        common::test_support::parse_audience_name("Foreign"),
+    )
+    .await;
 
     let payload = |audience_id| {
         serde_json::json!({
@@ -571,7 +585,7 @@ async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] ba
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
     let (status, body) = post_form(
         &state,
         <web::posts::GetAudienceSelection as ServerFn>::PATH,
@@ -648,7 +662,7 @@ async fn create_org_publish_now_overrides_header_draft(#[case] backend: Backend)
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created: SavedPost = confirmed_mutation(&body);
     assert!(
         created.published_at.is_some(),
         "structured publish-now wins over header draft"

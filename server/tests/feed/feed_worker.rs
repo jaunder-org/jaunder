@@ -39,6 +39,7 @@ fn make_worker(
         state.site_config.clone(),
         state.posts.clone(),
         state.feed_cache.clone(),
+        Arc::new(state.write_scope.clone()),
         state.feed_events.clone(),
         websub,
     )

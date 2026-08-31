@@ -29,7 +29,6 @@ use std::future::Future;
 
 use leptos::prelude::*;
 
-use common::ids::PostId;
 use common::revision_history::{
     RevisionHistoryAudience, RevisionHistoryDetail, RevisionHistoryTag,
 };
@@ -38,6 +37,7 @@ use common::seed::{Page, PageSeed, RenderedPost};
 use common::tag::Tag;
 use common::username::Username;
 use common::visibility::AudienceSelection;
+use common::{MutationOutcome, ids::PostId};
 
 use crate::audiences;
 use crate::error::{WebError, WebResult};
@@ -165,23 +165,28 @@ pub fn user_tag_query(username: Option<Username>, tag: Option<Tag>) -> WebResult
 }
 
 /// Where an update settles the browser, shaped for `on_settled_ok`'s read closure:
-/// `Some(Ok(permalink))` only when the update **published** the post.
+/// `Some(Ok(permalink))` only when the update **confirmed** publication.
 ///
 /// Editor → permalink is always a route change, so a fresh `PostPage` mount refetches
-/// — no explicit invalidation needed (#592). A settled-but-still-draft update, a
-/// failed one, and "not settled yet" all mean *nothing to navigate to*, and
-/// `on_settled_ok` skips all three identically, so collapsing them here leaves the
-/// component with no branch at all.
+/// — no explicit invalidation needed (#592). A confirmed-but-still-draft update, an
+/// indeterminate or failed update, and "not settled yet" all mean *nothing to navigate
+/// to*. In particular, an indeterminate commit must not masquerade as confirmed by
+/// redirecting to a post whose publication status the server could not establish.
 ///
 /// The permalink stays a [`RootRelativeUrl`] all the way to `use_navigate`, which takes
 /// `&str` by deref — unwrapping it here would trade the type for an allocation.
 #[must_use]
 pub fn publish_redirect<E>(
-    settled: Option<Result<SavedPost, E>>,
+    settled: Option<Result<MutationOutcome<SavedPost>, E>>,
 ) -> Option<Result<RootRelativeUrl, E>> {
-    let updated = settled?.ok()?;
-    let published = updated.published_at.is_some();
-    published.then_some(updated.permalink).map(Ok)
+    let MutationOutcome::Confirmed(updated) = settled?.ok()? else {
+        return None;
+    };
+    updated
+        .published_at
+        .is_some()
+        .then_some(updated.permalink)
+        .map(Ok)
 }
 
 /// Fire an optional parent callback, when the caller supplied one.
@@ -740,11 +745,11 @@ mod tests {
 
     #[test]
     fn a_published_update_redirects_to_its_typed_permalink() {
+        let outcome = MutationOutcome::Confirmed(saved_post(Some(
+            "2026-01-02T00:00:00Z".parse().expect("a real instant"),
+        )));
         assert_eq!(
-            publish_redirect::<WebError>(Some(Ok(saved_post(Some(
-                "2026-01-02T00:00:00Z".parse().expect("a real instant")
-            )))))
-            .expect("a published update navigates"),
+            publish_redirect::<WebError>(Some(Ok(outcome))).expect("a published update navigates"),
             Ok(parse_root_relative_url("/~alice/2026/01/02/hello")),
         );
     }
@@ -753,17 +758,23 @@ mod tests {
     fn a_still_unpublished_update_stays_put() {
         // The editor must not navigate away when the author saved a draft — the
         // invariant the `published_at.is_some()` gate exists to keep.
-        assert_eq!(
-            publish_redirect::<WebError>(Some(Ok(saved_post(None)))),
-            None
-        );
+        let outcome = MutationOutcome::Confirmed(saved_post(None));
+        assert_eq!(publish_redirect::<WebError>(Some(Ok(outcome))), None);
     }
 
     #[test]
-    fn an_unsettled_or_failed_update_navigates_nowhere() {
+    fn an_unsettled_failed_or_indeterminate_update_navigates_nowhere() {
         assert_eq!(publish_redirect::<WebError>(None), None);
         assert_eq!(
             publish_redirect(Some(Err(WebError::validation("boom")))),
+            None
+        );
+        assert_eq!(
+            publish_redirect::<WebError>(Some(Ok(MutationOutcome::CommitIndeterminate(
+                saved_post(Some(
+                    "2026-01-02T00:00:00Z".parse().expect("a real instant"),
+                )),
+            )))),
             None
         );
     }

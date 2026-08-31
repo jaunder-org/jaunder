@@ -16,7 +16,6 @@ pub mod cockpit;
 pub mod email;
 pub mod error;
 pub mod feed_discovery;
-pub mod feed_events;
 pub mod forms;
 pub mod home;
 /// `Markup` — the render layer's currency and its one trusted-HTML door. Every

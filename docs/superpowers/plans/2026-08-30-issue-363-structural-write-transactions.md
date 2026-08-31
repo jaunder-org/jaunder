@@ -102,7 +102,7 @@ pool-backed or independently committing compatibility form behind.
     leaves no user/session and consumes no invite, and email update leaves the
     code unused; server/client tests prove typed outcomes and revalidation.
 
-- [ ] **Task 4: Compose publishing, audience, subscription, and event writes.**
+- [x] **Task 4: Compose publishing, audience, subscription, and event writes.**
   - Cutover: the remaining six `PostStorage` mutations, all five
     `AudienceStorage` mutations, both `SubscriptionStorage` mutations, and
     `FeedEventStorage::enqueue_many`; migrate `post_service`, web and AtomPub

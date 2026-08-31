@@ -1,17 +1,16 @@
 use crate::error::WebResult;
-// `Username` is ungated: it types the `#[server]` wire args below, so the generated
-// arg structs reference it on both the client and server builds.
-use common::username::Username;
+use common::{MutationOutcome, username::Username};
 
 #[cfg(feature = "server")]
 use super::server;
 #[cfg(feature = "server")]
 use {
     crate::auth,
+    crate::error::{InternalError, from_write_scope_error},
     common::visibility,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{SubscriptionStorage, UserStorage},
+    storage::{SubscriptionStorage, UserStorage, WriteScope},
 };
 
 /// Subscribes the authenticated local user to `author_username` on the
@@ -20,30 +19,51 @@ use {
 /// Requires an authenticated local account (Layer A). Rejects a self-subscribe
 /// and an unknown author. Idempotent: subscribing twice is a no-op.
 #[macros::server]
-pub async fn subscribe(author_username: Username) -> WebResult<()> {
+pub async fn subscribe(author_username: Username) -> WebResult<MutationOutcome<()>> {
     let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
     let users = expect_context::<Arc<dyn UserStorage>>();
     let auth = auth::require_auth().await?;
     let author_id = server::resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
     let channel_id = subscriptions.local_channel_id().await?;
     let subscriber = visibility::local_subscriber_identity(channel_id, auth.user_id);
-    subscriptions.subscribe(author_id, &subscriber).await?;
-    Ok(())
+    let write_scope = expect_context::<WriteScope>();
+    write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                subscriptions
+                    .subscribe(transaction, author_id, &subscriber)
+                    .await
+                    .map(|_| ())
+                    .map_err(InternalError::storage)
+            })
+        })
+        .await
+        .map_err(from_write_scope_error)
 }
 
 /// Unsubscribes the authenticated local user from `author_username`.
 ///
 /// Mirror of [`subscribe`]. A no-op if no subscription exists.
 #[macros::server]
-pub async fn unsubscribe(author_username: Username) -> WebResult<()> {
+pub async fn unsubscribe(author_username: Username) -> WebResult<MutationOutcome<()>> {
     let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
     let users = expect_context::<Arc<dyn UserStorage>>();
     let auth = auth::require_auth().await?;
     let author_id = server::resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
     let channel_id = subscriptions.local_channel_id().await?;
     let subscriber = visibility::local_subscriber_identity(channel_id, auth.user_id);
-    subscriptions.unsubscribe(author_id, &subscriber).await?;
-    Ok(())
+    let write_scope = expect_context::<WriteScope>();
+    write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                subscriptions
+                    .unsubscribe(transaction, author_id, &subscriber)
+                    .await
+                    .map_err(InternalError::storage)
+            })
+        })
+        .await
+        .map_err(from_write_scope_error)
 }
 
 /// Reports whether the authenticated local user is subscribed to

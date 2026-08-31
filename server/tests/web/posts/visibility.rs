@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use chrono::Datelike;
-use common::ids::{PostId, UserId};
+use common::ids::{AudienceId, PostId, SubscriptionId, UserId};
 use common::seed::{AuthoredPost, Page, RenderedPost};
 use common::test_support::parse_audience_name;
-use common::visibility::local_subscriber_identity;
+use common::visibility::{SubscriberIdentity, local_subscriber_identity};
 use server_fn::ServerFn;
 use web::posts::{EditPostPreview, SavedPost};
 
@@ -13,16 +13,75 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    create_session_for, create_user_and_session, post_form, post_json_with_credentials,
+    confirmed_mutation, create_session_for, create_user_and_session, post_form,
+    post_json_with_credentials,
 };
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, SeededPost, TestEnv, backends, backends_matrix,
+    confirmed_for as confirmed,
 };
 
 use super::fixtures::{
     create_post_json, get_post_form, list_drafts, list_home_feed, list_local_timeline,
     list_scheduled, publish_post_form, update_post_json,
 };
+
+async fn create_audience_confirmed(
+    state: &Arc<storage::AppState>,
+    author: UserId,
+    name: common::audience::AudienceName,
+) -> AudienceId {
+    let audiences = Arc::clone(&state.audiences);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { audiences.create_audience(transaction, author, &name).await })
+        })
+        .await
+        .expect("audience fixture setup should succeed");
+    confirmed(outcome, "audience fixture setup")
+}
+
+async fn add_member_confirmed(
+    state: &Arc<storage::AppState>,
+    author: UserId,
+    audience: AudienceId,
+    subscription: SubscriptionId,
+) {
+    let audiences = Arc::clone(&state.audiences);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                audiences
+                    .add_member(transaction, author, audience, subscription)
+                    .await
+            })
+        })
+        .await
+        .expect("audience membership fixture setup should succeed");
+    confirmed(outcome, "audience membership fixture setup");
+}
+
+async fn subscribe_confirmed(
+    state: &Arc<storage::AppState>,
+    author: UserId,
+    subscriber: SubscriberIdentity,
+) -> SubscriptionId {
+    let subscriptions = Arc::clone(&state.subscriptions);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                subscriptions
+                    .subscribe(transaction, author, &subscriber)
+                    .await
+            })
+        })
+        .await
+        .expect("subscription fixture setup should succeed");
+    confirmed(outcome, "subscription fixture setup")
+}
 
 async fn get_post_preview_form(
     state: &Arc<storage::AppState>,
@@ -119,7 +178,7 @@ draft",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
     let record = state
         .posts
         .get_post_by_id(
@@ -198,7 +257,7 @@ draft",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
 
     let before = chrono::Utc::now();
     let (status, body) = get_post_preview_form(&state, created.post_id, Some(&author_cookie)).await;
@@ -239,7 +298,7 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
-    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let created = confirmed_mutation::<SavedPost>(&body);
     let record = state
         .posts
         .get_post_by_id(
@@ -336,21 +395,10 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // A named audience containing the subscriber's subscription. `subscribe` is
     // idempotent, so this both establishes the active subscription and yields
     // the subscription id for audience membership.
-    let friends = state
-        .audiences
-        .create_audience(author, &parse_audience_name("Friends"))
-        .await
-        .unwrap();
-    let sub_id = state
-        .subscriptions
-        .subscribe(author, &local_subscriber_identity(local, subscriber))
-        .await
-        .unwrap();
-    state
-        .audiences
-        .add_member(author, friends, sub_id)
-        .await
-        .unwrap();
+    let friends = create_audience_confirmed(&state, author, parse_audience_name("Friends")).await;
+    let sub_id =
+        subscribe_confirmed(&state, author, local_subscriber_identity(local, subscriber)).await;
+    add_member_confirmed(&state, author, friends, sub_id).await;
 
     let public = create_targeted_post(&state, author, vec![AudienceTarget::Public]).await;
     let subscribers = create_targeted_post(&state, author, vec![AudienceTarget::Subscribers]).await;
@@ -479,14 +527,12 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
     let subscriber = SeedUser::new().seed(&state).await.user_id;
 
     let local = state.subscriptions.local_channel_id().await.unwrap();
-    state
-        .subscriptions
-        .subscribe(
-            author.user_id,
-            &local_subscriber_identity(local, subscriber),
-        )
-        .await
-        .unwrap();
+    subscribe_confirmed(
+        &state,
+        author.user_id,
+        local_subscriber_identity(local, subscriber),
+    )
+    .await;
 
     let seeded =
         create_targeted_post(&state, author.user_id, vec![AudienceTarget::Subscribers]).await;

@@ -8,38 +8,35 @@ use common::visibility::{
 };
 use rstest::*;
 use rstest_reuse::*;
-use storage::test_support::{Backend, SeedUser, backends, seed_users};
-use storage::{PostgresSubscriptionStorage, SqliteSubscriptionStorage, SubscriptionStorage};
+use storage::test_support::{Backend, SeedUser, backends, confirmed_for as confirmed, seed_users};
+use storage::{
+    PostgresSubscriptionStorage, SqliteSubscriptionStorage, SubscriptionStorage, WriteScope,
+};
 
 use super::fixtures::{
     channel_id_by_name, local_channel_id, open_pool, raw_exec, update_subscription_created_at,
 };
 
-// The production `SubscriptionStorage::local_channel_id()` accessor must return
-// the same id as the seeded `'local'` channel row (read here via the raw test
-// helper of the same name).
 #[apply(backends)]
 #[tokio::test]
 async fn local_channel_id_returns_seeded_local(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     let expected = local_channel_id(backend, &env).await;
-    let actual = state.subscriptions.local_channel_id().await.unwrap();
+    let actual = env.state.subscriptions.local_channel_id().await.unwrap();
     assert_eq!(actual, expected);
 }
 
-// The other half of the accessor's contract: with the seed gone, the absence is
-// reported as a *named* missing row, not as an anonymous driver error the
-// boundary would page on with "storage operation failed" (#343). Deleting the
-// row is possible on both backends because `subscriptions` is the only table
-// referencing `channels` and a fresh test database has no subscription rows.
 #[apply(backends)]
 #[tokio::test]
 async fn local_channel_id_names_the_row_when_the_seed_is_missing(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let state = &env.state;
     raw_exec(backend, &env, "DELETE FROM channels WHERE name = 'local'").await;
-    let error = state.subscriptions.local_channel_id().await.unwrap_err();
+    let error = env
+        .state
+        .subscriptions
+        .local_channel_id()
+        .await
+        .unwrap_err();
     assert_eq!(error.kind(), host::error::ErrorKind::Internal);
     assert_eq!(error.class(), host::error::ErrorClass::Bug);
     let operator = error.operator_message();
@@ -60,21 +57,27 @@ async fn subscribe_round_trips_fixed_created_at_and_preserves_order(#[case] back
     let local = local_channel_id(backend, &env).await;
     let bob_subscriber = local_subscriber_identity(local, bob);
     let carol_subscriber = local_subscriber_identity(local, carol);
-    let bob_id = state
-        .subscriptions
-        .subscribe(author, &bob_subscriber)
-        .await
-        .unwrap();
-    let repeated_bob_id = state
-        .subscriptions
-        .subscribe(author, &bob_subscriber)
-        .await
-        .unwrap();
-    let carol_id = state
-        .subscriptions
-        .subscribe(author, &carol_subscriber)
-        .await
-        .unwrap();
+    let bob_id = subscribe_confirmed(
+        &state.write_scope,
+        Arc::clone(&state.subscriptions),
+        author,
+        bob_subscriber.clone(),
+    )
+    .await;
+    let repeated_bob_id = subscribe_confirmed(
+        &state.write_scope,
+        Arc::clone(&state.subscriptions),
+        author,
+        bob_subscriber.clone(),
+    )
+    .await;
+    let carol_id = subscribe_confirmed(
+        &state.write_scope,
+        Arc::clone(&state.subscriptions),
+        author,
+        carol_subscriber,
+    )
+    .await;
     assert_eq!(bob_id, repeated_bob_id, "subscribe is idempotent");
 
     let bob_created_at: UtcInstant = "2026-01-02T03:04:05.123457Z".parse().unwrap();
@@ -82,8 +85,6 @@ async fn subscribe_round_trips_fixed_created_at_and_preserves_order(#[case] back
     update_subscription_created_at(backend, &env, bob_id, bob_created_at).await;
     update_subscription_created_at(backend, &env, carol_id, carol_created_at).await;
 
-    // The real list seam decodes the typed instant and retains its established
-    // subscription-id order rather than reordering adjacent creation timestamps.
     let subs = state.subscriptions.list_subscribers(author).await.unwrap();
     assert_eq!(subs.len(), 2);
     assert_eq!(
@@ -122,12 +123,13 @@ async fn subscribe_round_trips_fixed_created_at_and_preserves_order(#[case] back
             .unwrap()
     );
 
-    // Unsubscribe round-trips: no longer a subscriber, remaining listing retains Carol.
-    state
-        .subscriptions
-        .unsubscribe(author, &bob_subscriber)
-        .await
-        .unwrap();
+    unsubscribe_confirmed(
+        &state.write_scope,
+        Arc::clone(&state.subscriptions),
+        author,
+        bob_subscriber,
+    )
+    .await;
     assert!(
         !state
             .subscriptions
@@ -157,39 +159,35 @@ async fn list_subscriber_summaries_resolves_labels_on_both_dialects(#[case] back
     .await;
     let remote = channel_id_by_name(backend, &env, "activitypub").await;
 
-    let resolved = state
-        .subscriptions
-        .subscribe(
-            author,
-            &local_subscriber_identity(local, local_user.user_id),
-        )
-        .await
-        .unwrap();
+    let resolved = subscribe_confirmed(
+        &state.write_scope,
+        Arc::clone(&state.subscriptions),
+        author,
+        local_subscriber_identity(local, local_user.user_id),
+    )
+    .await;
     let numeric_remote_ref = local_user.user_id.to_string();
-    let remote_numeric = state
-        .subscriptions
-        .subscribe(
-            author,
-            &SubscriberIdentity::new(remote, numeric_remote_ref.parse().unwrap()),
-        )
-        .await
-        .unwrap();
+    let remote_numeric = subscribe_confirmed(
+        &state.write_scope,
+        Arc::clone(&state.subscriptions),
+        author,
+        SubscriberIdentity::new(remote, numeric_remote_ref.parse().unwrap()),
+    )
+    .await;
     let missing_ref = "999999999";
-    let missing_local = state
-        .subscriptions
-        .subscribe(
-            author,
-            &SubscriberIdentity::new(local, missing_ref.parse().unwrap()),
-        )
-        .await
-        .unwrap();
+    let missing_local = subscribe_confirmed(
+        &state.write_scope,
+        Arc::clone(&state.subscriptions),
+        author,
+        SubscriberIdentity::new(local, missing_ref.parse().unwrap()),
+    )
+    .await;
 
     let rows = state
         .subscriptions
         .list_subscriber_summaries(author)
         .await
         .unwrap();
-
     assert_eq!(
         rows.into_iter()
             .map(|row| (row.subscription_id, row.label))
@@ -211,15 +209,14 @@ async fn subscriber_bulk_reads_skip_unicode_blank_stored_refs(#[case] backend: B
     let valid_subscriber = SeedUser::new().seed(state).await;
     let local = local_channel_id(backend, &env).await;
     let valid_identity = local_subscriber_identity(local, valid_subscriber.user_id);
-    let valid_subscription_id = state
-        .subscriptions
-        .subscribe(author, &valid_identity)
-        .await
-        .expect("subscribe valid user");
+    let valid_subscription_id = subscribe_confirmed(
+        &state.write_scope,
+        Arc::clone(&state.subscriptions),
+        author,
+        valid_identity.clone(),
+    )
+    .await;
 
-    // Unicode whitespace is deliberately beyond the portable database
-    // constraint, so insert it beneath the Rust write boundary. ADR-0122 says
-    // the bad typed column costs exactly this row rather than the whole scan.
     let sql = format!(
         "INSERT INTO subscriptions \
          (author_user_id, channel_id, subscriber_ref, status_id) \
@@ -253,10 +250,6 @@ async fn subscriber_bulk_reads_skip_unicode_blank_stored_refs(#[case] backend: B
     );
 }
 
-// `is_subscriber` resolves a `Remote` viewer against its own channel: admission
-// is the (channel, ref) pair on the subscription row, so the same opaque ref on
-// a different channel is a different subscriber. This is the non-local half of
-// the variant split (#6) — the `Local` arm is covered by the test above.
 #[apply(backends)]
 #[tokio::test]
 async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backend: Backend) {
@@ -273,14 +266,13 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
     let remote = channel_id_by_name(backend, &env, "activitypub").await;
 
     let actor = "https://remote.example/users/alice";
-    state
-        .subscriptions
-        .subscribe(
-            author,
-            &SubscriberIdentity::new(remote, actor.parse().unwrap()),
-        )
-        .await
-        .unwrap();
+    subscribe_confirmed(
+        &state.write_scope,
+        Arc::clone(&state.subscriptions),
+        author,
+        SubscriberIdentity::new(remote, actor.parse().unwrap()),
+    )
+    .await;
 
     assert!(
         state
@@ -289,7 +281,7 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
                 author,
                 &ViewerIdentity::Remote {
                     channel_id: remote,
-                    subscriber_ref: actor.parse().unwrap(),
+                    subscriber_ref: actor.parse().unwrap()
                 }
             )
             .await
@@ -303,7 +295,7 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
                 author,
                 &ViewerIdentity::Remote {
                     channel_id: local,
-                    subscriber_ref: actor.parse().unwrap(),
+                    subscriber_ref: actor.parse().unwrap()
                 }
             )
             .await
@@ -312,42 +304,37 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
     );
 }
 
-// Fail-closed admission: `is_subscriber` admits only `active` rows, so a
-// subscription a stricter policy left `pending` must NOT be admitted. The
-// default `state.subscriptions` uses `OpenSubscriptionPolicy` (always active),
-// so we construct the store directly with a stub policy returning `Pending`.
 #[apply(backends)]
 #[tokio::test]
 async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
     struct StubPending;
     impl SubscriptionPolicy for StubPending {
-        fn initial_status(&self, _a: UserId, _s: &SubscriberIdentity) -> SubscriptionStatus {
+        fn initial_status(
+            &self,
+            _author: UserId,
+            _subscriber: &SubscriberIdentity,
+        ) -> SubscriptionStatus {
             SubscriptionStatus::Pending
         }
     }
 
     let env = backend.setup().await;
-    // Only `active` is seeded this milestone (M13 adds `pending`). Seed the
-    // `pending` lookup row locally so `subscribe` can persist a pending row and
-    // we can prove `is_subscriber` still excludes it (the fail-closed property).
-    // Build the store over the *same* per-test database as `env.state`, with the
-    // stub `Pending` policy, per backend.
-    let store: Box<dyn SubscriptionStorage> = match backend {
+    let store: Arc<dyn SubscriptionStorage> = match backend {
         Backend::Sqlite => {
-            let pool = open_pool(&env.base).await; // same DB file as env.state
+            let pool = open_pool(&env.base).await;
             sqlx::query("INSERT INTO subscription_statuses (name) VALUES ('pending')")
                 .execute(&pool)
                 .await
                 .unwrap();
-            Box::new(SqliteSubscriptionStorage::new(pool, Arc::new(StubPending)))
+            Arc::new(SqliteSubscriptionStorage::new(pool, Arc::new(StubPending)))
         }
         Backend::Postgres => {
-            let pool = env.base.pool().postgres().clone(); // same DB as env.state
+            let pool = env.base.pool().postgres().clone();
             sqlx::query("INSERT INTO subscription_statuses (name) VALUES ('pending')")
                 .execute(&pool)
                 .await
                 .unwrap();
-            Box::new(PostgresSubscriptionStorage::new(
+            Arc::new(PostgresSubscriptionStorage::new(
                 pool,
                 Arc::new(StubPending),
             ))
@@ -355,18 +342,19 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
     };
     let [author, bob] = seed_users(&env.state).await;
     let local = local_channel_id(backend, &env).await;
-    store
-        .subscribe(author, &local_subscriber_identity(local, bob))
-        .await
-        .unwrap();
-    // Resolution admits only `active` → a pending subscriber is excluded.
+    subscribe_confirmed(
+        &env.state.write_scope,
+        Arc::clone(&store),
+        author,
+        local_subscriber_identity(local, bob),
+    )
+    .await;
     assert!(
         !store
             .is_subscriber(author, &ViewerIdentity::local(bob))
             .await
             .unwrap()
     );
-    // ...and it is not listed (list_subscribers is active-only).
     assert!(store.list_subscribers(author).await.unwrap().is_empty());
     assert!(
         store
@@ -375,4 +363,42 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
             .unwrap()
             .is_empty()
     );
+}
+
+async fn subscribe_confirmed(
+    write_scope: &WriteScope,
+    subscriptions: Arc<dyn SubscriptionStorage>,
+    author: UserId,
+    subscriber: SubscriberIdentity,
+) -> common::ids::SubscriptionId {
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                subscriptions
+                    .subscribe(transaction, author, &subscriber)
+                    .await
+            })
+        })
+        .await
+        .expect("subscription fixture setup should succeed");
+    confirmed(outcome, "subscription fixture setup")
+}
+
+async fn unsubscribe_confirmed(
+    write_scope: &WriteScope,
+    subscriptions: Arc<dyn SubscriptionStorage>,
+    author: UserId,
+    subscriber: SubscriberIdentity,
+) {
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                subscriptions
+                    .unsubscribe(transaction, author, &subscriber)
+                    .await
+            })
+        })
+        .await
+        .expect("subscription removal should succeed");
+    confirmed(outcome, "subscription removal");
 }
