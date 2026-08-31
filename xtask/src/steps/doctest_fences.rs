@@ -18,7 +18,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use doctests::check::{ScannedFile, problems};
+use doctests::check::{self, ScannedFile};
 use doctests::roots;
 use xshell::Shell;
 
@@ -66,78 +66,116 @@ fn doctest_args(manifest: &Path) -> Vec<String> {
 
 const WORKSPACE_STEP: &str = "workspace-doctests";
 
-/// The root-workspace invocation, kept in one pure helper so command-level tests
-/// pin the same argument list the pre-push lane will execute.
-fn workspace_doctest_args() -> Vec<String> {
-    ["test", "--workspace", "--doc"]
-        .into_iter()
-        .map(str::to_string)
-        .collect()
+/// The root-workspace command and its compile-cache configuration. This is the
+/// single source for the invocation and cache detail used by the pre-push lane.
+struct WorkspaceDoctestCommand {
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+    cache_detail: Option<String>,
 }
 
-/// Scan only the root workspace population, using repository-relative paths as
-/// Cargo prints them for a root-manifest `--workspace` invocation.
-fn workspace_files(top: &Path, tracked: &[String]) -> (Vec<ScannedFile>, Vec<String>) {
-    let mut scanned = Vec::new();
-    let mut hard_errors = Vec::new();
+fn workspace_doctest_command() -> WorkspaceDoctestCommand {
+    let (env, cache_detail) = compile_cache::cargo_compile_env();
+    WorkspaceDoctestCommand {
+        args: ["test", "--workspace", "--doc"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        env,
+        cache_detail,
+    }
+}
 
-    for &root in roots::WORKSPACE {
-        let prefix = format!("{root}/");
-        let paths: Vec<&String> = tracked
-            .iter()
-            .filter(|path| path.starts_with(&prefix))
-            .collect();
-        if paths.is_empty() {
-            hard_errors.push(format!("scan root {root} matched no tracked .rs files"));
-            continue;
-        }
-        for path in paths {
-            match std::fs::read_to_string(top.join(path)) {
-                Ok(source) => scanned.push(ScannedFile {
-                    run_path: path.clone(),
-                    path: path.clone(),
-                    source,
-                }),
-                Err(error) => hard_errors.push(format!(
-                    "{path}: cannot read: {error} — an unread file is invisible to this gate."
-                )),
-            }
-        }
+/// Scan one declared doctest root. Callers provide only the Cargo-visible path
+/// mapping; root discovery, tracked-file selection, and unreadable-file policy
+/// are identical for workspace and host runs.
+fn scan_root(
+    top: &Path,
+    tracked: &[String],
+    root: &str,
+    run_path: impl Fn(&str) -> String,
+) -> (Vec<ScannedFile>, Vec<String>) {
+    let prefix = format!("{root}/");
+    let paths: Vec<&String> = tracked
+        .iter()
+        .filter(|path| path.starts_with(&prefix))
+        .collect();
+    if paths.is_empty() {
+        return (
+            Vec::new(),
+            vec![format!("scan root {root} matched no tracked .rs files")],
+        );
     }
 
+    let mut scanned = Vec::with_capacity(paths.len());
+    let mut hard_errors = Vec::new();
+    for path in paths {
+        match std::fs::read_to_string(top.join(path)) {
+            Ok(source) => scanned.push(ScannedFile {
+                run_path: run_path(path),
+                path: path.clone(),
+                source,
+            }),
+            Err(error) => hard_errors.push(format!(
+                "{path}: cannot read: {error} — an unread file is invisible to this gate."
+            )),
+        }
+    }
     (scanned, hard_errors)
 }
 
-/// Reconcile one root-workspace run with its complete scanned population.
-///
-/// This deliberately delegates both directions to `doctests::check::problems`,
-/// the same checker used by the hermetic Nix producer. A process that cannot run
-/// is separate from a failed doctest entry: the latter remains a location-specific
-/// reconciliation violation, while the former has no evidence to reconcile.
-fn workspace_step(
+/// Reconcile one command result with the population it was expected to run.
+/// A nonzero status without a failed doctest entry is a command failure, even
+/// when a root contains no fences.
+fn reconcile_doctests(
     scanned: &[ScannedFile],
-    mut hard_errors: Vec<String>,
     command: Result<(String, bool), String>,
-) -> StepResult {
+    cannot_run: impl FnOnce(&str) -> String,
+    no_failed_entry: impl FnOnce() -> String,
+) -> Vec<String> {
     match command {
-        Err(error) => hard_errors.push(format!("cannot run workspace doctests: {error}")),
+        Err(error) => vec![cannot_run(&error)],
         Ok((output, succeeded)) => {
             let entries = doctests::libtest::run_entries(&output);
-            if !succeeded && !entries.iter().any(|entry| entry.failed) {
-                hard_errors.push(
-                    "workspace doctests exited non-zero without a reported failed doctest entry."
-                        .to_string(),
-                );
-            }
-            hard_errors.extend(problems(scanned, &output).iter().map(violation_detail));
+            let mut details = if !succeeded && !entries.iter().any(|entry| entry.failed) {
+                vec![no_failed_entry()]
+            } else {
+                Vec::new()
+            };
+            details.extend(
+                check::problems(scanned, &output)
+                    .iter()
+                    .map(violation_detail),
+            );
+            details
         }
     }
+}
 
-    if hard_errors.is_empty() {
-        StepResult::ok(WORKSPACE_STEP)
+fn assemble_step(name: &'static str, details: Vec<String>) -> StepResult {
+    if details.is_empty() {
+        StepResult::ok(name)
     } else {
-        StepResult::fail(WORKSPACE_STEP).detail(hard_errors.join("\n"))
+        StepResult::fail(name).detail(details.join("\n"))
     }
+}
+
+fn workspace_step(
+    scanned: &[ScannedFile],
+    hard_errors: Vec<String>,
+    command: Result<(String, bool), String>,
+) -> StepResult {
+    let mut details = hard_errors;
+    details.extend(reconcile_doctests(
+        scanned,
+        command,
+        |error| format!("cannot run workspace doctests: {error}"),
+        || {
+            "workspace doctests exited non-zero without a reported failed doctest entry."
+                .to_string()
+        },
+    ));
+    assemble_step(WORKSPACE_STEP, details)
 }
 
 /// Run and reconcile doctests for exactly the root Cargo workspace.
@@ -162,18 +200,23 @@ pub fn run_workspace(sh: &Shell, result: &mut CommandResult) {
             return;
         }
     };
-    let (scanned, hard_errors) = workspace_files(&top, &tracked);
-    let args = workspace_doctest_args();
-    let (env, cache_detail) = compile_cache::cargo_compile_env();
+    let mut scanned = Vec::new();
+    let mut hard_errors = Vec::new();
+    for root in roots::WORKSPACE {
+        let (root_files, root_errors) = scan_root(&top, &tracked, root, str::to_string);
+        scanned.extend(root_files);
+        hard_errors.extend(root_errors);
+    }
+    let command_spec = workspace_doctest_command();
     let start = Instant::now();
     let workspace_shell = sh.clone();
     workspace_shell.change_dir(&top);
     let mut command = workspace_shell
         .cmd("cargo")
-        .args(&args)
+        .args(&command_spec.args)
         .quiet()
         .ignore_status();
-    for (key, value) in &env {
+    for (key, value) in &command_spec.env {
         command = command.env(key, value);
     }
     let command = command.output().map(|output| {
@@ -183,7 +226,7 @@ pub fn run_workspace(sh: &Shell, result: &mut CommandResult) {
     });
     let command = command.map_err(|error| error.to_string());
     let mut step = workspace_step(&scanned, hard_errors, command).with_duration(start.elapsed());
-    if let Some(cache_detail) = cache_detail {
+    if let Some(cache_detail) = command_spec.cache_detail {
         step.detail = Some(match step.detail.take() {
             Some(detail) => format!("{detail}\n{cache_detail}"),
             None => cache_detail,
@@ -206,7 +249,7 @@ fn run_doctests(manifest: &Path) -> std::io::Result<(String, bool)> {
     Ok((combined, out.status.success()))
 }
 
-fn violation_detail(v: &doctests::check::Violation) -> String {
+fn violation_detail(v: &check::Violation) -> String {
     let location = v
         .line
         .map_or_else(|| v.file.clone(), |line| format!("{}:{line}", v.file));
@@ -215,8 +258,7 @@ fn violation_detail(v: &doctests::check::Violation) -> String {
 
 /// Scan and reconcile both host roots, pushing one `doctest-fences` step.
 pub fn run(result: &mut CommandResult) {
-    let mut violations = Vec::new();
-    let mut hard_errors = Vec::new();
+    let mut details = Vec::new();
 
     // `git ls-files`, not a filesystem walk. A walk descends into `xtask/target/`
     // and `tools/target/`, where build scripts emit generated `.rs` — so the
@@ -225,89 +267,50 @@ pub fn run(result: &mut CommandResult) {
     // parse) into a gate the developer has no way to satisfy.
     let (top, roots) = match host_roots(Path::new(".")) {
         Ok(paths) => paths,
-        Err(e) => {
+        Err(error) => {
             result.push(
                 StepResult::fail("doctest-fences")
-                    .detail(format!("cannot enumerate tracked sources: {e}")),
+                    .detail(format!("cannot enumerate tracked sources: {error}")),
             );
             return;
         }
     };
     let tracked = match crate::git::tracked_files(&top, "*.rs") {
         Ok(tracked) => tracked,
-        Err(e) => {
+        Err(error) => {
             result.push(
                 StepResult::fail("doctest-fences")
-                    .detail(format!("cannot enumerate tracked sources: {e}")),
+                    .detail(format!("cannot enumerate tracked sources: {error}")),
             );
             return;
         }
     };
 
     for root in roots {
-        let prefix = format!(
-            "{}/",
-            root.source
-                .strip_prefix(&top)
-                .expect("host root derived from Git top-level")
-                .display()
-        );
-        let paths: Vec<&String> = tracked.iter().filter(|p| p.starts_with(&prefix)).collect();
-        if paths.is_empty() {
-            // A root that yields nothing is a root that moved: silently scanning
-            // an empty population is the one way this gate must never be green.
-            hard_errors.push(format!(
-                "scan root {} matched no tracked .rs files",
-                root.run_root
-            ));
-            continue;
-        }
-        let mut scanned = Vec::with_capacity(paths.len());
-        for path in paths {
-            let source_path = root.source.join(
-                path.strip_prefix(&prefix)
-                    .expect("tracked path matched host root prefix"),
-            );
-            match std::fs::read_to_string(source_path) {
-                Ok(source) => scanned.push(ScannedFile {
-                    run_path: run_path(root.run_root, path),
-                    path: path.clone(),
-                    source,
-                }),
-                // Same reasoning as an unparseable file: an unread file is
-                // invisible to this gate, so it fails rather than being dropped.
-                Err(e) => hard_errors.push(format!(
-                    "{path}: cannot read: {e} — an unread file is invisible to this gate."
-                )),
-            }
-        }
-        match run_doctests(&root.manifest) {
-            Ok((output, ok)) => {
-                if !ok && doctests::libtest::run_entries(&output).is_empty() {
-                    hard_errors.push(format!(
-                        "{} doctests exited non-zero and reported no tests — the run \
-                         failed before any fence was evaluated.",
-                        root.run_root
-                    ));
-                }
-                violations.extend(problems(&scanned, &output));
-            }
-            Err(e) => hard_errors.push(format!("cannot run {} doctests: {e}", root.run_root)),
-        }
+        debug_assert_eq!(root.source, top.join(root.run_root));
+        let (scanned, scan_errors) = scan_root(&top, &tracked, root.run_root, |path| {
+            run_path(root.run_root, path)
+        });
+        details.extend(scan_errors);
+        details.extend(reconcile_doctests(
+            &scanned,
+            run_doctests(&root.manifest).map_err(|error| error.to_string()),
+            |error| format!("cannot run {} doctests: {error}", root.run_root),
+            || {
+                format!(
+                    "{} doctests exited non-zero without a reported failed doctest entry.",
+                    root.run_root
+                )
+            },
+        ));
     }
 
-    if hard_errors.is_empty() && violations.is_empty() {
-        result.push(StepResult::ok("doctest-fences"));
-        return;
-    }
-    let mut lines = hard_errors;
-    lines.extend(violations.iter().map(violation_detail));
-    result.push(StepResult::fail("doctest-fences").detail(lines.join("\n")));
+    result.push(assemble_step("doctest-fences", details));
 }
 
 /// The kebab-case wire spelling, so this step's message reads the same as the Nix
 /// gate's `jq` output rather than `Debug`'s CamelCase.
-fn kind_str(kind: doctests::check::Kind) -> String {
+fn kind_str(kind: check::Kind) -> String {
     serde_json::to_string(&kind)
         .unwrap_or_default()
         .trim_matches('"')
@@ -331,13 +334,42 @@ mod tests {
     }
 
     #[test]
-    fn workspace_doctest_command_has_exact_root_arguments() {
+    fn workspace_doctest_command_has_exact_root_arguments_and_compile_cache() {
+        let command = workspace_doctest_command();
         assert_eq!(
-            workspace_doctest_args(),
+            command.args,
             ["test", "--workspace", "--doc"]
                 .into_iter()
                 .map(str::to_string)
                 .collect::<Vec<_>>()
+        );
+        assert!(
+            command
+                .env
+                .contains(&("RUSTC_WRAPPER".to_string(), "sccache".to_string()))
+        );
+        assert!(
+            command
+                .env
+                .contains(&("CARGO_INCREMENTAL".to_string(), "0".to_string()))
+        );
+    }
+
+    #[test]
+    fn shared_reconciliation_rejects_a_host_command_without_failed_entry() {
+        let details = reconcile_doctests(
+            &[],
+            Ok((workspace_entry("ok"), false)),
+            |error| format!("cannot run xtask doctests: {error}"),
+            || {
+                "xtask doctests exited non-zero without a reported failed doctest entry."
+                    .to_string()
+            },
+        );
+
+        assert_eq!(
+            details,
+            ["xtask doctests exited non-zero without a reported failed doctest entry."]
         );
     }
 
