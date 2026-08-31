@@ -12,6 +12,7 @@ use crate::{
 };
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
+use common::time::UtcInstant;
 type MediaRefRow = (
     common::media::MediaSource,
     common::media::ContentHash,
@@ -29,7 +30,7 @@ async fn apply_lifecycle_change(
     publish: bool,
     delete: bool,
 ) -> sqlx::Result<()> {
-    let now = common::time::UtcInstant::now();
+    let now = UtcInstant::now();
     posts::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
     if delete {
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
@@ -340,7 +341,7 @@ impl PostDialect for Sqlite {
         posts::capture_complete_post_revision::<Sqlite>(
             &mut *connection,
             post_id,
-            common::time::UtcInstant::now(),
+            UtcInstant::now(),
         )
         .await?;
         for label in diff.to_add {

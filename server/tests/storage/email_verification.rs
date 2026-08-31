@@ -3,10 +3,11 @@ use std::sync::Arc;
 use common::MutationOutcome;
 use common::test_support::parse_raw_token;
 use common::time::UtcInstant;
+use common::token::RawToken;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, backends, confirmed_for};
-use storage::{AppState, UseEmailVerificationError, WriteScopeError};
+use storage::{AppState, EmailVerificationConsumption, UseEmailVerificationError, WriteScopeError};
 
 use super::fixtures::raw_exec;
 #[apply(backends)]
@@ -221,8 +222,8 @@ async fn create_email_verification(
 
 async fn use_email_verification(
     state: &AppState,
-    raw_token: common::token::RawToken,
-) -> storage::EmailVerificationConsumption {
+    raw_token: RawToken,
+) -> EmailVerificationConsumption {
     let outcome = use_email_verification_result(state, raw_token)
         .await
         .expect("email verification should succeed");
@@ -231,11 +232,9 @@ async fn use_email_verification(
 
 async fn use_email_verification_result(
     state: &AppState,
-    raw_token: common::token::RawToken,
-) -> Result<
-    MutationOutcome<storage::EmailVerificationConsumption>,
-    WriteScopeError<UseEmailVerificationError>,
-> {
+    raw_token: RawToken,
+) -> Result<MutationOutcome<EmailVerificationConsumption>, WriteScopeError<UseEmailVerificationError>>
+{
     let email_verifications = Arc::clone(&state.email_verifications);
     state
         .write_scope

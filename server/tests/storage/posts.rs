@@ -1047,7 +1047,7 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
-            common::time::UtcInstant::now(),
+            UtcInstant::now(),
         )
         .await
         .unwrap(),
@@ -1097,7 +1097,7 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
-            common::time::UtcInstant::now(),
+            UtcInstant::now(),
         )
         .await
         .unwrap(),

@@ -1353,9 +1353,9 @@ mod server_tests {
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
     use storage::{
-        AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MediaContentLocks,
-        MockAudienceStorage, MockFeedEventStorage, MockPostStorage, PostFormat, PostRecord,
-        PostRevisionMetadata, PostRevisionPage, PostStorage, UpdatePostError,
+        AudienceStorage, CreatedPost, CurrentPostRevisionSummary, FeedEventStorage,
+        MediaContentLocks, MockAudienceStorage, MockFeedEventStorage, MockPostStorage, PostFormat,
+        PostRecord, PostRevisionMetadata, PostRevisionPage, PostStorage, UpdatePostError,
         test_support::{fixture_media_content_locks, mock_write_scope},
     };
     fn owned_post(user_id: UserId) -> PostRecord {
@@ -1946,7 +1946,7 @@ mod server_tests {
             .expect_create_post()
             .withf(|_transaction, input, _now| input.tags.len() == 2)
             .returning(|_transaction, _input, _now| {
-                Ok(storage::CreatedPost {
+                Ok(CreatedPost {
                     record: owned_post(UserId::from(1)),
                     idempotency_key_expired: false,
                 })

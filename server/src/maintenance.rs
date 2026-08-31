@@ -129,13 +129,17 @@ where
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use storage::{
+        FeedEventError, MockEmailVerificationStorage, MockFeedEventStorage, MockInviteStorage,
+        MockPasswordResetStorage, MockPostStorage,
+    };
 
     fn maintenance(
-        posts: storage::MockPostStorage,
-        invites: storage::MockInviteStorage,
-        email_verifications: storage::MockEmailVerificationStorage,
-        password_resets: storage::MockPasswordResetStorage,
-        feed_events: storage::MockFeedEventStorage,
+        posts: MockPostStorage,
+        invites: MockInviteStorage,
+        email_verifications: MockEmailVerificationStorage,
+        password_resets: MockPasswordResetStorage,
+        feed_events: MockFeedEventStorage,
     ) -> DatabaseMaintenance {
         DatabaseMaintenance::new(
             Arc::new(posts),
@@ -149,33 +153,33 @@ mod tests {
     fn successful_stores(
         expected_now: UtcInstant,
     ) -> (
-        storage::MockPostStorage,
-        storage::MockInviteStorage,
-        storage::MockEmailVerificationStorage,
-        storage::MockPasswordResetStorage,
-        storage::MockFeedEventStorage,
+        MockPostStorage,
+        MockInviteStorage,
+        MockEmailVerificationStorage,
+        MockPasswordResetStorage,
+        MockFeedEventStorage,
     ) {
-        let mut posts = storage::MockPostStorage::new();
+        let mut posts = MockPostStorage::new();
         posts
             .expect_prune_expired_idempotency_keys()
             .withf(move |actual| *actual == expected_now)
             .returning(|_| Ok(1));
-        let mut invites = storage::MockInviteStorage::new();
+        let mut invites = MockInviteStorage::new();
         invites
             .expect_prune_invites()
             .withf(move |actual| *actual == expected_now)
             .returning(|_| Ok(2));
-        let mut email_verifications = storage::MockEmailVerificationStorage::new();
+        let mut email_verifications = MockEmailVerificationStorage::new();
         email_verifications
             .expect_prune_email_verifications()
             .withf(move |actual| *actual == expected_now)
             .returning(|_| Ok(3));
-        let mut password_resets = storage::MockPasswordResetStorage::new();
+        let mut password_resets = MockPasswordResetStorage::new();
         password_resets
             .expect_prune_password_resets()
             .withf(move |actual| *actual == expected_now)
             .returning(|_| Ok(4));
-        let mut feed_events = storage::MockFeedEventStorage::new();
+        let mut feed_events = MockFeedEventStorage::new();
         feed_events
             .expect_prune_terminal_events()
             .withf(move |actual| *actual == expected_now)
@@ -203,36 +207,36 @@ mod tests {
     #[tokio::test]
     async fn run_at_continues_after_each_domain_failure() {
         let now: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
-        let mut posts = storage::MockPostStorage::new();
+        let mut posts = MockPostStorage::new();
         posts
             .expect_prune_expired_idempotency_keys()
             .withf(move |actual| *actual == now)
             .times(1)
             .returning(|_| Err(sqlx::Error::PoolClosed));
-        let mut invites = storage::MockInviteStorage::new();
+        let mut invites = MockInviteStorage::new();
         invites
             .expect_prune_invites()
             .withf(move |actual| *actual == now)
             .times(1)
             .returning(|_| Err(sqlx::Error::PoolClosed));
-        let mut email_verifications = storage::MockEmailVerificationStorage::new();
+        let mut email_verifications = MockEmailVerificationStorage::new();
         email_verifications
             .expect_prune_email_verifications()
             .withf(move |actual| *actual == now)
             .times(1)
             .returning(|_| Err(sqlx::Error::PoolClosed));
-        let mut password_resets = storage::MockPasswordResetStorage::new();
+        let mut password_resets = MockPasswordResetStorage::new();
         password_resets
             .expect_prune_password_resets()
             .withf(move |actual| *actual == now)
             .times(1)
             .returning(|_| Err(sqlx::Error::PoolClosed));
-        let mut feed_events = storage::MockFeedEventStorage::new();
+        let mut feed_events = MockFeedEventStorage::new();
         feed_events
             .expect_prune_terminal_events()
             .withf(move |actual| *actual == now)
             .times(1)
-            .returning(|_| Err(storage::FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
 
         maintenance(
             posts,
@@ -249,7 +253,7 @@ mod tests {
     async fn failed_domain_is_retried_on_the_next_run() {
         let attempts = Arc::new(AtomicUsize::new(0));
         let post_attempts = Arc::clone(&attempts);
-        let mut posts = storage::MockPostStorage::new();
+        let mut posts = MockPostStorage::new();
         posts
             .expect_prune_expired_idempotency_keys()
             .times(2)
@@ -260,19 +264,19 @@ mod tests {
                     Ok(1)
                 }
             });
-        let mut invites = storage::MockInviteStorage::new();
+        let mut invites = MockInviteStorage::new();
         invites.expect_prune_invites().times(2).returning(|_| Ok(0));
-        let mut email_verifications = storage::MockEmailVerificationStorage::new();
+        let mut email_verifications = MockEmailVerificationStorage::new();
         email_verifications
             .expect_prune_email_verifications()
             .times(2)
             .returning(|_| Ok(0));
-        let mut password_resets = storage::MockPasswordResetStorage::new();
+        let mut password_resets = MockPasswordResetStorage::new();
         password_resets
             .expect_prune_password_resets()
             .times(2)
             .returning(|_| Ok(0));
-        let mut feed_events = storage::MockFeedEventStorage::new();
+        let mut feed_events = MockFeedEventStorage::new();
         feed_events
             .expect_prune_terminal_events()
             .times(2)
@@ -296,31 +300,31 @@ mod tests {
     // guard:no-backend — failing storage mocks prove maintenance is startup-best-effort.
     #[tokio::test]
     async fn start_survives_database_cleanup_failures() {
-        let mut posts = storage::MockPostStorage::new();
+        let mut posts = MockPostStorage::new();
         posts
             .expect_prune_expired_idempotency_keys()
             .times(1)
             .returning(|_| Err(sqlx::Error::PoolClosed));
-        let mut invites = storage::MockInviteStorage::new();
+        let mut invites = MockInviteStorage::new();
         invites
             .expect_prune_invites()
             .times(1)
             .returning(|_| Err(sqlx::Error::PoolClosed));
-        let mut email_verifications = storage::MockEmailVerificationStorage::new();
+        let mut email_verifications = MockEmailVerificationStorage::new();
         email_verifications
             .expect_prune_email_verifications()
             .times(1)
             .returning(|_| Err(sqlx::Error::PoolClosed));
-        let mut password_resets = storage::MockPasswordResetStorage::new();
+        let mut password_resets = MockPasswordResetStorage::new();
         password_resets
             .expect_prune_password_resets()
             .times(1)
             .returning(|_| Err(sqlx::Error::PoolClosed));
-        let mut feed_events = storage::MockFeedEventStorage::new();
+        let mut feed_events = MockFeedEventStorage::new();
         feed_events
             .expect_prune_terminal_events()
             .times(1)
-            .returning(|_| Err(storage::FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
 
         let mut scheduler = maintenance(
             posts,
@@ -341,24 +345,24 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
 
         let post_calls = Arc::clone(&calls);
-        let mut posts = storage::MockPostStorage::new();
+        let mut posts = MockPostStorage::new();
         posts
             .expect_prune_expired_idempotency_keys()
             .returning(move |_| {
                 post_calls.fetch_add(1, Ordering::SeqCst);
                 Ok(0)
             });
-        let mut invites = storage::MockInviteStorage::new();
+        let mut invites = MockInviteStorage::new();
         invites.expect_prune_invites().returning(|_| Ok(0));
-        let mut email_verifications = storage::MockEmailVerificationStorage::new();
+        let mut email_verifications = MockEmailVerificationStorage::new();
         email_verifications
             .expect_prune_email_verifications()
             .returning(|_| Ok(0));
-        let mut password_resets = storage::MockPasswordResetStorage::new();
+        let mut password_resets = MockPasswordResetStorage::new();
         password_resets
             .expect_prune_password_resets()
             .returning(|_| Ok(0));
-        let mut feed_events = storage::MockFeedEventStorage::new();
+        let mut feed_events = MockFeedEventStorage::new();
         feed_events
             .expect_prune_terminal_events()
             .returning(|_| Ok(0));

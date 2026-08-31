@@ -350,7 +350,7 @@ impl SeedRawPost {
             .run(move |transaction| {
                 Box::pin(async move {
                     posts
-                        .create_post(transaction, &input, common::time::UtcInstant::now())
+                        .create_post(transaction, &input, UtcInstant::now())
                         .await
                 })
             })

@@ -12,6 +12,7 @@ use crate::{
 };
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
+use common::time::UtcInstant;
 type MediaRefRow = (
     common::media::MediaSource,
     common::media::ContentHash,
@@ -77,7 +78,7 @@ async fn apply_lifecycle_change(
     publish: bool,
     delete: bool,
 ) -> sqlx::Result<()> {
-    let now = common::time::UtcInstant::now();
+    let now = UtcInstant::now();
     let media = load_current_post_media_lock_set(&mut *connection, post_id).await?;
     <Postgres as PostDialect>::lock_media_references(connection, &media).await?;
     posts::capture_complete_post_revision::<Postgres>(connection, post_id, now).await?;
@@ -433,7 +434,7 @@ impl PostDialect for Postgres {
         posts::capture_complete_post_revision::<Postgres>(
             &mut *connection,
             post_id,
-            common::time::UtcInstant::now(),
+            UtcInstant::now(),
         )
         .await?;
         for label in diff.to_add {

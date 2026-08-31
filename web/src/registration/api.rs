@@ -18,13 +18,17 @@ use {
     crate::error::{InternalError, from_write_scope_error},
     common::ids::UserId,
     common::session_label::SessionLabel,
+    common::token::RawToken,
     host::invite::InviteCode,
-    host::metrics::{self, InviteEvent, RegistrationResult, RegistrationSource},
+    host::metrics::{
+        self, InviteEvent, RegistrationPolicy as RegistrationMetricPolicy, RegistrationResult,
+        RegistrationSource,
+    },
     host::password,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{
-        InviteStorage, SessionStorage, SiteConfigStorage, UserStorage, WriteScope,
+        InviteStorage, SessionStorage, SiteConfigStorage, UserStorage, WriteScope, WriteScopeError,
         account_mutations::{self, RegisterWithInviteInput},
     },
     tracing::Instrument,
@@ -33,13 +37,13 @@ use {
 #[cfg(feature = "server")]
 fn classify_registration_scope_result(
     scope_result: Result<
-        MutationOutcome<(common::token::RawToken, Option<UserId>)>,
-        storage::WriteScopeError<InternalError>,
+        MutationOutcome<(RawToken, Option<UserId>)>,
+        WriteScopeError<InternalError>,
     >,
     span: &tracing::Span,
-    metric_policy: host::metrics::RegistrationPolicy,
+    metric_policy: RegistrationMetricPolicy,
     is_invite_registration: bool,
-) -> crate::error::InternalResult<MutationOutcome<common::token::RawToken>> {
+) -> crate::error::InternalResult<MutationOutcome<RawToken>> {
     match scope_result {
         Ok(MutationOutcome::Confirmed((token, invite_consumed))) => {
             metrics::registration(
@@ -76,7 +80,7 @@ fn classify_registration_scope_result(
 }
 
 #[cfg(feature = "server")]
-fn finalize_registration(outcome: MutationOutcome<common::token::RawToken>) -> MutationOutcome<()> {
+fn finalize_registration(outcome: MutationOutcome<RawToken>) -> MutationOutcome<()> {
     match outcome {
         MutationOutcome::Confirmed(raw_token) => {
             auth::set_session_cookie(&raw_token);

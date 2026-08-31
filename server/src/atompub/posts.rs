@@ -24,6 +24,7 @@ use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use host::atompub::{self, CollectionFeedTitle, Entry, FeedMeta};
+use host::metrics::{self, IdempotencyEvent};
 use host::{etag, feed};
 use storage::{
     AudienceStorage, CollectionCursor, FeedEventError, FeedEventStorage, InvalidAudienceTargets,
@@ -582,7 +583,7 @@ pub async fn collection_post(
             .await?
             .ok_or(HandlerError::NotFound)?;
         let base = super::required_base_url(site_config).await?;
-        host::metrics::idempotency(host::metrics::IdempotencyEvent::Replayed);
+        metrics::idempotency(IdempotencyEvent::Replayed);
         return post_entry_response(StatusCode::OK, &post, &base, &username);
     }
 
@@ -593,7 +594,7 @@ pub async fn collection_post(
         Err(status) => return Ok(status.into_response()),
     };
     if idempotency_key.is_some() {
-        host::metrics::idempotency(host::metrics::IdempotencyEvent::Created);
+        metrics::idempotency(IdempotencyEvent::Created);
     }
     let base = super::required_base_url(site_config).await?;
     let post = posts

@@ -10,6 +10,7 @@ use anyhow::Context;
 
 use crate::cli::{AppTarget, BootstrapDb, Commands, SiteConfigAction, StorageArgs};
 use crate::mailer::LettreMailSender;
+use crate::maintenance::{DATABASE_MAINTENANCE_INTERVAL, DatabaseMaintenance};
 use crate::runtime_file;
 use common::backup::BackupMode;
 use common::display_name::DisplayName;
@@ -26,8 +27,8 @@ use host::metrics;
 use host::password::Password;
 use host::smtp_config::SmtpConfig;
 use storage::{
-    BackupExportOptions, BackupRestoreOptions, BackupRestoreOutcome, RestoreValidationReport,
-    StorageRuntimeConfig,
+    BackupExportOptions, BackupRestoreOptions, BackupRestoreOutcome, MediaManager,
+    RestoreValidationReport, StorageRuntimeConfig,
 };
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
@@ -913,7 +914,7 @@ pub async fn prepare_server(
     }
     // The exclusive OS lock above proves no valid upload can be active. Establish
     // a clean transient area before any upload-capable server state is prepared.
-    storage::MediaManager::prepare_temporary_upload_directory(&storage.storage_path)
+    MediaManager::prepare_temporary_upload_directory(&storage.storage_path)
         .await
         .context("failed to prepare media temporary upload directory")?;
     let runtime = storage_runtime_config(&storage.db)?;
@@ -922,14 +923,14 @@ pub async fn prepare_server(
         instance_id,
         pool_observer,
     } = open_server_database(storage, &runtime, prod).await?;
-    let maintenance_scheduler = crate::maintenance::DatabaseMaintenance::new(
+    let maintenance_scheduler = DatabaseMaintenance::new(
         db.posts.clone(),
         db.invites.clone(),
         db.email_verifications.clone(),
         db.password_resets.clone(),
         db.feed_events.clone(),
     )
-    .start(crate::maintenance::DATABASE_MAINTENANCE_INTERVAL)
+    .start(DATABASE_MAINTENANCE_INTERVAL)
     .await?;
 
     let saturation_metrics = prepare_saturation_metrics(
@@ -1223,7 +1224,7 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt as _;
     use storage::{
-        DbConnectOptions,
+        DbConnectOptions, MediaTemporaryDirectoryError,
         test_support::{
             Backend, PostgresDbGuard, TestEnv, backends, confirmed, sqlite_url, unique_postgres_url,
         },
@@ -2233,7 +2234,7 @@ mod tests {
         );
         assert!(
             error.chain().any(|source| source
-                .downcast_ref::<storage::MediaTemporaryDirectoryError>()
+                .downcast_ref::<MediaTemporaryDirectoryError>()
                 .is_some()),
             "fatal startup error must retain the typed cleanup source: {error:#}"
         );

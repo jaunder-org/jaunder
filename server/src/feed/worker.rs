@@ -10,7 +10,7 @@ use common::ids::FeedEventId;
 use common::tagged_url::{self, FeedUrl, HubUrl};
 use common::time::UtcInstant;
 use host::{
-    error,
+    error::{self, ErrorClass, ErrorKind, SwallowedSource},
     feed::{self, FeedPath},
     metrics,
 };
@@ -31,17 +31,12 @@ const BACKOFFS_SECS: &[u64] = &[60, 300, 1800, 7200, 7200, 7200];
 const ENQUEUE_CHUNK: usize = 256;
 
 fn report_continuation(
-    kind: host::error::ErrorKind,
-    class: host::error::ErrorClass,
+    kind: ErrorKind,
+    class: ErrorClass,
     context: &'static str,
     error: &(dyn std::error::Error + 'static),
 ) {
-    error::report_swallowed(
-        kind,
-        class,
-        context,
-        host::error::SwallowedSource::Error(error),
-    );
+    error::report_swallowed(kind, class, context, SwallowedSource::Error(error));
 }
 
 /// Converts a mutation outcome into its confirmed value for a feed operation.
@@ -436,8 +431,8 @@ impl FeedWorker {
             .await
         {
             report_continuation(
-                host::error::ErrorKind::Storage,
-                host::error::ErrorClass::Transient,
+                ErrorKind::Storage,
+                ErrorClass::Transient,
                 "server.feed.status_write.mark_pinged",
                 error.as_ref(),
             );
@@ -463,8 +458,8 @@ impl FeedWorker {
             .await
         {
             report_continuation(
-                host::error::ErrorKind::Storage,
-                host::error::ErrorClass::Transient,
+                ErrorKind::Storage,
+                ErrorClass::Transient,
                 "server.feed.status_write.mark_exhausted",
                 error.as_ref(),
             );

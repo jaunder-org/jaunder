@@ -23,6 +23,7 @@ use common::slug::{InvalidSlug, Slug};
 use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
 use host::feed::affected_feed_urls;
+use host::metrics::{self, IdempotencyEvent};
 
 // ---------------------------------------------------------------------------
 // Orchestration helpers
@@ -123,7 +124,7 @@ pub async fn create_rendered_post(
     match outcome {
         MutationOutcome::Confirmed(created) => {
             if created.idempotency_key_expired {
-                host::metrics::idempotency(host::metrics::IdempotencyEvent::Expired);
+                metrics::idempotency(IdempotencyEvent::Expired);
             }
             Ok(MutationOutcome::Confirmed(created.record))
         }
