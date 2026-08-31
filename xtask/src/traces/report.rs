@@ -17,7 +17,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use serde_json::Value;
+
+use crate::playwright_report::{PlaywrightReport, PlaywrightSpec};
 
 /// Identity of one test *attempt*, matching the `e2e.test.lifecycle` span's
 /// `e2e.test` / `e2e.project` / `e2e.retry` attributes.
@@ -71,26 +72,31 @@ impl ReportedDurations {
 
     /// Parse one Playwright `json` report.
     ///
-    /// Shape: `suites[]` nest arbitrarily; each carries `specs[]`, each spec has
-    /// `tests[]` (one per project), each test has `results[]` indexed by retry.
-    /// Unknown or missing fields are skipped rather than erroring — a report from
-    /// a future Playwright with extra keys should still yield what it does have.
+    /// The shared report seam owns the nested suite traversal and rejects a
+    /// structurally incomplete spec/test array before duration extraction.
     /// Build from an in-memory report. Test constructor — the production paths
     /// read from disk via [`Self::from_paths`] / [`Self::from_labeled`].
     #[cfg(test)]
-    pub fn from_value(root: &Value) -> Self {
-        Self {
+    pub fn from_value(root: &serde_json::Value) -> Self {
+        Self::try_from_value(root).expect("test Playwright report must be structurally valid")
+    }
+
+    #[cfg(test)]
+    fn try_from_value(root: &serde_json::Value) -> Result<Self> {
+        let report =
+            serde_json::from_value(root.clone()).context("failed to parse Playwright report")?;
+        Ok(Self {
             per_source: HashMap::new(),
-            global: attempts_in(root),
-        }
+            global: attempts_in(&report),
+        })
     }
 
     fn read(path: &Path) -> Result<HashMap<AttemptKey, f64>> {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read playwright report {}", path.display()))?;
-        let value: Value = serde_json::from_str(&raw)
+        let report: PlaywrightReport = serde_json::from_str(&raw)
             .with_context(|| format!("failed to parse playwright report {}", path.display()))?;
-        Ok(attempts_in(&value))
+        Ok(attempts_in(&report))
     }
 
     /// Unpaired reports, as the CLI's `--playwright-report` supplies them.
@@ -138,57 +144,26 @@ impl ReportedDurations {
     }
 }
 
-fn attempts_in(root: &Value) -> HashMap<AttemptKey, f64> {
+fn attempts_in(report: &PlaywrightReport) -> HashMap<AttemptKey, f64> {
     let mut out = HashMap::new();
-    if let Some(suites) = root.get("suites").and_then(Value::as_array) {
-        for suite in suites {
-            walk_suite(suite, &mut out);
-        }
-    }
+    report.visit_specs(&mut |spec| insert_attempts(spec, &mut out));
     out
 }
 
-fn walk_suite(suite: &Value, out: &mut HashMap<AttemptKey, f64>) {
-    if let Some(specs) = suite.get("specs").and_then(Value::as_array) {
-        for spec in specs {
-            let title = spec
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            let Some(tests) = spec.get("tests").and_then(Value::as_array) else {
+fn insert_attempts(spec: &PlaywrightSpec, out: &mut HashMap<AttemptKey, f64>) {
+    let title = spec.title.clone().unwrap_or_default();
+    for test in &spec.tests {
+        let project = test.project_name.clone().unwrap_or_default();
+        for result in &test.results {
+            let Some(duration) = result.duration else {
                 continue;
             };
-            for test in tests {
-                let project = test
-                    .get("projectName")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let Some(results) = test.get("results").and_then(Value::as_array) else {
-                    continue;
-                };
-                for result in results {
-                    // `retry` is present on each result; fall back to positional
-                    // index only if absent.
-                    let retry = result.get("retry").and_then(Value::as_u64);
-                    let Some(duration) = result.get("duration").and_then(Value::as_f64) else {
-                        continue;
-                    };
-                    let key = AttemptKey {
-                        test: title.clone(),
-                        project: project.clone(),
-                        retry: retry.unwrap_or(0),
-                    };
-                    out.insert(key, duration);
-                }
-            }
-        }
-    }
-    // Suites nest; `describe` blocks and per-file suites both appear here.
-    if let Some(children) = suite.get("suites").and_then(Value::as_array) {
-        for child in children {
-            walk_suite(child, out);
+            let key = AttemptKey {
+                test: title.clone(),
+                project: project.clone(),
+                retry: result.retry.unwrap_or(0).into(),
+            };
+            out.insert(key, duration);
         }
     }
 }
@@ -196,6 +171,7 @@ fn walk_suite(suite: &Value, out: &mut HashMap<AttemptKey, f64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
     use serde_json::json;
 
     fn report() -> Value {
@@ -281,22 +257,26 @@ mod tests {
     #[test]
     fn per_source_scoping_keeps_two_backends_apart() {
         let mut durations = ReportedDurations::default();
-        durations
-            .per_source
-            .insert("sqlite-chromium.jsonl".to_owned(), attempts_in(&report()));
+        durations.per_source.insert(
+            "sqlite-chromium.jsonl".to_owned(),
+            attempts_in(&serde_json::from_value(report()).unwrap()),
+        );
         durations.per_source.insert(
             "postgres-chromium.jsonl".to_owned(),
-            attempts_in(&json!({
-                "suites": [{
-                    "specs": [{
-                        "title": "logs in",
-                        "tests": [{
-                            "projectName": "chromium",
-                            "results": [{ "retry": 0, "duration": 5555.0 }]
+            attempts_in(
+                &serde_json::from_value(json!({
+                    "suites": [{
+                        "specs": [{
+                            "title": "logs in",
+                            "tests": [{
+                                "projectName": "chromium",
+                                "results": [{ "retry": 0, "duration": 5555.0 }]
+                            }]
                         }]
                     }]
-                }]
-            })),
+                }))
+                .unwrap(),
+            ),
         );
         let key = AttemptKey {
             test: "logs in".to_owned(),

@@ -381,7 +381,7 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
                     Path::new(&format!(".xtask/diagnostics/{check}")),
                 );
             },
-            || crate::steps::duration_budget::validate_lifted_combo(backend, browser),
+            || validate_lifted_e2e_combo(backend, browser),
         );
     }
     E2eOutcome::from_combo_steps(&result.steps[combo_start..])
@@ -409,8 +409,9 @@ fn build_e2e_combos(
 }
 
 /// Build a single E2E {backend}×{browser} combo, lift its diagnostics, then
-/// validate the report and manifest only when the VM itself succeeded. Used by
-/// both CI's `cargo xtask e2e` matrix path and `cargo xtask validate`.
+/// validate its duration and boot-decomposition evidence only when the VM itself
+/// succeeded. Used by both CI's `cargo xtask e2e` matrix path and `cargo xtask
+/// validate`.
 pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
     let check = format!("e2e-{backend}-{browser}");
     let step_name = format!("nix-{check}");
@@ -424,24 +425,37 @@ pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
                 Path::new(&format!(".xtask/diagnostics/{check}")),
             );
         },
-        || crate::steps::duration_budget::validate_lifted_combo(backend, browser),
+        || validate_lifted_e2e_combo(backend, browser),
     );
 }
 
+/// Validate one successful lifted E2E combination in the fixed post-build order.
+///
+/// Both aggregate and single-combination orchestration use this seam so the
+/// duration verdict always precedes boot-decomposition coverage.
+fn validate_lifted_e2e_combo(backend: &str, browser: &str) -> [StepResult; 2] {
+    [
+        crate::steps::duration_budget::validate_lifted_combo(backend, browser),
+        crate::steps::boot_decomposition_coverage::validate_lifted_combo(backend, browser),
+    ]
+}
+
 /// Preserve ADR-0037's diagnostic-before-failure order. A failed VM has already
-/// explained its own failure, so only a successful VM is fail-closed on missing
-/// or inconsistent duration artifacts.
+/// explained its own failure, so only a successful VM is fail-closed on its
+/// lifted evidence.
 fn finish_e2e_combo(
     result: &mut CommandResult,
     build: StepResult,
     lift: impl FnOnce(),
-    validate: impl FnOnce() -> StepResult,
+    validate: impl FnOnce() -> [StepResult; 2],
 ) {
     let succeeded = build.ok;
     result.push(build);
     lift();
     if succeeded {
-        result.push(validate());
+        for step in validate() {
+            result.push(step);
+        }
     }
 }
 
@@ -466,23 +480,23 @@ fn copy_e2e_diagnostics_between(src_dir: &Path, dest_dir: &Path) -> DiagnosticsC
     )
 }
 
-/// The duration validator reads only these lifted files. Remove a previous
-/// attempt's pair before copying so a successful VM cannot validate stale data
-/// when its current attempt fails to provide either input.
-fn is_authoritative_e2e_duration_input(name: &str) -> bool {
+/// The post-build validators read only these lifted files. Remove a previous
+/// attempt's inputs before copying so a successful VM cannot validate stale
+/// evidence when its current attempt fails to provide an input.
+fn is_authoritative_e2e_input(name: &str) -> bool {
     (name.starts_with("playwright-report-") && name.ends_with(".json"))
         || (name.starts_with("duration-budget-manifest-") && name.ends_with(".json"))
+        || (name.starts_with("capture-") && name.ends_with(".tar.gz"))
 }
 
 fn is_e2e_diagnostic_artifact(name: &str) -> bool {
     (name.starts_with("jaunder-journal-") && name.ends_with(".log"))
         || (name.starts_with("system-journal-") && name.ends_with(".log"))
-        || is_authoritative_e2e_duration_input(name)
+        || is_authoritative_e2e_input(name)
         || (name.starts_with("playwright-artifacts-") && name.ends_with(".tar.gz"))
-        || (name.starts_with("capture-") && name.ends_with(".tar.gz"))
 }
 
-fn clear_authoritative_e2e_duration_inputs(
+fn clear_authoritative_e2e_inputs(
     dest_dir: &Path,
     remove: &mut impl FnMut(&Path) -> io::Result<()>,
     failures: &mut Vec<String>,
@@ -508,7 +522,7 @@ fn clear_authoritative_e2e_duration_inputs(
         };
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        if !is_authoritative_e2e_duration_input(name) {
+        if !is_authoritative_e2e_input(name) {
             continue;
         }
         let path = entry.path();
@@ -529,7 +543,7 @@ fn copy_e2e_diagnostics_with_ops(
 ) -> DiagnosticsCopy {
     let mut copied = 0;
     let mut failures = Vec::new();
-    clear_authoritative_e2e_duration_inputs(dest_dir, &mut remove, &mut failures);
+    clear_authoritative_e2e_inputs(dest_dir, &mut remove, &mut failures);
     let entries = match std::fs::read_dir(src_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -561,6 +575,12 @@ fn copy_e2e_diagnostics_with_ops(
         }
         let from = entry.path();
         let to = dest_dir.join(name);
+        // An authoritative path still present here could not be cleared above.
+        // Keep its single lift failure rather than reporting the same bad path
+        // again while attempting the copy.
+        if is_authoritative_e2e_input(name) && to.is_dir() {
+            continue;
+        }
         match remove(&to) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -1529,7 +1549,7 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
     }
 
     #[test]
-    fn copy_e2e_diagnostics_removes_stale_duration_inputs_before_lifting() {
+    fn copy_e2e_diagnostics_removes_stale_post_build_inputs_before_lifting() {
         let tmp = std::env::temp_dir().join(format!("xtask-stale-e2e-{}", std::process::id()));
         let src = tmp.join("src");
         let dest = tmp.join("dest");
@@ -1541,24 +1561,22 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             b"stale manifest",
         )
         .unwrap();
-        std::fs::write(src.join("capture-sqlite.tar.gz"), b"current diagnostics").unwrap();
+        std::fs::write(dest.join("capture-sqlite.tar.gz"), b"stale capture").unwrap();
 
         let outcome = super::copy_e2e_diagnostics_between(&src, &dest);
 
         assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
-        assert_eq!(outcome.copied, 1);
-        assert!(
-            !dest.join("playwright-report-sqlite.json").exists(),
-            "a missing current report must not leave a prior attempt's input"
-        );
-        assert!(
-            !dest.join("duration-budget-manifest-sqlite.json").exists(),
-            "a missing current manifest must not leave a prior attempt's input"
-        );
-        assert_eq!(
-            std::fs::read(dest.join("capture-sqlite.tar.gz")).unwrap(),
-            b"current diagnostics"
-        );
+        assert_eq!(outcome.copied, 0);
+        for name in [
+            "playwright-report-sqlite.json",
+            "duration-budget-manifest-sqlite.json",
+            "capture-sqlite.tar.gz",
+        ] {
+            assert!(
+                !dest.join(name).exists(),
+                "a missing current {name} must not leave a prior attempt's input"
+            );
+        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1745,14 +1763,13 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
     }
 
     #[test]
-    fn e2e_outcome_is_ok_when_every_combo_build_and_duration_check_passes() {
+    fn e2e_outcome_is_ok_when_every_combo_build_and_post_build_check_passes() {
         let mut result = CommandResult::new("validate");
         let combo_start = result.steps.len();
         for (backend, browser) in E2E_COMBOS {
             result.push(StepResult::ok(&format!("nix-e2e-{backend}-{browser}")));
-            result.push(StepResult::ok(&format!(
-                "e2e-duration-budget-{backend}-{browser}"
-            )));
+            result.push(StepResult::ok("e2e-duration-budget"));
+            result.push(StepResult::ok("e2e-boot-decomposition-coverage"));
         }
 
         assert!(E2eOutcome::from_combo_steps(&result.steps[combo_start..]).combinations_ok);
@@ -1784,7 +1801,8 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         result.push(StepResult::fail("nix-static-checks"));
         let combo_start = result.steps.len();
         result.push(StepResult::ok("nix-e2e-sqlite-chromium"));
-        result.push(StepResult::ok("e2e-duration-budget-sqlite-chromium"));
+        result.push(StepResult::ok("e2e-duration-budget"));
+        result.push(StepResult::ok("e2e-boot-decomposition-coverage"));
 
         assert!(!result.ok);
         assert!(E2eOutcome::from_combo_steps(&result.steps[combo_start..]).combinations_ok);
@@ -1795,9 +1813,8 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         let mut result = CommandResult::new("validate");
         for (backend, browser) in E2E_COMBOS {
             result.push(StepResult::ok(&format!("nix-e2e-{backend}-{browser}")));
-            result.push(StepResult::ok(&format!(
-                "e2e-duration-budget-{backend}-{browser}"
-            )));
+            result.push(StepResult::ok("e2e-duration-budget"));
+            result.push(StepResult::ok("e2e-boot-decomposition-coverage"));
         }
 
         assert_eq!(
@@ -1808,19 +1825,23 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
                 .collect::<Vec<_>>(),
             [
                 "nix-e2e-sqlite-chromium",
-                "e2e-duration-budget-sqlite-chromium",
+                "e2e-duration-budget",
+                "e2e-boot-decomposition-coverage",
                 "nix-e2e-sqlite-firefox",
-                "e2e-duration-budget-sqlite-firefox",
+                "e2e-duration-budget",
+                "e2e-boot-decomposition-coverage",
                 "nix-e2e-postgres-chromium",
-                "e2e-duration-budget-postgres-chromium",
+                "e2e-duration-budget",
+                "e2e-boot-decomposition-coverage",
                 "nix-e2e-postgres-firefox",
-                "e2e-duration-budget-postgres-firefox",
+                "e2e-duration-budget",
+                "e2e-boot-decomposition-coverage",
             ]
         );
     }
 
     #[test]
-    fn successful_combo_lifts_before_dispatching_duration_validator() {
+    fn successful_combo_lifts_before_dispatching_both_validators() {
         let mut result = CommandResult::new("e2e-sqlite-chromium");
         let events = std::cell::RefCell::new(Vec::new());
         finish_e2e_combo(
@@ -1828,12 +1849,16 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             StepResult::ok("nix-e2e-sqlite-chromium"),
             || events.borrow_mut().push("lift"),
             || {
-                events.borrow_mut().push("validate");
-                StepResult::ok("e2e-duration-budget")
+                events.borrow_mut().push("duration");
+                events.borrow_mut().push("boot");
+                [
+                    StepResult::ok("e2e-duration-budget"),
+                    StepResult::ok("e2e-boot-decomposition-coverage"),
+                ]
             },
         );
 
-        assert_eq!(events.into_inner(), ["lift", "validate"]);
+        assert_eq!(events.into_inner(), ["lift", "duration", "boot"]);
         assert!(result.ok);
         assert_eq!(
             result
@@ -1841,7 +1866,11 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
                 .iter()
                 .map(|step| step.name.as_str())
                 .collect::<Vec<_>>(),
-            ["nix-e2e-sqlite-chromium", "e2e-duration-budget"]
+            [
+                "nix-e2e-sqlite-chromium",
+                "e2e-duration-budget",
+                "e2e-boot-decomposition-coverage",
+            ]
         );
     }
 
@@ -1853,7 +1882,7 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             &mut result,
             StepResult::fail("nix-e2e-sqlite-chromium"),
             || lifted.set(true),
-            || panic!("a failed VM must not dispatch duration validation"),
+            || panic!("a failed VM must not dispatch post-build validation"),
         );
 
         assert!(lifted.get());

@@ -8,9 +8,10 @@
 //! unit-tested; the nix/filesystem I/O in `collect_trace_files` is manual.
 
 use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use flate2::read::GzDecoder;
 use tempfile::TempDir;
 
@@ -23,7 +24,7 @@ const BACKENDS: [E2eBackend; 2] = [E2eBackend::Sqlite, E2eBackend::Postgres];
 /// The trace member inside every `capture-<backend>.tar.gz` — the collector writes
 /// `capture/otel-traces.jsonl` under the capture dir, and the tarball is rooted at the
 /// capture dir's parent (`tar … -C /var/lib/jaunder capture`).
-const TRACE_MEMBER: &str = "capture/otel-traces.jsonl";
+pub(crate) const TRACE_MEMBER: &str = "capture/otel-traces.jsonl";
 
 /// The flake attr for one e2e combo. `single_worker` → the `packages…-single-worker`
 /// variant, otherwise the gate check →
@@ -126,33 +127,129 @@ pub fn playwright_report_path(out: &str, backend: E2eBackend) -> PathBuf {
     PathBuf::from(out).join(format!("playwright-report-{}.json", backend.as_str()))
 }
 
-/// Extract the single `capture/otel-traces.jsonl` member of a `capture-*.tar.gz`
-/// bundle to `dest`, via the `tar` + `flate2` crates (matching `storage::backup`'s
-/// archive I/O rather than shelling out `tar`). Errors, naming the tarball, if the
-/// member is absent.
+/// Read the single required JSONL member from a capture archive.
 ///
-/// `pub(crate)` for the flow-coverage gate (#681), which reads the same member out
-/// of the same bundle — reusing this rather than hand-rolling a second extractor.
-pub(crate) fn extract_trace(tarball: &Path, dest: &Path) -> Result<()> {
-    let file = File::open(tarball).with_context(|| format!("opening {}", tarball.display()))?;
+/// Every archive consumer uses this seam so malformed evidence has the same
+/// missing, ambiguous, file-type, empty, and UTF-8 failure modes.
+pub(crate) fn read_trace_member(tarball: &Path) -> Result<String> {
+    let file =
+        File::open(tarball).with_context(|| format!("opening capture {}", tarball.display()))?;
     let mut archive = tar::Archive::new(GzDecoder::new(file));
+    let mut trace = None;
     for entry in archive.entries()? {
         let mut entry = entry?;
-        if entry.path()?.as_ref() == Path::new(TRACE_MEMBER) {
-            entry.unpack(dest)?;
-            return Ok(());
+        if entry.path()?.as_ref() != Path::new(TRACE_MEMBER) {
+            continue;
         }
+        ensure!(
+            entry.header().entry_type().is_file(),
+            "trace member `{TRACE_MEMBER}` is not a regular file"
+        );
+        ensure!(
+            trace.is_none(),
+            "capture has ambiguous trace member `{TRACE_MEMBER}`"
+        );
+        let mut contents = String::new();
+        entry
+            .read_to_string(&mut contents)
+            .with_context(|| format!("reading trace member `{TRACE_MEMBER}`"))?;
+        trace = Some(contents);
     }
-    bail!(
-        "otel trace member `{TRACE_MEMBER}` missing from {}",
-        tarball.display()
+    let trace = trace.ok_or_else(|| {
+        anyhow::anyhow!(
+            "trace member `{TRACE_MEMBER}` is missing from {}",
+            tarball.display()
+        )
+    })?;
+    ensure!(
+        !trace.trim().is_empty(),
+        "trace member `{TRACE_MEMBER}` is empty"
     );
+    Ok(trace)
+}
+
+/// Extract the single `capture/otel-traces.jsonl` member of a `capture-*.tar.gz`
+/// bundle to `dest`.
+///
+/// `pub(crate)` for the flow-coverage gate (#681), which reads the same member out
+/// of the same bundle through [`read_trace_member`].
+pub(crate) fn extract_trace(tarball: &Path, dest: &Path) -> Result<()> {
+    let trace = read_trace_member(tarball)?;
+    std::fs::write(dest, trace)
+        .with_context(|| format!("writing extracted trace {}", dest.display()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn write_capture(path: &Path, entries: &[(&str, &[u8], tar::EntryType)]) {
+        let file = File::create(path).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        for (name, content, entry_type) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(*entry_type);
+            header.set_size(content.len().try_into().unwrap());
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive.append_data(&mut header, *name, *content).unwrap();
+        }
+        archive.into_inner().unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn trace_member_reader_rejects_incomplete_or_ambiguous_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let capture = temp.path().join("capture.tar.gz");
+
+        write_capture(&capture, &[]);
+        assert!(
+            read_trace_member(&capture)
+                .unwrap_err()
+                .to_string()
+                .contains("missing")
+        );
+
+        write_capture(&capture, &[(TRACE_MEMBER, b"", tar::EntryType::Regular)]);
+        assert!(
+            read_trace_member(&capture)
+                .unwrap_err()
+                .to_string()
+                .contains("empty")
+        );
+
+        write_capture(
+            &capture,
+            &[(TRACE_MEMBER, b"trace", tar::EntryType::Directory)],
+        );
+        assert!(
+            read_trace_member(&capture)
+                .unwrap_err()
+                .to_string()
+                .contains("regular")
+        );
+
+        write_capture(
+            &capture,
+            &[(TRACE_MEMBER, b"\xff", tar::EntryType::Regular)],
+        );
+        assert!(read_trace_member(&capture).is_err());
+
+        write_capture(
+            &capture,
+            &[
+                (TRACE_MEMBER, b"one", tar::EntryType::Regular),
+                (TRACE_MEMBER, b"two", tar::EntryType::Regular),
+            ],
+        );
+        assert!(
+            read_trace_member(&capture)
+                .unwrap_err()
+                .to_string()
+                .contains("ambiguous")
+        );
+    }
     #[test]
     fn e2e_attr_gate_and_single_worker() {
         assert_eq!(

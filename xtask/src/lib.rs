@@ -16,6 +16,7 @@ mod ids;
 pub mod issue;
 pub mod markers;
 mod nix_build;
+mod playwright_report;
 pub mod pr;
 mod result;
 mod server_fn_coverage;
@@ -30,6 +31,7 @@ mod wasm_symbols;
 mod web_server_fns;
 mod steps {
     pub mod adr_check;
+    pub mod boot_decomposition_coverage;
     pub mod build_csr;
     pub mod common_host_target_closure;
     pub mod doc_links;
