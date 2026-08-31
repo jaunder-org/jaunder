@@ -32,7 +32,7 @@ Out:
   - Verification: run `devtool run -- cargo xtask census --json`; hash the
     canonical manifest; publish it to issue #1227 and verify exact readback.
 
-- [ ] Task 2: Audit the complete lifecycle slice through independent lenses
+- [x] Task 2: Audit the complete lifecycle slice through independent lenses
   - Contract: parallel lenses cover (a) transition and adapter parity, (b)
     callers, DI, transactions, feed events, and error/result conversion, (c)
     direct storage and caller-level tests, glossary, and ADR constraints, and
