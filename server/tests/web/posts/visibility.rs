@@ -4,17 +4,18 @@ use axum::http::StatusCode;
 use chrono::Datelike;
 use common::ids::{AudienceId, PostId, SubscriptionId, UserId};
 use common::seed::{AuthoredPost, Page, RenderedPost};
-use common::test_support::parse_audience_name;
+use common::test_support::{parse_audience_name, parse_post_body};
 use common::visibility::{SubscriberIdentity, local_subscriber_identity};
 use server_fn::ServerFn;
-use web::posts::{EditPostPreview, SavedPost};
+use storage::PostFormat;
+use web::posts::{EditPostPreview, PostInputs, SavedPost};
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    confirmed_mutation, create_session_for, create_user_and_session, post_form,
-    post_json_with_credentials,
+    confirmed_mutation, create_post_json, create_session_for, create_user_and_session, post_form,
+    post_json_with_credentials, update_post_json,
 };
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, SeededPost, TestEnv, backends, backends_matrix,
@@ -22,8 +23,8 @@ use storage::test_support::{
 };
 
 use super::fixtures::{
-    create_post_json, get_post_form, list_drafts, list_home_feed, list_local_timeline,
-    list_scheduled, publish_post_form, update_post_json,
+    get_post_form, list_drafts, list_home_feed, list_local_timeline, list_scheduled,
+    publish_post_form,
 };
 
 async fn create_audience_confirmed(
@@ -117,16 +118,24 @@ async fn unauthenticated_request(
 ) -> (StatusCode, String) {
     match endpoint {
         UnauthEndpoint::CreatePost => {
-            create_post_json(state, "body", "markdown", None, false, None).await
+            create_post_json(
+                state,
+                PostInputs {
+                    publish: Some(false),
+                    ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
+                },
+                None,
+            )
+            .await
         }
         UnauthEndpoint::UpdatePost => {
             update_post_json(
                 state,
                 PostId::from(42),
-                "body",
-                "markdown",
-                None,
-                false,
+                PostInputs {
+                    publish: Some(false),
+                    ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
+                },
                 None,
             )
             .await
@@ -168,12 +177,10 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
 
     let (status, body) = create_post_json(
         &state,
-        "# Draft
-
-draft",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("# Draft\n\ndraft"), PostFormat::Markdown)
+        },
         Some(&author_cookie),
     )
     .await;
@@ -247,12 +254,13 @@ async fn get_post_preview_shows_draft_to_author_only(#[case] backend: Backend) {
 
     let (status, body) = create_post_json(
         &state,
-        "# Preview Draft
-
-draft",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(
+                parse_post_body("# Preview Draft\n\ndraft"),
+                PostFormat::Markdown,
+            )
+        },
         Some(&author_cookie),
     )
     .await;
@@ -290,10 +298,10 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
 
     let (status, body) = create_post_json(
         &state,
-        "draft",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("draft"), PostFormat::Markdown)
+        },
         Some(&author_cookie),
     )
     .await;

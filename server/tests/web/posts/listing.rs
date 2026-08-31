@@ -3,20 +3,22 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use common::seed::{Page, RenderedPost};
 use common::tag::TagLabel;
+use common::test_support::{parse_post_body, parse_tag_label};
 use server_fn::ServerFn;
-use web::posts::{SavedPost, UnpublishedPost};
+use storage::PostFormat;
+use web::posts::{PostInputs, SavedPost, UnpublishedPost};
 
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    confirmed_mutation, create_session_for, create_user_and_session, post_form, post_json,
+    confirmed_mutation, create_post_json, create_session_for, create_user_and_session, post_form,
+    post_json,
 };
 use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix};
 
 use super::fixtures::{
-    create_post_json, list_drafts, list_home_feed, list_local_timeline, list_scheduled,
-    list_user_posts,
+    list_drafts, list_home_feed, list_local_timeline, list_scheduled, list_user_posts,
 };
 
 async fn list_posts_by_tag(
@@ -57,10 +59,10 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
 
     let (status, body) = create_post_json(
         &state,
-        "first",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("first"), PostFormat::Markdown)
+        },
         Some(&author_cookie),
     )
     .await;
@@ -69,10 +71,10 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
 
     let (status, body) = create_post_json(
         &state,
-        "second",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("second"), PostFormat::Markdown)
+        },
         Some(&author_cookie),
     )
     .await;
@@ -81,10 +83,10 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
 
     let (status, body) = create_post_json(
         &state,
-        "visible",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("visible"), PostFormat::Markdown)
+        },
         Some(&author_cookie),
     )
     .await;
@@ -92,10 +94,10 @@ async fn list_drafts_returns_current_user_drafts_with_cursor_pagination(#[case] 
 
     let (status, body) = create_post_json(
         &state,
-        "private",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("private"), PostFormat::Markdown)
+        },
         Some(&stranger_cookie),
     )
     .await;
@@ -378,17 +380,24 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
 
     let (status, body) = create_post_json(
         &state,
-        "private",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("private"), PostFormat::Markdown)
+        },
         Some(&author_cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-    let (status, body) =
-        create_post_json(&state, "body", "markdown", None, true, Some(&other_cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("body"), PostFormat::Markdown)
+        },
+        Some(&other_cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
     let (status, body) = list_user_posts(&state, &author.username, None, 50, None).await;
@@ -518,17 +527,24 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
 
     let (status, body) = create_post_json(
         &state,
-        "private",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("private"), PostFormat::Markdown)
+        },
         Some(&author_cookie),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
 
-    let (status, body) =
-        create_post_json(&state, "gone", "markdown", None, true, Some(&author_cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("gone"), PostFormat::Markdown)
+        },
+        Some(&author_cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let deleted: SavedPost = confirmed_mutation(&body);
     let posts = Arc::clone(&state.posts);
@@ -598,10 +614,10 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
 
     let (status, body) = create_post_json(
         &state,
-        "private",
-        "markdown",
-        None,
-        false,
+        PostInputs {
+            publish: Some(false),
+            ..PostInputs::new(parse_post_body("private"), PostFormat::Markdown)
+        },
         Some(&author_cookie),
     )
     .await;
@@ -611,10 +627,10 @@ async fn list_home_feed_returns_authenticated_users_published_posts_only(#[case]
         let request_body = format!("# Post {i}\n\nbody");
         let (status, body) = create_post_json(
             &state,
-            &request_body,
-            "markdown",
-            None,
-            true,
+            PostInputs {
+                publish: Some(true),
+                ..PostInputs::new(parse_post_body(&request_body), PostFormat::Markdown)
+            },
             Some(&other_cookie),
         )
         .await;
@@ -659,10 +675,13 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
 
     let (status, body) = create_post_json(
         &state,
-        "# Tagged Post\n\nbody",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(
+                parse_post_body("# Tagged Post\n\nbody"),
+                PostFormat::Markdown,
+            )
+        },
         Some(&cookie),
     )
     .await;
@@ -709,22 +728,16 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
     let bob = create_user_and_session(&state).await;
     let bob_cookie = bob.cookie();
 
-    let create = |cookie: String, body: &'static str, tags: serde_json::Value| {
+    let create = |cookie: String, body: &'static str, tags: Vec<TagLabel>| {
         let state = Arc::clone(&state);
         async move {
-            let payload = serde_json::json!({
-                "post": {
-                    "body": body,
-                    "format": "markdown",
-                    "slug_override": null,
-                    "publish": true,
-                    "tags": tags,
-                }
-            });
-            let (status, body) = post_json(
+            let (status, body) = create_post_json(
                 &state,
-                <web::posts::Create as ServerFn>::PATH,
-                payload,
+                PostInputs {
+                    publish: Some(true),
+                    tags: Some(tags),
+                    ..PostInputs::new(parse_post_body(body), PostFormat::Markdown)
+                },
                 Some(&cookie),
             )
             .await;
@@ -736,25 +749,25 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
     create(
         alice_cookie.clone(),
         "# Alice A\n\nbody",
-        serde_json::json!(["rust", "web"]),
+        vec![parse_tag_label("rust"), parse_tag_label("web")],
     )
     .await;
     create(
         alice_cookie,
         "# Alice B\n\nbody",
-        serde_json::json!(["rust"]),
+        vec![parse_tag_label("rust")],
     )
     .await;
     create(
         bob_cookie.clone(),
         "# Bob A\n\nbody",
-        serde_json::json!(["rust", "perf"]),
+        vec![parse_tag_label("rust"), parse_tag_label("perf")],
     )
     .await;
     create(
         bob_cookie,
         "# Bob B\n\nbody",
-        serde_json::json!(["javascript"]),
+        vec![parse_tag_label("javascript")],
     )
     .await;
 
@@ -793,19 +806,13 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
     let create = |cookie: String, body: &'static str| {
         let state = Arc::clone(&state);
         async move {
-            let payload = serde_json::json!({
-                "post": {
-                    "body": body,
-                    "format": "markdown",
-                    "slug_override": null,
-                    "publish": true,
-                    "tags": ["shared"],
-                }
-            });
-            let (status, body) = post_json(
+            let (status, body) = create_post_json(
                 &state,
-                <web::posts::Create as ServerFn>::PATH,
-                payload,
+                PostInputs {
+                    publish: Some(true),
+                    tags: Some(vec![parse_tag_label("shared")]),
+                    ..PostInputs::new(parse_post_body(body), PostFormat::Markdown)
+                },
                 Some(&cookie),
             )
             .await;

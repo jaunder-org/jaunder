@@ -1,17 +1,19 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use common::render::PostFormat;
+use common::test_support::parse_post_body;
 use common::visibility::{AudienceBase, AudienceSelection};
 use server_fn::ServerFn;
-use web::posts::SavedPost;
+use web::posts::{PostInputs, SavedPost};
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{confirmed_mutation, create_user_and_session, post_form, post_json};
+use crate::helpers::{
+    confirmed_mutation, create_post_json, create_user_and_session, post_form, post_json,
+};
 use storage::test_support::{Backend, TestEnv, backends};
-
-use super::fixtures::create_post_json;
 
 // ── Audience-picker server fns ────────────────────────────────
 
@@ -68,8 +70,15 @@ async fn post_audience_selection_returns_public_for_new_post(#[case] backend: Ba
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = author_with_cookie(&state).await;
 
-    let (status, body) =
-        create_post_json(&state, "Hello", "markdown", None, true, Some(&cookie)).await;
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("Hello"), PostFormat::Markdown)
+        },
+        Some(&cookie),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: SavedPost = confirmed_mutation(&body);
 
@@ -115,10 +124,10 @@ async fn post_audience_selection_rejects_non_owner(#[case] backend: Backend) {
 
     let (status, body) = create_post_json(
         &state,
-        "Hello",
-        "markdown",
-        None,
-        true,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("Hello"), PostFormat::Markdown)
+        },
         Some(&author_cookie),
     )
     .await;
