@@ -114,11 +114,14 @@ during the hook fail closed with diagnostics; pre-existing delete/rename state
 and untracked files stay unstaged and tolerated. Bypass with
 `SKIP_PRE_COMMIT=1 git commit` for WIP.
 
-**`pre-push`** runs `cargo xtask prepush`: the fast verify-only host surface
-plus the host-native product Rust test lane, with the same clean-tree refusal as
-`validate`. The browser E2E VM checks and hermetic Nix Rust
-coverage/wasm/doctest checks are not run here — they run in CI, or locally via
-`cargo xtask validate`. Bypass with `SKIP_PRE_PUSH=1 git push` for WIP.
+**`pre-push`** runs `cargo xtask prepush`: the fast, non-hermetic verify-only
+host/static surface, existing auxiliary `xtask`/`tools` non-doc tests,
+host-native product Rust tests, and `workspace-doctests` after the product
+tests. `workspace-doctests` executes `cargo test --workspace --doc` and the same
+bidirectional root-workspace fence reconciliation as the Nix doctest gate. The
+hook has the same clean-tree refusal as `validate` and invokes no Nix
+derivation. Hermetic Nix proof remains CI/explicit-`validate` work. Bypass with
+`SKIP_PRE_PUSH=1 git push` for WIP.
 
 ## Development workflow
 
@@ -386,10 +389,11 @@ consumes fails the test.
 ### Local checks: `cargo xtask`
 
 The driver for all checks is `cargo xtask`. Host-side steps cover static checks,
-clippy, the standalone `xtask`/`tools` workspaces, and the day-to-day
-root-workspace Rust tests. Coverage, wasm browser tests, doctests, and e2e still
-run in hermetic Nix checks where that isolation is load-bearing. The local push
-hook is intentionally faster than the hermetic CI backstop.
+clippy, the standalone `xtask`/`tools` workspaces, and day-to-day root-workspace
+Rust tests. `prepush` adds the host `workspace-doctests` verdict; it remains a
+fast local gate rather than an alias for hermetic `validate --no-e2e`. Nix
+static proof, coverage/CRAP, wasm browser tests, Elisp coverage, the wasm
+budget, and e2e retain their stated hermetic or full-validate authorities.
 
 Within the host/local gate, health checks are ordered for fast, actionable
 feedback: clean/staged-tree preconditions first, source-format and generated-doc
@@ -422,9 +426,32 @@ the question. Focused `test-local` is an accelerator, not a certification gate.
 | `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                                                                                                       | auto-fixes    |
 | `cargo xtask check`             | + `test-local` for root-workspace Rust tests, plus the Nix `wasm-tests` and `doctests`/`doctests-gate` checks                                                                                                              | auto-fixes    |
 | `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path                                                                                         | auto-fixes    |
-| `cargo xtask prepush`           | verify-only host surface + `test-local`, with clean-tree refusal — the `.githooks/pre-push` hook runs this path                                                                                                            | never mutates |
-| `cargo xtask validate --no-e2e` | static + clippy + host tests + the Nix `wasm-tests`, Rust `coverage`/`coverage-gate`, `doctests`/`doctests-gate`, and authoritative `elisp-coverage-producer` plus host consumer — the hermetic CI/static confidence gate  | never mutates |
+| `cargo xtask prepush`           | verify-only host/static surface + auxiliary `xtask`/`tools` non-doc tests + `test-local` + `workspace-doctests`, with clean-tree refusal and no Nix — the `.githooks/pre-push` hook runs this path                         | never mutates |
+| `cargo xtask validate --no-e2e` | verify-only host/static surface plus Nix static proof, `wasm-budget`, Nix `wasm-tests`, Rust `coverage`/`coverage-gate`, Nix `doctests`/`doctests-gate`, and authoritative `elisp-coverage-producer` plus host consumer    | never mutates |
 | `cargo xtask validate`          | inherits the authoritative Emacs verdict, then adds all four `{sqlite,postgres}×{chromium,firefox}` browser E2E combinations and authoritative SQLite/Chromium server-function coverage verification — the full local gate | never mutates |
+
+#### Prepush parity by failure surface
+
+The fast local lane and `validate --no-e2e` do not run the same tests in
+different environments. They have the following explicit authority split
+([ADR-0029](docs/adr/0029-git-enforced-verify-gate.md), #1117 supplement):
+
+| `validate --no-e2e` surface                              | `prepush` coverage                                                                                                 | Authority / rationale                                                                                                                                                              |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Verify-only host/static surface                          | Runs the same host surface.                                                                                        | Prepush is the fast host verdict; Nix static proof remains authoritative for the sandboxed offline environment.                                                                    |
+| Auxiliary `xtask`/`tools` non-doc tests                  | Runs once.                                                                                                         | The host tests are the applicable verdict; they are outside the application coverage/Nix test gates.                                                                               |
+| Host-native product Rust tests                           | Runs `test-local`.                                                                                                 | The host-native product verdict is cheap and cache-friendly.                                                                                                                       |
+| Root-workspace doctests and fence reconciliation         | Runs `workspace-doctests`: `cargo test --workspace --doc` plus the same bidirectional root-workspace fence census. | Prepush is authoritative for host-toolchain example execution and reconciliation; Nix `doctests`/`doctests-gate` remains authoritative for the pinned sandbox/offline environment. |
+| Nix static proof                                         | Does not run.                                                                                                      | Only the sandboxed offline Cargo environment proves the hermetic static definitions.                                                                                               |
+| Rust coverage/CRAP                                       | Does not run.                                                                                                      | Instrumentation and SQLite/PostgreSQL backend parity are part of the verdict.                                                                                                      |
+| Wasm browser tests                                       | Does not run.                                                                                                      | The verdict exercises wasm browser primitives unavailable to a cheap host lane.                                                                                                    |
+| Elisp coverage                                           | Does not run.                                                                                                      | The coverage VM is the authoritative execution environment.                                                                                                                        |
+| Wasm budget                                              | Does not run.                                                                                                      | The verdict is defined by the Nix-built artifact's size semantics.                                                                                                                 |
+| Server-function flow verification (full `validate` only) | Does not run.                                                                                                      | This is an e2e/full-validate responsibility outside the `validate --no-e2e` comparator.                                                                                            |
+
+`workspace-doctests` and the Nix doctest producer/gate reconcile the same
+root-workspace fence population in both directions; neither path may silently
+shrink it. Only the Nix path establishes the pinned sandbox/offline verdict.
 
 `cargo xtask check` is the normal agent/developer feedback command. Its product
 Rust test portion is implemented through the same host-native lane exposed as
@@ -682,13 +709,14 @@ Test paths follow the nested module path to the test name. A shallow file yields
 
 ### Doctests and the fence vocabulary
 
-`cargo nextest` structurally cannot run doctests, so they are gated separately
-by the `doctests`/`doctests-gate` Nix checks (the root workspace) plus the
-host-side `doctest-fences` step (`xtask/` and `tools/`, which no Nix check can
-see). The gate does not merely run them: it reads every rustdoc fence out of the
-source with `syn` and **reconciles** that population against what the runner
-reported, in both directions. A fence that exists but never ran is a failure,
-and so is a reported doctest the scanner did not find.
+`cargo nextest` structurally cannot run doctests. `workspace-doctests` runs the
+root workspace on the host during `prepush`; the Nix `doctests`/`doctests-gate`
+producer/consumer remains the sandbox/offline authority for that same root
+population. The host-side `doctest-fences` step covers `xtask/` and `tools`,
+which no Nix check can see. Each applicable path reads rustdoc fences with `syn`
+and **reconciles** its population against what the runner reported, in both
+directions. A fence that exists but never ran is a failure, and so is a reported
+doctest the scanner did not find.
 
 Run them directly with `cargo test --workspace --doc`. Use `--workspace`, never
 `-p`: package scoping silently drops the `#[cfg(feature = "sanitize")]` fences

@@ -688,9 +688,57 @@ fn run_host_gate(sh: &xshell::Shell, mode: Mode, result: &mut CommandResult) {
     HOST_TESTS_STEP.run(sh, mode, result);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrepushPhase {
+    HostGate,
+    LocalTests,
+    WorkspaceDoctests,
+}
+
+impl PrepushPhase {
+    fn run(self, sh: &xshell::Shell, result: &mut CommandResult) {
+        match self {
+            Self::HostGate => run_host_gate(sh, Mode::Check, result),
+            Self::LocalTests => steps::test_local::run(sh, result, &[]),
+            Self::WorkspaceDoctests => steps::doctest_fences::run_workspace(sh, result),
+        }
+    }
+
+    #[cfg(test)]
+    const fn name(self) -> &'static str {
+        match self {
+            Self::HostGate => "host-gate",
+            Self::LocalTests => "test-local",
+            Self::WorkspaceDoctests => "workspace-doctests",
+        }
+    }
+}
+
+const PREPUSH_PHASES: &[PrepushPhase] = &[
+    PrepushPhase::HostGate,
+    PrepushPhase::LocalTests,
+    PrepushPhase::WorkspaceDoctests,
+];
+
 fn run_local_push_gate(sh: &xshell::Shell, result: &mut CommandResult) {
-    run_host_gate(sh, Mode::Check, result);
-    steps::test_local::run(sh, result, &[]);
+    for phase in PREPUSH_PHASES {
+        phase.run(sh, result);
+    }
+}
+
+fn run_prepush_with(
+    sh: &xshell::Shell,
+    result: &mut CommandResult,
+    precheck: impl FnOnce() -> StepResult,
+    run_gate: impl FnOnce(&xshell::Shell, &mut CommandResult),
+) {
+    let precheck_start = std::time::Instant::now();
+    let precheck = precheck().with_duration(precheck_start.elapsed());
+    let blocked = !precheck.ok && !precheck.skipped;
+    result.push(precheck);
+    if !blocked {
+        run_gate(sh, result);
+    }
 }
 
 fn run_precommit_with_host_gate(
@@ -729,13 +777,6 @@ fn precommit_host_step_names_for_test() -> Vec<&'static str> {
     host_gate_step_names_for_test(Mode::Fix)
 }
 
-#[cfg(test)]
-fn prepush_step_names_for_test() -> Vec<&'static str> {
-    let mut names = host_gate_step_names_for_test(Mode::Check);
-    names.push("test-local");
-    names
-}
-
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     // Reject --json for commands with no structured payload (the `traces` reporting
     // commands) before doing any work — a hollow envelope is worse than an error.
@@ -768,13 +809,12 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let sh = xshell::Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("prepush");
-            let precheck_start = std::time::Instant::now();
-            let precheck = clean_tree_precheck(false).with_duration(precheck_start.elapsed());
-            let blocked = !precheck.ok && !precheck.skipped;
-            result.push(precheck);
-            if !blocked {
-                run_local_push_gate(&sh, &mut result);
-            }
+            run_prepush_with(
+                &sh,
+                &mut result,
+                || clean_tree_precheck(false),
+                run_local_push_gate,
+            );
             finalize(&mut result, start);
             Ok(result)
         }
@@ -1294,14 +1334,36 @@ mod cli_tests {
     }
 
     #[test]
-    fn prepush_surface_is_local_verify_host_plus_product_tests() {
-        let prepush = prepush_step_names_for_test();
-        assert!(prepush.contains(&"test-local"));
-        assert!(!prepush.contains(&"wasm-budget"));
-        assert!(!prepush.contains(&"wasm-tests"));
-        assert!(!prepush.contains(&"coverage"));
-        assert!(!prepush.contains(&"doctests"));
-        assert!(!prepush.contains(&"e2e"));
+    fn prepush_phase_plan_is_ordered_unique_and_nix_free() {
+        let phases: Vec<_> = PREPUSH_PHASES.iter().map(|phase| phase.name()).collect();
+
+        assert_eq!(
+            phases,
+            ["host-gate", "test-local", "workspace-doctests"],
+            "the production-used prepush plan is the complete local gate"
+        );
+        assert_eq!(
+            phases.len(),
+            phases
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            "each prepush phase runs exactly once"
+        );
+        assert!(!phases.iter().any(|name| name.contains("nix")));
+
+        let host_steps = host_gate_step_names_for_test(Mode::Check);
+        assert_eq!(
+            host_steps
+                .iter()
+                .filter(|name| **name == "host-tests")
+                .count(),
+            1
+        );
+        assert!(
+            !host_steps.iter().any(|name| name.contains("nix")),
+            "the host phase must remain Nix-free"
+        );
     }
 
     #[test]
@@ -1365,12 +1427,30 @@ mod cli_tests {
     }
 
     #[test]
-    fn prepush_precondition_runs_before_host_gate_and_product_tests() {
-        let mut names = vec!["clean-tree"];
-        names.extend(prepush_step_names_for_test());
+    fn prepush_clean_tree_short_circuits_the_local_gate() {
+        let sh = xshell::Shell::new().expect("create shell");
+        let mut result = CommandResult::new("prepush");
+        let invoked = std::cell::Cell::new(false);
 
-        assert!(position(&names, "clean-tree") < position(&names, "fmt"));
-        assert!(position(&names, "clean-tree") < position(&names, "test-local"));
+        run_prepush_with(
+            &sh,
+            &mut result,
+            || StepResult::fail("clean-tree").detail("dirty"),
+            |_, _| invoked.set(true),
+        );
+
+        assert!(
+            !invoked.get(),
+            "the local gate must not run after a failed precheck"
+        );
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .map(|step| step.name.as_str())
+                .collect::<Vec<_>>(),
+            ["clean-tree"]
+        );
     }
 
     #[test]

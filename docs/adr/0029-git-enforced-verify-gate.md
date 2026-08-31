@@ -113,3 +113,40 @@ slower `cargo xtask validate --no-e2e` command remains available locally for
 hermetic confidence, and CI remains the non-bypassable hermetic backstop. The
 current materialized gate shape lives in
 [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#the-verify-ladder--git-enforced-gate).
+
+## Supplement (2026-08-31, #1117): fast local parity by failure surface
+
+[#1117](https://github.com/jaunder-org/jaunder/issues/1117) keeps
+`cargo xtask prepush` a fast, non-hermetic, clean-tree-gated early-failure lane:
+it invokes no Nix derivation. It runs the existing verify-only host/static
+surface, the existing auxiliary `xtask`/`tools` non-doc tests, the host-native
+product Rust tests, and `workspace-doctests`: exactly
+`cargo test --workspace --doc` plus the complete bidirectional doctest-fence
+census and reconciliation. The auxiliary tests remain exactly once, and root
+doctests run after the product tests.
+
+This is parity by failure surface, not an assertion that `prepush` and
+`validate --no-e2e` execute the same tests in different environments. The local
+`workspace-doctests` verdict is authoritative for host-toolchain example
+execution and fence reconciliation. The Nix doctest producer/gate remains the
+authority for its pinned sandbox/offline environment, even though both paths
+reconcile the same root-workspace fence population in both directions.
+
+The following surfaces remain hermetic-only, under explicit
+`cargo xtask validate --no-e2e` or CI authority:
+
+- Nix static proof, because only its sandboxed offline Cargo environment proves
+  the hermetic static definitions.
+- Rust coverage/CRAP, because its instrumentation and SQLite/PostgreSQL backend
+  parity are part of the verdict.
+- Wasm browser tests, because they exercise browser primitives unavailable to a
+  cheap host lane.
+- Elisp coverage, because its coverage VM is the authoritative execution
+  environment.
+- The wasm budget, because its verdict is defined by the Nix-built artifact's
+  size semantics.
+
+Full `cargo xtask validate` additionally owns server-function flow verification
+through the e2e path. That is outside the `validate --no-e2e` comparator, not a
+missing prepush surface. The materialized per-surface contract is in
+[`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#prepush-parity-by-failure-surface).
