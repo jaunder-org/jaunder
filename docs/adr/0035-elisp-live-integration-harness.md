@@ -86,7 +86,8 @@ server affordances.**
 > discovery contract but replaces JSON-as-mutex for startup cleanup with a
 > storage-directory OS lock and a mandatory canonical pre-cleanup reservation. A
 > `--runtime-file` override becomes additional discovery output; only post-bind
-> address updates remain best-effort.
+> address updates remain best-effort. A pre-bind port of zero is an ownership
+> reservation, so discovery consumers reread until a nonzero bound port appears.
 
 2. **The harness owns the server lifecycle.** A `jaunder-test--with-live-server`
    macro (under `elisp/test/`) spawns

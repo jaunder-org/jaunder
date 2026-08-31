@@ -1747,12 +1747,14 @@ two processes clean the same `media/tmp`. Before cleanup it also writes the
 canonical `<storage>/runtime.json` identity; that initial reservation is fatal
 on failure and remains visible to older binaries whose JSON `pid` plus process
 start-time check predates the OS lock. `--runtime-file` adds a second discovery
-file rather than replacing the canonical reservation. After binding, address
-updates are best-effort but preserve the live reservation on failure; graceful
-and forced shutdown remove every published identity before releasing the lock.
-The e2e harness reads the configured discovery file for its port handshake. This
-retains ADR-0035's discovery contract while qualifying its former JSON-as-mutex
-and override behavior ([ADR-0035](adr/0035-elisp-live-integration-harness.md);
+file rather than replacing the canonical reservation. The pre-bind reservation
+uses port zero; discovery consumers treat it as not ready and reread until the
+bound nonzero port is published. Address updates are best-effort but preserve
+the live reservation on failure; graceful and forced shutdown remove every
+published identity before releasing the lock. The e2e and Elisp harnesses read
+the configured discovery file for this port handshake. This retains ADR-0035's
+discovery contract while qualifying its former JSON-as-mutex and override
+behavior ([ADR-0035](adr/0035-elisp-live-integration-harness.md);
 [bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)).
 
 - `StaticAssets` (`server/src/assets.rs:3-5`, `#[folder = "assets/"]`) carries

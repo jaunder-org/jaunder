@@ -61,8 +61,10 @@ additional discovery output, not the lock identity or a replacement for the
 canonical reservation. Existing JSON `pid` plus process-start-time checks
 continue to refuse live legacy processes that predate the OS lock. After the
 listener binds, address updates are best-effort and must preserve the existing
-live identity on failure; graceful and forced shutdown remove every published
-runtime file before releasing the lock. This qualifies ADR-0035's JSON-as-mutex,
+live identity on failure. The pre-bind reservation carries port zero; discovery
+consumers treat that value as not ready and reread until a nonzero bound port is
+published. Graceful and forced shutdown remove every published runtime file
+before releasing the lock. This qualifies ADR-0035's JSON-as-mutex,
 override-replaces-default, post-bind publication, and best-effort initial-write
 rules while retaining its discovery contract.
 
