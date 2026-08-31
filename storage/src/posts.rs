@@ -42,6 +42,39 @@ use host::{
     retention::Domain,
 };
 const TAG_EXISTS_SQL: &str = "SELECT EXISTS(SELECT 1 FROM tags WHERE tag_slug = $1)";
+/// The `published_at`-clear flag in an update-post statement.
+///
+/// This is deliberately a persistence role: [`PublishUpdate`] remains the
+/// application-level publication instruction, while the SQL `CASE` needs only
+/// its clear-column fact.
+#[derive(Clone, Copy, Debug, macros::SqlxBridge)]
+pub(crate) struct PostPublicationClear(bool);
+
+impl PostPublicationClear {
+    #[must_use]
+    pub(crate) const fn for_update(update: PublishUpdate) -> Self {
+        Self(matches!(update, PublishUpdate::Unpublish))
+    }
+}
+
+/// ISO calendar text used by the permalink-date SQL comparison.
+#[derive(Debug, macros::SqlxBridge)]
+pub(crate) struct PermalinkDateText(String);
+
+impl From<PermalinkDate> for PermalinkDateText {
+    fn from(date: PermalinkDate) -> Self {
+        Self(date.to_string())
+    }
+}
+
+/// The escaped `LIKE` pattern for a normalized tag-slug prefix lookup.
+#[derive(Debug, macros::SqlxBridge)]
+pub(crate) struct TagSlugPrefixPattern(String);
+impl TagSlugPrefixPattern {
+    fn from_normalized_prefix(prefix: &str) -> Self {
+        Self(format!("{prefix}%"))
+    }
+}
 
 /// The validated calendar date of a public permalink lookup key. Re-exported from
 /// `common::time` so storage callers and the trait method name the domain type
@@ -985,7 +1018,13 @@ impl PersistedMediaReference {
 /// unbounded author-controlled rows. Rows beyond this limit receive no foreign
 /// evidence and therefore remain conservatively live.
 pub const MAX_MEDIA_REFERENCE_SNAPSHOT: usize = 128;
-const MEDIA_REFERENCE_SNAPSHOT_QUERY_LIMIT: i64 = 129;
+
+/// The sentinel-bearing maximum row count passed to the media-reference snapshot query.
+#[derive(Clone, Copy, Debug, macros::SqlxBridge)]
+pub(crate) struct MediaReferenceSnapshotLimit(i64);
+
+const MEDIA_REFERENCE_SNAPSHOT_QUERY_LIMIT: MediaReferenceSnapshotLimit =
+    MediaReferenceSnapshotLimit(129);
 
 /// A bounded exact-reference snapshot for one media identity.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1603,15 +1642,16 @@ pub trait PostDialect: Backend {
 /// was proved against.  The matching predicate below deliberately compares all
 /// of them: a foreign proof must not exempt a newly inserted spelling, a
 /// differently keyed media entry, or evidence collected for another instance.
-pub(crate) fn push_media_reference_evidence_cte<DB>(
-    query: &mut QueryBuilder<'_, DB>,
-    evidence: &MediaReferenceEvidence,
+pub(crate) fn push_media_reference_evidence_cte<'a, DB>(
+    query: &mut QueryBuilder<'a, DB>,
+    evidence: &'a MediaReferenceEvidence,
 ) where
     DB: Database,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
+    for<'q> &'q InstanceId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
 {
     query.push(
         "WITH foreign_evidence \
@@ -1650,7 +1690,7 @@ pub(crate) fn push_media_reference_evidence_cte<DB>(
                 .push(", ")
                 .push_bind(reference.reference_form().clone())
                 .push(", ")
-                .push_bind(proof.expected_instance_id().to_string())
+                .push_bind(proof.expected_instance_id())
                 .push(")");
         }
     }
@@ -1659,13 +1699,12 @@ pub(crate) fn push_media_reference_evidence_cte<DB>(
 
 /// Appends the sole rule for a persisted reference to remain live: it is not an
 /// exact foreign proof made for the current instance identity.
-pub(crate) fn push_live_media_reference_predicate<DB>(
-    query: &mut QueryBuilder<'_, DB>,
-    current_instance_id: &InstanceId,
+pub(crate) fn push_live_media_reference_predicate<'a, DB>(
+    query: &mut QueryBuilder<'a, DB>,
+    current_instance_id: &'a InstanceId,
 ) where
     DB: Database,
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
+    for<'q> &'q InstanceId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
 {
     query.push(
         " AND NOT EXISTS (\
@@ -1680,7 +1719,7 @@ pub(crate) fn push_live_media_reference_predicate<DB>(
              AND evidence.reference_form = pm.reference_form \
              AND evidence.expected_instance_id = ",
     );
-    query.push_bind(current_instance_id.to_string());
+    query.push_bind(current_instance_id);
     query.push(")");
 }
 
@@ -2431,9 +2470,7 @@ where
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> sqlx::Result<Option<PostRecord>> {
-        // `PermalinkDate`'s Display is ISO `YYYY-MM-DD` — the exact string the
-        // `PERMALINK_DATE_CLAUSE` binds.
-        let date_str = date.to_string();
+        let date_text = PermalinkDateText::from(date);
         let (resolution, binds, _) = resolution_where(viewer, 5);
         // `published_at <= $4` hides scheduled (future-dated) posts until due.
         let sql = format!(
@@ -2455,8 +2492,7 @@ where
         let query = sqlx::query_as::<_, PostRecord>(&sql)
             .bind(username)
             .bind(slug)
-            // sqlx-newtype-bind:allow permanent-primitive — permalink date is a formatted URL path part, not a domain value.
-            .bind(date_str.as_str())
+            .bind(date_text)
             .bind(now);
         Ok(binds.bind_onto(query).fetch_optional(&self.pool).await?)
     }
@@ -2475,7 +2511,7 @@ where
     ) -> sqlx::Result<Option<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let date_clause = DB::PERMALINK_DATE_CLAUSE;
-        let date_str = date.to_string();
+        let date_text = PermalinkDateText::from(date);
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                     p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -2491,8 +2527,7 @@ where
         let row = sqlx::query_as::<_, PostRecord>(&sql)
             .bind(user_id)
             .bind(slug)
-            // sqlx-newtype-bind:allow permanent-primitive — permalink date is a formatted URL path part, not a domain value.
-            .bind(date_str.as_str())
+            .bind(date_text)
             .bind(now)
             .fetch_optional(&self.pool)
             .await?;
@@ -3140,7 +3175,9 @@ where
             .map(str::trim)
             .filter(|p| !p.is_empty())
             .map(str::to_ascii_lowercase);
-        let pattern = normalized.as_deref().map(|p| format!("{p}%"));
+        let pattern = normalized
+            .as_deref()
+            .map(TagSlugPrefixPattern::from_normalized_prefix);
 
         let rows = match pattern {
             Some(ref like) => {
@@ -3150,8 +3187,7 @@ where
                      ORDER BY tag_slug
                      LIMIT $2",
                 )
-                // sqlx-newtype-bind:allow permanent-primitive — LIKE prefix pattern is derived query text, not a stored domain value.
-                .bind(like.as_str())
+                .bind(like)
                 .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
@@ -3641,13 +3677,17 @@ pub(crate) fn idempotency_advisory_lock_key(user_id: UserId, key: &IdempotencyKe
     ])
 }
 
+/// `PostgreSQL`'s signed advisory-lock key for one exact media identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, macros::SqlxBridge)]
+pub(crate) struct MediaAdvisoryLockKey(i64);
+
 /// Maps every distinct media identity to the signed 64-bit advisory-lock key
 /// derived from the first eight bytes of SHA-256 over an unambiguous encoding.
 ///
 /// The resulting vector is sorted and deduplicated before a backend acquires
 /// locks, preventing opposite-order updates from deadlocking.
 #[must_use]
-pub(crate) fn media_advisory_lock_key(media: &MediaRef) -> i64 {
+pub(crate) fn media_advisory_lock_key(media: &MediaRef) -> MediaAdvisoryLockKey {
     let mut digest = Sha256::new();
     digest.update(media.source.to_string().as_bytes());
     digest.update([0]);
@@ -3655,14 +3695,16 @@ pub(crate) fn media_advisory_lock_key(media: &MediaRef) -> i64 {
     digest.update([0]);
     digest.update(media.filename.to_string().as_bytes());
     let digest: [u8; 32] = digest.finalize().into();
-    i64::from_be_bytes([
+    MediaAdvisoryLockKey(i64::from_be_bytes([
         digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
-    ])
+    ]))
 }
 
 /// Maps every distinct media identity to a signed 64-bit advisory-lock key.
 #[must_use]
-pub(crate) fn media_advisory_lock_keys(media: impl IntoIterator<Item = MediaRef>) -> Vec<i64> {
+pub(crate) fn media_advisory_lock_keys(
+    media: impl IntoIterator<Item = MediaRef>,
+) -> Vec<MediaAdvisoryLockKey> {
     media
         .into_iter()
         .map(|media| media_advisory_lock_key(&media))
@@ -3671,15 +3713,16 @@ pub(crate) fn media_advisory_lock_keys(media: impl IntoIterator<Item = MediaRef>
         .collect()
 }
 
+/// Whether the requested scalar state would leave the locked Post unchanged.
+///
 /// Returns media identities once, in canonical order, for a write-side lock.
 pub(crate) fn media_lock_set(references: &[MediaReference]) -> BTreeSet<MediaRef> {
     references
         .iter()
-        .map(|reference| reference.media().clone())
+        .map(MediaReference::media)
+        .cloned()
         .collect()
 }
-/// Whether the requested scalar state would leave the locked Post unchanged.
-///
 /// The caller additionally compares normalized children under the same lock;
 /// keeping the scalar rule here makes the two dialects suppress timestamp-only
 /// writes identically.
@@ -4412,6 +4455,20 @@ impl PhysicalPostTagRowId {
         self.0
     }
 }
+/// Deliberately malformed value for the `tags.tag_slug` decode fixture.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptTagSlug(String);
+
+/// Deliberately malformed value for the `posts.slug` decode fixture.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptPostSlug(String);
+
+/// Deliberately malformed value for the `posts.format` decode fixture.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptPostFormat(String);
 
 #[cfg(test)]
 mod tests {
@@ -4423,6 +4480,7 @@ mod tests {
         fetch_post_media, fp, media_ref_for, media_row_exists, media_url_for, seed_media,
         seed_users, set_post_tags_confirmed, update_post_body_via_service,
     };
+
     use chrono::Utc;
     use common::test_support::{
         parse_etag, parse_post_body, parse_post_summary, parse_post_title, parse_row_limit,
@@ -6176,7 +6234,7 @@ mod tests {
                 "UPDATE tags SET tag_slug = $1
                  WHERE tag_id = (SELECT tag_id FROM post_tags WHERE post_id = $2)",
             )
-            .bind("not a slug")
+            .bind(CorruptTagSlug("not a slug".to_owned()))
             .bind(post_id)
             .execute(pool)
             .await
@@ -7663,12 +7721,13 @@ mod tests {
         .expect("seed tag");
 
         // The tags aggregate reads `tag_slug` from `tags`. Land a value the `Tag`
-        // serde bridge rejects with a raw bind, because a typed bind cannot create it.
+        // serde bridge rejects with a column-specific corruption role, because a
+        // typed domain bind cannot create it.
         let sql = "UPDATE tags SET tag_slug = $1
                    WHERE tag_id = (SELECT tag_id FROM post_tags WHERE post_id = $2)";
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
-                .bind("not a slug")
+                .bind(CorruptTagSlug("not a slug".to_owned()))
                 .bind(post_id)
                 .execute(pool)
                 .await
@@ -7700,12 +7759,12 @@ mod tests {
             .post_id;
 
         // Overwrite the `slug` column with a value `Slug::from_str` rejects (a space
-        // is not a valid slug character), binding it as a raw `&str` so the bad
-        // value actually lands in the column — the typed bind could not produce it.
+        // is not a valid slug character), binding it through the column-specific
+        // corruption role so the bad value actually lands in the column.
         let sql = "UPDATE posts SET slug = $1 WHERE post_id = $2";
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
-                .bind("not a slug")
+                .bind(CorruptPostSlug("not a slug".to_owned()))
                 .bind(post_id)
                 .execute(pool)
                 .await
@@ -7764,13 +7823,13 @@ mod tests {
             .await
             .post_id;
 
-        // Land a bogus token in `format` via a raw bind (the typed bind could not
-        // produce it), then assert the read fails at column-decode — the bridge's
-        // `Decode` error arm (`parse()` → `InvalidPostFormat`).
+        // Land a bogus token in `format` via its column-specific corruption role,
+        // then assert the read fails at column-decode — the bridge's `Decode` error
+        // arm (`parse()` → `InvalidPostFormat`).
         let sql = "UPDATE posts SET format = $1 WHERE post_id = $2";
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
-                .bind("bogus")
+                .bind(CorruptPostFormat("bogus".to_owned()))
                 .bind(post_id)
                 .execute(pool)
                 .await

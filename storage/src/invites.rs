@@ -17,6 +17,20 @@ use crate::helpers::{self, InviteTokenStateRow, TokenState};
 use crate::sql::RowCount;
 use common::ids::UserId;
 use common::time::UtcInstant;
+/// Test-only invalid `invites.code` column value.
+///
+/// Fixtures use this role to bypass `InviteCode` validation deliberately without
+/// admitting arbitrary text to production storage interfaces.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptInviteCode(String);
+
+#[cfg(test)]
+impl CorruptInviteCode {
+    fn malformed() -> Self {
+        Self("bad code".to_owned())
+    }
+}
 
 /// An invite code record returned by [`InviteStorage`] queries.
 #[derive(Clone, Debug)]
@@ -296,12 +310,11 @@ mod tests {
         let expires_at = UtcInstant::from(now.value() + Duration::days(7));
 
         // Seed a row whose `code` column holds a value `InviteCode::from_str`
-        // rejects (a space is not a base64url character), binding it as a raw `&str`
-        // so the bad value actually lands in the column (the typed bind could not).
+        // rejects (a space is not a base64url character).
         let sql = "INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)";
         crate::with_closeable_pool!(base.pool(), pool, {
             sqlx::query(sql)
-                .bind("bad code")
+                .bind(CorruptInviteCode::malformed())
                 .bind(now)
                 .bind(expires_at)
                 .execute(pool)

@@ -8,7 +8,7 @@ use sqlx::{Pool, Postgres};
 
 use crate::feed_events::{
     self, ClaimedFeedEventRow, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord,
-    FeedEventStore,
+    FeedEventStore, StoredFeedDiagnostic,
 };
 use crate::sql::RowCount;
 
@@ -137,7 +137,7 @@ impl FeedEventDialect for Postgres {
     async fn mark_failed(
         connection: &mut sqlx::PgConnection,
         ids: &[FeedEventId],
-        error: &str,
+        error: &StoredFeedDiagnostic,
         next_attempt_at: UtcInstant,
     ) -> Result<(), FeedEventError> {
         sqlx::query(
@@ -146,7 +146,6 @@ impl FeedEventDialect for Postgres {
                  last_error = $1, next_attempt_at = $2, claimed_at = NULL \
              WHERE id = ANY($3)",
         )
-        // sqlx-newtype-bind:allow permanent-primitive — stored diagnostic text has no domain identity.
         .bind(error)
         .bind(next_attempt_at)
         .bind(ids)
@@ -158,13 +157,12 @@ impl FeedEventDialect for Postgres {
     async fn mark_exhausted(
         connection: &mut sqlx::PgConnection,
         ids: &[FeedEventId],
-        error: &str,
+        error: &StoredFeedDiagnostic,
         now: UtcInstant,
     ) -> Result<(), FeedEventError> {
         sqlx::query(
             "UPDATE feed_events SET status = 'failed', last_error = $1, terminal_at = $2 WHERE id = ANY($3)",
         )
-        // sqlx-newtype-bind:allow permanent-primitive — stored diagnostic text has no domain identity.
         .bind(error)
         .bind(now)
         .bind(ids)

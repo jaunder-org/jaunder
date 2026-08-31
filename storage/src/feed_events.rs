@@ -30,7 +30,7 @@ use crate::backend::Backend;
     min = 0,
     error = "feed event attempts must be a non-negative integer"
 )]
-struct FeedEventAttempts(i32);
+pub(crate) struct FeedEventAttempts(i32);
 
 impl FeedEventAttempts {
     const fn into_i32(self) -> i32 {
@@ -40,7 +40,7 @@ impl FeedEventAttempts {
 
 /// Free-form feed processing diagnostic retained exactly for the public record.
 #[derive(Debug, macros::SqlxBridge)]
-struct StoredFeedDiagnostic(String);
+pub(crate) struct StoredFeedDiagnostic(String);
 
 impl StoredFeedDiagnostic {
     fn into_inner(self) -> String {
@@ -298,7 +298,7 @@ pub trait FeedEventStorage: Send + Sync {
 /// they use a dynamically-built `IN (?, ?, …)` pattern; Postgres uses
 /// `WHERE id = ANY($n)` with a slice binding — a cleaner and cheaper approach.
 #[async_trait]
-pub trait FeedEventDialect: Backend {
+pub(crate) trait FeedEventDialect: Backend {
     /// Atomically claim and return up to `limit` eligible rows.
     async fn claim_pending_batch(
         connection: &mut Self::Connection,
@@ -331,7 +331,7 @@ pub trait FeedEventDialect: Backend {
     async fn mark_failed(
         connection: &mut Self::Connection,
         ids: &[FeedEventId],
-        error: &str,
+        error: &StoredFeedDiagnostic,
         next_attempt_at: UtcInstant,
     ) -> Result<(), FeedEventError>;
 
@@ -340,7 +340,7 @@ pub trait FeedEventDialect: Backend {
     async fn mark_exhausted(
         connection: &mut Self::Connection,
         ids: &[FeedEventId],
-        error: &str,
+        error: &StoredFeedDiagnostic,
         now: UtcInstant,
     ) -> Result<(), FeedEventError>;
     /// Delete one bounded batch of terminal rows eligible at the frozen `now`.
@@ -519,7 +519,8 @@ where
             return Ok(());
         }
         let connection = DB::write_connection(transaction)?;
-        DB::mark_failed(connection, ids, error, next_attempt_at).await
+        let error = StoredFeedDiagnostic(error.to_owned());
+        DB::mark_failed(connection, ids, &error, next_attempt_at).await
     }
 
     #[tracing::instrument(
@@ -538,7 +539,8 @@ where
             return Ok(());
         }
         let connection = DB::write_connection(transaction)?;
-        DB::mark_exhausted(connection, ids, error, now).await
+        let error = StoredFeedDiagnostic(error.to_owned());
+        DB::mark_exhausted(connection, ids, &error, now).await
     }
     #[tracing::instrument(
         name = "storage.feed_events.prune_terminal_events",
@@ -1540,6 +1542,10 @@ mod tests {
 
         let claimed_rows = crate::with_closeable_pool!(env.base.pool(), pool, {
             for fixture in &fixtures {
+                let attempts = FeedEventAttempts(fixture.2);
+                let last_error = fixture
+                    .3
+                    .map(|error| StoredFeedDiagnostic(error.to_owned()));
                 sqlx::query(
                     "INSERT INTO feed_events \
                      (feed_url, status, attempts, last_error, next_attempt_at, claimed_at, terminal_at, created_at, regenerated_at, pinged_at) \
@@ -1547,8 +1553,8 @@ mod tests {
                 )
                 .bind(&fixture.0)
                 .bind(fixture.1)
-                .bind(fixture.2)
-                .bind(fixture.3)
+                .bind(attempts)
+                .bind(last_error)
                 .bind(fixture.4)
                 .bind(fixture.5)
                 .bind(fixture.6)

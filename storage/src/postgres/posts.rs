@@ -224,9 +224,10 @@ async fn apply_post_update(
 ) -> Result<PostRecord, UpdatePostError> {
     let now = input.request_clock;
     posts::capture_complete_post_revision::<Postgres>(tx, post_id, now).await?;
-    let (unpublish, explicit_published_at) = match input.publish {
-        PublishUpdate::Unpublish => (true, None),
-        PublishUpdate::Publish { at } => (false, at),
+    let publication_clear = posts::PostPublicationClear::for_update(input.publish);
+    let explicit_published_at = match input.publish {
+        PublishUpdate::Unpublish => None,
+        PublishUpdate::Publish { at } => at,
     };
     let row = sqlx::query_as::<_, PostRecord>(
         "UPDATE posts
@@ -247,7 +248,7 @@ async fn apply_post_update(
     .bind(&input.body)
     .bind(input.format)
     .bind(input.rendered.html())
-    .bind(unpublish)
+    .bind(publication_clear)
     .bind(explicit_published_at)
     .bind(explicit_published_at)
     .bind(now)
@@ -543,7 +544,7 @@ impl PostDialect for Postgres {
                 .push_bind(media.source)
                 .push_bind(media.sha256)
                 .push_bind(media.filename)
-                .push_bind(kind.to_string())
+                .push_bind(kind)
                 .push_bind(form);
         });
         query.build().execute(&mut *conn).await?;

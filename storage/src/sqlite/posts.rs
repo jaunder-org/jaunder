@@ -131,9 +131,10 @@ async fn apply_post_update(
 ) -> Result<PostRecord, UpdatePostError> {
     let now = input.request_clock;
     posts::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
-    let (unpublish, explicit_published_at) = match input.publish {
-        PublishUpdate::Unpublish => (true, None),
-        PublishUpdate::Publish { at } => (false, at),
+    let publication_clear = posts::PostPublicationClear::for_update(input.publish);
+    let explicit_published_at = match input.publish {
+        PublishUpdate::Unpublish => None,
+        PublishUpdate::Publish { at } => at,
     };
     let row = sqlx::query_as::<_, PostRecord>(
         "UPDATE posts SET title = $1, slug = CASE WHEN published_at IS NULL THEN $2 ELSE slug END,
@@ -145,7 +146,7 @@ async fn apply_post_update(
          COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]') AS tags",
     )
     .bind(input.title.as_ref()).bind(&input.slug).bind(&input.body).bind(input.format)
-    .bind(input.rendered.html()).bind(unpublish).bind(explicit_published_at)
+    .bind(input.rendered.html()).bind(publication_clear).bind(explicit_published_at)
     .bind(explicit_published_at).bind(now).bind(now).bind(input.summary.as_ref()).bind(post_id)
     .fetch_one(&mut *conn).await?;
     posts::replace_post_audiences::<Sqlite>(&mut *conn, post_id, &input.audiences).await?;
@@ -460,7 +461,7 @@ impl PostDialect for Sqlite {
                 .push_bind(media.source)
                 .push_bind(media.sha256)
                 .push_bind(media.filename)
-                .push_bind(kind.to_string())
+                .push_bind(kind)
                 .push_bind(form);
         });
         query.build().execute(&mut *conn).await?;

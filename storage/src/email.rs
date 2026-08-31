@@ -15,6 +15,20 @@ use common::ids::UserId;
 use common::time::UtcInstant;
 use common::token::RawToken;
 use host::{metrics, retention::Domain, token};
+/// Test-only invalid `email_verifications.email` column value.
+///
+/// Fixtures use this role to bypass `Email` validation deliberately without
+/// admitting arbitrary text to production storage interfaces.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptEmailAddress(String);
+
+#[cfg(test)]
+impl CorruptEmailAddress {
+    fn malformed() -> Self {
+        Self("not-an-email".to_owned())
+    }
+}
 
 /// Errors returned by [`EmailVerificationStorage::use_email_verification`].
 #[derive(Debug, Error)]
@@ -340,12 +354,11 @@ mod tests {
             .unwrap();
         let raw_token = confirmed_for(outcome, "email-verification fixture setup");
 
-        // Overwrite the `email` column with a value `Email::from_str` rejects,
-        // binding it as a raw `&str` so the bad value actually lands in the column.
+        // Overwrite the `email` column with a value `Email::from_str` rejects.
         let sql = "UPDATE email_verifications SET email = $1";
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
-                .bind("not-an-email")
+                .bind(CorruptEmailAddress::malformed())
                 .execute(pool)
                 .await
                 .unwrap();

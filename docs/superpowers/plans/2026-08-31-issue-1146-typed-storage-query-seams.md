@@ -63,7 +63,7 @@ Out:
     media deletion behavior pass on both backends; exact signatures reject
     transposed role values at compile time.
 
-- [ ] Task 3: Type ordinary query roles without changing behavior
+- [x] Task 3: Type ordinary query roles without changing behavior
   - Ownership: posts and both post dialects, including the advisory-key
     callsites in PostgreSQL media; site/user configuration; subscriptions; feed
     cache; feed events and both feed-event dialects; email, invites, and

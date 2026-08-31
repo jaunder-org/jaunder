@@ -11,6 +11,20 @@ use common::time::UtcInstant;
 use common::token::{RawToken, TokenHash};
 use common::username::Username;
 use host::token;
+/// Test-only invalid `sessions.token_hash` column value.
+///
+/// Fixtures use this role to bypass `TokenHash` validation deliberately without
+/// admitting arbitrary text to production storage interfaces.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptSessionTokenHash(String);
+
+#[cfg(test)]
+impl CorruptSessionTokenHash {
+    fn malformed() -> Self {
+        Self("bad hash".to_owned())
+    }
+}
 
 /// A session record returned by [`SessionStorage`] queries.
 #[derive(Clone, Debug)]
@@ -349,13 +363,11 @@ mod tests {
         assert!(matches!(outcome, common::MutationOutcome::Confirmed(_)));
 
         // Overwrite the `token_hash` column with a value `TokenHash::from_str`
-        // rejects (a space is not a valid token character), binding it as a raw
-        // `&str` so the bad value actually lands in the column — the typed bind
-        // could not produce it.
+        // rejects (a space is not a valid token character).
         let sql = "UPDATE sessions SET token_hash = $1";
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
-                .bind("bad hash")
+                .bind(CorruptSessionTokenHash::malformed())
                 .execute(pool)
                 .await
                 .unwrap();

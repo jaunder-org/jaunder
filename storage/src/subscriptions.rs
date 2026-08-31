@@ -23,6 +23,9 @@ use sqlx::{Database, Pool, Row};
 use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::error::RequireRow;
+#[derive(Debug, macros::SqlxBridge)]
+pub(crate) struct SubscriptionStatusName(String);
+
 use crate::sql::Exists;
 /// A subscription row returned by [`SubscriptionStorage::list_subscribers`].
 #[derive(Clone, Debug)]
@@ -211,6 +214,8 @@ where
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q SubscriberRef: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -236,8 +241,7 @@ where
             .bind(author_user_id)
             .bind(subscriber.channel_id)
             .bind(&subscriber.subscriber_ref)
-            // sqlx-newtype-bind:allow permanent-primitive — FK-normalized subscription status binds its lookup token, not a text column value.
-            .bind(status_name)
+            .bind(SubscriptionStatusName(status_name.into()))
             .fetch_one(&mut *connection)
             .await
             .map(|(id,)| id)

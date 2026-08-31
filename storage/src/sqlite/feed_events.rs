@@ -8,7 +8,7 @@ use sqlx::{Pool, Sqlite};
 
 use crate::feed_events::{
     self, ClaimedFeedEventRow, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord,
-    FeedEventStore,
+    FeedEventStore, StoredFeedDiagnostic,
 };
 
 use crate::sql::RowCount;
@@ -147,7 +147,7 @@ impl FeedEventDialect for Sqlite {
     async fn mark_failed(
         connection: &mut sqlx::SqliteConnection,
         ids: &[FeedEventId],
-        error: &str,
+        error: &StoredFeedDiagnostic,
         next_attempt_at: UtcInstant,
     ) -> Result<(), FeedEventError> {
         let ph = placeholders(ids.len());
@@ -156,7 +156,6 @@ impl FeedEventDialect for Sqlite {
              SET status = 'pending', attempts = attempts + 1, last_error = ?, next_attempt_at = ?, claimed_at = NULL \
              WHERE id IN ({ph})"
         );
-        // sqlx-newtype-bind:allow permanent-primitive — stored diagnostic text has no domain identity.
         let mut q = sqlx::query(&sql).bind(error).bind(next_attempt_at);
         for id in ids {
             q = q.bind(*id);
@@ -168,14 +167,13 @@ impl FeedEventDialect for Sqlite {
     async fn mark_exhausted(
         connection: &mut sqlx::SqliteConnection,
         ids: &[FeedEventId],
-        error: &str,
+        error: &StoredFeedDiagnostic,
         now: UtcInstant,
     ) -> Result<(), FeedEventError> {
         let ph = placeholders(ids.len());
         let sql = format!(
             "UPDATE feed_events SET status = 'failed', last_error = ?, terminal_at = ? WHERE id IN ({ph})"
         );
-        // sqlx-newtype-bind:allow permanent-primitive — stored diagnostic text has no domain identity.
         let mut q = sqlx::query(&sql).bind(error).bind(now);
         for id in ids {
             q = q.bind(*id);

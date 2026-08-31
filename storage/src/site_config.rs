@@ -343,7 +343,7 @@ const SELECT_VALUE_SQL: &str = "SELECT value FROM site_config WHERE key = $1";
 
 /// A site-config value preserved exactly until its key-specific read policy parses it.
 #[derive(Debug, macros::SqlxBridge)]
-struct StoredSiteConfigValue(String);
+pub(crate) struct StoredSiteConfigValue(String);
 
 impl StoredSiteConfigValue {
     fn into_inner(self) -> String {
@@ -401,6 +401,7 @@ where
     // `SiteConfigKey`'s sqlx bridge reports `String` as its type (the token is bound as
     // borrowed text), so binding a key directly needs `String: Type<DB>` in scope.
     String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -426,17 +427,7 @@ where
         key: SiteConfigKey,
         value: &str,
     ) -> sqlx::Result<()> {
-        let connection = DB::write_connection(transaction)?;
-        sqlx::query(
-            "INSERT INTO site_config (key, value) VALUES ($1, $2)
-             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-        )
-        .bind(key)
-        // sqlx-newtype-bind:allow permanent-primitive — typed site config values are persisted through their string representation.
-        .bind(value)
-        .execute(connection)
-        .await?;
-        Ok(())
+        set_stored::<DB>(transaction, key, StoredSiteConfigValue(value.to_owned())).await
     }
 
     async fn get_smtp_config(&self) -> sqlx::Result<Option<SmtpConfig>> {
@@ -529,6 +520,33 @@ where
         .await?;
         Ok(removed.is_some())
     }
+}
+async fn set_stored<DB>(
+    transaction: &mut WriteTransaction,
+    key: SiteConfigKey,
+    value: StoredSiteConfigValue,
+) -> sqlx::Result<()>
+where
+    DB: Database + Backend,
+    SiteConfigKey: sqlx::Type<DB>,
+    for<'q> SiteConfigKey: sqlx::Encode<'q, DB>,
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+    StoredSiteConfigValue: sqlx::Type<DB>,
+    for<'q> StoredSiteConfigValue: sqlx::Encode<'q, DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    let connection = DB::write_connection(transaction)?;
+    sqlx::query(
+        "INSERT INTO site_config (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(key)
+    .bind(value)
+    .execute(connection)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]

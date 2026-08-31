@@ -11,7 +11,7 @@ use host::config_key::UserConfigKey;
 
 /// A user-config value preserved exactly until its key-specific read policy parses it.
 #[derive(Debug, macros::SqlxBridge)]
-struct StoredUserConfigValue(String);
+pub(crate) struct StoredUserConfigValue(String);
 
 impl StoredUserConfigValue {
     fn into_inner(self) -> String {
@@ -119,6 +119,7 @@ where
     // borrowed text), so binding a key directly needs `String: Type<DB>` in scope.
     String: sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
@@ -151,18 +152,13 @@ where
         key: UserConfigKey,
         value: &str,
     ) -> sqlx::Result<()> {
-        let connection = DB::write_connection(transaction)?;
-        sqlx::query(
-            "INSERT INTO user_config (user_id, key, value) VALUES ($1, $2, $3)
-             ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value",
+        set_stored::<DB>(
+            transaction,
+            user_id,
+            key,
+            StoredUserConfigValue(value.to_owned()),
         )
-        .bind(user_id)
-        .bind(key)
-        // sqlx-newtype-bind:allow permanent-primitive — typed user config values are persisted through their string representation.
-        .bind(value)
-        .execute(&mut *connection)
-        .await?;
-        Ok(())
+        .await
     }
 
     #[tracing::instrument(
@@ -184,6 +180,37 @@ where
             .await?;
         Ok(())
     }
+}
+async fn set_stored<DB>(
+    transaction: &mut WriteTransaction,
+    user_id: UserId,
+    key: UserConfigKey,
+    value: StoredUserConfigValue,
+) -> sqlx::Result<()>
+where
+    DB: Database + Backend,
+    UserId: sqlx::Type<DB>,
+    for<'q> UserId: sqlx::Encode<'q, DB>,
+    UserConfigKey: sqlx::Type<DB>,
+    for<'q> UserConfigKey: sqlx::Encode<'q, DB>,
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+    StoredUserConfigValue: sqlx::Type<DB>,
+    for<'q> StoredUserConfigValue: sqlx::Encode<'q, DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    let connection = DB::write_connection(transaction)?;
+    sqlx::query(
+        "INSERT INTO user_config (user_id, key, value) VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(user_id)
+    .bind(key)
+    .bind(value)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
