@@ -37,10 +37,10 @@ pub(super) fn run_source_scan(
 
 /// Like [`run_source_scan`], but accepts the reader used for each discovered file.
 ///
-/// Production supplies [`std::fs::read_to_string`]. Keeping this seam private
-/// prevents check-specific I/O policy while letting this module prove that a read
-/// failure never invokes an analyzer.
-fn run_source_scan_with(
+/// Production supplies [`std::fs::read_to_string`]. This crate-visible test seam
+/// lets a check prove that an unreadable source cannot silently produce a partial
+/// passing census.
+pub(super) fn run_source_scan_with(
     result: &mut CommandResult,
     step: &'static str,
     roots: &[&str],

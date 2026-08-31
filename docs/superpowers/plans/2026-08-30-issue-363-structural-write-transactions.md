@@ -142,7 +142,7 @@ pool-backed or independently committing compatibility form behind.
     tests prove list and usage invalidation while indeterminate remains visibly
     error-like.
 
-- [ ] **Task 7: Enforce the complete structural invariant and close
+- [x] **Task 7: Enforce the complete structural invariant and close
       documentation.**
   - Contract: the structural check enumerates exactly the 48 audited application
     mutation methods and proves each requires the sealed capability; it rejects

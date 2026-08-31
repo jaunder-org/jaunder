@@ -34,36 +34,54 @@ enter a scope, but cannot construct one, choose a backend, look up storage from
 it, or execute arbitrary SQL through it. `WriteScope::run` is the explicit,
 smallest-coherent-set commit boundary.
 
-`WriteScope::run` gives its callback a sealed, backend-erased mutable write
-capability. Audited application storage mutations take that capability and have
-no pool-backed, auto-committing, standalone, or compatibility form. The adapter
-creates the concrete transaction behind that capability; a backend mismatch is
-an internal wiring error, not an application choice.
+`WriteScope::run` gives its callback a sealed, backend-erased mutable
+`WriteTransaction` capability. The audited application surface is a closed
+census of 48 methods: `AudienceStorage` (5), `EmailVerificationStorage` (2),
+`FeedCacheStorage` (2), `FeedEventStorage` (7), `InviteStorage` (1),
+`MediaStorage` (2), `PasswordResetStorage` (2), `PostStorage` (7),
+`SessionStorage` (3), `SiteConfigStorage` (6), `SubscriptionStorage` (2),
+`UserConfigStorage` (2), `UserStorage` (5), and `AtomicOps` (2). Every one takes
+`&mut WriteTransaction`; it has no pool-backed, auto-committing, standalone,
+alias, or compatibility form. The adapter creates the concrete transaction
+behind that capability; a backend mismatch is an internal wiring error, not an
+application choice.
 
-On callback `Err`, the scope rolls back or drops the transaction and reports a
-rollback-confirmed operation failure. On callback `Ok`, it makes exactly one
-commit attempt. A successful acknowledgement is a confirmed commit; any commit
-error is commit-indeterminate, never an operation failure. The scope records
-this bounded outcome on the span that owns the decision, following
-[ADR-0147](../0147-decision-path-observability.md).
+The structural contract derives the observed trait census and compares it with
+the closed authoritative 48-method list. It rejects an unknown, missing, or
+duplicate declaration, requires the mutable capability on every audited method,
+and rejects production transaction starts that bypass the
+`WriteScope`/`WriteTransaction` composition. Administrative lifecycle work
+(migrations, backup and restore, and PostgreSQL bootstrap), backend dialect
+code, and internal helpers are outside that application-method census.
 
-Server mutation outputs represent confirmed and indeterminate commits with typed
-`MutationOutcome<T>` variants. Both variants cause client invalidation and
-revalidation; indeterminate remains visibly error-like rather than claiming a
-confirmed result.
+On callback `Err`, the scope rolls back or drops the transaction and returns
+`WriteScopeError::Operation`: that failure is rollback-confirmed. On callback
+`Ok`, it makes exactly one commit attempt: a successful acknowledgement returns
+`MutationOutcome::Confirmed`, while any commit error returns
+`MutationOutcome::CommitIndeterminate`, never a rollback-confirmed operation
+failure. The scope records this bounded outcome on the span that owns the
+decision, following [ADR-0147](../0147-decision-path-observability.md).
+
+Server mutation outputs preserve the same outcome algebra: a rollback-confirmed
+`WriteScopeError`, `MutationOutcome::Confirmed`, or
+`MutationOutcome::CommitIndeterminate`. Confirmed and indeterminate results both
+cause client invalidation and revalidation; indeterminate remains visibly
+error-like rather than claiming a confirmed result.
 
 ## Consequences
 
-Callers acquire a scope only around the mutations that must be atomic. They
-prepare validation, rendering, ordinary password hashing, filesystem work, and
-network work before acquisition or after completion, except for the existing
-claim-before-Argon2 cases. This is necessary to preserve bounded SQLite write
-lock occupancy.
+Callers acquire a scope only for the narrow set of mutations that must be
+atomic. They prepare validation, rendering, ordinary password hashing, streamed
+upload bytes, and network work before acquisition or after completion. Media
+upload holds the identity lock for only final local target placement, metadata
+insertion, and failure cleanup; existing claim-before-Argon2 cases remain
+explicit. This preserves bounded SQLite write-lock occupancy.
 
-The post-tag slice proves the boundary while retaining SQLite `BEGIN IMMEDIATE`,
-PostgreSQL post-row and slug-ordered tag locks, snapshot ordering, and injected
-error behaviour. Future vertical cutovers use the same capability; they do not
-introduce a second mutation implementation or a general SQL executor.
+The post-tag and media reconciliation paths prove the boundary while retaining
+SQLite `BEGIN IMMEDIATE`, PostgreSQL post-row and slug-ordered tag locks,
+snapshot ordering, and injected-error behaviour. Every audited application
+mutation uses the same capability; no cutover retains a second mutation path or
+a general SQL executor.
 
 This decision supersedes [ADR-0021](../0021-sqlite-transaction-discipline.md)'s
 single-statement-autocommit preference for the audited application mutations
