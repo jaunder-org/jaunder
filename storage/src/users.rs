@@ -97,6 +97,11 @@ pub enum UserAuthError {
     Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
+/// Preserves a write-connection acquisition failure as an authentication source.
+fn map_user_auth_connection_error(error: sqlx::Error) -> UserAuthError {
+    UserAuthError::Internal(Box::new(error))
+}
+
 impl From<CreateUserError> for host::error::InternalError {
     /// Reproduces the former `web::auth::server::register_open_error`
     /// `(kind, class, public_message)`: a taken username is a client conflict,
@@ -454,8 +459,8 @@ where
         mut authentication: PreparedAuthentication,
     ) -> Result<UserRecord, UserAuthError> {
         let now = UtcInstant::now();
-        let connection = DB::write_connection(transaction)
-            .map_err(|error| UserAuthError::Internal(Box::new(error)))?;
+        let connection =
+            DB::write_connection(transaction).map_err(map_user_auth_connection_error)?;
         sqlx::query("UPDATE users SET last_authenticated_at = $1 WHERE user_id = $2")
             .bind(now)
             .bind(authentication.0.user_id)
@@ -1090,6 +1095,18 @@ mod tests {
             &trace,
             "storage.user.authenticate.dummy_verify",
         );
+    }
+
+    #[test]
+    fn user_auth_connection_error_preserves_sqlx_source() {
+        let error = map_user_auth_connection_error(sqlx::Error::PoolClosed);
+        let UserAuthError::Internal(source) = error else {
+            panic!("connection failure must map to an internal authentication error");
+        };
+        assert!(matches!(
+            source.downcast_ref::<sqlx::Error>(),
+            Some(sqlx::Error::PoolClosed)
+        ));
     }
 
     // Each variant maps to a fixed `(kind, public_message)` pair.

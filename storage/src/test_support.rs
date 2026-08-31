@@ -1936,8 +1936,8 @@ mod tests {
     use super::{
         AudienceTarget, Backend, CreatePostError, DbConnectOptions, PostFormat, PostSummary,
         PostgresDbGuard, PostgresTestConfig, SeedPost, SeedRawPost, SeedUser, UtcInstant, backends,
-        bootstrap_url, parse_post_title, raw_media_filename_exists, recorded_postgres_url,
-        report_drop_outcome, seed_media, splice_db_name, sqlite_url,
+        bootstrap_url, confirmed_for, parse_post_title, raw_media_filename_exists,
+        recorded_postgres_url, report_drop_outcome, seed_media, splice_db_name, sqlite_url,
     };
 
     // The free renderer, to pin that the builder's HTML is exactly `render(body)` — the
@@ -1948,6 +1948,15 @@ mod tests {
     use rstest::*;
     use rstest_reuse::*;
     use std::sync::Arc;
+
+    #[test]
+    #[should_panic(expected = "fixture action requires a confirmed commit")]
+    fn confirmed_for_rejects_indeterminate_commit() {
+        confirmed_for(
+            common::MutationOutcome::CommitIndeterminate(()),
+            "fixture action",
+        );
+    }
 
     #[apply(backends)]
     #[tokio::test]

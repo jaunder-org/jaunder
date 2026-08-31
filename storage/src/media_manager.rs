@@ -381,9 +381,9 @@ impl MediaManager {
         let target_path = self.storage_path.join("media").join(&relative_path);
         let hash_dir = target_path
             .parent()
-            .ok_or_else(|| {
-                anyhow::anyhow!("media target path {} has no parent", target_path.display())
-            })?
+            .unwrap_or_else(|| {
+                unreachable!("media target path is constructed beneath storage root")
+            })
             .to_path_buf();
         let media_ref = MediaRef {
             source: MediaSource::Upload,
@@ -548,18 +548,24 @@ impl MediaManager {
                     })
                 })
                 .await;
-            let reclaim = match reclaimability {
-                Ok(MutationOutcome::Confirmed(true)) => {
-                    Self::remove_media_file(self.storage_path.as_ref(), media).await
-                }
-                Ok(MutationOutcome::Confirmed(false) | MutationOutcome::CommitIndeterminate(_)) => {
-                    Ok(())
-                }
-                Err(error) => Err(Self::scope_error(error)),
+            let reclaim = match Self::reclaimable_from_scope(reclaimability) {
+                Ok(true) => Self::remove_media_file(self.storage_path.as_ref(), media).await,
+                Ok(false) => Ok(()),
+                Err(error) => Err(error),
             };
             return Ok(Self::finish_reclaim(outcome, reclaim));
         }
         Ok(outcome)
+    }
+
+    fn reclaimable_from_scope(
+        reclaimability: Result<MutationOutcome<bool>, WriteScopeError<anyhow::Error>>,
+    ) -> anyhow::Result<bool> {
+        match reclaimability {
+            Ok(MutationOutcome::Confirmed(reclaimable)) => Ok(reclaimable),
+            Ok(MutationOutcome::CommitIndeterminate(_)) => Ok(false),
+            Err(error) => Err(Self::scope_error(error)),
+        }
     }
 
     fn finish_reclaim<T>(primary: T, reclaim: anyhow::Result<()>) -> T {
@@ -762,6 +768,141 @@ mod tests {
 
         assert_eq!(metadata.size_bytes, parse_byte_size("0"));
         assert!(ByteSize::try_from(-1).is_err());
+    }
+
+    #[test]
+    fn reclaimability_scope_begin_failure_maps_to_typed_internal_error() {
+        let error = MediaManager::reclaimable_from_scope(Err(WriteScopeError::Begin(
+            sqlx::Error::PoolClosed,
+        )))
+        .expect_err("scope begin failure must be returned");
+        let media_error = error
+            .downcast_ref::<MediaError>()
+            .expect("scope begin failure must map to MediaError");
+        let MediaError::Internal(source) = media_error else {
+            panic!("scope begin failure must map to an internal error");
+        };
+        assert!(matches!(
+            source.downcast_ref::<sqlx::Error>(),
+            Some(sqlx::Error::PoolClosed)
+        ));
+    }
+
+    // guard:no-backend — placement fails before the database scope starts.
+    #[tokio::test]
+    async fn placement_failure_removes_temp_file_and_retains_hash_collision() {
+        let temp = TempDir::new().unwrap();
+        let collision = temp.path().join("hash-dir");
+        fs::write(&collision, b"not-a-directory").await.unwrap();
+        let tmp_path = temp.path().join("upload.tmp");
+        fs::write(&tmp_path, b"png-ish").await.unwrap();
+        let filename = parse_filename("placement-failed.png");
+        let sha256 =
+            parse_content_hash("deadbeef00000000000000000000000000000000000000000000000000000000");
+        let media_ref = MediaRef {
+            source: MediaSource::Upload,
+            sha256: sha256.clone(),
+            filename: filename.clone(),
+        };
+        let record = MediaRecord {
+            user_id: UserId::from(1),
+            sha256,
+            filename,
+            source: MediaSource::Upload,
+            content_type: parse_content_type("image/png"),
+            size_bytes: parse_byte_size("7"),
+            source_url: None,
+            created_at: UtcInstant::now(),
+        };
+        let manager = MediaManager::new(
+            Arc::new(crate::MockMediaStorage::new()),
+            Arc::new(crate::MockSiteConfigStorage::new()),
+            WriteScope::mock(),
+            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+        );
+
+        assert!(
+            manager
+                .place_and_register(
+                    record,
+                    media_ref,
+                    tmp_path.clone(),
+                    collision.join("target"),
+                    collision.clone(),
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            !tmp_path.exists(),
+            "a placement failure must remove the prepared temp file"
+        );
+        assert_eq!(
+            fs::read(&collision).await.unwrap(),
+            b"not-a-directory",
+            "cleanup must retain the pre-existing hash-path collision"
+        );
+    }
+
+    // guard:low-level-db — a closed pool makes the scope fail after deduplication.
+    #[tokio::test]
+    async fn existing_target_scope_failure_retains_target_and_removes_temp_file() {
+        let temp = TempDir::new().unwrap();
+        let target_path = temp.path().join("existing-target");
+        fs::write(&target_path, b"already-stored").await.unwrap();
+        let tmp_path = temp.path().join("upload.tmp");
+        fs::write(&tmp_path, b"png-ish").await.unwrap();
+        let filename = parse_filename("existing-target.png");
+        let sha256 =
+            parse_content_hash("deadbeef00000000000000000000000000000000000000000000000000000000");
+        let media_ref = MediaRef {
+            source: MediaSource::Upload,
+            sha256: sha256.clone(),
+            filename: filename.clone(),
+        };
+        let record = MediaRecord {
+            user_id: UserId::from(1),
+            sha256,
+            filename,
+            source: MediaSource::Upload,
+            content_type: parse_content_type("image/png"),
+            size_bytes: parse_byte_size("7"),
+            source_url: None,
+            created_at: UtcInstant::now(),
+        };
+        let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+        let write_scope = WriteScope::sqlite(pool.clone());
+        pool.close().await;
+        let manager = MediaManager::new(
+            Arc::new(crate::MockMediaStorage::new()),
+            Arc::new(crate::MockSiteConfigStorage::new()),
+            write_scope,
+            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+        );
+
+        let error = manager
+            .place_and_register(
+                record,
+                media_ref,
+                tmp_path.clone(),
+                target_path.clone(),
+                temp.path().join("unused-hash-dir"),
+            )
+            .await
+            .expect_err("scope begin failure must be returned");
+        assert!(matches!(
+            error.downcast_ref::<MediaError>(),
+            Some(MediaError::Internal(_))
+        ));
+        assert!(
+            !tmp_path.exists(),
+            "deduplicating to a pre-existing target must remove the temp file"
+        );
+        assert_eq!(
+            fs::read(&target_path).await.unwrap(),
+            b"already-stored",
+            "scope failure must retain the pre-existing target"
+        );
     }
 
     // guard:no-backend — mock scope rejects the DB operation after target preparation

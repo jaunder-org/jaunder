@@ -107,6 +107,25 @@ pub(crate) fn postgres_connection(
         .ok_or_else(|| sqlx::Error::Protocol("PostgreSQL write capability required".into()))
 }
 
+/// Classifies a commit acknowledgement while preserving the completed mutation value.
+fn classify_commit_result<T>(commit: Result<(), sqlx::Error>, value: T) -> MutationOutcome<T> {
+    match commit {
+        Ok(()) => MutationOutcome::Confirmed(value),
+        Err(error) => {
+            // The server must return the mutation value as indeterminate because the
+            // database may have committed before acknowledgement failed. Report the
+            // suppressed commit error through the owning runtime's structured seam.
+            host::error::report_swallowed(
+                host::error::ErrorKind::Storage,
+                host::error::ErrorClass::Transient,
+                "storage.write_scope.commit_acknowledgement",
+                host::error::SwallowedSource::Error(&error),
+            );
+            MutationOutcome::CommitIndeterminate(value)
+        }
+    }
+}
+
 impl WriteScope {
     pub(crate) fn sqlite(pool: SqlitePool) -> Self {
         Self {
@@ -196,8 +215,8 @@ impl WriteScope {
                 #[cfg(any(test, feature = "test-utils"))]
                 HeldTransaction::Mock => Ok(()),
             };
-            match commit {
-                Ok(()) => {
+            match classify_commit_result(commit, value) {
+                MutationOutcome::Confirmed(value) => {
                     #[cfg(test)]
                     if self.lose_commit_acknowledgement_after_commit {
                         span.record("write_scope.outcome", "commit_indeterminate");
@@ -207,17 +226,8 @@ impl WriteScope {
                     span.record("write_scope.outcome", "confirmed_commit");
                     Ok(MutationOutcome::Confirmed(value))
                 }
-                Err(error) => {
+                MutationOutcome::CommitIndeterminate(value) => {
                     span.record("write_scope.outcome", "commit_indeterminate");
-                    // The server must return the mutation value as indeterminate because the
-                    // database may have committed before acknowledgement failed. Report the
-                    // suppressed commit error through the owning runtime's structured seam.
-                    host::error::report_swallowed(
-                        host::error::ErrorKind::Storage,
-                        host::error::ErrorClass::Transient,
-                        "storage.write_scope.commit_acknowledgement",
-                        host::error::SwallowedSource::Error(&error),
-                    );
                     Ok(MutationOutcome::CommitIndeterminate(value))
                 }
             }
@@ -254,12 +264,12 @@ mod tests {
     struct FieldRecorder(Vec<(String, String)>);
 
     impl Visit for FieldRecorder {
-        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-            self.0.push((field.name().to_owned(), format!("{value:?}")));
-        }
-
         fn record_str(&mut self, field: &Field, value: &str) {
             self.0.push((field.name().to_owned(), value.to_owned()));
+        }
+
+        fn record_debug(&mut self, _field: &Field, _value: &dyn fmt::Debug) {
+            unreachable!("write_scope.outcome is recorded as a string");
         }
     }
 
@@ -489,24 +499,84 @@ mod tests {
     }
 
     #[test]
-    fn operation_error_exposes_its_source() {
-        let error = WriteScopeError::Operation(std::io::Error::other("operation failure"));
+    fn begin_error_formats_and_exposes_its_source() {
+        let begin_error = sqlx::Error::Io(std::io::Error::other("begin failure"));
+        let expected = format!("write scope could not begin: {begin_error}");
+        let error = WriteScopeError::<std::io::Error>::Begin(begin_error);
 
-        assert!(
-            std::error::Error::source(&error)
-                .is_some_and(|source| source.downcast_ref::<std::io::Error>().is_some())
-        );
-    }
-
-    #[test]
-    fn begin_error_exposes_its_source() {
-        let error = WriteScopeError::<std::io::Error>::Begin(sqlx::Error::Io(
-            std::io::Error::other("begin failure"),
-        ));
-
+        assert_eq!(error.to_string(), expected);
         assert!(
             std::error::Error::source(&error)
                 .is_some_and(|source| source.downcast_ref::<sqlx::Error>().is_some())
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn real_scope_rejects_other_backend_capability(#[case] backend: Backend) {
+        let env = backend.setup().await;
+
+        let result = match backend {
+            Backend::Sqlite => {
+                env.state
+                    .write_scope
+                    .run(|transaction| {
+                        Box::pin(async move { postgres_connection(transaction).map(|_| ()) })
+                    })
+                    .await
+            }
+            Backend::Postgres => {
+                env.state
+                    .write_scope
+                    .run(|transaction| {
+                        Box::pin(async move { sqlite_connection(transaction).map(|_| ()) })
+                    })
+                    .await
+            }
+        };
+
+        assert!(matches!(
+            result,
+            Err(WriteScopeError::Operation(sqlx::Error::Protocol(_)))
+        ));
+    }
+
+    // guard:no-backend — mock write scope holds no database connection
+    #[tokio::test]
+    async fn mock_scope_rejects_database_capabilities() {
+        let scope = WriteScope::mock();
+
+        let sqlite = scope
+            .run(|transaction| Box::pin(async move { sqlite_connection(transaction).map(|_| ()) }))
+            .await;
+        let postgres = scope
+            .run(|transaction| {
+                Box::pin(async move { postgres_connection(transaction).map(|_| ()) })
+            })
+            .await;
+
+        assert!(matches!(
+            sqlite,
+            Err(WriteScopeError::Operation(sqlx::Error::Protocol(_)))
+        ));
+        assert!(matches!(
+            postgres,
+            Err(WriteScopeError::Operation(sqlx::Error::Protocol(_)))
+        ));
+    }
+
+    #[test]
+    fn failed_commit_acknowledgement_is_indeterminate_with_value_preserved() {
+        let outcome = classify_commit_result(
+            Err(sqlx::Error::Io(std::io::Error::other(
+                "acknowledgement lost",
+            ))),
+            "completed mutation",
+        );
+
+        assert_eq!(
+            outcome,
+            MutationOutcome::CommitIndeterminate("completed mutation")
         );
     }
 }

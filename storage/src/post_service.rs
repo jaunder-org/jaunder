@@ -56,6 +56,22 @@ pub struct RenderedPostContent {
     pub expectations: PostBookkeepingExpectation,
 }
 
+/// Converts a post-creation write-scope failure into its public service error.
+fn map_create_post_scope_error(error: WriteScopeError<CreatePostError>) -> CreatePostError {
+    match error {
+        WriteScopeError::Operation(error) => error,
+        WriteScopeError::Begin(error) => CreatePostError::Internal(error),
+    }
+}
+
+/// Converts a post-update write-scope failure into its public service error.
+fn map_post_update_scope_error(error: WriteScopeError<UpdatePostError>) -> PerformUpdateError {
+    match error {
+        WriteScopeError::Operation(error) => error.into(),
+        WriteScopeError::Begin(error) => PerformUpdateError::Storage(error),
+    }
+}
+
 /// Renders `body` according to `format` and creates the post through one caller-owned
 /// write scope.
 ///
@@ -102,10 +118,7 @@ pub async fn create_rendered_post(
             })
         })
         .await
-        .map_err(|error| match error {
-            WriteScopeError::Operation(error) => error,
-            WriteScopeError::Begin(error) => CreatePostError::Internal(error),
-        })
+        .map_err(map_create_post_scope_error)
 }
 
 /// Renders `body` per `format` and assembles the [`CreatePostInput`] without
@@ -366,10 +379,7 @@ pub async fn perform_post_update(
             })
         })
         .await
-        .map_err(|error| match error {
-            WriteScopeError::Operation(error) => error.into(),
-            WriteScopeError::Begin(error) => PerformUpdateError::Storage(error),
-        })
+        .map_err(map_post_update_scope_error)
 }
 
 // ---------------------------------------------------------------------------
@@ -588,17 +598,47 @@ pub async fn perform_post_creation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "test-utils")]
+    use crate::test_support::mock_write_scope;
     use crate::test_support::{
         Backend, SeedUser, backends, confirmed, fetch_post_media, media_ref_for, media_url_for,
-        mock_write_scope, seed_media,
+        seed_media,
     };
     use common::idempotency_key::IdempotencyKey;
     use common::media::{MediaReferenceForm, MediaReferenceKind};
-    use common::test_support::{
-        parse_post_body, parse_post_title, parse_row_limit, parse_slug, parse_tag, parse_tag_label,
-    };
+    use common::test_support::{parse_post_body, parse_post_title, parse_row_limit, parse_slug};
+    #[cfg(feature = "test-utils")]
+    use common::test_support::{parse_tag, parse_tag_label};
+
     use rstest::*;
     use rstest_reuse::*;
+    #[test]
+    fn create_post_scope_error_maps_operation_and_begin() {
+        assert!(matches!(
+            map_create_post_scope_error(WriteScopeError::Operation(CreatePostError::SlugConflict)),
+            CreatePostError::SlugConflict
+        ));
+
+        let error = map_create_post_scope_error(WriteScopeError::Begin(sqlx::Error::PoolClosed));
+        let CreatePostError::Internal(source) = error else {
+            panic!("begin failure must map to a create storage error");
+        };
+        assert!(matches!(source, sqlx::Error::PoolClosed));
+    }
+
+    #[test]
+    fn post_update_scope_error_maps_operation_and_begin() {
+        assert!(matches!(
+            map_post_update_scope_error(WriteScopeError::Operation(UpdatePostError::NotFound)),
+            PerformUpdateError::NotFound
+        ));
+
+        let error = map_post_update_scope_error(WriteScopeError::Begin(sqlx::Error::PoolClosed));
+        let PerformUpdateError::Storage(source) = error else {
+            panic!("begin failure must map to an update storage error");
+        };
+        assert!(matches!(source, sqlx::Error::PoolClosed));
+    }
 
     // -- perform_post_creation tests --
 
