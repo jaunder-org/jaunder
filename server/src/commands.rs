@@ -904,15 +904,15 @@ pub async fn prepare_server(
     // than serve with a silently-broken guard (#141).
     let start_time = runtime_file::require_start_time_at(Path::new("/proc/self/stat"))?;
 
-    let runtime_path = runtime_file::resolve_runtime_path(runtime_file, &storage.storage_path);
-    // This is the actual startup mutex. It is acquired before cleanup and retained
-    // through the serve lifetime, so a concurrent process cannot delete uploads
-    // belonging to the active instance. A stale lock *file* is safe: the OS lock
-    // itself is released when its process dies.
-    let startup_lock = StartupLockGuard::acquire(&runtime_path)?;
-    // Keep checking the legacy runtime file during rollout: an older live process
-    // has no OS lock, but still must be allowed to protect its active uploads.
-    match runtime_file::check_startup_mutex(&runtime_path)? {
+    let canonical_runtime_path = runtime_file::canonical_runtime_path(&storage.storage_path);
+    let discovery_runtime_path =
+        runtime_file::resolve_runtime_path(runtime_file, &storage.storage_path);
+    // This is the actual startup mutex. It is keyed only by the data directory,
+    // so a discovery override cannot let two processes clean the same uploads.
+    let startup_lock = StartupLockGuard::acquire(&storage.storage_path)?;
+    // Keep checking the canonical legacy runtime file during rollout: an older
+    // live process has no OS lock, but still must protect its active uploads.
+    match runtime_file::check_startup_mutex(&canonical_runtime_path)? {
         StartupCheck::Refuse { pid } => anyhow::bail!(
             "another jaunder instance is already running on data dir {} (pid {pid}); \
              refusing to start",
@@ -920,8 +920,27 @@ pub async fn prepare_server(
         ),
         StartupCheck::Stale | StartupCheck::Proceed => {}
     }
-    // The exclusive OS lock above proves no valid upload can be active. Establish
-    // a clean transient area before any upload-capable server state is prepared.
+    if discovery_runtime_path != canonical_runtime_path {
+        match runtime_file::check_startup_mutex(&discovery_runtime_path)? {
+            StartupCheck::Refuse { pid } => anyhow::bail!(
+                "runtime discovery file {} is owned by a live jaunder instance (pid {pid}); \
+                 refusing to start",
+                discovery_runtime_path.display()
+            ),
+            StartupCheck::Stale | StartupCheck::Proceed => {}
+        }
+    }
+    // Publish a mandatory, legacy-visible identity before cleanup. If this fails,
+    // do not risk deleting another process's temporary uploads.
+    let runtime_guard = startup_lock.reserve(
+        canonical_runtime_path,
+        discovery_runtime_path,
+        bind,
+        start_time,
+    )?;
+    // The exclusive OS lock and live reservation above prove no valid upload can
+    // be active. Establish a clean transient area before any upload-capable
+    // server state is prepared.
     MediaManager::prepare_temporary_upload_directory(&storage.storage_path)
         .await
         .context("failed to prepare media temporary upload directory")?;
@@ -979,9 +998,8 @@ pub async fn prepare_server(
     // `local_addr` cannot fail on a just-bound listener; fall back to the
     // requested `bind` rather than add a never-taken error branch.
     let addr = listener.local_addr().unwrap_or(bind);
-    // Publish discovery only after the listener has a bound address, while retaining
-    // the lock acquired before all line-of-business startup work.
-    let runtime_guard = startup_lock.publish(runtime_path, addr, start_time);
+    // Update both mandatory live identities after binding, while the OS lock is held.
+    runtime_guard.update_addresses(addr, start_time);
 
     Ok(PreparedServer {
         listener,
@@ -1030,7 +1048,7 @@ async fn serve_with_shutdown(
 ///
 /// Returns an error if a signal handler cannot be installed.
 #[cfg(unix)]
-fn spawn_shutdown_supervisor(runtime_path: Option<PathBuf>) -> io::Result<Receiver<()>> {
+fn spawn_shutdown_supervisor(runtime_paths: Vec<PathBuf>) -> io::Result<Receiver<()>> {
     use tokio::signal::unix::{SignalKind, signal};
     let mut sigint = signal(SignalKind::interrupt())?;
     let mut sigterm = signal(SignalKind::terminate())?;
@@ -1050,8 +1068,8 @@ fn spawn_shutdown_supervisor(runtime_path: Option<PathBuf>) -> io::Result<Receiv
         let _ = tx.send(());
         tokio::select! { _ = sigint.recv() => {}, _ = sigterm.recv() => {} }
         tracing::warn!("second shutdown signal; forcing immediate exit");
-        if let Some(p) = &runtime_path {
-            runtime_file::remove_runtime_file(p);
+        for path in &runtime_paths {
+            runtime_file::remove_runtime_file(path);
         }
         std::process::exit(0);
         // cov:ignore-stop
@@ -1101,10 +1119,8 @@ pub async fn cmd_serve(
     let _saturation_metrics = saturation_metrics;
     #[cfg(unix)]
     {
-        // Clone the runtime-file path for the forced-exit removal before the guard
-        // moves into serve_with_shutdown (whose Drop handles the graceful path).
-        let runtime_path = runtime_guard.path().map(std::path::Path::to_path_buf);
-        let shutdown_rx = spawn_shutdown_supervisor(runtime_path)?;
+        let runtime_paths = runtime_guard.paths();
+        let shutdown_rx = spawn_shutdown_supervisor(runtime_paths)?;
         serve_with_shutdown(listener, router, runtime_guard, async move {
             let _ = shutdown_rx.await;
         })
@@ -2200,10 +2216,18 @@ mod tests {
         .expect("write stale temporary upload");
 
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let discovery_path = temp.path().join("discovery.json");
         let telemetry = test_telemetry(None);
-        let prepared = prepare_server(&storage, bind, false, None, &telemetry, None)
-            .await
-            .expect("prepare server after temporary cleanup");
+        let prepared = prepare_server(
+            &storage,
+            bind,
+            false,
+            Some(discovery_path.clone()),
+            &telemetry,
+            None,
+        )
+        .await
+        .expect("prepare server after temporary cleanup");
 
         assert!(
             fs::read_dir(&tmp_dir)
@@ -2212,7 +2236,30 @@ mod tests {
                 .is_none(),
             "uploads may be accepted only after stale temporary artifacts are removed"
         );
+        let legacy: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(temp.path().join("runtime.json")).expect("legacy reservation"),
+        )
+        .expect("valid legacy reservation");
+        let addr = prepared
+            .listener
+            .local_addr()
+            .expect("bound listener address");
+        assert_eq!(legacy["pid"], std::process::id());
+        assert!(legacy["start_time"].as_u64().is_some());
+        assert_eq!(legacy["port"], addr.port());
+        let discovery: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&discovery_path).expect("discovery override"))
+                .expect("valid discovery override");
+        assert_eq!(discovery["port"], addr.port());
         drop(prepared);
+        assert!(
+            !temp.path().join("runtime.json").exists(),
+            "dropping the server removes the legacy reservation"
+        );
+        assert!(
+            !discovery_path.exists(),
+            "dropping the server removes the discovery override"
+        );
     }
 
     #[tokio::test]
@@ -2257,14 +2304,19 @@ mod tests {
         fs::create_dir_all(&tmp_dir).expect("create temporary directory");
         let stale_upload = tmp_dir.join("stale-upload");
         fs::write(&stale_upload, b"stale").expect("write stale upload");
-        let _lock = StartupLockGuard::acquire(&temp.path().join("runtime.json"))
-            .expect("hold startup lock");
-
+        let _lock = StartupLockGuard::acquire(temp.path()).expect("hold startup lock");
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let err = prepare_server(&storage, bind, false, None, &telemetry, None)
-            .await
-            .err();
+        let err = prepare_server(
+            &storage,
+            bind,
+            false,
+            Some(temp.path().join("other-discovery.json")),
+            &telemetry,
+            None,
+        )
+        .await
+        .err();
         assert!(
             err.is_some_and(|e| e.to_string().contains("exclusive startup lock")),
             "prepare_server must refuse when a live process holds the OS lock"
@@ -2276,6 +2328,57 @@ mod tests {
         assert!(
             stale_upload.exists(),
             "a live-instance refusal must occur before temporary cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_server_refuses_live_discovery_override_before_cleanup() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        let tmp_dir = temp.path().join("media").join("tmp");
+        fs::create_dir_all(&tmp_dir).expect("create temporary directory");
+        let stale_upload = tmp_dir.join("stale-upload");
+        fs::write(&stale_upload, b"stale").expect("write stale upload");
+        let discovery_path = temp.path().join("live-discovery.json");
+        let start_time = runtime_file::require_start_time_at(Path::new("/proc/self/stat"))
+            .expect("current process start time");
+        fs::write(
+            &discovery_path,
+            serde_json::json!({
+                "ip": "127.0.0.1",
+                "port": 1,
+                "pid": std::process::id(),
+                "start_time": start_time,
+            })
+            .to_string(),
+        )
+        .expect("write live discovery file");
+
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let telemetry = test_telemetry(None);
+        let error = prepare_server(
+            &storage,
+            bind,
+            false,
+            Some(discovery_path.clone()),
+            &telemetry,
+            None,
+        )
+        .await
+        .err()
+        .expect("a live discovery owner must refuse startup");
+
+        assert!(
+            error.to_string().contains("runtime discovery file"),
+            "refusal must identify the conflicting discovery file: {error:#}"
+        );
+        assert!(
+            stale_upload.exists(),
+            "a live discovery refusal must occur before temporary cleanup"
+        );
+        assert!(
+            discovery_path.exists(),
+            "the live process's discovery file must not be overwritten"
         );
     }
 
@@ -2292,14 +2395,15 @@ mod tests {
         let path = dir.path().join("runtime.json");
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let guard = StartupLockGuard::acquire(&path)
+        let guard = StartupLockGuard::acquire(dir.path())
             .expect("startup lock")
-            .publish(path.clone(), addr, 0);
+            .reserve(path.clone(), path.clone(), addr, 0)
+            .expect("runtime reservation");
         assert!(path.exists(), "guard wrote the runtime file");
 
         // Installs the SIGINT/SIGTERM handlers synchronously, so the raise below
         // cannot beat handler installation.
-        let shutdown_rx = spawn_shutdown_supervisor(Some(path.clone())).unwrap();
+        let shutdown_rx = spawn_shutdown_supervisor(guard.paths()).unwrap();
         let handle = tokio::spawn(serve_with_shutdown(
             listener,
             axum::Router::new(),

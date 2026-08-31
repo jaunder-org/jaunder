@@ -11,7 +11,11 @@ use chrono::Duration;
 use common::ids::FeedEventId;
 use common::pagination::RowLimit;
 use common::time::UtcInstant;
-use host::feed::{FeedEventClaimLimit, FeedEventStatus, FeedPath};
+use host::{
+    feed::{FeedEventClaimLimit, FeedEventStatus, FeedPath},
+    metrics,
+    retention::Domain,
+};
 use sqlx::{Database, Error as SqlxError, Pool};
 use thiserror::Error;
 #[cfg(test)]
@@ -548,6 +552,9 @@ where
             let batch =
                 DB::prune_terminal_events(&self.pool, now, failed_cutoff, TERMINAL_PRUNE_LIMIT)
                     .await?;
+            if batch > 0 {
+                metrics::retention_pruned(Domain::FeedEvents, batch);
+            }
             deleted += batch;
             if batch < TERMINAL_PRUNE_LIMIT.value().unsigned_abs() {
                 return Ok(deleted);

@@ -33,10 +33,14 @@ use common::tag::{Tag, TagLabel};
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{self, AudienceTarget, SubscriberRef, TargetKind, ViewerIdentity};
-use host::error::{InternalError, InternalResult};
-use host::etag;
-use host::feed::FeedPath;
-use host::render::{self, RenderOutput};
+use host::{
+    error::{InternalError, InternalResult},
+    etag,
+    feed::FeedPath,
+    metrics,
+    render::{self, RenderOutput},
+    retention::Domain,
+};
 const TAG_EXISTS_SQL: &str = "SELECT EXISTS(SELECT 1 FROM tags WHERE tag_slug = $1)";
 
 /// The validated calendar date of a public permalink lookup key. Re-exported from
@@ -2065,6 +2069,9 @@ where
             .fetch_all(&self.pool)
             .await?
             .len() as u64;
+            if batch > 0 {
+                metrics::retention_pruned(Domain::IdempotencyKeys, batch);
+            }
             deleted += batch;
             if batch < BATCH_SIZE as u64 {
                 return Ok(deleted);

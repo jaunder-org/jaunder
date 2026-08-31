@@ -4,7 +4,11 @@ use async_trait::async_trait;
 use chrono::Duration;
 use thiserror::Error;
 
-use host::invite::{self, InviteCode};
+use host::{
+    invite::{self, InviteCode},
+    metrics,
+    retention::Domain,
+};
 use sqlx::{Database, Pool};
 
 use crate::WriteTransaction;
@@ -236,6 +240,9 @@ where
             .fetch_all(&self.pool)
             .await?
             .len() as u64;
+            if batch > 0 {
+                metrics::retention_pruned(Domain::Invites, batch);
+            }
             deleted += batch;
             if batch == 0 {
                 return Ok(deleted);

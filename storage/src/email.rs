@@ -14,7 +14,7 @@ use common::email::Email;
 use common::ids::UserId;
 use common::time::UtcInstant;
 use common::token::RawToken;
-use host::token;
+use host::{metrics, retention::Domain, token};
 
 /// Errors returned by [`EmailVerificationStorage::use_email_verification`].
 #[derive(Debug, Error)]
@@ -241,6 +241,9 @@ where
             .fetch_all(&self.pool)
             .await?
             .len() as u64;
+            if batch > 0 {
+                metrics::retention_pruned(Domain::EmailVerifications, batch);
+            }
             deleted += batch;
             if batch == 0 {
                 return Ok(deleted);

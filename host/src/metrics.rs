@@ -365,17 +365,21 @@ pub fn post(event: PostEvent) {
 pub fn idempotency(event: IdempotencyEvent) {
     M.idempotency_keys.add(1, &kv("event", event.as_str()));
 }
-/// Records one bounded retention-domain outcome and its successful prune count.
-pub fn retention_cleanup(domain: Domain, result: CleanupResult, pruned: u64) {
-    let attributes = [
-        KeyValue::new("domain", domain.label()),
-        KeyValue::new("result", result.label()),
-    ];
-    M.retention_runs.add(1, &attributes);
-    if matches!(result, CleanupResult::Success) {
-        M.retention_pruned
-            .add(pruned, &kv("domain", domain.label()));
-    }
+
+/// Records one bounded retention-domain run outcome.
+pub fn retention_run(domain: Domain, result: CleanupResult) {
+    M.retention_runs.add(
+        1,
+        &[
+            KeyValue::new("domain", domain.label()),
+            KeyValue::new("result", result.label()),
+        ],
+    );
+}
+
+/// Records rows deleted by one committed bounded retention statement.
+pub fn retention_pruned(domain: Domain, count: u64) {
+    M.retention_pruned.add(count, &kv("domain", domain.label()));
 }
 
 pub fn atompub_request(op: &'static str, result: AtompubResult) {
@@ -429,6 +433,8 @@ mod tests {
         "jaunder.db.pool.idle",
         "jaunder.db.pool.max",
         "jaunder.posts",
+        "jaunder.storage.retention_runs",
+        "jaunder.storage.retention_pruned",
         "jaunder.atompub.requests",
     ];
 
@@ -459,6 +465,8 @@ mod tests {
         backup_bytes(1024);
         backup_pruned(3);
         post(PostEvent::Published);
+        retention_run(Domain::Invites, CleanupResult::Success);
+        retention_pruned(Domain::Invites, 3);
         atompub_request("POST /feed", AtompubResult::ClientError);
     }
 
@@ -700,6 +708,17 @@ mod tests {
                 ("error.disposition", "boundary"),
                 ("telemetry.origin", "server"),
             ])]
+        );
+
+        let retention_runs = counter_attributes(&metrics, "jaunder.storage.retention_runs");
+        assert!(
+            retention_runs.contains(&attrs([("domain", "invites"), ("result", "success")])),
+            "retention run did not record its bounded domain and result: {retention_runs:?}"
+        );
+        assert_eq!(
+            counter_attributes(&metrics, "jaunder.storage.retention_pruned"),
+            vec![attrs1([("domain", "invites")])],
+            "retention prune counts must carry only the bounded domain label"
         );
         // `counter_attributes` reads counters only. Asking it about a histogram
         // yields nothing rather than panicking — worth pinning, because a silent

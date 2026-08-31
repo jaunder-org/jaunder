@@ -23,7 +23,7 @@ use common::post_title::PostTitle;
 use common::slug::{InvalidSlug, Slug};
 use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
-use host::feed::affected_feed_urls;
+use host::feed;
 use host::metrics::{self, IdempotencyEvent};
 
 // ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ pub async fn create_rendered_post(
             let feed_events = Arc::clone(&feed_events);
             Box::pin(async move {
                 let created = storage.create_post(transaction, &input, now).await?;
-                let feed_paths = affected_feed_urls(
+                let feed_paths = feed::affected_feed_urls(
                     &created.record.author_username,
                     created.record.tags.iter().map(|tag| &tag.tag_slug),
                 );
@@ -376,7 +376,7 @@ pub async fn perform_post_update(
                     .update_post(transaction, post_id, editor_user_id, &input)
                     .await?;
                 let mut tag_slugs = HashSet::new();
-                let feed_paths = affected_feed_urls(
+                let feed_paths = feed::affected_feed_urls(
                     &record.author_username,
                     previous_tag_slugs
                         .iter()
@@ -961,7 +961,7 @@ mod tests {
         let previous_tag_slugs = vec![parse_tag("old"), parse_tag("shared")];
         let expected_tag_slugs = [parse_tag("old"), parse_tag("shared"), parse_tag("new")];
         let expected_feed_paths =
-            affected_feed_urls(&seeded_user.username, expected_tag_slugs.iter());
+            feed::affected_feed_urls(&seeded_user.username, expected_tag_slugs.iter());
         let mut feed_events = crate::MockFeedEventStorage::new();
         feed_events
             .expect_enqueue_many()

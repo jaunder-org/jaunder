@@ -103,7 +103,7 @@ where
 {
     match result {
         Ok(pruned) => {
-            metrics::retention_cleanup(domain, CleanupResult::Success, pruned);
+            metrics::retention_run(domain, CleanupResult::Success);
             tracing::info!(
                 retention.domain = domain.label(),
                 pruned,
@@ -111,7 +111,7 @@ where
             );
         }
         Err(error) => {
-            metrics::retention_cleanup(domain, CleanupResult::Failure, 0);
+            metrics::retention_run(domain, CleanupResult::Failure);
             tracing::warn!(
                 retention.domain = domain.label(),
                 error = %error,

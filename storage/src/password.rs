@@ -14,7 +14,7 @@ use crate::helpers::{self, TokenStateRow};
 use crate::sql::RowCount;
 use crate::{PasswordResetConsumption, WriteTransaction};
 use common::ids::UserId;
-use host::token;
+use host::{metrics, retention::Domain, token};
 
 /// Errors returned by [`PasswordResetStorage::use_password_reset`].
 #[derive(Debug, Error)]
@@ -186,6 +186,9 @@ where
             .fetch_all(&self.pool)
             .await?
             .len() as u64;
+            if batch > 0 {
+                metrics::retention_pruned(Domain::PasswordResets, batch);
+            }
             deleted += batch;
             if batch == 0 {
                 return Ok(deleted);
