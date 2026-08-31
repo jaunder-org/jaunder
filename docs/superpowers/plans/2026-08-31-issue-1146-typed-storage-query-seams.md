@@ -123,7 +123,7 @@ Out:
     tree; focused storage tests from Tasks 2–4 remain green after the mechanical
     cutover.
 
-- [ ] Task 6: Record the architecture and run the branch confidence gate
+- [x] Task 6: Record the architecture and run the branch confidence gate
   - Contract: create a tracked numberless proposed ADR with `jaunder-adr`;
     project it into `docs/ARCHITECTURE.md` with `jaunder-adr-projection`;
     correct ADR-0071 and ADR-0085 so the bridge, explicit approval registry,
