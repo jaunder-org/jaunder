@@ -59,7 +59,7 @@ Out:
     each new one-concern issue has exact readback proving milestone 17 and
     required metadata.
 
-- [ ] Task 4: Publish and archive the complete audit record
+- [x] Task 4: Publish and archive the complete audit record
   - Contract: issue #1227 receives the frozen source, representativeness and
     boundedness rationale, path/caller/test inventory, adapter comparison,
     useful/noisy signal assessment, accepted dispositions, deletion-test
