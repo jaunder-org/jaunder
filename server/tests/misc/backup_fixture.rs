@@ -220,20 +220,27 @@ async fn seed_side_tables(state: &AppState, author: UserId) {
             .expect("set user config"),
         "backup fixture user config",
     );
-    state
-        .media
-        .create_media(&MediaRecord {
-            user_id: author,
-            sha256: parse_content_hash(FIXTURE_MEDIA_SHA256),
-            filename: parse_filename("my%20photo.jpg"),
-            source: MediaSource::Upload,
-            content_type: parse_content_type("image/jpeg"),
-            size_bytes: parse_byte_size("4"),
-            source_url: None,
-            created_at: fixture_published_at(),
-        })
-        .await
-        .expect("create media row");
+    let media = Arc::clone(&state.media);
+    let record = MediaRecord {
+        user_id: author,
+        sha256: parse_content_hash(FIXTURE_MEDIA_SHA256),
+        filename: parse_filename("my%20photo.jpg"),
+        source: MediaSource::Upload,
+        content_type: parse_content_type("image/jpeg"),
+        size_bytes: parse_byte_size("4"),
+        source_url: None,
+        created_at: fixture_published_at(),
+    };
+    confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { media.create_media(transaction, &record).await })
+            })
+            .await
+            .expect("create media row"),
+        "backup fixture media",
+    );
     let feed_events = Arc::clone(&state.feed_events);
     let feed_path = fp("/feed.rss");
     confirmed_for(

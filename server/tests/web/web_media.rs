@@ -10,13 +10,14 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 use web::media::{Item, MediaDeletion, UsageData};
 
+use common::MutationOutcome;
 use common::time::UtcInstant;
 use host::config_key::SiteConfigKey;
 use rstest::*;
 use rstest_reuse::*;
 use storage::{
     CreateMediaError, ForeignEvidenceSink, InstanceId, MediaRecord, MediaReferenceEvidence,
-    MediaReferenceOwnershipResolver, PersistedMediaReference,
+    MediaReferenceOwnershipResolver, PersistedMediaReference, WriteScopeError,
 };
 
 use crate::helpers::{
@@ -32,15 +33,44 @@ use storage::test_support::{
     Backend, SeedRawPost, TestEnv, backends, backends_matrix, noop_mailer,
 };
 
-fn assert_json_object_keys(body: &str, expected: &[&str]) {
-    let value: serde_json::Value =
-        serde_json::from_str(body).expect("response should be valid JSON");
-    let object = value.as_object().expect("response should be a JSON object");
-    let mut actual = object.keys().map(String::as_str).collect::<Vec<_>>();
-    actual.sort_unstable();
-    let mut expected = expected.to_vec();
-    expected.sort_unstable();
-    assert_eq!(actual, expected, "unexpected response keys: {body}");
+async fn create_media(state: &storage::AppState, record: &MediaRecord) {
+    let media = state.media.clone();
+    let record = record.clone();
+    let outcome = match state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { media.create_media(transaction, &record).await })
+        })
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(WriteScopeError::Operation(CreateMediaError::AlreadyExists)) => return,
+        Err(error) => panic!("create_media failed: {error}"),
+    };
+    match outcome {
+        MutationOutcome::Confirmed(()) => {}
+        MutationOutcome::CommitIndeterminate(()) => {
+            panic!("fixture media creation requires a confirmed commit")
+        }
+    }
+}
+
+fn confirmed_media_deletion(body: &str) -> MediaDeletion {
+    match serde_json::from_str(body).expect("response should be a valid mutation outcome") {
+        MutationOutcome::Confirmed(deletion) => deletion,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("test fixture requires a confirmed media deletion")
+        }
+    }
+}
+
+fn confirmed_upload(body: &str) -> UploadedMedia {
+    match serde_json::from_str(body).expect("response should be a valid mutation outcome") {
+        MutationOutcome::Confirmed(upload) => upload,
+        MutationOutcome::CommitIndeterminate(_) => {
+            panic!("test fixture requires a confirmed media upload")
+        }
+    }
 }
 
 struct BlockingOwnershipResolver {
@@ -207,10 +237,7 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
         source_url: None,
         created_at: UtcInstant::now(),
     };
-    match state.media.create_media(&record).await {
-        Ok(()) | Err(CreateMediaError::AlreadyExists) => {}
-        Err(e) => panic!("create_media failed: {e}"),
-    }
+    create_media(&state, &record).await;
 
     let cookie = session.cookie();
 
@@ -251,10 +278,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
         source_url: None,
         created_at: UtcInstant::now(),
     };
-    match state.media.create_media(&record).await {
-        Ok(()) | Err(CreateMediaError::AlreadyExists) => {}
-        Err(e) => panic!("create_media failed: {e}"),
-    }
+    create_media(&state, &record).await;
 
     let cookie = session.cookie();
 
@@ -293,10 +317,7 @@ async fn delete_nested_request_maps_identity_without_force(#[case] backend: Back
         source_url: None,
         created_at: UtcInstant::now(),
     };
-    match state.media.create_media(&record).await {
-        Ok(()) | Err(CreateMediaError::AlreadyExists) => {}
-        Err(e) => panic!("create_media failed: {e}"),
-    }
+    create_media(&state, &record).await;
 
     let cookie = session.cookie();
 
@@ -315,9 +336,7 @@ async fn delete_nested_request_maps_identity_without_force(#[case] backend: Back
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
-    assert_json_object_keys(&body_str, &["deleted", "referenced_in_posts"]);
-    let result: MediaDeletion =
-        serde_json::from_str(&body_str).expect("response should be valid JSON");
+    let result = confirmed_media_deletion(&body_str);
     assert!(
         result.deleted,
         "delete of existing item should report deleted=true"
@@ -352,10 +371,7 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
         source_url: None,
         created_at: UtcInstant::now(),
     };
-    match state.media.create_media(&record).await {
-        Ok(()) | Err(CreateMediaError::AlreadyExists) => {}
-        Err(e) => panic!("create_media failed: {e}"),
-    }
+    create_media(&state, &record).await;
 
     let post = SeedRawPost::new(user_id)
         .body(parse_post_body(&format!("![inline]({media_url})")))
@@ -379,8 +395,7 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
-    let result: MediaDeletion =
-        serde_json::from_str(&body_str).expect("response should be valid JSON");
+    let result = confirmed_media_deletion(&body_str);
     assert!(
         !result.deleted,
         "delete without force should refuse when media is referenced by a post"
@@ -410,7 +425,7 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
         source_url: None,
         created_at: UtcInstant::now(),
     };
-    state.media.create_media(&media).await.unwrap();
+    create_media(&state, &media).await;
     let media_url = common::media::media_url(&media.source, &sha256, &filename);
     let foreign_form: MediaReferenceForm = format!("https://foreign.example{media_url}")
         .parse()
@@ -438,7 +453,7 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let refused: MediaDeletion = serde_json::from_str(&body).expect("valid JSON response");
+    let refused = confirmed_media_deletion(&body);
     assert!(!refused.deleted);
     assert_eq!(refused.referenced_in_posts, vec![owned.post_id]);
     assert_eq!(
@@ -472,7 +487,7 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let refused: MediaDeletion = serde_json::from_str(&body).expect("valid JSON response");
+    let refused = confirmed_media_deletion(&body);
     assert!(!refused.deleted, "unknown foreign ownership fails closed");
     assert_eq!(refused.referenced_in_posts, vec![owned.post_id]);
     let calls = resolver.calls();
@@ -508,7 +523,7 @@ async fn delete_refusal_reports_the_reference_snapshot_despite_a_concurrent_post
         source_url: None,
         created_at: UtcInstant::now(),
     };
-    state.media.create_media(&media).await.unwrap();
+    create_media(&state, &media).await;
     let media_url = common::media::media_url(&media.source, &sha256, &filename);
     let original = SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("<img src=\"{media_url}\">")))
@@ -542,7 +557,7 @@ async fn delete_refusal_reports_the_reference_snapshot_despite_a_concurrent_post
     resolver.release.notify_one();
     let (status, body) = deleting.await.expect("delete task does not panic");
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let result: MediaDeletion = serde_json::from_str(&body).expect("valid JSON response");
+    let result = confirmed_media_deletion(&body);
     assert!(!result.deleted);
     assert_eq!(
         result.referenced_in_posts,
@@ -572,7 +587,7 @@ async fn delete_nested_request_force_can_break_owner_retained_history(#[case] ba
         source_url: None,
         created_at: UtcInstant::now(),
     };
-    state.media.create_media(&record).await.unwrap();
+    create_media(&state, &record).await;
     SeedRawPost::new(user_id)
         .body(parse_post_body(&format!("![forced]({media_url})")))
         .seed(&state)
@@ -593,8 +608,7 @@ async fn delete_nested_request_force_can_break_owner_retained_history(#[case] ba
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
-    let result: MediaDeletion =
-        serde_json::from_str(&body_str).expect("response should be valid JSON");
+    let result = confirmed_media_deletion(&body_str);
     assert!(
         result.deleted,
         "explicit force may knowingly break the owner's retained history"
@@ -634,13 +648,9 @@ async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend)
     )
     .await;
 
-    // The server fn returns 200 with the bare `UploadedMedia` JSON.
+    // The server fn returns 200 with a confirmed mutation outcome.
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    assert_json_object_keys(
-        &body,
-        &["sha256", "filename", "content_type", "size_bytes", "url"],
-    );
-    let resp: UploadedMedia = serde_json::from_str(&body).expect("response should be valid JSON");
+    let resp = confirmed_upload(&body);
     assert_eq!(resp.filename, "photo.jpg");
     assert_eq!(resp.content_type, "image/jpeg");
     assert!(resp.url.contains("/media/upload/"), "url: {}", resp.url);
@@ -673,8 +683,8 @@ async fn upload_media_detects_content_type_when_field_omits_it(#[case] backend: 
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let response: UploadedMedia =
-        serde_json::from_str(&crate::helpers::body_string(response).await).unwrap();
+    let body = crate::helpers::body_string(response).await;
+    let response = confirmed_upload(&body);
     assert_eq!(response.content_type, "image/jpeg");
 }
 
@@ -701,7 +711,7 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let resp: UploadedMedia = serde_json::from_str(&body).expect("response should be valid JSON");
+    let resp = confirmed_upload(&body);
 
     // The wire field carries the *canonical* encoded spelling (#720), because it is a
     // lookup key rather than a display value — `atompub::media::collection_post` passes it
@@ -781,7 +791,7 @@ async fn upload_then_serve_survives_a_name_too_long_to_store(#[case] backend: Ba
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let resp: UploadedMedia = serde_json::from_str(&body).expect("response should be valid JSON");
+    let resp = confirmed_upload(&body);
 
     // Truncated, not rejected — and the extension survived, so the detected content type is
     // still an image rather than octet-stream.

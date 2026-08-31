@@ -14,6 +14,7 @@ use thiserror::Error;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
+use crate::InstanceId;
 use common::ids::UserId;
 use common::media::{
     self, ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaRef, MediaSource,
@@ -22,11 +23,11 @@ use common::media::{
 use common::time::UtcInstant;
 use host::metrics::{self, UploadOutcome};
 
-use crate::InstanceId;
 use crate::{
     CreateMediaError, MediaRecord, MediaReferenceEvidence, MediaStorage, SiteConfigStorage,
-    TryDeleteOutcome,
+    TryDeleteOutcome, WriteScope, WriteScopeError,
 };
+use common::MutationOutcome;
 
 /// A media upload failure with a bounded, client-mappable classification. `pub`
 /// so the HTTP boundary in `server` can `downcast_ref` it to a `StatusCode`
@@ -52,6 +53,7 @@ pub enum MediaError {
 pub struct MediaManager {
     media: Arc<dyn MediaStorage>,
     site_config: Arc<dyn SiteConfigStorage>,
+    write_scope: WriteScope,
     storage_path: Arc<PathBuf>,
 }
 
@@ -64,16 +66,36 @@ struct UploadMetadata {
     size_bytes: ByteSize,
 }
 
+/// How finalization placed the target file.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TargetDisposition {
+    ExistingTarget,
+    CreatedHardLink,
+    FreshRename,
+}
+
+impl TargetDisposition {
+    fn is_deduplicated(self) -> bool {
+        !matches!(self, Self::FreshRename)
+    }
+
+    fn was_created_by_upload(self) -> bool {
+        !matches!(self, Self::ExistingTarget)
+    }
+}
+
 impl MediaManager {
     #[must_use]
     pub fn new(
         media: Arc<dyn MediaStorage>,
         site_config: Arc<dyn SiteConfigStorage>,
+        write_scope: WriteScope,
         storage_path: Arc<PathBuf>,
     ) -> Self {
         Self {
             media,
             site_config,
+            write_scope,
             storage_path,
         }
     }
@@ -93,7 +115,7 @@ impl MediaManager {
         filename: &Filename,
         content_type: Option<ContentType>,
         stream: S,
-    ) -> anyhow::Result<UploadedMedia>
+    ) -> anyhow::Result<MutationOutcome<UploadedMedia>>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin,
         E: std::error::Error + Send + Sync + 'static,
@@ -111,7 +133,7 @@ impl MediaManager {
         filename: &Filename,
         content_type: Option<ContentType>,
         stream: S,
-    ) -> anyhow::Result<UploadedMedia>
+    ) -> anyhow::Result<MutationOutcome<UploadedMedia>>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin,
         E: std::error::Error + Send + Sync + 'static,
@@ -154,7 +176,7 @@ impl MediaManager {
     /// Emits the single `media_upload` failure metric for a completed upload attempt.
     /// The success metrics are emitted in `finalize_upload`, so this fires only on
     /// the `Err` path — keeping emission to exactly once per upload.
-    fn emit_failure_metric(result: &anyhow::Result<UploadedMedia>) {
+    fn emit_failure_metric<T>(result: &anyhow::Result<MutationOutcome<T>>) {
         if let Err(err) = result {
             metrics::media_upload(Self::upload_outcome(err.downcast_ref::<MediaError>()));
         }
@@ -211,19 +233,16 @@ impl MediaManager {
         )
     }
 
-    /// Content-addresses the temp file at `target_path`, deduplicating against
-    /// already-stored identical content. Returns `true` when the bytes were
-    /// deduplicated (the target already existed, or an identical file was
-    /// hard-linked) and `false` when this is a freshly stored file.
+    /// Content-addresses the temp file at `target_path`, distinguishing a
+    /// pre-existing target from one created by this upload.
     async fn handle_deduplication(
-        &self,
         tmp_path: &Path,
         target_path: &Path,
         hash_dir: &Path,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<TargetDisposition> {
         if target_path.exists() {
             return Self::finish_temp_cleanup(
-                Ok(true),
+                Ok(TargetDisposition::ExistingTarget),
                 fs::remove_file(tmp_path).await,
                 "storage.media.dedup_temp_cleanup",
             );
@@ -234,7 +253,7 @@ impl MediaManager {
         // this point every `read_dir`/`next_entry` error is unexpected and must
         // propagate.
         fs::create_dir_all(hash_dir).await?;
-        let existing_file = self.first_file_in_dir(hash_dir).await;
+        let existing_file = Self::first_file_in_dir(hash_dir).await;
         Self::finish_deduplication_from_result(tmp_path, target_path, existing_file).await
     }
 
@@ -242,7 +261,7 @@ impl MediaManager {
         tmp_path: &Path,
         target_path: &Path,
         existing_file: io::Result<Option<PathBuf>>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<TargetDisposition> {
         Self::finish_deduplication(tmp_path, target_path, existing_file?).await
     }
 
@@ -250,65 +269,105 @@ impl MediaManager {
         tmp_path: &Path,
         target_path: &Path,
         existing_file: Option<PathBuf>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<TargetDisposition> {
         if let Some(existing) = existing_file {
             fs::hard_link(&existing, target_path).await?;
             Self::finish_temp_cleanup(
-                Ok(true),
+                Ok(TargetDisposition::CreatedHardLink),
                 fs::remove_file(tmp_path).await,
                 "storage.media.dedup_temp_cleanup",
             )
         } else {
             fs::rename(tmp_path, target_path).await?;
-            Ok(false)
+            Ok(TargetDisposition::FreshRename)
         }
     }
 
-    async fn register_in_db(
+    /// Places an upload and records it while holding the media identity lock.
+    ///
+    /// The lock spans target placement, insertion, and rollback cleanup: another
+    /// writer therefore cannot adopt a target that this failed upload removes.
+    async fn place_and_register(
         &self,
-        user_id: UserId,
-        sha256_hex: &ContentHash,
-        filename: &Filename,
-        content_type: &ContentType,
-        size_bytes: ByteSize,
-    ) -> anyhow::Result<()> {
-        let record = MediaRecord {
-            user_id,
-            sha256: sha256_hex.clone(),
-            filename: filename.clone(),
-            source: MediaSource::Upload,
-            content_type: content_type.clone(),
-            size_bytes,
-            source_url: None,
-            created_at: UtcInstant::now(),
-        };
-        match self.media.create_media(&record).await {
-            Ok(()) | Err(CreateMediaError::AlreadyExists) => Ok(()),
-            Err(CreateMediaError::Internal(e)) => {
-                tracing::error!(error = %e, "create_media failed");
-                Err(anyhow::anyhow!(MediaError::Internal(Box::new(e))))
-            }
-        }
+        record: MediaRecord,
+        media_ref: MediaRef,
+        tmp_path: PathBuf,
+        target_path: PathBuf,
+        hash_dir: PathBuf,
+    ) -> anyhow::Result<(TargetDisposition, MutationOutcome<()>)> {
+        let media = Arc::clone(&self.media);
+        let tmp_path_for_begin = tmp_path.clone();
+        let outcome =
+            match self
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        media.lock_media_reference(transaction, &media_ref).await?;
+                        let disposition =
+                            match Self::handle_deduplication(&tmp_path, &target_path, &hash_dir)
+                                .await
+                            {
+                                Ok(disposition) => disposition,
+                                Err(error) => {
+                                    return Self::finish_temp_cleanup(
+                                        Err(error),
+                                        fs::remove_file(&tmp_path).await,
+                                        "storage.media.placement_temp_cleanup",
+                                    );
+                                }
+                            };
+                        match media.create_media(transaction, &record).await {
+                            Ok(()) | Err(CreateMediaError::AlreadyExists) => Ok(disposition),
+                            Err(CreateMediaError::Internal(error)) => {
+                                tracing::error!(error = %error, "create_media failed");
+                                let error = anyhow::anyhow!(MediaError::Internal(Box::new(error)));
+                                if disposition.was_created_by_upload() {
+                                    Self::finish_temp_cleanup(
+                                        Err(error),
+                                        fs::remove_file(&target_path).await,
+                                        "storage.media.create_target_cleanup",
+                                    )
+                                } else {
+                                    Err(error)
+                                }
+                            }
+                        }
+                    })
+                })
+                .await
+            {
+                Ok(outcome) => outcome,
+                Err(WriteScopeError::Operation(error)) => return Err(error),
+                Err(WriteScopeError::Begin(error)) => {
+                    return Self::finish_temp_cleanup(
+                        Err(anyhow::anyhow!(MediaError::Internal(Box::new(error)))),
+                        fs::remove_file(&tmp_path_for_begin).await,
+                        "storage.media.begin_temp_cleanup",
+                    );
+                }
+            };
+        let disposition = *outcome.value();
+        Ok((disposition, outcome.map(|_| ())))
     }
 
     /// Shared finalization for an upload whose bytes are already written to
-    /// `tmp_path` with a known content hash and size: enforces quota, content-
-    /// addresses the file (dedup via hard-link), records it in the DB, and builds
-    /// the response. The temp file is consumed (moved, linked, or removed). Emits
-    /// the success `media_upload*` metrics.
+    /// `tmp_path` with a known content hash and size: enforces quota before its
+    /// short database scope, then holds the media identity lock while it
+    /// content-addresses the file and records it. Streaming and hashing remain
+    /// outside that scope.
     async fn finalize_upload(
         &self,
         user_id: UserId,
         metadata: UploadMetadata,
         tmp_path: &Path,
         user_quota: UserQuota,
-    ) -> anyhow::Result<UploadedMedia> {
-        if let Err(e) = self
+    ) -> anyhow::Result<MutationOutcome<UploadedMedia>> {
+        if let Err(error) = self
             .check_quota(user_id, metadata.size_bytes, user_quota)
             .await
         {
             return Self::finish_temp_cleanup(
-                Err(e),
+                Err(error),
                 fs::remove_file(tmp_path).await,
                 "storage.media.quota_temp_cleanup",
             );
@@ -319,31 +378,38 @@ impl MediaManager {
             &metadata.filename,
         );
         let target_path = self.storage_path.join("media").join(&relative_path);
-        // `target_path` is built by joining `media`/`relative_path` onto the storage
-        // root, so it always ends in a filename component and has a parent; surface a
-        // clear error rather than panicking if that invariant is ever violated.
         let hash_dir = target_path
             .parent()
-            // cov:ignore-start — defensive: `target_path` always has a parent (see
-            // above), so this error branch is unreachable in practice.
             .ok_or_else(|| {
                 anyhow::anyhow!("media target path {} has no parent", target_path.display())
             })?
-            // cov:ignore-stop
             .to_path_buf();
-        let deduplicated = self
-            .handle_deduplication(tmp_path, &target_path, &hash_dir)
-            .await?;
-        self.register_in_db(
+        let media_ref = MediaRef {
+            source: MediaSource::Upload,
+            sha256: metadata.sha256_hex.clone(),
+            filename: metadata.filename.clone(),
+        };
+        let record = MediaRecord {
             user_id,
-            &metadata.sha256_hex,
-            &metadata.filename,
-            &metadata.content_type,
-            metadata.size_bytes,
-        )
-        .await?;
+            sha256: metadata.sha256_hex.clone(),
+            filename: metadata.filename.clone(),
+            source: MediaSource::Upload,
+            content_type: metadata.content_type.clone(),
+            size_bytes: metadata.size_bytes,
+            source_url: None,
+            created_at: UtcInstant::now(),
+        };
+        let (target_disposition, outcome) = self
+            .place_and_register(
+                record,
+                media_ref,
+                tmp_path.to_path_buf(),
+                target_path,
+                hash_dir,
+            )
+            .await?;
         metrics::media_upload_bytes(metadata.size_bytes.value().unsigned_abs());
-        metrics::media_upload(if deduplicated {
+        metrics::media_upload(if target_disposition.is_deduplicated() {
             UploadOutcome::Deduplicated
         } else {
             UploadOutcome::Stored
@@ -353,13 +419,14 @@ impl MediaManager {
             &metadata.sha256_hex,
             &metadata.filename,
         );
-        Ok(UploadedMedia {
+        let response = UploadedMedia {
             sha256: metadata.sha256_hex,
             filename: metadata.filename,
             content_type: metadata.content_type,
             size_bytes: metadata.size_bytes,
             url,
-        })
+        };
+        Ok(outcome.map(|()| response))
     }
 
     /// Uploads raw in-memory bytes (e.g. an `AtomPub` media POST), reusing the same
@@ -375,7 +442,7 @@ impl MediaManager {
         filename: &Filename,
         content_type: ContentType,
         bytes: &[u8],
-    ) -> anyhow::Result<UploadedMedia> {
+    ) -> anyhow::Result<MutationOutcome<UploadedMedia>> {
         let result = self
             .upload_bytes_inner(user_id, filename, content_type, bytes)
             .await;
@@ -389,7 +456,7 @@ impl MediaManager {
         filename: &Filename,
         content_type: ContentType,
         bytes: &[u8],
-    ) -> anyhow::Result<UploadedMedia> {
+    ) -> anyhow::Result<MutationOutcome<UploadedMedia>> {
         let (max_file_size, user_quota) = self.get_limits().await?;
         // `filename` and `content_type` were validated at their respective inbound
         // boundaries, so neither needs revalidation in the persistence seam.
@@ -419,9 +486,13 @@ impl MediaManager {
     /// live Post names the same canonical media address.
     ///
     /// # Errors
+    /// Deletes a media row in a scoped transaction. A confirmed deletion then
+    /// conservatively attempts post-commit filesystem reclamation.
     ///
-    /// Returns storage errors from the row decision or reclamation check, and I/O
-    /// errors from removing a reclaimable file.
+    /// # Errors
+    ///
+    /// Returns write-scope acquisition or operation errors. Reclaim failures are
+    /// reported diagnostically without changing a confirmed database outcome.
     pub async fn delete_media(
         &self,
         user_id: UserId,
@@ -429,22 +500,82 @@ impl MediaManager {
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
         force: bool,
-    ) -> anyhow::Result<TryDeleteOutcome> {
+    ) -> anyhow::Result<MutationOutcome<TryDeleteOutcome>> {
+        let storage = Arc::clone(&self.media);
+        let media_for_write = media.clone();
+        let instance_for_write = current_instance_id.clone();
+        let evidence_for_write = evidence.clone();
         let outcome = self
-            .media
-            .try_delete_media(user_id, media, current_instance_id, evidence, force)
-            .await?;
-        if outcome == TryDeleteOutcome::Deleted {
-            Self::reclaim_deleted_media_file(
-                self.media.as_ref(),
-                self.storage_path.as_ref(),
-                media,
-                current_instance_id,
-                evidence,
-            )
-            .await?;
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    storage
+                        .try_delete_media(
+                            transaction,
+                            user_id,
+                            &media_for_write,
+                            &instance_for_write,
+                            &evidence_for_write,
+                            force,
+                        )
+                        .await
+                        .map_err(anyhow::Error::from)
+                })
+            })
+            .await
+            .map_err(|error| match error {
+                WriteScopeError::Operation(error) => error,
+                WriteScopeError::Begin(error) => {
+                    anyhow::anyhow!(MediaError::Internal(Box::new(error)))
+                }
+            })?;
+        if matches!(
+            outcome,
+            MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
+        ) {
+            let storage = Arc::clone(&self.media);
+            let storage_path = Arc::clone(&self.storage_path);
+            let media = media.clone();
+            let current_instance_id = current_instance_id.clone();
+            let evidence = evidence.clone();
+            let reclaim = self
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        Self::reclaim_deleted_media_file(
+                            storage.as_ref(),
+                            transaction,
+                            storage_path.as_ref(),
+                            &media,
+                            &current_instance_id,
+                            &evidence,
+                        )
+                        .await
+                    })
+                })
+                .await
+                .map(drop)
+                .map_err(|error| match error {
+                    WriteScopeError::Operation(error) => error,
+                    WriteScopeError::Begin(error) => {
+                        anyhow::anyhow!(MediaError::Internal(Box::new(error)))
+                    }
+                });
+            return Ok(Self::finish_reclaim(outcome, reclaim));
         }
         Ok(outcome)
+    }
+
+    fn finish_reclaim<T>(primary: T, reclaim: anyhow::Result<()>) -> T {
+        if let Err(error) = reclaim {
+            host::error::report_swallowed(
+                host::error::ErrorKind::Internal,
+                host::error::ErrorClass::Transient,
+                "storage.media.reclaim_failure",
+                host::error::SwallowedSource::Error(error.as_ref()),
+            );
+        }
+        primary
     }
 
     /// Reclaims the file for an already-deleted media row when the canonical entry is
@@ -454,15 +585,20 @@ impl MediaManager {
     ///
     /// Returns storage errors from the reclaimability query and I/O errors from
     /// removing a reclaimable file.
-    pub async fn reclaim_deleted_media_file(
+    async fn reclaim_deleted_media_file(
         media_storage: &dyn MediaStorage,
+        transaction: &mut crate::WriteTransaction,
         storage_path: &Path,
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
     ) -> anyhow::Result<()> {
+        media_storage
+            .lock_media_reference(transaction, media)
+            .await?;
+
         if !media_storage
-            .media_entry_is_reclaimable(media, current_instance_id, evidence)
+            .media_entry_is_reclaimable(transaction, media, current_instance_id, evidence)
             .await?
         {
             return Ok(());
@@ -521,7 +657,7 @@ impl MediaManager {
         }))
     }
 
-    async fn first_file_in_dir(&self, dir: &Path) -> io::Result<Option<PathBuf>> {
+    async fn first_file_in_dir(dir: &Path) -> io::Result<Option<PathBuf>> {
         Self::first_file_in_entries(Self::directory_entries(dir).await).await
     }
 
@@ -555,18 +691,8 @@ mod tests {
     use rstest_reuse::*;
     use tempfile::TempDir;
 
-    /// A `MediaManager` whose storage handles are mocks with no expectations, over a
-    /// bare `TempDir` root — for the pure filesystem paths (`first_file_in_dir`,
-    /// `handle_deduplication`) that never touch the DB (ADR-0053 sidestep).
-    fn mock_manager(storage_path: Arc<PathBuf>) -> MediaManager {
-        MediaManager::new(
-            Arc::new(crate::MockMediaStorage::new()),
-            Arc::new(crate::MockSiteConfigStorage::new()),
-            storage_path,
-        )
-    }
-
-    fn upload_ref(response: &UploadedMedia) -> MediaRef {
+    fn upload_ref(response: &MutationOutcome<UploadedMedia>) -> MediaRef {
+        let response = response.value();
         MediaRef {
             source: MediaSource::Upload,
             sha256: response.sha256.clone(),
@@ -647,37 +773,169 @@ mod tests {
         assert!(ByteSize::try_from(-1).is_err());
     }
 
-    // guard:no-backend — mock store
+    // guard:no-backend — mock scope rejects the DB operation after target preparation
     #[tokio::test]
-    async fn register_in_db_maps_internal_create_error() {
+    async fn upload_operation_failure_removes_only_newly_created_target() {
+        let temp = TempDir::new().unwrap();
         let mut media = crate::MockMediaStorage::new();
+        media
+            .expect_get_user_upload_usage()
+            .times(1)
+            .returning(|_| Ok(parse_byte_size("0")));
+        media
+            .expect_lock_media_reference()
+            .times(1)
+            .returning(|_, _| Ok(()));
         media
             .expect_create_media()
             .times(1)
-            .returning(|_| Err(CreateMediaError::Internal(sqlx::Error::PoolClosed)));
+            .returning(|_, _| Err(CreateMediaError::Internal(sqlx::Error::PoolClosed)));
         let manager = MediaManager::new(
             Arc::new(media),
             Arc::new(crate::MockSiteConfigStorage::new()),
-            Arc::new(PathBuf::from("/tmp")),
+            WriteScope::mock(),
+            Arc::new(temp.path().to_path_buf()),
         );
+        let metadata = UploadMetadata {
+            filename: parse_filename("failed.png"),
+            content_type: parse_content_type("image/png"),
+            sha256_hex: parse_content_hash(
+                "deadbeef00000000000000000000000000000000000000000000000000000000",
+            ),
+            size_bytes: parse_byte_size("7"),
+        };
+        let tmp_path = temp.path().join("upload.tmp");
+        fs::write(&tmp_path, b"png-ish").await.unwrap();
+        let target_path = temp.path().join("media").join(media::media_path(
+            &MediaSource::Upload,
+            &metadata.sha256_hex,
+            &metadata.filename,
+        ));
+        assert!(
+            manager
+                .finalize_upload(
+                    UserId::from(1),
+                    metadata,
+                    &tmp_path,
+                    UserQuota::try_from(100_i64).unwrap()
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            !target_path.exists(),
+            "a rolled-back create must remove only its newly created target"
+        );
+    }
 
-        let err = manager
-            .register_in_db(
-                UserId::from(1),
-                &parse_content_hash(
-                    "deadbeef00000000000000000000000000000000000000000000000000000000",
-                ),
-                &parse_filename("file.png"),
-                &parse_content_type("image/png"),
-                parse_byte_size("100"),
-            )
+    // guard:low-level-db — a deliberately closed SQLite pool exercises scope acquisition failure.
+    #[tokio::test]
+    async fn upload_begin_failure_removes_temp_file() {
+        let temp = TempDir::new().unwrap();
+        let mut media = crate::MockMediaStorage::new();
+        media
+            .expect_get_user_upload_usage()
+            .times(1)
+            .returning(|_| Ok(parse_byte_size("0")));
+        let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+        let write_scope = WriteScope::sqlite(pool.clone());
+        pool.close().await;
+        let manager = MediaManager::new(
+            Arc::new(media),
+            Arc::new(crate::MockSiteConfigStorage::new()),
+            write_scope,
+            Arc::new(temp.path().to_path_buf()),
+        );
+        let metadata = UploadMetadata {
+            filename: parse_filename("begin-failed.png"),
+            content_type: parse_content_type("image/png"),
+            sha256_hex: parse_content_hash(
+                "deadbeef00000000000000000000000000000000000000000000000000000000",
+            ),
+            size_bytes: parse_byte_size("7"),
+        };
+        let tmp_path = temp.path().join("upload.tmp");
+        fs::write(&tmp_path, b"png-ish").await.unwrap();
+
+        assert!(
+            manager
+                .finalize_upload(
+                    UserId::from(1),
+                    metadata,
+                    &tmp_path,
+                    UserQuota::try_from(100_i64).unwrap(),
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            !tmp_path.exists(),
+            "a scope begin failure must remove the prepared temp file"
+        );
+    }
+
+    // guard:no-backend — mock scope rejects the DB operation after hard-link deduplication
+    #[tokio::test]
+    async fn upload_operation_failure_removes_hard_link_created_by_this_upload() {
+        let temp = TempDir::new().unwrap();
+        let mut media = crate::MockMediaStorage::new();
+        media
+            .expect_get_user_upload_usage()
+            .times(1)
+            .returning(|_| Ok(parse_byte_size("0")));
+        media
+            .expect_lock_media_reference()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        media
+            .expect_create_media()
+            .times(1)
+            .returning(|_, _| Err(CreateMediaError::Internal(sqlx::Error::PoolClosed)));
+        let manager = MediaManager::new(
+            Arc::new(media),
+            Arc::new(crate::MockSiteConfigStorage::new()),
+            WriteScope::mock(),
+            Arc::new(temp.path().to_path_buf()),
+        );
+        let metadata = UploadMetadata {
+            filename: parse_filename("failed-link.png"),
+            content_type: parse_content_type("image/png"),
+            sha256_hex: parse_content_hash(
+                "deadbeef00000000000000000000000000000000000000000000000000000000",
+            ),
+            size_bytes: parse_byte_size("7"),
+        };
+        let tmp_path = temp.path().join("upload.tmp");
+        fs::write(&tmp_path, b"png-ish").await.unwrap();
+        let target_path = temp.path().join("media").join(media::media_path(
+            &MediaSource::Upload,
+            &metadata.sha256_hex,
+            &metadata.filename,
+        ));
+        let source_path = target_path.with_file_name("already-stored.png");
+        fs::create_dir_all(source_path.parent().unwrap())
             .await
-            .unwrap_err();
-
-        let media_err = err
-            .downcast_ref::<MediaError>()
-            .expect("internal create error maps to MediaError");
-        assert!(matches!(media_err, MediaError::Internal(_)));
+            .unwrap();
+        fs::write(&source_path, b"png-ish").await.unwrap();
+        assert!(
+            manager
+                .finalize_upload(
+                    UserId::from(1),
+                    metadata,
+                    &tmp_path,
+                    UserQuota::try_from(100_i64).unwrap()
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            !target_path.exists(),
+            "a rolled-back create must remove its new hard link"
+        );
+        assert!(
+            source_path.exists(),
+            "cleanup must retain the pre-existing deduplication source"
+        );
     }
 
     #[test]
@@ -719,6 +977,18 @@ mod tests {
             &trace,
             "storage.media.dedup_temp_cleanup",
         );
+
+        let (outcome, trace) = crate::helpers::swallowed_test::capture(|| {
+            MediaManager::finish_reclaim(
+                MutationOutcome::Confirmed(TryDeleteOutcome::Deleted),
+                cleanup_error().map_err(anyhow::Error::from),
+            )
+        });
+        assert_eq!(
+            outcome,
+            MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
+        );
+        crate::helpers::swallowed_test::assert_one_report(&trace, "storage.media.reclaim_failure");
     }
 
     // guard:no-backend — mock store; the DB is unused by the dir scan
@@ -726,18 +996,20 @@ mod tests {
     async fn first_file_in_dir_skips_subdirs_and_finds_a_file() {
         let temp = TempDir::new().unwrap();
         let dir = temp.path();
-        let manager = mock_manager(Arc::new(dir.to_path_buf()));
 
-        assert_eq!(manager.first_file_in_dir(dir).await.unwrap(), None);
+        assert_eq!(MediaManager::first_file_in_dir(dir).await.unwrap(), None);
 
         // Dir with a subdir (should be ignored by is_file())
         let subdir = dir.join("subdir");
         fs::create_dir(&subdir).await.unwrap();
-        assert_eq!(manager.first_file_in_dir(dir).await.unwrap(), None);
+        assert_eq!(MediaManager::first_file_in_dir(dir).await.unwrap(), None);
 
         let file = dir.join("test.txt");
         fs::write(&file, "hello").await.unwrap();
-        assert_eq!(manager.first_file_in_dir(dir).await.unwrap(), Some(file));
+        assert_eq!(
+            MediaManager::first_file_in_dir(dir).await.unwrap(),
+            Some(file)
+        );
     }
 
     // guard:no-backend — mock store; dedup is a pure filesystem operation
@@ -749,7 +1021,6 @@ mod tests {
         fs::create_dir(&media_dir).await.unwrap();
         let tmp_dir = media_dir.join("tmp");
         fs::create_dir(&tmp_dir).await.unwrap();
-        let manager = mock_manager(Arc::new(dir.to_path_buf()));
 
         let tmp_path = tmp_dir.join("temp_file");
         fs::write(&tmp_path, "content").await.unwrap();
@@ -759,8 +1030,7 @@ mod tests {
 
         // Scenario 1: Target exists (should remove tmp)
         fs::write(&target_path, "existing").await.unwrap();
-        manager
-            .handle_deduplication(&tmp_path, &target_path, &hash_dir)
+        MediaManager::handle_deduplication(&tmp_path, &target_path, &hash_dir)
             .await
             .unwrap();
         assert!(!tmp_path.exists());
@@ -775,8 +1045,7 @@ mod tests {
         fs::write(&tmp_path2, "content").await.unwrap();
         let target_path2 = media_dir.join("target_file2");
 
-        manager
-            .handle_deduplication(&tmp_path2, &target_path2, &hash_dir)
+        MediaManager::handle_deduplication(&tmp_path2, &target_path2, &hash_dir)
             .await
             .unwrap();
 
@@ -794,8 +1063,7 @@ mod tests {
         let target_path3 = media_dir.join("target_file3");
         let hash_dir3 = media_dir.join("hash_dir3");
 
-        manager
-            .handle_deduplication(&tmp_path3, &target_path3, &hash_dir3)
+        MediaManager::handle_deduplication(&tmp_path3, &target_path3, &hash_dir3)
             .await
             .unwrap();
 
@@ -874,6 +1142,7 @@ mod tests {
         let manager = MediaManager::new(
             env.state.media.clone(),
             env.state.site_config.clone(),
+            env.state.write_scope.clone(),
             Arc::new(env.base.path().to_path_buf()),
         );
 
@@ -892,11 +1161,11 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(first.sha256.as_ref(), expected_sha.as_str());
-        assert_eq!(first.filename, "pic.png");
-        assert_eq!(first.content_type, "image/png");
+        assert_eq!(first.value().sha256.as_ref(), expected_sha.as_str());
+        assert_eq!(first.value().filename, "pic.png");
+        assert_eq!(first.value().content_type, "image/png");
         assert_eq!(
-            first.size_bytes,
+            first.value().size_bytes,
             ByteSize::try_from(i64::try_from(bytes.len()).unwrap()).unwrap()
         );
 
@@ -910,8 +1179,39 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(second.sha256, first.sha256);
-        assert_eq!(second.url, first.url);
+        assert_eq!(second.value().sha256, first.value().sha256);
+        assert_eq!(second.value().url, first.value().url);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn upload_bytes_retains_new_file_when_commit_is_indeterminate(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let manager = MediaManager::new(
+            env.state.media.clone(),
+            env.state.site_config.clone(),
+            env.state
+                .write_scope
+                .with_commit_acknowledgement_loss_after_commit_for_test(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+
+        let outcome = manager
+            .upload_bytes(
+                user_id,
+                &parse_filename("indeterminate.png"),
+                "image/png".parse().unwrap(),
+                b"png-ish",
+            )
+            .await
+            .unwrap();
+        let media = upload_ref(&outcome);
+        assert!(matches!(outcome, MutationOutcome::CommitIndeterminate(_)));
+        assert!(
+            stored_path(env.base.path(), &media).exists(),
+            "an indeterminate commit must retain the newly prepared target"
+        );
     }
 
     #[apply(backends)]
@@ -926,6 +1226,7 @@ mod tests {
         let manager = MediaManager::new(
             env.state.media.clone(),
             env.state.site_config.clone(),
+            env.state.write_scope.clone(),
             Arc::new(env.base.path().to_path_buf()),
         );
 
@@ -955,6 +1256,7 @@ mod tests {
         let manager = MediaManager::new(
             env.state.media.clone(),
             env.state.site_config.clone(),
+            env.state.write_scope.clone(),
             Arc::new(env.base.path().to_path_buf()),
         );
 
@@ -980,10 +1282,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.sha256, expected);
-        assert_eq!(resp.content_type, "image/png");
+        assert_eq!(resp.value().sha256, expected);
+        assert_eq!(resp.value().content_type, "image/png");
         assert_eq!(
-            resp.url,
+            resp.value().url,
             media::media_url(&MediaSource::Upload, &expected, &filename)
         );
     }
@@ -996,6 +1298,7 @@ mod tests {
         let manager = MediaManager::new(
             env.state.media.clone(),
             env.state.site_config.clone(),
+            env.state.write_scope.clone(),
             Arc::new(env.base.path().to_path_buf()),
         );
 
@@ -1023,7 +1326,7 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            TryDeleteOutcome::Deleted
+            MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
         );
 
         assert!(!media_row_exists(&env.state, user_id, &media).await);
@@ -1040,12 +1343,107 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn delete_media_surfaces_unexpected_file_reclaim_error(#[case] backend: Backend) {
+    async fn delete_media_retains_file_when_commit_is_indeterminate(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let confirmed_manager = MediaManager::new(
+            env.state.media.clone(),
+            env.state.site_config.clone(),
+            env.state.write_scope.clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        let uploaded = confirmed_manager
+            .upload_bytes(
+                user_id,
+                &parse_filename("indeterminate.jpg"),
+                "image/jpeg".parse().unwrap(),
+                b"jpeg-ish",
+            )
+            .await
+            .unwrap();
+        let media = upload_ref(&uploaded);
+        let file_path = stored_path(env.base.path(), &media);
+        let manager = MediaManager::new(
+            env.state.media.clone(),
+            env.state.site_config.clone(),
+            env.state
+                .write_scope
+                .with_commit_acknowledgement_loss_after_commit_for_test(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+
+        let outcome = manager
+            .delete_media(
+                user_id,
+                &media,
+                env.base.instance_id(),
+                &MediaReferenceEvidence::new(env.base.instance_id().clone()),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            MutationOutcome::CommitIndeterminate(TryDeleteOutcome::Deleted)
+        );
+        assert!(
+            file_path.exists(),
+            "an indeterminate delete must not reclaim bytes"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn delete_media_operation_failure_retains_file(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let owner = SeedUser::new().seed(&env.state).await.user_id;
+        let other_user = SeedUser::new().seed(&env.state).await.user_id;
+        let manager = MediaManager::new(
+            env.state.media.clone(),
+            env.state.site_config.clone(),
+            env.state.write_scope.clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        let uploaded = manager
+            .upload_bytes(
+                owner,
+                &parse_filename("retain-on-error.jpg"),
+                "image/jpeg".parse().unwrap(),
+                b"jpeg-ish",
+            )
+            .await
+            .unwrap();
+        let media = upload_ref(&uploaded);
+        let file_path = stored_path(env.base.path(), &media);
+
+        assert!(
+            manager
+                .delete_media(
+                    other_user,
+                    &media,
+                    env.base.instance_id(),
+                    &MediaReferenceEvidence::new(env.base.instance_id().clone()),
+                    false,
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            file_path.exists(),
+            "a failed delete must retain the media bytes"
+        );
+        assert!(media_row_exists(&env.state, owner, &media).await);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn delete_media_reclaim_failure_preserves_confirmed_outcome(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
             env.state.media.clone(),
             env.state.site_config.clone(),
+            env.state.write_scope.clone(),
             Arc::new(env.base.path().to_path_buf()),
         );
 
@@ -1063,7 +1461,7 @@ mod tests {
         std::fs::remove_file(&file_path).unwrap();
         std::fs::create_dir(&file_path).unwrap();
 
-        let error = manager
+        let outcome = manager
             .delete_media(
                 user_id,
                 &media,
@@ -1072,12 +1470,12 @@ mod tests {
                 false,
             )
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert!(matches!(
-            error.downcast_ref::<MediaError>(),
-            Some(MediaError::Internal(_))
-        ));
+        assert_eq!(
+            outcome,
+            MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
+        );
     }
 
     #[apply(backends)]
@@ -1088,6 +1486,7 @@ mod tests {
         let manager = MediaManager::new(
             env.state.media.clone(),
             env.state.site_config.clone(),
+            env.state.write_scope.clone(),
             Arc::new(env.base.path().to_path_buf()),
         );
 
@@ -1105,7 +1504,7 @@ mod tests {
         create_post_via_service(
             &env.state,
             user_id,
-            parse_post_body(&format!("<img src=\"{}\">", uploaded.url)),
+            parse_post_body(&format!("<img src=\"{}\">", uploaded.value().url)),
         )
         .await;
 
@@ -1120,7 +1519,7 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            TryDeleteOutcome::Deleted
+            MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
         );
         assert!(!media_row_exists(&env.state, user_id, &media).await);
         assert!(
@@ -1138,6 +1537,7 @@ mod tests {
         let manager = MediaManager::new(
             env.state.media.clone(),
             env.state.site_config.clone(),
+            env.state.write_scope.clone(),
             Arc::new(env.base.path().to_path_buf()),
         );
 
@@ -1202,6 +1602,7 @@ mod tests {
         let manager = MediaManager::new(
             env.state.media.clone(),
             env.state.site_config.clone(),
+            env.state.write_scope.clone(),
             Arc::new(env.base.path().to_path_buf()),
         );
 

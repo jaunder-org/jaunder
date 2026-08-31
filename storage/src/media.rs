@@ -9,6 +9,7 @@ use common::time::UtcInstant;
 use sqlx::{Database, FromRow, Pool};
 
 use crate::InstanceId;
+use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::helpers;
 use crate::posts::MediaReferenceEvidence;
@@ -91,7 +92,22 @@ pub trait MediaStorage: Send + Sync {
     ///
     /// Returns [`CreateMediaError::AlreadyExists`] if a record with the same
     /// hash, filename, and source exists for the user.
-    async fn create_media(&self, record: &MediaRecord) -> Result<(), CreateMediaError>;
+    async fn create_media(
+        &self,
+        transaction: &mut WriteTransaction,
+        record: &MediaRecord,
+    ) -> Result<(), CreateMediaError>;
+
+    /// Acquires the caller-owned transaction's lock for one media identity.
+    ///
+    /// This is an internal coordination operation, deliberately excluded from the
+    /// audited media-storage operation census. Callers retain the transaction while
+    /// performing every filesystem mutation that depends on this identity.
+    async fn lock_media_reference(
+        &self,
+        transaction: &mut WriteTransaction,
+        media: &MediaRef,
+    ) -> sqlx::Result<()>;
 
     /// Fetches a single media record by its composite key.
     async fn get_media(
@@ -126,6 +142,7 @@ pub trait MediaStorage: Send + Sync {
     /// refusal is distinguished from by a follow-up existence check on the cold path.
     async fn try_delete_media(
         &self,
+        transaction: &mut WriteTransaction,
         user_id: UserId,
         media: &MediaRef,
         current_instance_id: &InstanceId,
@@ -135,8 +152,11 @@ pub trait MediaStorage: Send + Sync {
 
     /// Whether the physical file named by `media` can be unlinked after a row
     /// delete: no remaining media row and no live Post anywhere still names it.
+    /// Checks reclaimability under `transaction`'s media-reference lock. The
+    /// caller keeps that transaction open through its physical unlink.
     async fn media_entry_is_reclaimable(
         &self,
+        transaction: &mut WriteTransaction,
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
@@ -185,7 +205,7 @@ pub trait MediaDialect: Backend {
     /// `true` means the row was deleted; `false` preserves the caller's
     /// NotFound-versus-refusal classification.
     async fn try_delete_media(
-        pool: &Pool<Self>,
+        conn: &mut Self::Connection,
         user_id: UserId,
         media: &MediaRef,
         current_instance_id: &InstanceId,
@@ -193,9 +213,10 @@ pub trait MediaDialect: Backend {
         force: bool,
     ) -> sqlx::Result<bool>;
 
-    /// Executes the locked global reclaimability decision for a concrete dialect.
+    /// Executes the locked global reclaimability decision for a concrete dialect
+    /// in the caller-owned write transaction.
     async fn media_entry_is_reclaimable(
-        pool: &Pool<Self>,
+        conn: &mut Self::Connection,
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
@@ -249,10 +270,26 @@ where
 {
     #[tracing::instrument(
         name = "storage.media.create",
-        skip(self, record),
+        skip(self, transaction, record),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn create_media(&self, record: &MediaRecord) -> Result<(), CreateMediaError> {
+    async fn create_media(
+        &self,
+        transaction: &mut WriteTransaction,
+        record: &MediaRecord,
+    ) -> Result<(), CreateMediaError> {
+        // Keep direct storage callers serialized even when the manager has already
+        // acquired this reentrant transaction lock for placement and insertion.
+        let media = MediaRef {
+            source: record.source,
+            sha256: record.sha256.clone(),
+            filename: record.filename.clone(),
+        };
+        let connection = DB::write_connection(transaction)?;
+        DB::lock_media_reference(connection, &media)
+            .await
+            .map_err(CreateMediaError::Internal)?;
+
         let result = sqlx::query(
             "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
@@ -265,7 +302,7 @@ where
         .bind(record.size_bytes)
         .bind(record.source_url.clone())
         .bind(record.created_at)
-        .execute(&self.pool)
+        .execute(connection)
         .await;
 
         match result {
@@ -371,20 +408,34 @@ where
     }
 
     #[tracing::instrument(
+        name = "storage.media.lock_reference",
+        skip(self, transaction, media),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn lock_media_reference(
+        &self,
+        transaction: &mut WriteTransaction,
+        media: &MediaRef,
+    ) -> sqlx::Result<()> {
+        DB::lock_media_reference(DB::write_connection(transaction)?, media).await
+    }
+    #[tracing::instrument(
         name = "storage.media.try_delete",
-        skip(self, media),
+        skip(self, transaction, media),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn try_delete_media(
         &self,
+        transaction: &mut WriteTransaction,
         user_id: UserId,
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
         force: bool,
     ) -> Result<TryDeleteOutcome, DeleteMediaError> {
+        let connection = DB::write_connection(transaction)?;
         let removed = DB::try_delete_media(
-            &self.pool,
+            connection,
             user_id,
             media,
             current_instance_id,
@@ -404,7 +455,7 @@ where
         .bind(media.source)
         .bind(&media.sha256)
         .bind(&media.filename)
-        .fetch_optional(&self.pool)
+        .fetch_optional(DB::write_connection(transaction)?)
         .await?;
 
         if present.is_some() {
@@ -416,16 +467,23 @@ where
 
     #[tracing::instrument(
         name = "storage.media.entry_reclaimable",
-        skip(self, media),
+        skip(self, transaction, media),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn media_entry_is_reclaimable(
         &self,
+        transaction: &mut WriteTransaction,
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
     ) -> sqlx::Result<bool> {
-        DB::media_entry_is_reclaimable(&self.pool, media, current_instance_id, evidence).await
+        DB::media_entry_is_reclaimable(
+            DB::write_connection(transaction)?,
+            media,
+            current_instance_id,
+            evidence,
+        )
+        .await
     }
 
     #[tracing::instrument(
@@ -470,23 +528,17 @@ where
         .bind(*source)
         .fetch_optional(&self.pool)
         .await?;
-
         Ok(row.map(helpers::media_record_from_row))
     }
 }
-
-// The media site-config keys live in the closed host registry
-// (`host::config_key::SiteConfigKey::{MediaMaxFileSizeBytes, MediaUserQuotaBytes}`, #687).
-// The defaults (50 MiB / 1 GiB) live on the `common::media::MaxFileSize` /
-// `UserQuota` newtypes' `#[num_newtype(default = …)]`, applied by the
-// `SiteConfigStorage::get_media_*` getters.
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::{
-        Backend, MEDIA_TEST_SHA256, SeedUser, TestEnv, backends, create_post_via_service,
-        media_ref_for, media_row_exists, media_url_for, seed_media, seed_users,
+        Backend, MEDIA_TEST_SHA256, SeedUser, TestEnv, backends, confirmed,
+        create_post_via_service, media_ref_for, media_row_exists, media_url_for, seed_media,
+        seed_users,
     };
     use crate::{PersistedMediaReference, PersistedMediaSubject, ProvenForeignReference};
     use common::media::{MediaReferenceForm, MediaReferenceKind};
@@ -498,6 +550,77 @@ mod tests {
     use rstest_reuse::*;
     use std::{sync::Arc, time::Duration};
     use tokio::{sync::oneshot, time::timeout};
+
+    async fn create_media_confirmed(state: &Arc<crate::AppState>, record: MediaRecord) {
+        let media = Arc::clone(&state.media);
+        let outcome = state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { media.create_media(transaction, &record).await })
+            })
+            .await
+            .expect("media fixture write succeeds");
+        confirmed(outcome);
+    }
+
+    async fn try_delete_media_scoped(
+        state: &Arc<crate::AppState>,
+        user_id: UserId,
+        media_ref: &MediaRef,
+        instance_id: &InstanceId,
+        evidence: &MediaReferenceEvidence,
+        force: bool,
+    ) -> Result<common::MutationOutcome<TryDeleteOutcome>, crate::WriteScopeError<DeleteMediaError>>
+    {
+        let media = Arc::clone(&state.media);
+        let media_ref = media_ref.clone();
+        let instance_id = instance_id.clone();
+        let evidence = evidence.clone();
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    media
+                        .try_delete_media(
+                            transaction,
+                            user_id,
+                            &media_ref,
+                            &instance_id,
+                            &evidence,
+                            force,
+                        )
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn media_entry_is_reclaimable_scoped(
+        state: &Arc<crate::AppState>,
+        media_ref: &MediaRef,
+        instance_id: &InstanceId,
+        evidence: &MediaReferenceEvidence,
+    ) -> Result<common::MutationOutcome<bool>, crate::WriteScopeError<sqlx::Error>> {
+        let media = Arc::clone(&state.media);
+        let media_ref = media_ref.clone();
+        let instance_id = instance_id.clone();
+        let evidence = evidence.clone();
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    media
+                        .media_entry_is_reclaimable(
+                            transaction,
+                            &media_ref,
+                            &instance_id,
+                            &evidence,
+                        )
+                        .await
+                })
+            })
+            .await
+    }
 
     /// A reference writer cannot pass a held media lock. Rolling that lock back
     /// releases the waiter; its newly-live row then defeats evidence collected for
@@ -581,10 +704,10 @@ mod tests {
                 delete_started_tx
                     .send(())
                     .expect("parent waits for delete start");
-                let result = state
-                    .media
-                    .try_delete_media(owner, &media, &instance_id, &evidence, false)
-                    .await;
+                let result =
+                    try_delete_media_scoped(&state, owner, &media, &instance_id, &evidence, false)
+                        .await
+                        .map(confirmed);
                 delete_finished_tx
                     .send(result)
                     .expect("parent waits for delete completion");
@@ -643,14 +766,14 @@ mod tests {
         let instance_id = env.base.instance_id().clone();
         let reclaim = tokio::spawn(async move {
             started_tx.send(()).expect("parent waits for reclaim start");
-            let result = state
-                .media
-                .media_entry_is_reclaimable(
-                    &media,
-                    &instance_id,
-                    &MediaReferenceEvidence::new(instance_id.clone()),
-                )
-                .await;
+            let result = media_entry_is_reclaimable_scoped(
+                &state,
+                &media,
+                &instance_id,
+                &MediaReferenceEvidence::new(instance_id.clone()),
+            )
+            .await
+            .map(confirmed);
             finished_tx
                 .send(result)
                 .expect("parent waits for reclaim completion");
@@ -676,6 +799,152 @@ mod tests {
         reclaim.await.expect("reclaim task does not panic");
     }
 
+    /// The reclaimability decision and unlink share one write callback, so a
+    /// newly-created Post cannot become live after the decision but before unlink.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn reclamation_holds_reference_lock_through_unlink(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let media = seed_media(&env.state, user, "reclaim-unlink-lock.jpg").await;
+        env.base
+            .pool()
+            .execute(&format!(
+                "DELETE FROM media WHERE user_id = {user} AND source = '{}' \
+                 AND sha256 = '{}' AND filename = '{}'",
+                media.source, media.sha256, media.filename
+            ))
+            .await
+            .expect("remove the only accounting row");
+        let form: MediaReferenceForm = media_url_for("reclaim-unlink-lock.jpg")
+            .parse()
+            .expect("valid media reference form");
+        let (checked_tx, checked_rx) = oneshot::channel();
+        let (unlink_tx, unlink_rx) = oneshot::channel();
+        let reclaim_state = Arc::clone(&env.state);
+        let reclaim_storage = Arc::clone(&reclaim_state.media);
+        let reclaim_scope = reclaim_state.write_scope.clone();
+        let instance_id = env.base.instance_id().clone();
+        let reclaim = tokio::spawn(async move {
+            reclaim_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        assert!(
+                            reclaim_storage
+                                .media_entry_is_reclaimable(
+                                    transaction,
+                                    &media,
+                                    &instance_id,
+                                    &MediaReferenceEvidence::new(instance_id.clone()),
+                                )
+                                .await?
+                        );
+                        checked_tx.send(()).expect("parent waits for reclaim check");
+                        unlink_rx.await.expect("parent permits unlink");
+                        Ok::<(), sqlx::Error>(())
+                    })
+                })
+                .await
+                .expect("reclaim write scope completes");
+        });
+        checked_rx.await.expect("reclaimability decision completed");
+
+        let writer_state = Arc::clone(&env.state);
+        let mut writer = tokio::spawn(async move {
+            create_post_via_service(
+                &writer_state,
+                user,
+                parse_post_body(&format!("<img src=\"{form}\">")),
+            )
+            .await
+        });
+        assert!(
+            timeout(Duration::from_millis(100), &mut writer)
+                .await
+                .is_err(),
+            "a fresh Post writer must wait until unlink finishes"
+        );
+        unlink_tx.send(()).expect("permit unlink");
+        reclaim.await.expect("reclaim task does not panic");
+        writer.await.expect("writer task does not panic");
+    }
+
+    /// A media create takes the reclamation lock before its insert. Therefore, a
+    /// successful create starts only after an in-flight reclaim has unlinked the old bytes.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_media_serializes_with_reclamation_through_unlink(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let media = seed_media(&env.state, user, "create-reclaim-lock.jpg").await;
+        env.base
+            .pool()
+            .execute(&format!(
+                "DELETE FROM media WHERE user_id = {user} AND source = '{}' \
+                 AND sha256 = '{}' AND filename = '{}'",
+                media.source, media.sha256, media.filename
+            ))
+            .await
+            .expect("remove the only accounting row");
+        let record = MediaRecord {
+            user_id: user,
+            sha256: media.sha256.clone(),
+            filename: media.filename.clone(),
+            source: media.source,
+            content_type: parse_content_type("image/jpeg"),
+            size_bytes: parse_byte_size("1"),
+            source_url: None,
+            created_at: UtcInstant::now(),
+        };
+
+        let (checked_tx, checked_rx) = oneshot::channel();
+        let (unlink_tx, unlink_rx) = oneshot::channel();
+        let reclaim_state = Arc::clone(&env.state);
+        let reclaim_storage = Arc::clone(&reclaim_state.media);
+        let reclaim_scope = reclaim_state.write_scope.clone();
+        let instance_id = env.base.instance_id().clone();
+        let media_for_reclaim = media.clone();
+        let reclaim = tokio::spawn(async move {
+            reclaim_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        assert!(
+                            reclaim_storage
+                                .media_entry_is_reclaimable(
+                                    transaction,
+                                    &media_for_reclaim,
+                                    &instance_id,
+                                    &MediaReferenceEvidence::new(instance_id.clone()),
+                                )
+                                .await?
+                        );
+                        checked_tx.send(()).expect("parent waits for reclaim check");
+                        unlink_rx.await.expect("parent permits unlink");
+                        Ok::<(), sqlx::Error>(())
+                    })
+                })
+                .await
+                .expect("reclaim write scope completes");
+        });
+        checked_rx.await.expect("reclaimability decision completed");
+
+        let create_state = Arc::clone(&env.state);
+        let mut create = tokio::spawn(async move {
+            create_media_confirmed(&create_state, record).await;
+        });
+        assert!(
+            timeout(Duration::from_millis(100), &mut create)
+                .await
+                .is_err(),
+            "the create must wait until the reclaim transaction finishes unlinking"
+        );
+
+        unlink_tx.send(()).expect("permit unlink");
+        reclaim.await.expect("reclaim task does not panic");
+        create.await.expect("create task does not panic");
+        assert!(media_row_exists(&env.state, user, &media).await);
+    }
+
     /// How many posts the concurrency exercise writes while the guard is hammered, and
     /// how many unforced deletes it attempts against them. Large enough that the two
     /// interleave for the whole run on both backends; small enough to stay a unit test.
@@ -696,7 +965,7 @@ mod tests {
             source_url: None,
             created_at: UtcInstant::now(),
         };
-        env.state.media.create_media(&record).await.unwrap();
+        create_media_confirmed(&env.state, record).await;
         let got = env
             .state
             .media
@@ -832,7 +1101,7 @@ mod tests {
             source_url: None,
             created_at: UtcInstant::now(),
         };
-        env.state.media.create_media(&good).await.unwrap();
+        create_media_confirmed(&env.state, good).await;
         // A second row's `sha256` is tampered to a non-hex value — only reachable via
         // direct DB access, since `ContentHash::from_str` requires 64 lowercase hex chars.
         // Every media read keys the query *on* `sha256`, so the observable behavior is
@@ -877,7 +1146,13 @@ mod tests {
             source_url: None,
             created_at: UtcInstant::now(),
         };
-        let result = state.media.create_media(&record).await;
+        let write_scope = state.write_scope.clone();
+        let media = Arc::clone(&state.media);
+        let result = write_scope
+            .run(move |transaction| {
+                Box::pin(async move { media.create_media(transaction, &record).await })
+            })
+            .await;
         assert!(result.is_err());
     }
 
@@ -920,17 +1195,20 @@ mod tests {
     async fn try_delete_media_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let result = state
-            .media
-            .try_delete_media(
-                UserId::from(1),
-                &media_ref_for("test.jpg"),
-                base.instance_id(),
-                &MediaReferenceEvidence::new(base.instance_id().clone()),
-                false,
-            )
-            .await;
-        assert!(matches!(result, Err(DeleteMediaError::Internal(_))));
+        let result = try_delete_media_scoped(
+            &state,
+            UserId::from(1),
+            &media_ref_for("test.jpg"),
+            base.instance_id(),
+            &MediaReferenceEvidence::new(base.instance_id().clone()),
+            false,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Begin(_)
+                | crate::WriteScopeError::Operation(DeleteMediaError::Internal(_)))
+        ));
     }
 
     #[apply(backends)]
@@ -944,9 +1222,9 @@ mod tests {
         create_post_via_service(&env.state, user, parse_post_body(&embed)).await;
 
         assert_eq!(
-            env.state
-                .media
-                .try_delete_media(
+            confirmed(
+                try_delete_media_scoped(
+                    &env.state,
                     user,
                     &media,
                     env.base.instance_id(),
@@ -954,7 +1232,8 @@ mod tests {
                     false,
                 )
                 .await
-                .expect("the guarded delete succeeds as a query"),
+                .expect("the guarded delete succeeds as a scoped write"),
+            ),
             TryDeleteOutcome::RefusedReferenced
         );
         assert!(
@@ -993,11 +1272,18 @@ mod tests {
             env.base.instance_id().clone(),
         )));
         assert_eq!(
-            env.state
-                .media
-                .try_delete_media(user, &media, env.base.instance_id(), &near_match, false)
+            confirmed(
+                try_delete_media_scoped(
+                    &env.state,
+                    user,
+                    &media,
+                    env.base.instance_id(),
+                    &near_match,
+                    false,
+                )
                 .await
-                .expect("near-match guard query succeeds"),
+                .expect("near-match guarded delete succeeds"),
+            ),
             TryDeleteOutcome::RefusedReferenced,
             "different kind/form evidence must not exempt the local row"
         );
@@ -1010,11 +1296,18 @@ mod tests {
             env.base.instance_id().clone(),
         )));
         assert_eq!(
-            env.state
-                .media
-                .try_delete_media(user, &media, env.base.instance_id(), &exact_match, false)
+            confirmed(
+                try_delete_media_scoped(
+                    &env.state,
+                    user,
+                    &media,
+                    env.base.instance_id(),
+                    &exact_match,
+                    false,
+                )
                 .await
                 .expect("exact-evidence delete succeeds"),
+            ),
             TryDeleteOutcome::Deleted
         );
     }
@@ -1046,11 +1339,17 @@ mod tests {
 
         let empty = MediaReferenceEvidence::new(env.base.instance_id().clone());
         assert!(
-            !env.state
-                .media
-                .media_entry_is_reclaimable(&media, env.base.instance_id(), &empty)
+            !confirmed(
+                media_entry_is_reclaimable_scoped(
+                    &env.state,
+                    &media,
+                    env.base.instance_id(),
+                    &empty,
+                )
                 .await
-                .expect("live reference prevents reclamation")
+                .expect("live reference check succeeds"),
+            ),
+            "live reference prevents reclamation"
         );
         let mut exact = MediaReferenceEvidence::new(env.base.instance_id().clone());
         assert!(exact.insert(ProvenForeignReference::new(
@@ -1058,11 +1357,17 @@ mod tests {
             env.base.instance_id().clone(),
         )));
         assert!(
-            env.state
-                .media
-                .media_entry_is_reclaimable(&media, env.base.instance_id(), &exact)
+            confirmed(
+                media_entry_is_reclaimable_scoped(
+                    &env.state,
+                    &media,
+                    env.base.instance_id(),
+                    &exact,
+                )
                 .await
-                .expect("exact foreign evidence makes row reclaimable")
+                .expect("exact foreign evidence check succeeds"),
+            ),
+            "exact foreign evidence makes row reclaimable"
         );
     }
     /// A foreign result for a current row cannot authorize deleting an unseen
@@ -1133,9 +1438,9 @@ mod tests {
             env.base.instance_id().clone(),
         )));
         assert_eq!(
-            env.state
-                .media
-                .try_delete_media(
+            confirmed(
+                try_delete_media_scoped(
+                    &env.state,
                     owner,
                     &media,
                     env.base.instance_id(),
@@ -1143,7 +1448,8 @@ mod tests {
                     false,
                 )
                 .await
-                .expect("guard query succeeds"),
+                .expect("guarded delete succeeds"),
+            ),
             TryDeleteOutcome::RefusedReferenced,
             "current evidence cannot exempt a retained revision subject"
         );
@@ -1154,9 +1460,9 @@ mod tests {
             env.base.instance_id().clone(),
         )));
         assert_eq!(
-            env.state
-                .media
-                .try_delete_media(
+            confirmed(
+                try_delete_media_scoped(
+                    &env.state,
                     owner,
                     &media,
                     env.base.instance_id(),
@@ -1164,7 +1470,8 @@ mod tests {
                     false,
                 )
                 .await
-                .expect("guard query succeeds"),
+                .expect("guarded delete succeeds"),
+            ),
             TryDeleteOutcome::RefusedReferenced,
             "the unexamined deleted-current subject remains protected"
         );
@@ -1179,9 +1486,9 @@ mod tests {
             env.base.instance_id().clone(),
         )));
         assert_eq!(
-            env.state
-                .media
-                .try_delete_media(
+            confirmed(
+                try_delete_media_scoped(
+                    &env.state,
                     owner,
                     &media,
                     env.base.instance_id(),
@@ -1189,7 +1496,8 @@ mod tests {
                     false,
                 )
                 .await
-                .expect("guard query succeeds"),
+                .expect("guarded delete succeeds"),
+            ),
             TryDeleteOutcome::Deleted,
             "every retained subject needs and accepts its own exact foreign proof"
         );
@@ -1205,9 +1513,9 @@ mod tests {
         create_post_via_service(&env.state, user, parse_post_body(&embed)).await;
 
         assert_eq!(
-            env.state
-                .media
-                .try_delete_media(
+            confirmed(
+                try_delete_media_scoped(
+                    &env.state,
                     user,
                     &media,
                     env.base.instance_id(),
@@ -1215,7 +1523,8 @@ mod tests {
                     true,
                 )
                 .await
-                .expect("the forced delete succeeds as a query"),
+                .expect("forced delete succeeds"),
+            ),
             TryDeleteOutcome::Deleted
         );
         assert!(
@@ -1237,9 +1546,9 @@ mod tests {
         create_post_via_service(&env.state, owner, parse_post_body(&embed)).await;
 
         assert_eq!(
-            env.state
-                .media
-                .try_delete_media(
+            confirmed(
+                try_delete_media_scoped(
+                    &env.state,
                     owner,
                     &media,
                     env.base.instance_id(),
@@ -1247,7 +1556,8 @@ mod tests {
                     true,
                 )
                 .await
-                .expect("the forced delete succeeds"),
+                .expect("forced delete succeeds"),
+            ),
             TryDeleteOutcome::Deleted
         );
         assert!(!media_row_exists(&env.state, owner, &media).await);
@@ -1263,9 +1573,9 @@ mod tests {
         let media = seed_media(&env.state, user, "photo.jpg").await;
 
         assert_eq!(
-            env.state
-                .media
-                .try_delete_media(
+            confirmed(
+                try_delete_media_scoped(
+                    &env.state,
                     user,
                     &media,
                     env.base.instance_id(),
@@ -1273,7 +1583,8 @@ mod tests {
                     false,
                 )
                 .await
-                .expect("the delete succeeds"),
+                .expect("delete succeeds"),
+            ),
             TryDeleteOutcome::Deleted
         );
         assert!(!media_row_exists(&env.state, user, &media).await);
@@ -1288,20 +1599,23 @@ mod tests {
         let env = backend.setup().await;
         let [user] = seed_users::<1>(&env.state).await;
 
-        let result = env
-            .state
-            .media
-            .try_delete_media(
-                user,
-                &media_ref_for("never-uploaded.jpg"),
-                env.base.instance_id(),
-                &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                false,
-            )
-            .await;
+        let result = try_delete_media_scoped(
+            &env.state,
+            user,
+            &media_ref_for("never-uploaded.jpg"),
+            env.base.instance_id(),
+            &MediaReferenceEvidence::new(env.base.instance_id().clone()),
+            false,
+        )
+        .await;
 
         assert!(
-            matches!(result, Err(DeleteMediaError::NotFound)),
+            matches!(
+                result,
+                Err(crate::WriteScopeError::Operation(
+                    DeleteMediaError::NotFound
+                ))
+            ),
             "expected NotFound, got {result:?}"
         );
     }
@@ -1351,10 +1665,9 @@ mod tests {
         });
 
         for _ in 0..ROUNDS {
-            let outcome = env
-                .state
-                .media
-                .try_delete_media(
+            let outcome = confirmed(
+                try_delete_media_scoped(
+                    &env.state,
                     user,
                     &media,
                     env.base.instance_id(),
@@ -1362,7 +1675,8 @@ mod tests {
                     false,
                 )
                 .await
-                .expect("no SQLITE_BUSY under concurrency");
+                .expect("no SQLite busy under concurrent scoped writes"),
+            );
             assert_eq!(
                 outcome,
                 TryDeleteOutcome::RefusedReferenced,
@@ -1371,6 +1685,95 @@ mod tests {
         }
         writer.await.expect("the concurrent writer does not panic");
         assert!(media_row_exists(&env.state, user, &media).await);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn delete_rolls_back_when_the_scoped_operation_fails(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let media_ref = seed_media(&env.state, user, "rollback.jpg").await;
+        let instance_id = env.base.instance_id().clone();
+        let evidence = MediaReferenceEvidence::new(instance_id.clone());
+        let media = Arc::clone(&env.state.media);
+
+        let delete_media_ref = media_ref.clone();
+        let result = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    assert_eq!(
+                        media
+                            .try_delete_media(
+                                transaction,
+                                user,
+                                &delete_media_ref,
+                                &instance_id,
+                                &evidence,
+                                false,
+                            )
+                            .await?,
+                        TryDeleteOutcome::Deleted
+                    );
+                    Err::<TryDeleteOutcome, DeleteMediaError>(DeleteMediaError::NotFound)
+                })
+            })
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Operation(
+                DeleteMediaError::NotFound
+            ))
+        ));
+        assert!(
+            media_row_exists(&env.state, user, &media_ref).await,
+            "the storage delete participates in the caller's rollback"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn delete_commit_acknowledgement_loss_is_indeterminate(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let media_ref = seed_media(&env.state, user, "indeterminate.jpg").await;
+        let instance_id = env.base.instance_id().clone();
+        let evidence = MediaReferenceEvidence::new(instance_id.clone());
+        let media = Arc::clone(&env.state.media);
+        let delete_media_ref = media_ref.clone();
+        let scope = env
+            .state
+            .write_scope
+            .with_commit_acknowledgement_loss_after_commit_for_test();
+
+        let outcome = scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    media
+                        .try_delete_media(
+                            transaction,
+                            user,
+                            &delete_media_ref,
+                            &instance_id,
+                            &evidence,
+                            false,
+                        )
+                        .await
+                })
+            })
+            .await
+            .expect("delete operation succeeds before acknowledgement loss");
+
+        assert_eq!(
+            outcome,
+            common::MutationOutcome::CommitIndeterminate(TryDeleteOutcome::Deleted)
+        );
+        assert!(
+            !media_row_exists(&env.state, user, &media_ref).await,
+            "the commit may have succeeded despite acknowledgement loss"
+        );
     }
 
     #[apply(backends)]

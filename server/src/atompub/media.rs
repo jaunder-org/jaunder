@@ -12,13 +12,14 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use common::media::{self, ContentHash, Filename, MediaRef, MediaSource};
+use common::mutation::MutationOutcome;
 use common::root_relative_url::RootRelativeUrl;
 use common::tagged_url::{self, BaseUrl, EditMediaUriUrl, EditUriUrl};
 use common::username::Username;
 use host::atompub::{self, MediaLinkEntry};
 use storage::{
     InstanceId, MediaManager, MediaRecord, MediaReferenceOwnershipResolver, MediaStorage,
-    PostStorage, SiteConfigStorage,
+    PostStorage, SiteConfigStorage, WriteScope,
 };
 use web::auth;
 
@@ -33,6 +34,14 @@ type MemberDeleteExtensions = (
     Extension<Arc<PathBuf>>,
     Extension<InstanceId>,
     Extension<Arc<dyn MediaReferenceOwnershipResolver>>,
+    Extension<WriteScope>,
+);
+
+type CollectionPostExtensions = (
+    Extension<Arc<dyn MediaStorage>>,
+    Extension<Arc<dyn SiteConfigStorage>>,
+    Extension<Arc<PathBuf>>,
+    Extension<WriteScope>,
 );
 
 /// Builds the media-link entry for a stored media record.
@@ -85,9 +94,12 @@ fn media_link_entry(record: &MediaRecord, base: &BaseUrl, username: &Username) -
 /// `403` wrong user; `4xx`/`5xx` from the upload pipeline; `500` on storage failure.
 #[tracing::instrument(name = "atompub.media.collection_post", skip_all)]
 pub async fn collection_post(
-    Extension(media): Extension<Arc<dyn MediaStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
-    Extension(storage_path): Extension<Arc<PathBuf>>,
+    (
+        Extension(media),
+        Extension(site_config),
+        Extension(storage_path),
+        Extension(write_scope),
+    ): CollectionPostExtensions,
     auth_user: auth::User,
     Path(username): Path<Username>,
     headers: HeaderMap,
@@ -123,10 +135,19 @@ pub async fn collection_post(
         .await?
         .is_some();
 
-    let manager = storage::MediaManager::new(media.clone(), site_config.clone(), storage_path);
-    let upload = manager
+    let manager = storage::MediaManager::new(
+        media.clone(),
+        site_config.clone(),
+        write_scope,
+        storage_path,
+    );
+    let upload = match manager
         .upload_bytes(auth_user.user_id, &filename, content_type, &body)
-        .await?;
+        .await?
+    {
+        MutationOutcome::Confirmed(upload) => upload,
+        MutationOutcome::CommitIndeterminate(_) => return Err(HandlerError::Invariant),
+    };
 
     let record = media
         .get_media(
@@ -235,6 +256,7 @@ pub(super) async fn member_delete(
         Extension(storage_path),
         Extension(instance_id),
         Extension(resolver),
+        Extension(write_scope),
     ): MemberDeleteExtensions,
     auth_user: auth::User,
     Path(address): Path<MediaMemberAddress>,
@@ -266,11 +288,15 @@ pub(super) async fn member_delete(
         identity.base_url.as_ref(),
     )
     .await;
-    let manager = MediaManager::new(media, site_config, storage_path);
-    let outcome = manager
+    let manager = MediaManager::new(media, site_config, write_scope, storage_path);
+    let outcome = match manager
         .delete_media(auth_user.user_id, &media_ref, &instance_id, &evidence, true)
         .await
-        .map_err(map_delete_error)?;
+        .map_err(map_delete_error)?
+    {
+        MutationOutcome::Confirmed(outcome) => outcome,
+        MutationOutcome::CommitIndeterminate(_) => return Err(HandlerError::Invariant),
+    };
     if outcome == storage::TryDeleteOutcome::RefusedReferenced {
         return Err(StatusCode::CONFLICT.into());
     }

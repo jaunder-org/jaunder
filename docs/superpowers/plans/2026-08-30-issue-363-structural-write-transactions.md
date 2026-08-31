@@ -128,7 +128,7 @@ pool-backed or independently committing compatibility form behind.
     tests prove bounded acquisition, rollback on operation failure, and no
     foreign work under the scope.
 
-- [ ] **Task 6: Preserve media under confirmed and indeterminate commits.**
+- [x] **Task 6: Preserve media under confirmed and indeterminate commits.**
   - Cutover: `MediaStorage::create_media` and `try_delete_media`,
     `storage::MediaManager`, web and AtomPub upload/delete handlers, seed and
     fixture callers, and media integration/e2e coverage.

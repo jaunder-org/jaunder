@@ -1743,20 +1743,25 @@ pub fn media_url_for(name: &str) -> String {
 /// If the row cannot be created — happy-path setup only, like [`SeedUser::seed`].
 pub async fn seed_media(state: &Arc<AppState>, user_id: UserId, name: &str) -> MediaRef {
     let media = media_ref_for(name);
-    state
-        .media
-        .create_media(&MediaRecord {
-            user_id,
-            sha256: media.sha256.clone(),
-            filename: media.filename.clone(),
-            source: media.source,
-            content_type: detect_content_type(&media.filename),
-            size_bytes: parse_byte_size("1"),
-            source_url: None,
-            created_at: UtcInstant::now(),
+    let record = MediaRecord {
+        user_id,
+        sha256: media.sha256.clone(),
+        filename: media.filename.clone(),
+        source: media.source,
+        content_type: detect_content_type(&media.filename),
+        size_bytes: parse_byte_size("1"),
+        source_url: None,
+        created_at: UtcInstant::now(),
+    };
+    let media_store = Arc::clone(&state.media);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { media_store.create_media(transaction, &record).await })
         })
         .await
         .expect("seed media should be created");
+    confirmed_for(outcome, "seed media");
     media
 }
 

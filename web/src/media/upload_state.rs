@@ -13,57 +13,86 @@
 
 use leptos::prelude::*;
 
+use common::MutationOutcome;
 use common::media::UploadedMedia;
 use common::root_relative_url::RootRelativeUrl;
 
+use super::MediaDeletion;
 use crate::error::WebResult;
 
 /// What one upload attempt resolved to — the fold of the multipart `#[server]` fn's
 /// `Result` into the one value both consumers read.
 ///
-/// Failure carries the rendered message rather than the typed `WebError` (unlike
-/// `timeline::LoadStatus`, ADR-0083): both sinks here are already stringly — the
-/// `on_error` prop is a `Callback<String>` and the inline banner paints text — so
-/// this widget has no consumer that could act on the error *kind*.
+/// Failure and indeterminate commits carry the rendered message rather than the typed
+/// `WebError` (unlike `timeline::LoadStatus`, ADR-0083): both sinks here are already
+/// stringly — the `on_error` prop is a `Callback<String>` and the inline banner paints
+/// text. The distinct indeterminate variant lets the media page invalidate stale data
+/// without ever treating an uncertain commit as a confirmed upload.
 #[derive(Debug, PartialEq, Eq)]
 pub enum UploadOutcome {
     Uploaded(RootRelativeUrl),
+    Indeterminate(String),
     Failed(String),
 }
 
 impl UploadOutcome {
-    /// Fold the server fn's result. Only the URL survives a success; this control
-    /// does not need the rest of [`UploadedMedia`]'s stored-upload metadata.
+    /// Fold the server fn's result. Only the URL survives a confirmed success; this
+    /// control does not need the rest of [`UploadedMedia`]'s stored-upload metadata.
     #[must_use]
-    pub fn classify(result: WebResult<UploadedMedia>) -> Self {
+    pub fn classify(result: WebResult<MutationOutcome<UploadedMedia>>) -> Self {
         match result {
-            Ok(response) => Self::Uploaded(response.url),
+            Ok(MutationOutcome::Confirmed(response)) => Self::Uploaded(response.url),
+            Ok(MutationOutcome::CommitIndeterminate(_)) => Self::Indeterminate(
+                "Upload status is unknown. Reload and verify whether the media was uploaded."
+                    .to_owned(),
+            ),
             Err(error) => Self::Failed(error.to_string()),
         }
     }
 }
 
-/// The caller notifications an upload fires, bundled so the component hands one
-/// `Copy` value to [`UploadState::settle`] instead of threading two `Option` props
-/// through the spawned future.
+/// Whether a completed delete may have changed the media list and storage usage.
 ///
-/// Both are optional and independent: `MediaPage` supplies both and displays
-/// nothing inline, while the compose form supplies neither and reads the inline
-/// signals instead.
+/// A confirmed refusal cannot change either resource, while a confirmed deletion or
+/// an indeterminate commit must trigger revalidation.
+#[must_use]
+pub fn delete_invalidates_media_resources(outcome: &MutationOutcome<MediaDeletion>) -> bool {
+    matches!(
+        outcome,
+        MutationOutcome::Confirmed(MediaDeletion { deleted: true, .. })
+            | MutationOutcome::CommitIndeterminate(_)
+    )
+}
+
+/// The caller notifications an upload fires, bundled so the component hands one
+/// `Copy` value to [`UploadState::settle`] instead of threading optional props through
+/// the spawned future.
+///
+/// All callbacks are optional and independent. A confirmed upload fires
+/// `on_uploaded`; an indeterminate upload fires both `on_indeterminate` so callers
+/// can revalidate uncertain resources and `on_error` for error reporting.
 #[derive(Clone, Copy)]
 pub struct UploadCallbacks {
     pub on_uploaded: Option<Callback<RootRelativeUrl>>,
+    pub on_indeterminate: Option<Callback<()>>,
     pub on_error: Option<Callback<String>>,
 }
 
 impl UploadCallbacks {
-    /// Fire the callback matching `outcome`, when the caller supplied one. A caller
-    /// that supplied only the other one — or neither — is silently fine.
+    /// Fire callbacks matching `outcome`, when the caller supplied them.
     pub fn notify(&self, outcome: &UploadOutcome) {
         match outcome {
             UploadOutcome::Uploaded(url) => {
                 if let Some(callback) = self.on_uploaded {
                     callback.run(url.clone());
+                }
+            }
+            UploadOutcome::Indeterminate(message) => {
+                if let Some(callback) = self.on_indeterminate {
+                    callback.run(());
+                }
+                if let Some(callback) = self.on_error {
+                    callback.run(message.clone());
                 }
             }
             UploadOutcome::Failed(message) => {
@@ -120,7 +149,11 @@ impl UploadState {
     /// The ordering is the pre-extraction body's, verbatim: `uploading` clears
     /// first, the caller's callback runs next (so a caller that refetches sees the
     /// button already re-enabled), and the inline signals are written last.
-    pub fn settle(&self, result: WebResult<UploadedMedia>, callbacks: UploadCallbacks) {
+    pub fn settle(
+        &self,
+        result: WebResult<MutationOutcome<UploadedMedia>>,
+        callbacks: UploadCallbacks,
+    ) {
         self.uploading.set(false);
         let outcome = UploadOutcome::classify(result);
         callbacks.notify(&outcome);
@@ -128,8 +161,8 @@ impl UploadState {
     }
 
     /// Record `outcome` in the inline-display signals — a no-op unless this control
-    /// was built with `show_result`. A success also clears any previous error, so a
-    /// retry after a failure does not leave the stale banner up.
+    /// was built with `show_result`. Only a confirmed upload stores a URL and clears a
+    /// previous error; failures and indeterminate commits remain visibly error-like.
     fn record(&self, outcome: &UploadOutcome) {
         if !self.show_result {
             return;
@@ -138,6 +171,10 @@ impl UploadState {
             UploadOutcome::Uploaded(url) => {
                 self.last_media_url.set(Some(url.clone()));
                 self.error.set(None);
+            }
+            UploadOutcome::Indeterminate(message) => {
+                self.last_media_url.set(None);
+                self.error.set(Some(message.clone()));
             }
             UploadOutcome::Failed(message) => self.error.set(Some(message.clone())),
         }
@@ -180,14 +217,14 @@ mod tests {
     fn no_callbacks() -> UploadCallbacks {
         UploadCallbacks {
             on_uploaded: None,
+            on_indeterminate: None,
             on_error: None,
         }
     }
 
-    /// The two sinks a caller's callbacks would write, plus the callbacks that write
-    /// them.
+    /// The sinks a caller's callbacks would write, plus the callbacks that write them.
     ///
-    /// **One helper, not a fresh pair of closures per test.** The no-callback case
+    /// **One helper, not a fresh set of closures per test.** The no-callback case
     /// asserts these very sinks stay unwritten, which only says something because the
     /// same instrumented callbacks demonstrably write them a few lines earlier — the
     /// difference between "no callback fired" and "nothing here could ever fire". It
@@ -196,6 +233,7 @@ mod tests {
     #[derive(Clone, Copy)]
     struct Sinks {
         uploaded: RwSignal<Option<RootRelativeUrl>>,
+        indeterminate: RwSignal<u32>,
         failed: RwSignal<Option<String>>,
     }
 
@@ -203,14 +241,18 @@ mod tests {
         fn new() -> Self {
             Self {
                 uploaded: RwSignal::new(None),
+                indeterminate: RwSignal::new(0),
                 failed: RwSignal::new(None),
             }
         }
 
-        /// Both callbacks supplied.
+        /// All callbacks supplied.
         fn callbacks(self) -> UploadCallbacks {
             UploadCallbacks {
                 on_uploaded: Some(Callback::new(move |url| self.uploaded.set(Some(url)))),
+                on_indeterminate: Some(Callback::new(move |()| {
+                    self.indeterminate.update(|count| *count += 1);
+                })),
                 on_error: Some(Callback::new(move |message| self.failed.set(Some(message)))),
             }
         }
@@ -219,21 +261,34 @@ mod tests {
         fn error_only(self) -> UploadCallbacks {
             UploadCallbacks {
                 on_uploaded: None,
+                on_indeterminate: None,
                 ..self.callbacks()
             }
         }
 
         fn clear(self) {
             self.uploaded.set(None);
+            self.indeterminate.set(0);
             self.failed.set(None);
         }
     }
 
     #[test]
-    fn classify_keeps_only_the_url_on_success() {
+    fn classify_keeps_only_the_url_on_confirmed_success() {
         assert_eq!(
-            UploadOutcome::classify(Ok(response())),
+            UploadOutcome::classify(Ok(MutationOutcome::Confirmed(response()))),
             UploadOutcome::Uploaded(url())
+        );
+    }
+
+    #[test]
+    fn classify_preserves_an_indeterminate_commit() {
+        assert_eq!(
+            UploadOutcome::classify(Ok(MutationOutcome::CommitIndeterminate(response()))),
+            UploadOutcome::Indeterminate(
+                "Upload status is unknown. Reload and verify whether the media was uploaded."
+                    .to_owned()
+            )
         );
     }
 
@@ -256,6 +311,10 @@ mod tests {
     fn upload_outcome_is_debug_printable() {
         assert!(format!("{:?}", UploadOutcome::Uploaded(url())).contains("Uploaded"));
         assert_eq!(
+            format!("{:?}", UploadOutcome::Indeterminate("unknown".to_string())),
+            "Indeterminate(\"unknown\")"
+        );
+        assert_eq!(
             format!("{:?}", UploadOutcome::Failed("boom".to_string())),
             "Failed(\"boom\")"
         );
@@ -269,7 +328,12 @@ mod tests {
 
             callbacks.notify(&UploadOutcome::Uploaded(url()));
             assert_eq!(sinks.uploaded.get(), Some(url()));
+            assert_eq!(sinks.indeterminate.get(), 0);
             assert_eq!(sinks.failed.get(), None, "a success must not fire on_error");
+
+            callbacks.notify(&UploadOutcome::Indeterminate("unknown".to_string()));
+            assert_eq!(sinks.indeterminate.get(), 1, "uncertain uploads revalidate");
+            assert_eq!(sinks.failed.get(), Some("unknown".to_string()));
 
             callbacks.notify(&UploadOutcome::Failed("boom".to_string()));
             assert_eq!(sinks.failed.get(), Some("boom".to_string()));
@@ -277,6 +341,11 @@ mod tests {
                 sinks.uploaded.get(),
                 Some(url()),
                 "a failure must not disturb the last success"
+            );
+            assert_eq!(
+                sinks.indeterminate.get(),
+                1,
+                "a failure is not indeterminate"
             );
         });
     }
@@ -291,17 +360,27 @@ mod tests {
             sinks.callbacks().notify(&UploadOutcome::Uploaded(url()));
             sinks
                 .callbacks()
+                .notify(&UploadOutcome::Indeterminate("unknown".to_string()));
+            sinks
+                .callbacks()
                 .notify(&UploadOutcome::Failed("boom".to_string()));
             assert_eq!(sinks.uploaded.get(), Some(url()));
+            assert_eq!(sinks.indeterminate.get(), 1);
             assert_eq!(sinks.failed.get(), Some("boom".to_string()));
 
             sinks.clear();
             no_callbacks().notify(&UploadOutcome::Uploaded(url()));
+            no_callbacks().notify(&UploadOutcome::Indeterminate("unknown".to_string()));
             no_callbacks().notify(&UploadOutcome::Failed("boom".to_string()));
             assert_eq!(
                 sinks.uploaded.get(),
                 None,
                 "an absent on_uploaded writes nothing"
+            );
+            assert_eq!(
+                sinks.indeterminate.get(),
+                0,
+                "an absent on_indeterminate writes nothing"
             );
             assert_eq!(
                 sinks.failed.get(),
@@ -312,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn notify_fires_the_error_arm_when_only_on_error_is_supplied() {
+    fn notify_reports_an_indeterminate_upload_when_only_on_error_is_supplied() {
         with_owner(|| {
             let sinks = Sinks::new();
             let callbacks = sinks.error_only();
@@ -325,9 +404,34 @@ mod tests {
                 "the absent on_uploaded fires nothing"
             );
 
-            callbacks.notify(&UploadOutcome::Failed("boom".to_string()));
-            assert_eq!(sinks.failed.get(), Some("boom".to_string()));
+            callbacks.notify(&UploadOutcome::Indeterminate("unknown".to_string()));
+            assert_eq!(sinks.failed.get(), Some("unknown".to_string()));
+            assert_eq!(
+                sinks.indeterminate.get(),
+                0,
+                "the absent on_indeterminate fires nothing"
+            );
         });
+    }
+
+    #[test]
+    fn delete_invalidation_covers_confirmed_and_indeterminate_mutations_only() {
+        let deleted = MutationOutcome::Confirmed(MediaDeletion {
+            deleted: true,
+            referenced_in_posts: vec![],
+        });
+        let refused = MutationOutcome::Confirmed(MediaDeletion {
+            deleted: false,
+            referenced_in_posts: vec![],
+        });
+        let indeterminate = MutationOutcome::CommitIndeterminate(MediaDeletion {
+            deleted: false,
+            referenced_in_posts: vec![],
+        });
+
+        assert!(delete_invalidates_media_resources(&deleted));
+        assert!(!delete_invalidates_media_resources(&refused));
+        assert!(delete_invalidates_media_resources(&indeterminate));
     }
 
     #[test]
@@ -350,11 +454,18 @@ mod tests {
     }
 
     #[test]
-    fn settle_clears_the_in_flight_flag_on_both_outcomes() {
+    fn settle_clears_the_in_flight_flag_on_every_outcome() {
         with_owner(|| {
             let state = UploadState::new(false);
             state.begin();
-            state.settle(Ok(response()), no_callbacks());
+            state.settle(Ok(MutationOutcome::Confirmed(response())), no_callbacks());
+            assert!(!state.uploading.get());
+
+            state.begin();
+            state.settle(
+                Ok(MutationOutcome::CommitIndeterminate(response())),
+                no_callbacks(),
+            );
             assert!(!state.uploading.get());
 
             state.begin();
@@ -371,7 +482,7 @@ mod tests {
             assert_eq!(state.error.get(), Some("boom".to_string()));
             assert_eq!(state.last_media_url.get(), None);
 
-            state.settle(Ok(response()), no_callbacks());
+            state.settle(Ok(MutationOutcome::Confirmed(response())), no_callbacks());
             assert_eq!(state.last_media_url.get(), Some(url()));
             assert_eq!(
                 state.error.get(),
@@ -382,10 +493,36 @@ mod tests {
     }
 
     #[test]
+    fn settle_renders_an_indeterminate_upload_as_reload_and_verify_error() {
+        with_owner(|| {
+            let state = UploadState::new(true);
+            state.settle(Ok(MutationOutcome::Confirmed(response())), no_callbacks());
+            assert_eq!(state.last_media_url.get(), Some(url()));
+
+            state.settle(
+                Ok(MutationOutcome::CommitIndeterminate(response())),
+                no_callbacks(),
+            );
+            assert_eq!(
+                state.last_media_url.get(),
+                None,
+                "an uncertain retry must not paint a confirmed success"
+            );
+            assert_eq!(
+                state.error.get(),
+                Some(
+                    "Upload status is unknown. Reload and verify whether the media was uploaded."
+                        .to_owned()
+                )
+            );
+        });
+    }
+
+    #[test]
     fn settle_records_nothing_when_not_showing_results() {
         with_owner(|| {
             let state = UploadState::new(false);
-            state.settle(Ok(response()), no_callbacks());
+            state.settle(Ok(MutationOutcome::Confirmed(response())), no_callbacks());
             assert_eq!(state.last_media_url.get(), None);
 
             state.settle(Err(WebError::validation("boom")), no_callbacks());
@@ -406,8 +543,21 @@ mod tests {
             let callbacks = sinks.callbacks();
             let state = UploadState::new(false);
 
-            state.settle(Ok(response()), callbacks);
+            state.settle(Ok(MutationOutcome::Confirmed(response())), callbacks);
             assert_eq!(sinks.uploaded.get(), Some(url()));
+
+            state.settle(
+                Ok(MutationOutcome::CommitIndeterminate(response())),
+                callbacks,
+            );
+            assert_eq!(sinks.indeterminate.get(), 1);
+            assert_eq!(
+                sinks.failed.get(),
+                Some(
+                    "Upload status is unknown. Reload and verify whether the media was uploaded."
+                        .to_owned()
+                )
+            );
 
             state.settle(Err(WebError::validation("boom")), callbacks);
             assert_eq!(sinks.failed.get(), Some("boom".to_string()));

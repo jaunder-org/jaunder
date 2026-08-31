@@ -12,6 +12,21 @@ use storage::{
     CreateMediaError, DeleteMediaError, MediaRecord, MediaReferenceEvidence, TryDeleteOutcome,
 };
 
+async fn create_media(state: &storage::AppState, record: MediaRecord) {
+    let media = state.media.clone();
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { media.create_media(transaction, &record).await })
+        })
+        .await
+        .expect("fixture media creation should succeed");
+    assert!(
+        matches!(outcome, common::MutationOutcome::Confirmed(())),
+        "fixture media creation requires a confirmed commit"
+    );
+}
+
 // ── MediaStorage tests ────────────────────────────────────────────────────────
 
 fn make_media_record(
@@ -45,7 +60,7 @@ async fn create_and_get_media(#[case] backend: Backend) {
         .expect("valid microsecond instant");
     let mut record = make_media_record(user_id, &sha256, "test.jpg", MediaSource::Upload);
     record.created_at = created_at;
-    state.media.create_media(&record).await.unwrap();
+    create_media(state, record).await;
 
     let fetched = state
         .media
@@ -91,7 +106,7 @@ async fn media_source_url_round_trips_through_the_typed_column(#[case] backend: 
     // text as typed (#675).
     record.source_url = Some(parse_url("https://Example.COM:443/x.png"));
 
-    state.media.create_media(&record).await.unwrap();
+    create_media(state, record).await;
 
     let fetched = state
         .media
@@ -159,7 +174,7 @@ async fn list_media_skips_rows_that_fail_to_decode(#[case] backend: Backend) {
     // A valid record via the normal (validating) path.
     let good_sha = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
     let record = make_media_record(user_id, good_sha, "good.jpg", MediaSource::Upload);
-    state.media.create_media(&record).await.unwrap();
+    create_media(state, record).await;
 
     // A row whose `filename` column is a non-canonical value, inserted directly to
     // bypass the validating `create_media` (the `Filename` type makes an un-sanitized
@@ -214,10 +229,20 @@ async fn duplicate_media_returns_already_exists(#[case] backend: Backend) {
 
     let sha256 = "bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234bbbb1234".to_string();
     let record = make_media_record(user_id, &sha256, "dup.jpg", MediaSource::Upload);
-    state.media.create_media(&record).await.unwrap();
-    let err = state.media.create_media(&record).await.unwrap_err();
+    create_media(state, record.clone()).await;
+    let media = state.media.clone();
+    let err = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { media.create_media(transaction, &record).await })
+        })
+        .await
+        .expect_err("duplicate media creation must fail");
     assert!(
-        matches!(err, CreateMediaError::AlreadyExists),
+        matches!(
+            err,
+            storage::WriteScopeError::Operation(CreateMediaError::AlreadyExists)
+        ),
         "expected AlreadyExists, got {err:?}"
     );
 }
@@ -232,23 +257,36 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
     let sha256 =
         parse_content_hash("cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234");
     let record = make_media_record(user_id, &sha256, "del.jpg", MediaSource::Upload);
-    state.media.create_media(&record).await.unwrap();
-    let evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
+    create_media(state, record).await;
+    let media = state.media.clone();
+    let media_ref = MediaRef {
+        source: MediaSource::Upload,
+        sha256: sha256.clone(),
+        filename: parse_filename("del.jpg"),
+    };
+    let instance_id = env.base.instance_id().clone();
+    let evidence = MediaReferenceEvidence::new(instance_id.clone());
     let outcome = state
-        .media
-        .try_delete_media(
-            user_id,
-            &MediaRef {
-                source: MediaSource::Upload,
-                sha256: sha256.clone(),
-                filename: parse_filename("del.jpg"),
-            },
-            env.base.instance_id(),
-            &evidence,
-            false,
-        )
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                media
+                    .try_delete_media(
+                        transaction,
+                        user_id,
+                        &media_ref,
+                        &instance_id,
+                        &evidence,
+                        false,
+                    )
+                    .await
+            })
+        })
         .await
-        .unwrap();
+        .expect("media deletion should succeed");
+    let common::MutationOutcome::Confirmed(outcome) = outcome else {
+        panic!("media deletion requires a confirmed commit");
+    };
     assert_eq!(outcome, TryDeleteOutcome::Deleted);
 
     let fetched = state
@@ -273,22 +311,35 @@ async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
 
     let sha256 =
         parse_content_hash("dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234");
-    let evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
+    let media = state.media.clone();
+    let media_ref = MediaRef {
+        source: MediaSource::Upload,
+        sha256: sha256.clone(),
+        filename: parse_filename("ghost.jpg"),
+    };
+    let instance_id = env.base.instance_id().clone();
+    let evidence = MediaReferenceEvidence::new(instance_id.clone());
     let err = state
-        .media
-        .try_delete_media(
-            user_id,
-            &MediaRef {
-                source: MediaSource::Upload,
-                sha256: sha256.clone(),
-                filename: parse_filename("ghost.jpg"),
-            },
-            env.base.instance_id(),
-            &evidence,
-            false,
-        )
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                media
+                    .try_delete_media(
+                        transaction,
+                        user_id,
+                        &media_ref,
+                        &instance_id,
+                        &evidence,
+                        false,
+                    )
+                    .await
+            })
+        })
         .await
-        .unwrap_err();
+        .expect_err("deleting missing media must fail");
+    let storage::WriteScopeError::Operation(err) = err else {
+        panic!("expected media delete operation failure");
+    };
     assert!(
         matches!(err, DeleteMediaError::NotFound),
         "expected NotFound, got {err:?}"
@@ -306,36 +357,21 @@ async fn list_media_returns_records_for_user(#[case] backend: Backend) {
     let sha2 = "ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234ffff1234".to_string();
     let sha3 = "9999123499991234999912349999123499991234999912349999123499991234".to_string();
 
-    state
-        .media
-        .create_media(&make_media_record(
-            user_a,
-            &sha1,
-            "a1.jpg",
-            MediaSource::Upload,
-        ))
-        .await
-        .unwrap();
-    state
-        .media
-        .create_media(&make_media_record(
-            user_a,
-            &sha2,
-            "a2.jpg",
-            MediaSource::Upload,
-        ))
-        .await
-        .unwrap();
-    state
-        .media
-        .create_media(&make_media_record(
-            user_b,
-            &sha3,
-            "b1.jpg",
-            MediaSource::Upload,
-        ))
-        .await
-        .unwrap();
+    create_media(
+        state,
+        make_media_record(user_a, &sha1, "a1.jpg", MediaSource::Upload),
+    )
+    .await;
+    create_media(
+        state,
+        make_media_record(user_a, &sha2, "a2.jpg", MediaSource::Upload),
+    )
+    .await;
+    create_media(
+        state,
+        make_media_record(user_b, &sha3, "b1.jpg", MediaSource::Upload),
+    )
+    .await;
 
     let results = state
         .media
@@ -356,26 +392,16 @@ async fn list_media_filtered_by_source(#[case] backend: Backend) {
     let sha_up = "8888123488881234888812348888123488881234888812348888123488881234".to_string();
     let sha_ca = "7777123477771234777712347777123477771234777712347777123477771234".to_string();
 
-    state
-        .media
-        .create_media(&make_media_record(
-            user_id,
-            &sha_up,
-            "up.jpg",
-            MediaSource::Upload,
-        ))
-        .await
-        .unwrap();
-    state
-        .media
-        .create_media(&make_media_record(
-            user_id,
-            &sha_ca,
-            "ca.jpg",
-            MediaSource::Cached,
-        ))
-        .await
-        .unwrap();
+    create_media(
+        state,
+        make_media_record(user_id, &sha_up, "up.jpg", MediaSource::Upload),
+    )
+    .await;
+    create_media(
+        state,
+        make_media_record(user_id, &sha_ca, "ca.jpg", MediaSource::Cached),
+    )
+    .await;
 
     let uploads = state
         .media
@@ -427,11 +453,11 @@ async fn get_user_upload_usage_sums_uploads_only(#[case] backend: Backend) {
 
     let mut upload = make_media_record(user_id, &sha_up, "upload.jpg", MediaSource::Upload);
     upload.size_bytes = parse_byte_size("1000");
-    state.media.create_media(&upload).await.unwrap();
+    create_media(state, upload).await;
 
     let mut cached = make_media_record(user_id, &sha_ca, "cached.jpg", MediaSource::Cached);
     cached.size_bytes = parse_byte_size("9999");
-    state.media.create_media(&cached).await.unwrap();
+    create_media(state, cached).await;
 
     let usage = state.media.get_user_upload_usage(user_id).await.unwrap();
     assert_eq!(
@@ -451,7 +477,7 @@ async fn find_by_hash_returns_any_match(#[case] backend: Backend) {
     let sha256 =
         parse_content_hash("4444123444441234444412344444123444441234444412344444123444441234");
     let record = make_media_record(user_id, &sha256, "find.jpg", MediaSource::Upload);
-    state.media.create_media(&record).await.unwrap();
+    create_media(state, record).await;
 
     let found = state
         .media

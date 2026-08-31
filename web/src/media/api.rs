@@ -4,6 +4,7 @@
 //! wiring only and re-exports these under the stable `crate::media::…` paths that
 //! external call sites and the server-fn registrar depend on.
 
+use common::MutationOutcome;
 use common::media::{
     ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaSource, UserQuota,
 };
@@ -31,7 +32,7 @@ use {
     storage::{
         self, DeleteMediaError, InstanceId, MediaError, MediaManager,
         MediaReferenceOwnershipResolver, MediaStorage, PostStorage, SiteConfigStorage,
-        TryDeleteOutcome,
+        TryDeleteOutcome, WriteScope,
     },
 };
 
@@ -137,7 +138,7 @@ pub async fn get_usage() -> WebResult<UsageData> {
 /// refuses when it would leave referenced bytes without any media row accounting
 /// for them.
 #[macros::server(skip_all)]
-pub async fn delete(request: DeleteMediaRequest) -> WebResult<MediaDeletion> {
+pub async fn delete(request: DeleteMediaRequest) -> WebResult<MutationOutcome<MediaDeletion>> {
     let DeleteMediaRequest {
         sha256,
         filename,
@@ -148,6 +149,7 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MediaDeletion> {
     let media = expect_context::<Arc<dyn MediaStorage>>();
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let write_scope = expect_context::<WriteScope>();
     let axum::Extension(storage_path) = extract::<axum::Extension<Arc<PathBuf>>>()
         .await
         .map_err(map_storage_path_extract_error)?;
@@ -175,7 +177,7 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MediaDeletion> {
 
     // The manager delegates the row decision to storage's one-statement guard, then
     // reclaims the file only when that decision deleted the row.
-    let manager = MediaManager::new(media.clone(), site_config, storage_path);
+    let manager = MediaManager::new(media.clone(), site_config, write_scope, storage_path);
     let outcome = manager
         .delete_media(
             auth.user_id,
@@ -189,7 +191,9 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MediaDeletion> {
 
     // Reporting is derived from the exact globally resolved rows; querying after
     // the guarded delete would race a concurrent post edit into the explanation.
-    let referenced_in_posts: Vec<PostId> = if outcome == TryDeleteOutcome::RefusedReferenced {
+    let referenced_in_posts: Vec<PostId> = if *outcome.value()
+        == TryDeleteOutcome::RefusedReferenced
+    {
         references
             .references()
             .iter()
@@ -204,10 +208,10 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MediaDeletion> {
         Vec::new()
     };
 
-    Ok(MediaDeletion {
+    Ok(outcome.map(|outcome| MediaDeletion {
         deleted: outcome == TryDeleteOutcome::Deleted,
         referenced_in_posts,
-    })
+    }))
 }
 
 /// Maps an owned media operation failure to its bounded public classification while
@@ -293,10 +297,11 @@ fn map_multipart_error(error: multer::Error) -> InternalError {
 /// Streams a multipart file upload to storage and returns its stored URL/metadata.
 /// The multipart `#[server]` fn (#517).
 #[macros::server(input = MultipartFormData, skip_all)]
-pub async fn upload(data: MultipartData) -> WebResult<UploadedMedia> {
+pub async fn upload(data: MultipartData) -> WebResult<MutationOutcome<UploadedMedia>> {
     let auth = auth::require_auth().await?;
     let media = expect_context::<Arc<dyn MediaStorage>>();
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let write_scope = expect_context::<WriteScope>();
 
     // `storage_path` is an axum `Extension` (server/src/lib.rs), not a leptos
     // context value, so pull it via the request extractor rather than expect_context.
@@ -333,7 +338,7 @@ pub async fn upload(data: MultipartData) -> WebResult<UploadedMedia> {
         })
         .transpose()?; // cov:ignore
 
-    let manager = MediaManager::new(media, site_config, storage_path);
+    let manager = MediaManager::new(media, site_config, write_scope, storage_path);
     manager
         .upload(auth.user_id, &filename, content_type, field)
         .await
