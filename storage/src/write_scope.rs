@@ -252,7 +252,6 @@ mod tests {
     use tracing::field::{Field, Visit};
     use tracing_subscriber::layer::{Context, Layer};
     use tracing_subscriber::prelude::*;
-    use tracing_subscriber::registry::LookupSpan;
 
     #[derive(Default)]
     struct RecordedOutcomes(Mutex<Vec<String>>);
@@ -273,25 +272,22 @@ mod tests {
 
     impl<S> Layer<S> for WriteScopeRecorder
     where
-        S: tracing::Subscriber + for<'span> LookupSpan<'span>,
+        S: tracing::Subscriber,
     {
         fn on_record(
             &self,
-            id: &tracing::span::Id,
+            _id: &tracing::span::Id,
             values: &tracing::span::Record<'_>,
-            context: Context<'_, S>,
+            _context: Context<'_, S>,
         ) {
-            if let Some(span) = context.span(id)
-                && span.metadata().name() == "storage.write_scope"
-            {
-                let mut fields = FieldRecorder(Vec::new());
-                values.record(&mut fields);
-                self.0.0.lock().expect("outcome recorder mutex").extend(
-                    fields.0.into_iter().filter_map(|(field, value)| {
-                        (field == "write_scope.outcome").then_some(value)
-                    }),
-                );
-            }
+            let mut fields = FieldRecorder(Vec::new());
+            values.record(&mut fields);
+            self.0.0.lock().expect("outcome recorder mutex").extend(
+                fields
+                    .0
+                    .into_iter()
+                    .filter_map(|(field, value)| (field == "write_scope.outcome").then_some(value)),
+            );
         }
     }
 

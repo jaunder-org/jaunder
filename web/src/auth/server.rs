@@ -444,6 +444,12 @@ mod tests {
             crate::error::WebError::Server { .. }
         ));
 
+        let missing_scope = auth_rejection_error(Rejection::MissingWriteScope);
+        assert!(matches!(
+            crate::error::project(missing_scope.kind(), missing_scope.public_message()),
+            crate::error::WebError::Server { .. }
+        ));
+
         for error in [
             storage::SessionAuthError::InvalidToken,
             storage::SessionAuthError::SessionNotFound,

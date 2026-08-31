@@ -27,6 +27,58 @@ use {
     tracing::Instrument,
 };
 
+#[cfg(feature = "server")]
+fn classify_registration_scope_result(
+    scope_result: Result<
+        MutationOutcome<common::token::RawToken>,
+        storage::WriteScopeError<InternalError>,
+    >,
+    span: &tracing::Span,
+    metric_policy: host::metrics::RegistrationPolicy,
+    is_invite_registration: bool,
+) -> crate::error::InternalResult<MutationOutcome<common::token::RawToken>> {
+    match scope_result {
+        Ok(MutationOutcome::Confirmed(token)) => {
+            metrics::registration(
+                RegistrationSource::Web,
+                metric_policy,
+                RegistrationResult::Ok,
+            );
+            if is_invite_registration {
+                metrics::invite(InviteEvent::Redeemed);
+            }
+            Ok(MutationOutcome::Confirmed(token))
+        }
+        Ok(MutationOutcome::CommitIndeterminate(token)) => {
+            span.record("registration.outcome", "commit_indeterminate");
+            Ok(MutationOutcome::CommitIndeterminate(token))
+        }
+        Err(error) => {
+            metrics::registration(
+                RegistrationSource::Web,
+                metric_policy,
+                RegistrationResult::Rejected,
+            );
+            Err(from_write_scope_error(error))
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+fn finalize_registration(outcome: MutationOutcome<common::token::RawToken>) -> MutationOutcome<()> {
+    match outcome {
+        MutationOutcome::Confirmed(raw_token) => {
+            auth::set_session_cookie(&raw_token);
+            leptos_axum::redirect("/");
+            MutationOutcome::Confirmed(())
+        }
+        MutationOutcome::CommitIndeterminate(raw_token) => {
+            auth::set_session_cookie(&raw_token);
+            MutationOutcome::CommitIndeterminate(())
+        }
+    }
+}
+
 /// Returns the site's current registration policy — one of
 /// [`RegistrationPolicy::Open`], [`RegistrationPolicy::InviteOnly`], or
 /// [`RegistrationPolicy::Closed`].
@@ -97,11 +149,9 @@ pub async fn register(
                 let user_id_result: Result<UserId, InternalError> = match policy {
                     RegistrationPolicy::Open => {
                         operation_span.record("registration.outcome", "create_user");
-                        let password = prepared_password.as_ref().ok_or_else(|| {
-                            InternalError::server(std::io::Error::other(
-                                "open registration password was not prepared",
-                            ))
-                        })?;
+                        let Some(password) = prepared_password.as_ref() else {
+                            unreachable!("open registration always prepares its password");
+                        };
                         users
                             .create_user(transaction, &username, password, None, false)
                             .instrument(tracing::info_span!(
@@ -152,41 +202,48 @@ pub async fn register(
             })
         })
         .await;
-    let outcome = match scope_result {
-        Ok(MutationOutcome::Confirmed(token)) => {
-            metrics::registration(
-                RegistrationSource::Web,
-                metric_policy,
-                RegistrationResult::Ok,
-            );
-            if is_invite_registration {
-                metrics::invite(InviteEvent::Redeemed);
-            }
-            MutationOutcome::Confirmed(token)
-        }
-        Ok(MutationOutcome::CommitIndeterminate(token)) => {
-            span.record("registration.outcome", "commit_indeterminate");
-            MutationOutcome::CommitIndeterminate(token)
-        }
-        Err(error) => {
-            metrics::registration(
-                RegistrationSource::Web,
-                metric_policy,
-                RegistrationResult::Rejected,
-            );
-            return Err(from_write_scope_error(error));
-        }
-    };
+    let outcome = classify_registration_scope_result(
+        scope_result,
+        &span,
+        metric_policy,
+        is_invite_registration,
+    )?;
+    Ok(finalize_registration(outcome))
+}
 
-    match outcome {
-        MutationOutcome::Confirmed(raw_token) => {
-            auth::set_session_cookie(&raw_token);
-            leptos_axum::redirect("/");
-            Ok(MutationOutcome::Confirmed(()))
-        }
-        MutationOutcome::CommitIndeterminate(raw_token) => {
-            auth::set_session_cookie(&raw_token);
-            Ok(MutationOutcome::CommitIndeterminate(()))
-        }
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::{classify_registration_scope_result, finalize_registration};
+    use common::{MutationOutcome, test_support::parse_raw_token};
+    use leptos::prelude::Owner;
+    use tracing::Span;
+
+    #[test]
+    fn scope_result_preserves_indeterminate_token_without_confirmed_metrics() {
+        let token = parse_raw_token("token");
+        let outcome = classify_registration_scope_result(
+            Ok(MutationOutcome::CommitIndeterminate(token.clone())),
+            &Span::none(),
+            host::metrics::RegistrationPolicy::Open,
+            false,
+        )
+        .expect("indeterminate commits remain successful wire outcomes");
+
+        assert!(matches!(
+            outcome,
+            MutationOutcome::CommitIndeterminate(returned)
+                if returned.as_ref() == token.as_ref()
+        ));
+    }
+
+    #[test]
+    fn finalize_registration_preserves_indeterminate_envelope_and_sets_cookie() {
+        Owner::new().with(|| {
+            let outcome = finalize_registration(MutationOutcome::CommitIndeterminate(
+                parse_raw_token("token"),
+            ));
+
+            assert!(matches!(outcome, MutationOutcome::CommitIndeterminate(())));
+        });
     }
 }

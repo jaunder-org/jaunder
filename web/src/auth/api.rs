@@ -28,6 +28,24 @@ fn login_write_scope_error(error: WriteScopeError<InternalError>) -> InternalErr
     from_write_scope_error(error)
 }
 
+#[cfg(feature = "server")]
+fn finalize_login(
+    outcome: MutationOutcome<(common::token::RawToken, super::SessionUser)>,
+) -> MutationOutcome<super::SessionUser> {
+    match outcome {
+        MutationOutcome::Confirmed((raw_token, session)) => {
+            metrics::login(LoginOutcome::Success);
+            server::set_session_cookie(&raw_token);
+            leptos_axum::redirect("/");
+            MutationOutcome::Confirmed(session)
+        }
+        MutationOutcome::CommitIndeterminate((raw_token, session)) => {
+            server::set_session_cookie(&raw_token);
+            MutationOutcome::CommitIndeterminate(session)
+        }
+    }
+}
+
 /// Authenticates a user. Sets the `HttpOnly` `session` cookie and returns the
 /// authenticated viewer's [`super::SessionUser`] — deliberately not the session token
 /// (#533).
@@ -107,18 +125,7 @@ pub async fn login(
         .await
         .map_err(login_write_scope_error)?;
 
-    match outcome {
-        MutationOutcome::Confirmed((raw_token, session)) => {
-            metrics::login(LoginOutcome::Success);
-            server::set_session_cookie(&raw_token);
-            leptos_axum::redirect("/");
-            Ok(MutationOutcome::Confirmed(session))
-        }
-        MutationOutcome::CommitIndeterminate((raw_token, session)) => {
-            server::set_session_cookie(&raw_token);
-            Ok(MutationOutcome::CommitIndeterminate(session))
-        }
-    }
+    Ok(finalize_login(outcome))
 }
 
 /// Revokes the current session and clears the `session` cookie. Missing or stale
@@ -171,8 +178,15 @@ pub async fn get_session() -> WebResult<Option<super::SessionUser>> {
 
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::login_write_scope_error;
-    use crate::error::{ErrorClass, ErrorKind, WebError, project};
+    use super::{finalize_login, login_write_scope_error};
+    use crate::auth::SessionUser;
+    use crate::error::{WebError, project};
+    use common::{
+        MutationOutcome,
+        test_support::{parse_raw_token, parse_username},
+    };
+    use host::error::{ErrorClass, ErrorKind};
+    use leptos::prelude::Owner;
 
     #[test]
     fn login_begin_failure_emits_internal_metric_and_maps_to_a_masked_storage_error() {
@@ -187,5 +201,24 @@ mod tests {
                 message: "storage operation failed".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn finalize_login_preserves_indeterminate_session_and_sets_cookie() {
+        Owner::new().with(|| {
+            let outcome = finalize_login(MutationOutcome::CommitIndeterminate((
+                parse_raw_token("token"),
+                SessionUser {
+                    username: parse_username("alice"),
+                    is_operator: false,
+                },
+            )));
+
+            assert!(matches!(
+                outcome,
+                MutationOutcome::CommitIndeterminate(session)
+                    if session.username == parse_username("alice") && !session.is_operator
+            ));
+        });
     }
 }
