@@ -3,12 +3,12 @@ import {
   DurationBudgetManifestCollector,
   type DurationBudgetManifest,
 } from "../durationBudgetManifest";
+import { test } from "./fixtures";
 import {
   DEFAULT_TEST_BUDGET_MS,
   setTestBudget,
   slowBrowserTimeoutMs,
-  test,
-} from "./fixtures";
+} from "./timeout-policy";
 
 test("duration budget fixture records the resolved ambient timeout", ({}, testInfo) => {
   expect(testInfo.timeout).toBe(

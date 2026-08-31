@@ -7,8 +7,8 @@
 //! that drifts silently narrows a guard.
 //!
 //! Exemptions stay the caller's business: this returns *every* matching file, so a
-//! gate that spares one (`steps::traced_context_check`'s `fixtures.ts`) filters the
-//! result rather than teaching the walk one gate's policy.
+//! gate applies its own narrowly scoped policy after the walk rather than teaching
+//! the shared inventory one gate's exceptions.
 
 use std::path::{Path, PathBuf};
 

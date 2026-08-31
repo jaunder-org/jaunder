@@ -22,14 +22,16 @@ Make the specs **parallel-safe at the test level** via per-test identity, so the
 suite carries no shared-state races and a future `workers > 1` flip is a
 config-only change:
 
-1. **Per-test identity fixtures** (`end2end/tests/fixtures.ts`): `user`
-   provisions a uniquely-named account out-of-band (in a throwaway browser
-   context, so the test page stays logged out); `mailbox` is a recipient-scoped,
-   cursor-tracked mail waiter bound to that account's unique address;
-   `verifiedUser` adds the email-verification flow. Lazy and test-scoped, so
-   each test that destructures them gets isolated state and the boilerplate
-   lives once. The `auth`, `email`, and `password_reset` specs drop the shared
-   seeded accounts in favour of these fixtures.
+1. **Per-test identity fixtures** (implemented in
+   `end2end/tests/provisioning.ts` and composed into the public test surface by
+   `end2end/tests/fixtures.ts`): `user` provisions a uniquely-named account
+   out-of-band (in a throwaway browser context, so the test page stays logged
+   out); `mailbox` is a recipient-scoped, cursor-tracked mail waiter bound to
+   that account's unique address; `verifiedUser` adds the email-verification
+   flow. Lazy and test-scoped, so each test that destructures them gets isolated
+   state and the boilerplate lives once. The `auth`, `email`, and
+   `password_reset` specs drop the shared seeded accounts in favour of these
+   fixtures.
 
 2. **Own-scoped feed assertions.** `posts`' anonymous local-timeline test
    asserts a full first page (`toBeGreaterThanOrEqual`) and that pagination
@@ -81,11 +83,12 @@ per-VM-footprint sweep (see `docs/observability.md` → "#155 — flip landed"):
   transparent to the app-level tests), keeping peak local RAM ≤12 GB.
 
 **Budget-bug note:** the sweep's early `workers=4` runs were tainted by a
-worker-scaling bug — `fixtures.ts` re-read `JAUNDER_E2E_WORKERS` with a default
-that diverged from the config, so chromium budgets got zero contention headroom
-(Firefox was unaffected — its 2.2× browser scale dominates). Fixed by deriving
-the scale from `testInfo.config.workers`; a re-test then ran `workers=4` 71/71
-green. Details in `docs/observability.md`.
+worker-scaling bug — the timeout policy, now owned by `timeout-policy.ts`,
+re-read `JAUNDER_E2E_WORKERS` with a default that diverged from the config, so
+chromium budgets got zero contention headroom (Firefox was unaffected — its 2.2×
+browser scale dominates). Fixed by deriving the scale from
+`testInfo.config.workers`; a re-test then ran `workers=4` 71/71 green. Details
+in `docs/observability.md`.
 
 `workers`/`cores`/`mem` are baked into the shared `e2eWarmChecks` derivation, so
 CI's per-combo matrix uses the same values; `workers=2` gives up only ~1 min on
