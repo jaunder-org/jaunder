@@ -3,7 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::time::UtcInstant;
-use host::{error, metrics};
+use host::{
+    error, metrics,
+    retention::{CleanupResult, Domain},
+};
 use storage::{
     EmailVerificationStorage, FeedEventStorage, InviteStorage, PasswordResetStorage, PostStorage,
 };
@@ -43,25 +46,22 @@ impl DatabaseMaintenance {
     /// Runs every cleanup domain against one frozen eligibility instant.
     pub(crate) async fn run_at(&self, now: UtcInstant) {
         report_cleanup(
-            metrics::RetentionDomain::IdempotencyKeys,
+            Domain::IdempotencyKeys,
             self.posts.prune_expired_idempotency_keys(now).await,
         );
+        report_cleanup(Domain::Invites, self.invites.prune_invites(now).await);
         report_cleanup(
-            metrics::RetentionDomain::Invites,
-            self.invites.prune_invites(now).await,
-        );
-        report_cleanup(
-            metrics::RetentionDomain::EmailVerifications,
+            Domain::EmailVerifications,
             self.email_verifications
                 .prune_email_verifications(now)
                 .await,
         );
         report_cleanup(
-            metrics::RetentionDomain::PasswordResets,
+            Domain::PasswordResets,
             self.password_resets.prune_password_resets(now).await,
         );
         report_cleanup(
-            metrics::RetentionDomain::FeedEvents,
+            Domain::FeedEvents,
             self.feed_events.prune_terminal_events(now).await,
         );
     }
@@ -95,13 +95,13 @@ impl DatabaseMaintenance {
     }
 }
 
-fn report_cleanup<E>(domain: metrics::RetentionDomain, result: Result<u64, E>)
+fn report_cleanup<E>(domain: Domain, result: Result<u64, E>)
 where
     E: Error + 'static,
 {
     match result {
         Ok(pruned) => {
-            metrics::retention_cleanup(domain, metrics::RetentionResult::Success, pruned);
+            metrics::retention_cleanup(domain, CleanupResult::Success, pruned);
             tracing::info!(
                 retention.domain = domain.label(),
                 pruned,
@@ -109,7 +109,7 @@ where
             );
         }
         Err(error) => {
-            metrics::retention_cleanup(domain, metrics::RetentionResult::Failure, 0);
+            metrics::retention_cleanup(domain, CleanupResult::Failure, 0);
             tracing::warn!(
                 retention.domain = domain.label(),
                 error = %error,

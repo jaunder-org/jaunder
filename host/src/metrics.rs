@@ -16,6 +16,7 @@
 
 use std::sync::{Arc, LazyLock, PoisonError, RwLock};
 
+use crate::retention::{CleanupResult, Domain};
 use opentelemetry::metrics::{AsyncInstrument, Counter, Histogram, ObservableGauge};
 use opentelemetry::{KeyValue, global};
 
@@ -46,31 +47,6 @@ enum_attr!(BackupResult { Success => "success", Failure => "failure" });
 enum_attr!(PostEvent { Created => "created", Updated => "updated", Published => "published", Deleted => "deleted" });
 enum_attr!(AtompubResult { Ok => "ok", ClientError => "client_error", ServerError => "server_error" });
 enum_attr!(IdempotencyEvent { Created => "created", Replayed => "replayed", Expired => "expired" });
-/// Closed set of retention domains emitted by metrics and maintenance logs.
-#[derive(Clone, Copy, Debug)]
-pub enum RetentionDomain {
-    IdempotencyKeys,
-    Invites,
-    EmailVerifications,
-    PasswordResets,
-    FeedEvents,
-}
-
-impl RetentionDomain {
-    /// Returns the bounded structured label shared by retention telemetry.
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::IdempotencyKeys => "idempotency_keys",
-            Self::Invites => "invites",
-            Self::EmailVerifications => "email_verifications",
-            Self::PasswordResets => "password_resets",
-            Self::FeedEvents => "feed_events",
-        }
-    }
-}
-
-enum_attr!(RetentionResult { Success => "success", Failure => "failure" });
 
 struct Instruments {
     logins: Counter<u64>,
@@ -390,13 +366,13 @@ pub fn idempotency(event: IdempotencyEvent) {
     M.idempotency_keys.add(1, &kv("event", event.as_str()));
 }
 /// Records one bounded retention-domain outcome and its successful prune count.
-pub fn retention_cleanup(domain: RetentionDomain, result: RetentionResult, pruned: u64) {
+pub fn retention_cleanup(domain: Domain, result: CleanupResult, pruned: u64) {
     let attributes = [
         KeyValue::new("domain", domain.label()),
-        KeyValue::new("result", result.as_str()),
+        KeyValue::new("result", result.label()),
     ];
     M.retention_runs.add(1, &attributes);
-    if matches!(result, RetentionResult::Success) {
+    if matches!(result, CleanupResult::Success) {
         M.retention_pruned
             .add(pruned, &kv("domain", domain.label()));
     }
@@ -826,17 +802,6 @@ mod tests {
         assert_eq!(IdempotencyEvent::Created.as_str(), "created");
         assert_eq!(IdempotencyEvent::Replayed.as_str(), "replayed");
         assert_eq!(IdempotencyEvent::Expired.as_str(), "expired");
-
-        assert_eq!(RetentionDomain::IdempotencyKeys.label(), "idempotency_keys");
-        assert_eq!(RetentionDomain::Invites.label(), "invites");
-        assert_eq!(
-            RetentionDomain::EmailVerifications.label(),
-            "email_verifications"
-        );
-        assert_eq!(RetentionDomain::PasswordResets.label(), "password_resets");
-        assert_eq!(RetentionDomain::FeedEvents.label(), "feed_events");
-        assert_eq!(RetentionResult::Success.as_str(), "success");
-        assert_eq!(RetentionResult::Failure.as_str(), "failure");
     }
 
     /// `kv` is the one shared shape-builder: every single-attribute emitter goes
