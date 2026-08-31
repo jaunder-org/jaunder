@@ -542,6 +542,25 @@ async fn create_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backen
 
 #[apply(backends)]
 #[tokio::test]
+async fn create_org_without_any_lifecycle_stays_draft(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs::new(parse_post_body("Body"), PostFormat::Org),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: SavedPost = confirmed_mutation(&body);
+    assert!(
+        created.published_at.is_none(),
+        "absent transport and Org lifecycle state must create a draft"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn create_non_org_requires_publish_presence(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();

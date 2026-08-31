@@ -1074,6 +1074,42 @@ async fn update_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backen
 
 #[apply(backends)]
 #[tokio::test]
+async fn update_org_without_any_lifecycle_unpublishes_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let (status, body) = create_post_json(
+        &state,
+        PostInputs {
+            publish: Some(true),
+            ..PostInputs::new(parse_post_body("Original"), PostFormat::Org)
+        },
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created = confirmed_mutation::<SavedPost>(&body);
+    assert!(
+        created.published_at.is_some(),
+        "fixture must start published"
+    );
+
+    let (status, body) = update_post_json(
+        &state,
+        created.post_id,
+        PostInputs::new(parse_post_body("Updated body"), PostFormat::Org),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "update body: {body}");
+    let updated = confirmed_mutation::<SavedPost>(&body);
+    assert!(
+        updated.published_at.is_none(),
+        "absent transport and Org lifecycle state must unpublish"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn update_non_org_requires_publish_presence(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
