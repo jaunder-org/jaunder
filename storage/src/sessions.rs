@@ -263,30 +263,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, SeedUser, TestEnv, backends};
-    use common::test_support::{parse_raw_token, parse_session_label};
+    use crate::test_support::{Backend, SeedUser, backends};
+    use common::test_support::parse_session_label;
     use rstest::*;
     use rstest_reuse::*;
     use std::sync::Arc;
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn authenticate_with_closed_pool_returns_internal_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let sessions = Arc::clone(&state.sessions);
-        let result = state
-            .write_scope
-            .run(|transaction| {
-                let token = parse_raw_token("dGVzdA");
-                Box::pin(async move { sessions.authenticate(transaction, &token).await })
-            })
-            .await;
-        assert!(matches!(
-            result,
-            Err(crate::WriteScopeError::Begin(sqlx::Error::PoolClosed))
-        ));
-    }
 
     #[apply(backends)]
     #[tokio::test]

@@ -55,7 +55,7 @@ async fn use_email_verification_already_used_returns_already_used(#[case] backen
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected email verification operation error, got {err:?}");
+        unreachable!("expected email verification operation error, got {err:?}");
     };
     assert!(
         matches!(err, UseEmailVerificationError::AlreadyUsed),
@@ -84,7 +84,7 @@ async fn use_email_verification_expired_returns_expired(#[case] backend: Backend
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected email verification operation error, got {err:?}");
+        unreachable!("expected email verification operation error, got {err:?}");
     };
     assert!(
         matches!(err, UseEmailVerificationError::Expired),
@@ -102,7 +102,7 @@ async fn use_email_verification_unknown_token_returns_not_found(#[case] backend:
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected email verification operation error, got {err:?}");
+        unreachable!("expected email verification operation error, got {err:?}");
     };
     assert!(
         matches!(err, UseEmailVerificationError::NotFound),
@@ -146,7 +146,7 @@ async fn second_email_verification_supersedes_first(#[case] backend: Backend) {
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected email verification operation error, got {err:?}");
+        unreachable!("expected email verification operation error, got {err:?}");
     };
     assert!(
         matches!(
@@ -190,7 +190,7 @@ async fn use_email_verification_with_corrupt_stored_email_returns_internal(
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected email verification operation error, got {err:?}");
+        unreachable!("expected email verification operation error, got {err:?}");
     };
     assert!(
         matches!(err, UseEmailVerificationError::Internal(_)),

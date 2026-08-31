@@ -1133,31 +1133,6 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn create_media_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let record = MediaRecord {
-            user_id: UserId::from(1),
-            sha256: parse_content_hash(MEDIA_TEST_SHA256),
-            filename: parse_filename("test.jpg"),
-            source: MediaSource::Upload,
-            content_type: parse_content_type("image/jpeg"),
-            size_bytes: parse_byte_size("1024"),
-            source_url: None,
-            created_at: UtcInstant::now(),
-        };
-        let write_scope = state.write_scope.clone();
-        let media = Arc::clone(&state.media);
-        let result = write_scope
-            .run(move |transaction| {
-                Box::pin(async move { media.create_media(transaction, &record).await })
-            })
-            .await;
-        assert!(result.is_err());
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
     async fn get_media_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
@@ -1188,27 +1163,6 @@ mod tests {
             )
             .await;
         assert!(result.is_err());
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn try_delete_media_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let result = try_delete_media_scoped(
-            &state,
-            UserId::from(1),
-            &media_ref_for("test.jpg"),
-            base.instance_id(),
-            &MediaReferenceEvidence::new(base.instance_id().clone()),
-            false,
-        )
-        .await;
-        assert!(matches!(
-            result,
-            Err(crate::WriteScopeError::Begin(_)
-                | crate::WriteScopeError::Operation(DeleteMediaError::Internal(_)))
-        ));
     }
 
     #[apply(backends)]

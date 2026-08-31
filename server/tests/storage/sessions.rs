@@ -97,7 +97,7 @@ async fn revoke_session_then_authenticate_returns_session_not_found(#[case] back
 
     let err = authenticate_result(state, raw_token).await.unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected session authentication operation error, got {err:?}");
+        unreachable!("expected session authentication operation error, got {err:?}");
     };
     assert!(matches!(err, SessionAuthError::SessionNotFound));
 }
@@ -115,7 +115,7 @@ async fn authenticate_with_invalid_base64_token_returns_invalid_token(#[case] ba
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected session authentication operation error, got {err:?}");
+        unreachable!("expected session authentication operation error, got {err:?}");
     };
     assert!(matches!(err, SessionAuthError::InvalidToken));
 }

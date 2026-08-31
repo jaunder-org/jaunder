@@ -60,7 +60,7 @@ async fn duplicate_username_returns_username_taken(#[case] backend: Backend) {
     .await
     .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected user creation operation error, got {err:?}");
+        unreachable!("expected user creation operation error, got {err:?}");
     };
     assert!(matches!(err, CreateUserError::UsernameTaken));
 }
@@ -101,7 +101,7 @@ async fn authenticate_wrong_password_returns_invalid_credentials(#[case] backend
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected authentication operation error, got {err:?}");
+        unreachable!("expected authentication operation error, got {err:?}");
     };
     assert!(matches!(err, UserAuthError::InvalidCredentials));
 }
@@ -116,7 +116,7 @@ async fn authenticate_unknown_username_returns_invalid_credentials(#[case] backe
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected authentication operation error, got {err:?}");
+        unreachable!("expected authentication operation error, got {err:?}");
     };
     assert!(matches!(err, UserAuthError::InvalidCredentials));
 }
@@ -204,7 +204,7 @@ async fn set_password_authenticate_with_old_returns_invalid_and_new_succeeds(
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected authentication operation error, got {err:?}");
+        unreachable!("expected authentication operation error, got {err:?}");
     };
     assert!(
         matches!(err, UserAuthError::InvalidCredentials),

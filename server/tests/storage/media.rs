@@ -333,7 +333,7 @@ async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
         .await
         .expect_err("deleting missing media must fail");
     let storage::WriteScopeError::Operation(err) = err else {
-        panic!("expected media delete operation failure");
+        unreachable!("expected media delete operation failure");
     };
     assert!(
         matches!(err, DeleteMediaError::NotFound),

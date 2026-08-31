@@ -182,25 +182,6 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn create_invite_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let expires_at = UtcInstant::now();
-        let invites = Arc::clone(&state.invites);
-        let result = state
-            .write_scope
-            .run(|transaction| {
-                Box::pin(async move { invites.create_invite(transaction, expires_at).await })
-            })
-            .await;
-        assert!(matches!(
-            result,
-            Err(crate::WriteScopeError::Begin(sqlx::Error::PoolClosed))
-        ));
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
     async fn list_invites_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;

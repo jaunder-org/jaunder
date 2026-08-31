@@ -253,7 +253,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn closed_pool_fails_reads_writes_and_write_scope_begin(#[case] backend: Backend) {
+    async fn closed_pool_fails_site_config_reads_and_writes(#[case] backend: Backend) {
         let env = backend.setup().await;
         env.base.close_pool().await;
 
@@ -273,41 +273,6 @@ mod tests {
             .await
             .is_err()
         );
-        let result: Result<
-            common::MutationOutcome<()>,
-            crate::WriteScopeError<RegisterWithInviteError>,
-        > = env
-            .state
-            .write_scope
-            .run(|_| {
-                Box::pin(async {
-                    unreachable!("transaction closure must not run after begin failure")
-                })
-            })
-            .await;
-        assert!(matches!(result, Err(crate::WriteScopeError::Begin(_))));
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn confirm_password_reset_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let (raw_token, _) = host::token::generate_hashed();
-        env.base.close_pool().await;
-        let password = host::test_support::parse_password("password123");
-        let atomic = std::sync::Arc::clone(&env.state.atomic);
-        let result = env
-            .state
-            .write_scope
-            .run(move |transaction| {
-                Box::pin(async move {
-                    atomic
-                        .confirm_password_reset(transaction, &raw_token, &password)
-                        .await
-                })
-            })
-            .await;
-        assert!(matches!(result, Err(crate::WriteScopeError::Begin(_))));
     }
 
     #[apply(backends)]

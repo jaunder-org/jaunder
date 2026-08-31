@@ -125,7 +125,7 @@ async fn use_password_reset_already_used_returns_already_used(#[case] backend: B
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected password reset operation error, got {err:?}");
+        unreachable!("expected password reset operation error, got {err:?}");
     };
     assert!(
         matches!(err, UsePasswordResetError::AlreadyUsed),
@@ -148,7 +148,7 @@ async fn use_password_reset_expired_returns_expired(#[case] backend: Backend) {
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected password reset operation error, got {err:?}");
+        unreachable!("expected password reset operation error, got {err:?}");
     };
     assert!(
         matches!(err, UsePasswordResetError::Expired),
@@ -166,7 +166,7 @@ async fn use_password_reset_unknown_token_returns_not_found(#[case] backend: Bac
         .await
         .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected password reset operation error, got {err:?}");
+        unreachable!("expected password reset operation error, got {err:?}");
     };
     assert!(
         matches!(err, UsePasswordResetError::NotFound),

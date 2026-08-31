@@ -890,7 +890,9 @@ mod tests {
             .expect_err("a non-feed_url decode failure must propagate")
         {
             crate::WriteScopeError::Operation(error) => error,
-            crate::WriteScopeError::Begin(error) => panic!("begin scope: {error}"),
+            crate::WriteScopeError::Begin(error) => {
+                unreachable!("open-pool write scope must begin: {error}")
+            }
         };
         assert!(
             matches!(err, FeedEventError::Db(sqlx::Error::ColumnDecode { .. })),
@@ -960,7 +962,9 @@ mod tests {
             .expect_err("negative attempts must fail decode rather than divert")
         {
             crate::WriteScopeError::Operation(error) => error,
-            crate::WriteScopeError::Begin(error) => panic!("begin scope: {error}"),
+            crate::WriteScopeError::Begin(error) => {
+                unreachable!("open-pool write scope must begin: {error}")
+            }
         };
         assert!(
             matches!(err, FeedEventError::Db(sqlx::Error::ColumnDecode { .. })),

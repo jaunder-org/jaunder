@@ -143,7 +143,7 @@ async fn create_user_with_invite_second_call_returns_already_used(#[case] backen
     .await
     .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected invite registration operation error, got {err:?}");
+        unreachable!("expected invite registration operation error, got {err:?}");
     };
 
     assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
@@ -178,7 +178,7 @@ async fn create_user_with_invite_expired_returns_invite_expired(#[case] backend:
     .await
     .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected invite registration operation error, got {err:?}");
+        unreachable!("expected invite registration operation error, got {err:?}");
     };
 
     assert!(matches!(err, RegisterWithInviteError::InviteExpired));
@@ -210,7 +210,7 @@ async fn create_user_with_invite_unknown_code_returns_not_found(#[case] backend:
     .await
     .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected invite registration operation error, got {err:?}");
+        unreachable!("expected invite registration operation error, got {err:?}");
     };
 
     assert!(matches!(err, RegisterWithInviteError::InviteNotFound));
@@ -250,7 +250,7 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
     .await
     .unwrap_err();
     let WriteScopeError::Operation(err) = err else {
-        panic!("expected invite registration operation error, got {err:?}");
+        unreachable!("expected invite registration operation error, got {err:?}");
     };
 
     assert!(matches!(err, RegisterWithInviteError::UsernameTaken));

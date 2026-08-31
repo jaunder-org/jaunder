@@ -44,7 +44,7 @@ async fn create_media(state: &storage::AppState, record: &MediaRecord) {
     {
         Ok(outcome) => outcome,
         Err(WriteScopeError::Operation(CreateMediaError::AlreadyExists)) => return,
-        Err(error) => panic!("create_media failed: {error}"),
+        Err(error) => unreachable!("create_media returned an unexpected error: {error}"),
     };
     storage::test_support::confirmed_for(outcome, "fixture media creation");
 }

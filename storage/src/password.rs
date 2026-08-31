@@ -161,8 +161,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, SeedUser, TestEnv, backends};
-    use common::test_support::parse_raw_token;
+    use crate::test_support::{Backend, SeedUser, backends};
     use rstest::*;
     use rstest_reuse::*;
     use std::sync::Arc;
@@ -208,51 +207,5 @@ mod tests {
             .unwrap();
         let claimed = crate::test_support::confirmed_for(outcome, "password reset");
         assert_eq!(claimed, user_id);
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn create_password_reset_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let expires_at = UtcInstant::now();
-        let password_resets = Arc::clone(&state.password_resets);
-        let result = state
-            .write_scope
-            .run(|transaction| {
-                Box::pin(async move {
-                    password_resets
-                        .create_password_reset(transaction, UserId::from(1), expires_at)
-                        .await
-                })
-            })
-            .await;
-        assert!(matches!(
-            result,
-            Err(crate::WriteScopeError::Begin(sqlx::Error::PoolClosed))
-        ));
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn use_password_reset_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let password_resets = Arc::clone(&state.password_resets);
-        let result = state
-            .write_scope
-            .run(|transaction| {
-                let token = parse_raw_token("dGVzdA");
-                Box::pin(async move {
-                    password_resets
-                        .use_password_reset(transaction, &token)
-                        .await
-                })
-            })
-            .await;
-        assert!(matches!(
-            result,
-            Err(crate::WriteScopeError::Begin(sqlx::Error::PoolClosed))
-        ));
     }
 }

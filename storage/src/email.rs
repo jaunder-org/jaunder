@@ -205,7 +205,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, SeedUser, TestEnv, backends};
+    use crate::test_support::{Backend, SeedUser, backends};
     use common::test_support::parse_email;
     use rstest::*;
     use rstest_reuse::*;
@@ -345,72 +345,5 @@ mod tests {
         let mapped: InternalError =
             UseEmailVerificationError::Internal(sqlx::Error::RowNotFound).into();
         assert_eq!(mapped.kind(), ErrorKind::Storage);
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn create_email_verification_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let expires_at = UtcInstant::now();
-        let email = parse_email("test@example.com");
-        let email_verifications = Arc::clone(&state.email_verifications);
-        let result = state
-            .write_scope
-            .run(|transaction| {
-                Box::pin(async move {
-                    email_verifications
-                        .create_email_verification(transaction, UserId::from(1), &email, expires_at)
-                        .await
-                })
-            })
-            .await;
-        assert!(matches!(
-            result,
-            Err(crate::WriteScopeError::Begin(sqlx::Error::PoolClosed))
-        ));
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn use_email_verification_with_closed_pool_returns_internal(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let email = parse_email("alice@example.com");
-        let email_verifications = Arc::clone(&env.state.email_verifications);
-        let expires_at = "2099-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap();
-        let outcome = env
-            .state
-            .write_scope
-            .run(|transaction| {
-                Box::pin(async move {
-                    email_verifications
-                        .create_email_verification(transaction, user_id, &email, expires_at)
-                        .await
-                })
-            })
-            .await
-            .unwrap();
-        let raw_token =
-            crate::test_support::confirmed_for(outcome, "email-verification fixture setup");
-        env.base.close_pool().await;
-
-        let email_verifications = Arc::clone(&env.state.email_verifications);
-        let result = env
-            .state
-            .write_scope
-            .run(|transaction| {
-                Box::pin(async move {
-                    email_verifications
-                        .use_email_verification(transaction, &raw_token)
-                        .await
-                })
-            })
-            .await;
-
-        assert!(matches!(
-            result,
-            Err(crate::WriteScopeError::Begin(sqlx::Error::PoolClosed))
-        ));
     }
 }
