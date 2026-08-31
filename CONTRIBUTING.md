@@ -304,6 +304,16 @@ invoke it.
   whole-test budget from its polling deadline rather than from observed
   duration.
 
+- **Boot-decomposition coverage gate** — After the same successful VM combo
+  lifts diagnostics, it reconciles the executed browser-project set in
+  `playwright-report-<backend>.json` with `capture-<backend>.tar.gz`'s
+  `capture/otel-traces.jsonl`. Each reported project needs non-dropped, mounted,
+  current-schema navigation evidence with complete document-frame boot phases
+  that close within 1 ms; `e2e.test` and secondary `e2e.page` spans both count.
+  Missing, empty, malformed, duplicate, or mismatched evidence fails closed.
+  This certifies trace evidence, not a boot time budget, source coverage, or
+  `#[server]` request-flow coverage.
+
 #### Visual snapshot workflow
 
 Visual coverage is deliberately four existing behavioral tests tagged `@visual`:

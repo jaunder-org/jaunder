@@ -32,6 +32,10 @@ const EXCLUSIVE_SEGMENTS: [(&str, &str); 2] = [
     ),
 ];
 
+/// The fewest boot intervals a complete navigation carries. It is a floor so
+/// future instrumentation can add marks without becoming a coverage blackout.
+pub(crate) const MIN_BOOT_PHASES: usize = 3;
+
 /// How far the segments may miss `mount_done.startTime` before the navigation is
 /// counted as a closure violation instead of a sample. The segments close
 /// *exactly* by construction, so this is float slack, not a tolerance band.
@@ -205,6 +209,16 @@ enum NavOutcome {
     Decomposed(Box<Decomposition>),
 }
 
+/// Whether a navigation has a complete, closing document-frame decomposition.
+///
+/// The evaluator keeps this classification alongside the median renderer so
+/// both consumers apply the same schema and closure calculation.
+pub(crate) enum BootDecompositionOutcome {
+    Incomplete,
+    ClosureViolation,
+    Complete,
+}
+
 /// `name -> startTime` for one navigation's marks.
 fn mark_starts(marks: &[Value]) -> BTreeMap<String, f64> {
     marks
@@ -321,6 +335,18 @@ fn decompose(nav: &Value, marks: &[Value]) -> NavOutcome {
         boot_total_ms,
         commit_to_mount_ms: field_f64(nav, "commitToMountMs"),
     }))
+}
+
+/// Classify one navigation using the shared document-frame decomposition.
+pub(crate) fn boot_decomposition_outcome(
+    navigation: &Value,
+    marks: &[Value],
+) -> BootDecompositionOutcome {
+    match decompose(navigation, marks) {
+        NavOutcome::NotDecomposed => BootDecompositionOutcome::Incomplete,
+        NavOutcome::ClosureViolation => BootDecompositionOutcome::ClosureViolation,
+        NavOutcome::Decomposed(_) => BootDecompositionOutcome::Complete,
+    }
 }
 
 /// A population under accumulation.

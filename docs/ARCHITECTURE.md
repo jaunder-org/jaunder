@@ -1522,6 +1522,15 @@ service and system journals alongside the capture tarball, per the
 copied before the Playwright exit is asserted. `cargo xtask traces analyze`
 consumes the trace files offline (see the tooling section).
 
+For host-side gates that reconcile Playwright execution with trace evidence, the
+lifted Playwright JSON report defines the executed project population. The
+consumer requires an exact project-set match with the trace-derived evidence, so
+a project-wide capture blackout cannot disappear from the denominator and an
+unexpected project cannot inflate it. Artifacts are still copied before a
+Playwright failure is propagated; reconciliation runs only after the E2E
+combination succeeds, preserving the primary failure
+([Playwright report population authority](adr/drafts/playwright-report-defines-trace-gate-population.md)).
+
 ### Measurement frames are not mixed
 
 The browser measurements arrive in two clocks, and a decomposition is computed

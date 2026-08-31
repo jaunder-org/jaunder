@@ -13,11 +13,14 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde_json::Value;
 
-use super::parse::{
-    Filters, Span, get_attr, interval_union_ms, parse_json_attr, read_spans, span_interval_ms,
-    to_url_path,
+use super::{
+    boot_phases::MIN_BOOT_PHASES,
+    parse::{
+        Filters, Span, get_attr, interval_union_ms, parse_json_attr, read_spans, span_interval_ms,
+        to_url_path,
+    },
+    report::{AttemptKey, ReportedDurations},
 };
-use super::report::{AttemptKey, ReportedDurations};
 
 /// Parse an `e2e.*` integer-count attribute (`0` when absent/non-numeric),
 /// matching Node's `Number(getAttr(...) || "0")`.
@@ -375,14 +378,6 @@ fn navigation_sections(spans: &[Span]) -> Result<(Vec<HotspotRow>, Vec<TargetRow
     sort_desc_by(&mut target_rows, |r| r.max_ms);
     Ok((phase_rows, target_rows))
 }
-
-/// The fewest `bootPhases` entries a fully decomposed navigation carries.
-/// `bootPhasesFrom` (`end2end/tests/fixtures.ts`) emits one phase per adjacent mark
-/// pair, so today's four `jaunder.*` marks yield three. **A floor, never an
-/// equality:** `client::perf` may gain a mark, and pinning the count would report
-/// that as a total coverage blackout — exactly the silent failure #818 exists to
-/// eliminate.
-const MIN_BOOT_PHASES: usize = 3;
 
 /// Section 5 — boot-decomposition coverage from `e2e.navigation_top_json` (#818).
 ///

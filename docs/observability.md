@@ -217,12 +217,13 @@ decomposition at all**, which is why #818 could not be answered from it and had
 to re-measure. Nothing noticed for two issues' worth of work because
 `bootPhases` is written by the harness and read by nothing.
 
-Coverage is now _reported_ per `(source, project)` by
-`cargo xtask traces analyze` — navigations, mounted, full mark sets, dropped —
-and an unthresholded e2e assertion (`end2end/tests/boot-marks.spec.ts`) reddens
-the gate if the mechanism breaks outright. It is **not yet gated on a
-threshold**, so gradual erosion would still pass; that is
-[#831](https://github.com/jaunder-org/jaunder/issues/831).
+Coverage is reported per `(source, project)` by `cargo xtask traces analyze` —
+navigations, mounted, full mark sets, and dropped records — and the E2E VM gate
+now fails closed on every successful backend×browser combo when the report's
+executed project population and its trace evidence do not reconcile. The
+unthresholded `end2end/tests/boot-marks.spec.ts` remains a mechanism check; the
+host gate additionally requires current `direct-init-v1` document-frame
+decomposition, 1 ms closure, and zero dropped records.
 
 ### Truncation is reported, never silent
 
@@ -317,6 +318,22 @@ This is a per-combo headroom detector, not a timeout-sizing policy or aggregate
 duration history. Whole-test budgets remain ambient except where a budget is
 derived from a polling deadline that exceeds it; observed duration does not
 justify re-sizing that deadline-derived budget.
+
+## E2E evidence gates
+
+The successful-combo host checks serve distinct purposes and do not substitute
+for one another:
+
+- **Duration pressure** reconciles Playwright attempts with the duration
+  manifest and rejects attempts using 80% or more of their effective timeout.
+- **Boot-decomposition coverage** reconciles the Playwright report's executed
+  project set with `e2e.test` and `e2e.page` trace navigation evidence in that
+  combo's capture archive. It certifies complete, current, non-dropped,
+  document-frame-closing evidence; it sets no boot-duration budget.
+- **Source coverage** is the Rust coverage denominator and measures exercised
+  source lines, not browser trace completeness.
+- **`#[server]` flow coverage** derives which server functions browser traffic
+  reaches. It is request attribution coverage, not document boot evidence.
 
 ## `#[server]` flow coverage (#681)
 
