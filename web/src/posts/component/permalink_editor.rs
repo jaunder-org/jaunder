@@ -4,6 +4,7 @@ use leptos_router::hooks::{use_navigate, use_params_map};
 
 use crate::error::WebError;
 use crate::forms::Field;
+use crate::posts;
 use crate::posts::{
     ComposeState, EditPublicationState, NamedAudienceState, PublicationIntent, SavedPost,
 };
@@ -16,7 +17,6 @@ use common::seed::{AuthoredPost, PageSeed};
 use common::slug::Slug;
 use common::{MutationOutcome, permalink_route::PermalinkRoute};
 
-use super::super::render;
 use super::audience::load_named_audiences;
 use super::composers::{ComposeOptions, ComposerFields, MediaSection, PostSaveActions};
 use super::display::PostCard;
@@ -31,7 +31,7 @@ fn permalink_first_paint(seed_post: Option<AuthoredPost>) -> AnyView {
             // Just the article — this fallback sits inside the reactive PostPage's
             // own `j-scroll`/`j-page`. `display:contents` keeps the host wrapper out
             // of the layout so it coincides with the projector's permalink page.
-            let html = render::permalink_article(&seed.post);
+            let html = posts::render::permalink_article(&seed.post);
             html.inject_into(leptos::html::div().style("display:contents"))
                 .into_any()
         }
@@ -63,8 +63,8 @@ pub fn PostPage() -> impl IntoView {
         let params = params.get();
         // Decode the permalink route params into typed values client-side so
         // `get` takes a typed `Slug`/`Username` (ADR-0063 §4). The pure
-        // all-or-nothing decoder is host-tested in `super::super::parse`.
-        super::super::parse_permalink_route(
+        // all-or-nothing decoder is host-tested in `crate::posts::parse`.
+        posts::parse_permalink_route(
             params.get("username").as_deref(),
             params.get("year").as_deref(),
             params.get("month").as_deref(),
@@ -88,7 +88,7 @@ pub fn PostPage() -> impl IntoView {
                 // (e.g. /media/…) never reaches this page at all (#592).
                 return Err(WebError::validation("Invalid permalink"));
             };
-            super::super::get(route.username, route.date, route.slug).await
+            posts::get(route.username, route.date, route.slug).await
         },
     );
 
@@ -144,7 +144,7 @@ pub fn PostPage() -> impl IntoView {
 #[component]
 pub fn EditPostPage() -> impl IntoView {
     let params = use_params_map();
-    let update_post_action = ServerAction::<super::super::Update>::new();
+    let update_post_action = ServerAction::<posts::Update>::new();
     // The editor edits the same seven fields the composer does and dispatches the
     // same `PostInputs` payload, so it reuses that bundle (#301). The slug field is
     // page-level here — unlike the composer, where only the full shape has one.
@@ -157,7 +157,7 @@ pub fn EditPostPage() -> impl IntoView {
     // `on_settled_ok` wraps.
     let navigate = use_navigate();
     on_settled_ok(
-        move || super::super::publish_redirect(update_post_action.value().get()),
+        move || posts::publish_redirect(update_post_action.value().get()),
         move |permalink: RootRelativeUrl| navigate(&permalink, NavigateOptions::default()),
     );
 
@@ -172,7 +172,7 @@ pub fn EditPostPage() -> impl IntoView {
             .and_then(|v| v.parse::<PostId>().ok())
     };
     let post = Resource::new(post_id_param, |post_id| {
-        super::super::with_post_id(post_id, super::super::get_preview)
+        posts::with_post_id(post_id, posts::get_preview)
     });
     // Seeded into the editable `audience` picker inside the `Suspense` block below
     // (awaited alongside `post`, not via a standalone Effect, since the page
@@ -181,7 +181,7 @@ pub fn EditPostPage() -> impl IntoView {
     // comment lives here, outside `view!`, because leptosfmt relocates comments
     // inside the macro.
     let current_audience = Resource::new(post_id_param, |post_id| {
-        super::super::with_post_id(post_id, super::super::get_audience_selection)
+        posts::with_post_id(post_id, posts::get_audience_selection)
     });
 
     view! {
@@ -195,7 +195,7 @@ pub fn EditPostPage() -> impl IntoView {
                         state.seed_from(&fetched.post);
                         slug_field.value.set(fetched.post.post.slug.to_string());
                         let publication = EditPublicationState::from_loaded(
-                            super::super::loaded_publication(
+                            posts::loaded_publication(
                                 fetched.post.post.published_at,
                                 fetched.fetched_at,
                             ),
@@ -239,7 +239,7 @@ fn EditPostForm(
     publication: EditPublicationState,
     /// The named-audience load shared by the picker and the action gate.
     named: RwSignal<NamedAudienceState>,
-    action: ServerAction<super::super::Update>,
+    action: ServerAction<posts::Update>,
 ) -> impl IntoView {
     // The body/field gate also waits for a real named-audience load. Repeating
     // the pure guard in the callback prevents a direct invocation from
@@ -253,7 +253,7 @@ fn EditPostForm(
     });
     let loaded_publication = publication.loaded();
     let scheduled = publication.scheduled();
-    let (save_disabled, schedule_error, dispatch_update) = super::super::edit_submit_gate(
+    let (save_disabled, schedule_error, dispatch_update) = posts::edit_submit_gate(
         state.body,
         also_blocked,
         publication,
@@ -261,7 +261,7 @@ fn EditPostForm(
             if state.audience.with(|selection| {
                 named.with(|state| state.selection_for_submit(selection).is_some())
             }) {
-                action.dispatch(super::super::Update {
+                action.dispatch(posts::Update {
                     post_id,
                     post: state.inputs(body, publication, slug_field.parsed()),
                 });
@@ -309,7 +309,7 @@ fn EditPostForm(
 ///
 /// Split out of [`EditPostPage`] (#306); this component owns that outcome decision.
 #[component]
-fn EditSaveOutcome(action: ServerAction<super::super::Update>) -> impl IntoView {
+fn EditSaveOutcome(action: ServerAction<posts::Update>) -> impl IntoView {
     view! {
         {move || {
             action

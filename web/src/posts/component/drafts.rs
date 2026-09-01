@@ -2,6 +2,7 @@ use leptos::prelude::*;
 
 use crate::auth;
 use crate::error::WebError;
+use crate::posts;
 use crate::posts::{Delete, DraftRowDisplay, Publish, SavedPost, UnpublishedPost};
 use crate::topbar::Topbar;
 use common::{MutationOutcome, pagination::PageSize, seed::Page};
@@ -17,7 +18,7 @@ pub fn DraftsPage() -> impl IntoView {
                 delete_action.version().get(),
             )
         },
-        |_| super::super::list_drafts(None, Some(PageSize::default())),
+        |_| posts::list_drafts(None, Some(PageSize::default())),
     );
 
     view! {
@@ -102,7 +103,7 @@ pub fn ScheduledPage() -> impl IntoView {
                     {move || Suspend::new(async move {
                         match session.reconcile.await {
                             Ok(Some(_)) => {
-                                let scheduled = super::super::list_scheduled(
+                                let scheduled = posts::list_scheduled(
                                         None,
                                         Some(PageSize::default()),
                                     )
@@ -165,7 +166,7 @@ fn ScheduledList(scheduled: Result<Page<UnpublishedPost>, WebError>) -> impl Int
 }
 
 fn render_scheduled_row(scheduled: UnpublishedPost) -> impl IntoView {
-    let DraftRowDisplay { label, .. } = super::super::draft_row_display(&scheduled);
+    let DraftRowDisplay { label, .. } = posts::draft_row_display(&scheduled);
     let go_live = scheduled.post.published_at.map_or_else(
         || "Scheduled time unavailable".to_owned(),
         |when| when.to_string(),
@@ -239,7 +240,7 @@ fn render_draft_row(
     let DraftRowDisplay {
         label,
         scheduled_badge,
-    } = super::super::draft_row_display(&draft);
+    } = posts::draft_row_display(&draft);
     let scheduled_badge = scheduled_badge.map(|text| {
         view! { <span class="j-badge j-badge-scheduled">{text}</span> }
     });

@@ -5,6 +5,7 @@ use crate::avatar::Avatar;
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedBareInput, ValidatedTextarea};
 use crate::media::MediaUpload;
+use crate::posts;
 use crate::posts::{
     ComposeState, Create, InvalidSchedule, LoadedPublication, NamedAudienceState, SavedPost,
     ScheduledEditState,
@@ -121,8 +122,7 @@ pub fn PostCreateForm(
     let create_action = ServerAction::<Create>::new();
     let state = ComposeState::new();
 
-    let default_audience =
-        Resource::new(|| (), |()| super::super::get_default_audience_selection());
+    let default_audience = Resource::new(|| (), |()| posts::get_default_audience_selection());
     // The site-wide default audience resolves asynchronously; the composer must
     // render immediately (no Suspense), so seed the editable `audience` signal
     // once the Resource resolves, over the Public placeholder `ComposeState::new`
@@ -137,7 +137,7 @@ pub fn PostCreateForm(
     on_settled_ok(
         move || create_action.value().get(),
         move |outcome| {
-            if super::super::notify_create_settlement(outcome, on_mutation, on_success) {
+            if posts::notify_create_settlement(outcome, on_mutation, on_success) {
                 state.reset();
             }
         },
@@ -179,12 +179,11 @@ fn CompactComposer(
     // The gate and the payload come from one `submit_gate` call (#860, ADR-0105), so a
     // control that cannot dispatch is disabled rather than inert. No slug in this shape,
     // so the only other blocker is the summary.
-    let (submit_disabled, dispatch) = super::super::submit_gate(
+    let (submit_disabled, dispatch) = posts::submit_gate(
         state.body,
         Signal::derive(move || !state.summary_field.is_valid()),
         Callback::new(move |(body, publish): (PostBody, bool)| {
-            let publication =
-                super::super::publication_from_local(publish, &state.publish_at.get());
+            let publication = posts::publication_from_local(publish, &state.publish_at.get());
             create_action.dispatch(Create {
                 post: state.inputs(body, publication, None),
             });
@@ -245,7 +244,7 @@ fn FullComposer(
     // failed or unresolved picker cannot dispatch as though an empty list had
     // loaded. The callback repeats the pure guard so direct invocation cannot
     // bypass the disabled buttons.
-    let (submit_disabled, dispatch) = super::super::submit_gate(
+    let (submit_disabled, dispatch) = posts::submit_gate(
         state.body,
         Signal::derive(move || {
             !slug_field.is_valid()
@@ -255,8 +254,7 @@ fn FullComposer(
                 })
         }),
         Callback::new(move |(body, publish): (PostBody, bool)| {
-            let publication =
-                super::super::publication_from_local(publish, &state.publish_at.get());
+            let publication = posts::publication_from_local(publish, &state.publish_at.get());
             if state.audience.with(|selection| {
                 named.with(|state| state.selection_for_submit(selection).is_some())
             }) {

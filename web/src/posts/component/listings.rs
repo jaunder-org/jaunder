@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
 use crate::feed_discovery::{FeedDiscovery, RsdDiscovery};
+use crate::posts;
 use crate::posts::ListingRoute;
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx;
@@ -38,7 +39,7 @@ pub fn UserTimelinePage() -> impl IntoView {
         move || (username.get(), mutate_version.get()),
         |(username, _)| async move {
             timeline::list_by_user(
-                super::super::user_query(username)?,
+                posts::user_query(username)?,
                 None,
                 Some(PageSize::default()),
             )
@@ -52,7 +53,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     // Loading flash). The route guard — which keeps a client-side navigation to a
     // *different* profile from adopting the initial URL's seed — is the host-tested
     // `seeded_page` (#306); the reactive fetch still runs and takes over.
-    state.adopt_seed(super::super::seeded_page(
+    state.adopt_seed(posts::seeded_page(
         use_context::<Option<PageSeed>>().flatten(),
         &ListingRoute::Profile(username.get_untracked()),
     ));
@@ -60,7 +61,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     timeline::wire_timeline_resolve(state, initial_page);
 
     let on_load_more = Callback::new(move |()| {
-        if let Ok(username) = super::super::user_query(username.get_untracked()) {
+        if let Ok(username) = posts::user_query(username.get_untracked()) {
             timeline::spawn_load_more(state, move |cursor, limit| {
                 timeline::list_by_user(username, cursor, limit)
             });
@@ -110,12 +111,7 @@ pub fn SiteTagPage() -> impl IntoView {
     let initial_page = Resource::new(
         move || (tag.get(), mutate_version.get()),
         |(tag, _)| async move {
-            timeline::list_by_tag(
-                super::super::tag_query(tag)?,
-                None,
-                Some(PageSize::default()),
-            )
-            .await
+            timeline::list_by_tag(posts::tag_query(tag)?, None, Some(PageSize::default())).await
         },
     );
 
@@ -124,7 +120,7 @@ pub fn SiteTagPage() -> impl IntoView {
     // tag so first paint shows content (the host-tested `seeded_page` guard keeps a
     // client-side nav to a different tag from adopting the initial URL's seed, #306);
     // the reactive fetch still runs.
-    state.adopt_seed(super::super::seeded_page(
+    state.adopt_seed(posts::seeded_page(
         use_context::<Option<PageSeed>>().flatten(),
         &ListingRoute::SiteTag(tag.get_untracked()),
     ));
@@ -132,7 +128,7 @@ pub fn SiteTagPage() -> impl IntoView {
     timeline::wire_timeline_resolve(state, initial_page);
 
     let on_load_more = Callback::new(move |()| {
-        if let Ok(tag_value) = super::super::tag_query(tag.get_untracked()) {
+        if let Ok(tag_value) = posts::tag_query(tag.get_untracked()) {
             timeline::spawn_load_more(state, move |cursor, limit| {
                 timeline::list_by_tag(tag_value, cursor, limit)
             });
@@ -187,7 +183,7 @@ pub fn UserTagPage() -> impl IntoView {
     let initial_page = Resource::new(
         move || (username.get(), tag.get(), mutate_version.get()),
         |(username, tag, _)| async move {
-            let (username, tag) = super::super::user_tag_query(username, tag)?;
+            let (username, tag) = posts::user_tag_query(username, tag)?;
             timeline::list_by_user_and_tag(username, tag, None, Some(PageSize::default())).await
         },
     );
@@ -196,7 +192,7 @@ pub fn UserTagPage() -> impl IntoView {
     // Public projector seed (#178/#179): adopt the seeded posts for a matching
     // username+tag so first paint shows content; both halves of the match are the
     // host-tested `seeded_page` (#306), and the reactive fetch still runs.
-    state.adopt_seed(super::super::seeded_page(
+    state.adopt_seed(posts::seeded_page(
         use_context::<Option<PageSeed>>().flatten(),
         &ListingRoute::UserTag(username.get_untracked(), tag.get_untracked()),
     ));
@@ -205,7 +201,7 @@ pub fn UserTagPage() -> impl IntoView {
 
     let on_load_more = Callback::new(move |()| {
         if let Ok((username_value, tag_value)) =
-            super::super::user_tag_query(username.get_untracked(), tag.get_untracked())
+            posts::user_tag_query(username.get_untracked(), tag.get_untracked())
         {
             timeline::spawn_load_more(state, move |cursor, limit| {
                 timeline::list_by_user_and_tag(username_value, tag_value, cursor, limit)

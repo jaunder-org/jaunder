@@ -4,6 +4,7 @@ use leptos_router::hooks::use_navigate;
 
 use crate::avatar::Avatar;
 use crate::error::WebError;
+use crate::posts;
 use crate::posts::{Delete, Publish, SavedPost, Unpublish};
 use crate::taglist::TagCtx;
 use client::telemetry;
@@ -13,7 +14,6 @@ use common::seed::RenderedPost;
 use common::username::Username;
 use common::{client_telemetry::ClientErrorContext, ids::PostId};
 
-use super::super::render;
 use super::support::on_settled_ok;
 
 #[component]
@@ -26,12 +26,12 @@ pub fn PostDisplay<'a>(
     tag_context: &'a TagCtx,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView + use<> {
-    let time_label = render::format_post_time(post.display_time());
+    let time_label = posts::render::format_post_time(post.display_time());
     // Built once and shared by both arms so the authored content column is the SAME
     // pure, viewer-independent render the projector paints (#181, ADR-0044 D4) — no
     // hand-rebuilt markup and no is_author-driven content change that could diverge
     // and reintroduce a flash. The action column is layered on additively.
-    let view = render::PostView {
+    let view = posts::render::PostView {
         username: &post.username,
         title: post.title.as_ref(),
         banner,
@@ -50,7 +50,7 @@ pub fn PostDisplay<'a>(
         // not the component" (ADR-0041 §4). The projector only ever renders this
         // anonymous view, so this is the only path that must coincide.
         None => {
-            let inner = render::render_post_inner(&view);
+            let inner = posts::render::render_post_inner(&view);
             inner
                 .inject_into(leptos::html::article().class("j-post"))
                 .into_any()
@@ -62,7 +62,7 @@ pub fn PostDisplay<'a>(
         // `inner_html` can't) overlays it as a sibling — hand-rebuilt reactive
         // markup here would diverge from the projector and reintroduce the flash.
         Some(children) => {
-            let inner_content = render::render_post_content(&view);
+            let inner_content = posts::render::render_post_content(&view);
             view! {
                 <article class="j-post">
                     <Avatar name=&post.username size=38 />
@@ -202,9 +202,9 @@ fn notify_unpublish_outcome(
 ) {
     match outcome {
         MutationOutcome::Confirmed(_) => {
-            super::super::notify_with_fallback(on_unpublish, on_mutate);
+            posts::notify_with_fallback(on_unpublish, on_mutate);
         }
-        MutationOutcome::CommitIndeterminate(_) => super::super::notify(on_mutate),
+        MutationOutcome::CommitIndeterminate(_) => posts::notify(on_mutate),
     }
 }
 
@@ -235,7 +235,7 @@ pub fn PostCard<'a>(
     // Unpublish (#23): an Unpublish column would be a no-op on an already-
     // unpublished post.
     let is_draft = post.is_draft();
-    let edit_url = super::super::edit_post_url(post_id);
+    let edit_url = posts::edit_post_url(post_id);
     let history_url = format!("/posts/{}/history", i64::from(post_id));
     let delete_action = ServerAction::<Delete>::new();
     let unpublish_action = ServerAction::<Unpublish>::new();
@@ -249,7 +249,7 @@ pub fn PostCard<'a>(
                 MutationOutcome::Confirmed(()) => deleted.set(true),
                 MutationOutcome::CommitIndeterminate(()) => {}
             }
-            super::super::notify(on_mutate);
+            posts::notify(on_mutate);
         },
     );
     on_settled_ok(
@@ -266,7 +266,7 @@ pub fn PostCard<'a>(
                 }
                 MutationOutcome::CommitIndeterminate(_) => {}
             }
-            super::super::notify(on_publish);
+            posts::notify(on_publish);
         },
     );
 

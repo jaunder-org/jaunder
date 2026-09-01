@@ -309,10 +309,11 @@ hydration). So a plain client-only `Effect::new` that copies a resolved
 1. **Copying a `Resource` into signals.** Mirror `home.rs`: a plain
    `Effect::new` that copies the resolved page into signals and only writes when
    the value actually changes (to prevent remounting child components). A
-   **client-only `Effect::new` belongs in the vertical's wasm-only
-   `component.rs`** (§8), where it is structurally stripped from every host
-   build — never add an `Effect::new` to host-compiled code, and never re-gate
-   it per-call inside a file.
+   **client-only `Effect::new` belongs in the vertical's wasm-only component
+   boundary** (§8): directly in a small vertical's `component.rs`, or in a
+   cohesive private leaf behind an assembly facade. It is structurally stripped
+   from every host build — never add an `Effect::new` to host-compiled code, and
+   never re-gate it per-call inside a file.
 
    Three cases, narrowest first:
    - Where the signals exist _only_ to receive the copy, **skip the seed
