@@ -12,6 +12,7 @@ import {
   stallServerFn,
 } from "./helpers";
 import { createPostViaApi } from "./posts";
+import { navigateInApp } from "./navigate";
 import type { Page } from "@playwright/test";
 
 type UploadedMedia = { url: string; filename: string };
@@ -57,6 +58,14 @@ function countMediaRequests(page: Page): {
     usageRequests: () => usageRequests,
   };
 }
+
+async function openMediaLibrary(page: Page): Promise<void> {
+  await navigateInApp(page, () => click(page, "a[href='/media']"), {
+    url: "/media",
+    ready: "button:has-text('Attach media')",
+  });
+}
+
 test.describe("Media upload and serving", () => {
   test("authenticated user can upload and access media", async ({ page }) => {
     await signInAsNewUser(page);
@@ -142,8 +151,7 @@ test.describe("Media upload and serving", () => {
 
     // Reached via the nav link and pinned on the page's own landmark, matching the
     // sibling media-page tests below — a bare `goto` races the CSR shell's mount.
-    await click(page, "a[href='/media']");
-    await waitForSelector(page, "button:has-text('Attach media')");
+    await openMediaLibrary(page);
     await expect(
       page.getByRole("link", { name: "my holiday photo.jpg" }),
     ).toBeVisible();
@@ -207,8 +215,7 @@ test.describe("Media upload and serving", () => {
     await goto(page, "/", {
       timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 30_000),
     });
-    await click(page, "a[href='/media']");
-    await waitForSelector(page, "button:has-text('Attach media')");
+    await openMediaLibrary(page);
   });
 
   test("upload widget on create-post page uploads file and shows URL", async ({
@@ -282,8 +289,7 @@ test.describe("Media delete guard", () => {
    */
   async function attemptDelete(page: Page): Promise<void> {
     await goto(page, "/");
-    await click(page, "a[href='/media']");
-    await waitForSelector(page, "button:has-text('Attach media')");
+    await openMediaLibrary(page);
     page.on("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Delete", exact: true }).click();
   }
@@ -300,8 +306,7 @@ test.describe("Media delete guard", () => {
     });
 
     await goto(page, "/");
-    await click(page, "a[href='/media']");
-    await waitForSelector(page, "button:has-text('Attach media')");
+    await openMediaLibrary(page);
     page.on("dialog", (dialog) => dialog.accept());
     const { release, deleteRequests, listRequests, usageRequests } =
       await submitOrdinaryDeleteOnce(page);
