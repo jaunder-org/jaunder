@@ -9,10 +9,10 @@ use thiserror::Error;
 use common::time::UtcInstant;
 use common::token::RawToken;
 
+use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::helpers::{self, TokenStateRow};
 use crate::sql::RowCount;
-use crate::{PasswordResetConsumption, WriteTransaction};
 use common::ids::UserId;
 use host::{metrics, retention::Domain, token};
 
@@ -63,7 +63,7 @@ pub trait PasswordResetStorage: Send + Sync {
         &self,
         transaction: &mut WriteTransaction,
         raw_token: &RawToken,
-    ) -> Result<PasswordResetConsumption, UsePasswordResetError>;
+    ) -> Result<UserId, UsePasswordResetError>;
     /// Deletes consumed reset tokens whose consumption is at or before the
     /// supplied instant, and unused tokens expired for at least 24 hours,
     /// draining bounded batches at that instant.
@@ -130,7 +130,7 @@ where
         &self,
         transaction: &mut WriteTransaction,
         raw_token: &RawToken,
-    ) -> Result<PasswordResetConsumption, UsePasswordResetError> {
+    ) -> Result<UserId, UsePasswordResetError> {
         let token_hash = token::hash(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
 
         let now = UtcInstant::now();
@@ -152,7 +152,7 @@ where
         .await?;
 
         if let Some((user_id,)) = claimed {
-            return Ok(PasswordResetConsumption { user_id });
+            return Ok(user_id);
         }
         let row = sqlx::query_as::<_, TokenStateRow>(
             "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
@@ -246,8 +246,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let consumption = confirmed_for(outcome, "password reset");
-        assert_eq!(consumption.user_id, user_id);
+        let consumed_user_id = confirmed_for(outcome, "password reset");
+        assert_eq!(consumed_user_id, user_id);
     }
 
     #[apply(backends)]

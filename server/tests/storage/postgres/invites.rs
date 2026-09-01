@@ -48,6 +48,10 @@ impl InviteStorage for BarrierInviteStorage {
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>> {
         self.inner.list_invites().await
     }
+
+    async fn prune_invites(&self, now: UtcInstant) -> sqlx::Result<u64> {
+        self.inner.prune_invites(now).await
+    }
 }
 
 #[apply(postgres_only)]

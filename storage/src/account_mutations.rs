@@ -210,7 +210,7 @@ pub async fn confirm_password_reset(
     sessions: &dyn SessionStorage,
     raw_token: &RawToken,
     new_password: &Password,
-) -> Result<(), ConfirmPasswordResetError> {
+) -> Result<UserId, ConfirmPasswordResetError> {
     let user_id = password_resets
         .use_password_reset(transaction, raw_token)
         .await
@@ -228,7 +228,8 @@ pub async fn confirm_password_reset(
     sessions
         .revoke_all_for_user(transaction, user_id)
         .await
-        .map_err(ConfirmPasswordResetError::Internal)
+        .map_err(ConfirmPasswordResetError::Internal)?;
+    Ok(user_id)
 }
 
 #[cfg(test)]

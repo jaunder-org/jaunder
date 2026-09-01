@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use super::fixtures::password;
 use common::MutationOutcome;
+use common::ids::UserId;
 use common::test_support::parse_raw_token;
 use common::time::UtcInstant;
 use common::token::RawToken;
 use host::password::Password;
 use rstest::*;
 use rstest_reuse::*;
-use storage::test_support::{Backend, SeedUser, backends};
+use storage::test_support::{self, Backend, SeedUser, backends};
 use storage::{
     AppState, UsePasswordResetError, WriteScopeError,
     account_mutations::{self, ConfirmPasswordResetError},
@@ -150,8 +151,8 @@ async fn create_password_reset_and_use_returns_user_id(#[case] backend: Backend)
     let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = create_password_reset(state, user_id, expires_at).await;
 
-    let consumption = use_password_reset(state, raw_token).await;
-    assert_eq!(consumption.user_id, user_id);
+    let consumed_user_id = use_password_reset(state, raw_token).await;
+    assert_eq!(consumed_user_id, user_id);
 }
 
 #[apply(backends)]
@@ -240,7 +241,7 @@ async fn create_password_reset(
     storage::test_support::confirmed_for(outcome, "password-reset fixture setup")
 }
 
-async fn use_password_reset(state: &AppState, raw_token: RawToken) -> PasswordResetConsumption {
+async fn use_password_reset(state: &AppState, raw_token: RawToken) -> UserId {
     let outcome = use_password_reset_result(state, raw_token)
         .await
         .expect("password reset should succeed");
@@ -250,7 +251,7 @@ async fn use_password_reset(state: &AppState, raw_token: RawToken) -> PasswordRe
 async fn use_password_reset_result(
     state: &AppState,
     raw_token: RawToken,
-) -> Result<MutationOutcome<PasswordResetConsumption>, WriteScopeError<UsePasswordResetError>> {
+) -> Result<MutationOutcome<UserId>, WriteScopeError<UsePasswordResetError>> {
     let password_resets = Arc::clone(&state.password_resets);
     state
         .write_scope
@@ -275,7 +276,7 @@ async fn confirm_password_reset_result(
     state: &AppState,
     raw_token: RawToken,
     password: Password,
-) -> Result<MutationOutcome<()>, WriteScopeError<ConfirmPasswordResetError>> {
+) -> Result<MutationOutcome<UserId>, WriteScopeError<ConfirmPasswordResetError>> {
     let password_resets = Arc::clone(&state.password_resets);
     let users = Arc::clone(&state.users);
     let sessions = Arc::clone(&state.sessions);
