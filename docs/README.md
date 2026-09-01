@@ -194,6 +194,7 @@ convention). See the Status column below for each ADR's current status.
 | [0166](adr/0166-account-mutations-compose-storage-primitives.md)    | Account Mutations Compose Storage Primitives                                                                 | accepted   |
 | [0167](adr/0167-bounded-transient-data-retention.md)                | Bound retention for transient data                                                                           | accepted   |
 | [0168](adr/0168-isolated-e2e-browser-diagnostic-payloads.md)        | Allow synthetic browser diagnostic payloads in isolated E2E telemetry                                        | accepted   |
+| [0169](adr/0169-typed-storage-bind-admission.md)                    | Typed storage bind admission                                                                                 | accepted   |
 
 <!-- adr-table:end -->
 

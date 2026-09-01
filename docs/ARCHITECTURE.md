@@ -2235,7 +2235,7 @@ Native `Query`, `QueryAs`, and `QueryScalar` use `bind_storage`; native
 are the only normal value-admission APIs and directly delegate to SQLx, keeping
 the native execution/fetch surface. The registry does not infer SQL-column
 meaning: exact helper and storage-trait signatures retain wrong-role safety
-([typed storage bind admission](adr/drafts/typed-storage-bind-admission.md)).
+([typed storage bind admission](adr/0169-typed-storage-bind-admission.md)).
 
 `sqlx-newtype-bind` is the residual defense-in-depth detector. It parses every
 Rust source file under `storage/src`, including test-support code, and fails
@@ -2849,7 +2849,7 @@ raw SQLx admission doors and fails closed; it follows local aliases and
 conservatively rejects unresolved receiver shapes, but is not type resolution or
 SQL analysis. SQLx query macros are forbidden in its root because their
 generated argument admission is outside that source AST
-([typed storage bind admission](adr/drafts/typed-storage-bind-admission.md)).
+([typed storage bind admission](adr/0169-typed-storage-bind-admission.md)).
 
 **Membership is structural and fails closed.**
 [ADR-0110](adr/0110-gate-population-membership-is-structural.md) separates two
