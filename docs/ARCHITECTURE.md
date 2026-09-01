@@ -2629,14 +2629,35 @@ The ladder has four local entrypoints, all driven by `xtask`
   (formatters auto-fix), then every repo-shape and type-safety gate, then the
   host unit tests, and — unless `--no-test` — the host-native `test-local`
   product Rust suite plus the Nix-only `wasm-tests` and `doctests` derivations.
-- **`cargo xtask precommit`** is the hook entrypoint. It runs the same host
-  surface as `cargo xtask check --no-test`, then always takes its after-snapshot
-  and applies the safe-staging policy, even when an earlier failed step stopped
-  gate execution: re-stage only formatter/check mutations to already-staged
-  tracked paths that had no pre-existing unstaged change; fail closed for mixed
-  tracked paths, newly-created untracked files, and delete/rename state changed
-  during the hook. Pre-existing delete/rename state and untracked files stay
-  unstaged and tolerated.
+- **`cargo xtask precommit`** is the hook entrypoint. Before gate work it
+  classifies the complete pre-run dirty-tree snapshot. The narrow
+  `staged-markdown-only` class requires a nonempty tree containing only
+  staged-only, regular, case-sensitive `.md` additions or modifications; any
+  unstaged, untracked, delete/rename, type-changing, non-Markdown, malformed,
+  unparseable, or otherwise unsupported evidence takes the broad route.
+  `precommit-routing` is an informational successful result emitted before the
+  selected gate: its detail is
+  `class=staged-markdown-only reason=isolated-staged-markdown`, or
+  `class=broad reason=<stable-kebab-case-reason>`. Broad reasons have stable
+  precedence: `uncertain-status`, `empty-state`, `untracked-path`,
+  `unstaged-path`, `delete-or-rename`, `unsupported-change`,
+  `unsupported-index-mode`, then `non-markdown-path`.
+
+  The narrow route is a fixed ordered filter over the same production
+  host/static catalogs: Prettier, sequence/identifier collision checks, the ADR
+  bundle, documentation links, flow-document parity, and the error-swallowing
+  inventory. It is not further path-routed: Prettier owns global `end2end` plus
+  `**/*.md` formatting, ADRs project into `docs/README.md` and this document,
+  and document links and flow documents consume repository-wide relationships.
+  The isolated-tree predicate makes those reads and formatter writes represent
+  the staged Markdown state. All other classifications run the existing broad
+  host surface. The after-snapshot and conservative safe-staging reconciliation
+  always run, including after failure: only formatter/check mutations to
+  already-staged tracked paths with no pre-existing unstaged change are
+  restaged; mixed tracked paths, newly-created untracked files, and changed
+  delete/rename state fail closed. Pre-existing delete/rename state and
+  untracked files stay unstaged and tolerated.
+
 - **`cargo xtask prepush`** is the fast local push-hook entrypoint. It opens
   with the same clean-tree precheck as `validate`, then runs the verify-only
   host/static surface, the auxiliary `xtask`/`tools` non-doc tests, the
@@ -2654,11 +2675,12 @@ Both hook entrypoints select orchestration-owned **fail-fast** execution. At
 every ordered local boundary — individual static checks, host-gate steps, and
 prepush phases — the first newly appended failed, non-skipped step prevents
 later work. Unexecuted steps are absent from the command result, not
-green-skipped. This does not alter command membership, order, the clean-tree
-precondition, or the staged-subset reconciliation authority. Explicit
-**`cargo xtask check`** and **`cargo xtask validate`**, along with CI's
-corresponding surfaces, remain **exhaustive**: they retain the unchanged ordered
-diagnostic graph and their existing authority.
+green-skipped. Apart from precommit's selected routing surface, this does not
+alter command order, the clean-tree precondition, or staged-subset
+reconciliation authority. `prepush`, explicit **`cargo xtask check`** and
+**`cargo xtask validate`**, along with CI's corresponding surfaces, remain
+**broad** and **exhaustive**: they retain the unchanged ordered diagnostic graph
+and their existing authority.
 
 Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
 `.githooks/pre-commit` calls `cargo xtask precommit`; the `xtask` Cargo alias

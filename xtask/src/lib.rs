@@ -549,8 +549,11 @@ enum HostGateStep {
     ResultOnly {
         name: &'static str,
         run: fn(&mut CommandResult),
+        markdown_eligible: bool,
     },
-    HostTests,
+    HostTests {
+        markdown_eligible: bool,
+    },
 }
 
 impl HostGateStep {
@@ -572,7 +575,7 @@ impl HostGateStep {
                     steps::static_checks::run_spec,
                 );
             }
-            Self::ResultOnly { name, run } => {
+            Self::ResultOnly { name, run, .. } => {
                 debug_assert!(!name.is_empty());
                 let before = result.steps.len();
                 let start = std::time::Instant::now();
@@ -584,7 +587,50 @@ impl HostGateStep {
                     }
                 }
             }
-            Self::HostTests => steps::host_tests::run(sh, result),
+            Self::HostTests { .. } => steps::host_tests::run(sh, result),
+        }
+    }
+
+    fn run_markdown(
+        &self,
+        sh: &xshell::Shell,
+        mode: Mode,
+        policy: ExecutionPolicy,
+        result: &mut CommandResult,
+    ) {
+        match self {
+            Self::StaticChecks(phase) => steps::static_checks::run_markdown_phase_with(
+                sh,
+                mode,
+                *phase,
+                policy,
+                result,
+                steps::static_checks::run_spec,
+            ),
+            Self::ResultOnly { run, .. } => {
+                let before = result.steps.len();
+                let start = std::time::Instant::now();
+                run(result);
+                let duration = start.elapsed().as_millis();
+                for step in &mut result.steps[before..] {
+                    if step.duration_ms == 0 {
+                        step.duration_ms = duration;
+                    }
+                }
+            }
+            Self::HostTests { .. } => unreachable!("host tests are not Markdown-route eligible"),
+        }
+    }
+
+    fn markdown_eligible(&self, _mode: Mode) -> bool {
+        match self {
+            // The phase is a catalog container; `run_markdown_phase_with` applies
+            // each static spec's own eligibility metadata without a parallel list.
+            Self::StaticChecks(_) => true,
+            Self::ResultOnly {
+                markdown_eligible, ..
+            } => *markdown_eligible,
+            Self::HostTests { markdown_eligible } => *markdown_eligible,
         }
     }
 
@@ -597,7 +643,7 @@ impl HostGateStep {
                     .map(|spec| spec.name),
             ),
             Self::ResultOnly { name, .. } => names.push(name),
-            Self::HostTests => names.push("host-tests"),
+            Self::HostTests { .. } => names.push("host-tests"),
         }
     }
 }
@@ -613,114 +659,142 @@ const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
     HostGateStep::ResultOnly {
         name: "sequence-check",
         run: steps::sequence_check::run,
+        markdown_eligible: true,
     },
     HostGateStep::ResultOnly {
         name: "adr-filenames",
         run: steps::adr_check::run,
+        markdown_eligible: true,
     },
     HostGateStep::ResultOnly {
         name: "doc-links",
         run: steps::doc_links::run,
+        markdown_eligible: true,
     },
     HostGateStep::ResultOnly {
         name: "flow-docs",
         run: run_flow_docs,
+        markdown_eligible: true,
     },
     HostGateStep::ResultOnly {
         name: "error-swallowing-inventory",
         run: steps::error_swallowing_inventory_check::run,
+        markdown_eligible: true,
     },
     HostGateStep::ResultOnly {
         name: "test-patterns",
         run: steps::test_pattern_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "server-fn-registrar",
         run: steps::server_fn_registrar_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "server-fn-tracing",
         run: steps::server_fn_tracing_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "server-fn-coverage",
         run: steps::server_fn_coverage_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "server-fn-wire-arg-error",
         run: steps::server_fn_wire_arg_error_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "traced-context",
         run: steps::traced_context_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "e2e-telemetry-boundary",
         run: steps::e2e_telemetry_boundary_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "proffered-secret",
         run: steps::proffered_secret_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "e2e-goto-wrapper",
         run: steps::e2e_goto_wrapper_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "e2e-server-fn-endpoints",
         run: steps::e2e_server_fn_endpoint_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "target-arch-placement",
         run: steps::target_arch_placement_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "write-transaction-contract",
         run: steps::write_transaction_contract_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "common-host-target-closure",
         run: steps::common_host_target_closure::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "lint-suppression",
         run: steps::lint_suppression_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "thin-components",
         run: steps::thin_components::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "sqlx-newtype-bind",
         run: steps::sqlx_newtype_bind_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "sqlx-newtype-decode",
         run: steps::sqlx_newtype_decode_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "doctest-fences",
         run: steps::doctest_fences::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "rendered-html-compiler-boundary",
         run: steps::rendered_html_compiler_boundary::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "raw-html-door",
         run: steps::raw_html_door_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "html-sink",
         run: steps::html_sink_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "e2e-scaffold",
         run: steps::e2e_scaffold_check::run,
+        markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
         name: "xlang-literal",
         run: steps::xlang_literal_check::run,
+        markdown_eligible: false,
     },
     // Compile/type surfaces after cheap repository-shape checks. They are still
     // before host runtime tests, which cannot pass if compilation is broken.
@@ -728,7 +802,9 @@ const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
     HostGateStep::StaticChecks(steps::static_checks::Phase::HostRuntime),
 ];
 
-const HOST_TESTS_STEP: HostGateStep = HostGateStep::HostTests;
+const HOST_TESTS_STEP: HostGateStep = HostGateStep::HostTests {
+    markdown_eligible: false,
+};
 
 fn run_host_steps_with<'a>(
     sh: &xshell::Shell,
@@ -759,6 +835,24 @@ fn run_host_gate_without_tests(
     );
 }
 
+fn run_markdown_host_gate(
+    sh: &xshell::Shell,
+    mode: Mode,
+    policy: ExecutionPolicy,
+    result: &mut CommandResult,
+) {
+    run_host_steps_with(
+        sh,
+        mode,
+        policy,
+        result,
+        HOST_GATE_NON_TEST_STEPS
+            .iter()
+            .filter(|step| step.markdown_eligible(mode)),
+        HostGateStep::run_markdown,
+    );
+}
+
 fn run_host_gate(
     sh: &xshell::Shell,
     mode: Mode,
@@ -774,6 +868,32 @@ fn run_host_gate(
             .iter()
             .chain(std::iter::once(&HOST_TESTS_STEP)),
         HostGateStep::run,
+    );
+}
+
+fn dispatch_precommit_host_gate_with(
+    class: git::PrecommitChangeClass,
+    result: &mut CommandResult,
+    run_markdown: impl FnOnce(&mut CommandResult),
+    run_broad: impl FnOnce(&mut CommandResult),
+) {
+    match class {
+        git::PrecommitChangeClass::StagedMarkdownOnly => run_markdown(result),
+        git::PrecommitChangeClass::Broad(_) => run_broad(result),
+    }
+}
+
+fn dispatch_precommit_host_gate(
+    class: git::PrecommitChangeClass,
+    sh: &xshell::Shell,
+    policy: ExecutionPolicy,
+    result: &mut CommandResult,
+) {
+    dispatch_precommit_host_gate_with(
+        class,
+        result,
+        |result| run_markdown_host_gate(sh, Mode::Fix, policy, result),
+        |result| run_host_gate(sh, Mode::Fix, policy, result),
     );
 }
 
@@ -833,12 +953,14 @@ fn run_prepush_with(
 
 fn run_precommit_with_host_gate(
     dir: &Path,
-    run_gate: impl FnOnce(&mut CommandResult),
+    run_gate: impl FnOnce(git::PrecommitChangeClass, &mut CommandResult),
 ) -> anyhow::Result<CommandResult> {
     let start = std::time::Instant::now();
     let before = git::status_snapshot(dir)?;
+    let class = git::classify_precommit_change(&before);
     let mut result = CommandResult::new("precommit");
-    run_gate(&mut result);
+    result.push(StepResult::ok("precommit-routing").detail(class.detail()));
+    run_gate(class, &mut result);
     let after = git::status_snapshot(dir)?;
     let plan = git::precommit_stage_plan(&before, &after);
     result.push(git::apply_precommit_stage_plan(dir, &plan));
@@ -867,6 +989,28 @@ fn precommit_host_step_names_for_test() -> Vec<&'static str> {
     host_gate_step_names_for_test(Mode::Fix)
 }
 
+#[cfg(test)]
+fn markdown_precommit_step_names_for_test() -> Vec<&'static str> {
+    let mut names = Vec::new();
+    for step in HOST_GATE_NON_TEST_STEPS {
+        match step {
+            HostGateStep::StaticChecks(phase) => names.extend(
+                steps::static_checks::specs_for_phase(*phase, Mode::Fix)
+                    .into_iter()
+                    .filter(|spec| spec.markdown_eligible)
+                    .map(|spec| spec.name),
+            ),
+            HostGateStep::ResultOnly {
+                name,
+                markdown_eligible: true,
+                ..
+            } => names.push(name),
+            HostGateStep::ResultOnly { .. } | HostGateStep::HostTests { .. } => {}
+        }
+    }
+    names
+}
+
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     // Reject --json for commands with no structured payload (the `traces` reporting
     // commands) before doing any work — a hollow envelope is worse than an error.
@@ -893,8 +1037,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::Precommit => {
             let policy = Command::Precommit.execution_policy();
             let sh = xshell::Shell::new()?;
-            run_precommit_with_host_gate(Path::new("."), |result| {
-                run_host_gate(&sh, Mode::Fix, policy, result);
+            run_precommit_with_host_gate(Path::new("."), |class, result| {
+                dispatch_precommit_host_gate(class, &sh, policy, result);
             })
         }
         Command::Prepush => {
@@ -1485,6 +1629,21 @@ mod cli_tests {
         assert!(!precommit.contains(&"proffered-filename"));
     }
 
+    #[test]
+    fn staged_markdown_route_filters_the_production_host_catalog_in_order() {
+        assert_eq!(
+            markdown_precommit_step_names_for_test(),
+            [
+                "prettier",
+                "sequence-check",
+                "adr-filenames",
+                "doc-links",
+                "flow-docs",
+                "error-swallowing-inventory",
+            ]
+        );
+    }
+
     fn position(names: &[&str], name: &str) -> usize {
         names
             .iter()
@@ -1651,7 +1810,7 @@ mod cli_tests {
         .name;
         let mut invoked = Vec::new();
 
-        let result = run_precommit_with_host_gate(&dir, |result| {
+        let result = run_precommit_with_host_gate(&dir, |_, result| {
             run_host_steps_with(
                 &sh,
                 Mode::Fix,
@@ -1681,7 +1840,9 @@ mod cli_tests {
                     HostGateStep::ResultOnly { name, .. } => {
                         panic!("later host step {name} ran after static failure")
                     }
-                    HostGateStep::HostTests => panic!("host tests ran after static failure"),
+                    HostGateStep::HostTests { .. } => {
+                        panic!("host tests ran after static failure")
+                    }
                 },
             );
         })
@@ -1774,7 +1935,7 @@ mod cli_tests {
                         invoked.push(name);
                         result.push(StepResult::ok(name));
                     }
-                    HostGateStep::HostTests => {
+                    HostGateStep::HostTests { .. } => {
                         invoked.push("host-tests");
                         result.push(StepResult::ok("host-tests"));
                     }
@@ -1881,20 +2042,100 @@ mod cli_tests {
         crate::test_support::commit(&dir, "b.rs", "fn b(){}\n");
         crate::test_support::write(&dir, "a.rs", "fn a() { }\n");
         crate::test_support::git_ok(&dir, &["add", "a.rs"]);
-        crate::test_support::write(&dir, "b.rs", "fn b() { }\n");
 
-        let result = run_precommit_with_host_gate(&dir, |result| {
-            crate::test_support::write(&dir, "a.rs", "fn a() { }\n// formatted\n");
-            result.push(StepResult::ok("fake-host-gate"));
+        crate::test_support::write(&dir, "b.rs", "fn b() { }\n");
+        let result = run_precommit_with_host_gate(&dir, |class, result| {
+            dispatch_precommit_host_gate_with(
+                class,
+                result,
+                |_| panic!("non-Markdown or mixed state must not dispatch to the narrow graph"),
+                |result| {
+                    crate::test_support::write(&dir, "a.rs", "fn a() { }\n// formatted\n");
+                    result.push(StepResult::ok("fake-complete-fix-host-gate"));
+                },
+            );
         })
         .unwrap();
 
         assert!(result.ok);
+        assert_eq!(result.steps[0].name, "precommit-routing");
+        assert_eq!(
+            result.steps[0].detail.as_deref(),
+            Some("class=broad reason=unstaged-path")
+        );
         assert_eq!(
             git::output(&dir, &["diff", "--cached", "--name-only"]).unwrap(),
             "a.rs"
         );
         assert_eq!(git::output(&dir, &["diff", "--name-only"]).unwrap(), "b.rs");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn precommit_routes_staged_markdown_before_restaging_safe_formatter_output() {
+        let dir = crate::test_support::temp_repo("precommit", "markdown-routing");
+        crate::test_support::commit(&dir, "guide.md", "# Guide\n");
+        crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
+        crate::test_support::git_ok(&dir, &["add", "guide.md"]);
+
+        let result = run_precommit_with_host_gate(&dir, |class, result| {
+            dispatch_precommit_host_gate_with(
+                class,
+                result,
+                |result| {
+                    crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\nFormatted\n");
+                    result.push(StepResult::ok("fake-markdown-host-gate"));
+                },
+                |_| panic!("staged Markdown must not dispatch to the broad host graph"),
+            );
+        })
+        .expect("precommit orchestration");
+
+        assert_eq!(result.steps[0].name, "precommit-routing");
+        assert_eq!(
+            result.steps[0].detail.as_deref(),
+            Some("class=staged-markdown-only reason=isolated-staged-markdown")
+        );
+        assert!(result.ok);
+        assert_eq!(
+            git::output(&dir, &["diff", "--cached", "--name-only"]).expect("cached paths"),
+            "guide.md"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn narrow_dispatch_failure_still_reconciles_exactly_once() {
+        let dir = crate::test_support::temp_repo("precommit", "markdown-failure");
+        crate::test_support::commit(&dir, "guide.md", "# Guide\n");
+        crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
+        crate::test_support::git_ok(&dir, &["add", "guide.md"]);
+
+        let result = run_precommit_with_host_gate(&dir, |class, result| {
+            dispatch_precommit_host_gate_with(
+                class,
+                result,
+                |result| result.push(StepResult::fail("prettier").detail("synthetic failure")),
+                |_| panic!("staged Markdown must not dispatch to the broad host graph"),
+            );
+        })
+        .expect("precommit orchestration");
+
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .map(|step| step.name.as_str())
+                .collect::<Vec<_>>(),
+            ["precommit-routing", "prettier", "precommit-staging"]
+        );
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .filter(|step| step.name == "precommit-staging")
+                .count(),
+            1
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1903,7 +2144,7 @@ mod cli_tests {
         let dir = crate::test_support::temp_repo("precommit", "orchestration-unsafe");
         crate::test_support::commit(&dir, "clean.rs", "one\n");
 
-        let result = run_precommit_with_host_gate(&dir, |result| {
+        let result = run_precommit_with_host_gate(&dir, |_, result| {
             crate::test_support::write(&dir, "clean.rs", "two\n");
             result.push(StepResult::ok("fake-host-gate"));
         })

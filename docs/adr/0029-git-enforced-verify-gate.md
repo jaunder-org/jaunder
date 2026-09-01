@@ -175,3 +175,41 @@ remain exhaustive: they continue through the unchanged ordered diagnostic graph
 and retain their existing authority. The #1117 prepush parity-by-failure-surface
 contract remains unchanged; this supplement changes only when the local hook
 stops, not which surfaces it covers or which hermetic verdict CI owns.
+
+## Supplement (2026-09-01, #1123): staged-Markdown precommit routing
+
+`precommit` classifies its complete pre-run dirty-tree snapshot before it starts
+gate work. The only narrow class is `staged-markdown-only`: a nonempty dirty
+tree whose every path is a staged-only, regular, case-sensitive `.md` addition
+or modification. Unstaged or untracked paths, deletions or renames, type
+changes, unsupported index modes, non-Markdown paths, and malformed or
+unparseable status evidence are not narrow.
+
+Classification is conservative routing rather than validation. It emits the
+informational successful `precommit-routing` result before gate work, with
+`class=staged-markdown-only reason=isolated-staged-markdown` for the narrow
+route. Every other state uses the existing broad host gate and reports
+`class=broad reason=<stable-kebab-case-reason>`; the stable broad-reason
+precedence is `uncertain-status`, `empty-state`, `untracked-path`,
+`unstaged-path`, `delete-or-rename`, `unsupported-change`,
+`unsupported-index-mode`, then `non-markdown-path`. Thus uncertainty selects a
+safe broad gate rather than bypassing or failing classification.
+
+The narrow route is a fixed, ordered filter over the same production host/static
+catalogs: Prettier; sequence/identifier collision checks; the ADR bundle;
+documentation links; flow-document parity; and the error-swallowing inventory.
+It is not further split by Markdown path. Prettier's global `end2end` plus
+`**/*.md` fix scope, ADR projections into `docs/README.md` and
+`docs/ARCHITECTURE.md`, and repository-wide document-link and flow-document
+relationships all make path-specific sub-routing unsound; the isolated-tree
+predicate makes those reads and formatter writes represent the staged Markdown
+state.
+
+Fail-fast execution and the one after-snapshot staging reconciliation remain:
+safe formatter mutations to initially staged-clean Markdown may be restaged,
+while ambiguous or unsafe state fails closed, including after a narrow-route
+failure. `prepush`, explicit `check` and `validate`, and CI remain broad and
+retain their existing authority. `xtask/tools-only` routing is deliberately
+rejected because those workspaces define gate behavior and repository scanners
+that must be exercised against their full product, documentation, CI, and e2e
+input populations.
