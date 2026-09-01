@@ -1,12 +1,12 @@
-# ADR-DRAFT: Typed storage bind admission
+# ADR-0169: Typed storage bind admission
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-31
 - Issue: [#1146](https://github.com/jaunder-org/jaunder/issues/1146)
 
 ## Context
 
-The SQLx bridges from [ADR-0071](../0071-sqlx-string-newtype-bridge.md) make a
+The SQLx bridges from [ADR-0071](0071-sqlx-string-newtype-bridge.md) make a
 newtype representable by a database, but `Encode`/`Type` alone do not decide
 which values may enter a storage query. The former `sqlx-newtype-bind` check
 looked for selected stripping spellings and carried a substring allowlist. It
@@ -93,10 +93,9 @@ closes the known expansion route through native `Arguments::add` and hidden
 result constructors; conservative syntax failures cover unresolved source
 shapes. Its bounded claim is therefore that source-visible raw admission syntax
 is rejected, while compile-time registry approval is the primary admission
-proof. This conforms to
-[ADR-0085](../0085-static-type-safety-gates-enumerate.md) and its
-structural-membership refinement
-[ADR-0110](../0110-gate-population-membership-is-structural.md).
+proof. This conforms to [ADR-0085](0085-static-type-safety-gates-enumerate.md)
+and its structural-membership refinement
+[ADR-0110](0110-gate-population-membership-is-structural.md).
 
 ## Consequences
 

@@ -238,7 +238,7 @@ rather than silently excluding it. Its honest boundary is source syntax, not
 rustc type resolution, a call graph, arbitrary proc-macro expansion, or
 SQL-column semantics; the resulting query-macro prohibition is part of the
 invariant. The current decision is
-[typed storage bind admission](drafts/typed-storage-bind-admission.md).
+[typed storage bind admission](0169-typed-storage-bind-admission.md).
 
 ## Consequences
 

@@ -194,7 +194,7 @@ source, tracks source-visible aliases structurally, and is deliberately not
 rustc type resolution, call-graph analysis, proc-macro expansion, or SQL-column
 inference. SQLx query macros are therefore forbidden under `storage/src`. The
 current decision is
-[typed storage bind admission](drafts/typed-storage-bind-admission.md).
+[typed storage bind admission](0169-typed-storage-bind-admission.md).
 
 ## Consequences
 
