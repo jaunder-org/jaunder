@@ -94,6 +94,23 @@ mod tests {
                 .unwrap(),
         }
     }
+    fn test_cli(command: Commands) -> Cli {
+        Cli {
+            command: Some(command),
+            verbose: false,
+        }
+    }
+
+    async fn initialized_storage(base: &TempDir) -> StorageArgs {
+        let storage = test_storage_args(base);
+        run(test_cli(Commands::Init {
+            storage: storage.clone(),
+            skip_if_exists: false,
+        }))
+        .await
+        .unwrap();
+        storage
+    }
 
     #[tokio::test]
     async fn run_init_triggers_tracing() {
@@ -111,157 +128,103 @@ mod tests {
     #[tokio::test]
     async fn run_user_create() {
         let base = TempDir::new().unwrap();
-        let storage = test_storage_args(&base);
-        run(Cli {
-            command: Some(Commands::Init {
-                storage: storage.clone(),
-                skip_if_exists: false,
-            }),
-            verbose: false,
-        })
-        .await
-        .unwrap();
+        let storage = initialized_storage(&base).await;
 
-        let cli = Cli {
-            command: Some(Commands::UserCreate {
-                storage,
-                username: "alice".parse().unwrap(),
-                password: Some(host::test_support::parse_password("password123")),
-                display_name: None,
-                operator: false,
-            }),
-            verbose: false,
-        };
+        let cli = test_cli(Commands::UserCreate {
+            storage,
+            username: "alice".parse().unwrap(),
+            password: Some(host::test_support::parse_password("password123")),
+            display_name: None,
+            operator: false,
+        });
         run(cli).await.unwrap();
     }
 
     #[tokio::test]
     async fn run_user_invite() {
         let base = TempDir::new().unwrap();
-        let storage = test_storage_args(&base);
-        run(Cli {
-            command: Some(Commands::Init {
-                storage: storage.clone(),
-                skip_if_exists: false,
-            }),
-            verbose: false,
-        })
-        .await
-        .unwrap();
+        let storage = initialized_storage(&base).await;
 
-        let cli = Cli {
-            command: Some(Commands::UserInvite {
-                storage,
-                expires_in: None,
-            }),
-            verbose: false,
-        };
+        let cli = test_cli(Commands::UserInvite {
+            storage,
+            expires_in: None,
+        });
         run(cli).await.unwrap();
     }
 
     #[tokio::test]
     async fn run_site_config_set_get_list_unset_dispatch() {
         let base = TempDir::new().unwrap();
-        let storage = test_storage_args(&base);
-        run(Cli {
-            command: Some(Commands::Init {
-                storage: storage.clone(),
-                skip_if_exists: false,
-            }),
-            verbose: false,
-        })
-        .await
-        .unwrap();
+        let storage = initialized_storage(&base).await;
 
         // set dispatches and upserts through the real storage path.
-        run(Cli {
-            command: Some(Commands::SiteConfig {
-                action: SiteConfigAction::Set {
-                    storage: storage.clone(),
-                    key: SiteConfigKey::SiteRegistrationPolicy,
-                    value: "open".to_string(),
-                },
-            }),
-            verbose: false,
-        })
+        run(test_cli(Commands::SiteConfig {
+            action: SiteConfigAction::Set {
+                storage: storage.clone(),
+                key: SiteConfigKey::SiteRegistrationPolicy,
+                value: "open".to_string(),
+            },
+        }))
         .await
         .unwrap();
 
         // get of a set key dispatches and succeeds.
-        run(Cli {
-            command: Some(Commands::SiteConfig {
-                action: SiteConfigAction::Get {
-                    storage: storage.clone(),
-                    key: SiteConfigKey::SiteRegistrationPolicy,
-                },
-            }),
-            verbose: false,
-        })
+        run(test_cli(Commands::SiteConfig {
+            action: SiteConfigAction::Get {
+                storage: storage.clone(),
+                key: SiteConfigKey::SiteRegistrationPolicy,
+            },
+        }))
         .await
         .expect("get of a set key succeeds");
 
         // get of an unset key dispatches and errors (→ non-zero exit). Every key is a
         // registry variant, so "unset" means "no row written", not "not a key".
-        let missing = run(Cli {
-            command: Some(Commands::SiteConfig {
-                action: SiteConfigAction::Get {
-                    storage: storage.clone(),
-                    key: SiteConfigKey::SiteTitle,
-                },
-            }),
-            verbose: false,
-        })
+        let missing = run(test_cli(Commands::SiteConfig {
+            action: SiteConfigAction::Get {
+                storage: storage.clone(),
+                key: SiteConfigKey::SiteTitle,
+            },
+        }))
         .await;
         assert!(missing.is_err(), "get of an unset key must error");
 
         // list dispatches and succeeds.
-        run(Cli {
-            command: Some(Commands::SiteConfig {
-                action: SiteConfigAction::List {
-                    storage: storage.clone(),
-                },
-            }),
-            verbose: false,
-        })
+        run(test_cli(Commands::SiteConfig {
+            action: SiteConfigAction::List {
+                storage: storage.clone(),
+            },
+        }))
         .await
         .expect("list succeeds");
 
         // unset of a present key dispatches and removes it (the removed branch).
-        run(Cli {
-            command: Some(Commands::SiteConfig {
-                action: SiteConfigAction::Unset {
-                    storage: storage.clone(),
-                    key: SiteConfigKey::SiteRegistrationPolicy,
-                },
-            }),
-            verbose: false,
-        })
+        run(test_cli(Commands::SiteConfig {
+            action: SiteConfigAction::Unset {
+                storage: storage.clone(),
+                key: SiteConfigKey::SiteRegistrationPolicy,
+            },
+        }))
         .await
         .expect("unset of a present key succeeds");
 
         // get now errors: the key is gone.
-        let after_unset = run(Cli {
-            command: Some(Commands::SiteConfig {
-                action: SiteConfigAction::Get {
-                    storage: storage.clone(),
-                    key: SiteConfigKey::SiteRegistrationPolicy,
-                },
-            }),
-            verbose: false,
-        })
+        let after_unset = run(test_cli(Commands::SiteConfig {
+            action: SiteConfigAction::Get {
+                storage: storage.clone(),
+                key: SiteConfigKey::SiteRegistrationPolicy,
+            },
+        }))
         .await;
         assert!(after_unset.is_err(), "unset key must read as unset");
 
         // unset of an absent key is an idempotent no-op (the no-op branch).
-        run(Cli {
-            command: Some(Commands::SiteConfig {
-                action: SiteConfigAction::Unset {
-                    storage,
-                    key: SiteConfigKey::SiteRegistrationPolicy,
-                },
-            }),
-            verbose: false,
-        })
+        run(test_cli(Commands::SiteConfig {
+            action: SiteConfigAction::Unset {
+                storage,
+                key: SiteConfigKey::SiteRegistrationPolicy,
+            },
+        }))
         .await
         .expect("unset of an absent key is a no-op success");
     }
@@ -271,29 +234,17 @@ mod tests {
         const CHILD: &str = "JAUNDER_TEST_SITE_CONFIG_TELEMETRY_CHILD";
         if std::env::var_os(CHILD).is_some() {
             let base = TempDir::new().expect("db dir");
-            let storage = test_storage_args(&base);
             tokio::runtime::Runtime::new()
                 .expect("runtime")
                 .block_on(async {
-                    run(Cli {
-                        command: Some(Commands::Init {
-                            storage: storage.clone(),
-                            skip_if_exists: false,
-                        }),
-                        verbose: false,
-                    })
-                    .await
-                    .expect("init db");
-                    run(Cli {
-                        command: Some(Commands::SiteConfig {
-                            action: SiteConfigAction::Set {
-                                storage,
-                                key: SiteConfigKey::SiteRegistrationPolicy,
-                                value: "open".to_string(),
-                            },
-                        }),
-                        verbose: false,
-                    })
+                    let storage = initialized_storage(&base).await;
+                    run(test_cli(Commands::SiteConfig {
+                        action: SiteConfigAction::Set {
+                            storage,
+                            key: SiteConfigKey::SiteRegistrationPolicy,
+                            value: "open".to_string(),
+                        },
+                    }))
                     .await
                     .expect("site-config set");
                 });
@@ -345,14 +296,11 @@ mod tests {
             let storage = test_storage_args(&base);
             let result = tokio::runtime::Runtime::new()
                 .expect("runtime")
-                .block_on(run(Cli {
-                    command: Some(Commands::Serve {
-                        storage,
-                        bind: "127.0.0.1:0".parse().expect("bind"),
-                        environment: jaunder::cli::DeploymentEnv::Prod,
-                    }),
-                    verbose: false,
-                }));
+                .block_on(run(test_cli(Commands::Serve {
+                    storage,
+                    bind: "127.0.0.1:0".parse().expect("bind"),
+                    environment: jaunder::cli::DeploymentEnv::Prod,
+                })));
             match scenario.to_string_lossy().as_ref() {
                 "absent" | "valid" => assert!(
                     result
@@ -419,24 +367,12 @@ mod tests {
     #[tokio::test]
     async fn run_smtp_test_fails_when_smtp_not_configured() {
         let base = TempDir::new().unwrap();
-        let storage = test_storage_args(&base);
-        run(Cli {
-            command: Some(Commands::Init {
-                storage: storage.clone(),
-                skip_if_exists: false,
-            }),
-            verbose: false,
-        })
-        .await
-        .unwrap();
+        let storage = initialized_storage(&base).await;
 
-        let cli = Cli {
-            command: Some(Commands::SmtpTest {
-                storage,
-                to: parse_email("alice@example.com"),
-            }),
-            verbose: false,
-        };
+        let cli = test_cli(Commands::SmtpTest {
+            storage,
+            to: parse_email("alice@example.com"),
+        });
         let result = run(cli).await;
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
@@ -449,37 +385,22 @@ mod tests {
     #[tokio::test]
     async fn run_app_password_create_mints_for_existing_user() {
         let base = TempDir::new().unwrap();
-        let storage = test_storage_args(&base);
-        run(Cli {
-            command: Some(Commands::Init {
-                storage: storage.clone(),
-                skip_if_exists: false,
-            }),
-            verbose: false,
-        })
-        .await
-        .unwrap();
-        run(Cli {
-            command: Some(Commands::UserCreate {
-                storage: storage.clone(),
-                username: "alice".parse().unwrap(),
-                password: Some(host::test_support::parse_password("password123")),
-                display_name: None,
-                operator: false,
-            }),
-            verbose: false,
-        })
+        let storage = initialized_storage(&base).await;
+        run(test_cli(Commands::UserCreate {
+            storage: storage.clone(),
+            username: "alice".parse().unwrap(),
+            password: Some(host::test_support::parse_password("password123")),
+            display_name: None,
+            operator: false,
+        }))
         .await
         .unwrap();
 
-        run(Cli {
-            command: Some(Commands::AppPasswordCreate {
-                storage,
-                username: "alice".parse().unwrap(),
-                label: parse_session_label("ert"),
-            }),
-            verbose: false,
-        })
+        run(test_cli(Commands::AppPasswordCreate {
+            storage,
+            username: "alice".parse().unwrap(),
+            label: parse_session_label("ert"),
+        }))
         .await
         .expect("app-password-create should succeed for an existing user");
     }
@@ -487,26 +408,14 @@ mod tests {
     #[tokio::test]
     async fn run_serve() {
         let base = TempDir::new().unwrap();
-        let storage = test_storage_args(&base);
-        run(Cli {
-            command: Some(Commands::Init {
-                storage: storage.clone(),
-                skip_if_exists: false,
-            }),
-            verbose: false,
-        })
-        .await
-        .unwrap();
+        let storage = initialized_storage(&base).await;
 
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let cli = Cli {
-            command: Some(Commands::Serve {
-                storage,
-                bind,
-                environment: jaunder::cli::DeploymentEnv::Dev,
-            }),
-            verbose: false,
-        };
+        let cli = test_cli(Commands::Serve {
+            storage,
+            bind,
+            environment: jaunder::cli::DeploymentEnv::Dev,
+        });
 
         // Spawn-and-abort: this pins the dispatch arm, not the serve loop.
         let task = tokio::spawn(async move {
@@ -527,16 +436,13 @@ mod tests {
     // connection. That exercises the dispatch without provisioning anything.
     #[tokio::test]
     async fn run_create_pg_db_dispatches() {
-        let cli = Cli {
-            command: Some(Commands::CreatePgDb {
-                pg: PgBootstrapArgs {
-                    bootstrap_db: "postgres://postgres@localhost:1/postgres".parse().unwrap(),
-                    app_db: "postgres://jaunder@localhost/jaunder".parse().unwrap(),
-                    app_role_password: "hunter2".parse().unwrap(),
-                },
-            }),
-            verbose: false,
-        };
+        let cli = test_cli(Commands::CreatePgDb {
+            pg: PgBootstrapArgs {
+                bootstrap_db: "postgres://postgres@localhost:1/postgres".parse().unwrap(),
+                app_db: "postgres://jaunder@localhost/jaunder".parse().unwrap(),
+                app_role_password: "hunter2".parse().unwrap(),
+            },
+        });
 
         let err = run(cli).await.expect_err("a closed port must fail");
 
@@ -561,18 +467,15 @@ mod tests {
         let storage_path = base.path().join("file");
         std::fs::write(&storage_path, "not a dir").unwrap();
 
-        let cli = Cli {
-            command: Some(Commands::Init {
-                storage: StorageArgs {
-                    storage_path: storage_path.clone(),
-                    db: format!("sqlite:{}", base.path().join("test.db").display())
-                        .parse()
-                        .unwrap(),
-                },
-                skip_if_exists: false,
-            }),
-            verbose: false,
-        };
+        let cli = test_cli(Commands::Init {
+            storage: StorageArgs {
+                storage_path: storage_path.clone(),
+                db: format!("sqlite:{}", base.path().join("test.db").display())
+                    .parse()
+                    .unwrap(),
+            },
+            skip_if_exists: false,
+        });
         let err = run(cli).await.unwrap_err();
         assert!(
             err.to_string().contains("Not a directory") || err.to_string().contains("File exists")
@@ -583,14 +486,11 @@ mod tests {
     async fn run_serve_prod_fails_when_uninitialized() {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
-        let cli = Cli {
-            command: Some(Commands::Serve {
-                storage,
-                bind: "127.0.0.1:0".parse().unwrap(),
-                environment: jaunder::cli::DeploymentEnv::Prod,
-            }),
-            verbose: false,
-        };
+        let cli = test_cli(Commands::Serve {
+            storage,
+            bind: "127.0.0.1:0".parse().unwrap(),
+            environment: jaunder::cli::DeploymentEnv::Prod,
+        });
         let err = run(cli).await.unwrap_err();
         assert!(err.to_string().contains("run `jaunder init` first"));
     }
@@ -600,14 +500,11 @@ mod tests {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let cli = Cli {
-            command: Some(Commands::Serve {
-                storage,
-                bind,
-                environment: jaunder::cli::DeploymentEnv::Dev,
-            }),
-            verbose: false,
-        };
+        let cli = test_cli(Commands::Serve {
+            storage,
+            bind,
+            environment: jaunder::cli::DeploymentEnv::Dev,
+        });
 
         let task = tokio::spawn(async move {
             let _ = run(cli).await;
@@ -623,27 +520,15 @@ mod tests {
     #[tokio::test]
     async fn run_backup_creates_artifact() {
         let base = TempDir::new().unwrap();
-        let storage = test_storage_args(&base);
-        run(Cli {
-            command: Some(Commands::Init {
-                storage: storage.clone(),
-                skip_if_exists: false,
-            }),
-            verbose: false,
-        })
-        .await
-        .unwrap();
+        let storage = initialized_storage(&base).await;
 
         // `cmd_backup` creates the artifact itself, so no prior backup is needed.
         let backup_path = base.path().join("backup");
-        run(Cli {
-            command: Some(Commands::Backup {
-                storage,
-                mode: CliBackupMode::Directory,
-                path: Some(backup_path.clone()),
-            }),
-            verbose: false,
-        })
+        run(test_cli(Commands::Backup {
+            storage,
+            mode: CliBackupMode::Directory,
+            path: Some(backup_path.clone()),
+        }))
         .await
         .expect("backup dispatch should succeed");
         assert!(backup_path.exists());
@@ -653,47 +538,23 @@ mod tests {
     async fn run_restore_from_backup() {
         // Produce a backup from an initialized source storage...
         let source_base = TempDir::new().unwrap();
-        let source = test_storage_args(&source_base);
-        run(Cli {
-            command: Some(Commands::Init {
-                storage: source.clone(),
-                skip_if_exists: false,
-            }),
-            verbose: false,
-        })
-        .await
-        .unwrap();
+        let source = initialized_storage(&source_base).await;
         let backup_path = source_base.path().join("backup");
-        run(Cli {
-            command: Some(Commands::Backup {
-                storage: source,
-                mode: CliBackupMode::Directory,
-                path: Some(backup_path.clone()),
-            }),
-            verbose: false,
-        })
+        run(test_cli(Commands::Backup {
+            storage: source,
+            mode: CliBackupMode::Directory,
+            path: Some(backup_path.clone()),
+        }))
         .await
         .unwrap();
 
         // ...then restore it into a fresh (empty) target storage.
         let target_base = TempDir::new().unwrap();
-        let target = test_storage_args(&target_base);
-        run(Cli {
-            command: Some(Commands::Init {
-                storage: target.clone(),
-                skip_if_exists: false,
-            }),
-            verbose: false,
-        })
-        .await
-        .unwrap();
-        run(Cli {
-            command: Some(Commands::Restore {
-                storage: target,
-                path: backup_path,
-            }),
-            verbose: false,
-        })
+        let target = initialized_storage(&target_base).await;
+        run(test_cli(Commands::Restore {
+            storage: target,
+            path: backup_path,
+        }))
         .await
         .expect("restore dispatch should succeed");
     }
