@@ -136,13 +136,19 @@ object-safe `XStorage` trait plus its record and input structs (e.g.
 persistence work rather than a trait — `post_service.rs` (post create/update
 over `PostStorage`, shared by the web and AtomPub front-ends) and
 `media_manager.rs` (content-addressed upload, relocated from `server` in #517).
-The trait bodies are implemented once by a generic `XStore<DB>` bounded on a
-`Backend: sqlx::Database` marker trait (`storage/src/backend.rs`, implemented
-for `Sqlite` and `Postgres`, carrying only the `db.system` span constant);
-backend-specific SQL is isolated in per-trait `XDialect` impls under
+The trait bodies are implemented once by a generic `XStore<DB>` bounded on
+public `Backend: sqlx::Database` (`storage/src/backend.rs`, implemented for
+`Sqlite` and `Postgres`). `Backend` carries the `db.system` span constant and
+adapts sealed `WriteTransaction` capability to the concrete connection.
+Crate-private `AppStateBackend: Backend`, implemented only for those two
+backends, converts a pool into a backend-erased `WriteScope` exclusively for
+generic `AppState` composition. Downstream code can run the factory-minted scope
+but cannot name that trait or construct one from a pool, preserving ADR-0164's
+downstream-construction invariant without changing ADR-0019's public marker
+surface. Backend-specific SQL is isolated in per-trait `XDialect` impls under
 `storage/src/{sqlite,postgres}/*.rs`. Traits with no divergence need no dialect
-at all, and `Backend` deliberately carries no sqlx bind/executor bounds — each
-store impl restates exactly the subset it uses
+at all. Neither `Backend` nor `AppStateBackend` carries sqlx bind/executor
+bounds — each store impl restates exactly the subset it uses
 ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)). Span names are
 backend-agnostic (`storage.posts.*`) with `db.system` distinguishing the
 backend. Pure-SQL helpers shared by both dialects live in `storage/src/sql.rs`
@@ -156,11 +162,12 @@ be a thin shell over a near-total dialect
 
 ### Dependency injection and AppState
 
-`storage::AppState` (`storage/src/app_state.rs`) is a bundle of fourteen trait
-handles — thirteen `Arc<dyn *Storage>` plus `Arc<dyn AtomicOps>` — and the
-factory-minted, sealed `WriteScope`, all built by `open_database` at the
-composition root. It holds storage dependencies only; services (mailer, WebSub
-client, background workers) are constructed in `server` and injected
+`storage::AppState` (`storage/src/app_state.rs`) is a bundle of thirteen
+`Arc<dyn *Storage>` handles and the factory-minted, sealed `WriteScope`. One
+generic `make_app_state<DB>(Pool<DB>)` builds it for both production backends;
+its crate-private `AppStateBackend` bound converts the pool into the
+backend-erased scope. It holds storage dependencies only; services (mailer,
+WebSub client, background workers) are constructed in `server` and injected
 per-consumer as constructor parameters, and there is no services bundle. The
 durable invariant: no type may be both a heterogeneous dependency holder and
 passed beyond the composition root
@@ -169,9 +176,9 @@ passed beyond the composition root
 The web layer takes its dependencies per-trait via Leptos context and receives
 `WriteScope` and `MediaContentLocks` as separate context values.
 `server::provide_app_state_contexts` (`server/src/context.rs:27`) publishes
-thirteen of the handles (all but `feed_cache`, which no `#[server]` fn needs)
-plus the separately injected scope; the router composition root separately
-provides the media coordinator. Each server fn fetches exactly what it uses —
+twelve of the handles (all but `feed_cache`, which no `#[server]` fn needs) plus
+the separately injected scope; the router composition root separately provides
+the media coordinator. Each server fn fetches exactly what it uses —
 `expect_context::<Arc<dyn UserStorage>>()`, `expect_context::<WriteScope>()`, or
 `expect_context::<Arc<MediaContentLocks>>()`. The helper lives in `server`, not
 `storage`, because using Leptos context as the DI mechanism is an
@@ -189,10 +196,15 @@ parentless root owner strong for the whole future by itself. The ADR-0016
 superseded-and-historical inside the ADR
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
 
-The two multi-trait operations on `AtomicOps` (`create_user_with_invite`,
-`confirm_password_reset`) are part of the same audited write surface: each
-receives the caller's mutable `WriteTransaction` capability and composes within
-its `WriteScope`, rather than owning a storage-side transaction.
+The two cross-store account mutations are functions owned by `storage`, not an
+injected operation holder. Registration performs a read-only invite precheck,
+creates the user, then conditionally claims the invite with that user's ID; a
+concurrent loser rolls its inserted user back. Password reset composes
+reset-token claiming, password replacement, and whole-user session revocation.
+Each receives the caller's mutable `WriteTransaction` plus only the exact
+object-safe storage traits it uses. Invalid reset capabilities use their typed
+client-validation mapping
+([account mutations compose storage primitives](adr/drafts/account-mutations-compose-storage-primitives.md)).
 
 ### Query and transaction discipline
 
@@ -338,32 +350,36 @@ Details in the testing section.
 
 - **Structural write scopes and mutation outcomes.** A factory-minted, sealed,
   backend-erased `WriteScope` is injected separately beside the exact storage
-  traits
+  traits. Only crate-private `AppStateBackend` can mint it during AppState
+  composition; downstream code cannot construct a scope from a pool
   ([structural write scopes and mutation outcomes](adr/0164-structural-write-scopes-and-mutation-outcomes.md)).
   Its explicit `run` boundary supplies a sealed mutable `WriteTransaction`
   capability, never storage lookup or arbitrary SQL. The closed audited
   application surface has exactly 48 declarations: Audience (5), Email
-  Verification (2), Feed Cache (2), Feed Event (7), Invite (1), Media (2),
-  Password Reset (2), Post (7), Session (3), Site Config (6), Subscription (2),
-  User Config (2), User (5), and AtomicOps (2). Each takes
-  `&mut WriteTransaction`; there are no pool-backed, auto-committing,
-  standalone, or compatibility mutation paths. The structural gate derives the
-  observed declarations, compares them with the closed 48-method list, rejects
-  unknown, missing, and duplicate declarations, and rejects production
-  transaction starts that bypass the `WriteScope`/`WriteTransaction`
-  composition. It excludes administrative lifecycle work, dialect code, and
-  internal helpers. Callback failure is rollback-confirmed; a failed commit
-  acknowledgement is commit-indeterminate. Typed `MutationOutcome<T>` preserves
-  that algebra through server responses and client revalidation, while the
-  owning scope span records the bounded outcome. SQLite scopes retain
-  `BEGIN IMMEDIATE`; PostgreSQL operations retain their required row locks; and
-  the post-tag plus media-reconciliation paths retain their ordering,
-  rollback-on-drop, and injected-error behaviour. A separately injected,
-  cross-process `MediaContentLocks` capability serializes media placement and
-  reclamation with Post create/update for each content hash, in stable order for
-  multi-reference Posts. Writers acquire it before their short database
-  identity-lock scopes and retain it through filesystem cleanup, so no database
-  transaction spans filesystem I/O and no Post reference can race file removal.
+  Verification (2), Feed Cache (2), Feed Event (7), Invite (2), Media (2),
+  Password Reset (2), Post (7), Session (4), Site Config (6), Subscription (2),
+  User Config (2), and User (5). Cross-store account mutations compose these
+  capability-taking primitives as storage-owned functions
+  ([account mutations compose storage primitives](adr/drafts/account-mutations-compose-storage-primitives.md)).
+  Each declaration takes `&mut WriteTransaction`; there are no pool-backed,
+  auto-committing, standalone, or compatibility mutation paths. The structural
+  gate derives the observed declarations, compares them with the closed
+  48-method list, rejects unknown, missing, and duplicate declarations, and
+  rejects production transaction starts that bypass the
+  `WriteScope`/`WriteTransaction` composition. It excludes administrative
+  lifecycle work, dialect code, and internal helpers. Callback failure is
+  rollback-confirmed; a failed commit acknowledgement is commit-indeterminate.
+  Typed `MutationOutcome<T>` preserves that algebra through server responses and
+  client revalidation, while the owning scope span records the bounded outcome.
+  SQLite scopes retain `BEGIN IMMEDIATE`; PostgreSQL operations retain their
+  required row locks; and the post-tag plus media-reconciliation paths retain
+  their ordering, rollback-on-drop, and injected-error behaviour. A separately
+  injected, cross-process `MediaContentLocks` capability serializes media
+  placement and reclamation with Post create/update for each content hash, in
+  stable order for multi-reference Posts. Writers acquire it before their short
+  database identity-lock scopes and retain it through filesystem cleanup, so no
+  database transaction spans filesystem I/O and no Post reference can race file
+  removal.
 
 ## Content model
 
@@ -876,11 +892,10 @@ pass.
   token and its SHA-256 digest are returned together and only the digest is
   persisted, so the raw value is never stored. On the lookup side
   `host::token::hash` (`:53`) is the **sole** `RawToken → TokenHash` conversion
-  (`storage/src/sessions.rs:185`, `password.rs:116`, `email.rs:161`,
-  `sqlite/atomic.rs:131`, `postgres/atomic.rs:98`). The neighbouring
-  `host::token::generate` (`:28`) mints invite codes, not session tokens
-  (`host/src/invite.rs:59` is its only caller). The two are distinct newtypes,
-  `common::token::{RawToken, TokenHash}`
+  (`storage/src/sessions.rs:219`, `password.rs:126`, `email.rs:162`). The
+  neighbouring `host::token::generate` (`:28`) mints invite codes, not session
+  tokens (`host/src/invite.rs:59` is its only caller). The two are distinct
+  newtypes, `common::token::{RawToken, TokenHash}`
   ([#458](https://github.com/jaunder-org/jaunder/issues/458)), and `RawToken`
   carries `#[str_newtype(no_sqlx, no_ord)]` (`common/src/token.rs`) so
   `.bind(raw_token)` does not compile — that opt-out, not a lint, is what keeps
@@ -986,15 +1001,19 @@ split by the **entropy of the value being validated**:
   and no parity test asserts it — an accepted limitation of hard-coding, and why
   the fallback is a last resort
   ([ADR-0114](adr/0114-absent-user-timing-equalization.md)).
-- **High-entropy secret (invite code, reset token): cheap-reject first.** Both
-  operations live on the `AtomicOps` trait (`storage/src/atomic.rs:101`), which
-  each backend implements separately (`storage/src/sqlite/atomic.rs:30`, `:125`;
-  `storage/src/postgres/atomic.rs:26`, `:92`). `create_user_with_invite`
-  validates the invite with a cheap lookup before hashing (the SQLite backend
-  takes its write lock up front per ADR-0021, so the hash runs inside the
-  immediate transaction on the success path only), and `confirm_password_reset`
-  atomically claims the reset token before hashing the new password — it
-  originally hashed first, which ADR-0022 recorded as a violation and
+- **High-entropy secret (invite code, reset token): cheap-reject first.**
+  Storage-owned account mutations compose the rows' primitive traits inside the
+  caller-owned `WriteScope`: `account_mutations::register_with_invite` prechecks
+  and conditionally claims through `InviteStorage`, with
+  `UserStorage::create_user` between those operations; and
+  `account_mutations::confirm_password_reset` claims through
+  `PasswordResetStorage::use_password_reset`, then calls
+  `UserStorage::set_password` and `SessionStorage::revoke_all_for_user`.
+  Registration validates the invite with a cheap lookup before hashing, creates
+  the user, and then conditionally claims the invite so a concurrent PostgreSQL
+  loser rolls back its inserted user. Password reset atomically claims the reset
+  token before hashing the new password — it originally hashed first, which
+  ADR-0022 recorded as a violation and
   [#60](https://github.com/jaunder-org/jaunder/issues/60) fixed. A ~256-bit
   secret admits no useful timing oracle, and hashing first would turn
   bogus-secret requests into a CPU-exhaustion amplifier while destroying invite
@@ -1459,8 +1478,8 @@ declares the fields it may later record, usually with `tracing::field::Empty`,
 then records each value when the code reaches the decision. Branch-specific
 child span names are avoided: e.g. `web.registration.register` carries
 `registration.policy`, `registration.invite_present`, and
-`registration.outcome`, while the invite-backed atomic create remains a separate
-child operation span named `storage.atomic.create_user_with_invite`.
+`registration.outcome`, while invite-backed registration has the separate child
+operation span `storage.account_mutations.register_with_invite`.
 
 `host::error::InternalError` captures a `tracing_error::SpanTrace` at
 construction time, while the active span stack still exists. Boundary failures

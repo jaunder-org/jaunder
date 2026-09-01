@@ -1,17 +1,21 @@
 use std::sync::Arc;
 
+use super::fixtures::password;
 use common::MutationOutcome;
 use common::test_support::parse_raw_token;
 use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, backends};
-use storage::{AppState, ConfirmPasswordResetError, UsePasswordResetError, WriteScopeError};
-
-use super::fixtures::password;
+use storage::{
+    AppState, UsePasswordResetError, WriteScopeError,
+    account_mutations::{self, ConfirmPasswordResetError},
+};
 #[apply(backends)]
 #[tokio::test]
-async fn confirm_password_reset_hash_failure_returns_internal(#[case] backend: Backend) {
+async fn confirm_password_reset_hash_failure_preserves_password_error_source_and_token(
+    #[case] backend: Backend,
+) {
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
@@ -21,20 +25,28 @@ async fn confirm_password_reset_hash_failure_returns_internal(#[case] backend: B
         "2099-01-02T03:04:05.123456Z".parse().unwrap(),
     )
     .await;
-    // Valid token → the claim succeeds, then hashing the new password fails → Internal
-    // (success-path hash failure; the failed hash rolls the claim back).
-    let result = confirm_password_reset_result(
+
+    let error = confirm_password_reset_result(
         state,
-        reset_token,
+        reset_token.clone(),
         password("force-hash-error-for-test-coverage"),
     )
-    .await;
-    assert!(matches!(
-        result,
-        Err(WriteScopeError::Operation(
-            ConfirmPasswordResetError::Internal(_)
-        ))
-    ));
+    .await
+    .expect_err("a forced password hash failure must reject the reset");
+    let WriteScopeError::Operation(ConfirmPasswordResetError::Internal(sqlx::Error::Io(source))) =
+        error
+    else {
+        panic!("expected PasswordError wrapped by sqlx::Error::Io");
+    };
+    assert!(
+        source
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<host::password::PasswordError>())
+            .is_some(),
+        "the password error must remain downcastable through sqlx::Error::Io"
+    );
+
+    assert_eq!(use_password_reset(state, reset_token).await, user_id);
 }
 
 #[apply(backends)]
@@ -49,6 +61,30 @@ async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
         "2099-01-02T03:04:05.123456Z".parse().unwrap(),
     )
     .await;
+
+    let sessions = Arc::clone(&state.sessions);
+    let label = common::test_support::parse_session_label("Existing device");
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                sessions
+                    .create_session(transaction, user.user_id, &label)
+                    .await
+            })
+        })
+        .await
+        .expect("session fixture setup should succeed");
+    storage::test_support::confirmed_for(outcome, "session fixture setup");
+    assert_eq!(
+        state
+            .sessions
+            .list_sessions(user.user_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 
     confirm_password_reset(state, reset_token, password("new_password123")).await;
 
@@ -68,6 +104,14 @@ async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
         .unwrap();
     let authenticated = storage::test_support::confirmed_for(outcome, "authentication");
     assert_eq!(authenticated.user_id, user.user_id);
+    assert!(
+        state
+            .sessions
+            .list_sessions(user.user_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[apply(backends)]
@@ -237,14 +281,22 @@ async fn confirm_password_reset_result(
     raw_token: common::token::RawToken,
     password: host::password::Password,
 ) -> Result<MutationOutcome<()>, WriteScopeError<ConfirmPasswordResetError>> {
-    let atomic = Arc::clone(&state.atomic);
+    let password_resets = Arc::clone(&state.password_resets);
+    let users = Arc::clone(&state.users);
+    let sessions = Arc::clone(&state.sessions);
     state
         .write_scope
         .run(|transaction| {
             Box::pin(async move {
-                atomic
-                    .confirm_password_reset(transaction, &raw_token, &password)
-                    .await
+                account_mutations::confirm_password_reset(
+                    transaction,
+                    password_resets.as_ref(),
+                    users.as_ref(),
+                    sessions.as_ref(),
+                    &raw_token,
+                    &password,
+                )
+                .await
             })
         })
         .await

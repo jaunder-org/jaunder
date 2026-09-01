@@ -32,10 +32,9 @@ pub enum UseEmailVerificationError {
 }
 
 impl From<UseEmailVerificationError> for host::error::InternalError {
-    /// Mirrors the sibling [`crate::atomic::ConfirmPasswordResetError`] mapping so
-    /// `verify_email` is `?`-liftable: the three token failures are client
-    /// validation errors (a stale/used/unknown verification link), and an
-    /// internal failure is a masked storage error.
+    /// Mirrors the password-reset mapping so `verify_email` is `?`-liftable:
+    /// the three token failures are client validation errors (a stale/used/unknown
+    /// verification link), and an internal failure is a masked storage error.
     fn from(error: UseEmailVerificationError) -> Self {
         use host::error::InternalError;
         match error {

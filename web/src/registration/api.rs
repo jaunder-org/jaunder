@@ -23,7 +23,10 @@ use {
     host::password,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{AtomicOps, SessionStorage, SiteConfigStorage, UserStorage, WriteScope},
+    storage::{
+        InviteStorage, SessionStorage, SiteConfigStorage, UserStorage, WriteScope,
+        account_mutations::{self, RegisterWithInviteInput},
+    },
     tracing::Instrument,
 };
 
@@ -110,8 +113,8 @@ pub async fn register(
 ) -> WebResult<MutationOutcome<()>> {
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     let users = expect_context::<Arc<dyn UserStorage>>();
+    let invites = expect_context::<Arc<dyn InviteStorage>>();
     let write_scope = expect_context::<WriteScope>();
-    let atomic = expect_context::<Arc<dyn AtomicOps>>();
     let sessions = expect_context::<Arc<dyn SessionStorage>>();
     // `username` arrives as a validated typed wire arg. The proffered password is
     // accepted only at this boundary and immediately converted to the serde-free
@@ -166,20 +169,23 @@ pub async fn register(
                                 .record("registration.outcome", "create_user_with_invite");
                             let code = InviteCode::try_from(proffered)
                                 .map_err(|_| InternalError::validation("invalid invite code"))?;
-                            atomic
-                                .create_user_with_invite(
-                                    transaction,
-                                    &username,
-                                    &password,
-                                    None,
-                                    false,
-                                    &code,
-                                )
-                                .instrument(tracing::info_span!(
-                                    "web.registration.register.create_user_with_invite"
-                                ))
-                                .await
-                                .map_err(Into::into)
+                            account_mutations::register_with_invite(
+                                transaction,
+                                users.as_ref(),
+                                invites.as_ref(),
+                                RegisterWithInviteInput {
+                                    username: &username,
+                                    password: &password,
+                                    display_name: None,
+                                    is_operator: false,
+                                    invite_code: &code,
+                                },
+                            )
+                            .instrument(tracing::info_span!(
+                                "web.registration.register.create_user_with_invite"
+                            ))
+                            .await
+                            .map_err(Into::into)
                         } else {
                             operation_span.record("registration.outcome", "invite_required");
                             Err(InternalError::validation("invite code required"))

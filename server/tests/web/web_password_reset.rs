@@ -249,7 +249,7 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
         .unwrap();
     let raw_token = storage::test_support::confirmed_for(outcome, "password-reset fixture setup");
 
-    let (status, _body) = post_server_fn_with_mailer(
+    let (status, response_body) = post_server_fn_with_mailer(
         &state,
         &mailer,
         &web::password_reset::Confirm {
@@ -263,6 +263,10 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
     .await;
 
     assert_ne!(status, StatusCode::OK);
+    assert!(
+        response_body.contains("\"validation\""),
+        "expected a validation-class password-reset error; body: {response_body}"
+    );
 }
 
 // M3.11.12: confirm_password_reset with an invalid token returns an error.
@@ -272,7 +276,7 @@ async fn confirm_password_reset_with_invalid_token_returns_error(#[case] backend
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, _body) =
+    let (status, response_body) =
         post_server_fn_request_fixture_with_mailer::<web::password_reset::Confirm, _, _>(
             &state,
             &mailer,
@@ -285,6 +289,10 @@ async fn confirm_password_reset_with_invalid_token_returns_error(#[case] backend
         .await;
 
     assert_ne!(status, StatusCode::OK);
+    assert!(
+        response_body.contains("\"validation\""),
+        "expected a validation-class password-reset error; body: {response_body}"
+    );
 }
 
 #[apply(backends)]
@@ -382,8 +390,12 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
     assert_eq!(status, StatusCode::OK);
 
     // Use it again — should fail
-    let (status, _) = post_server_fn_with_mailer(&state, &mailer, &request, None).await;
+    let (status, response_body) = post_server_fn_with_mailer(&state, &mailer, &request, None).await;
     assert_ne!(status, StatusCode::OK);
+    assert!(
+        response_body.contains("\"validation\""),
+        "expected a validation-class password-reset error; body: {response_body}"
+    );
 }
 
 // A too-short `new_password` is rejected while decoding the nested request before

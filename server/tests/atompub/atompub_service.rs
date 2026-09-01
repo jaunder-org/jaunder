@@ -43,7 +43,6 @@ fn with_site_config(
         users: state.users.clone(),
         sessions: state.sessions.clone(),
         invites: state.invites.clone(),
-        atomic: state.atomic.clone(),
         email_verifications: state.email_verifications.clone(),
         password_resets: state.password_resets.clone(),
         posts: state.posts.clone(),

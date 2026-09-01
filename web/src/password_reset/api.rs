@@ -13,7 +13,10 @@ use {
     host::password,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{AtomicOps, PasswordResetStorage, SiteConfigStorage, UserStorage, WriteScope},
+    storage::{
+        PasswordResetStorage, SessionStorage, SiteConfigStorage, UserStorage, WriteScope,
+        account_mutations,
+    },
 };
 
 use crate::error::WebResult;
@@ -101,7 +104,9 @@ pub async fn confirm(request: ConfirmPasswordResetRequest) -> WebResult<Mutation
         new_password,
     } = request;
     let write_scope = expect_context::<WriteScope>();
-    let atomic = expect_context::<Arc<dyn AtomicOps>>();
+    let password_resets = expect_context::<Arc<dyn PasswordResetStorage>>();
+    let users = expect_context::<Arc<dyn UserStorage>>();
+    let sessions = expect_context::<Arc<dyn SessionStorage>>();
 
     // `new_password` is the inbound-secret twin (ADR-0063); convert into the
     // serde-free domain `Password` at the boundary. `token` is a `RawToken` wire
@@ -111,10 +116,16 @@ pub async fn confirm(request: ConfirmPasswordResetRequest) -> WebResult<Mutation
     let outcome = write_scope
         .run(|transaction| {
             Box::pin(async move {
-                atomic
-                    .confirm_password_reset(transaction, &token, &password)
-                    .await
-                    .map_err(InternalError::storage)
+                account_mutations::confirm_password_reset(
+                    transaction,
+                    password_resets.as_ref(),
+                    users.as_ref(),
+                    sessions.as_ref(),
+                    &token,
+                    &password,
+                )
+                .await
+                .map_err(Into::into)
             })
         })
         .await
