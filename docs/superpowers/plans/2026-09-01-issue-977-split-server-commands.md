@@ -44,7 +44,7 @@ Out:
     public account/operator functions retain `jaunder::commands::…` paths.
   - Verification: focused account, invitation, SMTP, and source-chain tests
     pass; `server/tests/misc/commands.rs` remains content-identical.
-- [ ] Task 3: Extract backup/restore commands and tests.
+- [x] Task 3: Extract backup/restore commands and tests.
   - Contract: private `backup` owns backup/restore, validation reporting, target
     derivation, emptiness checks, and backup-local helpers. Existing public
     backup functions retain `jaunder::commands::…` paths.

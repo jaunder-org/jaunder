@@ -15,21 +15,19 @@ use host::{
 };
 use tokio::{net::TcpListener, sync::oneshot::Receiver, task::JoinHandle};
 
-use crate::backup;
 use crate::cli::{Commands, SiteConfigAction, StorageArgs};
 use crate::feed::worker::FeedWorker;
 use crate::maintenance::{self, DatabaseMaintenance};
 use crate::metrics::{self, SaturationSources};
 use crate::runtime_file::{self, RuntimeGuard, StartupCheck, StartupLockGuard};
 use crate::scheduled_worker::ScheduledWorkerGuard;
-use common::backup::BackupMode;
 use host::config_key::SiteConfigKey;
 use storage::{
-    AppState, BackupExportOptions, BackupRestoreOptions, BackupRestoreOutcome, DbConnectOptions,
-    DbPoolObserver, InstanceId, MediaManager, OperatorStatus, RestoreValidationReport,
+    AppState, BackupRestoreOutcome, DbConnectOptions, DbPoolObserver, InstanceId, MediaManager,
     SiteConfigStorage, StorageRuntimeConfig,
 };
 mod account;
+mod backup;
 mod storage_bootstrap;
 mod support;
 #[cfg(test)]
@@ -38,6 +36,7 @@ mod test_support;
 pub use account::{
     app_password_create, cmd_app_password_create, cmd_smtp_test, cmd_user_create, cmd_user_invite,
 };
+pub use backup::{cmd_backup, cmd_restore};
 pub use storage_bootstrap::{cmd_create_pg_db, cmd_init};
 
 use support::{INIT_FIRST_CONTEXT, require_confirmed_mutation, storage_runtime_config};
@@ -173,128 +172,6 @@ impl SiteConfigAction {
     }
 }
 
-
-/// Performs a full backup of the application database and media.
-///
-/// # Errors
-///
-/// Returns an error if the backup process fails.
-pub async fn cmd_backup(
-    storage: &StorageArgs,
-    mode: BackupMode,
-    path: Option<PathBuf>,
-) -> anyhow::Result<PathBuf> {
-    let runtime = storage_runtime_config(&storage.db)?;
-    let destination_path = path.unwrap_or_else(|| default_backup_path(storage, mode));
-    let manifest = storage::export_backup(BackupExportOptions {
-        database: &storage.db,
-        runtime: &runtime,
-        media_path: &storage.storage_path.join("media"),
-        destination_path: &destination_path,
-        mode,
-    })
-    .await?;
-
-    println!(
-        "Backup complete: path={} tables={}",
-        destination_path.display(),
-        manifest.tables.len()
-    );
-    Ok(destination_path)
-}
-
-/// Restores the application state from a backup.
-///
-/// # Errors
-///
-/// Returns an error if the backup does not exist, or if the target database or
-/// media directory is not empty.
-pub async fn cmd_restore(
-    storage: &StorageArgs,
-    path: &Path,
-) -> anyhow::Result<BackupRestoreOutcome> {
-    if !path.exists() {
-        return Err(anyhow::anyhow!(
-            "backup path does not exist: {}",
-            path.display()
-        ));
-    }
-    let runtime = storage_runtime_config(&storage.db)?;
-    ensure_restore_target_empty(storage, &runtime).await?;
-    let outcome = storage::restore_backup(BackupRestoreOptions {
-        database: &storage.db,
-        runtime: &runtime,
-        media_path: &storage.storage_path.join("media"),
-        source_path: path,
-    })
-    .await?;
-    println!(
-        "Restore complete: path={} tables={}",
-        path.display(),
-        outcome.manifest.tables.len()
-    );
-    print_restore_validation_report(&outcome.validation_report);
-    Ok(outcome)
-}
-
-fn print_restore_validation_report(report: &RestoreValidationReport) {
-    if report.is_empty() {
-        return;
-    }
-
-    println!(
-        "Restore validation issues: count={} (data restored; repair may be needed before normal reads)",
-        report.len()
-    );
-    for issue in report.issues() {
-        println!("- {issue}");
-    }
-}
-
-fn default_backup_path(storage: &StorageArgs, mode: BackupMode) -> PathBuf {
-    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-    let name = match mode {
-        BackupMode::Directory => format!("backup-{timestamp}"),
-        BackupMode::Archive => format!("backup-{timestamp}.tar.gz"),
-    };
-    storage.storage_path.join("backups").join(name)
-}
-
-async fn ensure_restore_target_empty(
-    storage: &StorageArgs,
-    runtime: &StorageRuntimeConfig,
-) -> anyhow::Result<()> {
-    if !storage::database_is_empty(&storage.db, runtime).await? {
-        return Err(anyhow::anyhow!(
-            "refusing to restore into a non-empty database"
-        ));
-    }
-    let media_path = storage.storage_path.join("media");
-    if directory_has_entries(&media_path)? {
-        return Err(anyhow::anyhow!(
-            "refusing to restore into a non-empty media directory"
-        ));
-    }
-    Ok(())
-}
-
-fn directory_has_entries(path: &Path) -> io::Result<bool> {
-    if !path.exists() {
-        return Ok(false);
-    }
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let metadata = entry.metadata()?;
-        if metadata.is_dir() {
-            if directory_has_entries(&entry.path())? {
-                return Ok(true);
-            }
-        } else {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
 
 #[async_trait::async_trait]
 trait StartupDatabaseOperations: Sync {
@@ -498,7 +375,7 @@ impl BackgroundWorkers {
             .maintenance
             .start(maintenance::DATABASE_MAINTENANCE_INTERVAL)
             .await?;
-        let mut backup = match backup::start_backup_worker(
+        let mut backup = match crate::backup::start_backup_worker(
             setup.backup_site_config,
             setup.database,
             setup.runtime,
@@ -1341,46 +1218,6 @@ mod tests {
             0,
             "PostgreSQL connection failures must not trigger auto-init"
         );
-    }
-
-    #[test]
-    fn default_backup_path_is_under_storage_backups() {
-        let storage = StorageArgs {
-            storage_path: PathBuf::from("/tmp/jaunder"),
-            db: "sqlite:/tmp/jaunder.db".parse().expect("sqlite db"),
-        };
-
-        let path = default_backup_path(&storage, BackupMode::Directory);
-
-        assert!(path.starts_with("/tmp/jaunder/backups"));
-    }
-
-    #[test]
-    fn default_archive_backup_path_ends_with_tar_gz() {
-        let storage = StorageArgs {
-            storage_path: PathBuf::from("/tmp/jaunder"),
-            db: "sqlite:/tmp/jaunder.db".parse().expect("sqlite db"),
-        };
-
-        let path = default_backup_path(&storage, BackupMode::Archive);
-
-        assert!(path.starts_with("/tmp/jaunder/backups"));
-        assert!(path.to_string_lossy().ends_with(".tar.gz"));
-    }
-
-    #[test]
-    fn directory_has_entries_handles_missing_empty_and_nested_paths() {
-        let temp = tempfile::TempDir::new().expect("temp dir");
-        assert!(!directory_has_entries(&temp.path().join("missing")).expect("missing"));
-
-        let empty = temp.path().join("empty");
-        std::fs::create_dir(&empty).expect("empty dir");
-        assert!(!directory_has_entries(&empty).expect("empty"));
-
-        let nested = temp.path().join("nested");
-        std::fs::create_dir(&nested).expect("nested dir");
-        std::fs::write(nested.join("file.txt"), "content").expect("nested file");
-        assert!(directory_has_entries(temp.path()).expect("nested"));
     }
 
     #[test]
