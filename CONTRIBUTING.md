@@ -104,15 +104,37 @@ standards. Configure git to use them after cloning:
 git config core.hooksPath .githooks
 ```
 
-**`pre-commit`** runs **`cargo xtask precommit`** on every commit: the fast
-Fix-mode host surface equivalent to `cargo xtask check --no-test`, followed by
-Rust-owned Git/index reconciliation. It auto-fixes formatting
-(fmt/leptosfmt/prettier) and re-stages only formatter/check mutations on
-already-staged tracked paths that had no pre-existing unstaged change. Mixed
-tracked paths, newly-created untracked files, and delete/rename states changed
-during the hook fail closed with diagnostics; pre-existing delete/rename state
-and untracked files stay unstaged and tolerated. Bypass with
-`SKIP_PRE_COMMIT=1 git commit` for WIP.
+**`pre-commit`** runs **`cargo xtask precommit`**. Before gate work, it
+classifies the complete pre-run dirty tree. `staged-markdown-only` is the sole
+narrow class: a nonempty tree containing only staged-only, regular,
+case-sensitive `.md` additions or modifications. Any unstaged, untracked,
+delete/rename, type-changing, non-Markdown, malformed, unparseable, or otherwise
+unsupported evidence uses the broad route. The informational successful
+`precommit-routing` result is emitted before the selected gate and reports
+either `class=staged-markdown-only reason=isolated-staged-markdown` or
+`class=broad reason=<stable-kebab-case-reason>`; broad reason precedence is
+`uncertain-status`, `empty-state`, `untracked-path`, `unstaged-path`,
+`delete-or-rename`, `unsupported-change`, `unsupported-index-mode`, then
+`non-markdown-path`.
+
+For `staged-markdown-only`, the fixed ordered Markdown-sensitive surface is
+Prettier, sequence/identifier collision checks, the ADR bundle, documentation
+links, flow-document parity, and the error-swallowing inventory. It is a filter
+over the normal production host/static catalogs, not a per-path policy: Prettier
+formats global `end2end` plus `**/*.md`, ADRs project into `docs/README.md` and
+`docs/ARCHITECTURE.md`, and document links and flow documents use
+repository-wide relationships. Every other classification runs the existing
+broad host surface. `xtask/tools-only` routing is rejected because those
+workspaces define gate behavior and repository scanners that require their full
+product, documentation, CI, and e2e input populations.
+
+Precommit retains Fix-mode formatting and Rust-owned Git/index reconciliation:
+it re-stages only formatter/check mutations on already-staged tracked paths
+without pre-existing unstaged changes. It always takes its after-snapshot and
+reconciles once, including after a narrow-surface failure; mixed tracked paths,
+newly-created untracked files, and changed delete/rename states fail closed,
+while pre-existing delete/rename state and untracked files stay unstaged and
+tolerated. Bypass with `SKIP_PRE_COMMIT=1 git commit` for WIP.
 
 **`pre-push`** runs `cargo xtask prepush`: the fast, non-hermetic verify-only
 host/static surface, existing auxiliary `xtask`/`tools` non-doc tests,
@@ -130,10 +152,11 @@ refusal remains its first boundary. Precommit still performs its after-snapshot
 and conservative staging reconciliation after the gate stops; safe
 formatter/check changes can be restaged, while mixed or unsafe Git/index state
 still fails closed. Work not reached is absent from the result, not
-green-skipped. This does not change command membership, order, or the
-clean-tree/staged-subset authority. In contrast, explicit `cargo xtask check`
-and `cargo xtask validate`, and CI's corresponding surfaces, remain exhaustive
-diagnostic gates; local early stopping does not weaken CI's hermetic authority.
+green-skipped. Apart from precommit's selected routing surface, this does not
+change command order or clean-tree/staged-subset authority. `prepush`, explicit
+`cargo xtask check` and `cargo xtask validate`, and CI's corresponding surfaces
+remain broad, exhaustive diagnostic gates; local early stopping does not weaken
+CI's hermetic authority.
 
 ## Development workflow
 

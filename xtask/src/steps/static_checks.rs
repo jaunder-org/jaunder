@@ -22,6 +22,7 @@ pub struct StepSpec {
     pub program: &'static str,
     pub args: Vec<&'static str>,
     pub cache_rustc: bool,
+    pub markdown_eligible: bool,
 }
 
 /// The ordered static-check steps for `phase` and `mode`. Pure (no I/O) so the
@@ -53,6 +54,7 @@ pub fn specs_for_phase(phase: Phase, mode: Mode) -> Vec<StepSpec> {
                 program: "cargo",
                 args: xtask_fmt_args,
                 cache_rustc: false,
+                markdown_eligible: false,
             },
         ],
         Phase::CompileAndType => vec![
@@ -130,6 +132,7 @@ fn devtool_check_with_cache(name: &'static str, mode: Mode, cache_rustc: bool) -
         program: "cargo",
         args,
         cache_rustc,
+        markdown_eligible: name == "prettier",
     }
 }
 
@@ -139,6 +142,7 @@ fn cargo_compile_check(name: &'static str, args: Vec<&'static str>) -> StepSpec 
         program: "cargo",
         args,
         cache_rustc: true,
+        markdown_eligible: false,
     }
 }
 
@@ -154,6 +158,24 @@ pub(crate) fn run_phase_with(
         policy,
         result,
         specs_for_phase(phase, mode),
+        |spec, result| result.push(run(sh, &spec)),
+    );
+}
+
+pub(crate) fn run_markdown_phase_with(
+    sh: &Shell,
+    mode: Mode,
+    phase: Phase,
+    policy: ExecutionPolicy,
+    result: &mut CommandResult,
+    mut run: impl FnMut(&Shell, &StepSpec) -> StepResult,
+) {
+    crate::run_with_policy(
+        policy,
+        result,
+        specs_for_phase(phase, mode)
+            .into_iter()
+            .filter(|spec| spec.markdown_eligible),
         |spec, result| result.push(run(sh, &spec)),
     );
 }
@@ -351,6 +373,18 @@ mod tests {
         );
         // tsc-deps is gone — folded into `devtool check tsc`.
         assert!(specs(Mode::Check).iter().all(|s| s.name != "tsc-deps"));
+    }
+
+    #[test]
+    fn prettier_is_the_only_markdown_eligible_static_check() {
+        for mode in [Mode::Check, Mode::Fix] {
+            let eligible: Vec<_> = specs(mode)
+                .into_iter()
+                .filter(|spec| spec.markdown_eligible)
+                .map(|spec| spec.name)
+                .collect();
+            assert_eq!(eligible, ["prettier"]);
+        }
     }
 
     #[test]

@@ -42,6 +42,10 @@ pub fn porcelain_is_dirty(porcelain: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitStatusSnapshot {
     pub paths: BTreeMap<String, GitPathStatus>,
+    /// Evidence which could not be represented safely.  A precommit snapshot is
+    /// deliberately incomplete in this case, so both routing and reconciliation
+    /// must fail closed.
+    pub uncertainty: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -50,7 +54,93 @@ pub struct GitPathStatus {
     pub unstaged: bool,
     pub untracked: bool,
     pub delete_or_rename: bool,
+    pub unsupported_change: bool,
+    pub index_mode: Option<u32>,
+    pub staged_change: Option<u8>,
+    pub raw_change: Option<u8>,
     pub worktree_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrecommitBroadReason {
+    UncertainStatus,
+    EmptyState,
+    UntrackedPath,
+    UnstagedPath,
+    DeleteOrRename,
+    UnsupportedChange,
+    UnsupportedIndexMode,
+    NonMarkdownPath,
+}
+
+impl PrecommitBroadReason {
+    const fn detail(self) -> &'static str {
+        match self {
+            Self::UncertainStatus => "uncertain-status",
+            Self::EmptyState => "empty-state",
+            Self::UntrackedPath => "untracked-path",
+            Self::UnstagedPath => "unstaged-path",
+            Self::DeleteOrRename => "delete-or-rename",
+            Self::UnsupportedChange => "unsupported-change",
+            Self::UnsupportedIndexMode => "unsupported-index-mode",
+            Self::NonMarkdownPath => "non-markdown-path",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrecommitChangeClass {
+    StagedMarkdownOnly,
+    Broad(PrecommitBroadReason),
+}
+
+impl PrecommitChangeClass {
+    pub fn detail(self) -> String {
+        match self {
+            Self::StagedMarkdownOnly => {
+                "class=staged-markdown-only reason=isolated-staged-markdown".to_owned()
+            }
+            Self::Broad(reason) => format!("class=broad reason={}", reason.detail()),
+        }
+    }
+}
+
+pub fn classify_precommit_change(snapshot: &GitStatusSnapshot) -> PrecommitChangeClass {
+    if !snapshot.uncertainty.is_empty() {
+        return PrecommitChangeClass::Broad(PrecommitBroadReason::UncertainStatus);
+    }
+    if snapshot.paths.is_empty() {
+        return PrecommitChangeClass::Broad(PrecommitBroadReason::EmptyState);
+    }
+    for status in snapshot.paths.values() {
+        if status.untracked {
+            return PrecommitChangeClass::Broad(PrecommitBroadReason::UntrackedPath);
+        }
+    }
+    for status in snapshot.paths.values() {
+        if status.unstaged || !status.staged {
+            return PrecommitChangeClass::Broad(PrecommitBroadReason::UnstagedPath);
+        }
+    }
+    for status in snapshot.paths.values() {
+        if status.delete_or_rename {
+            return PrecommitChangeClass::Broad(PrecommitBroadReason::DeleteOrRename);
+        }
+    }
+    for status in snapshot.paths.values() {
+        if status.unsupported_change {
+            return PrecommitChangeClass::Broad(PrecommitBroadReason::UnsupportedChange);
+        }
+    }
+    for status in snapshot.paths.values() {
+        if !matches!(status.index_mode, Some(0o100644 | 0o100755)) {
+            return PrecommitChangeClass::Broad(PrecommitBroadReason::UnsupportedIndexMode);
+        }
+    }
+    if snapshot.paths.keys().any(|path| !path.ends_with(".md")) {
+        return PrecommitChangeClass::Broad(PrecommitBroadReason::NonMarkdownPath);
+    }
+    PrecommitChangeClass::StagedMarkdownOnly
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,69 +163,383 @@ pub fn working_tree_status(dir: &Path) -> Result<String> {
     output(dir, &["status", "--porcelain"])
 }
 
-/// Snapshot the full dirty working tree visible to pre-commit. `--untracked-files=all`
-/// is load-bearing: without it, Git can collapse a dirty untracked directory to
-/// `?? dir/` and hide a new file created under that directory during the gate.
-/// `--find-renames` is also load-bearing: it preserves rename detection while
-/// overriding user config such as `status.renames=copies`, which can otherwise
-/// emit synthetic `C  old -> new` paths that cannot be fingerprinted or staged.
+/// Snapshot the complete dirty working tree and its staged index evidence.
+/// NUL-delimited porcelain preserves whitespace and prevents a path from being
+/// mistaken for status syntax; cached raw diff supplies the index mode.
 pub fn status_snapshot(dir: &Path) -> Result<GitStatusSnapshot> {
-    let out = at(dir)
+    let status = at(dir)
         .args([
             "status",
-            "--porcelain",
+            "--porcelain=v1",
+            "-z",
             "--untracked-files=all",
-            "--find-renames",
+            "--no-renames",
         ])
         .output()
-        .with_context(|| "running git status --porcelain --untracked-files=all --find-renames")?;
-    if !out.status.success() {
+        .with_context(|| "running NUL-delimited git status")?;
+    if !status.status.success() {
         anyhow::bail!(
-            "git status --porcelain --untracked-files=all --find-renames failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            "git status --porcelain=v1 -z failed: {}",
+            String::from_utf8_lossy(&status.stderr).trim()
         );
     }
-    let mut snapshot = parse_status_snapshot(&String::from_utf8_lossy(&out.stdout));
-    for (path, status) in &mut snapshot.paths {
-        if !status.untracked && !status.delete_or_rename {
-            status.worktree_fingerprint = Some(output(dir, &["hash-object", "--", path])?);
+    let raw = at(dir)
+        .args([
+            "diff",
+            "--cached",
+            "--raw",
+            "-z",
+            "--no-abbrev",
+            "--no-renames",
+        ])
+        .output()
+        .with_context(|| "running NUL-delimited cached raw diff")?;
+    if !raw.status.success() {
+        anyhow::bail!(
+            "git diff --cached --raw -z failed: {}",
+            String::from_utf8_lossy(&raw.stderr).trim()
+        );
+    }
+    let mut snapshot = parse_snapshot(&status.stdout, &raw.stdout);
+    if snapshot.uncertainty.is_empty() {
+        for (path, entry) in &mut snapshot.paths {
+            if fingerprintable(entry) || fingerprintable_unstaged(dir, path, entry) {
+                entry.worktree_fingerprint = Some(output(dir, &["hash-object", "--", path])?);
+            }
         }
     }
     Ok(snapshot)
 }
 
+fn fingerprintable(entry: &GitPathStatus) -> bool {
+    !entry.untracked
+        && !entry.delete_or_rename
+        && !entry.unsupported_change
+        && matches!(entry.index_mode, Some(0o100644 | 0o100755))
+}
+
+fn fingerprintable_unstaged(dir: &Path, path: &str, entry: &GitPathStatus) -> bool {
+    !entry.staged
+        && entry.unstaged
+        && !entry.untracked
+        && !entry.delete_or_rename
+        && !entry.unsupported_change
+        && std::fs::symlink_metadata(dir.join(path))
+            .is_ok_and(|metadata| metadata.file_type().is_file())
+}
+
+/// Legacy line-oriented parser retained for staging-plan unit fixtures. Production
+/// snapshots must use [`status_snapshot`].
 pub fn parse_status_snapshot(porcelain: &str) -> GitStatusSnapshot {
-    let mut paths = BTreeMap::new();
-    for line in porcelain.lines().filter(|line| !line.trim().is_empty()) {
-        let bytes = line.as_bytes();
-        if bytes.len() < 3 {
-            continue;
+    let mut nul = porcelain.as_bytes().to_vec();
+    for byte in &mut nul {
+        if *byte == b'\n' {
+            *byte = 0;
         }
-        let path = line.get(3..).unwrap_or("").trim();
-        if path.is_empty() {
-            continue;
-        }
-        let status = paths
-            .entry(path.to_string())
-            .or_insert_with(GitPathStatus::default);
-        let index = bytes[0];
-        let worktree = bytes[1];
-        if index == b'?' && worktree == b'?' {
-            status.untracked = true;
-            continue;
-        }
-        status.staged |= index != b' ' && index != b'?';
-        status.unstaged |= worktree != b' ' && worktree != b'?';
-        status.delete_or_rename |= matches!(index, b'D' | b'R') || matches!(worktree, b'D' | b'R');
     }
-    GitStatusSnapshot { paths }
+    parse_snapshot_with_raw_evidence(&nul, &[], false)
+}
+
+fn parse_snapshot(porcelain: &[u8], raw: &[u8]) -> GitStatusSnapshot {
+    parse_snapshot_with_raw_evidence(porcelain, raw, true)
+}
+
+fn nul_records<'a>(bytes: &'a [u8], uncertainty: &mut Vec<String>, label: &str) -> Vec<&'a [u8]> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    let mut records = bytes.split(|byte| *byte == 0).collect::<Vec<_>>();
+    if bytes.ends_with(&[0]) {
+        records.pop();
+    } else {
+        uncertainty.push(format!("unterminated-{label}-record"));
+    }
+    if records.iter().any(|record| record.is_empty()) {
+        uncertainty.push(format!("interior-empty-{label}-record"));
+    }
+    records
+        .into_iter()
+        .filter(|record| !record.is_empty())
+        .collect()
+}
+
+fn parse_snapshot_with_raw_evidence(
+    porcelain: &[u8],
+    raw: &[u8],
+    require_raw_evidence: bool,
+) -> GitStatusSnapshot {
+    let mut snapshot = GitStatusSnapshot {
+        paths: BTreeMap::new(),
+        uncertainty: Vec::new(),
+    };
+    let mut staged_from_status = BTreeSet::new();
+    let mut seen_status_records = BTreeSet::new();
+    let mut records = nul_records(porcelain, &mut snapshot.uncertainty, "status").into_iter();
+    while let Some(record) = records.next() {
+        if record.len() < 4 || record[2] != b' ' {
+            snapshot
+                .uncertainty
+                .push("malformed-status-record".to_owned());
+            continue;
+        }
+        let index = record[0];
+        let worktree = record[1];
+        if !valid_status_pair(index, worktree) {
+            snapshot.uncertainty.push("unknown-status-pair".to_owned());
+            continue;
+        }
+        let Some(path) = std::str::from_utf8(&record[3..])
+            .ok()
+            .filter(|path| !path.is_empty())
+        else {
+            snapshot
+                .uncertainty
+                .push("non-utf8-or-empty-status-path".to_owned());
+            continue;
+        };
+        let rename_like = matches!(index, b'R' | b'C');
+        let old_path = if rename_like { records.next() } else { None };
+        let mut add = |path: &str| {
+            if !seen_status_records.insert((path.to_owned(), index, worktree)) {
+                snapshot
+                    .uncertainty
+                    .push("duplicate-status-path".to_owned());
+            }
+            let entry = snapshot.paths.entry(path.to_owned()).or_default();
+            if index == b'?' && worktree == b'?' {
+                entry.untracked = true;
+                return;
+            }
+            entry.staged |= index != b' ';
+            entry.unstaged |= worktree != b' ';
+            entry.delete_or_rename |=
+                matches!(index, b'D' | b'R') || matches!(worktree, b'D' | b'R');
+            entry.unsupported_change |=
+                matches!(index, b'T' | b'U' | b'C') || matches!(worktree, b'T' | b'U' | b'C');
+            if index != b' ' {
+                entry.staged_change = Some(index);
+            }
+            if entry.staged {
+                staged_from_status.insert(path.to_owned());
+            }
+        };
+        add(path);
+        match old_path {
+            Some(old_path) => match std::str::from_utf8(old_path)
+                .ok()
+                .filter(|path| !path.is_empty())
+            {
+                Some(old_path) => add(old_path),
+                None => snapshot
+                    .uncertainty
+                    .push("non-utf8-or-empty-rename-path".to_owned()),
+            },
+            None if rename_like => snapshot.uncertainty.push("missing-rename-path".to_owned()),
+            None => {}
+        }
+    }
+
+    let mut staged_from_raw = BTreeSet::new();
+    let mut records = nul_records(raw, &mut snapshot.uncertainty, "raw").into_iter();
+    let mut seen_raw_paths = BTreeSet::new();
+    while let Some(header) = records.next() {
+        let Some((old_mode, new_mode, status)) = parse_raw_header(header) else {
+            snapshot.uncertainty.push("malformed-raw-record".to_owned());
+            continue;
+        };
+        let Some(path_bytes) = records.next() else {
+            snapshot.uncertainty.push("missing-raw-path".to_owned());
+            continue;
+        };
+        let Some(path) = std::str::from_utf8(path_bytes)
+            .ok()
+            .filter(|path| !path.is_empty())
+        else {
+            snapshot
+                .uncertainty
+                .push("non-utf8-or-empty-raw-path".to_owned());
+            continue;
+        };
+        let rename_like = matches!(status, b'R' | b'C');
+        let old_path = if rename_like { records.next() } else { None };
+        if !seen_raw_paths.insert(path.to_owned()) {
+            snapshot.uncertainty.push("duplicate-raw-path".to_owned());
+        }
+        let entry = snapshot.paths.entry(path.to_owned()).or_default();
+        entry.delete_or_rename |= matches!(status, b'D' | b'R');
+        entry.unsupported_change |= !matches!(status, b'A' | b'M' | b'D' | b'R');
+        entry.index_mode = Some(new_mode);
+        entry.raw_change = Some(status);
+        staged_from_raw.insert(path.to_owned());
+        if rename_like {
+            match old_path.and_then(|value| std::str::from_utf8(value).ok()) {
+                Some(old_path) if !old_path.is_empty() => {
+                    if !seen_raw_paths.insert(old_path.to_owned()) {
+                        snapshot.uncertainty.push("duplicate-raw-path".to_owned());
+                    }
+                    let old = snapshot.paths.entry(old_path.to_owned()).or_default();
+                    old.index_mode = Some(old_mode);
+                    staged_from_raw.insert(old_path.to_owned());
+                }
+                _ => snapshot
+                    .uncertainty
+                    .push("non-utf8-or-empty-raw-rename-path".to_owned()),
+            }
+        }
+    }
+    if require_raw_evidence {
+        for entry in snapshot.paths.values() {
+            if entry
+                .staged_change
+                .zip(entry.raw_change)
+                .is_some_and(|(status, raw)| status != raw)
+            {
+                snapshot
+                    .uncertainty
+                    .push("status-raw-change-mismatch".to_owned());
+            }
+        }
+        if staged_from_status != staged_from_raw {
+            snapshot
+                .uncertainty
+                .push("status-raw-population-mismatch".to_owned());
+        }
+    }
+    snapshot.uncertainty.sort();
+    snapshot.uncertainty.dedup();
+    snapshot
+}
+
+fn valid_status_pair(index: u8, worktree: u8) -> bool {
+    if (index, worktree) == (b'?', b'?') {
+        return true;
+    }
+    matches!(index, b' ' | b'M' | b'A' | b'D' | b'R' | b'C' | b'U' | b'T')
+        && matches!(worktree, b' ' | b'M' | b'A' | b'D' | b'U' | b'T')
+}
+
+fn parse_raw_header(header: &[u8]) -> Option<(u32, u32, u8)> {
+    let text = std::str::from_utf8(header).ok()?;
+    let mut fields = text.strip_prefix(':')?.split(' ');
+    let old_mode = parse_raw_mode(fields.next()?)?;
+    let new_mode = parse_raw_mode(fields.next()?)?;
+    let old_object = fields.next()?;
+    let new_object = fields.next()?;
+    if !valid_object_id(old_object) || !valid_object_id(new_object) {
+        return None;
+    }
+    let status = fields.next()?;
+    if fields.next().is_some() || status.is_empty() {
+        return None;
+    }
+    let (kind, score) = status.split_at(1);
+    let status = kind.as_bytes()[0];
+    match status {
+        b'R' | b'C' if score.parse::<u8>().is_ok_and(|score| score <= 100) => {}
+        b'A' | b'M' | b'D' | b'T' | b'U' if score.is_empty() => {}
+        _ => return None,
+    }
+    valid_raw_transition(old_mode, new_mode, old_object, new_object, status)
+        .then_some((old_mode, new_mode, status))
+}
+
+fn parse_raw_mode(mode: &str) -> Option<u32> {
+    (mode.len() == 6 && mode.bytes().all(|byte| matches!(byte, b'0'..=b'7')))
+        .then(|| u32::from_str_radix(mode, 8).ok())
+        .flatten()
+}
+
+fn valid_object_id(object_id: &str) -> bool {
+    matches!(object_id.len(), 40 | 64) && object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_raw_transition(
+    old_mode: u32,
+    new_mode: u32,
+    old_object: &str,
+    new_object: &str,
+    status: u8,
+) -> bool {
+    if old_object.len() != new_object.len() {
+        return false;
+    }
+    let old_zero = old_object.bytes().all(|byte| byte == b'0');
+    let new_zero = new_object.bytes().all(|byte| byte == b'0');
+    match status {
+        b'A' => old_mode == 0 && known_mode(new_mode) && old_zero && !new_zero,
+        b'D' => known_mode(old_mode) && new_mode == 0 && !old_zero && new_zero,
+        b'M' => {
+            known_mode(old_mode)
+                && known_mode(new_mode)
+                && object_type(old_mode) == object_type(new_mode)
+                && !old_zero
+                && !new_zero
+                && (old_mode != new_mode || old_object != new_object)
+        }
+        b'T' => {
+            known_mode(old_mode)
+                && known_mode(new_mode)
+                && object_type(old_mode) != object_type(new_mode)
+                && !old_zero
+                && !new_zero
+        }
+        b'U' => known_mode(old_mode) && known_mode(new_mode) && !old_zero && !new_zero,
+        _ => false,
+    }
+}
+
+fn known_mode(mode: u32) -> bool {
+    matches!(mode, 0o100644 | 0o100755 | 0o120000 | 0o160000)
+}
+
+fn object_type(mode: u32) -> u8 {
+    match mode {
+        0o100644 | 0o100755 => 1,
+        0o120000 => 2,
+        0o160000 => 3,
+        _ => 0,
+    }
 }
 
 pub fn precommit_stage_plan(
     before: &GitStatusSnapshot,
     after: &GitStatusSnapshot,
 ) -> PrecommitStagePlan {
+    if !before.uncertainty.is_empty() || !after.uncertainty.is_empty() {
+        let mut evidence = before
+            .uncertainty
+            .iter()
+            .chain(after.uncertainty.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        evidence.sort();
+        evidence.dedup();
+        return PrecommitStagePlan {
+            stage_paths: Vec::new(),
+            failures: vec![format!(
+                "precommit staging requires complete git status evidence: {}",
+                evidence.join(", ")
+            )],
+        };
+    }
     let paths: BTreeSet<_> = before.paths.keys().chain(after.paths.keys()).collect();
+    let has_delete_or_rename = before
+        .paths
+        .values()
+        .chain(after.paths.values())
+        .any(|status| status.delete_or_rename);
+    let has_unsupported_evidence =
+        before
+            .paths
+            .values()
+            .chain(after.paths.values())
+            .any(|status| {
+                status.unsupported_change
+                    || matches!(
+                        status.index_mode,
+                        Some(mode) if !matches!(mode, 0o100644 | 0o100755)
+                    )
+            });
     let mut stage_paths = Vec::new();
     let mut failures = Vec::new();
     for path in paths {
@@ -144,11 +548,15 @@ pub fn precommit_stage_plan(
         if !precommit_path_changed(before_status, after_status) {
             continue;
         }
-        if before_status.is_some_and(|s| s.delete_or_rename)
-            || after_status.is_some_and(|s| s.delete_or_rename)
-        {
+        if has_delete_or_rename {
             failures.push(format!(
                 "{path}: delete/rename status is unsafe for auto-staging"
+            ));
+            continue;
+        }
+        if has_unsupported_evidence {
+            failures.push(format!(
+                "{path}: unsupported change or index mode is unsafe for auto-staging"
             ));
             continue;
         }
@@ -688,8 +1096,8 @@ mod tests {
 
     #[test]
     fn precommit_stage_plan_ignores_unchanged_delete_or_rename_states() {
-        let before = parse_status_snapshot("D  gone.rs\nR  old.rs -> new.rs\n");
-        let after = parse_status_snapshot("D  gone.rs\nR  old.rs -> new.rs\n");
+        let before = parse_status_snapshot("D  gone.rs\nD  old.rs\nA  new.rs\n");
+        let after = parse_status_snapshot("D  gone.rs\nD  old.rs\nA  new.rs\n");
         let plan = precommit_stage_plan(&before, &after);
         assert!(plan.stage_paths.is_empty());
         assert!(plan.failures.is_empty());
@@ -697,26 +1105,26 @@ mod tests {
 
     #[test]
     fn precommit_stage_plan_rejects_changed_rename_states() {
-        let before = parse_status_snapshot("R  old.rs -> new.rs\n");
-        let after = parse_status_snapshot("R  old.rs -> newer.rs\n");
+        let before = parse_status_snapshot("D  old.rs\nA  new.rs\n");
+        let after = parse_status_snapshot("D  old.rs\nA  newer.rs\n");
         let plan = precommit_stage_plan(&before, &after);
         assert!(plan.stage_paths.is_empty());
         assert!(
             plan.failures
                 .iter()
-                .any(|f| f.contains("old.rs -> new.rs") && f.contains("delete/rename"))
+                .any(|f| f.contains("new.rs") && f.contains("delete/rename"))
         );
         assert!(
             plan.failures
                 .iter()
-                .any(|f| f.contains("old.rs -> newer.rs") && f.contains("delete/rename"))
+                .any(|f| f.contains("newer.rs") && f.contains("delete/rename"))
         );
     }
 
     #[test]
     fn precommit_stage_plan_rejects_delete_or_rename_states() {
         let before = parse_status_snapshot("M  keep.rs\n");
-        let after = parse_status_snapshot("D  keep.rs\nR  old.rs -> new.rs\n");
+        let after = parse_status_snapshot("D  keep.rs\nD  old.rs\nA  new.rs\n");
         let plan = precommit_stage_plan(&before, &after);
         assert!(plan.stage_paths.is_empty());
         assert!(
@@ -727,7 +1135,7 @@ mod tests {
         assert!(
             plan.failures
                 .iter()
-                .any(|f| f.contains("old.rs -> new.rs") && f.contains("delete/rename"))
+                .any(|f| f.contains("new.rs") && f.contains("delete/rename"))
         );
     }
 
@@ -900,5 +1308,242 @@ mod tests {
                 .is_empty()
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    fn snapshot(status: &[u8], raw: &[u8]) -> GitStatusSnapshot {
+        parse_snapshot(status, raw)
+    }
+
+    fn raw(mode: &str, status: char, path: &str) -> Vec<u8> {
+        const ZERO: &str = "0000000000000000000000000000000000000000";
+        const OLD: &str = "1111111111111111111111111111111111111111";
+        const NEW: &str = "2222222222222222222222222222222222222222";
+        let (old_mode, new_mode, old_object, new_object) = match status {
+            'A' => ("000000", mode, ZERO, NEW),
+            'D' => (mode, "000000", OLD, ZERO),
+            _ => (mode, mode, OLD, NEW),
+        };
+        format!(":{old_mode} {new_mode} {old_object} {new_object} {status}\0{path}\0").into_bytes()
+    }
+    fn raw_modes(old_mode: &str, new_mode: &str, status: char, path: &str) -> Vec<u8> {
+        const OLD: &str = "1111111111111111111111111111111111111111";
+        const NEW: &str = "2222222222222222222222222222222222222222";
+        format!(":{old_mode} {new_mode} {OLD} {NEW} {status}\0{path}\0").into_bytes()
+    }
+    #[test]
+    fn staged_regular_markdown_addition_and_modification_route_narrowly() {
+        for (status, raw_status) in [
+            (b"A  guide.md\0".as_slice(), 'A'),
+            (b"M  guide.md\0".as_slice(), 'M'),
+        ] {
+            let snapshot = snapshot(status, &raw("100644", raw_status, "guide.md"));
+            assert_eq!(
+                classify_precommit_change(&snapshot),
+                PrecommitChangeClass::StagedMarkdownOnly
+            );
+        }
+        assert_eq!(
+            PrecommitChangeClass::StagedMarkdownOnly.detail(),
+            "class=staged-markdown-only reason=isolated-staged-markdown"
+        );
+    }
+
+    #[test]
+    fn classifier_uses_stable_broad_reason_precedence() {
+        let cases = [
+            (
+                snapshot(b"bad\0", b""),
+                PrecommitBroadReason::UncertainStatus,
+            ),
+            (snapshot(b"", b""), PrecommitBroadReason::EmptyState),
+            (
+                snapshot(b"?? scratch.md\0", b""),
+                PrecommitBroadReason::UntrackedPath,
+            ),
+            (
+                snapshot(b" M guide.md\0", b""),
+                PrecommitBroadReason::UnstagedPath,
+            ),
+            (
+                snapshot(b"D  guide.md\0", &raw("100644", 'D', "guide.md")),
+                PrecommitBroadReason::DeleteOrRename,
+            ),
+            (
+                snapshot(
+                    b"T  guide.md\0",
+                    &raw_modes("100644", "120000", 'T', "guide.md"),
+                ),
+                PrecommitBroadReason::UnsupportedChange,
+            ),
+            (
+                snapshot(b"M  guide.md\0", &raw("120000", 'M', "guide.md")),
+                PrecommitBroadReason::UnsupportedIndexMode,
+            ),
+            (
+                snapshot(b"M  guide.MD\0", &raw("100644", 'M', "guide.MD")),
+                PrecommitBroadReason::NonMarkdownPath,
+            ),
+        ];
+        for (snapshot, reason) in cases {
+            let class = classify_precommit_change(&snapshot);
+            assert_eq!(class, PrecommitChangeClass::Broad(reason));
+            assert_eq!(
+                class.detail(),
+                format!("class=broad reason={}", reason.detail())
+            );
+        }
+    }
+    #[test]
+    fn classifier_fails_closed_for_non_utf8_and_population_conflicts() {
+        let non_utf8 = snapshot(b"A  \xff.md\0", &raw("100644", 'A', "safe.md"));
+        let conflict = snapshot(b"A  guide.md\0", &raw("100644", 'A', "other.md"));
+        assert_eq!(
+            classify_precommit_change(&non_utf8),
+            PrecommitChangeClass::Broad(PrecommitBroadReason::UncertainStatus)
+        );
+        assert_eq!(
+            classify_precommit_change(&conflict),
+            PrecommitChangeClass::Broad(PrecommitBroadReason::UncertainStatus)
+        );
+    }
+
+    #[test]
+    fn malformed_status_and_raw_evidence_are_uncertain() {
+        let unknown_status = snapshot(b"Z  guide.md\0", &raw("100644", 'M', "guide.md"));
+        let malformed_raw = snapshot(
+            b"M  guide.md\0",
+            b":100644 100644 short invalid M\0guide.md\0",
+        );
+        assert_eq!(
+            classify_precommit_change(&unknown_status),
+            PrecommitChangeClass::Broad(PrecommitBroadReason::UncertainStatus)
+        );
+        assert_eq!(
+            classify_precommit_change(&malformed_raw),
+            PrecommitChangeClass::Broad(PrecommitBroadReason::UncertainStatus)
+        );
+    }
+
+    #[test]
+    fn duplicate_status_and_raw_paths_are_uncertain() {
+        let duplicate_status = snapshot(
+            b"M  guide.md\0M  guide.md\0",
+            &raw("100644", 'M', "guide.md"),
+        );
+        let duplicate_raw = snapshot(
+            b"M  guide.md\0",
+            b":100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 M\0guide.md\0:100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 M\0guide.md\0",
+        );
+        assert!(
+            duplicate_status
+                .uncertainty
+                .iter()
+                .any(|reason| reason == "duplicate-status-path")
+        );
+        assert!(
+            duplicate_raw
+                .uncertainty
+                .iter()
+                .any(|reason| reason == "duplicate-raw-path")
+        );
+    }
+
+    #[test]
+    fn reconciliation_rejects_changed_path_with_unsupported_index_evidence() {
+        let mut before = parse_status_snapshot("M  guide.md\n");
+        before.paths.get_mut("guide.md").unwrap().index_mode = Some(0o120000);
+        before
+            .paths
+            .get_mut("guide.md")
+            .unwrap()
+            .worktree_fingerprint = Some("before".to_owned());
+        let mut after = before.clone();
+        after
+            .paths
+            .get_mut("guide.md")
+            .unwrap()
+            .worktree_fingerprint = Some("after".to_owned());
+        let plan = precommit_stage_plan(&before, &after);
+        assert!(plan.stage_paths.is_empty());
+        assert!(plan.failures[0].contains("unsupported change or index mode"));
+    }
+
+    #[test]
+    fn interior_empty_nul_records_are_uncertain() {
+        let status_empty = snapshot(
+            b"M  first.md\0\0M  second.md\0",
+            &raw("100644", 'M', "first.md"),
+        );
+        let raw_empty = snapshot(
+            b"M  guide.md\0",
+            b":100644 100644 1111111111111111111111111111111111111111 1111111111111111111111111111111111111111 M\0\0guide.md\0",
+        );
+        assert!(!status_empty.uncertainty.is_empty());
+        assert!(!raw_empty.uncertainty.is_empty());
+    }
+
+    #[test]
+    fn mixed_raw_object_id_widths_are_uncertain() {
+        let raw = b":100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222222222222222222222222222 M\0guide.md\0";
+        let snapshot = snapshot(b"M  guide.md\0", raw);
+        assert_eq!(
+            classify_precommit_change(&snapshot),
+            PrecommitChangeClass::Broad(PrecommitBroadReason::UncertainStatus)
+        );
+    }
+
+    #[test]
+    fn impossible_raw_mode_transition_is_uncertain() {
+        let raw = b":000000 100644 1111111111111111111111111111111111111111 1111111111111111111111111111111111111111 M\0guide.md\0";
+        let snapshot = snapshot(b"M  guide.md\0", raw);
+        assert_eq!(
+            classify_precommit_change(&snapshot),
+            PrecommitChangeClass::Broad(PrecommitBroadReason::UncertainStatus)
+        );
+    }
+
+    #[test]
+    fn reconciliation_detects_mutation_of_preexisting_unstaged_regular_file() {
+        let dir = temp_repo("precommit-unstaged-fingerprint");
+        commit(&dir, "a.rs", "one\n");
+        write(&dir, "a.rs", "two\n");
+        let before = status_snapshot(&dir).expect("before snapshot");
+        write(&dir, "a.rs", "three\n");
+        let after = status_snapshot(&dir).expect("after snapshot");
+        let plan = precommit_stage_plan(&before, &after);
+        assert!(plan.stage_paths.is_empty());
+        assert!(
+            plan.failures
+                .iter()
+                .any(|failure| failure.contains("will not add work"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn gitlink_mode_is_broad_without_needing_a_worktree_fingerprint() {
+        let snapshot = snapshot(b"M  nested\0", &raw("160000", 'M', "nested"));
+        assert!(snapshot.uncertainty.is_empty());
+        assert_eq!(
+            classify_precommit_change(&snapshot),
+            PrecommitChangeClass::Broad(PrecommitBroadReason::UnsupportedIndexMode)
+        );
+    }
+
+    #[test]
+    fn unsupported_index_modes_are_not_fingerprinted() {
+        let entry = GitPathStatus {
+            staged: true,
+            index_mode: Some(0o160000),
+            ..GitPathStatus::default()
+        };
+        assert!(!fingerprintable(&entry));
+    }
+
+    #[test]
+    fn staging_reconciliation_refuses_incomplete_evidence() {
+        let before = snapshot(b"bad\0", b"");
+        let after = snapshot(b"bad\0", b"");
+        let plan = precommit_stage_plan(&before, &after);
+        assert!(plan.stage_paths.is_empty());
+        assert!(plan.failures[0].contains("complete git status evidence"));
     }
 }
