@@ -350,28 +350,9 @@ test("clearing a post summary on edit persists as empty", async ({
   await waitForSelector(page, SEL.saveSummary);
 
   const summary = page.locator(SEL.saveSummary);
-  // The canonical permalink is the only route (#24): reach the post at its canonical permalink, then read
-  // the post_id off the PostCard's Edit affordance.
-  const permalinkHref = (await summary
-    .locator('[data-test="permalink-link"]')
-    .getAttribute("href"))!;
-  expect(permalinkHref).toBeTruthy();
-  await navigateInApp(
-    page,
-    () => summary.locator('[data-test="permalink-link"]').click(),
-    { url: permalinkHref, ready: "article.j-post" },
-  );
-  const editLink = page.locator('.j-post-acts a:has-text("Edit")');
-  await editLink.waitFor();
-  const postId = (await editLink.getAttribute("href"))!.match(
-    /\/posts\/(\d+)\/edit/,
-  )![1];
-
-  // Edit: the summary prefills; clear it and save.
-  await navigateInApp(page, () => editLink.click(), {
-    url: `/posts/${postId}/edit`,
-    ready: SEL.postBody,
-  });
+  // The canonical permalink is the only route (#24); both hops stay in-app.
+  await followPermalink(page, summary);
+  const postId = await openEditor(page);
   await expect(page.locator(SEL.postSummary)).toHaveValue(
     "A summary to remove",
   );
@@ -441,33 +422,15 @@ test("clearing the body in the editor disables save", async ({
   registeredPage,
 }) => {
   test.slow();
-  // Create a draft, then reach its editor the way the summary-clearing test does:
-  // permalink → the PostCard's Edit affordance → the post_id. Both hops are in-app
-  // (#867): the subject is the editor's gate, not a cold boot.
+  // Create a draft, then reach its editor through the in-app permalink and
+  // PostCard Edit hops (#867): the subject is the editor's gate, not a cold boot.
   const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Gate Test\n\noriginal body");
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
-  const permalink = page
-    .locator(SEL.saveSummary)
-    .locator('[data-test="permalink-link"]');
-  const permalinkHref = (await permalink.getAttribute("href"))!;
-  await navigateInApp(page, () => permalink.click(), {
-    url: permalinkHref,
-    ready: "article.j-post",
-  });
-
-  const editLink = page.locator('.j-post-acts a:has-text("Edit")');
-  await editLink.waitFor();
-  const postId = (await editLink.getAttribute("href"))!.match(
-    /\/posts\/(\d+)\/edit/,
-  )![1];
-
-  await navigateInApp(page, () => editLink.click(), {
-    url: `/posts/${postId}/edit`,
-    ready: SEL.postBody,
-  });
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
   await expect(page.locator(SEL.publishButton("true"))).toBeEnabled();
 
   await page.fill(SEL.postBody, "");
@@ -564,27 +527,9 @@ test("authenticated user can edit a draft post", async ({ registeredPage }) => {
   await waitForSelector(page, SEL.saveSummary);
 
   const summary = page.locator(SEL.saveSummary);
-  // The canonical permalink is the only route (#24): reach the draft at its canonical permalink, then read
-  // the post_id off the PostCard's Edit affordance.
-  const permalinkHref = (await summary
-    .locator('[data-test="permalink-link"]')
-    .getAttribute("href"))!;
-  expect(permalinkHref).toBeTruthy();
-  await navigateInApp(
-    page,
-    () => summary.locator('[data-test="permalink-link"]').click(),
-    { url: permalinkHref, ready: "article.j-post" },
-  );
-  const editLink = page.locator('.j-post-acts a:has-text("Edit")');
-  await editLink.waitFor();
-  const postId = (await editLink.getAttribute("href"))!.match(
-    /\/posts\/(\d+)\/edit/,
-  )![1];
-
-  await navigateInApp(page, () => editLink.click(), {
-    url: `/posts/${postId}/edit`,
-    ready: SEL.postBody,
-  });
+  // The canonical permalink is the only route (#24); both hops stay in-app.
+  await followPermalink(page, summary);
+  await openEditor(page);
 
   await expect(page.locator(SEL.topbarHeading)).toHaveText("Edit Post");
 
@@ -685,26 +630,9 @@ test("edit page pre-selects the post's current audience", async ({
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
-  // Reach the draft's edit page via the post_id on its PostCard Edit affordance.
-  const permalinkLink = page
-    .locator(SEL.saveSummary)
-    .locator('[data-test="permalink-link"]');
-  const permalinkHref = (await permalinkLink.getAttribute("href"))!;
-  expect(permalinkHref).toBeTruthy();
-  await navigateInApp(page, () => permalinkLink.click(), {
-    url: permalinkHref,
-    ready: "article.j-post",
-  });
-  const editLink = page.locator('.j-post-acts a:has-text("Edit")');
-  await editLink.waitFor();
-  const postId = (await editLink.getAttribute("href"))!.match(
-    /\/posts\/(\d+)\/edit/,
-  )![1];
-
-  await navigateInApp(page, () => editLink.click(), {
-    url: `/posts/${postId}/edit`,
-    ready: SEL.postBody,
-  });
+  // Reach the draft's edit page through the shared in-app navigation hops.
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
   await waitForSelector(page, "#audience-base");
   await expect(page.getByText("No named audiences.")).toHaveCount(0);
 
@@ -755,27 +683,9 @@ test("editing a published post freezes the slug", async ({
     .getAttribute("data-slug");
   expect(originalSlug).toBeTruthy();
 
-  // The canonical permalink is the only route (#24): reach the published post at its permalink, then read
-  // the post_id off the PostCard's Edit affordance.
-  const permalinkHref = (await summary
-    .locator('[data-test="permalink-link"]')
-    .getAttribute("href"))!;
-  expect(permalinkHref).toBeTruthy();
-  await navigateInApp(
-    page,
-    () => summary.locator('[data-test="permalink-link"]').click(),
-    { url: permalinkHref, ready: "article.j-post" },
-  );
-  const editLink = page.locator('.j-post-acts a:has-text("Edit")');
-  await editLink.waitFor();
-  const postId = (await editLink.getAttribute("href"))!.match(
-    /\/posts\/(\d+)\/edit/,
-  )![1];
-
-  await navigateInApp(page, () => editLink.click(), {
-    url: `/posts/${postId}/edit`,
-    ready: SEL.postBody,
-  });
+  // The canonical permalink is the only route (#24); both hops stay in-app.
+  await followPermalink(page, summary);
+  await openEditor(page);
 
   // Published post should have neither unpublished-only option control.
   await expect(page.locator(SEL.postSlug)).not.toBeVisible();
@@ -1900,30 +1810,14 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   // than rendering the `.j-save-summary` block the draft-save path renders.
   const FUTURE_DATETIME_LOCAL = "2999-01-01T09:00";
 
-  // Create a draft and reach its edit page, the same route the edit test above uses.
+  // Create a draft and reach its edit page through the shared in-app hops.
   const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Scheduled From Editor\n\nbody");
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
-  const permalinkLink = page
-    .locator(SEL.saveSummary)
-    .locator('[data-test="permalink-link"]');
-  const permalinkHref = (await permalinkLink.getAttribute("href"))!;
-  await navigateInApp(page, () => permalinkLink.click(), {
-    url: permalinkHref,
-    ready: "article.j-post",
-  });
-  const editLink = page.locator('.j-post-acts a:has-text("Edit")');
-  await editLink.waitFor();
-  const postId = (await editLink.getAttribute("href"))!.match(
-    /\/posts\/(\d+)\/edit/,
-  )![1];
-
-  await navigateInApp(page, () => editLink.click(), {
-    url: `/posts/${postId}/edit`,
-    ready: SEL.postBody,
-  });
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await openEditor(page);
   await expect(page.locator(SEL.topbarHeading)).toHaveText("Edit Post");
 
   // The post is still a draft, so the slug and schedule controls are rendered.
