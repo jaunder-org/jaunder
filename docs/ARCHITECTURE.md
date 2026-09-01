@@ -318,7 +318,7 @@ removed and its replacement post and key row are written atomically. Fresh
 creation returns `201`; when its original post remains available, same-user key
 reuse returns that original post as `200`, even when the new payload differs.
 Another user may use the same key independently. The
-[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+[bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
 replaces indefinite mapping retention with a one-hour semantic replay window: at
 `cutoff <= now`, the mapping no longer coordinates a replay, whether or not a
 later cleanup pass has physically removed it.
@@ -818,7 +818,7 @@ separately inspectable and redrivable
 [Configuration changes do not invalidate caches, worker/regenerator snapshots can differ, configuration access errors can collapse to `NoHub`, HTTP failures retry alike, `Retry-After` is ignored, budgets are shared, and terminal rows lack redrive](https://github.com/jaunder-org/jaunder/issues/1052).
 
 The
-[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+[bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
 makes completed feed events cleanup-eligible immediately and retains exhausted
 events for seven days before making them cleanup-eligible. It is terminal-row
 retention, not a recovery or redrive decision for #1052, and does not apply to
@@ -932,7 +932,7 @@ pass.
   ([ADR-0014](adr/0014-atompub-authentication.md)).
 
 The
-[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+[bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
 separates permanent sessions and App Passwords from credentials with expiry: an
 expired credential remains retained for 24 hours after expiry, while a consumed
 credential is cleanup-eligible immediately.
@@ -1041,7 +1041,7 @@ split by the **entropy of the value being validated**:
   ([ADR-0022](adr/0022-validate-before-expensive-work.md)).
 
 The
-[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+[bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
 governs retention after a credential enters its terminal state; it does not
 alter the cheap-reject and atomic-claim security properties above.
 
@@ -1449,7 +1449,7 @@ IDs, never passwords, tokens, raw emails, invite codes, request bodies,
 arbitrary source text, or whole-struct dumps.
 
 The
-[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+[bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
 adds PII- and secret-free structured OpenTelemetry signals at transient-data
 state transitions: expiry, consumption, completion, exhaustion, and cleanup. The
 operator, rather than Jaunder, owns long-term telemetry retention.
@@ -1757,7 +1757,7 @@ measurement, then removes the canonical identity before releasing the lock;
 forced process exit removes the identity and lets the OS release the lock. The
 e2e and Elisp harnesses read that canonical file for this port handshake. This
 retains ADR-0035's discovery contract while the
-[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+[bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
 qualifies its JSON-as-mutex behavior and removes ADR-0144's runtime-path
 override.
 
@@ -1803,7 +1803,7 @@ storage configuration ([ADR-0064](adr/0064-backup-target-auto-derivation.md),
 `site-config set/get/list/unset` reads and writes site settings.
 
 **Transient-data cleanup.** The
-[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+[bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
 requires database-backed transient data to have authoritative semantic expiry at
 `cutoff <= now`, with physical removal once at startup and daily thereafter.
 Each run receives one explicit `now` and drains eligible backlogs through
@@ -1835,7 +1835,7 @@ Deployment is configured by clap flags with matching `JAUNDER_*` environment
 fallbacks and documented defaults
 ([process configuration](adr/0144-process-configuration-cli-contract.md), as
 qualified by the
-[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)).
+[bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)).
 The process-shape variables are `JAUNDER_BIND` (listen address, `:267`),
 `JAUNDER_DB` (database URL, default `sqlite:./data/jaunder.db`, `:41`),
 `JAUNDER_STORAGE_PATH` (the data directory, default `./data`, `:33`),
