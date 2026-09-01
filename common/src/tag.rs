@@ -153,34 +153,62 @@ pub fn parse_and_validate_tags(raw: Vec<TagLabel>) -> Result<Vec<TagLabel>, TagV
 mod tests {
     use super::*;
 
-    #[test]
-    fn tag_parses_valid_values() {
-        assert!("hello-world".parse::<Tag>().is_ok());
-        assert!("abc123".parse::<Tag>().is_ok());
-        assert!("a".parse::<Tag>().is_ok());
-        assert!("0".parse::<Tag>().is_ok());
-        assert!("my-tag-2024".parse::<Tag>().is_ok());
+    use rstest::rstest;
+
+    const LONG_CANONICAL_TAG: &str = concat!(
+        "aaaaaaaaaa",
+        "aaaaaaaaaa",
+        "aaaaaaaaaa",
+        "aaaaaaaaaa",
+        "aaaaaaaaaa",
+        "aaaaaaaaaa",
+        "aaaaaaaaaa",
+        "aaaaaaaaaa",
+        "aaaaaaaaaa",
+        "aaaaaaaaaa",
+    );
+    const LONG_MIXED_CASE_TAG: &str = concat!(
+        "LongTagWithManyCharacters",
+        "LongTagWithManyCharacters",
+        "LongTagWithManyCharacters",
+        "LongTagWithManyCharacters",
+    );
+    const LONG_MIXED_CASE_CANONICAL_TAG: &str = concat!(
+        "longtagwithmanycharacters",
+        "longtagwithmanycharacters",
+        "longtagwithmanycharacters",
+        "longtagwithmanycharacters",
+    );
+
+    #[rstest]
+    #[case::canonical_ascii("my-tag-2024", "my-tag-2024")]
+    #[case::single_letter("a", "a")]
+    #[case::single_digit("7", "7")]
+    #[case::leading_digit("0tag", "0tag")]
+    #[case::trailing_hyphen("hello-", "hello-")]
+    #[case::middle_hyphens("a-b-c-d", "a-b-c-d")]
+    #[case::consecutive_hyphens("a---b", "a---b")]
+    #[case::uppercase("ABC", "abc")]
+    #[case::mixed_case("Hello-World", "hello-world")]
+    #[case::mixed_case_with_digits("UPPERCASE-TAG-123", "uppercase-tag-123")]
+    #[case::long_canonical(LONG_CANONICAL_TAG, LONG_CANONICAL_TAG)]
+    #[case::long_mixed_case(LONG_MIXED_CASE_TAG, LONG_MIXED_CASE_CANONICAL_TAG)]
+    fn tag_accepts_and_canonicalizes(#[case] input: &str, #[case] canonical: &str) {
+        let tag = input.parse::<Tag>().expect("case input should be accepted");
+        assert_eq!(tag, canonical);
     }
 
-    #[test]
-    fn tag_rejects_invalid_values() {
-        // empty
-        assert!("".parse::<Tag>().is_err());
-        // starts with hyphen
-        assert!("-hello".parse::<Tag>().is_err());
-        // spaces
-        assert!("hello world".parse::<Tag>().is_err());
-        // underscore
-        assert!("hello_world".parse::<Tag>().is_err());
-        // special chars
-        assert!("hello@world".parse::<Tag>().is_err());
-    }
-
-    #[test]
-    fn tag_normalizes_to_lowercase() {
-        let tag: Tag = "Hello-World".parse().unwrap();
-        assert_eq!(tag.to_string(), "hello-world");
-        assert_eq!(tag, "hello-world");
+    #[rstest]
+    #[case::empty("")]
+    #[case::leading_hyphen("-hello")]
+    #[case::space("hello world")]
+    #[case::underscore("hello_world")]
+    #[case::leading_symbol("#tag")]
+    #[case::embedded_symbol("tag!")]
+    #[case::leading_non_ascii("é")]
+    #[case::embedded_non_ascii("café")]
+    fn tag_rejects_invalid_grammar(#[case] input: &str) {
+        assert!(input.parse::<Tag>().is_err());
     }
 
     #[test]
@@ -188,67 +216,6 @@ mod tests {
         let tag: Tag = "my-tag".parse().unwrap();
         assert_eq!(tag.to_string(), "my-tag");
         assert_eq!(tag, "my-tag");
-    }
-
-    #[test]
-    fn tag_normalizes_uppercase() {
-        // `Tag::from_str` lowercases, so an uppercase input is accepted.
-        assert!("Hello".parse::<Tag>().is_ok());
-    }
-
-    #[test]
-    fn tag_rejects_non_ascii() {
-        // Non-ASCII characters should be rejected
-        assert!("café".parse::<Tag>().is_err());
-        assert!("日本".parse::<Tag>().is_err());
-        assert!("résumé".parse::<Tag>().is_err());
-    }
-
-    #[test]
-    fn tag_allows_trailing_hyphen() {
-        // Trailing hyphens are allowed by the pattern [a-z0-9][a-z0-9-]*
-        assert!("hello-".parse::<Tag>().is_ok());
-        assert!("tag-".parse::<Tag>().is_ok());
-        assert_eq!("hello-".parse::<Tag>().unwrap(), "hello-");
-    }
-
-    #[test]
-    fn tag_allows_hyphen_in_middle() {
-        assert!("hello-world-tag".parse::<Tag>().is_ok());
-        assert!("a-b-c-d".parse::<Tag>().is_ok());
-        assert!("tag-1-2-3".parse::<Tag>().is_ok());
-    }
-
-    #[test]
-    fn tag_allows_all_digits() {
-        assert!("123".parse::<Tag>().is_ok());
-        assert!("999".parse::<Tag>().is_ok());
-        assert!("1".parse::<Tag>().is_ok());
-    }
-
-    #[test]
-    fn tag_lowercase_normalization_various_cases() {
-        let tag1: Tag = "ABC".parse().unwrap();
-        assert_eq!(tag1, "abc");
-
-        let tag2: Tag = "MixedCase".parse().unwrap();
-        assert_eq!(tag2, "mixedcase");
-
-        let tag3: Tag = "UPPERCASE-TAG-123".parse().unwrap();
-        assert_eq!(tag3, "uppercase-tag-123");
-    }
-
-    #[test]
-    fn tag_allows_consecutive_hyphens() {
-        assert!("hello--world".parse::<Tag>().is_ok());
-    }
-
-    #[test]
-    fn tag_rejects_starting_with_symbol() {
-        assert!("#tag".parse::<Tag>().is_err());
-        assert!("@tag".parse::<Tag>().is_err());
-        assert!("+tag".parse::<Tag>().is_err());
-        assert!("=tag".parse::<Tag>().is_err());
     }
 
     #[test]
@@ -303,58 +270,6 @@ mod tests {
         let tag: Tag = "debug-tag".parse().unwrap();
         let debug_str = format!("{tag:?}");
         assert!(debug_str.contains("debug-tag"));
-    }
-
-    #[test]
-    fn tag_very_long_valid_tag() {
-        let long_tag = "a".repeat(100);
-        let tag = long_tag.parse::<Tag>();
-        assert!(tag.is_ok());
-        assert_eq!(tag.unwrap(), long_tag.as_str());
-    }
-
-    #[test]
-    fn tag_mixed_case_long_tag() {
-        let long_tag = "LongTagWithManyCharacters".repeat(4);
-        let tag = long_tag.parse::<Tag>();
-        assert!(tag.is_ok());
-        assert_eq!(tag.unwrap(), long_tag.to_lowercase().as_str());
-    }
-
-    #[test]
-    fn tag_single_digit() {
-        assert!("0".parse::<Tag>().is_ok());
-        assert!("5".parse::<Tag>().is_ok());
-        assert!("9".parse::<Tag>().is_ok());
-        assert_eq!("7".parse::<Tag>().unwrap(), "7");
-    }
-
-    #[test]
-    fn tag_consecutive_hyphens() {
-        assert!("a--b".parse::<Tag>().is_ok());
-        assert!("a---b".parse::<Tag>().is_ok());
-        assert_eq!("test--tag".parse::<Tag>().unwrap(), "test--tag");
-    }
-
-    #[test]
-    fn invalid_tag_various_special_chars() {
-        assert!("tag!".parse::<Tag>().is_err());
-        assert!("tag&".parse::<Tag>().is_err());
-        assert!("tag%".parse::<Tag>().is_err());
-        assert!("tag$".parse::<Tag>().is_err());
-        assert!("tag^".parse::<Tag>().is_err());
-        assert!("tag*".parse::<Tag>().is_err());
-        assert!("tag(hello)".parse::<Tag>().is_err());
-        assert!("tag[test]".parse::<Tag>().is_err());
-        assert!("tag{test}".parse::<Tag>().is_err());
-        assert!("tag<test>".parse::<Tag>().is_err());
-    }
-
-    #[test]
-    fn tag_starting_with_digit() {
-        assert!("0tag".parse::<Tag>().is_ok());
-        assert!("1test".parse::<Tag>().is_ok());
-        assert!("9value".parse::<Tag>().is_ok());
     }
 
     fn labels(v: &[&str]) -> Vec<TagLabel> {
