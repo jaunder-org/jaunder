@@ -136,10 +136,11 @@ impl ScheduledWorkerGuard {
     pub(crate) async fn start(mut scheduler: JobScheduler, tracker: WorkTracker) -> Result<Self> {
         if let Err(start_error) = scheduler.start().await {
             tracker.stop();
+            let shutdown_result = scheduler.shutdown().await;
+            tracker.wait().await;
             let shutdown_context =
                 format!("cannot stop scheduled worker after startup failed: {start_error}");
-            scheduler.shutdown().await.context(shutdown_context)?;
-            tracker.wait().await;
+            shutdown_result.context(shutdown_context)?;
             return Err(start_error).context("cannot start scheduled worker");
         }
         Ok(Self { scheduler, tracker })
