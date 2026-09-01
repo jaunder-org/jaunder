@@ -7,6 +7,8 @@ use common::visibility::ViewerIdentity;
 use rstest::*;
 use rstest_reuse::*;
 
+use crate::helpers::body_string;
+
 use storage::test_support::{Backend, TestEnv, backends};
 
 use super::fixtures::{TEST_SHELL, get, projector_app, seed_published_post};
@@ -21,10 +23,7 @@ async fn profile_projects_user_timeline(#[case] backend: Backend) {
         .await
         .expect("request");
     assert_eq!(resp.status(), StatusCode::OK, "profile → 200");
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let html = String::from_utf8_lossy(&body);
+    let html = body_string(resp).await;
     assert!(
         html.contains(&format!("Posts by {u}")),
         "profile heading: {html}"
@@ -43,10 +42,7 @@ async fn site_timeline_projects_local_posts(#[case] backend: Backend) {
         .await
         .expect("request");
     assert_eq!(resp.status(), StatusCode::OK, "root site timeline → 200");
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let html = String::from_utf8_lossy(&body);
+    let html = body_string(resp).await;
     assert!(html.contains(title.as_ref()), "post present: {html}");
     assert!(html.contains(r#"id="jaunder-seed""#), "data blob present");
 }
@@ -64,10 +60,8 @@ async fn profile_invalid_username_serves_shell(#[case] backend: Backend) {
         StatusCode::OK,
         "unparseable username → shell"
     );
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    assert!(String::from_utf8_lossy(&body).contains("test-shell"));
+    let body = body_string(resp).await;
+    assert!(body.contains("test-shell"));
 }
 
 #[apply(backends)]
@@ -86,10 +80,7 @@ async fn profile_unknown_valid_username_is_cacheable_projection(#[case] backend:
         Some("public, max-age=300"),
         "valid unknown username projects an empty cacheable profile"
     );
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let html = String::from_utf8_lossy(&body);
+    let html = body_string(resp).await;
     assert!(html.contains("Posts by ghost"), "profile heading: {html}");
     assert!(html.contains(r#"id="jaunder-seed""#), "data blob present");
 }

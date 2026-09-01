@@ -21,7 +21,7 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{ensure_server_fns_registered, tmp_storage_path};
+use crate::helpers::{body_string, ensure_server_fns_registered, tmp_storage_path};
 use storage::test_support::{Backend, TestEnv, backends, noop_mailer};
 
 const INSTANCE_HEADER: &str = "x-jaunder-instance";
@@ -88,10 +88,7 @@ async fn spa_fallback_serves_embedded_shell_without_disk_index_html(#[case] back
         response.headers().get(CONTENT_TYPE).unwrap(),
         "text/html; charset=utf-8"
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body = String::from_utf8(body.to_vec()).unwrap();
+    let body = body_string(response).await;
     let init = format!(
         r#"initMeasured(window.__jaunderWasmFetch ?? "{}")"#,
         web::app::WASM_URL

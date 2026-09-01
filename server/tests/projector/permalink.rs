@@ -4,6 +4,8 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
+use crate::helpers::body_string;
+
 use storage::test_support::{Backend, TestEnv, backends};
 
 use super::fixtures::{get, projector_app, seed_published_post};
@@ -24,10 +26,7 @@ async fn permalink_projects_cacheable_crawlable_html(#[case] backend: Backend) {
         resp.headers().get(header::ETAG).is_some(),
         "ETag header present"
     );
-    let body1 = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let html = String::from_utf8_lossy(&body1);
+    let html = body_string(resp).await;
 
     // Crawlable, JS-off: real content is in the served HTML.
     assert!(html.contains(title.as_ref()), "title present: {html}");
@@ -50,7 +49,7 @@ async fn permalink_projects_cacheable_crawlable_html(#[case] backend: Backend) {
     )
     .await
     .unwrap();
-    assert_eq!(body1, body2, "identical bytes per URL");
+    assert_eq!(html.as_bytes(), body2.as_ref(), "identical bytes per URL");
 }
 
 #[apply(backends)]
@@ -65,10 +64,7 @@ async fn permalink_unknown_serves_spa_shell(#[case] backend: Backend) {
         .await
         .expect("request");
     assert_eq!(resp.status(), StatusCode::OK, "no public post → SPA shell");
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let html = String::from_utf8_lossy(&body);
+    let html = body_string(resp).await;
     assert!(html.contains("test-shell"), "served the SPA shell: {html}");
     assert!(
         !html.contains("jaunder-seed"),
@@ -91,10 +87,7 @@ async fn permalink_non_numeric_date_serves_shell(#[case] backend: Backend) {
         StatusCode::OK,
         "non-numeric date → SPA shell"
     );
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let html = String::from_utf8_lossy(&body);
+    let html = body_string(resp).await;
     assert!(html.contains("test-shell"), "served the SPA shell: {html}");
 }
 
@@ -111,10 +104,7 @@ async fn permalink_overflowing_date_serves_shell(#[case] backend: Backend) {
         StatusCode::OK,
         "overflowing date → SPA shell"
     );
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let html = String::from_utf8_lossy(&body);
+    let html = body_string(resp).await;
     assert!(html.contains("test-shell"), "served the SPA shell: {html}");
 }
 
@@ -127,10 +117,7 @@ async fn permalink_impossible_date_serves_shell(#[case] backend: Backend) {
         .await
         .expect("request");
     assert_eq!(resp.status(), StatusCode::OK, "impossible date → SPA shell");
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let html = String::from_utf8_lossy(&body);
+    let html = body_string(resp).await;
     assert!(html.contains("test-shell"), "served the SPA shell: {html}");
 }
 
@@ -149,10 +136,8 @@ async fn permalink_invalid_segment_serves_shell(#[case] backend: Backend) {
         StatusCode::OK,
         "unparseable segment → SPA shell"
     );
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    assert!(String::from_utf8_lossy(&body).contains("test-shell"));
+    let body = body_string(resp).await;
+    assert!(body.contains("test-shell"));
 }
 
 #[apply(backends)]
