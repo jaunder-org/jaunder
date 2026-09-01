@@ -38,6 +38,25 @@ async function uploadMedia(
   );
 }
 
+function countMediaRequests(page: Page): {
+  deleteRequests: () => number;
+  listRequests: () => number;
+  usageRequests: () => number;
+} {
+  let deleteRequests = 0;
+  let listRequests = 0;
+  let usageRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/media/delete")) deleteRequests += 1;
+    if (request.url().includes("/api/media/list_mine")) listRequests += 1;
+    if (request.url().includes("/api/media/get_usage")) usageRequests += 1;
+  });
+  return {
+    deleteRequests: () => deleteRequests,
+    listRequests: () => listRequests,
+    usageRequests: () => usageRequests,
+  };
+}
 test.describe("Media upload and serving", () => {
   test("authenticated user can upload and access media", async ({ page }) => {
     await signInAsNewUser(page);
@@ -131,12 +150,7 @@ test.describe("Media upload and serving", () => {
 
     // The label is cosmetic and decodes. Successful deletion proves the typed request
     // retained the encoded filename key expected by `Filename` at the wire boundary.
-    let deleteRequests = 0;
-    let listRequests = 0;
-    page.on("request", (request) => {
-      if (request.url().includes("/api/media/delete")) deleteRequests += 1;
-      if (request.url().includes("/api/media/list_mine")) listRequests += 1;
-    });
+    const counts = countMediaRequests(page);
     page.on("dialog", (dialog) => dialog.accept());
     const button = page.getByRole("button", { name: "Delete", exact: true });
     expect(await button.getAttribute("onclick")).toContain(
@@ -145,15 +159,16 @@ test.describe("Media upload and serving", () => {
 
     const release = await stallServerFn(page, "media/delete");
     await button.click();
-    await expect.poll(() => deleteRequests).toBe(1);
+    await expect.poll(counts.deleteRequests).toBe(1);
     await expect(button).toBeDisabled();
     await button.click({ force: true });
-    expect(deleteRequests).toBe(1);
+    expect(counts.deleteRequests()).toBe(1);
     release();
     await expect(
       page.getByRole("link", { name: "my holiday photo.jpg" }),
     ).toHaveCount(0);
-    await expect.poll(() => listRequests).toBe(1);
+    await expect.poll(counts.listRequests).toBe(1);
+    await expect.poll(counts.usageRequests).toBe(1);
   });
 
   test("unauthenticated upload is rejected", async ({ page }) => {
@@ -240,26 +255,11 @@ test.describe("Media upload and serving", () => {
 });
 
 test.describe("Media delete guard", () => {
-  function countMediaRequests(page: Page): {
-    deleteRequests: () => number;
-    listRequests: () => number;
-  } {
-    let deleteRequests = 0;
-    let listRequests = 0;
-    page.on("request", (request) => {
-      if (request.url().includes("/api/media/delete")) deleteRequests += 1;
-      if (request.url().includes("/api/media/list_mine")) listRequests += 1;
-    });
-    return {
-      deleteRequests: () => deleteRequests,
-      listRequests: () => listRequests,
-    };
-  }
-
   async function submitOrdinaryDeleteOnce(page: Page): Promise<{
     release: () => void;
     deleteRequests: () => number;
     listRequests: () => number;
+    usageRequests: () => number;
   }> {
     const counts = countMediaRequests(page);
     const release = await stallServerFn(page, "media/delete");
@@ -303,17 +303,18 @@ test.describe("Media delete guard", () => {
     await click(page, "a[href='/media']");
     await waitForSelector(page, "button:has-text('Attach media')");
     page.on("dialog", (dialog) => dialog.accept());
-    const { release, deleteRequests, listRequests } =
+    const { release, deleteRequests, listRequests, usageRequests } =
       await submitOrdinaryDeleteOnce(page);
     release();
     await expect.poll(deleteRequests).toBe(1);
-    await expect.poll(listRequests).toBe(0);
     // Naming the post is part of the contract: this cannot pass on an empty lookup.
     await expect(
       page.getByText(
         new RegExp(`Cannot delete: referenced in post\\(s\\) ${post_id}\\.`),
       ),
     ).toBeVisible();
+    expect(listRequests()).toBe(0);
+    expect(usageRequests()).toBe(0);
     // The library labels a row with the *decoded* name.
     await expect(
       page.getByRole("link", { name: "referenced.jpg" }),
@@ -334,10 +335,15 @@ test.describe("Media delete guard", () => {
     await attemptDelete(page);
     const forceButton = page.getByRole("button", { name: /^Force delete / });
 
+    const refusalError = await page.locator("p.error").innerText();
+    const failedCounts = countMediaRequests(page);
     await failServerFn(page, "media/delete");
     await forceButton.click();
-    await expect(page.locator("p.error")).toBeVisible();
+    await expect.poll(failedCounts.deleteRequests).toBe(1);
+    await expect(page.locator("p.error")).not.toHaveText(refusalError);
     await expect(page.getByRole("link", { name: "forced.jpg" })).toBeVisible();
+    expect(failedCounts.listRequests()).toBe(0);
+    expect(failedCounts.usageRequests()).toBe(0);
     await page.unroute("**/api/media/delete");
 
     await page.getByRole("button", { name: "Delete", exact: true }).click();
@@ -354,11 +360,13 @@ test.describe("Media delete guard", () => {
     expect(counts.deleteRequests()).toBe(1);
     release();
 
+    await expect(forceButton).toBeEnabled();
     await expect(
       page.getByText(/Cannot delete: referenced in post/),
     ).toBeVisible();
     await expect(page.getByRole("link", { name: "forced.jpg" })).toBeVisible();
-    await expect.poll(counts.listRequests).toBe(0);
+    expect(counts.listRequests()).toBe(0);
+    expect(counts.usageRequests()).toBe(0);
   });
 
   test("a post embedding the raw filename spelling blocks deletion", async ({

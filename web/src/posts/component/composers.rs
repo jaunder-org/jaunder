@@ -330,7 +330,7 @@ fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
 }
 
 #[component]
-pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl IntoView {
+pub fn InlineComposer(username: Username, on_publish: Callback<()>) -> impl IntoView {
     let flash: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
     let on_success = Callback::new(move |created: SavedPost| {
@@ -347,7 +347,7 @@ pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl 
     });
     let on_mutation = Callback::new(move |published: bool| {
         if published {
-            on_publish.update(|v| *v += 1);
+            on_publish.run(());
         }
     });
 

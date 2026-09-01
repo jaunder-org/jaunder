@@ -42,6 +42,31 @@ where
     action
 }
 
+/// A [`ServerAction`] that fires `notify` after a successful mutation only when
+/// `predicate` accepts its output. Neither dispatch, failure, nor an absent outcome
+/// invokes the predicate or notification.
+#[must_use]
+pub fn action_if<A>(
+    notify: impl Fn() + Send + Sync + 'static,
+    predicate: impl Fn(&A::Output) -> bool + Send + Sync + 'static,
+) -> ServerAction<A>
+where
+    A: ServerFn + Send + Sync + Clone + 'static,
+    A::Output: Send + Sync + 'static,
+    A::Error: Send + Sync + 'static,
+{
+    let action = ServerAction::<A>::new();
+    Effect::new(move |_| {
+        if action
+            .value()
+            .with(|value| matches!(value, Some(Ok(output)) if predicate(output)))
+        {
+            notify();
+        }
+    });
+    action
+}
+
 /// Drives a keyed [`reactive_stores`](https://docs.rs/reactive_stores) list from a refetch of
 /// `fetch` (revalidated by `track`). On each successful refetch it hands the rows to `patch` —
 /// supplied as a closure so the caller's concrete keyed field runs its **in-place** `patch` (a

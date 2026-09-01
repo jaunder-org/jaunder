@@ -59,7 +59,7 @@ impl UploadOutcome {
 pub fn delete_invalidates_media_resources(outcome: &MutationOutcome<MediaDeletion>) -> bool {
     matches!(
         outcome,
-        MutationOutcome::Confirmed(MediaDeletion { deleted: true, .. })
+        MutationOutcome::Confirmed(MediaDeletion::Deleted)
             | MutationOutcome::CommitIndeterminate(_)
     )
 }
@@ -416,18 +416,10 @@ mod tests {
 
     #[test]
     fn delete_invalidation_covers_confirmed_and_indeterminate_mutations_only() {
-        let deleted = MutationOutcome::Confirmed(MediaDeletion {
-            deleted: true,
-            referenced_in_posts: vec![],
-        });
-        let refused = MutationOutcome::Confirmed(MediaDeletion {
-            deleted: false,
-            referenced_in_posts: vec![],
-        });
-        let indeterminate = MutationOutcome::CommitIndeterminate(MediaDeletion {
-            deleted: false,
-            referenced_in_posts: vec![],
-        });
+        let deleted = MutationOutcome::Confirmed(MediaDeletion::Deleted);
+        let refused =
+            MutationOutcome::Confirmed(MediaDeletion::RefusedReferenced { post_ids: vec![] });
+        let indeterminate = MutationOutcome::CommitIndeterminate(MediaDeletion::Deleted);
 
         assert!(delete_invalidates_media_resources(&deleted));
         assert!(!delete_invalidates_media_resources(&refused));

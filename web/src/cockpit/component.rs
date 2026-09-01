@@ -10,6 +10,7 @@ use leptos::prelude::*;
 
 use super::CockpitState;
 use crate::posts::InlineComposer;
+use crate::reactive::Invalidator;
 use crate::timeline::{self, NoIdentity, TimelineGate};
 use crate::topbar::Topbar;
 
@@ -19,20 +20,20 @@ pub fn CockpitPage() -> impl IntoView {
     // (#306, ADR-0083); this body keeps only the `Effect` and the `view!`.
     let state = CockpitState::default();
 
-    let refresh_version = RwSignal::new(0u32);
-    let on_mutate = Callback::new(move |()| refresh_version.update(|v| *v += 1));
+    let invalidator = Invalidator::new();
+    let on_mutate = Callback::new(move |()| invalidator.notify());
 
     // Gate on the shared session's server-confirmed reconcile, then fetch the
     // personalized feed. Unlike `/`, `/app` is authed-only and served from the SPA
     // shell (no-store), so an async gate is correct here — there is no cacheable-page
     // flash constraint. `Ok(None)` means anonymous / expired → bounce to `/login`
-    // (D6). Keyed on `refresh_version` (publish/draft), which refetches the feed; the
-    // reconcile itself is keyed on pathname, so this reuses it rather than re-hitting
-    // the server for identity on every publish (#591).
+    // (D6). Publish, delete, and unpublish settlements notify the page invalidator;
+    // the reconcile itself is keyed on pathname, so this reuses it rather than
+    // re-hitting the server for identity on every publish (#591).
     let session = crate::auth::use_session();
-    let initial_page = Resource::new(
-        move || refresh_version.get(),
-        move |_| async move {
+    let initial_page = client::reactive::resource(
+        move || invalidator.track(),
+        move || async move {
             super::resolve_initial_page(session.reconcile.await, || {
                 timeline::list_home_feed(None, Some(PageSize::default()))
             })
@@ -74,7 +75,7 @@ pub fn CockpitPage() -> impl IntoView {
                 Some(user) => {
                     view! {
                         <Topbar title="Home" sub="Your home feed" />
-                        <InlineComposer username=user on_publish=refresh_version.write_only() />
+                        <InlineComposer username=user on_publish=on_mutate />
                     }
                         .into_any()
                 }

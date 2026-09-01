@@ -764,13 +764,13 @@ mod tests {
     }
 
     #[test]
-    fn create_settlement_revalidates_both_outcomes_but_confirms_only_one() {
+    fn create_settlement_classifies_published_and_draft_outcomes() {
         let owner = Owner::new();
         owner.set();
-        let mutation_count = RwSignal::new(0_u8);
+        let publications = RwSignal::new(Vec::new());
         let success_count = RwSignal::new(0_u8);
         let on_mutation =
-            Callback::new(move |_published| mutation_count.update(|count| *count += 1));
+            Callback::new(move |published| publications.update(|values| values.push(published)));
         let on_success = Callback::new(move |_created| success_count.update(|count| *count += 1));
         let published_at = "2026-01-02T00:00:00Z".parse().expect("a real instant");
 
@@ -784,8 +784,18 @@ mod tests {
             Some(on_mutation),
             on_success,
         ));
-        assert_eq!(mutation_count.get_untracked(), 2);
-        assert_eq!(success_count.get_untracked(), 1);
+        assert!(notify_create_settlement(
+            MutationOutcome::Confirmed(saved_post(None)),
+            Some(on_mutation),
+            on_success,
+        ));
+        assert!(!notify_create_settlement(
+            MutationOutcome::CommitIndeterminate(saved_post(None)),
+            Some(on_mutation),
+            on_success,
+        ));
+        assert_eq!(publications.get_untracked(), [true, true, false, false]);
+        assert_eq!(success_count.get_untracked(), 2);
         drop(owner);
     }
 
