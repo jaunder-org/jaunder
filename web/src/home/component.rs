@@ -6,6 +6,7 @@
 use leptos::prelude::*;
 
 use crate::feed_discovery::FeedDiscovery;
+use crate::reactive::Invalidator;
 use crate::timeline::{self, TimelineGate, TimelineState};
 use common::seed::PageSeed;
 use common::{feed::FeedSurface, pagination::PageSize};
@@ -30,16 +31,16 @@ pub fn HomePage() -> impl IntoView {
         },
     );
 
-    let refresh_version = RwSignal::new(0u32);
-    let on_mutate = Callback::new(move |()| refresh_version.update(|v| *v += 1));
+    let invalidator = Invalidator::new();
+    let on_mutate = Callback::new(move |()| invalidator.notify());
 
     // The Local timeline is identical for every viewer, so the fetch is
     // viewer-independent — no `current_user()` gate and no mode swap (#181, D10).
-    // Re-fetch on mutation (`refresh_version`) so the owner's own edits/deletes,
+    // Re-fetch after a committed mutation so the owner's own edits/deletes,
     // performed via the client-side action column, reflect immediately.
-    let initial_page = Resource::new(
-        move || refresh_version.get(),
-        |_| timeline::list_local_timeline(None, Some(PageSize::default())),
+    let initial_page = client::reactive::resource(
+        move || invalidator.track(),
+        move || timeline::list_local_timeline(None, Some(PageSize::default())),
     );
 
     timeline::wire_timeline_resolve(state, initial_page);

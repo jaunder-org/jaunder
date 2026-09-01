@@ -12,13 +12,14 @@ use common::pagination::{PageOffset, PageSize};
 use common::root_relative_url::RootRelativeUrl;
 
 use super::{
-    Delete, DeleteMediaRequest, Item, MediaDeletion, UploadCallbacks, UploadState, UsageData,
-    delete_invalidates_media_resources,
+    Delete, DeleteMediaRequest, Item, MediaDeletion, UploadCallbacks, UploadState, UsageData, api,
+    upload_state,
 };
 use crate::error::{WebError, WebResult};
 use crate::forms;
+use crate::reactive::Invalidator;
 use crate::topbar::Topbar;
-use client::telemetry;
+use client::{reactive, telemetry};
 
 /// A media upload control: a button that opens the file picker and immediately
 /// uploads the chosen file via the [`super::upload`] multipart `#[server]`
@@ -140,16 +141,11 @@ fn uploaded_url_view(url: RootRelativeUrl) -> impl IntoView {
 
 #[component]
 pub fn MediaPage() -> impl IntoView {
-    let delete_action = ServerAction::<Delete>::new();
-    let delete_version = RwSignal::new(0_u32);
-    Effect::new(move |_| {
-        if let Some(Ok(outcome)) = delete_action.value().get()
-            && delete_invalidates_media_resources(&outcome)
-        {
-            delete_version.update(|version| *version += 1);
-        }
-    });
-    let upload_version = RwSignal::new(0u32);
+    let media = Invalidator::new();
+    let delete_action = reactive::action_if::<Delete>(
+        move || media.notify(),
+        upload_state::delete_invalidates_media_resources,
+    );
     // `Action::input()` is cleared when its future settles. Retain the submitted
     // aggregate while it is in flight so a refusal can offer the same request with
     // `force` enabled, without making the form's validity constructor stateful.
@@ -160,16 +156,10 @@ pub fn MediaPage() -> impl IntoView {
         }
     });
 
-    let usage = Resource::new(
-        move || (delete_version.get(), upload_version.get()),
-        |_: (u32, u32)| super::get_usage(),
-    );
-
-    let media_list = Resource::new(
-        move || (delete_version.get(), upload_version.get()),
-        |_: (u32, u32)| {
-            super::list_mine(None, Some(PageSize::default()), Some(PageOffset::default()))
-        },
+    let usage = reactive::resource(move || media.track(), api::get_usage);
+    let media_list = reactive::resource(
+        move || media.track(),
+        || api::list_mine(None, Some(PageSize::default()), Some(PageOffset::default())),
     );
 
     view! {
@@ -181,10 +171,10 @@ pub fn MediaPage() -> impl IntoView {
             <div style="margin-bottom:24px">
                 <MediaUpload
                     on_uploaded=Callback::new(move |_url: RootRelativeUrl| {
-                        upload_version.update(|v| *v += 1);
+                        media.notify();
                     })
                     on_indeterminate=Callback::new(move |()| {
-                        upload_version.update(|v| *v += 1);
+                        media.notify();
                     })
                     on_error=Callback::new(move |msg: String| {
                         leptos::logging::warn!("upload error: {msg}");
@@ -310,12 +300,13 @@ fn MediaDeleteOutcome(
                 .value()
                 .get()
                 .map(|result: Result<MutationOutcome<MediaDeletion>, WebError>| match result {
-                    Ok(MutationOutcome::Confirmed(r)) if r.deleted => {
+                    Ok(MutationOutcome::Confirmed(MediaDeletion::Deleted)) => {
                         view! { <p class="success">"Media deleted."</p> }.into_any()
                     }
-                    Ok(MutationOutcome::Confirmed(r)) => {
-                        let ids = r
-                            .referenced_in_posts
+                    Ok(
+                        MutationOutcome::Confirmed(MediaDeletion::RefusedReferenced { post_ids }),
+                    ) => {
+                        let ids = post_ids
                             .iter()
                             .map(ToString::to_string)
                             .collect::<Vec<_>>()

@@ -326,14 +326,10 @@ async fn delete_nested_request_maps_identity_without_force(#[case] backend: Back
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
-    let result = confirmed_media_deletion(&body_str);
-    assert!(
-        result.deleted,
-        "delete of existing item should report deleted=true"
-    );
-    assert!(
-        result.referenced_in_posts.is_empty(),
-        "item not in any posts should have no post references"
+    assert_eq!(
+        confirmed_media_deletion(&body_str),
+        MediaDeletion::Deleted,
+        "delete of existing item should report its confirmed deleted state"
     );
 }
 
@@ -385,15 +381,12 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
-    let result = confirmed_media_deletion(&body_str);
-    assert!(
-        !result.deleted,
-        "delete without force should refuse when media is referenced by a post"
-    );
     assert_eq!(
-        result.referenced_in_posts,
-        vec![post.post_id],
-        "referenced_in_posts should list the referencing post"
+        confirmed_media_deletion(&body_str),
+        MediaDeletion::RefusedReferenced {
+            post_ids: vec![post.post_id],
+        },
+        "delete without force should report the referencing post"
     );
 }
 #[apply(backends)]
@@ -443,9 +436,12 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let refused = confirmed_media_deletion(&body);
-    assert!(!refused.deleted);
-    assert_eq!(refused.referenced_in_posts, vec![owned.post_id]);
+    assert_eq!(
+        confirmed_media_deletion(&body),
+        MediaDeletion::RefusedReferenced {
+            post_ids: vec![owned.post_id],
+        }
+    );
     assert_eq!(
         resolver.calls().len(),
         1,
@@ -477,9 +473,13 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let refused = confirmed_media_deletion(&body);
-    assert!(!refused.deleted, "unknown foreign ownership fails closed");
-    assert_eq!(refused.referenced_in_posts, vec![owned.post_id]);
+    assert_eq!(
+        confirmed_media_deletion(&body),
+        MediaDeletion::RefusedReferenced {
+            post_ids: vec![owned.post_id],
+        },
+        "unknown foreign ownership fails closed"
+    );
     let calls = resolver.calls();
     assert_eq!(
         calls.len(),
@@ -547,11 +547,11 @@ async fn delete_refusal_reports_the_reference_snapshot_despite_a_concurrent_post
     resolver.release.notify_one();
     let (status, body) = deleting.await.expect("delete task does not panic");
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let result = confirmed_media_deletion(&body);
-    assert!(!result.deleted);
     assert_eq!(
-        result.referenced_in_posts,
-        vec![original.post_id],
+        confirmed_media_deletion(&body),
+        MediaDeletion::RefusedReferenced {
+            post_ids: vec![original.post_id],
+        },
         "the refusal explains the pre-lock reference snapshot, not a later query"
     );
     assert_ne!(original.post_id, later.post_id);
@@ -598,12 +598,11 @@ async fn delete_nested_request_force_can_break_owner_retained_history(#[case] ba
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
-    let result = confirmed_media_deletion(&body_str);
-    assert!(
-        result.deleted,
+    assert_eq!(
+        confirmed_media_deletion(&body_str),
+        MediaDeletion::Deleted,
         "explicit force may knowingly break the owner's retained history"
     );
-    assert!(result.referenced_in_posts.is_empty());
     assert!(
         state
             .media

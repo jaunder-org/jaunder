@@ -61,9 +61,9 @@ pub struct UsageData {
 
 /// The deletion disposition returned by [`delete`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MediaDeletion {
-    pub deleted: bool,
-    pub referenced_in_posts: Vec<PostId>,
+pub enum MediaDeletion {
+    Deleted,
+    RefusedReferenced { post_ids: Vec<PostId> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,11 +155,11 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MutationOutcome<Me
         .await
         .map_err(map_delete_error)?;
 
-    let referenced_in_posts = result.referenced_post_ids(auth.user_id);
+    let post_ids = result.referenced_post_ids(auth.user_id);
 
-    Ok(result.into_outcome().map(|outcome| MediaDeletion {
-        deleted: outcome == TryDeleteOutcome::Deleted,
-        referenced_in_posts,
+    Ok(result.into_outcome().map(|outcome| match outcome {
+        TryDeleteOutcome::Deleted => MediaDeletion::Deleted,
+        TryDeleteOutcome::RefusedReferenced => MediaDeletion::RefusedReferenced { post_ids },
     }))
 }
 
