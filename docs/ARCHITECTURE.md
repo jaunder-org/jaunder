@@ -3186,7 +3186,7 @@ rather than a global synonym for merged.
 
 **Post-land checkout cleanup.** After a confirmed merge,
 `cargo xtask pr cleanup [N]` is the explicit local-only cleanup command
-([docs/adr/drafts/explicit-post-land-cleanup-command.md](adr/drafts/explicit-post-land-cleanup-command.md)).
+([docs/adr/0171-explicit-post-land-cleanup-command.md](adr/0171-explicit-post-land-cleanup-command.md)).
 It independently proves that the PR is merged into exactly `main`, the current
 branch and HEAD exactly match its head ref and SHA, and the tree is clean; an
 omitted number cursor-paginates merged candidates and accepts exactly one match.
