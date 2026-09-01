@@ -990,10 +990,8 @@ pub async fn prepare_server(
 }
 
 /// Serves `router` on `listener`, draining in-flight requests when `shutdown`
-/// resolves, then returns. Owns `runtime_guard`, so a normal return removes the
-/// runtime file and releases the OS startup lock. The forced-exit path (see
-/// [`spawn_shutdown_supervisor`]) removes the runtime file explicitly instead;
-/// process exit releases the OS lock.
+/// resolves, then returns. Runtime ownership remains with the caller so it can
+/// stop every background worker before releasing the storage-directory lock.
 ///
 /// # Errors
 ///
@@ -1001,22 +999,18 @@ pub async fn prepare_server(
 async fn serve_with_shutdown(
     listener: TcpListener,
     router: axum::Router,
-    // Held to scope end: its drop removes runtime.json and releases the OS lock.
-    _runtime_guard: RuntimeGuard,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())
-    // `_runtime_guard` drops here → removes runtime.json on the graceful path.
 }
 
 /// Installs `SIGINT`/`SIGTERM` handlers and returns a receiver that fires when the
 /// first arrives (the graceful-shutdown trigger). A second signal forces an
 /// immediate exit, best-effort removing the runtime file first — necessary because
-/// `process::exit` skips `Drop`. `runtime_path` is cloned from the guard before it
-/// is moved into [`serve_with_shutdown`].
+/// `process::exit` skips `Drop`.
 ///
 /// The streams are created synchronously (before returning), so a caller can rely
 /// on the handlers being active the moment this returns.
@@ -1086,32 +1080,28 @@ pub async fn cmd_serve(
     } = prepare_server(storage, bind, prod, telemetry, capture).await?;
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
-    // Keep the worker schedulers alive for the lifetime of the serve loop.
-    let _backup_scheduler = backup_scheduler;
-    let _maintenance_scheduler = maintenance_scheduler;
-    let _feed_scheduler = feed_scheduler;
-    let _saturation_metrics = saturation_metrics;
     #[cfg(unix)]
-    {
+    let serve_result = {
         let runtime_path = runtime_guard.path().to_path_buf();
         let shutdown_rx = spawn_shutdown_supervisor(runtime_path)?;
-        serve_with_shutdown(listener, router, runtime_guard, async move {
+        serve_with_shutdown(listener, router, async move {
             let _ = shutdown_rx.await;
         })
         .await
-    }
+    };
     #[cfg(not(unix))]
-    {
+    let serve_result = {
         // No signal handling off unix (jaunder targets Linux/NixOS): serve until
         // the process is otherwise terminated.
-        serve_with_shutdown(
-            listener,
-            router,
-            runtime_guard,
-            std::future::pending::<()>(),
-        )
-        .await
-    }
+        serve_with_shutdown(listener, router, std::future::pending::<()>()).await
+    };
+    // End every background task before releasing storage ownership.
+    drop(saturation_metrics);
+    drop(feed_scheduler);
+    drop(maintenance_scheduler);
+    drop(backup_scheduler);
+    drop(runtime_guard);
+    serve_result
     // cov:ignore-stop
 }
 
@@ -2398,7 +2388,6 @@ mod tests {
         let handle = tokio::spawn(serve_with_shutdown(
             listener,
             axum::Router::new(),
-            guard,
             async move {
                 let _ = shutdown_rx.await;
             },
@@ -2406,12 +2395,15 @@ mod tests {
 
         nix::sys::signal::raise(signal).unwrap();
 
-        // Await serve completion so removal (guard Drop on return) is observed
-        // deterministically, not by a timing poll.
         handle
             .await
             .unwrap()
             .expect("serve_with_shutdown returns Ok on graceful shutdown");
+        assert!(
+            path.exists(),
+            "serve completion must not release runtime ownership"
+        );
+        drop(guard);
         assert!(!path.exists(), "runtime.json removed after {signal:?}");
     }
 
