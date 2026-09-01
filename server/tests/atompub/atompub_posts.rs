@@ -2359,6 +2359,39 @@ async fn create_with_same_idempotency_key_dedups(#[case] backend: Backend) {
     );
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn create_with_expired_idempotency_key_creates_a_replacement(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+    let first_xml = entry_xml("Original", "text", "original body");
+
+    let first = create_post_keyed(app.clone(), &session, &first_xml, Some("expired-key")).await;
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let first_location = location_of(&first);
+    base.pool()
+        .execute(
+            "UPDATE idempotency_keys \
+             SET created_at = '2000-01-01 00:00:00+00' \
+             WHERE key = 'expired-key'",
+        )
+        .await
+        .expect("age the retained mapping as a restored backup may");
+
+    let replacement_xml = entry_xml("Replacement", "text", "replacement body");
+    let replacement = create_post_keyed(app, &session, &replacement_xml, Some("expired-key")).await;
+    assert_eq!(replacement.status(), StatusCode::CREATED);
+    assert_ne!(location_of(&replacement), first_location);
+    assert_eq!(
+        base.pool()
+            .scalar_i64("SELECT COUNT(*) FROM posts")
+            .await
+            .expect("count durable Posts"),
+        2
+    );
+}
+
 fn etag_of(response: &axum::response::Response) -> String {
     response
         .headers()

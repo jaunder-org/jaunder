@@ -24,6 +24,7 @@ use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use host::atompub::{self, CollectionFeedTitle, Entry, FeedMeta};
+use host::metrics::{self, IdempotencyEvent};
 use host::{etag, feed};
 use storage::{
     AudienceStorage, CollectionCursor, FeedEventError, FeedEventStorage, InvalidAudienceTargets,
@@ -540,11 +541,12 @@ pub async fn collection_post(
     };
     let idempotency_key = idempotency_key_from_headers(&headers);
 
-    let created = storage::perform_post_creation(
+    let created = storage::perform_post_creation_at(
         &write_scope,
         services.content_locks(),
         Arc::clone(&posts),
         Arc::clone(&feed_events),
+        request_clock,
         storage::PostCreation {
             user_id: auth_user.user_id,
             body,
@@ -566,14 +568,10 @@ pub async fn collection_post(
     // hidden, and so the response entry carries the post's tags.
     let viewer = owner_viewer(&auth_user);
 
-    // A reused idempotency key returns the original post as `200` — skipping category
-    // re-application (the original already carries its tags).
-    if let Err(storage::PerformCreationError::IdempotencyConflict) = &created {
-        let key = idempotency_key.as_ref().ok_or(HandlerError::Invariant)?;
-        let post_id = posts
-            .post_id_for_idempotency_key(auth_user.user_id, key)
-            .await?
-            .ok_or(HandlerError::Invariant)?;
+    // A reused idempotency key returns the transaction-selected original post
+    // as `200`, skipping category re-application (it already carries its tags).
+    if let Err(storage::PerformCreationError::IdempotencyConflict(post_id)) = &created {
+        let post_id = *post_id;
         // If the original was soft-deleted between the create and this replay, a
         // stale-key retry deserves a 404 rather than a 500.
         let post = posts
@@ -581,6 +579,7 @@ pub async fn collection_post(
             .await?
             .ok_or(HandlerError::NotFound)?;
         let base = super::required_base_url(site_config).await?;
+        metrics::idempotency(IdempotencyEvent::Replayed);
         return post_entry_response(StatusCode::OK, &post, &base, &username);
     }
 
@@ -590,6 +589,9 @@ pub async fn collection_post(
         Ok(created) => created,
         Err(status) => return Ok(status.into_response()),
     };
+    if idempotency_key.is_some() {
+        metrics::idempotency(IdempotencyEvent::Created);
+    }
     let base = super::required_base_url(site_config).await?;
     let post = posts
         .get_post_by_id(created.post_id, &viewer)

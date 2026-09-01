@@ -162,7 +162,7 @@ async fn prepare_server_postgres_missing_database_preserves_3d000_guidance() {
     let bind = "127.0.0.1:0".parse().expect("bind address");
 
     let (telemetry, capture) = test_host_config();
-    let error = prepare_server(&args, bind, false, None, &telemetry, capture.as_ref())
+    let error = prepare_server(&args, bind, false, &telemetry, capture.as_ref())
         .await
         .err()
         .expect("missing PostgreSQL database must fail");
@@ -186,7 +186,11 @@ async fn prepare_server_postgres_missing_database_preserves_3d000_guidance() {
         "expected SQLSTATE 3D000, got {source:?}"
     );
     assert!(
-        !storage_path.exists(),
-        "PostgreSQL startup must not auto-initialize storage"
+        storage_path.join("media/tmp").is_dir(),
+        "transient upload cleanup must precede the database check"
+    );
+    assert!(
+        !storage_path.join("runtime.json").exists(),
+        "failed PostgreSQL startup must not publish a live runtime file"
     );
 }

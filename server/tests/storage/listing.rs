@@ -123,6 +123,7 @@ async fn seed_post_published_at(
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
+            published_at,
         )
         .await
         .expect("seed post should be created"),

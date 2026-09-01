@@ -272,11 +272,6 @@ pub enum Commands {
         /// Deployment environment.
         #[arg(long, env = "JAUNDER_ENV", default_value_t = DeploymentEnv::Dev)]
         environment: DeploymentEnv,
-
-        /// Path to write the runtime-info JSON file (default
-        /// `<storage-path>/runtime.json`). Records the bound `ip`/`port`.
-        #[arg(long, env = "JAUNDER_RUNTIME_FILE")]
-        runtime_file: Option<PathBuf>,
     },
 
     /// Create a user account directly, bypassing the registration policy.
@@ -458,7 +453,6 @@ mod tests {
         "JAUNDER_DB",
         "JAUNDER_BIND",
         "JAUNDER_ENV",
-        "JAUNDER_RUNTIME_FILE",
     ];
 
     fn parse_in_child(scenario: &str, environment: &[(&str, &str)]) -> String {

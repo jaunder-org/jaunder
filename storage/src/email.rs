@@ -2,17 +2,19 @@
 
 use crate::WriteTransaction;
 use async_trait::async_trait;
+use chrono::Duration;
 
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
-use crate::helpers::TokenStateRow;
+use crate::helpers::{self, TokenStateRow};
+use crate::sql::RowCount;
 use common::email::Email;
 use common::ids::UserId;
 use common::time::UtcInstant;
 use common::token::RawToken;
-use host::token;
+use host::{metrics, retention::Domain, token};
 
 /// Errors returned by [`EmailVerificationStorage::use_email_verification`].
 #[derive(Debug, Error)]
@@ -47,11 +49,19 @@ impl From<UseEmailVerificationError> for host::error::InternalError {
         }
     }
 }
+/// The email-verification consumption that must be observed only after commit
+/// confirmation.
+#[derive(Debug)]
+pub struct EmailVerificationConsumption {
+    pub user_id: UserId,
+    pub email: Email,
+}
 
 /// Storage for email verification tokens.
 ///
 /// This trait manages the lifecycle of tokens sent to users to verify their
 /// email addresses.
+#[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait EmailVerificationStorage: Send + Sync {
     /// Stores a new verification token for a user's email address.
@@ -70,7 +80,8 @@ pub trait EmailVerificationStorage: Send + Sync {
 
     /// Validates a raw verification token and marks it as used.
     ///
-    /// Returns the associated `(user_id, email)` on success.
+    /// Returns the consumption on success. Its caller must log the consumption
+    /// only after the enclosing transaction is confirmed committed.
     ///
     /// # Errors
     ///
@@ -80,13 +91,19 @@ pub trait EmailVerificationStorage: Send + Sync {
         &self,
         transaction: &mut WriteTransaction,
         raw_token: &RawToken,
-    ) -> Result<(UserId, Email), UseEmailVerificationError>;
+    ) -> Result<EmailVerificationConsumption, UseEmailVerificationError>;
+    /// Deletes consumed verification tokens whose consumption is at or before
+    /// the supplied instant, and unused tokens expired for at least 24 hours,
+    /// draining bounded batches at that instant.
+    async fn prune_email_verifications(&self, now: UtcInstant) -> sqlx::Result<u64>;
 }
 
 /// Generic [`EmailVerificationStorage`] backed by any [`Backend`] database.
 ///
 /// Zero backend divergence (identical SQL across `SQLite` and Postgres),
 /// so it is implemented once here; see ADR-0019.
+const PRUNE_BATCH_SIZE: i64 = 100;
+
 pub struct EmailVerificationStore<DB: Database> {
     pool: Pool<DB>,
 }
@@ -104,7 +121,9 @@ where
     DB: Backend,
     (UserId, Email): for<'r> sqlx::FromRow<'r, DB::Row>,
     TokenStateRow: for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    usize: sqlx::ColumnIndex<DB::Row>,
+    for<'q> RowCount: sqlx::Decode<'q, DB> + sqlx::Type<DB>,
     // `TokenHash` binds and `Email` binds/decodes as themselves via the ADR-0071
     // sqlx bridge (the `(UserId, Email): FromRow` bound above threads the `Email`
     // decode).
@@ -158,7 +177,7 @@ where
         &self,
         transaction: &mut WriteTransaction,
         raw_token: &RawToken,
-    ) -> Result<(UserId, Email), UseEmailVerificationError> {
+    ) -> Result<EmailVerificationConsumption, UseEmailVerificationError> {
         let token_hash = token::hash(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
 
         let now = UtcInstant::now();
@@ -184,7 +203,7 @@ where
         .map_err(UseEmailVerificationError::Internal)?;
 
         if let Some((user_id, email)) = claimed {
-            return Ok((user_id, email));
+            return Ok(EmailVerificationConsumption { user_id, email });
         }
 
         // A successful claim miss is the only path that reaches the domain
@@ -196,18 +215,53 @@ where
         .fetch_optional(&self.pool)
         .await
         .map_err(UseEmailVerificationError::Internal)?;
+        Err(helpers::email_verification_claim_error(row, now))
+    }
 
-        Err(crate::helpers::email_verification_claim_error(row, now))
+    async fn prune_email_verifications(&self, now: UtcInstant) -> sqlx::Result<u64> {
+        let unused_cutoff = UtcInstant::from(now.value() - Duration::hours(24));
+        let mut deleted = 0;
+
+        loop {
+            // Executing through the pool confines each deletion batch to one
+            // statement and releases its connection before the next batch.
+            let batch = sqlx::query_scalar::<_, RowCount>(
+                "DELETE FROM email_verifications
+                 WHERE token_hash IN (
+                     SELECT token_hash FROM email_verifications
+                     WHERE (used_at IS NOT NULL AND used_at <= $1) OR expires_at <= $2
+                     ORDER BY token_hash
+                     LIMIT $3
+                 )
+                 RETURNING CAST(1 AS BIGINT)",
+            )
+            .bind(now)
+            .bind(unused_cutoff)
+            .bind(PRUNE_BATCH_SIZE)
+            .fetch_all(&self.pool)
+            .await?
+            .len() as u64;
+            if batch > 0 {
+                metrics::retention_pruned(Domain::EmailVerifications, batch);
+            }
+            deleted += batch;
+            if batch == 0 {
+                return Ok(deleted);
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, SeedUser, backends};
+    use crate::test_support::{Backend, SeedUser, TestEnv, backends, confirmed_for};
+    use chrono::Duration;
     use common::test_support::parse_email;
+    use host::token;
     use rstest::*;
     use rstest_reuse::*;
+    use sqlx::Error as SqlxError;
     use std::sync::Arc;
 
     #[apply(backends)]
@@ -242,8 +296,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let raw_token =
-            crate::test_support::confirmed_for(outcome, "email-verification fixture setup");
+        let raw_token = confirmed_for(outcome, "email-verification fixture setup");
 
         let email_verifications = Arc::clone(&env.state.email_verifications);
         let outcome = env
@@ -258,10 +311,9 @@ mod tests {
             })
             .await
             .unwrap();
-        let (claimed_user, claimed_email) =
-            crate::test_support::confirmed_for(outcome, "email verification");
-        assert_eq!(claimed_user, user_id);
-        assert_eq!(claimed_email, email);
+        let consumption = confirmed_for(outcome, "email verification");
+        assert_eq!(consumption.user_id, user_id);
+        assert_eq!(consumption.email, email);
     }
 
     #[apply(backends)]
@@ -286,8 +338,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let raw_token =
-            crate::test_support::confirmed_for(outcome, "email-verification fixture setup");
+        let raw_token = confirmed_for(outcome, "email-verification fixture setup");
 
         // Overwrite the `email` column with a value `Email::from_str` rejects,
         // binding it as a raw `&str` so the bad value actually lands in the column.
@@ -321,7 +372,7 @@ mod tests {
             matches!(
                 err,
                 crate::WriteScopeError::Operation(UseEmailVerificationError::Internal(
-                    sqlx::Error::ColumnDecode { .. }
+                    SqlxError::ColumnDecode { .. }
                 ))
             ),
             "expected Internal(ColumnDecode), got: {err:?}"
@@ -342,7 +393,166 @@ mod tests {
             assert_eq!(mapped.kind(), ErrorKind::Validation);
         }
         let mapped: InternalError =
-            UseEmailVerificationError::Internal(sqlx::Error::RowNotFound).into();
+            UseEmailVerificationError::Internal(SqlxError::RowNotFound).into();
         assert_eq!(mapped.kind(), ErrorKind::Storage);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn prune_email_verifications_uses_the_supplied_instant_for_consumed_rows(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let email = parse_email("alice@example.com");
+        let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
+        let expired_at = UtcInstant::from(now.value() - Duration::hours(24));
+        let valid_until = UtcInstant::from(now.value() + Duration::hours(1));
+
+        let expired_email = email.clone();
+        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let outcome = env
+            .state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    email_verifications
+                        .create_email_verification(transaction, user_id, &expired_email, expired_at)
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        let expired_token = confirmed_for(outcome, "expired email-verification fixture");
+
+        let boundary_email = email.clone();
+        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let outcome = env
+            .state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    email_verifications
+                        .create_email_verification(
+                            transaction,
+                            user_id,
+                            &boundary_email,
+                            valid_until,
+                        )
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        let boundary_token = confirmed_for(outcome, "boundary email-verification fixture");
+        let boundary_hash = token::hash(&boundary_token).unwrap();
+
+        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let outcome = env
+            .state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    email_verifications
+                        .create_email_verification(transaction, user_id, &email, valid_until)
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        let future_token = confirmed_for(outcome, "future email-verification fixture");
+        let future_hash = token::hash(&future_token).unwrap();
+
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE email_verifications SET used_at = $1 WHERE token_hash = $2")
+                .bind(now)
+                .bind(boundary_hash)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE email_verifications SET used_at = $1 WHERE token_hash = $2")
+                .bind(valid_until)
+                .bind(future_hash)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
+
+        assert_eq!(
+            env.state
+                .email_verifications
+                .prune_email_verifications(now)
+                .await
+                .unwrap(),
+            2
+        );
+
+        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let expired = env
+            .state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    email_verifications
+                        .use_email_verification(transaction, &expired_token)
+                        .await
+                })
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            expired,
+            crate::WriteScopeError::Operation(UseEmailVerificationError::NotFound)
+        ));
+
+        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let boundary = env
+            .state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    email_verifications
+                        .use_email_verification(transaction, &boundary_token)
+                        .await
+                })
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            boundary,
+            crate::WriteScopeError::Operation(UseEmailVerificationError::NotFound)
+        ));
+
+        let email_verifications = Arc::clone(&env.state.email_verifications);
+        let future = env
+            .state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    email_verifications
+                        .use_email_verification(transaction, &future_token)
+                        .await
+                })
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            future,
+            crate::WriteScopeError::Operation(UseEmailVerificationError::AlreadyUsed)
+        ));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn prune_email_verifications_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        base.close_pool().await;
+        assert!(
+            state
+                .email_verifications
+                .prune_email_verifications(UtcInstant::now())
+                .await
+                .is_err()
+        );
     }
 }

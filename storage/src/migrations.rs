@@ -232,7 +232,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            28
+            29
         );
         assert_eq!(
             db.pool
@@ -677,5 +677,136 @@ mod tests {
             check_count, 0,
             "the failed migration must leave the version-25 schema in place"
         );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0029_backfills_feed_terminal_instants_and_adds_retention_indexes(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(28).await.unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO feed_events
+                    (feed_url, status, created_at, pinged_at, next_attempt_at, claimed_at)
+                 VALUES
+                 ('/~done-known/feed.rss', 'done', '2026-01-01T00:00:00Z',
+                  '2026-01-02T00:00:00Z', '2026-01-01T00:00:00Z', NULL),
+                 ('/~done-fallback/feed.rss', 'done', '2026-01-03T00:00:00Z',
+                  NULL, '2026-01-03T00:00:00Z', NULL),
+                 ('/~failed/feed.rss', 'failed', '2026-01-04T00:00:00Z',
+                  NULL, '2026-01-04T00:00:00Z', '2026-01-06T00:00:00Z'),
+                 ('/~pending/feed.rss', 'pending', '2026-01-05T00:00:00Z',
+                  NULL, '2026-01-05T00:00:00Z', NULL)",
+            )
+            .await
+            .unwrap();
+
+        db.migrate_current().await.unwrap();
+
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
+                .await
+                .unwrap(),
+            29
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM feed_events
+                     WHERE status = 'done' AND pinged_at IS NOT NULL
+                       AND terminal_at = pinged_at",
+                )
+                .await
+                .unwrap(),
+            1,
+            "a known completion instant must remain the retention anchor"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM feed_events
+                     WHERE feed_url = '/~done-fallback/feed.rss'
+                       AND terminal_at = created_at",
+                )
+                .await
+                .unwrap(),
+            1,
+            "a legacy completion without pinged_at must retain its original age"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM feed_events
+                     WHERE feed_url = '/~failed/feed.rss'
+                       AND terminal_at = claimed_at",
+                )
+                .await
+                .unwrap(),
+            1,
+            "a legacy exhaustion must retain its final-attempt age"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM feed_events
+                     WHERE status IN ('done', 'failed') AND terminal_at IS NOT NULL",
+                )
+                .await
+                .unwrap(),
+            3,
+            "every legacy terminal row needs a deterministic retention anchor"
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM feed_events
+                     WHERE status = 'pending' AND terminal_at IS NULL",
+                )
+                .await
+                .unwrap(),
+            1,
+            "non-terminal rows must not acquire a terminal instant"
+        );
+
+        let retention_index_count = match backend {
+            Backend::Sqlite => db
+                .pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM sqlite_master
+                         WHERE type = 'index' AND name IN (
+                           'idx_idempotency_keys_created_at',
+                           'idx_invites_expires_at',
+                           'idx_invites_used_at',
+                           'idx_email_verifications_expires_at',
+                           'idx_email_verifications_used_at',
+                           'idx_password_resets_expires_at',
+                           'idx_password_resets_used_at',
+                           'idx_feed_events_terminal_retention'
+                         )",
+                )
+                .await
+                .unwrap(),
+            Backend::Postgres => db
+                .pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM pg_indexes
+                         WHERE schemaname = 'public' AND indexname IN (
+                           'idx_idempotency_keys_created_at',
+                           'idx_invites_expires_at',
+                           'idx_invites_used_at',
+                           'idx_email_verifications_expires_at',
+                           'idx_email_verifications_used_at',
+                           'idx_password_resets_expires_at',
+                           'idx_password_resets_used_at',
+                           'idx_feed_events_terminal_retention'
+                         )",
+                )
+                .await
+                .unwrap(),
+        };
+        assert_eq!(retention_index_count, 8);
     }
 }

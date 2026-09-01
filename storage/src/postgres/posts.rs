@@ -10,8 +10,10 @@ use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
     UpdatePostError, UpdatePostInput, WriteTransaction, postgres_connection,
 };
+use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
+use common::time::UtcInstant;
 type MediaRefRow = (
     common::media::MediaSource,
     common::media::ContentHash,
@@ -77,7 +79,7 @@ async fn apply_lifecycle_change(
     publish: bool,
     delete: bool,
 ) -> sqlx::Result<()> {
-    let now = common::time::UtcInstant::now();
+    let now = UtcInstant::now();
     let media = load_current_post_media_lock_set(&mut *connection, post_id).await?;
     <Postgres as PostDialect>::lock_media_references(connection, &media).await?;
     posts::capture_complete_post_revision::<Postgres>(connection, post_id, now).await?;
@@ -309,6 +311,28 @@ impl PostDialect for Postgres {
         Ok(())
     }
 
+    async fn lock_live_idempotency_mapping(
+        conn: &mut <Self as sqlx::Database>::Connection,
+        user_id: UserId,
+        key: &IdempotencyKey,
+        cutoff: UtcInstant,
+    ) -> sqlx::Result<Option<PostId>> {
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(posts::idempotency_advisory_lock_key(user_id, key))
+            .execute(&mut *conn)
+            .await?;
+        sqlx::query_scalar(
+            "SELECT post_id FROM idempotency_keys
+             WHERE user_id = $1 AND key = $2 AND created_at > $3
+             FOR UPDATE",
+        )
+        .bind(user_id)
+        .bind(key)
+        .bind(cutoff)
+        .fetch_optional(&mut *conn)
+        .await
+    }
+
     const DELETE_POST_MEDIA: &'static str = "DELETE FROM post_media WHERE post_id = $1 AND subject_kind = 'current' AND revision_id = 0";
 
     async fn update_post(
@@ -433,7 +457,7 @@ impl PostDialect for Postgres {
         posts::capture_complete_post_revision::<Postgres>(
             &mut *connection,
             post_id,
-            common::time::UtcInstant::now(),
+            UtcInstant::now(),
         )
         .await?;
         for label in diff.to_add {

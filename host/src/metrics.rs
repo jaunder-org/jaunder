@@ -16,6 +16,7 @@
 
 use std::sync::{Arc, LazyLock, PoisonError, RwLock};
 
+use crate::retention::{CleanupResult, Domain};
 use opentelemetry::metrics::{AsyncInstrument, Counter, Histogram, ObservableGauge};
 use opentelemetry::{KeyValue, global};
 
@@ -45,6 +46,7 @@ enum_attr!(CacheResult { Hit => "hit", Miss => "miss" });
 enum_attr!(BackupResult { Success => "success", Failure => "failure" });
 enum_attr!(PostEvent { Created => "created", Updated => "updated", Published => "published", Deleted => "deleted" });
 enum_attr!(AtompubResult { Ok => "ok", ClientError => "client_error", ServerError => "server_error" });
+enum_attr!(IdempotencyEvent { Created => "created", Replayed => "replayed", Expired => "expired" });
 
 struct Instruments {
     logins: Counter<u64>,
@@ -66,6 +68,9 @@ struct Instruments {
     backup_pruned: Counter<u64>,
     posts: Counter<u64>,
     atompub_requests: Counter<u64>,
+    idempotency_keys: Counter<u64>,
+    retention_runs: Counter<u64>,
+    retention_pruned: Counter<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -140,6 +145,9 @@ static M: LazyLock<Instruments> = LazyLock::new(|| {
         backup_pruned: m.u64_counter("jaunder.backup.pruned").build(),
         posts: m.u64_counter("jaunder.posts").build(),
         atompub_requests: m.u64_counter("jaunder.atompub.requests").build(),
+        idempotency_keys: m.u64_counter("jaunder.atompub.idempotency_keys").build(),
+        retention_runs: m.u64_counter("jaunder.storage.retention_runs").build(),
+        retention_pruned: m.u64_counter("jaunder.storage.retention_pruned").build(),
     }
 });
 
@@ -352,6 +360,28 @@ pub fn post(event: PostEvent) {
     M.posts.add(1, &kv("event", event.as_str()));
 }
 
+/// Records a bounded `AtomPub` Idempotency Key lifecycle event without attaching
+/// the client-supplied key or any Post content.
+pub fn idempotency(event: IdempotencyEvent) {
+    M.idempotency_keys.add(1, &kv("event", event.as_str()));
+}
+
+/// Records one bounded retention-domain run outcome.
+pub fn retention_run(domain: Domain, result: CleanupResult) {
+    M.retention_runs.add(
+        1,
+        &[
+            KeyValue::new("domain", domain.label()),
+            KeyValue::new("result", result.label()),
+        ],
+    );
+}
+
+/// Records rows deleted by one committed bounded retention statement.
+pub fn retention_pruned(domain: Domain, count: u64) {
+    M.retention_pruned.add(count, &kv("domain", domain.label()));
+}
+
 pub fn atompub_request(op: &'static str, result: AtompubResult) {
     M.atompub_requests.add(
         1,
@@ -403,6 +433,9 @@ mod tests {
         "jaunder.db.pool.idle",
         "jaunder.db.pool.max",
         "jaunder.posts",
+        "jaunder.atompub.idempotency_keys",
+        "jaunder.storage.retention_runs",
+        "jaunder.storage.retention_pruned",
         "jaunder.atompub.requests",
     ];
 
@@ -433,6 +466,11 @@ mod tests {
         backup_bytes(1024);
         backup_pruned(3);
         post(PostEvent::Published);
+        idempotency(IdempotencyEvent::Created);
+        idempotency(IdempotencyEvent::Replayed);
+        idempotency(IdempotencyEvent::Expired);
+        retention_run(Domain::Invites, CleanupResult::Success);
+        retention_pruned(Domain::Invites, 3);
         atompub_request("POST /feed", AtompubResult::ClientError);
     }
 
@@ -675,6 +713,30 @@ mod tests {
                 ("telemetry.origin", "server"),
             ])]
         );
+
+        let idempotency = counter_attributes(&metrics, "jaunder.atompub.idempotency_keys");
+        assert_eq!(
+            idempotency.len(),
+            3,
+            "idempotency events must remain bounded to the declared lifecycle values: {idempotency:?}"
+        );
+        for event in ["created", "replayed", "expired"] {
+            assert!(
+                idempotency.contains(&attrs1([("event", event)])),
+                "idempotency event={event} was not exported: {idempotency:?}"
+            );
+        }
+
+        let retention_runs = counter_attributes(&metrics, "jaunder.storage.retention_runs");
+        assert!(
+            retention_runs.contains(&attrs([("domain", "invites"), ("result", "success")])),
+            "retention run did not record its bounded domain and result: {retention_runs:?}"
+        );
+        assert_eq!(
+            counter_attributes(&metrics, "jaunder.storage.retention_pruned"),
+            vec![attrs1([("domain", "invites")])],
+            "retention prune counts must carry only the bounded domain label"
+        );
         // `counter_attributes` reads counters only. Asking it about a histogram
         // yields nothing rather than panicking — worth pinning, because a silent
         // empty result is how the two assertions above would go vacuously true if
@@ -772,6 +834,10 @@ mod tests {
         assert_eq!(AtompubResult::Ok.as_str(), "ok");
         assert_eq!(AtompubResult::ClientError.as_str(), "client_error");
         assert_eq!(AtompubResult::ServerError.as_str(), "server_error");
+
+        assert_eq!(IdempotencyEvent::Created.as_str(), "created");
+        assert_eq!(IdempotencyEvent::Replayed.as_str(), "replayed");
+        assert_eq!(IdempotencyEvent::Expired.as_str(), "expired");
     }
 
     /// `kv` is the one shared shape-builder: every single-attribute emitter goes

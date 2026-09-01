@@ -20,6 +20,22 @@ use crate::error::WebResult;
 // (deserialize) sides.
 use common::{MutationOutcome, email::Email, token::RawToken};
 
+#[cfg(feature = "server")]
+fn finalize_verification(outcome: &MutationOutcome<common::ids::UserId>) -> MutationOutcome<()> {
+    match outcome {
+        MutationOutcome::Confirmed(user_id) => {
+            tracing::info!(
+                credential.kind = "email_verification",
+                credential.outcome = "consumed",
+                user.id = %user_id,
+                "credential consumed"
+            );
+            MutationOutcome::Confirmed(())
+        }
+        MutationOutcome::CommitIndeterminate(_) => MutationOutcome::CommitIndeterminate(()),
+    }
+}
+
 /// Sends a verification email to `email`. Requires authentication.
 ///
 /// Creates a 24-hour verification token, sends an absolute
@@ -85,19 +101,40 @@ pub async fn verify(token: RawToken) -> WebResult<MutationOutcome<()>> {
 
     // `token` is a `RawToken` wire arg — its serde bridge already rejected a
     // malformed shape on decode, so no in-body re-parse is needed.
-    write_scope
+    let outcome = write_scope
         .run(|transaction| {
             Box::pin(async move {
-                let (user_id, email_addr) = email_verifications
+                let consumption = email_verifications
                     .use_email_verification(transaction, &token)
                     .await
                     .map_err(InternalError::storage)?;
                 users
-                    .set_email(transaction, user_id, Some(&email_addr), true)
+                    .set_email(
+                        transaction,
+                        consumption.user_id,
+                        Some(&consumption.email),
+                        true,
+                    )
                     .await
-                    .map_err(InternalError::storage)
+                    .map_err(InternalError::storage)?;
+                Ok(consumption.user_id)
             })
         })
         .await
-        .map_err(from_write_scope_error)
+        .map_err(from_write_scope_error)?;
+    Ok(finalize_verification(&outcome))
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::finalize_verification;
+    use common::{MutationOutcome, ids::UserId};
+
+    #[test]
+    fn verification_indeterminate_outcome_preserves_uncertainty_and_erases_user_id() {
+        let outcome =
+            finalize_verification(&MutationOutcome::CommitIndeterminate(UserId::from(41)));
+
+        assert!(matches!(outcome, MutationOutcome::CommitIndeterminate(())));
+    }
 }

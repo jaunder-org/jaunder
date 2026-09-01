@@ -7,10 +7,22 @@ use std::{
 };
 
 use anyhow::Context;
+use axum::Router;
+use host::{
+    error,
+    metrics::{SaturationObservableGuard, SaturationSnapshot},
+    telemetry::TelemetryConfig,
+};
+use tokio::{net::TcpListener, sync::oneshot::Receiver, task::JoinHandle};
 
+use crate::backup;
 use crate::cli::{AppTarget, BootstrapDb, Commands, SiteConfigAction, StorageArgs};
+use crate::feed::worker::FeedWorker;
 use crate::mailer::LettreMailSender;
-use crate::runtime_file;
+use crate::maintenance::{self, DatabaseMaintenance};
+use crate::metrics::{self, SaturationSources};
+use crate::runtime_file::{self, RuntimeGuard, StartupCheck, StartupLockGuard};
+use crate::scheduled_worker::ScheduledWorkerGuard;
 use common::backup::BackupMode;
 use common::display_name::DisplayName;
 use common::email::Email;
@@ -22,12 +34,11 @@ use common::tagged_url::{self, MailConfirmUrl};
 use common::token::RawToken;
 use common::username::Username;
 use host::config_key::SiteConfigKey;
-use host::metrics;
 use host::password::Password;
 use host::smtp_config::SmtpConfig;
 use storage::{
-    BackupExportOptions, BackupRestoreOptions, BackupRestoreOutcome, RestoreValidationReport,
-    StorageRuntimeConfig,
+    AppState, BackupExportOptions, BackupRestoreOptions, BackupRestoreOutcome, DbConnectOptions,
+    DbPoolObserver, MediaManager, RestoreValidationReport, SiteConfigStorage, StorageRuntimeConfig,
 };
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
@@ -138,12 +149,10 @@ impl Commands {
                 storage,
                 bind,
                 environment,
-                runtime_file,
             } => cmd_serve(
                 &storage,
                 bind,
                 environment.is_prod(),
-                runtime_file,
                 telemetry,
                 capture.as_ref(),
             )
@@ -372,7 +381,7 @@ pub async fn cmd_user_create(
     .await?;
 
     // CLI user creation bypasses the site registration policy entirely.
-    metrics::registration(
+    host::metrics::registration(
         host::metrics::RegistrationSource::Cli,
         host::metrics::RegistrationPolicy::CliBypass,
         host::metrics::RegistrationResult::Ok,
@@ -473,7 +482,7 @@ pub async fn cmd_user_invite(
         .map_err(anyhow::Error::from)
         .context("failed to create invite")?;
     let code = require_confirmed_mutation(outcome, "invite creation")?;
-    metrics::invite(host::metrics::InviteEvent::Created);
+    host::metrics::invite(host::metrics::InviteEvent::Created);
     // Deliberate operator-facing reveal via `AsRef` (InviteCode has no Display/serde). With a
     // configured base URL, print a ready-to-send invitation link; otherwise the bare code.
     match state.site_config().get_identity().await?.base_url {
@@ -809,38 +818,139 @@ async fn open_server_database(
     open_server_database_with(storage, runtime, prod, &RealStartupDatabaseOperations).await
 }
 
-/// A bound listener and router ready to serve, plus the live background-worker
-/// schedulers that must outlive the serve loop. Produced by [`prepare_server`].
+/// A bound listener and router ready to serve, plus the live background workers
+/// that must outlive the serve loop. Produced by [`prepare_server`].
 pub struct PreparedServer {
     /// The bound TCP listener.
-    pub listener: tokio::net::TcpListener,
+    pub listener: TcpListener,
     /// The fully wired application router.
-    pub router: axum::Router,
-    // Held only to keep the workers running for the server's lifetime.
-    backup_scheduler: Option<tokio_cron_scheduler::JobScheduler>,
-    feed_scheduler: tokio_cron_scheduler::JobScheduler,
-    /// Removes the runtime-info file on drop (see ADR-0035).
-    runtime_guard: runtime_file::RuntimeFileGuard,
+    pub router: Router,
+    workers: BackgroundWorkers,
+    /// Owns the OS-backed startup lock and removes the runtime-info file on drop.
+    runtime_guard: RuntimeGuard,
     pub saturation_metrics: Option<PreparedSaturationMetrics>,
 }
 
-pub struct PreparedSaturationMetrics {
-    _observables: host::metrics::SaturationObservableGuard,
-    sampler: tokio::task::JoinHandle<()>,
+struct BackgroundWorkerSetup {
+    maintenance: DatabaseMaintenance,
+    backup_site_config: Arc<dyn SiteConfigStorage>,
+    database: DbConnectOptions,
+    runtime: StorageRuntimeConfig,
+    storage_path: PathBuf,
+    feed_worker: FeedWorker,
+    feed_interval: Duration,
 }
 
-impl Drop for PreparedSaturationMetrics {
-    fn drop(&mut self) {
-        self.sampler.abort();
+struct BackgroundWorkers {
+    backup: Option<ScheduledWorkerGuard>,
+    maintenance: ScheduledWorkerGuard,
+    feed: ScheduledWorkerGuard,
+}
+struct SaturationMetricsSetup {
+    observables: SaturationObservableGuard,
+    sources: SaturationSources,
+    snapshot: Arc<RwLock<SaturationSnapshot>>,
+}
+
+impl SaturationMetricsSetup {
+    fn start(self) -> PreparedSaturationMetrics {
+        PreparedSaturationMetrics {
+            _observables: self.observables,
+            sampler: metrics::spawn_saturation_sampler(self.sources, self.snapshot),
+        }
+    }
+}
+
+impl BackgroundWorkers {
+    async fn start(setup: BackgroundWorkerSetup) -> anyhow::Result<Self> {
+        let mut maintenance = setup
+            .maintenance
+            .start(maintenance::DATABASE_MAINTENANCE_INTERVAL)
+            .await?;
+        let mut backup = match backup::start_backup_worker(
+            setup.backup_site_config,
+            setup.database,
+            setup.runtime,
+            setup.storage_path,
+        )
+        .await
+        {
+            Ok(scheduler) => scheduler,
+            Err(error) => {
+                maintenance.stop();
+                stop_worker_after_start_failure(
+                    &mut maintenance,
+                    "server.maintenance.start_rollback",
+                )
+                .await;
+                return Err(error);
+            }
+        };
+        let feed = match setup.feed_worker.start(setup.feed_interval).await {
+            Ok(scheduler) => scheduler,
+            Err(error) => {
+                maintenance.stop();
+                if let Some(scheduler) = backup.as_ref() {
+                    scheduler.stop();
+                }
+                if let Some(scheduler) = backup.as_mut() {
+                    stop_worker_after_start_failure(scheduler, "server.backup.start_rollback")
+                        .await;
+                    // The await body is covered; LLVM assigns this closing edge a zero count.
+                } // cov:ignore
+                stop_worker_after_start_failure(
+                    &mut maintenance,
+                    "server.maintenance.start_rollback",
+                )
+                .await;
+                return Err(error);
+            }
+        };
+        Ok(Self {
+            backup,
+            maintenance,
+            feed,
+        })
+    }
+
+    fn stop(&self) {
+        self.feed.stop();
+        self.maintenance.stop();
+        if let Some(worker) = self.backup.as_ref() {
+            worker.stop();
+        }
+    }
+
+    async fn shutdown(&mut self) -> (anyhow::Result<()>, anyhow::Result<()>, anyhow::Result<()>) {
+        self.stop();
+        let feed = self.feed.shutdown().await;
+        let maintenance = self.maintenance.shutdown().await;
+        let backup = match self.backup.as_mut() {
+            Some(worker) => worker.shutdown().await,
+            None => Ok(()),
+        };
+        (feed, maintenance, backup)
+    }
+}
+
+pub struct PreparedSaturationMetrics {
+    _observables: SaturationObservableGuard,
+    sampler: metrics::SaturationSampler,
+}
+
+impl PreparedSaturationMetrics {
+    async fn shutdown(self) -> anyhow::Result<()> {
+        self.sampler.shutdown().await?;
+        Ok(())
     }
 }
 
 async fn prepare_saturation_metrics(
-    db: Arc<storage::AppState>,
-    pool_observer: storage::DbPoolObserver,
+    db: Arc<AppState>,
+    pool_observer: DbPoolObserver,
     media_root: PathBuf,
-    telemetry: &host::telemetry::TelemetryConfig,
-) -> anyhow::Result<Option<PreparedSaturationMetrics>> {
+    telemetry: &TelemetryConfig,
+) -> anyhow::Result<Option<SaturationMetricsSetup>> {
     if !telemetry.otlp_endpoint_configured() {
         return Ok(None);
     }
@@ -850,21 +960,56 @@ async fn prepare_saturation_metrics(
         .await
         .context("failed to load backup configuration for saturation metrics")?;
     let backup_destination_root = backup_config.destination_path.as_deref().map(PathBuf::from);
-    let snapshot = Arc::new(RwLock::new(host::metrics::SaturationSnapshot::default()));
-    let observables = metrics::register_saturation_observables(snapshot.clone());
-    let sources = crate::metrics::SaturationSources::real(
+    let snapshot = Arc::new(RwLock::new(SaturationSnapshot::default()));
+    let observables = host::metrics::register_saturation_observables(snapshot.clone());
+    let sources = SaturationSources::real(
         db.feed_events.clone(),
         db.media.clone(),
         media_root,
         backup_destination_root,
         pool_observer,
     );
-    let sampler = crate::metrics::spawn_saturation_sampler(sources, snapshot);
-
-    Ok(Some(PreparedSaturationMetrics {
-        _observables: observables,
-        sampler,
+    Ok(Some(SaturationMetricsSetup {
+        observables,
+        sources,
+        snapshot,
     }))
+}
+
+async fn stop_worker_after_start_failure(worker: &mut ScheduledWorkerGuard, context: &'static str) {
+    worker.stop();
+    if let Err(error) = worker.shutdown().await {
+        // cov:ignore-start -- tokio-cron-scheduler 0.13 shutdown always returns Ok;
+        // retain reporting so a future fallible implementation does not hide cleanup failure.
+        error::report_swallowed(
+            error::ErrorKind::Internal,
+            error::ErrorClass::Transient,
+            context,
+            error::SwallowedSource::Error(error.root_cause()),
+        );
+        // cov:ignore-stop
+    }
+}
+
+fn merge_worker_shutdown(
+    primary: &mut anyhow::Result<()>,
+    shutdown: anyhow::Result<()>,
+    context: &'static str,
+) {
+    let Err(error) = shutdown else {
+        return;
+    };
+    let error = error.context(context);
+    if primary.is_ok() {
+        *primary = Err(error);
+    } else {
+        error::report_swallowed(
+            error::ErrorKind::Internal,
+            error::ErrorClass::Transient,
+            context,
+            error::SwallowedSource::Error(error.root_cause()),
+        );
+    }
 }
 
 /// Performs all of [`cmd_serve`]'s setup — open the database (auto-initializing
@@ -878,32 +1023,41 @@ async fn prepare_saturation_metrics(
 ///
 /// # Errors
 ///
-/// Returns an error if the database cannot be opened/initialized, a worker fails
-/// to start, or the listener cannot bind.
+/// Returns an error if the runtime mutex refuses startup, the temporary upload
+/// directory cannot be prepared, the database cannot be opened/initialized, a
+/// worker fails to start, or the listener cannot bind.
 pub async fn prepare_server(
     storage: &StorageArgs,
     bind: SocketAddr,
     prod: bool,
-    runtime_file: Option<std::path::PathBuf>,
-    telemetry: &host::telemetry::TelemetryConfig,
+    telemetry: &TelemetryConfig,
     capture: Option<&ServeCapturePaths>,
 ) -> anyhow::Result<PreparedServer> {
     // Establish our own start-time up front (before opening the DB): if `/proc` is
-    // unusable we cannot enforce the start-up mutex, so refuse rather than serve with
-    // a silently-broken guard (#141). Threaded into the post-bind runtime-file write.
+    // unusable we cannot preserve live runtime-file detection, so refuse rather
+    // than serve with a silently-broken guard (#141).
     let start_time = runtime_file::require_start_time_at(Path::new("/proc/self/stat"))?;
-
-    // Start-up mutex: if the runtime file names a live writer process, refuse before
-    // opening the DB / touching a data dir another instance owns (#141).
-    let runtime_path = runtime_file::resolve_runtime_path(runtime_file, &storage.storage_path);
+    let runtime_path = runtime_file::canonical_runtime_path(&storage.storage_path);
+    // This is the startup mutex, keyed only by the storage directory.
+    let startup_lock = StartupLockGuard::acquire(&storage.storage_path)?;
+    // A live process predating the OS lock still owns the storage directory.
     match runtime_file::check_startup_mutex(&runtime_path)? {
-        runtime_file::StartupCheck::Refuse { pid } => anyhow::bail!(
+        StartupCheck::Refuse { pid } => anyhow::bail!(
             "another jaunder instance is already running on data dir {} (pid {pid}); \
              refusing to start",
             storage.storage_path.display()
         ),
-        runtime_file::StartupCheck::Stale | runtime_file::StartupCheck::Proceed => {}
+        StartupCheck::Stale | StartupCheck::Proceed => {}
     }
+    // Publish a mandatory identity with a not-ready port before cleanup. If this
+    // fails, do not risk deleting another process's uploads.
+    let runtime_guard = startup_lock.reserve(SocketAddr::new(bind.ip(), 0), start_time)?;
+    // The exclusive OS lock and live reservation above prove no valid upload can
+    // be active. Establish a clean transient area before any upload-capable
+    // server state is prepared.
+    MediaManager::prepare_temporary_upload_directory(&storage.storage_path)
+        .await
+        .context("failed to prepare media temporary upload directory")?;
     let runtime = storage_runtime_config(&storage.db)?;
     let StartupDatabase {
         state: db,
@@ -911,6 +1065,27 @@ pub async fn prepare_server(
         pool_observer,
     } = open_server_database(storage, &runtime, prod).await?;
 
+    let maintenance = DatabaseMaintenance::new(
+        db.posts.clone(),
+        db.invites.clone(),
+        db.email_verifications.clone(),
+        db.password_resets.clone(),
+        db.feed_events.clone(),
+    );
+    let backup_site_config = db.site_config.clone();
+    // The `WebSub` publisher is a service, not storage: it is constructed at the
+    // composition root and injected into the feed worker (ADR-0016). Capture mode
+    // also selects the shorter e2e cadence without changing the production policy.
+    let websub_capture = capture.map(|paths| paths.websub.clone());
+    let feed_interval = feed_worker_interval(websub_capture.is_some());
+    let feed_worker = crate::feed::worker::FeedWorker::new(
+        db.site_config.clone(),
+        db.posts.clone(),
+        db.feed_cache.clone(),
+        Arc::new(db.write_scope.clone()),
+        db.feed_events.clone(),
+        crate::websub::default_client(websub_capture),
+    );
     let saturation_metrics = prepare_saturation_metrics(
         db.clone(),
         pool_observer,
@@ -918,84 +1093,61 @@ pub async fn prepare_server(
         telemetry,
     )
     .await?;
-    let backup_scheduler = crate::backup::start_backup_worker(
-        db.site_config.clone(),
-        storage.db.clone(),
-        runtime,
-        storage.storage_path.clone(),
-    )
-    .await?;
-    // The `WebSub` publisher is a service, not storage: it is constructed at the
-    // composition root and injected into the feed worker (ADR-0016). Capture mode
-    // also selects the shorter e2e cadence without changing the production policy.
-    let websub_capture = capture.map(|paths| paths.websub.clone());
-    let feed_interval = feed_worker_interval(websub_capture.is_some());
-    let websub = crate::websub::default_client(websub_capture);
-    let feed_scheduler = crate::feed::worker::FeedWorker::new(
-        db.site_config.clone(),
-        db.posts.clone(),
-        db.feed_cache.clone(),
-        Arc::new(db.write_scope.clone()),
-        db.feed_events.clone(),
-        websub,
-    )
-    .start(feed_interval)
-    .await?;
     let mailer =
         crate::mailer::build_mailer(db.site_config(), capture.map(|paths| paths.mail.clone()))
             .await?;
     let router = crate::create_router(db, instance_id, mailer, prod, storage.storage_path.clone())?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
+
+    let workers = BackgroundWorkers::start(BackgroundWorkerSetup {
+        maintenance,
+        backup_site_config,
+        database: storage.db.clone(),
+        runtime,
+        storage_path: storage.storage_path.clone(),
+        feed_worker,
+        feed_interval,
+    })
+    .await?;
+    let saturation_metrics = saturation_metrics.map(SaturationMetricsSetup::start);
+
     // `local_addr` cannot fail on a just-bound listener; fall back to the
     // requested `bind` rather than add a never-taken error branch.
     let addr = listener.local_addr().unwrap_or(bind);
-    // Reuse the path already resolved for the mutex check (no re-resolve / clone).
-    let runtime_guard = runtime_file::RuntimeFileGuard::for_serve(
-        Some(runtime_path),
-        &storage.storage_path,
-        addr,
-        start_time,
-    );
+    // Update the live identity after binding, while the OS lock is held.
+    runtime_guard.update_address(addr, start_time);
 
     Ok(PreparedServer {
         listener,
         router,
-        backup_scheduler,
-        feed_scheduler,
+        workers,
         runtime_guard,
         saturation_metrics,
     })
 }
 
 /// Serves `router` on `listener`, draining in-flight requests when `shutdown`
-/// resolves, then returns. Owns `runtime_guard`, so a normal return drops it and
-/// removes the runtime file — the covered removal path. The forced-exit path (see
-/// [`spawn_shutdown_supervisor`]) removes the file explicitly instead.
+/// resolves, then returns. Runtime ownership remains with the caller so it can
+/// stop every background worker before releasing the storage-directory lock.
 ///
 /// # Errors
 ///
 /// Returns an error if the server exits with an error.
 async fn serve_with_shutdown(
-    listener: tokio::net::TcpListener,
+    listener: TcpListener,
     router: axum::Router,
-    // Held only for its `Drop`, which removes runtime.json when this function
-    // returns (the graceful path). Underscore-named so it lives to scope end
-    // rather than dropping immediately.
-    _runtime_guard: runtime_file::RuntimeFileGuard,
-    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())
-    // `_runtime_guard` drops here → removes runtime.json on the graceful path.
 }
 
 /// Installs `SIGINT`/`SIGTERM` handlers and returns a receiver that fires when the
 /// first arrives (the graceful-shutdown trigger). A second signal forces an
 /// immediate exit, best-effort removing the runtime file first — necessary because
-/// `process::exit` skips `Drop`. `runtime_path` is cloned from the guard before it
-/// is moved into [`serve_with_shutdown`].
+/// `process::exit` skips `Drop`.
 ///
 /// The streams are created synchronously (before returning), so a caller can rely
 /// on the handlers being active the moment this returns.
@@ -1004,14 +1156,12 @@ async fn serve_with_shutdown(
 ///
 /// Returns an error if a signal handler cannot be installed.
 #[cfg(unix)]
-fn spawn_shutdown_supervisor(
-    runtime_path: Option<std::path::PathBuf>,
-) -> std::io::Result<tokio::sync::oneshot::Receiver<()>> {
+fn spawn_shutdown_supervisor(runtime_path: PathBuf) -> io::Result<(Receiver<()>, JoinHandle<()>)> {
     use tokio::signal::unix::{SignalKind, signal};
     let mut sigint = signal(SignalKind::interrupt())?;
     let mut sigterm = signal(SignalKind::terminate())?;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    tokio::spawn(async move {
+    let supervisor = tokio::spawn(async move {
         // cov:ignore-start -- async signal wait-loop; the forced branch ends in
         // process::exit and is unreachable by a survivable test. The synchronous
         // setup above and serve_with_shutdown are host-covered by the signal tests.
@@ -1026,13 +1176,11 @@ fn spawn_shutdown_supervisor(
         let _ = tx.send(());
         tokio::select! { _ = sigint.recv() => {}, _ = sigterm.recv() => {} }
         tracing::warn!("second shutdown signal; forcing immediate exit");
-        if let Some(p) = &runtime_path {
-            runtime_file::remove_runtime_file(p);
-        }
+        runtime_file::remove_runtime_file(&runtime_path);
         std::process::exit(0);
         // cov:ignore-stop
     });
-    Ok(rx)
+    Ok((rx, supervisor))
 }
 
 /// Starts the HTTP server and the background workers.
@@ -1045,8 +1193,7 @@ pub async fn cmd_serve(
     storage: &StorageArgs,
     bind: SocketAddr,
     prod: bool,
-    runtime_file: Option<std::path::PathBuf>,
-    telemetry: &host::telemetry::TelemetryConfig,
+    telemetry: &TelemetryConfig,
     capture: Option<&ServeCapturePaths>,
 ) -> anyhow::Result<()> {
     // Telemetry is owned by `run`, which holds the TelemetryGuard across this
@@ -1062,40 +1209,67 @@ pub async fn cmd_serve(
     let PreparedServer {
         listener,
         router,
-        backup_scheduler,
-        feed_scheduler,
+        mut workers,
         runtime_guard,
         saturation_metrics,
-    } = prepare_server(storage, bind, prod, runtime_file, telemetry, capture).await?;
+    } = prepare_server(storage, bind, prod, telemetry, capture).await?;
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
-    // Keep the worker schedulers alive for the lifetime of the serve loop.
-    let _backup_scheduler = backup_scheduler;
-    let _feed_scheduler = feed_scheduler;
-    let _saturation_metrics = saturation_metrics;
     #[cfg(unix)]
-    {
-        // Clone the runtime-file path for the forced-exit removal before the guard
-        // moves into serve_with_shutdown (whose Drop handles the graceful path).
-        let runtime_path = runtime_guard.path().map(std::path::Path::to_path_buf);
-        let shutdown_rx = spawn_shutdown_supervisor(runtime_path)?;
-        serve_with_shutdown(listener, router, runtime_guard, async move {
-            let _ = shutdown_rx.await;
-        })
-        .await
-    }
+    let (mut serve_result, shutdown_supervisor) =
+        match spawn_shutdown_supervisor(runtime_guard.path().to_path_buf()) {
+            Ok((shutdown_rx, supervisor)) => (
+                serve_with_shutdown(listener, router, async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await,
+                Some(supervisor),
+            ),
+            Err(error) => (Err(error.into()), None),
+        };
     #[cfg(not(unix))]
-    {
+    let mut serve_result = {
         // No signal handling off unix (jaunder targets Linux/NixOS): serve until
         // the process is otherwise terminated.
-        serve_with_shutdown(
-            listener,
-            router,
-            runtime_guard,
-            std::future::pending::<()>(),
-        )
-        .await
+        serve_with_shutdown(listener, router, std::future::pending::<()>()).await
+    };
+    // Refuse every new background activation together. Admitted work and the
+    // current saturation sample must finish while both the storage lock and the
+    // second-signal forced-exit supervisor remain live.
+    workers.stop();
+    if let Some(metrics) = saturation_metrics {
+        let saturation_shutdown = metrics.shutdown().await;
+        merge_worker_shutdown(
+            &mut serve_result,
+            saturation_shutdown,
+            "server.metrics.shutdown",
+        );
     }
+    let (feed_shutdown, maintenance_shutdown, backup_shutdown) = workers.shutdown().await;
+    merge_worker_shutdown(&mut serve_result, feed_shutdown, "server.feed.shutdown");
+    merge_worker_shutdown(
+        &mut serve_result,
+        maintenance_shutdown,
+        "server.maintenance.shutdown",
+    );
+    merge_worker_shutdown(&mut serve_result, backup_shutdown, "server.backup.shutdown");
+    #[cfg(unix)]
+    if let Some(supervisor) = shutdown_supervisor {
+        supervisor.abort();
+        match supervisor.await {
+            Err(error) if error.is_cancelled() => {}
+            Ok(()) => {}
+            Err(error) => error::report_swallowed(
+                error::ErrorKind::Internal,
+                error::ErrorClass::Transient,
+                "server.shutdown_supervisor.join",
+                error::SwallowedSource::Error(&error),
+            ),
+        }
+    }
+    drop(workers);
+    drop(runtime_guard);
+    serve_result
     // cov:ignore-stop
 }
 
@@ -1204,7 +1378,7 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt as _;
     use storage::{
-        DbConnectOptions,
+        DbConnectOptions, MediaTemporaryDirectoryError,
         test_support::{
             Backend, PostgresDbGuard, TestEnv, backends, confirmed, sqlite_url, unique_postgres_url,
         },
@@ -1367,6 +1541,51 @@ mod tests {
             storage_path: temp.path().to_path_buf(),
             db: crate::test_support::sqlite_db_options(temp.path()),
         }
+    }
+
+    async fn background_worker_setup(
+        storage: &StorageArgs,
+        backup_site_config: Arc<dyn SiteConfigStorage>,
+        feed_interval: Duration,
+    ) -> BackgroundWorkerSetup {
+        let state = storage::open_existing_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open test database");
+        BackgroundWorkerSetup {
+            maintenance: DatabaseMaintenance::new(
+                state.posts.clone(),
+                state.invites.clone(),
+                state.email_verifications.clone(),
+                state.password_resets.clone(),
+                state.feed_events.clone(),
+            ),
+            backup_site_config,
+            database: storage.db.clone(),
+            runtime: StorageRuntimeConfig::default(),
+            storage_path: storage.storage_path.clone(),
+            feed_worker: FeedWorker::new(
+                state.site_config.clone(),
+                state.posts.clone(),
+                state.feed_cache.clone(),
+                Arc::new(state.write_scope.clone()),
+                state.feed_events.clone(),
+                crate::websub::default_client(None),
+            ),
+            feed_interval,
+        }
+    }
+
+    async fn shutdown_prepared_server(mut prepared: PreparedServer) {
+        if let Some(metrics) = prepared.saturation_metrics.take() {
+            metrics
+                .shutdown()
+                .await
+                .expect("saturation sampler shutdown");
+        }
+        let (feed, maintenance, backup) = prepared.workers.shutdown().await;
+        feed.expect("feed worker shutdown");
+        maintenance.expect("maintenance worker shutdown");
+        backup.expect("backup worker shutdown");
     }
 
     fn smtp_config() -> SmtpConfig {
@@ -2093,6 +2312,119 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn background_workers_roll_back_maintenance_when_backup_config_load_fails() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let mut site_config = storage::MockSiteConfigStorage::new();
+        site_config.expect_get_backup_config().return_once(|| {
+            Err(sqlx::Error::Io(io::Error::other(
+                "injected backup configuration read failure",
+            )))
+        });
+
+        let error = BackgroundWorkers::start(
+            background_worker_setup(&storage, Arc::new(site_config), Duration::from_secs(1)).await,
+        )
+        .await
+        .err()
+        .expect("a backup configuration read failure must stop worker startup");
+
+        assert!(
+            error
+                .to_string()
+                .contains("injected backup configuration read failure"),
+            "startup error must retain the backup configuration failure: {error:#}"
+        );
+        assert!(
+            error
+                .chain()
+                .any(|source| source.downcast_ref::<sqlx::Error>().is_some()),
+            "the backup configuration source remains downcastable: {error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_workers_roll_back_backup_and_maintenance_when_feed_start_fails() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        let state = storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let destination = temp.path().join("backups");
+        let destination_for_config = destination.clone();
+        let site_config = Arc::clone(&state.site_config);
+        confirmed(
+            state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        site_config
+                            .set(
+                                transaction,
+                                SiteConfigKey::BackupDestinationPath,
+                                destination_for_config.to_str().expect("utf-8 path"),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .expect("configure backup destination"),
+        );
+
+        let error = BackgroundWorkers::start(
+            background_worker_setup(&storage, state.site_config.clone(), Duration::ZERO).await,
+        )
+        .await
+        .err()
+        .expect("a zero feed interval must stop worker startup");
+
+        assert_eq!(error.to_string(), "feed worker interval must be non-zero");
+    }
+
+    #[tokio::test]
+    async fn background_workers_shutdown_all_configured_workers() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        let state = storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let destination = temp.path().join("backups");
+        let destination_for_config = destination.clone();
+        let site_config = Arc::clone(&state.site_config);
+        confirmed(
+            state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        site_config
+                            .set(
+                                transaction,
+                                SiteConfigKey::BackupDestinationPath,
+                                destination_for_config.to_str().expect("utf-8 path"),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .expect("configure backup destination"),
+        );
+        let telemetry = test_telemetry(None);
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let prepared = prepare_server(&storage, bind, false, &telemetry, None)
+            .await
+            .expect("prepare server");
+
+        assert!(
+            prepared.workers.backup.is_some(),
+            "configured backup must start"
+        );
+        shutdown_prepared_server(prepared).await;
+    }
+
+    #[tokio::test]
     async fn prepare_server_auto_initializes_in_dev_mode() {
         // A fresh storage dir with no database: `open_existing_database` fails,
         // and because `prod == false`, `prepare_server` takes the dev auto-init
@@ -2108,90 +2440,288 @@ mod tests {
 
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let prepared = prepare_server(&storage, bind, false, None, &telemetry, None)
+        let prepared = prepare_server(&storage, bind, false, &telemetry, None)
             .await
             .expect("dev-mode prepare_server must auto-initialize");
 
         assert!(db_path.exists(), "auto-init must have created the database");
-        // Drop the prepared server (and its background workers) without serving.
-        drop(prepared);
-    }
-
-    #[test]
-    fn prepare_server_registers_saturation_sampler_when_otel_endpoint_is_set() {
-        let runtime = tokio::runtime::Runtime::new().expect("runtime");
-        runtime.block_on(async {
-            let temp = TempDir::new().expect("temp dir");
-            let storage = sqlite_storage_args(&temp);
-            storage::open_database(&storage.db, &StorageRuntimeConfig::default())
-                .await
-                .expect("open db");
-            let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
-
-            let telemetry = test_telemetry(Some("http://127.0.0.1:4318"));
-            let prepared = prepare_server(&storage, bind, false, None, &telemetry, None)
-                .await
-                .expect("prepare server");
-
-            assert!(prepared.saturation_metrics.is_some());
-        });
-    }
-
-    #[test]
-    fn prepare_server_does_not_start_saturation_sampler_without_otel_endpoint() {
-        let runtime = tokio::runtime::Runtime::new().expect("runtime");
-        runtime.block_on(async {
-            let temp = TempDir::new().expect("temp dir");
-            let storage = sqlite_storage_args(&temp);
-            storage::open_database(&storage.db, &StorageRuntimeConfig::default())
-                .await
-                .expect("open db");
-            let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
-
-            let telemetry = test_telemetry(None);
-            let prepared = prepare_server(&storage, bind, false, None, &telemetry, None)
-                .await
-                .expect("prepare server");
-
-            assert!(prepared.saturation_metrics.is_none());
-        });
+        shutdown_prepared_server(prepared).await;
     }
 
     #[tokio::test]
-    async fn prepare_server_refuses_on_live_holder_before_db_open() {
-        // A planted runtime.json naming a live writer (our own pid + real
-        // start-time) must make prepare_server refuse *before* opening/creating
-        // the DB (#141). Uses dev mode (prod == false) so, absent the mutex, it
-        // would auto-init — proving the refusal precedes that.
+    async fn prepare_server_registers_saturation_sampler_when_otel_endpoint_is_set() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+
+        let telemetry = test_telemetry(Some("http://127.0.0.1:4318"));
+        let prepared = prepare_server(&storage, bind, false, &telemetry, None)
+            .await
+            .expect("prepare server");
+
+        assert!(prepared.saturation_metrics.is_some());
+        shutdown_prepared_server(prepared).await;
+    }
+
+    #[tokio::test]
+    async fn prepare_server_does_not_start_saturation_sampler_without_otel_endpoint() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+
+        let telemetry = test_telemetry(None);
+        let prepared = prepare_server(&storage, bind, false, &telemetry, None)
+            .await
+            .expect("prepare server");
+
+        assert!(prepared.saturation_metrics.is_none());
+        shutdown_prepared_server(prepared).await;
+    }
+
+    #[tokio::test]
+    async fn prepare_server_cleans_temporary_uploads_before_returning_ready() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let tmp_dir = temp.path().join("media").join("tmp");
+        fs::create_dir_all(tmp_dir.join("interrupted").join("upload"))
+            .expect("create stale temporary directory");
+        fs::write(
+            tmp_dir.join("interrupted").join("upload").join("bytes"),
+            b"stale",
+        )
+        .expect("write stale temporary upload");
+
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let runtime_path = temp.path().join("runtime.json");
+        let telemetry = test_telemetry(None);
+        let prepared = prepare_server(&storage, bind, false, &telemetry, None)
+            .await
+            .expect("prepare server after temporary cleanup");
+
+        assert!(
+            fs::read_dir(&tmp_dir)
+                .expect("read cleaned temporary directory")
+                .next()
+                .is_none(),
+            "uploads may be accepted only after stale temporary artifacts are removed"
+        );
+        let runtime: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&runtime_path).expect("runtime file"))
+                .expect("valid runtime file");
+        let addr = prepared
+            .listener
+            .local_addr()
+            .expect("bound listener address");
+        assert_eq!(runtime["pid"], std::process::id());
+        assert!(runtime["start_time"].as_u64().is_some());
+        assert_eq!(runtime["port"], addr.port());
+        shutdown_prepared_server(prepared).await;
+        assert!(
+            !runtime_path.exists(),
+            "dropping the server removes its canonical runtime file"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_server_surfaces_temporary_cleanup_failure_as_fatal() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let tmp_dir = temp.path().join("media").join("tmp");
+        fs::create_dir_all(tmp_dir.parent().expect("temporary parent"))
+            .expect("create media directory");
+        fs::write(&tmp_dir, b"not a directory").expect("block temporary cleanup");
+
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let telemetry = test_telemetry(None);
+        let error = prepare_server(&storage, bind, false, &telemetry, None)
+            .await
+            .err()
+            .expect("temporary cleanup failure must stop startup");
+
+        assert_eq!(
+            error.to_string(),
+            "failed to prepare media temporary upload directory"
+        );
+        assert!(
+            error.chain().any(|source| source
+                .downcast_ref::<MediaTemporaryDirectoryError>()
+                .is_some()),
+            "fatal startup error must retain the typed cleanup source: {error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_server_refuses_canonical_live_runtime_identity_before_cleanup() {
         let temp = TempDir::new().expect("temp dir");
         let db_path = temp.path().join("jaunder.db");
         let storage = sqlite_storage_args(&temp);
-        let start = runtime_file::require_start_time_at(std::path::Path::new("/proc/self/stat"))
-            .expect("read own start-time");
-        std::fs::write(
-            temp.path().join("runtime.json"),
-            serde_json::json!({
-                "ip": "127.0.0.1", "port": 1,
-                "pid": std::process::id(), "start_time": start,
-            })
-            .to_string(),
-        )
-        .expect("plant runtime file");
+        let tmp_dir = temp.path().join("media").join("tmp");
+        fs::create_dir_all(&tmp_dir).expect("create temporary directory");
+        let stale_upload = tmp_dir.join("stale-upload");
+        fs::write(&stale_upload, b"stale").expect("write stale upload");
+        let runtime_path = temp.path().join("runtime.json");
+        let start_time = runtime_file::require_start_time_at(Path::new("/proc/self/stat"))
+            .expect("current process start time");
+        let live_identity = serde_json::json!({
+            "ip": "127.0.0.1",
+            "port": 1,
+            "pid": std::process::id(),
+            "start_time": start_time,
+        })
+        .to_string();
+        fs::write(&runtime_path, &live_identity).expect("write live canonical runtime file");
 
-        let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
-        // `.err()` discards the Ok(PreparedServer) (which isn't Debug) and keeps the
-        // error, so the whole check is one covered assertion (no standalone panic line).
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let err = prepare_server(&storage, bind, false, None, &telemetry, None)
+        let error = prepare_server(&storage, bind, false, &telemetry, None)
             .await
-            .err();
+            .err()
+            .expect("a live canonical runtime identity must refuse startup");
+
         assert!(
-            err.is_some_and(|e| e.to_string().contains("already running")),
-            "prepare_server must refuse when a live writer holds runtime.json"
+            error
+                .to_string()
+                .contains("another jaunder instance is already running"),
+            "refusal must identify the live canonical owner: {error:#}"
         );
         assert!(
             !db_path.exists(),
             "must refuse before creating the database"
+        );
+        assert!(
+            stale_upload.exists(),
+            "a canonical live-identity refusal must occur before temporary cleanup"
+        );
+        assert_eq!(
+            fs::read_to_string(&runtime_path).expect("read live canonical runtime file"),
+            live_identity,
+            "the live canonical identity must not be overwritten"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_server_propagates_reservation_failure_before_cleanup() {
+        let temp = TempDir::new().expect("temp dir");
+        let db_path = temp.path().join("jaunder.db");
+        let storage = sqlite_storage_args(&temp);
+        let tmp_dir = temp.path().join("media").join("tmp");
+        fs::create_dir_all(&tmp_dir).expect("create temporary directory");
+        let stale_upload = tmp_dir.join("stale-upload");
+        fs::write(&stale_upload, b"stale").expect("write stale upload");
+        let runtime_path = temp.path().join("runtime.json");
+        fs::create_dir(&runtime_path).expect("block canonical runtime reservation");
+
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let telemetry = test_telemetry(None);
+        let error = prepare_server(&storage, bind, false, &telemetry, None)
+            .await
+            .err()
+            .expect("a canonical reservation failure must stop startup");
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot publish live runtime reservation"),
+            "reservation failure must propagate with its publication context: {error:#}"
+        );
+        assert!(
+            error
+                .chain()
+                .any(|source| source.downcast_ref::<std::io::Error>().is_some()),
+            "reservation failure must retain its I/O source: {error:#}"
+        );
+        assert!(!db_path.exists(), "must fail before creating the database");
+        assert!(
+            stale_upload.exists(),
+            "a reservation failure must occur before temporary cleanup"
+        );
+        assert!(
+            runtime_path.is_dir(),
+            "the blocking canonical runtime path must not be replaced"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_server_refuses_on_live_lock_before_cleanup() {
+        // Holding the OS-backed guard must refuse the contender before it can
+        // delete temporary uploads or create the dev-mode database.
+        let temp = TempDir::new().expect("temp dir");
+        let db_path = temp.path().join("jaunder.db");
+        let storage = sqlite_storage_args(&temp);
+        let tmp_dir = temp.path().join("media").join("tmp");
+        fs::create_dir_all(&tmp_dir).expect("create temporary directory");
+        let stale_upload = tmp_dir.join("stale-upload");
+        fs::write(&stale_upload, b"stale").expect("write stale upload");
+        let _lock = StartupLockGuard::acquire(temp.path()).expect("hold startup lock");
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let telemetry = test_telemetry(None);
+        let err = prepare_server(&storage, bind, false, &telemetry, None)
+            .await
+            .err();
+        assert!(
+            err.is_some_and(|e| e.to_string().contains("exclusive startup lock")),
+            "prepare_server must refuse when a live process holds the OS lock"
+        );
+        assert!(
+            !db_path.exists(),
+            "must refuse before creating the database"
+        );
+        assert!(
+            stale_upload.exists(),
+            "a live-instance refusal must occur before temporary cleanup"
+        );
+    }
+
+    #[test]
+    fn successful_worker_shutdown_preserves_serve_result() {
+        let mut primary = Ok(());
+
+        merge_worker_shutdown(&mut primary, Ok(()), "server.test.shutdown");
+
+        assert!(primary.is_ok());
+    }
+
+    #[test]
+    fn worker_shutdown_error_becomes_primary_after_successful_serve() {
+        let mut primary = Ok(());
+        merge_worker_shutdown(
+            &mut primary,
+            Err(anyhow::anyhow!("shutdown failed")),
+            "server.test.shutdown",
+        );
+        assert!(
+            primary
+                .expect_err("shutdown failure must be returned")
+                .to_string()
+                .contains("server.test.shutdown")
+        );
+    }
+
+    #[test]
+    fn worker_shutdown_error_preserves_existing_serve_failure() {
+        let mut primary = Err(anyhow::anyhow!("serve failed"));
+        merge_worker_shutdown(
+            &mut primary,
+            Err(anyhow::anyhow!("shutdown failed")),
+            "server.test.shutdown",
+        );
+        assert_eq!(
+            primary
+                .expect_err("serve failure must remain primary")
+                .to_string(),
+            "serve failed"
         );
     }
 
@@ -2206,18 +2736,21 @@ mod tests {
     async fn assert_signal_removes_runtime_file(signal: nix::sys::signal::Signal) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("runtime.json");
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let guard = runtime_file::RuntimeFileGuard::write(path.clone(), addr, 0);
+        let guard = StartupLockGuard::acquire(dir.path())
+            .expect("startup lock")
+            .reserve(addr, 0)
+            .expect("runtime reservation");
         assert!(path.exists(), "guard wrote the runtime file");
 
         // Installs the SIGINT/SIGTERM handlers synchronously, so the raise below
         // cannot beat handler installation.
-        let shutdown_rx = spawn_shutdown_supervisor(Some(path.clone())).unwrap();
+        let (shutdown_rx, supervisor) =
+            spawn_shutdown_supervisor(guard.path().to_path_buf()).unwrap();
         let handle = tokio::spawn(serve_with_shutdown(
             listener,
             axum::Router::new(),
-            guard,
             async move {
                 let _ = shutdown_rx.await;
             },
@@ -2225,12 +2758,23 @@ mod tests {
 
         nix::sys::signal::raise(signal).unwrap();
 
-        // Await serve completion so removal (guard Drop on return) is observed
-        // deterministically, not by a timing poll.
         handle
             .await
             .unwrap()
             .expect("serve_with_shutdown returns Ok on graceful shutdown");
+        supervisor.abort();
+        assert!(
+            supervisor
+                .await
+                .expect_err("supervisor was aborted")
+                .is_cancelled(),
+            "graceful shutdown must cancel the forced-exit supervisor"
+        );
+        assert!(
+            path.exists(),
+            "serve completion must not release runtime ownership"
+        );
+        drop(guard);
         assert!(!path.exists(), "runtime.json removed after {signal:?}");
     }
 

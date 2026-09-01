@@ -14,7 +14,10 @@ use std::time::Duration;
 
 use host::{error, metrics::SaturationSnapshot};
 use storage::{DbPoolObserver, DbPoolSnapshot, FeedEventStorage, MediaStorage};
-use tokio::task::JoinHandle;
+use tokio::{
+    sync::oneshot,
+    task::{JoinError, JoinHandle},
+};
 
 use crate::backup;
 
@@ -408,11 +411,43 @@ pub async fn sample_saturation_once(
     };
 }
 
+pub(crate) struct SaturationSampler {
+    stop: Option<oneshot::Sender<()>>,
+    task: JoinHandle<()>,
+}
+
+impl SaturationSampler {
+    /// Stops future samples and waits for the current sample, including blocking
+    /// filesystem measurement, to finish.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the sampler task panicked.
+    pub(crate) async fn shutdown(mut self) -> Result<(), JoinError> {
+        self.stop();
+        (&mut self.task).await
+    }
+
+    fn stop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            // A closed receiver means the task already finished.
+            let _ = stop.send(());
+        }
+    }
+}
+impl Drop for SaturationSampler {
+    fn drop(&mut self) {
+        // Drop cannot await an active filesystem measurement, but it must stop
+        // future samples if setup ownership is abandoned.
+        self.stop();
+    }
+}
+
 #[must_use]
-pub fn spawn_saturation_sampler(
+pub(crate) fn spawn_saturation_sampler(
     sources: SaturationSources,
     snapshot: Arc<RwLock<SaturationSnapshot>>,
-) -> JoinHandle<()> {
+) -> SaturationSampler {
     spawn_saturation_sampler_with_interval(sources, snapshot, SATURATION_SAMPLE_INTERVAL)
 }
 
@@ -420,14 +455,25 @@ fn spawn_saturation_sampler_with_interval(
     sources: SaturationSources,
     snapshot: Arc<RwLock<SaturationSnapshot>>,
     interval_duration: Duration,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
+) -> SaturationSampler {
+    let (stop, mut stopped) = oneshot::channel();
+    let task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(interval_duration);
         loop {
-            interval.tick().await;
+            tokio::select! {
+                biased;
+                _ = &mut stopped => break,
+                _ = interval.tick() => {}
+            }
+            // Once admitted, finish the full sample before observing shutdown:
+            // dropping its spawn_blocking handle would not cancel filesystem work.
             sample_saturation_once(&sources, &snapshot).await;
         }
-    })
+    });
+    SaturationSampler {
+        stop: Some(stop),
+        task,
+    }
 }
 
 fn report_source_failure(context: &'static str) {
@@ -840,8 +886,7 @@ mod tests {
         })
         .await
         .expect("multiple filesystem measurements");
-        handle.abort();
-        let _ = handle.await;
+        handle.shutdown().await.expect("sampler shutdown");
 
         assert_eq!(
             measurement.max_active.load(Ordering::SeqCst),
@@ -1104,7 +1149,6 @@ mod tests {
         .await
         .expect("sampler tick");
 
-        handle.abort();
-        let _ = handle.await;
+        handle.shutdown().await.expect("sampler shutdown");
     }
 }

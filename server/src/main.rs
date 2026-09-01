@@ -350,7 +350,6 @@ mod tests {
                         storage,
                         bind: "127.0.0.1:0".parse().expect("bind"),
                         environment: jaunder::cli::DeploymentEnv::Prod,
-                        runtime_file: None,
                     }),
                     verbose: false,
                 }));
@@ -505,7 +504,6 @@ mod tests {
                 storage,
                 bind,
                 environment: jaunder::cli::DeploymentEnv::Dev,
-                runtime_file: None,
             }),
             verbose: false,
         };
@@ -590,7 +588,6 @@ mod tests {
                 storage,
                 bind: "127.0.0.1:0".parse().unwrap(),
                 environment: jaunder::cli::DeploymentEnv::Prod,
-                runtime_file: None,
             }),
             verbose: false,
         };
@@ -608,7 +605,6 @@ mod tests {
                 storage,
                 bind,
                 environment: jaunder::cli::DeploymentEnv::Dev,
-                runtime_file: None,
             }),
             verbose: false,
         };

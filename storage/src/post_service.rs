@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+
 use thiserror::Error;
 
 use crate::{
@@ -22,7 +23,8 @@ use common::post_title::PostTitle;
 use common::slug::{InvalidSlug, Slug};
 use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
-use host::feed::affected_feed_urls;
+use host::feed;
+use host::metrics::{self, IdempotencyEvent};
 
 // ---------------------------------------------------------------------------
 // Orchestration helpers
@@ -86,6 +88,7 @@ pub async fn create_rendered_post(
     storage: Arc<dyn PostStorage>,
     feed_events: Arc<dyn FeedEventStorage>,
     content: RenderedPostContent,
+    now: UtcInstant,
 ) -> Result<MutationOutcome<PostRecord>, CreatePostError> {
     let input = render_post_input(content);
     let _media_locks = content_locks
@@ -98,15 +101,15 @@ pub async fn create_rendered_post(
         )
         .await
         .map_err(|error| CreatePostError::Internal(sqlx::Error::Io(error)))?;
-    write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             let storage = Arc::clone(&storage);
             let feed_events = Arc::clone(&feed_events);
             Box::pin(async move {
-                let record = storage.create_post(transaction, &input).await?;
-                let feed_paths = affected_feed_urls(
-                    &record.author_username,
-                    record.tags.iter().map(|tag| &tag.tag_slug),
+                let created = storage.create_post(transaction, &input, now).await?;
+                let feed_paths = feed::affected_feed_urls(
+                    &created.record.author_username,
+                    created.record.tags.iter().map(|tag| &tag.tag_slug),
                 );
                 feed_events
                     .enqueue_many(transaction, &feed_paths)
@@ -114,11 +117,22 @@ pub async fn create_rendered_post(
                     .map_err(|error| match error {
                         crate::FeedEventError::Db(error) => CreatePostError::Internal(error),
                     })?;
-                Ok(record)
+                Ok(created)
             })
         })
         .await
-        .map_err(map_create_post_scope_error)
+        .map_err(map_create_post_scope_error)?;
+    match outcome {
+        MutationOutcome::Confirmed(created) => {
+            if created.idempotency_key_expired {
+                metrics::idempotency(IdempotencyEvent::Expired);
+            }
+            Ok(MutationOutcome::Confirmed(created.record))
+        }
+        MutationOutcome::CommitIndeterminate(created) => {
+            Ok(MutationOutcome::CommitIndeterminate(created.record))
+        }
+    }
 }
 
 /// Renders `body` per `format` and assembles the [`CreatePostInput`] without
@@ -362,7 +376,7 @@ pub async fn perform_post_update(
                     .update_post(transaction, post_id, editor_user_id, &input)
                     .await?;
                 let mut tag_slugs = HashSet::new();
-                let feed_paths = affected_feed_urls(
+                let feed_paths = feed::affected_feed_urls(
                     &record.author_username,
                     previous_tag_slugs
                         .iter()
@@ -400,10 +414,10 @@ pub enum PerformCreationError {
     Exhausted(usize),
     #[error("created post not found")]
     CreatedNotFound,
-    /// The idempotency key was already used to create a post for this user; the
-    /// create is a duplicate and no new post was written.
+    /// The idempotency key already maps to this Post. The mapping was chosen
+    /// atomically with the rejected create.
     #[error("idempotency key already used for this user")]
-    IdempotencyConflict,
+    IdempotencyConflict(PostId),
     #[error("post bookkeeping does not match the stored post")]
     BookkeepingMismatch,
     #[error("storage error: {0}")]
@@ -428,10 +442,9 @@ impl From<PerformCreationError> for host::error::InternalError {
             // attempt count) rather than a hardcoded literal that lies when the retry bound
             // isn't 100. Wire projection is unchanged (kind `Internal` → "server operation failed").
             //
-            // `IdempotencyConflict` is unreachable in practice — the AtomPub handler
-            // intercepts the conflict and returns the original post as `200` before this
-            // conversion — but shares the same internal-failure projection.
-            PerformCreationError::Exhausted(_) | PerformCreationError::IdempotencyConflict => {
+            // The AtomPub handler intercepts the replay decision and returns the
+            // selected post as `200`; this conversion covers non-AtomPub misuse.
+            PerformCreationError::Exhausted(_) | PerformCreationError::IdempotencyConflict(_) => {
                 InternalError::server(error)
             }
             PerformCreationError::CreatedNotFound => {
@@ -509,6 +522,34 @@ pub async fn perform_post_creation(
     feed_events: Arc<dyn FeedEventStorage>,
     input: PostCreation<'_>,
 ) -> Result<MutationOutcome<PostRecord>, PerformCreationError> {
+    perform_post_creation_at(
+        write_scope,
+        content_locks,
+        storage,
+        feed_events,
+        UtcInstant::now(),
+        input,
+    )
+    .await
+}
+
+/// Performs post creation against one explicit request clock.
+///
+/// `AtomPub` supplies its request clock so an Idempotency Key mapping and its
+/// replay cutoff cannot be extended by an implicit storage clock.
+///
+/// # Errors
+///
+/// Returns `Err(PerformCreationError)` if slug validation fails, attempts to
+/// find a unique slug are exhausted, or storage fails.
+pub async fn perform_post_creation_at(
+    write_scope: &WriteScope,
+    content_locks: &MediaContentLocks,
+    storage: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    now: UtcInstant,
+    input: PostCreation<'_>,
+) -> Result<MutationOutcome<PostRecord>, PerformCreationError> {
     let PostCreation {
         user_id,
         body,
@@ -565,6 +606,7 @@ pub async fn perform_post_creation(
                 tags: tags.clone(),
                 expectations: expectations.clone(),
             },
+            now,
         )
         .await
         {
@@ -573,11 +615,11 @@ pub async fn perform_post_creation(
                 return Err(PerformCreationError::BookkeepingMismatch);
             }
             Err(CreatePostError::SlugConflict) => {}
-            // A duplicate idempotency key is not a slug collision — do not retry;
-            // the whole create (post included) rolled back. The caller looks up
-            // and returns the original post.
-            Err(CreatePostError::IdempotencyConflict) => {
-                return Err(PerformCreationError::IdempotencyConflict);
+            // A duplicate key is not a slug collision. Storage chose the live
+            // mapping inside this transaction, so return that immutable decision
+            // rather than performing a racy lookup after rollback.
+            Err(CreatePostError::IdempotencyConflict(post_id)) => {
+                return Err(PerformCreationError::IdempotencyConflict(post_id));
             }
             Err(CreatePostError::BookkeepingMismatch) => {
                 return Err(PerformCreationError::BookkeepingMismatch);
@@ -604,11 +646,15 @@ mod tests {
         Backend, SeedUser, backends, confirmed, fetch_post_media, media_ref_for, media_url_for,
         seed_media,
     };
+    #[cfg(feature = "test-utils")]
+    use crate::{MockFeedEventStorage, MockPostStorage};
+    use chrono::{Duration, TimeZone, Utc};
     use common::idempotency_key::IdempotencyKey;
     use common::media::{MediaReferenceForm, MediaReferenceKind};
     use common::test_support::{parse_post_body, parse_post_title, parse_row_limit, parse_slug};
     #[cfg(feature = "test-utils")]
     use common::test_support::{parse_tag, parse_tag_label};
+    use sqlx::Error as SqlxError;
 
     use rstest::*;
     use rstest_reuse::*;
@@ -822,12 +868,12 @@ mod tests {
         // A storage-layer `Internal` error from `create_post` (as opposed to the
         // retryable `SlugConflict`) short-circuits the slug-retry loop into
         // `PerformCreationError::Storage`.
-        let mut storage = crate::MockPostStorage::new();
+        let mut storage = MockPostStorage::new();
         storage
             .expect_create_post()
-            .returning(|_, _| Err(CreatePostError::Internal(sqlx::Error::RowNotFound)));
+            .returning(|_, _, _| Err(CreatePostError::Internal(SqlxError::RowNotFound)));
         let write_scope = mock_write_scope();
-        let feed_events = crate::MockFeedEventStorage::new();
+        let feed_events = MockFeedEventStorage::new();
         let storage: Arc<dyn PostStorage> = Arc::new(storage);
         let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
         let temp = tempfile::tempdir().unwrap();
@@ -914,7 +960,7 @@ mod tests {
         let previous_tag_slugs = vec![parse_tag("old"), parse_tag("shared")];
         let expected_tag_slugs = [parse_tag("old"), parse_tag("shared"), parse_tag("new")];
         let expected_feed_paths =
-            affected_feed_urls(&seeded_user.username, expected_tag_slugs.iter());
+            feed::affected_feed_urls(&seeded_user.username, expected_tag_slugs.iter());
         let mut feed_events = crate::MockFeedEventStorage::new();
         feed_events
             .expect_enqueue_many()
@@ -2037,8 +2083,8 @@ mod tests {
         .unwrap();
         let first = confirmed(first);
 
-        // The duplicate reaches the post, audience, and media writes before its
-        // idempotency insert collides; the transaction must roll every attempted row back.
+        // Storage resolves the live mapping before any duplicate post, audience,
+        // media, tag, or feed-event writes occur.
         let mut replay = creation_with_key(
             user_id,
             parse_post_body(&format!("<img src=\"{}\">", media_url_for("attempted.jpg"))),
@@ -2054,7 +2100,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, PerformCreationError::IdempotencyConflict));
+        assert!(matches!(
+            err,
+            PerformCreationError::IdempotencyConflict(post_id) if post_id == first.post_id
+        ));
 
         let posts = storage
             .list_collection_by_user(user_id, None, parse_row_limit("50"))
@@ -2161,17 +2210,291 @@ mod tests {
         .unwrap();
 
         let mapped = storage
-            .post_id_for_idempotency_key(user_id, &key)
+            .post_id_for_idempotency_key(user_id, &key, UtcInstant::now())
             .await
             .unwrap();
         let record = confirmed(record);
         assert_eq!(mapped, Some(record.post_id));
 
         let missing = storage
-            .post_id_for_idempotency_key(user_id, &missing_key)
+            .post_id_for_idempotency_key(user_id, &missing_key, UtcInstant::now())
             .await
             .unwrap();
         assert_eq!(missing, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_rendered_post_preserves_indeterminate_commit_without_reporting_success(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = Arc::clone(&env.state.posts);
+        let key = parse_idempotency_key("indeterminate-commit-key");
+        let created_at = UtcInstant::from(
+            Utc.with_ymd_and_hms(2026, 8, 31, 12, 0, 0)
+                .single()
+                .expect("fixed instant"),
+        );
+        let cutoff = UtcInstant::from(created_at.value() + Duration::hours(1));
+
+        confirmed(
+            perform_post_creation_at(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
+                created_at,
+                creation_with_key(user_id, parse_post_body("original body"), Some(&key)),
+            )
+            .await
+            .expect("original keyed create"),
+        );
+
+        let outcome = create_rendered_post(
+            &env.state
+                .write_scope
+                .with_commit_acknowledgement_loss_after_commit_for_test(),
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
+            RenderedPostContent {
+                user_id,
+                title: None,
+                slug: parse_slug("indeterminate-commit"),
+                body: parse_post_body("indeterminate body"),
+                format: PostFormat::Markdown,
+                published_at: Some(cutoff),
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
+                idempotency_key: Some(key.clone()),
+                expectations: PostBookkeepingExpectation::default(),
+            },
+            cutoff,
+        )
+        .await
+        .expect("a lost commit acknowledgement is a mutation outcome");
+        let MutationOutcome::CommitIndeterminate(record) = outcome else {
+            panic!("lost commit acknowledgement must not be reported as a confirmed creation");
+        };
+
+        assert_eq!(record.user_id, user_id);
+        assert_eq!(record.slug, parse_slug("indeterminate-commit"));
+        assert_eq!(record.body, parse_post_body("indeterminate body"));
+        assert_eq!(record.published_at, Some(cutoff));
+        assert_eq!(
+            storage
+                .post_id_for_idempotency_key(user_id, &key, cutoff)
+                .await
+                .expect("replacement idempotency mapping"),
+            Some(record.post_id),
+            "the indeterminate creation's durable side effects must survive"
+        );
+
+        let stored = storage
+            .get_post_by_id(
+                record.post_id,
+                &common::visibility::ViewerIdentity::local(user_id),
+            )
+            .await
+            .expect("load indeterminate creation")
+            .expect("indeterminate commit still created the post");
+        assert_eq!(stored.post_id, record.post_id);
+        assert_eq!(stored.user_id, record.user_id);
+        assert_eq!(stored.author_username, record.author_username);
+        assert_eq!(stored.title, record.title);
+        assert_eq!(stored.slug, record.slug);
+        assert_eq!(stored.body, record.body);
+        assert_eq!(stored.format, record.format);
+        assert_eq!(stored.rendered_html, record.rendered_html);
+        assert_eq!(stored.created_at, record.created_at);
+        assert_eq!(stored.updated_at, record.updated_at);
+        assert_eq!(stored.published_at, record.published_at);
+        assert_eq!(stored.deleted_at, record.deleted_at);
+        assert_eq!(stored.summary, record.summary);
+        assert!(stored.tags.is_empty());
+        assert!(record.tags.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn idempotency_mapping_expires_at_the_inclusive_cutoff_and_prunes(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = Arc::clone(&env.state.posts);
+        let key = parse_idempotency_key("retained-key");
+        let created_at = UtcInstant::from(
+            Utc.with_ymd_and_hms(2026, 8, 31, 12, 0, 0)
+                .single()
+                .expect("fixed instant"),
+        );
+        let cutoff = UtcInstant::from(created_at.value() + Duration::hours(1));
+
+        let first = confirmed(
+            perform_post_creation_at(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
+                created_at,
+                creation_with_key(user_id, parse_post_body("first body"), Some(&key)),
+            )
+            .await
+            .expect("first keyed create"),
+        );
+
+        assert_eq!(
+            storage
+                .post_id_for_idempotency_key(
+                    user_id,
+                    &key,
+                    UtcInstant::from(cutoff.value() - Duration::seconds(1)),
+                )
+                .await
+                .expect("pre-cutoff lookup"),
+            Some(first.post_id)
+        );
+        env.base
+            .pool()
+            .execute(&format!(
+                "UPDATE posts SET deleted_at = created_at WHERE post_id = {}",
+                i64::from(first.post_id)
+            ))
+            .await
+            .expect("soft-delete original Post");
+        assert_eq!(
+            storage
+                .post_id_for_idempotency_key(user_id, &key, cutoff)
+                .await
+                .expect("cutoff lookup"),
+            None
+        );
+
+        let replacement = confirmed(
+            perform_post_creation_at(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
+                cutoff,
+                creation_with_key(user_id, parse_post_body("replacement body"), Some(&key)),
+            )
+            .await
+            .expect("cutoff reuse creates a replacement"),
+        );
+        assert_ne!(replacement.post_id, first.post_id);
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64(&format!(
+                    "SELECT COUNT(*) FROM posts WHERE post_id = {} AND deleted_at IS NOT NULL",
+                    i64::from(first.post_id)
+                ))
+                .await
+                .expect("inspect original Post tombstone"),
+            1,
+            "idempotency expiry must not alter a Deleted Post"
+        );
+        assert_eq!(
+            storage
+                .prune_expired_idempotency_keys(UtcInstant::from(
+                    cutoff.value() + Duration::hours(1)
+                ))
+                .await
+                .expect("prune expired mapping"),
+            1
+        );
+        assert_eq!(
+            storage
+                .post_id_for_idempotency_key(
+                    user_id,
+                    &key,
+                    UtcInstant::from(cutoff.value() + Duration::hours(1)),
+                )
+                .await
+                .expect("lookup after pruning"),
+            None
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn concurrent_exact_cutoff_reuse_creates_one_replacement(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = Arc::clone(&env.state.posts);
+        let key = parse_idempotency_key("concurrent-retained-key");
+        let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
+        let cutoff = UtcInstant::from(created_at.value() + Duration::hours(1));
+
+        let original = confirmed(
+            perform_post_creation_at(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&storage),
+                Arc::clone(&env.state.feed_events),
+                created_at,
+                creation_with_key(user_id, parse_post_body("original"), Some(&key)),
+            )
+            .await
+            .expect("original keyed create"),
+        );
+
+        let first_locks = env.media_content_locks();
+        let second_locks = env.media_content_locks();
+        let first_attempt = perform_post_creation_at(
+            &env.state.write_scope,
+            &first_locks,
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
+            cutoff,
+            creation_with_key(user_id, parse_post_body("replacement one"), Some(&key)),
+        );
+        let second_attempt = perform_post_creation_at(
+            &env.state.write_scope,
+            &second_locks,
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
+            cutoff,
+            creation_with_key(user_id, parse_post_body("replacement two"), Some(&key)),
+        );
+        let outcomes = tokio::join!(first_attempt, second_attempt);
+        let (replacement, replayed_post_id) = match outcomes {
+            (Ok(outcome), Err(PerformCreationError::IdempotencyConflict(post_id)))
+            | (Err(PerformCreationError::IdempotencyConflict(post_id)), Ok(outcome)) => {
+                (confirmed(outcome), post_id)
+            }
+            other => panic!("expected one replacement and one replay decision, got {other:?}"),
+        };
+        assert_eq!(
+            replayed_post_id, replacement.post_id,
+            "the losing request must retain the winner chosen inside its transaction"
+        );
+
+        assert_ne!(replacement.post_id, original.post_id);
+        assert_eq!(
+            storage
+                .post_id_for_idempotency_key(
+                    user_id,
+                    &key,
+                    UtcInstant::from(cutoff.value() + Duration::seconds(1)),
+                )
+                .await
+                .expect("replacement mapping"),
+            Some(replacement.post_id)
+        );
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM posts")
+                .await
+                .expect("count durable Posts"),
+            2
+        );
     }
 
     #[apply(backends)]
@@ -2208,14 +2531,14 @@ mod tests {
 
         assert_eq!(
             storage
-                .post_id_for_idempotency_key(user_a, &key)
+                .post_id_for_idempotency_key(user_a, &key, UtcInstant::now())
                 .await
                 .unwrap(),
             Some(post_a.post_id)
         );
         assert_eq!(
             storage
-                .post_id_for_idempotency_key(user_b, &key)
+                .post_id_for_idempotency_key(user_b, &key, UtcInstant::now())
                 .await
                 .unwrap(),
             Some(post_b.post_id)
@@ -2226,9 +2549,9 @@ mod tests {
     fn idempotency_conflict_converts_to_internal_error() {
         use host::error::{ErrorKind, InternalError};
 
-        // Covers the otherwise-unreachable `From` arm (the handler intercepts the
-        // conflict before this conversion) so the coverage gate stays green.
-        let err: InternalError = PerformCreationError::IdempotencyConflict.into();
+        // Covers the non-AtomPub conversion arm; the AtomPub handler normally
+        // intercepts the replay decision first.
+        let err: InternalError = PerformCreationError::IdempotencyConflict(PostId::from(42)).into();
         assert_eq!(err.kind(), ErrorKind::Internal);
         assert_eq!(err.public_message(), "server operation failed");
     }

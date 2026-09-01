@@ -43,6 +43,10 @@ impl PasswordResetStorage for BarrierPasswordResetStorage {
         self.claim_barrier.wait().await;
         self.inner.use_password_reset(transaction, raw_token).await
     }
+
+    async fn prune_password_resets(&self, now: UtcInstant) -> sqlx::Result<u64> {
+        self.inner.prune_password_resets(now).await
+    }
 }
 
 #[apply(postgres_only)]
@@ -162,7 +166,7 @@ async fn confirm_after_claim_barrier(
     password_resets: Arc<dyn PasswordResetStorage>,
     raw_token: RawToken,
     new_password: Password,
-) -> Result<MutationOutcome<()>, WriteScopeError<ConfirmPasswordResetError>> {
+) -> Result<MutationOutcome<UserId>, WriteScopeError<ConfirmPasswordResetError>> {
     let users = Arc::clone(&state.users);
     let sessions = Arc::clone(&state.sessions);
     state

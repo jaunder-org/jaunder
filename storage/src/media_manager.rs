@@ -44,6 +44,31 @@ pub enum MediaError {
     Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
+/// Failure to establish the clean temporary upload directory required at startup.
+#[derive(Debug, Error)]
+#[error(
+    "failed {operation} media temporary directory {}: {source}",
+    path.display()
+)]
+pub struct MediaTemporaryDirectoryError {
+    /// The filesystem operation that failed.
+    pub operation: &'static str,
+    /// The temporary directory that could not be prepared.
+    pub path: PathBuf,
+    #[source]
+    source: io::Error,
+}
+
+impl MediaTemporaryDirectoryError {
+    fn new(operation: &'static str, path: PathBuf, source: io::Error) -> Self {
+        Self {
+            operation,
+            path,
+            source,
+        }
+    }
+}
+
 // `UploadedMedia` is defined in `common::media`, not here — it is the `#[server]` fn's
 // return type, which must be nameable on the wasm client build where `storage` is not
 // compiled (`storage` is a `server`-gated `web` dep). `common` is ungated and reachable
@@ -100,6 +125,34 @@ impl MediaManager {
             storage_path: Arc::clone(content_locks.storage_path()),
             content_locks,
         }
+    }
+
+    /// Removes crash-orphaned upload artifacts and recreates `media/tmp` empty.
+    ///
+    /// This is deliberately confined to the transient directory. `remove_dir_all`
+    /// removes a symlink itself rather than following it, so finalized media paths
+    /// cannot be reached through a stale temporary-directory entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when removing stale artifacts or creating the usable
+    /// replacement directory fails.
+    pub async fn prepare_temporary_upload_directory(
+        storage_path: &Path,
+    ) -> Result<(), MediaTemporaryDirectoryError> {
+        let tmp_dir = storage_path.join("media").join("tmp");
+        match fs::remove_dir_all(&tmp_dir).await {
+            Ok(()) => {}
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(MediaTemporaryDirectoryError::new(
+                    "removing", tmp_dir, source,
+                ));
+            }
+        }
+        fs::create_dir_all(&tmp_dir)
+            .await
+            .map_err(|source| MediaTemporaryDirectoryError::new("creating", tmp_dir, source))
     }
 
     /// Streams a multipart upload to a content-addressed, dedup'd path and records
@@ -694,7 +747,10 @@ impl MediaManager {
 
 #[cfg(test)]
 mod tests {
+    use std::fs as std_fs;
+
     use super::*;
+
     use crate::test_support::{
         Backend, SeedUser, backends, create_post_via_service, media_row_exists,
     };
@@ -724,6 +780,139 @@ mod tests {
         ))
     }
 
+    // guard:no-backend — filesystem-only temporary upload cleanup.
+    #[tokio::test]
+    async fn prepare_temporary_upload_directory_creates_an_absent_directory() {
+        let temp = TempDir::new().expect("temp dir");
+        let tmp_dir = temp.path().join("media").join("tmp");
+
+        MediaManager::prepare_temporary_upload_directory(temp.path())
+            .await
+            .expect("create absent temporary directory");
+
+        assert!(
+            tmp_dir.is_dir(),
+            "temporary upload directory must be created"
+        );
+        assert!(
+            std_fs::read_dir(tmp_dir)
+                .expect("read temporary directory")
+                .next()
+                .is_none(),
+            "new temporary upload directory must be empty"
+        );
+    }
+
+    // guard:no-backend — filesystem-only temporary upload cleanup.
+    #[tokio::test]
+    async fn prepare_temporary_upload_directory_retains_an_empty_directory() {
+        let temp = TempDir::new().expect("temp dir");
+        let tmp_dir = temp.path().join("media").join("tmp");
+        fs::create_dir_all(&tmp_dir)
+            .await
+            .expect("create temporary directory");
+
+        MediaManager::prepare_temporary_upload_directory(temp.path())
+            .await
+            .expect("refresh empty temporary directory");
+
+        assert!(
+            tmp_dir.is_dir(),
+            "temporary upload directory must remain usable"
+        );
+        assert!(
+            std_fs::read_dir(tmp_dir)
+                .expect("read temporary directory")
+                .next()
+                .is_none(),
+            "temporary upload directory must remain empty"
+        );
+    }
+
+    // guard:no-backend — filesystem-only temporary upload cleanup.
+    #[tokio::test]
+    async fn prepare_temporary_upload_directory_removes_populated_artifacts_only() {
+        let temp = TempDir::new().expect("temp dir");
+        let tmp_dir = temp.path().join("media").join("tmp");
+        let finalized = temp.path().join("media").join("upload").join("finalized");
+        fs::create_dir_all(&tmp_dir)
+            .await
+            .expect("create temporary directory");
+        fs::write(tmp_dir.join("stale-upload"), b"stale")
+            .await
+            .expect("write stale artifact");
+        fs::create_dir_all(finalized.parent().expect("finalized parent"))
+            .await
+            .expect("create finalized directory");
+        fs::write(&finalized, b"durable")
+            .await
+            .expect("write finalized media");
+
+        MediaManager::prepare_temporary_upload_directory(temp.path())
+            .await
+            .expect("clear temporary artifacts");
+
+        assert!(
+            std_fs::read_dir(&tmp_dir)
+                .expect("read temporary directory")
+                .next()
+                .is_none(),
+            "temporary artifacts must be removed"
+        );
+        assert_eq!(
+            fs::read(finalized).await.expect("read finalized media"),
+            b"durable",
+            "cleanup must not reach finalized media"
+        );
+    }
+
+    // guard:no-backend — filesystem-only temporary upload cleanup.
+    #[tokio::test]
+    async fn prepare_temporary_upload_directory_removes_nested_artifacts() {
+        let temp = TempDir::new().expect("temp dir");
+        let tmp_dir = temp.path().join("media").join("tmp");
+        let nested = tmp_dir.join("interrupted").join("stream").join("upload");
+        fs::create_dir_all(nested.parent().expect("nested parent"))
+            .await
+            .expect("create nested temporary directory");
+        fs::write(&nested, b"stale")
+            .await
+            .expect("write nested temporary artifact");
+
+        MediaManager::prepare_temporary_upload_directory(temp.path())
+            .await
+            .expect("clear nested temporary artifacts");
+
+        assert!(
+            std_fs::read_dir(tmp_dir)
+                .expect("read temporary directory")
+                .next()
+                .is_none(),
+            "nested temporary artifacts must be removed"
+        );
+    }
+
+    // guard:no-backend — filesystem-only temporary upload cleanup.
+    #[tokio::test]
+    async fn prepare_temporary_upload_directory_returns_typed_cleanup_failure() {
+        let temp = TempDir::new().expect("temp dir");
+        let tmp_dir = temp.path().join("media").join("tmp");
+        fs::create_dir_all(tmp_dir.parent().expect("temporary parent"))
+            .await
+            .expect("create media directory");
+        fs::write(&tmp_dir, b"not a directory")
+            .await
+            .expect("block temporary directory removal");
+
+        let error = MediaManager::prepare_temporary_upload_directory(temp.path())
+            .await
+            .expect_err("non-directory temporary path must fail preparation");
+
+        assert_eq!(error.operation, "removing");
+        assert_eq!(error.path, tmp_dir);
+        assert_eq!(error.source.kind(), io::ErrorKind::NotADirectory);
+    }
+
     #[test]
     fn upload_outcome_maps_each_media_error() {
         use host::metrics::UploadOutcome;
@@ -740,9 +929,9 @@ mod tests {
             UploadOutcome::QuotaExceeded
         ));
         assert!(matches!(
-            MediaManager::upload_outcome(Some(&MediaError::Internal(Box::new(
-                std::io::Error::other("x"),
-            )))),
+            MediaManager::upload_outcome(Some(&MediaError::Internal(Box::new(io::Error::other(
+                "x",
+            ))))),
             UploadOutcome::Error
         ));
         assert!(matches!(
@@ -1210,8 +1399,8 @@ mod tests {
     #[test]
     fn continuation_reporting_cleanup_failures_preserve_quota_and_dedup_results_and_report_once() {
         let cleanup_error = || {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
                 "temp cleanup denied",
             ))
         };
@@ -1350,9 +1539,9 @@ mod tests {
         let tmp_path = tmp_dir.join("upload");
         fs::write(&tmp_path, b"payload").await.unwrap();
         let target_path = media_dir.join("hash").join("upload.png");
-        let entries: std::io::Result<futures_util::stream::Empty<std::io::Result<PathBuf>>> =
-            Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
+        let entries: io::Result<futures_util::stream::Empty<io::Result<PathBuf>>> =
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
                 "initial directory read sentinel",
             ));
 
@@ -1363,9 +1552,9 @@ mod tests {
                 .expect_err("dedup must not report success");
 
         let source = error
-            .downcast_ref::<std::io::Error>()
+            .downcast_ref::<io::Error>()
             .expect("typed initial read error");
-        assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(source.to_string(), "initial directory read sentinel");
         assert!(tmp_path.exists(), "failed probe must not consume upload");
         assert!(!target_path.exists(), "failed probe must not create target");
@@ -1385,7 +1574,7 @@ mod tests {
         let target_path = hash_dir.join("upload.png");
         let entries = Ok(futures_util::stream::iter([
             Ok(hash_dir.join("subdir")),
-            Err(std::io::Error::other("later next-entry sentinel")),
+            Err(io::Error::other("later next-entry sentinel")),
         ]));
 
         let existing_file = MediaManager::first_file_in_entries(entries).await;
@@ -1395,9 +1584,9 @@ mod tests {
                 .expect_err("dedup must not report success after partial enumeration");
 
         let source = error
-            .downcast_ref::<std::io::Error>()
+            .downcast_ref::<io::Error>()
             .expect("typed next-entry error");
-        assert_eq!(source.kind(), std::io::ErrorKind::Other);
+        assert_eq!(source.kind(), io::ErrorKind::Other);
         assert_eq!(source.to_string(), "later next-entry sentinel");
         assert!(tmp_path.exists(), "failed probe must not consume upload");
         assert!(!target_path.exists(), "failed probe must not create target");
@@ -1547,7 +1736,7 @@ mod tests {
         }
         let expected = ContentHash::from_digest(hasher.finalize().into());
 
-        let stream = futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
+        let stream = futures_util::stream::iter(chunks.into_iter().map(Ok::<_, io::Error>));
         let filename = parse_filename("s.png");
         let resp = manager
             .upload(
@@ -1745,8 +1934,8 @@ mod tests {
             .unwrap();
         let media = upload_ref(&uploaded);
         let file_path = stored_path(env.base.path(), &media);
-        std::fs::remove_file(&file_path).unwrap();
-        std::fs::create_dir(&file_path).unwrap();
+        std_fs::remove_file(&file_path).unwrap();
+        std_fs::create_dir(&file_path).unwrap();
 
         let outcome = manager
             .delete_media(

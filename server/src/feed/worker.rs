@@ -2,15 +2,16 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use crate::scheduled_worker::{ScheduledWorkerGuard, WorkTracker};
 use crate::websub::WebSubClient;
 use chrono::Utc;
 use common::ids::FeedEventId;
 use common::tagged_url::{self, FeedUrl, HubUrl};
 use common::time::UtcInstant;
 use host::{
-    error,
+    error::{self, ErrorClass, ErrorKind, SwallowedSource},
     feed::{self, FeedPath},
     metrics,
 };
@@ -18,7 +19,10 @@ use storage::{
     FeedCacheStorage, FeedEventError, FeedEventRecord, FeedEventStorage, PostStorage,
     SiteConfigStorage, WriteScope, WriteTransaction,
 };
-use tokio::sync::Mutex;
+use tokio::{
+    sync::Mutex,
+    time::{self, MissedTickBehavior},
+};
 
 use super::regenerate::{self, RegenerateError};
 
@@ -31,17 +35,12 @@ const BACKOFFS_SECS: &[u64] = &[60, 300, 1800, 7200, 7200, 7200];
 const ENQUEUE_CHUNK: usize = 256;
 
 fn report_continuation(
-    kind: host::error::ErrorKind,
-    class: host::error::ErrorClass,
+    kind: ErrorKind,
+    class: ErrorClass,
     context: &'static str,
     error: &(dyn std::error::Error + 'static),
 ) {
-    error::report_swallowed(
-        kind,
-        class,
-        context,
-        host::error::SwallowedSource::Error(error),
-    );
+    error::report_swallowed(kind, class, context, SwallowedSource::Error(error));
 }
 
 /// Converts a mutation outcome into its confirmed value for a feed operation.
@@ -283,7 +282,7 @@ impl FeedWorker {
         identity: Option<&common::site::SiteIdentity>,
     ) {
         let ids: Vec<FeedEventId> = recs.iter().map(|r| r.id).collect();
-        let started = std::time::Instant::now();
+        let started = Instant::now();
 
         match regenerate::regenerate_feed(
             self.site_config(),
@@ -385,28 +384,10 @@ impl FeedWorker {
                     );
                     let attempt_usize = usize::try_from(attempt).unwrap_or(0);
                     let next_attempt_idx = attempt_usize.saturating_sub(1);
+                    let error_message = e.to_string();
                     if next_attempt_idx >= BACKOFFS_SECS.len() {
                         metrics::websub_ping(metrics::PingOutcome::Exhausted);
-                        let feed_events = Arc::clone(&self.feed_events);
-                        let ids = ids.to_vec();
-                        let error_message = e.to_string();
-                        if let Err(error) = self
-                            .write_event_status(move |transaction| {
-                                Box::pin(async move {
-                                    feed_events
-                                        .mark_exhausted(transaction, &ids, &error_message)
-                                        .await
-                                })
-                            })
-                            .await
-                        {
-                            report_continuation(
-                                host::error::ErrorKind::Storage,
-                                host::error::ErrorClass::Transient,
-                                "server.feed.status_write.249",
-                                error.as_ref(),
-                            );
-                        }
+                        self.mark_exhausted(ids, &error_message).await;
                     } else {
                         let delay = chrono::Duration::seconds(
                             i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
@@ -415,7 +396,6 @@ impl FeedWorker {
                         metrics::websub_ping(metrics::PingOutcome::Failed);
                         let feed_events = Arc::clone(&self.feed_events);
                         let ids = ids.to_vec();
-                        let error_message = e.to_string();
                         if let Err(error) = self
                             .write_event_status(move |transaction| {
                                 Box::pin(async move {
@@ -446,18 +426,49 @@ impl FeedWorker {
     async fn mark_pinged(&self, ids: &[FeedEventId]) {
         let feed_events = Arc::clone(&self.feed_events);
         let ids = ids.to_vec();
+        let event_count = ids.len();
+        let now = UtcInstant::now();
         if let Err(error) = self
             .write_event_status(move |transaction| {
-                Box::pin(async move { feed_events.mark_pinged(transaction, &ids).await })
+                Box::pin(async move { feed_events.mark_pinged(transaction, &ids, now).await })
             })
             .await
         {
             report_continuation(
-                host::error::ErrorKind::Storage,
-                host::error::ErrorClass::Transient,
+                ErrorKind::Storage,
+                ErrorClass::Transient,
                 "server.feed.status_write.mark_pinged",
                 error.as_ref(),
             );
+        } else {
+            tracing::info!(event_count, outcome = "completed", "feed.event.terminal");
+        }
+    }
+
+    async fn mark_exhausted(&self, ids: &[FeedEventId], error_message: &str) {
+        let feed_events = Arc::clone(&self.feed_events);
+        let ids = ids.to_vec();
+        let error_message = error_message.to_owned();
+        let event_count = ids.len();
+        let now = UtcInstant::now();
+        if let Err(error) = self
+            .write_event_status(move |transaction| {
+                Box::pin(async move {
+                    feed_events
+                        .mark_exhausted(transaction, &ids, &error_message, now)
+                        .await
+                })
+            })
+            .await
+        {
+            report_continuation(
+                ErrorKind::Storage,
+                ErrorClass::Transient,
+                "server.feed.status_write.mark_exhausted",
+                error.as_ref(),
+            );
+        } else {
+            tracing::info!(event_count, outcome = "exhausted", "feed.event.terminal");
         }
     }
 
@@ -475,27 +486,9 @@ impl FeedWorker {
         let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
         let attempt_usize = usize::try_from(attempt).unwrap_or(0);
         let next_attempt_idx = attempt_usize.saturating_sub(1);
+        let error_message = e.to_string();
         if next_attempt_idx >= BACKOFFS_SECS.len() {
-            let feed_events = Arc::clone(&self.feed_events);
-            let ids = ids.to_vec();
-            let error_message = e.to_string();
-            if let Err(error) = self
-                .write_event_status(move |transaction| {
-                    Box::pin(async move {
-                        feed_events
-                            .mark_exhausted(transaction, &ids, &error_message)
-                            .await
-                    })
-                })
-                .await
-            {
-                report_continuation(
-                    host::error::ErrorKind::Storage,
-                    host::error::ErrorClass::Transient,
-                    "server.feed.status_write.288",
-                    error.as_ref(),
-                );
-            }
+            self.mark_exhausted(ids, &error_message).await;
         } else {
             let next = UtcInstant::from(
                 Utc::now()
@@ -529,43 +522,49 @@ impl FeedWorker {
     /// Starts the feed worker scheduler at the cadence selected by the
     /// composition root. Subsecond cadences use one scheduler activation to
     /// drive a Tokio interval because `tokio-cron-scheduler` stores repeated
-    /// durations at whole-second precision. Returns the scheduler; the caller
-    /// must keep it alive for the worker to run.
+    /// durations at whole-second precision. The returned guard owns scheduler
+    /// admission and drains admitted work during shutdown.
     ///
     /// # Errors
     ///
     /// Returns an error if the interval is zero or the scheduler fails to start.
-    pub async fn start(
-        self,
-        interval: Duration,
-    ) -> anyhow::Result<tokio_cron_scheduler::JobScheduler> {
+    pub(crate) async fn start(self, interval: Duration) -> anyhow::Result<ScheduledWorkerGuard> {
         anyhow::ensure!(!interval.is_zero(), "feed worker interval must be non-zero");
 
         let worker = Arc::new(self);
         let scheduler = tokio_cron_scheduler::JobScheduler::new().await?;
+        let tracker = WorkTracker::default();
         let job = if interval < Duration::from_secs(1) {
             // cov:ignore-start -- the closure body fires only when the scheduler
             // activates it; tick behavior is unit-tested through spawn_tick.
+            let job_tracker = tracker.clone();
+            let stop_tracker = tracker.clone();
             tokio_cron_scheduler::Job::new_one_shot_async(Duration::ZERO, move |_uuid, _lock| {
                 let worker = worker.clone();
-                Box::pin(async move {
-                    let mut ticker = tokio::time::interval(interval);
-                    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let tracker = job_tracker.clone();
+                let stop = stop_tracker.clone();
+                Box::pin(tracker.run(async move {
+                    let mut ticker = time::interval(interval);
+                    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
                     loop {
-                        ticker.tick().await;
-                        spawn_tick(worker.clone()).await;
+                        tokio::select! {
+                            biased;
+                            () = stop.stopped() => break,
+                            _ = ticker.tick() => spawn_tick(worker.clone()).await,
+                        }
                     }
-                })
+                }))
             })?
         } else {
+            let job_tracker = tracker.clone();
             tokio_cron_scheduler::Job::new_repeated_async(interval, move |_uuid, _lock| {
-                spawn_tick(worker.clone())
+                let tracker = job_tracker.clone();
+                Box::pin(tracker.run(spawn_tick(worker.clone())))
             })?
         };
         // cov:ignore-stop
         scheduler.add(job).await?;
-        scheduler.start().await?;
-        Ok(scheduler)
+        ScheduledWorkerGuard::start(scheduler, tracker).await
     }
 }
 
@@ -585,7 +584,11 @@ mod tests {
     use crate::websub::NoopWebSubClient;
     use common::site::SiteIdentity;
     use host::feed::FeedEventStatus;
-    use storage::{FeedEventError, FeedEventRecord, test_support::mock_write_scope};
+    use sqlx::Error as SqlxError;
+    use storage::{
+        FeedEventError, FeedEventRecord, MockFeedCacheStorage, MockFeedEventStorage,
+        test_support::mock_write_scope,
+    };
 
     fn event(id: i64, feed_url: &str, attempts: i32) -> FeedEventRecord {
         let now = UtcInstant::now();
@@ -597,6 +600,7 @@ mod tests {
             last_error: None,
             next_attempt_at: now,
             claimed_at: Some(now),
+            terminal_at: None,
             created_at: now,
             regenerated_at: None,
             pinged_at: None,
@@ -687,8 +691,8 @@ mod tests {
     fn worker(
         site_config: storage::MockSiteConfigStorage,
         posts: storage::MockPostStorage,
-        feed_cache: storage::MockFeedCacheStorage,
-        feed_events: storage::MockFeedEventStorage,
+        feed_cache: MockFeedCacheStorage,
+        feed_events: MockFeedEventStorage,
     ) -> FeedWorker {
         FeedWorker::new(
             Arc::new(site_config),
@@ -701,7 +705,7 @@ mod tests {
     }
 
     fn worker_with_websub(
-        feed_events: storage::MockFeedEventStorage,
+        feed_events: MockFeedEventStorage,
         websub: Arc<dyn WebSubClient>,
     ) -> FeedWorker {
         FeedWorker::new(
@@ -758,6 +762,36 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn terminal_transition_events_exclude_feed_urls_and_error_text() {
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_mark_pinged()
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+        events
+            .expect_mark_exhausted()
+            .times(1)
+            .returning(|_, _, _, _| Ok(()));
+        let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
+        let (guard, output) = trace_capture();
+        worker.mark_pinged(&[FeedEventId::from(7)]).await;
+        worker
+            .mark_exhausted(&[FeedEventId::from(8)], "private failure detail")
+            .await;
+        drop(guard);
+
+        let trace = trace_text(&output);
+        assert_eq!(
+            trace.matches(r#""message":"feed.event.terminal""#).count(),
+            2
+        );
+        assert!(trace.contains(r#""outcome":"completed""#));
+        assert!(trace.contains(r#""outcome":"exhausted""#));
+        assert!(!trace.contains("private failure detail"));
+        assert!(!trace.contains("/feed"));
+    }
+
     // guard:no-backend — mock stores isolate the config-read continuation.
     #[tokio::test]
     async fn continuation_reporting_tick_preserves_processing_after_websub_config_read_failure() {
@@ -765,7 +799,7 @@ mod tests {
         site_config
             .expect_get_feeds_websub_hub_url()
             .times(1)
-            .returning(|| Err(sqlx::Error::PoolClosed));
+            .returning(|| Err(SqlxError::PoolClosed));
         site_config
             .expect_get_identity()
             .times(2)
@@ -774,7 +808,7 @@ mod tests {
             .expect_get_feeds_config()
             .times(1)
             .returning(|| Ok(test_feeds_config()));
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
             .times(1)
@@ -786,7 +820,7 @@ mod tests {
         events
             .expect_mark_pinged()
             .times(1)
-            .returning(|_, _| Ok(()));
+            .returning(|_, _, _| Ok(()));
         let worker = worker(
             site_config,
             successful_tick_posts(),
@@ -814,7 +848,7 @@ mod tests {
             .times(2)
             .returning(move || {
                 if identity_reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
-                    Err(sqlx::Error::PoolClosed)
+                    Err(SqlxError::PoolClosed)
                 } else {
                     Ok(test_identity())
                 }
@@ -823,7 +857,7 @@ mod tests {
             .expect_get_feeds_config()
             .times(1)
             .returning(|| Ok(test_feeds_config()));
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
             .times(1)
@@ -835,7 +869,7 @@ mod tests {
         events
             .expect_mark_pinged()
             .times(1)
-            .returning(|_, _| Ok(()));
+            .returning(|_, _, _| Ok(()));
         let worker = worker(
             site_config,
             successful_tick_posts(),
@@ -866,15 +900,15 @@ mod tests {
             .expect_list_published_in_window()
             .times(1)
             .returning(|_, _, _, _| Ok(vec![]));
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_regenerated()
             .times(1)
-            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         events
             .expect_mark_pinged()
             .times(1)
-            .returning(|_, _| Ok(()));
+            .returning(|_, _, _| Ok(()));
         let worker = worker(site_config, posts, successful_feed_cache(), events);
         let identity = test_identity();
 
@@ -894,11 +928,11 @@ mod tests {
     // guard:no-backend — mock status store and successful protocol client.
     #[tokio::test]
     async fn continuation_reporting_websub_success_survives_mark_pinged_failure() {
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_pinged()
             .times(1)
-            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
         let hub = "https://hub.example/".parse().expect("hub URL");
         let identity = test_identity();
@@ -920,11 +954,11 @@ mod tests {
     // guard:no-backend — mock status store and failing protocol client.
     #[tokio::test]
     async fn continuation_reporting_websub_exhaustion_survives_status_write_failure() {
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_exhausted()
             .times(1)
-            .returning(|_, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(FailingWebSubClient));
         let hub = "https://hub.example/".parse().expect("hub URL");
         let identity = test_identity();
@@ -942,17 +976,17 @@ mod tests {
         drop(guard);
         let trace = trace_text(&output);
         assert_context_once(&trace, "server.feed.websub_ping");
-        assert_context_once(&trace, "server.feed.status_write.249");
+        assert_context_once(&trace, "server.feed.status_write.mark_exhausted");
     }
 
     // guard:no-backend — mock status store and failing protocol client.
     #[tokio::test]
     async fn continuation_reporting_websub_retry_survives_status_write_failure() {
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_failed()
             .times(1)
-            .returning(|_, _, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(FailingWebSubClient));
         let hub = "https://hub.example/".parse().expect("hub URL");
         let identity = test_identity();
@@ -976,11 +1010,11 @@ mod tests {
     // guard:no-backend — mock status store isolates regeneration retry.
     #[tokio::test]
     async fn continuation_reporting_regeneration_retry_survives_status_write_failure() {
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_failed()
             .times(1)
-            .returning(|_, _, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
         let record = event(1, "/feed.rss", 0);
         let error =
@@ -1007,11 +1041,11 @@ mod tests {
             .expect_feed_urls_needing_catchup()
             .times(0..)
             .returning(|_| Ok(vec![]));
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         // No mark_* expectation is set: any call after the claim error would
         // panic as an unexpected call, proving the tick returned early.
         let w = worker(
@@ -1041,7 +1075,7 @@ mod tests {
             .expect_feed_urls_needing_catchup()
             .times(0..)
             .returning(|_| Ok(vec![]));
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
             .times(1)
@@ -1064,8 +1098,8 @@ mod tests {
         posts
             .expect_feed_urls_needing_catchup()
             .times(1)
-            .returning(|_| Err(sqlx::Error::PoolClosed));
-        let mut events = storage::MockFeedEventStorage::new();
+            .returning(|_| Err(SqlxError::PoolClosed));
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
             .times(1)
@@ -1092,7 +1126,7 @@ mod tests {
     // guard:no-backend — mock store and failing protocol client.
     #[tokio::test]
     async fn websub_transport_failure_reaches_retry_boundary_and_reports_once() {
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_failed()
             .times(1)
@@ -1134,11 +1168,11 @@ mod tests {
     // guard:no-backend — mock status store.
     #[tokio::test]
     async fn completed_ping_keeps_success_primary_and_reports_status_failure_once() {
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_pinged()
             .times(1)
-            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
         let (guard, output) = trace_capture();
         worker
@@ -1175,7 +1209,7 @@ mod tests {
                     "/tags/t/feed.rss".parse().expect("valid feed path in test"),
                 ])
             });
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         // The regression gate for #766: the whole catch-up fans out as ONE
         // batched write, and the per-row API is never used.
         events
@@ -1210,7 +1244,7 @@ mod tests {
                     })
                     .collect())
             });
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_enqueue_many()
             .times(2)
@@ -1326,7 +1360,7 @@ mod tests {
         events
             .expect_mark_pinged()
             .times(1)
-            .returning(|_, _| Ok(()));
+            .returning(|_, _, _| Ok(()));
         let w = worker(site_config, posts, cache, events);
         w.tick().await;
     }
@@ -1356,7 +1390,7 @@ mod tests {
             .expect_feed_urls_needing_catchup()
             .times(1)
             .returning(|_| Ok(vec![]));
-        let mut events = storage::MockFeedEventStorage::new();
+        let mut events = MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
             .times(1)
@@ -1364,7 +1398,7 @@ mod tests {
         events
             .expect_mark_exhausted()
             .times(1)
-            .returning(|_, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let w = worker(
             site_config,
             posts,
@@ -1376,7 +1410,7 @@ mod tests {
         drop(guard);
         let trace = trace_text(&output);
         assert_context_once(&trace, "server.feed.regenerate");
-        assert_context_once(&trace, "server.feed.status_write.288");
+        assert_context_once(&trace, "server.feed.status_write.mark_exhausted");
         assert_eq!(
             trace.matches(r#""error.disposition":"swallowed""#).count(),
             2,

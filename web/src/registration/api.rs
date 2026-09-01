@@ -15,16 +15,17 @@ use common::{MutationOutcome, registration::RegistrationPolicy, username::Userna
 #[cfg(feature = "server")]
 use {
     crate::auth,
-    crate::error::{InternalError, from_write_scope_error},
+    crate::error::{InternalError, InternalResult, from_write_scope_error},
     common::ids::UserId,
     common::session_label::SessionLabel,
+    common::token::RawToken,
     host::invite::InviteCode,
     host::metrics::{self, InviteEvent, RegistrationResult, RegistrationSource},
     host::password,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{
-        InviteStorage, SessionStorage, SiteConfigStorage, UserStorage, WriteScope,
+        InviteStorage, SessionStorage, SiteConfigStorage, UserStorage, WriteScope, WriteScopeError,
         account_mutations::{self, RegisterWithInviteInput},
     },
     tracing::Instrument,
@@ -33,15 +34,15 @@ use {
 #[cfg(feature = "server")]
 fn classify_registration_scope_result(
     scope_result: Result<
-        MutationOutcome<common::token::RawToken>,
-        storage::WriteScopeError<InternalError>,
+        MutationOutcome<(RawToken, Option<UserId>)>,
+        WriteScopeError<InternalError>,
     >,
     span: &tracing::Span,
-    metric_policy: host::metrics::RegistrationPolicy,
+    metric_policy: metrics::RegistrationPolicy,
     is_invite_registration: bool,
-) -> crate::error::InternalResult<MutationOutcome<common::token::RawToken>> {
+) -> InternalResult<MutationOutcome<RawToken>> {
     match scope_result {
-        Ok(MutationOutcome::Confirmed(token)) => {
+        Ok(MutationOutcome::Confirmed((token, invite_consumed))) => {
             metrics::registration(
                 RegistrationSource::Web,
                 metric_policy,
@@ -50,9 +51,17 @@ fn classify_registration_scope_result(
             if is_invite_registration {
                 metrics::invite(InviteEvent::Redeemed);
             }
+            if let Some(user_id) = invite_consumed {
+                tracing::info!(
+                    credential.kind = "invite",
+                    credential.outcome = "consumed",
+                    user.id = %user_id,
+                    "credential consumed"
+                );
+            }
             Ok(MutationOutcome::Confirmed(token))
         }
-        Ok(MutationOutcome::CommitIndeterminate(token)) => {
+        Ok(MutationOutcome::CommitIndeterminate((token, _))) => {
             span.record("registration.outcome", "commit_indeterminate");
             Ok(MutationOutcome::CommitIndeterminate(token))
         }
@@ -68,7 +77,7 @@ fn classify_registration_scope_result(
 }
 
 #[cfg(feature = "server")]
-fn finalize_registration(outcome: MutationOutcome<common::token::RawToken>) -> MutationOutcome<()> {
+fn finalize_registration(outcome: MutationOutcome<RawToken>) -> MutationOutcome<()> {
     match outcome {
         MutationOutcome::Confirmed(raw_token) => {
             auth::set_session_cookie(&raw_token);
@@ -149,7 +158,7 @@ pub async fn register(
     let scope_result = write_scope
         .run(|transaction| {
             Box::pin(async move {
-                let user_id_result: Result<UserId, InternalError> = match policy {
+                let user_id_result: Result<(UserId, Option<UserId>), InternalError> = match policy {
                     RegistrationPolicy::Open => {
                         operation_span.record("registration.outcome", "create_user");
                         let Some(password) = prepared_password.as_ref() else {
@@ -161,6 +170,7 @@ pub async fn register(
                                 "web.registration.register.create_user"
                             ))
                             .await
+                            .map(|user_id| (user_id, None))
                             .map_err(Into::into)
                     }
                     RegistrationPolicy::InviteOnly => {
@@ -185,6 +195,7 @@ pub async fn register(
                                 "web.registration.register.create_user_with_invite"
                             ))
                             .await
+                            .map(|user_id| (user_id, Some(user_id)))
                             .map_err(Into::into)
                         } else {
                             operation_span.record("registration.outcome", "invite_required");
@@ -196,7 +207,7 @@ pub async fn register(
                         Err(InternalError::validation("registration is closed"))
                     }
                 };
-                let user_id = user_id_result?;
+                let (user_id, invite_consumed) = user_id_result?;
                 let signup_label = SessionLabel::from_lossy("Sign-up session");
                 sessions
                     .create_session(transaction, user_id, &signup_label)
@@ -204,6 +215,7 @@ pub async fn register(
                         "web.registration.register.create_session"
                     ))
                     .await
+                    .map(|token| (token, invite_consumed))
                     .map_err(InternalError::storage)
             })
         })
@@ -228,7 +240,7 @@ mod tests {
     fn scope_result_preserves_indeterminate_token_without_confirmed_metrics() {
         let token = parse_raw_token("token");
         let outcome = classify_registration_scope_result(
-            Ok(MutationOutcome::CommitIndeterminate(token.clone())),
+            Ok(MutationOutcome::CommitIndeterminate((token.clone(), None))),
             &Span::none(),
             host::metrics::RegistrationPolicy::Open,
             false,

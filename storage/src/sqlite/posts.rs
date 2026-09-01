@@ -10,8 +10,10 @@ use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
     UpdatePostError, UpdatePostInput, WriteTransaction, sqlite_connection,
 };
+use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
+use common::time::UtcInstant;
 type MediaRefRow = (
     common::media::MediaSource,
     common::media::ContentHash,
@@ -29,7 +31,7 @@ async fn apply_lifecycle_change(
     publish: bool,
     delete: bool,
 ) -> sqlx::Result<()> {
-    let now = common::time::UtcInstant::now();
+    let now = UtcInstant::now();
     posts::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
     if delete {
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
@@ -194,6 +196,25 @@ impl PostDialect for Sqlite {
         Ok(())
     }
 
+    async fn lock_live_idempotency_mapping(
+        conn: &mut <Self as sqlx::Database>::Connection,
+        user_id: UserId,
+        key: &IdempotencyKey,
+        cutoff: UtcInstant,
+    ) -> sqlx::Result<Option<PostId>> {
+        // WriteScope starts SQLite mutations with BEGIN IMMEDIATE, so the
+        // database writer lock serializes both present and absent mappings.
+        sqlx::query_scalar(
+            "SELECT post_id FROM idempotency_keys
+             WHERE user_id = $1 AND key = $2 AND created_at > $3",
+        )
+        .bind(user_id)
+        .bind(key)
+        .bind(cutoff)
+        .fetch_optional(&mut *conn)
+        .await
+    }
+
     const DELETE_POST_MEDIA: &'static str =
         "DELETE FROM post_media WHERE post_id = ? AND subject_kind = 'current' AND revision_id = 0";
 
@@ -340,7 +361,7 @@ impl PostDialect for Sqlite {
         posts::capture_complete_post_revision::<Sqlite>(
             &mut *connection,
             post_id,
-            common::time::UtcInstant::now(),
+            UtcInstant::now(),
         )
         .await?;
         for label in diff.to_add {

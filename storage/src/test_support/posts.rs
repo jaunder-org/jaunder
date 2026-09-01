@@ -348,14 +348,18 @@ impl SeedRawPost {
         let outcome = state
             .write_scope
             .run(move |transaction| {
-                Box::pin(async move { posts.create_post(transaction, &input).await })
+                Box::pin(async move {
+                    posts
+                        .create_post(transaction, &input, UtcInstant::now())
+                        .await
+                })
             })
             .await
             .map_err(|error| match error {
                 crate::WriteScopeError::Operation(error) => error,
                 crate::WriteScopeError::Begin(error) => CreatePostError::Internal(error),
             })?;
-        let post_id = confirmed_for(outcome, "seed raw post").post_id;
+        let post_id = confirmed_for(outcome, "seed raw post").record.post_id;
         Ok(SeededPost {
             post_id,
             slug,

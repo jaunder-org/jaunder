@@ -305,16 +305,23 @@ ADR-0047. At the AtomPub boundary, a missing header, a value rejected by
 `HeaderValue::to_str` (including non-ASCII UTF-8 bytes and invalid UTF-8), or
 text that is blank after trimming means no key rather than a `400`. A readable,
 non-blank value is parsed once into an owned `IdempotencyKey`; typed borrowed
-keys carry it through post creation and duplicate lookup, and the owned type is
-bound for persistence.
+keys carry it through post creation and the owned type is bound for persistence.
 
-The existing `idempotency_keys` table needs no schema migration: it stores the
-key as `TEXT NOT NULL` and enforces `UNIQUE(user_id, key)`. A fresh keyed create
-writes its post and key row atomically; a uniqueness collision rolls the
-attempted creation back. The fresh keyed create returns `201`; when its original
-post remains available, same-user key reuse returns that original post as `200`,
-even when the new payload differs. Another user may use the same key
-independently, and key rows are retained indefinitely.
+The existing `idempotency_keys` table stores the key as `TEXT NOT NULL` and
+enforces `UNIQUE(user_id, key)`. Storage serializes each `(user_id, key)` pair
+inside the create transaction (`SQLite`'s writer lock; a `PostgreSQL` advisory
+lock plus row lock) and applies the request's authoritative cutoff there. A live
+mapping returns its selected `PostId` as the replay decision without attempting
+new post or feed-event writes; the AtomPub handler fetches that fixed Post
+rather than looking the mapping up again after rollback. An expired mapping is
+removed and its replacement post and key row are written atomically. Fresh
+creation returns `201`; when its original post remains available, same-user key
+reuse returns that original post as `200`, even when the new payload differs.
+Another user may use the same key independently. The
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+replaces indefinite mapping retention with a one-hour semantic replay window: at
+`cutoff <= now`, the mapping no longer coordinates a replay, whether or not a
+later cleanup pass has physically removed it.
 
 ### Testing (summary)
 
@@ -593,14 +600,14 @@ boundary and non-owner requests are masked as absent. Both lists use
 newest-first immutable Revision-ID keyset pagination with bounded overfetch and
 opaque cursors. History is not a revert mechanism.
 
-Soft deletion stamps and retains the Post, all revisions, idempotency records,
-and child relationships indefinitely while excluding the current Post from
-active web reads, Syndication Feeds, and AtomPub Collections. Active permalink
-and syndicated-item identity can be reused by a later Post, with accepted
+Soft deletion stamps and retains the Post, all revisions, and child
+relationships indefinitely while excluding the current Post from active web
+reads, Syndication Feeds, and AtomPub Collections. Active permalink and
+syndicated-item identity can be reused by a later Post, with accepted
 feed-reader conflation; restore is not promised. There is no product purge. A
-future purge must decide the combined Post, Revision, media, idempotency, and
-child erasure policy ([ADR-0136](adr/0136-local-post-lifecycle.md)). ADR-0009
-continues to govern consumed content rather than these local rows.
+future purge must decide the combined Post, Revision, media, and child erasure
+policy ([ADR-0136](adr/0136-local-post-lifecycle.md)). ADR-0009 continues to
+govern consumed content rather than these local rows.
 
 Cross-cutting values are validated newtypes whose `FromStr` is the single
 chokepoint: `Username`, `Slug`, and `Tag` live in `common`; `Password` lives in
@@ -809,8 +816,14 @@ separately inspectable and redrivable
 `Failed`, or `NoHub`.
 [AtomPub does not enqueue, web enqueue is not atomic, and triggers are coarse](https://github.com/jaunder-org/jaunder/issues/1051).
 [Configuration changes do not invalidate caches, worker/regenerator snapshots can differ, configuration access errors can collapse to `NoHub`, HTTP failures retry alike, `Retry-After` is ignored, budgets are shared, and terminal rows lack redrive](https://github.com/jaunder-org/jaunder/issues/1052).
-`HttpWebSubClient` runs in production; noop and file-capture implementations
-back tests.
+
+The
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+makes completed feed events cleanup-eligible immediately and retains exhausted
+events for seven days before making them cleanup-eligible. It is terminal-row
+retention, not a recovery or redrive decision for #1052, and does not apply to
+`feed_cache`. `HttpWebSubClient` runs in production; noop and file-capture
+implementations back tests.
 
 ### Committed direction — inbound federation
 
@@ -917,6 +930,13 @@ pass.
   User-Agent/host label, app passwords carry a user-supplied name. Revocation is
   deleting the session in the Sessions UI
   ([ADR-0014](adr/0014-atompub-authentication.md)).
+
+The
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+separates permanent sessions and App Passwords from credentials with expiry: an
+expired credential remains retained for 24 hours after expiry, while a consumed
+credential is cleanup-eligible immediately.
+
 - A token for user X reaches only `/atompub/X/*`. The enforcer is
   `server::atompub::require_user_match` (`server/src/atompub/guards.rs:13`),
   which returns 403 on mismatch and guards every per-user route — directly at
@@ -1019,6 +1039,11 @@ split by the **entropy of the value being validated**:
   bogus-secret requests into a CPU-exhaustion amplifier while destroying invite
   issuance as a throttle
   ([ADR-0022](adr/0022-validate-before-expensive-work.md)).
+
+The
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+governs retention after a credential enters its terminal state; it does not
+alter the cheap-reject and atomic-claim security properties above.
 
 Do not apply the equalizing-dummy-hash rule to high-entropy-secret paths, or
 cheap-reject to enumerable identifiers — each ADR carries the scope boundary to
@@ -1423,6 +1448,12 @@ determinants follow the same rule: record bounded decisions and stable internal
 IDs, never passwords, tokens, raw emails, invite codes, request bodies,
 arbitrary source text, or whole-struct dumps.
 
+The
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+adds PII- and secret-free structured OpenTelemetry signals at transient-data
+state transitions: expiry, consumption, completion, exhaustion, and cleanup. The
+operator, rather than Jaunder, owns long-term telemetry retention.
+
 ### Server-fn span names are macro-derived
 
 Every `#[server]` fn in `web/src` is written as `#[macros::server]`, which emits
@@ -1708,17 +1739,27 @@ feature.
 **What is inside the executable.** Two `rust-embed` trees, so **no external file
 is needed to serve the client** ([ADR-0003](adr/0003-asset-management.md)).
 Request handling still touches disk for user data — media blobs are opened per
-request from the storage path (`server/src/media.rs:116,147`) — and the process
-may also write a runtime-info JSON file and read a PostgreSQL password file; see
-"Outside the binary" below.
+request from the storage path (`server/src/media.rs`) — and the process writes
+its sole runtime identity to `<storage>/runtime.json` and may read a PostgreSQL
+password file; see "Outside the binary" below.
 
-That runtime file is not only informational: it is a **startup mutex**.
-`check_startup_mutex` (`server/src/runtime_file.rs:104`, called from
-`server/src/commands.rs:487`) makes `serve` **refuse to start** when the file
-names a live writer process, and an unreadable file refuses too rather than
-serving with a broken guard (`runtime_file.rs:61`). A `RuntimeFileGuard` removes
-it on graceful exit and on SIGTERM/SIGINT (`commands.rs:1227-1234`). The e2e
-harness reads the same file for port discovery.
+Startup ownership is an OS-backed exclusive `runtime.lock` keyed only by the
+storage directory. `serve` acquires it before transient cleanup and retains it
+through shutdown, so two processes cannot clean the same `media/tmp`. Before
+cleanup it writes the canonical `<storage>/runtime.json` identity; that initial
+reservation is fatal on failure. If the file identifies a live process through
+its JSON `pid` plus process start time, startup refuses before cleanup. The
+pre-bind reservation uses port zero; discovery consumers treat it as not ready
+and reread until the bound nonzero port is published. Address updates are
+best-effort but preserve the live reservation on failure. Graceful shutdown
+first stops background admission and drains every admitted job and active
+measurement, then removes the canonical identity before releasing the lock;
+forced process exit removes the identity and lets the OS release the lock. The
+e2e and Elisp harnesses read that canonical file for this port handshake. This
+retains ADR-0035's discovery contract while the
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+qualifies its JSON-as-mutex behavior and removes ADR-0144's runtime-path
+override.
 
 - `StaticAssets` (`server/src/assets.rs:3-5`, `#[folder = "assets/"]`) carries
   the base stylesheets `jaunder.css` and `jaunder-themes.css`, mounted at
@@ -1761,6 +1802,19 @@ storage configuration ([ADR-0064](adr/0064-backup-target-auto-derivation.md),
 [ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)); and
 `site-config set/get/list/unset` reads and writes site settings.
 
+**Transient-data cleanup.** The
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+requires database-backed transient data to have authoritative semantic expiry at
+`cutoff <= now`, with physical removal once at startup and daily thereafter.
+Each run receives one explicit `now` and drains eligible backlogs through
+repeated fixed-size statements that release locks between batches. A database
+cleanup failure is reported, does not stop later domains in the same run, and
+retries during the next scheduled run. Before uploads are accepted, startup
+clears `media/tmp`; failure to clear it is fatal. The policy excludes durable
+Posts, revisions, tombstones, and referenced media; non-expiring sessions and
+App Passwords; `feed_cache`; and external captures, and deliberately creates no
+generic retention framework.
+
 `site-config` is not a free-form door. Its `key` argument is host-owned
 `SiteConfigKey`, so clap rejects an unknown key at parse time, and each key
 carries the validator that `set` runs before any row is written
@@ -1779,19 +1833,21 @@ closed-enum convention rather than a config-specific matcher
 
 Deployment is configured by clap flags with matching `JAUNDER_*` environment
 fallbacks and documented defaults
-([process configuration](adr/0144-process-configuration-cli-contract.md)). The
-process-shape variables are `JAUNDER_BIND` (listen address, `:267`),
+([process configuration](adr/0144-process-configuration-cli-contract.md), as
+qualified by the
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)).
+The process-shape variables are `JAUNDER_BIND` (listen address, `:267`),
 `JAUNDER_DB` (database URL, default `sqlite:./data/jaunder.db`, `:41`),
 `JAUNDER_STORAGE_PATH` (the data directory, default `./data`, `:33`),
-`JAUNDER_ENV` (`dev` | `prod`, `:271`), `JAUNDER_RUNTIME_FILE` (`:276`) and
-`JAUNDER_VERBOSE` (`:25`). PostgreSQL takes its secret by either
-`JAUNDER_DB_PASSWORD` or `JAUNDER_DB_PASSWORD_FILE`; the file source wins over
-the variable, and either wins over an embedded URL password. All runtime
-environment inputs — including the observability variables covered under
-[Observability](#observability) — are resolved once at an executable, command,
-or test-harness composition root into narrow typed configuration, then injected
-into the subsystems that own them. Library modules neither reread ambient
-configuration nor receive a general environment reader or process-config bundle
+`JAUNDER_ENV` (`dev` | `prod`, `:271`), and `JAUNDER_VERBOSE` (`:25`).
+PostgreSQL takes its secret by either `JAUNDER_DB_PASSWORD` or
+`JAUNDER_DB_PASSWORD_FILE`; the file source wins over the variable, and either
+wins over an embedded URL password. All runtime environment inputs — including
+the observability variables covered under [Observability](#observability) — are
+resolved once at an executable, command, or test-harness composition root into
+narrow typed configuration, then injected into the subsystems that own them.
+Library modules neither reread ambient configuration nor receive a general
+environment reader or process-config bundle
 ([peripheral process configuration](adr/0158-peripheral-process-configuration.md)).
 `prod` is load-bearing in two places: it sets the `secure_cookies` flag passed
 to `create_router` (`server/src/commands.rs:546`, `server/src/lib.rs:32`), and

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use common::ids::FeedEventId;
+use common::pagination::RowLimit;
 use common::time::UtcInstant;
 use host::feed::FeedEventClaimLimit;
 use sqlx::{Pool, Postgres};
@@ -71,7 +72,7 @@ impl FeedEventDialect for Postgres {
              ) \
              UPDATE feed_events SET status = 'claimed', claimed_at = $1 \
              WHERE id IN (SELECT id FROM eligible) \
-             RETURNING id, feed_url, status, attempts, last_error, next_attempt_at, claimed_at, \
+             RETURNING id, feed_url, status, attempts, last_error, next_attempt_at, claimed_at, terminal_at, \
                        created_at, regenerated_at, pinged_at",
         )
         .bind(now)
@@ -121,13 +122,15 @@ impl FeedEventDialect for Postgres {
     async fn mark_pinged(
         connection: &mut sqlx::PgConnection,
         ids: &[FeedEventId],
+        now: UtcInstant,
     ) -> Result<(), FeedEventError> {
-        let now = UtcInstant::now();
-        sqlx::query("UPDATE feed_events SET status = 'done', pinged_at = $1 WHERE id = ANY($2)")
-            .bind(now)
-            .bind(ids)
-            .execute(&mut *connection)
-            .await?;
+        sqlx::query(
+            "UPDATE feed_events SET status = 'done', pinged_at = $1, terminal_at = $1 WHERE id = ANY($2)",
+        )
+        .bind(now)
+        .bind(ids)
+        .execute(&mut *connection)
+        .await?;
         Ok(())
     }
 
@@ -156,14 +159,41 @@ impl FeedEventDialect for Postgres {
         connection: &mut sqlx::PgConnection,
         ids: &[FeedEventId],
         error: &str,
+        now: UtcInstant,
     ) -> Result<(), FeedEventError> {
-        sqlx::query("UPDATE feed_events SET status = 'failed', last_error = $1 WHERE id = ANY($2)")
-            // sqlx-newtype-bind:allow permanent-primitive — stored diagnostic text has no domain identity.
-            .bind(error)
-            .bind(ids)
-            .execute(&mut *connection)
-            .await?;
+        sqlx::query(
+            "UPDATE feed_events SET status = 'failed', last_error = $1, terminal_at = $2 WHERE id = ANY($3)",
+        )
+        // sqlx-newtype-bind:allow permanent-primitive — stored diagnostic text has no domain identity.
+        .bind(error)
+        .bind(now)
+        .bind(ids)
+        .execute(&mut *connection)
+        .await?;
         Ok(())
+    }
+    async fn prune_terminal_events(
+        pool: &Pool<Postgres>,
+        now: UtcInstant,
+        failed_cutoff: UtcInstant,
+        limit: RowLimit,
+    ) -> Result<u64, FeedEventError> {
+        let result = sqlx::query(
+            "WITH eligible AS ( \
+                SELECT id FROM feed_events \
+                WHERE (status = 'done' AND terminal_at <= $1) \
+                   OR (status = 'failed' AND terminal_at <= $2) \
+                ORDER BY terminal_at ASC \
+                LIMIT $3 \
+             ) \
+             DELETE FROM feed_events WHERE id IN (SELECT id FROM eligible)",
+        )
+        .bind(now)
+        .bind(failed_cutoff)
+        .bind(limit)
+        .execute(pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 }
 
@@ -182,6 +212,7 @@ mod tests {
             last_error: None,
             next_attempt_at: now,
             claimed_at: Some(now),
+            terminal_at: None,
             created_at: now,
             regenerated_at: None,
             pinged_at: None,

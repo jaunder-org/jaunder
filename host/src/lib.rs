@@ -11,9 +11,9 @@
 //! Syndication Feed policy/serialization, and sanitization; [`config_key`]
 //! owns the validated site-wide and per-user configuration registries; [`password`] owns the
 //! validated domain secret and Argon2 operations, paired with the persisted
-//! [`stored_password_hash::StoredPasswordHash`]; [`metrics`] and [`telemetry`] own
-//! process observability; and [`smtp_config`] holds the validated outbound relay
-//! aggregate.
+//! [`stored_password_hash::StoredPasswordHash`]; [`retention`] owns the bounded
+//! database-maintenance vocabulary; [`metrics`] and [`telemetry`] own process
+//! observability; and [`smtp_config`] holds the validated outbound relay aggregate.
 
 pub mod atompub;
 pub mod auth;
@@ -26,6 +26,7 @@ pub mod invite;
 pub mod metrics;
 pub mod password;
 pub mod render;
+pub mod retention;
 pub mod smtp_config;
 pub mod stored_password_hash;
 pub mod telemetry;

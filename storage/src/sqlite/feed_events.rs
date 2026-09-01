@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use common::ids::FeedEventId;
+use common::pagination::RowLimit;
 use common::time::UtcInstant;
 use host::feed::FeedEventClaimLimit;
 use sqlx::{Pool, Sqlite};
@@ -76,7 +77,7 @@ impl FeedEventDialect for Sqlite {
                  ORDER BY next_attempt_at ASC \
                  LIMIT $4 \
              ) \
-             RETURNING id, feed_url, status, attempts, last_error, next_attempt_at, claimed_at, \
+             RETURNING id, feed_url, status, attempts, last_error, next_attempt_at, claimed_at, terminal_at, \
                        created_at, regenerated_at, pinged_at",
         )
         .bind(now)
@@ -129,12 +130,13 @@ impl FeedEventDialect for Sqlite {
     async fn mark_pinged(
         connection: &mut sqlx::SqliteConnection,
         ids: &[FeedEventId],
+        now: UtcInstant,
     ) -> Result<(), FeedEventError> {
-        let now = UtcInstant::now();
         let ph = placeholders(ids.len());
-        let sql =
-            format!("UPDATE feed_events SET status = 'done', pinged_at = ? WHERE id IN ({ph})");
-        let mut q = sqlx::query(&sql).bind(now);
+        let sql = format!(
+            "UPDATE feed_events SET status = 'done', pinged_at = ?, terminal_at = ? WHERE id IN ({ph})"
+        );
+        let mut q = sqlx::query(&sql).bind(now).bind(now);
         for id in ids {
             q = q.bind(*id);
         }
@@ -167,17 +169,41 @@ impl FeedEventDialect for Sqlite {
         connection: &mut sqlx::SqliteConnection,
         ids: &[FeedEventId],
         error: &str,
+        now: UtcInstant,
     ) -> Result<(), FeedEventError> {
         let ph = placeholders(ids.len());
-        let sql =
-            format!("UPDATE feed_events SET status = 'failed', last_error = ? WHERE id IN ({ph})");
+        let sql = format!(
+            "UPDATE feed_events SET status = 'failed', last_error = ?, terminal_at = ? WHERE id IN ({ph})"
+        );
         // sqlx-newtype-bind:allow permanent-primitive — stored diagnostic text has no domain identity.
-        let mut q = sqlx::query(&sql).bind(error);
+        let mut q = sqlx::query(&sql).bind(error).bind(now);
         for id in ids {
             q = q.bind(*id);
         }
         q.execute(&mut *connection).await?;
         Ok(())
+    }
+    async fn prune_terminal_events(
+        pool: &Pool<Sqlite>,
+        now: UtcInstant,
+        failed_cutoff: UtcInstant,
+        limit: RowLimit,
+    ) -> Result<u64, FeedEventError> {
+        let result = sqlx::query(
+            "DELETE FROM feed_events WHERE id IN ( \
+                SELECT id FROM feed_events \
+                WHERE (status = 'done' AND terminal_at <= $1) \
+                   OR (status = 'failed' AND terminal_at <= $2) \
+                ORDER BY terminal_at ASC \
+                LIMIT $3 \
+             )",
+        )
+        .bind(now)
+        .bind(failed_cutoff)
+        .bind(limit)
+        .execute(pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 }
 
@@ -216,6 +242,7 @@ mod tests {
             last_error: None,
             next_attempt_at: now,
             claimed_at: Some(now),
+            terminal_at: None,
             created_at: now,
             regenerated_at: None,
             pinged_at: None,

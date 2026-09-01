@@ -52,13 +52,18 @@ token) and surfaced only on a non-zero exit."
       (delete-file errfile))))
 
 (defun jaunder-test--read-runtime-file (path)
-  "Return (IP . PORT) from runtime file PATH, or nil if absent/unparseable."
+  "Return ready (IP . PORT) from runtime file PATH, else nil.
+A pre-bind ownership reservation has port zero; treat it as not ready so the
+caller rereads the file after the server publishes its bound address."
   (when (and (file-exists-p path)
              (> (file-attribute-size (file-attributes path)) 0))
     (ignore-errors
       (let* ((json-object-type 'alist)
-             (data (json-read-file path)))
-        (cons (alist-get 'ip data) (alist-get 'port data))))))
+             (data (json-read-file path))
+             (ip (alist-get 'ip data))
+             (port (alist-get 'port data)))
+        (when (and (stringp ip) (integerp port) (< 0 port) (<= port 65535))
+          (cons ip port))))))
 
 (defun jaunder-test--wait (predicate what &optional timeout)
   "Poll PREDICATE until non-nil or TIMEOUT seconds elapse; then error WHAT.
@@ -112,7 +117,7 @@ before `serve' (no concurrent sqlite writer); the caller must pair this with
          (tmp (make-temp-file "jaunder-it-" t))
          (storage (expand-file-name "data" tmp))
          (db (concat "sqlite:" (expand-file-name "jaunder.db" tmp)))
-         (rf (expand-file-name "runtime.json" tmp))
+         (runtime (expand-file-name "runtime.json" storage))
          (authinfo (expand-file-name "authinfo" tmp))
          (stderr (generate-new-buffer " *jaunder-server*"))
          (username "alice")
@@ -131,9 +136,9 @@ before `serve' (no concurrent sqlite writer); the caller must pair this with
                         :name "jaunder-server" :buffer stderr :noquery t
                         :command (list bin "serve" "--bind" "127.0.0.1:0"
                                        "--db" db "--storage-path" storage
-                                       "--runtime-file" rf "--environment" "dev")))
+                                       "--environment" "dev")))
             (let* ((addr (jaunder-test--wait
-                          (lambda () (jaunder-test--read-runtime-file rf)) "runtime.json"))
+                          (lambda () (jaunder-test--read-runtime-file runtime)) "runtime.json"))
                    (base-url (format "http://%s:%s" (car addr) (cdr addr))))
               (jaunder-test--wait
                (lambda () (jaunder-test--http-reachable-p (concat base-url "/")))

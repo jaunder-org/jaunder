@@ -8,7 +8,7 @@ use common::time::UtcInstant;
 use host::invite::InviteCode;
 use rstest::*;
 use rstest_reuse::*;
-use storage::test_support::{Backend, CloseablePool, SeedUser, backends};
+use storage::test_support::{Backend, CloseablePool, SeedUser, backends, confirmed_for};
 use storage::{
     AppState, WriteScopeError,
     account_mutations::{self, RegisterWithInviteError, RegisterWithInviteInput},
@@ -385,7 +385,7 @@ pub(super) async fn create_invite(state: &AppState, expires_at: UtcInstant) -> I
         })
         .await
         .expect("invite fixture setup should succeed");
-    storage::test_support::confirmed_for(outcome, "invite fixture setup")
+    confirmed_for(outcome, "invite fixture setup")
 }
 
 async fn create_user_with_invite(
@@ -400,7 +400,7 @@ async fn create_user_with_invite(
         create_user_with_invite_result(state, username, password, display_name, is_operator, code)
             .await
             .expect("invite registration should succeed");
-    storage::test_support::confirmed_for(outcome, "invite registration")
+    confirmed_for(outcome, "invite registration")
 }
 
 async fn create_user_with_invite_result(

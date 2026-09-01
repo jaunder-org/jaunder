@@ -147,7 +147,7 @@ async fn cmd_serve_fails_when_not_initialized(#[case] backend: Backend) {
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
     let (telemetry, capture) = default_host_config();
-    let result = cmd_serve(&args, bind, true, None, &telemetry, capture.as_ref()).await;
+    let result = cmd_serve(&args, bind, true, &telemetry, capture.as_ref()).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -338,7 +338,7 @@ async fn prepare_server_binds_and_builds_serving_router(#[case] backend: Backend
     drop(probe);
 
     let (telemetry, capture) = default_host_config();
-    let prepared = prepare_server(&args, bind, true, None, &telemetry, capture.as_ref())
+    let prepared = prepare_server(&args, bind, true, &telemetry, capture.as_ref())
         .await
         .expect("prepare_server should succeed after init");
     assert_eq!(
@@ -369,18 +369,11 @@ async fn prepare_server_writes_then_removes_runtime_file(#[case] backend: Backen
     let bind = probe.local_addr().unwrap();
     drop(probe);
 
-    let rt_path = base.path().join("runtime.json");
+    let rt_path = args.storage_path.join("runtime.json");
     let (telemetry, capture) = default_host_config();
-    let prepared = prepare_server(
-        &args,
-        bind,
-        true,
-        Some(rt_path.clone()),
-        &telemetry,
-        capture.as_ref(),
-    )
-    .await
-    .expect("prepare_server should succeed after init");
+    let prepared = prepare_server(&args, bind, true, &telemetry, capture.as_ref())
+        .await
+        .expect("prepare_server should succeed after init");
 
     assert!(
         rt_path.exists(),
@@ -843,7 +836,7 @@ async fn cmd_restore_rejects_pre_identity_backup(#[case] backend: Backend) {
         error.downcast_ref::<BackupError>(),
         Some(BackupError::SchemaVersionMismatch {
             backup_version: 26,
-            target_version: 28
+            target_version: 29
         })
     ));
 }
