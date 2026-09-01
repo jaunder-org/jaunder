@@ -10,7 +10,7 @@ use tower::ServiceExt;
 
 use crate::helpers::{
     atompub_at, atompub_get, atompub_location, atompub_post_xml, atompub_put_xml, body_string,
-    create_user_and_session, make_app, setup_with_base_url,
+    create_user_and_session, make_app,
 };
 use storage::test_support::{Backend, TestEnv, backends};
 
@@ -47,7 +47,7 @@ fn entry_xml_with_draft_no_and_published(title: &str, content: &str, published: 
 #[apply(backends)]
 #[tokio::test]
 async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -103,7 +103,7 @@ async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn explicit_atom_draft_no_beats_org_metadata_and_canonicalizes_org(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">
@@ -167,7 +167,7 @@ Org body</content>
 #[apply(backends)]
 #[tokio::test]
 async fn create_org_bookkeeping_must_match_final_values(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let publication = "2024-01-02T03:04:05Z";
     let valid = format!(
@@ -228,7 +228,7 @@ Body</content>
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -278,7 +278,7 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -308,7 +308,7 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_explicit_draft_no_preserves_published_instant(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
     let xml = entry_xml_with_draft_no_and_published("Old post", "body", "2000-01-01T00:00:00Z");
@@ -336,7 +336,7 @@ async fn create_with_explicit_draft_no_preserves_published_instant(#[case] backe
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     // Start from a live post, then PUT a non-draft entry with a future
@@ -374,7 +374,7 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_explicit_draft_no_preserves_published_instant(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let post = session.seed_post().seed(&state).await;
     let app = make_app(&state, &base);

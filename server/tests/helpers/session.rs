@@ -3,10 +3,9 @@ use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_session_label;
 use common::token::RawToken;
 use common::username::Username;
-use host::config_key::SiteConfigKey;
 use std::sync::Arc;
 
-use storage::test_support::{Backend, TestEnv, confirmed_for};
+use storage::test_support::confirmed_for;
 
 /// Returns a `PathBuf` pointing to a temporary directory usable as a storage
 /// root.  The caller is responsible for keeping the `TempDir` alive; this
@@ -141,28 +140,8 @@ pub fn basic_header(username: &str, token: &RawToken) -> String {
     format!("Basic {encoded}")
 }
 
-/// Seeds the required `site.base_url` precondition (#560): the `AtomPub` handlers
-/// compose absolute URLs from it, so any handler that emits a URL 500s when it is
-/// unset. `BaseUrl` canonicalizes this to `https://example.com/` (trailing
-/// slash), so composed URLs are prefixed with `https://example.com`.
-pub async fn seed_base_url(state: &Arc<storage::AppState>) {
-    crate::helpers::set_site_config(state, SiteConfigKey::SiteBaseUrl, "https://example.com/")
-        .await
-        .unwrap();
-}
-
-/// `backend.setup()` + the required `site.base_url` seed (#560): the standard setup for a
-/// test that exercises the feed/AtomPub surface, so require-base is a fixture default
-/// rather than a per-test opt-in. Returns the `TestEnv` unchanged.
-pub async fn setup_with_base_url(backend: Backend) -> TestEnv {
-    let env = backend.setup().await;
-    seed_base_url(&env.state).await;
-    env
-}
-
 /// Assert exactly one email was captured, sent to `recipient`, carrying an
-/// **absolute** `https://example.com{path}?token=…` link (not a relative path) —
-/// the shape produced when `site.base_url` is seeded (`seed_base_url`).
+/// **absolute** `https://example.com{path}?token=…` link (not a relative path).
 pub fn assert_one_absolute_link_email(mailer: &CapturingMailSender, recipient: &str, path: &str) {
     let sent = mailer.sent();
     assert_eq!(sent.len(), 1, "expected exactly one email");

@@ -16,13 +16,12 @@ mod session;
 mod site_config;
 mod websub_capturing;
 
-// Three items are deliberately absent from the re-export lists below —
-// `atompub_authed`, `basic_header`, `seed_base_url`. Each is now consumed only
-// from inside this directory (`atompub_authed` by its own file's builders,
-// `basic_header` by `atompub.rs` directly, `seed_base_url` by
-// `setup_with_base_url` beside it), so re-exporting them would be an import
-// nothing outside consumes — and `unused_imports` is denied. Each definition
-// keeps its `pub`, so nothing narrowed; only unreachable paths went away.
+// Two items are deliberately absent from the re-export lists below —
+// `atompub_authed` and `basic_header`. Each is now consumed only from inside
+// this directory (`atompub_authed` by its own file's builders, `basic_header`
+// by `atompub.rs` directly), so re-exporting them would be an import nothing
+// outside consumes — and `unused_imports` is denied. Each definition keeps its
+// `pub`, so nothing narrowed; only unreachable paths went away.
 pub use atompub::{
     atompub, atompub_at, atompub_authed, atompub_get, atompub_location, atompub_post_xml,
     atompub_put_xml, atompub_upload, atompub_xml,
@@ -40,8 +39,8 @@ pub use posts::{create_post_json, update_post_json};
 pub use registrar::{REGISTERED_SERVER_FN_COUNT, ensure_server_fns_registered};
 pub use session::{
     SeededSession, assert_no_email, assert_one_absolute_link_email, create_operator_and_session,
-    create_session_for, create_user_and_session, session_cookie, setup_with_base_url,
-    tmp_storage_path, token_from_set_cookie,
+    create_session_for, create_user_and_session, session_cookie, tmp_storage_path,
+    token_from_set_cookie,
 };
 pub use site_config::{delete_site_config, set_site_config};
 // The capturing WebSub client used by `feed_worker.rs`.

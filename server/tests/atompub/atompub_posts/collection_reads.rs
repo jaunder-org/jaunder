@@ -5,9 +5,7 @@ use rstest::*;
 use rstest_reuse::*;
 use tower::ServiceExt;
 
-use crate::helpers::{
-    atompub_get, body_string, create_user_and_session, make_app, setup_with_base_url,
-};
+use crate::helpers::{atompub_get, body_string, create_user_and_session, make_app};
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
 // #560: the AtomPub surface composes absolute URLs, so it *requires* `site.base_url`.
@@ -16,8 +14,8 @@ use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 #[apply(backends)]
 #[tokio::test]
 async fn collection_get_without_base_url_returns_500(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    // Deliberately do NOT seed_base_url.
+    let TestEnv { state, base } = backend.setup().base_url(None).await;
+    // Deliberately omit the shared fixture's base URL.
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -29,7 +27,7 @@ async fn collection_get_without_base_url_returns_500(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn collection_lists_user_posts(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let _post1 = session
@@ -78,7 +76,7 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn collection_paging_emits_next_link(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     for _ in 0..2 {
@@ -130,7 +128,7 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn collection_clamps_out_of_range_limit(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     // Seed 51 posts so the `1..=50` page-size cap is observable (50 < 51).
@@ -190,7 +188,7 @@ async fn collection_cursor_validation(
     #[case] query: &str,
     #[case] expected: StatusCode,
 ) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     if seed_post {
         session.seed_post().seed(&state).await;
@@ -208,7 +206,7 @@ async fn collection_cursor_validation(
 #[apply(backends)]
 #[tokio::test]
 async fn collection_empty_returns_feed_without_entries(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 

@@ -12,7 +12,7 @@ use rstest_reuse::*;
 use std::error::Error;
 use std::sync::Arc;
 
-use crate::helpers::{make_app, setup_with_base_url};
+use crate::helpers::make_app;
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix, fp,
 };
@@ -89,7 +89,7 @@ fn typed_source<T: Error + 'static>(error: &web::error::InternalError) -> Option
 async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_type(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let app = make_app(&state, &base);
 
     let user = SeedUser::new().seed(&state).await;
@@ -151,7 +151,7 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
 #[apply(backends)]
 #[tokio::test]
 async fn handler_serves_site_tag_feed_with_200(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let app = make_app(&state, &base);
 
     // A tagged, published post so the site-tag surface has content.
@@ -247,7 +247,7 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
 async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let user = SeedUser::new().seed(&state).await;
     SeedRawPost::new(user.user_id).seed(&state).await;
 
@@ -427,7 +427,7 @@ async fn handler_rejects_invalid_request_with_404(backend: Backend, #[case] uri:
 #[apply(backends)]
 #[tokio::test]
 async fn handler_returns_correct_content_type_per_format(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
 
     let user = SeedUser::new().seed(&state).await;
 
@@ -533,7 +533,7 @@ async fn handler_cache_read_failure_is_sanitized_and_reports_boundary_once(
 async fn handler_regeneration_failure_is_sanitized_and_reports_boundary_once(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let mut cache = storage::MockFeedCacheStorage::new();
     cache.expect_get().times(1).return_once(|_| Ok(None));
     let state = with_feed_cache(&state, Arc::new(cache));

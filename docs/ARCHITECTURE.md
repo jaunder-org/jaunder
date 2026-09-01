@@ -2395,6 +2395,17 @@ feature. A separate crate is impossible: it must return `storage::AppState`, so
 `storage`'s own test target then links two distinct instances of itself
 (`E0308: multiple different versions of crate storage`).
 
+`Backend::setup()` is an awaitable typed builder whose bare form establishes the
+shared HTTP-test site baseline: Open registration and the canonical
+`https://example.com/` base URL. Typed overrides cover registration, optional
+base URL, aggregate backup configuration, and aggregate media limits; all
+selected rows commit through one confirmed write scope after migration and
+before `TestEnv` is returned. `.pristine()` is the explicit, mutually exclusive
+request for no site-config rows, while `base_url(None)` omits only that default
+row. Production's absent or invalid registration policy remains Closed; the Open
+policy belongs only to the test fixture
+([typed test site-config baseline](adr/drafts/typed-test-site-config-baseline.md)).
+
 The four templates live with their backend provisioning in
 `storage/src/test_support/backend.rs`: `backends` and `backends_matrix` (both
 dual; the second is the `#[values]`-based variant), plus `sqlite_only` and

@@ -8,8 +8,7 @@ use server_fn::ServerFn;
 use storage::EmailVerified;
 
 use crate::helpers::{
-    assert_no_email, assert_one_absolute_link_email, create_user_and_session,
-    post_form_with_mailer, setup_with_base_url,
+    assert_no_email, assert_one_absolute_link_email, create_user_and_session, post_form_with_mailer,
 };
 use storage::test_support::{Backend, SeedUser, TestEnv, backends};
 
@@ -22,7 +21,7 @@ use rstest_reuse::*;
 async fn request_email_verification_creates_row_and_sends_email(#[case] backend: Backend) {
     // The verification email composes an absolute link, so the flow requires a
     // seeded `site.base_url` (canonicalized to `https://example.com/`).
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
     let cookie = create_user_and_session(&state).await.cookie();
@@ -45,7 +44,7 @@ async fn request_email_verification_creates_row_and_sends_email(#[case] backend:
 #[apply(backends)]
 #[tokio::test]
 async fn request_email_verification_without_base_url_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await; // no base_url seeded
+    let TestEnv { state, base: _base } = backend.setup().base_url(None).await;
     let mailer = Arc::new(CapturingMailSender::new());
 
     let cookie = create_user_and_session(&state).await.cookie();

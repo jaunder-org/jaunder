@@ -12,7 +12,6 @@ use tower::ServiceExt;
 
 use crate::helpers::{
     atompub_at, atompub_authed, atompub_xml, body_string, create_user_and_session, make_app,
-    setup_with_base_url,
 };
 use storage::test_support::{Backend, TestEnv, backends};
 
@@ -59,7 +58,7 @@ fn with_site_config(
 #[apply(backends)]
 #[tokio::test]
 async fn service_document_returns_200_with_app_password(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let name: &str = &session.username;
     // Give the user a tagged post so the service document's category list is
@@ -123,7 +122,7 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn explicit_basic_identity_wins_and_expires_simultaneous_cookie(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let alice = create_user_and_session(&state).await;
     let bob = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
@@ -248,7 +247,7 @@ async fn required_base_url_preserves_storage_error_source() {
 #[apply(backends)]
 #[tokio::test]
 async fn service_document_unconfigured_base_url_keeps_documented_500(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
+    let TestEnv { state, base } = backend.setup().base_url(None).await;
     let session = create_user_and_session(&state).await;
     let uri = parse_root_relative_url("/atompub/service");
     let response = make_app(&state, &base)

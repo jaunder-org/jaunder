@@ -3,10 +3,10 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use common::MutationOutcome;
 use common::mailer::test_utils::CapturingMailSender;
+use common::registration::RegistrationPolicy;
 use common::test_support::{
     parse_bio, parse_display_name, parse_email, parse_invite_ttl_hours, parse_session_label,
 };
-use host::config_key::SiteConfigKey;
 use server_fn::ServerFn;
 use storage::{EmailVerified, ProfileUpdate};
 
@@ -270,13 +270,10 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_nested_request_maps_fields(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    crate::helpers::set_site_config(&state, SiteConfigKey::SiteRegistrationPolicy, "invite_only")
-        .await
-        .unwrap();
-    crate::helpers::set_site_config(&state, SiteConfigKey::SiteBaseUrl, "https://example.com")
-        .await
-        .unwrap();
+    let TestEnv { state, base: _base } = backend
+        .setup()
+        .registration(RegistrationPolicy::InviteOnly)
+        .await;
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
@@ -363,7 +360,7 @@ async fn create_invite_unauthorized_returns_error(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_without_base_url_errors_and_sends_nothing(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = backend.setup().base_url(None).await;
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
@@ -392,9 +389,6 @@ async fn create_invite_without_base_url_errors_and_sends_nothing(#[case] backend
 #[tokio::test]
 async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    crate::helpers::set_site_config(&state, SiteConfigKey::SiteBaseUrl, "https://example.com")
-        .await
-        .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
@@ -425,9 +419,6 @@ async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend)
 #[tokio::test]
 async fn create_invite_send_failure_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    crate::helpers::set_site_config(&state, SiteConfigKey::SiteBaseUrl, "https://example.com")
-        .await
-        .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
 
     // `post_server_fn` uses the noop mailer, whose `send_email` fails with
@@ -452,9 +443,6 @@ async fn create_invite_send_failure_returns_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    crate::helpers::set_site_config(&state, SiteConfigKey::SiteBaseUrl, "https://example.com")
-        .await
-        .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
@@ -489,9 +477,6 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    crate::helpers::set_site_config(&state, SiteConfigKey::SiteBaseUrl, "https://example.com")
-        .await
-        .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
@@ -525,9 +510,6 @@ async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    crate::helpers::set_site_config(&state, SiteConfigKey::SiteBaseUrl, "https://example.com")
-        .await
-        .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
@@ -602,7 +584,7 @@ async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) 
 #[tokio::test]
 async fn list_invites_returns_error_when_policy_not_invite_only(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    // Policy defaults to Closed.
+    // The default Open policy is not InviteOnly.
 
     let cookie = create_user_and_session(&state).await.cookie();
 

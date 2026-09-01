@@ -838,11 +838,10 @@ mod tests {
         PersistedMediaReference, ProvenForeignReference,
     };
     use common::ids::PostId;
-    use common::media::MediaRef;
+    use common::media::{MediaRef, UserQuota};
     use common::test_support::{
         parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_post_body,
     };
-    use host::config_key::SiteConfigKey;
     use rstest::*;
     use rstest_reuse::*;
     use tempfile::TempDir;
@@ -2096,12 +2095,12 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn upload_bytes_rejects_oversized_payload(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         // Cap the per-file limit well below the payload size.
-        crate::test_support::set_site_config(&env, SiteConfigKey::MediaMaxFileSizeBytes, "5")
-            .await
-            .unwrap();
+        let env = backend
+            .setup()
+            .media_limits("5".parse().unwrap(), UserQuota::default())
+            .await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
             env.state.media.clone(),
             env.state.posts.clone(),

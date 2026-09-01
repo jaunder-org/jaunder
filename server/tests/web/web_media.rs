@@ -11,7 +11,6 @@ use tower::ServiceExt;
 use web::media::{Item, MediaDeletion, UsageData};
 
 use common::time::UtcInstant;
-use host::config_key::SiteConfigKey;
 use rstest::*;
 use rstest_reuse::*;
 use storage::{
@@ -22,7 +21,6 @@ use storage::{
 use crate::helpers::{
     ForeignReferenceResolver, MultipartFile, create_user_and_session, make_app, post_form,
     post_multipart, post_server_fn, post_server_fn_with_media_ownership_resolver,
-    setup_with_base_url,
 };
 use common::media::{MaxFileSize, MediaReferenceForm, MediaSource, UploadedMedia, UserQuota};
 use common::test_support::{
@@ -392,7 +390,7 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
 #[apply(backends)]
 #[tokio::test]
 async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let owner = create_user_and_session(&state).await;
     let stranger = create_user_and_session(&state).await;
     let sha256 =
@@ -498,7 +496,7 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
 async fn delete_refusal_reports_the_reference_snapshot_despite_a_concurrent_post(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let sha256 =
         parse_content_hash("deadbeef99999997000000000000000000000000000000000000000000000000");
@@ -861,12 +859,12 @@ async fn upload_media_rejects_invalid_filename(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
     // Cap the max file size at 5 bytes so a 14-byte upload trips PayloadTooLarge,
     // exercising `map_media_error`'s PayloadTooLarge arm.
-    crate::helpers::set_site_config(&state, SiteConfigKey::MediaMaxFileSizeBytes, "5")
-        .await
-        .unwrap();
+    let TestEnv { state, base: _base } = backend
+        .setup()
+        .media_limits("5".parse().unwrap(), UserQuota::default())
+        .await;
     let cookie = create_user_and_session(&state).await.cookie();
 
     let storage = TempDir::new().unwrap();
@@ -893,12 +891,12 @@ async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
     // A 5-byte user quota with a 14-byte upload trips InsufficientStorage, exercising
     // `map_media_error`'s InsufficientStorage arm.
-    crate::helpers::set_site_config(&state, SiteConfigKey::MediaUserQuotaBytes, "5")
-        .await
-        .unwrap();
+    let TestEnv { state, base: _base } = backend
+        .setup()
+        .media_limits(MaxFileSize::default(), "5".parse().unwrap())
+        .await;
     let cookie = create_user_and_session(&state).await.cookie();
 
     let storage = TempDir::new().unwrap();

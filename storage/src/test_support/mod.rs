@@ -24,9 +24,10 @@ mod users;
 #[cfg(any(test, feature = "test-utils"))]
 pub use backend::mock_write_scope;
 pub use backend::{
-    Backend, CloseablePool, MediaReferenceWriteLock, PostWriteLock, TestBase, TestEnv, backends,
-    backends_matrix, confirmed, confirmed_for, fixture_media_content_locks, postgres_only,
-    set_post_tags_confirmed, set_site_config, sqlite_only, sqlite_url, sqlite_write_scope,
+    Backend, CloseablePool, MediaReferenceWriteLock, PostWriteLock, SetupBuilder, TestBase,
+    TestEnv, backends, backends_matrix, confirmed, confirmed_for, fixture_media_content_locks,
+    inject_invalid_site_config, postgres_only, set_post_tags_confirmed, set_site_config,
+    sqlite_only, sqlite_url, sqlite_write_scope,
 };
 
 pub use feeds::fp;

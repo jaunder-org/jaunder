@@ -10,7 +10,7 @@ use tower::ServiceExt;
 
 use crate::helpers::{
     SeededSession, atompub, atompub_at, atompub_get, atompub_location, atompub_post_xml,
-    atompub_put_xml, body_string, create_user_and_session, make_app, setup_with_base_url,
+    atompub_put_xml, body_string, create_user_and_session, make_app,
 };
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
@@ -19,7 +19,7 @@ use super::fixtures::{entry_xml, etag_of};
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let post = session.seed_post().seed(&state).await;
@@ -49,7 +49,7 @@ async fn update_with_stale_if_match_returns_412(#[case] backend: Backend) {
 async fn stale_org_synced_returns_412_despite_matching_if_match_without_mutation(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let post = session
         .seed_post()
@@ -99,7 +99,7 @@ async fn stale_org_synced_returns_412_despite_matching_if_match_without_mutation
 #[apply(backends)]
 #[tokio::test]
 async fn matching_org_id_and_synced_bookkeeping_updates_member(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let post = session.seed_post().seed(&state).await;
     let member = format!("posts/{}", post.post_id);
@@ -132,7 +132,7 @@ async fn matching_org_id_and_synced_bookkeeping_updates_member(#[case] backend: 
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_matching_if_match_succeeds(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -257,7 +257,7 @@ async fn delete_if_match_precondition(
     #[case] expected_status: StatusCode,
     #[case] post_survives: bool,
 ) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
     let (location, etag) = create_location_etag(app.clone(), &session).await;
@@ -287,7 +287,7 @@ async fn delete_if_match_precondition(
 #[tokio::test]
 async fn editing_content_via_put_changes_etag(#[case] backend: Backend) {
     // AC4 (HTTP): a PUT that changes the body changes the ETag end-to-end.
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
     let (location, e1) = create_location_etag(app.clone(), &session).await;
@@ -323,7 +323,7 @@ async fn editing_content_via_put_changes_etag(#[case] backend: Backend) {
 #[tokio::test]
 async fn etag_is_content_hash_format(#[case] backend: Backend) {
     // AC1: the emitted ETag is a strong, quoted "sha256-<64 lowercase hex>" token.
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -344,7 +344,7 @@ async fn etag_is_content_hash_format(#[case] backend: Backend) {
 async fn identical_posts_share_etag(#[case] backend: Backend) {
     // AC2: two distinct posts with identical content get the same ETag — the
     // per-post id / tag ids / slug are excluded from the hash.
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -358,7 +358,7 @@ async fn identical_posts_share_etag(#[case] backend: Backend) {
 async fn idempotent_reput_keeps_etag(#[case] backend: Backend) {
     // AC3 + AC5: re-PUT byte-identical content → the ETag is unchanged (a
     // timestamp ETag would have bumped on the write).
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 

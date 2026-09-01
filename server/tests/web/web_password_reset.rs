@@ -11,7 +11,7 @@ use storage::{AppState, EmailVerified};
 use crate::helpers::{
     SeededSession, assert_no_email, assert_one_absolute_link_email, create_session_for,
     create_user_and_session, post_form_with_mailer, post_server_fn_request_fixture_with_mailer,
-    post_server_fn_with_mailer, setup_with_base_url,
+    post_server_fn_with_mailer,
 };
 use storage::test_support::{Backend, SeedUser, TestEnv, backends};
 
@@ -55,7 +55,7 @@ async fn create_user_with_verified_email(state: &Arc<AppState>, email: &str) -> 
 async fn request_password_reset_sends_email_for_verified_user(#[case] backend: Backend) {
     // The reset email composes an absolute link, so the flow requires a seeded
     // `site.base_url` (canonicalized to `https://example.com/`).
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
     let session = create_user_with_verified_email(&state, "alice@example.com").await;
@@ -79,7 +79,7 @@ async fn request_password_reset_sends_email_for_verified_user(#[case] backend: B
 #[apply(backends)]
 #[tokio::test]
 async fn request_password_reset_without_base_url_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await; // no base_url seeded
+    let TestEnv { state, base: _base } = backend.setup().base_url(None).await;
     let mailer = Arc::new(CapturingMailSender::new());
 
     let session = create_user_with_verified_email(&state, "alice@example.com").await;
