@@ -6,7 +6,10 @@ use rstest::*;
 use rstest_reuse::*;
 use tower::ServiceExt;
 
-use crate::helpers::{SeededSession, atompub, body_string, create_user_and_session, make_app};
+use crate::helpers::{
+    SeededSession, atompub, atompub_at, atompub_location, body_string, create_user_and_session,
+    make_app,
+};
 use storage::test_support::{Backend, TestEnv, backends};
 
 use super::fixtures::{entry_xml, etag_of};
@@ -82,6 +85,42 @@ async fn create_with_same_idempotency_key_dedups(#[case] backend: Backend) {
         body_string(second).await,
         body1,
         "retry returns the same body"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn replay_for_deleted_post_returns_not_found(#[case] backend: Backend) {
+    // A live retry mapping must not bypass the active-Post boundary after deletion.
+    let TestEnv { state, base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+    let xml = entry_xml("Deleted", "text", "the body");
+
+    let created = create_post_keyed(app.clone(), &session, &xml, Some("deleted-key")).await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let location = atompub_location(&location_of(&created));
+
+    let deleted = app
+        .clone()
+        .oneshot(
+            atompub_at(&session, Method::DELETE, &location)
+                .body(Body::empty())
+                .expect("build AtomPub DELETE request"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+
+    let replayed = create_post_keyed(app, &session, &xml, Some("deleted-key")).await;
+    assert_eq!(replayed.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        base.pool()
+            .scalar_i64("SELECT COUNT(*) FROM posts")
+            .await
+            .expect("count retained Posts"),
+        1,
+        "a live replay mapping does not create a replacement Post"
     );
 }
 

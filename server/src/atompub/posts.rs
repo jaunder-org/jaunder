@@ -569,12 +569,7 @@ pub async fn collection_post(
     // as `200`, skipping category re-application (it already carries its tags).
     if let Err(PerformCreationError::IdempotencyConflict(post_id)) = &created {
         let post_id = *post_id;
-        // If the original was soft-deleted between the create and this replay, a
-        // stale-key retry deserves a 404 rather than a 500.
-        let post = posts
-            .get_post_by_id(post_id, &viewer)
-            .await?
-            .ok_or(HandlerError::NotFound)?;
+        let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
         let base = super::required_base_url(site_config).await?;
         metrics::idempotency(IdempotencyEvent::Replayed);
         return post_entry_response(StatusCode::OK, &post, &base, &username);
