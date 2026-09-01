@@ -51,7 +51,7 @@ Out:
   - Verification: focused backup unit tests pass;
     `server/tests/misc/backup_interop.rs` and backup coverage in
     `server/tests/misc/commands.rs` remain content-identical and pass.
-- [ ] Task 4: Extract stored site-configuration commands and tests.
+- [x] Task 4: Extract stored site-configuration commands and tests.
   - Contract: private `site_config` owns stored-key set/get/list/unset handlers,
     formatting, and site-config-only fixtures; it consumes production `support`
     without acquiring process-configuration ownership. Existing public
