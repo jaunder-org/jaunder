@@ -167,29 +167,42 @@ be a thin shell over a near-total dialect
 generic `make_app_state<DB>(Pool<DB>)` builds it for both production backends;
 its crate-private `AppStateBackend` bound converts the pool into the
 backend-erased scope. It holds storage dependencies only; services (mailer,
-WebSub client, background workers) are constructed in `server` and injected
-per-consumer as constructor parameters, and there is no services bundle. The
-durable invariant: no type may be both a heterogeneous dependency holder and
-passed beyond the composition root
+WebSub client, background workers, and the media manager) are constructed in
+`server` and injected per-consumer as constructor parameters, and there is no
+services bundle. The durable invariant: no type may be both a heterogeneous
+dependency holder and passed beyond the composition root
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
 
-The web layer takes its dependencies per-trait via Leptos context and receives
+The web layer takes most dependencies per-trait via Leptos context and receives
 `WriteScope` and `MediaContentLocks` as separate context values.
 `server::provide_app_state_contexts` (`server/src/context.rs:27`) publishes
 twelve of the handles (all but `feed_cache`, which no `#[server]` fn needs) plus
-the separately injected scope; the router composition root separately provides
-the media coordinator. Each server fn fetches exactly what it uses —
-`expect_context::<Arc<dyn UserStorage>>()`, `expect_context::<WriteScope>()`, or
+the separately injected scope. Each ordinary server fn fetches exactly what it
+uses—`expect_context::<Arc<dyn UserStorage>>()`,
+`expect_context::<WriteScope>()`, or
 `expect_context::<Arc<MediaContentLocks>>()`. The helper lives in `server`, not
 `storage`, because using Leptos context as the DI mechanism is an
 application-wiring decision
-([ADR-0016](adr/0016-dependency-injection-and-appstate.md)). Nothing in the
-codebase now pins reactive-owner lifetime for this: `server_boundary`
-(`web/src/error/server.rs:99`) is a thin error-projection wrapper that awaits
-the body and maps `InternalError → WebError`. The owner-pinning machinery was
-dismantled in two steps: `server_resource` went in #515, then
-`owner_ancestry_strong` and the `owner_lifetime` tests in #594. Dropping
-component SSR left only one server-fn invocation path —
+([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
+
+Media operations use one deeper seam. The router composition root constructs a
+single `Arc<MediaManager>` from explicit media, Post, site-configuration, write
+scope, content-lock, instance-identity, and ownership-resolver dependencies,
+then injects that same manager independently into Axum extensions and Leptos
+context. AtomPub and web upload/delete entry points supply only transport policy
+and input. For deletion, the manager loads one bounded global reference
+snapshot, resolves ownership before acquiring the content lock, and carries the
+same immutable evidence through guarded deletion, file reclamation, and
+owner-reference reporting
+([ADR-0016](adr/0016-dependency-injection-and-appstate.md),
+[ADR-0154](adr/0154-media-reference-live-ownership.md)).
+
+Nothing in the codebase now pins reactive-owner lifetime for this:
+`server_boundary` (`web/src/error/server.rs:99`) is a thin error-projection
+wrapper that awaits the body and maps `InternalError → WebError`. The
+owner-pinning machinery was dismantled in two steps: `server_resource` went in
+#515, then `owner_ancestry_strong` and the `owner_lifetime` tests in #594.
+Dropping component SSR left only one server-fn invocation path —
 `leptos_axum::handle_server_fns_with_context` on `POST /api/…`, which holds a
 parentless root owner strong for the whole future by itself. The ADR-0016
 #89/#124/#138 addenda that described that pinning are explicitly marked

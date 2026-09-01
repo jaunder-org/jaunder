@@ -334,6 +334,56 @@ async fn delete_media_member_force_bypasses_owner_retained_file(#[case] backend:
 
 #[apply(backends)]
 #[tokio::test]
+async fn delete_media_member_returns_409_for_another_owners_retained_reference(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let owner = create_user_and_session(&state).await;
+    let other_owner = create_user_and_session(&state).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app(&state, &storage);
+
+    let loc = upload_and_member_url(&app, &owner, "retained.png").await;
+    let sha256 = loc
+        .as_ref()
+        .rsplit('/')
+        .nth(1)
+        .map(parse_content_hash)
+        .expect("member URL includes the content hash");
+    let media_url = common::media::media_url(
+        &common::media::MediaSource::Upload,
+        &sha256,
+        &parse_filename("retained.png"),
+    );
+    SeedRawPost::new(other_owner.user_id)
+        .body(parse_post_body(&format!("<img src=\"{media_url}\">")))
+        .seed(&state)
+        .await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            atompub_at(&owner, Method::DELETE, &loc)
+                .body(Body::empty())
+                .expect("failed to build atompub DELETE request"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let retained = app
+        .oneshot(atompub_get(&owner, loc.as_ref()))
+        .await
+        .unwrap();
+    assert_eq!(
+        retained.status(),
+        StatusCode::OK,
+        "a refused delete retains the media row"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn delete_media_member_force_bypasses_owner_reference_ownership_evidence(
     #[case] backend: Backend,
 ) {
