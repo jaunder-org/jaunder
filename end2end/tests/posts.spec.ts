@@ -1067,40 +1067,80 @@ test("authenticated user can delete a published post", async ({
   await expect(page.locator("body")).not.toContainText("Post To Delete");
 });
 
-test("unpublishing from a permalink navigates to /drafts without a full reload", async ({
+test("unpublishing follows the moved draft permalink and replaces history", async ({
   registeredPage,
 }) => {
-  test.slow();
-  // Create a published post and open its permalink.
+  const FUTURE_DATETIME_LOCAL = "2999-01-01T09:00";
   const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Unpublish Me\n\nsoon a draft again");
+  await page.fill(SEL.publishAt, FUTURE_DATETIME_LOCAL);
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
   const permalinkLink = page.locator('[data-test="permalink-link"]');
-  const permalinkHref = await permalinkLink.getAttribute("href");
-  expect(permalinkHref).toBeTruthy();
+  const publishedPermalink = await permalinkLink.getAttribute("href");
+  expect(publishedPermalink).toBeTruthy();
+  expect(publishedPermalink).toContain("/2999/01/01/");
   await navigateInApp(page, () => permalinkLink.click(), {
-    url: permalinkHref!,
+    url: publishedPermalink!,
     ready: "article.j-post",
   });
   await expect(page.locator('button:has-text("Unpublish")')).toBeVisible();
 
-  // Unpublish dispatches directly (no confirm) and navigates client-side to /drafts
-  // (#592, spec AC3). A stashed sentinel proves there is no full document reload.
+  // The server recomputes the canonical permalink after clearing `published_at`.
+  // Keeping the author on that Post must replace the now-abandoned URL without
+  // rebooting the app.
   await page.evaluate(() => {
     (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
       true;
   });
   await click(page, 'button:has-text("Unpublish")');
-  await page.waitForURL(/\/drafts$/);
-  // The just-unpublished post lists on /drafts (fresh fetch on mount).
-  await expect(page.locator("li", { hasText: "Unpublish Me" })).toBeVisible();
-  const unpublishNoReload = await page.evaluate(
-    () =>
-      (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload ===
-      true,
-  );
-  expect(unpublishNoReload).toBe(true);
+  await page.waitForURL((url) => url.pathname !== publishedPermalink);
+  expect(new URL(page.url()).pathname).toMatch(/\/unpublish-me$/);
+  await expect(page.getByText("Draft - visible only to you")).toBeVisible();
+  await expect(page.locator('button:has-text("Publish")')).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        (window as Window & { __jaunderNoReload?: boolean })
+          .__jaunderNoReload === true,
+    ),
+  ).toBe(true);
+
+  await page.goBack();
+  await page.waitForURL(/\/posts\/new$/);
+});
+
+test("same-permalink unpublish refetches the Post in place", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  await page.fill(SEL.postBody, "# Same URL Unpublish\n\nsame-day lifecycle");
+  await click(page, SEL.publishButton("true"));
+  await waitForSelector(page, SEL.saveSummary);
+  const permalinkLink = page.locator('[data-test="permalink-link"]');
+  const permalink = await permalinkLink.getAttribute("href");
+  expect(permalink).toBeTruthy();
+  await navigateInApp(page, () => permalinkLink.click(), {
+    url: permalink!,
+    ready: "article.j-post",
+  });
+  await expect(page.locator('button:has-text("Unpublish")')).toBeVisible();
+
+  await page.evaluate(() => {
+    (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
+      true;
+  });
+  await click(page, 'button:has-text("Unpublish")');
+  await expect(page).toHaveURL(new RegExp(`${permalink}$`));
+  await expect(page.getByText("Draft - visible only to you")).toBeVisible();
+  await expect(page.locator('button:has-text("Publish")')).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        (window as Window & { __jaunderNoReload?: boolean })
+          .__jaunderNoReload === true,
+    ),
+  ).toBe(true);
 });
 
 // #735: `/app` renders the compact InlineComposer, whose optional summary field

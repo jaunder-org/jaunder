@@ -209,6 +209,22 @@ pub fn publish_redirect<E>(
         .map(Ok)
 }
 
+/// Refetch an unpublished Post when its canonical draft permalink is the current route.
+///
+/// A route change mounts a fresh `PostPage`, but a
+/// same-date unpublish leaves the URL unchanged and therefore needs explicit resource
+/// invalidation (#783). Keeping the comparison here makes that browser policy
+/// host-testable without allocating or erasing the [`RootRelativeUrl`].
+pub fn refetch_unpublished_post_if_needed(
+    current_path: &str,
+    destination: &RootRelativeUrl,
+    refetch: impl FnOnce(),
+) {
+    if current_path == destination.as_ref() {
+        refetch();
+    }
+}
+
 /// Fire an optional parent callback, when the caller supplied one.
 ///
 /// Every lifecycle hook in the posts vertical spelled out the same `if let Some(cb)`
@@ -823,6 +839,20 @@ mod tests {
             )))),
             None
         );
+    }
+
+    #[test]
+    fn unpublish_refetches_only_when_the_permalink_stays_the_same() {
+        let refetches = Cell::new(0);
+        let same_permalink = parse_root_relative_url("/~alice/2026/01/02/hello");
+        refetch_unpublished_post_if_needed("/~alice/2026/01/02/hello", &same_permalink, || {
+            refetches.set(refetches.get() + 1);
+        });
+        let moved_permalink = parse_root_relative_url("/~alice/2025/12/31/hello");
+        refetch_unpublished_post_if_needed("/~alice/2026/01/02/hello", &moved_permalink, || {
+            refetches.set(refetches.get() + 1);
+        });
+        assert_eq!(refetches.get(), 1);
     }
 
     /// A fetch that records the id it was called with and hands it straight back.

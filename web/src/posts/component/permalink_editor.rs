@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 use leptos_router::NavigateOptions;
-use leptos_router::hooks::{use_navigate, use_params_map};
+use leptos_router::hooks::{self, use_navigate, use_params_map};
 
 use crate::error::WebError;
 use crate::forms::Field;
@@ -92,15 +92,25 @@ pub fn PostPage() -> impl IntoView {
         },
     );
 
-    // Unpublish navigates client-side to /drafts (a fresh mount that refetches its own
-    // list — its resource keys on the publish/delete action versions); publish refetches
-    // this page in place via `on_publish` (#592).
+    // Keep the author on the Post after unpublishing. The server returns the canonical
+    // draft permalink, which may move back to the Post's creation date (#783).
+    let location = hooks::use_location();
     let navigate = use_navigate();
-    let on_unpublish = Callback::new(move |()| {
-        navigate("/drafts", NavigateOptions::default());
+    let on_unpublish = Callback::new(move |unpublished: SavedPost| {
+        posts::refetch_unpublished_post_if_needed(
+            &location.pathname.get_untracked(),
+            &unpublished.permalink,
+            || refetch.update(|v| *v += 1),
+        );
+        navigate(
+            &unpublished.permalink,
+            NavigateOptions {
+                replace: true,
+                ..NavigateOptions::default()
+            },
+        );
     });
-    // Publish-only: refetch this page in place (delete/unpublish must NOT — delete shows
-    // its own success and a refetch would 404; unpublish navigates away) (#592).
+    // Publish-only: refetch this page in place when navigation is a no-op (#592).
     let on_publish = Callback::new(move |()| refetch.update(|v| *v += 1));
 
     view! {
