@@ -399,7 +399,6 @@
           vendorDir = toolsCargoVendorDir;
         };
 
-
         # The in-sandbox dev tool (tools/ workspace: devtool + its coverage and
         # doctests path-deps). The offline coverage/doctests sandboxes run it
         # from PATH (nativeBuildInputs) instead of an in-sandbox `cargo run`,
@@ -582,7 +581,6 @@
               # `wasm-bindgen` (on PATH here) and does the rename + js wasm-ref fix.
               devtool csr-bundle --wasm ${csrWasm}/lib/csr.wasm --out $out${pkgs.lib.optionalString (wasmExperimentArm != "") " --wasm-experiment-arm ${wasmExperimentArm}"}${pkgs.lib.optionalString (wasmShapeSection != "") " --wasm-shape-section ${wasmShapeSection} --wasm-shape-section-count ${toString wasmShapeSectionCount}"}
             '';
-
 
         e2ePackage = pkgs.buildNpmPackage {
           name = "jaunder-e2e";
@@ -809,8 +807,9 @@
             assert pw_status == 0, "e2e Playwright failed (exit %d) for ${backend}/${browser}; see playwright-report-${backend}.json + duration-budget-manifest-${backend}.json + playwright-artifacts-${backend}.tar.gz + build.log" % pw_status
           '';
 
-        mkE2eSqliteCheck =
+        mkE2eCheck =
           {
+            backend,
             checkName,
             browser,
             traceId,
@@ -819,6 +818,90 @@
             vmMemory ? 2048,
             vmCores ? null,
           }:
+          let
+            backendPolicy =
+              if backend == "sqlite" then
+                {
+                  package = pkgs.sqlite;
+                  jaunderDb = "sqlite:/var/lib/jaunder/data/jaunder.db";
+                  nodeConfig = _: { };
+                  setupBeforeJaunder = "";
+                  seedBeforeStart = true;
+                  seedComments = [
+                    "  # Seed the fresh VM's already-migrated DB. This VM is single-use and"
+                    "  # jaunder.service's boot preStart (`jaunder init`) has already created"
+                    "  # and migrated an empty DB (incl. migration 0018 reference data);"
+                    "  # nothing writes user data before this point, so no wipe is needed"
+                    "  # (#271). Seeding runs against the running boot service."
+                  ];
+                }
+              else if backend == "postgres" then
+                {
+                  package = pkgs.postgresql_16;
+                  jaunderDb = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
+                  nodeConfig = lib: {
+                    services.postgresql = {
+                      enable = true;
+                      package = pkgs.postgresql_16;
+                      authentication = ''
+                        local all all trust
+                        host all all 0.0.0.0/0 trust
+                      '';
+                      settings = {
+                        listen_addresses = lib.mkForce "*";
+                      };
+                    };
+                    services.jaunder.db = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
+                  };
+                  setupBeforeJaunder = ''
+                    machine.wait_for_unit("postgresql.service", timeout=60)
+
+                    machine.succeed(
+                      "${jaunderBin}/bin/jaunder create-pg-db"
+                      + " --bootstrap-db postgres://postgres@127.0.0.1/postgres"
+                      + " --app-db postgres://jaunder@127.0.0.1/jaunder"
+                      + " --app-role-password testpassword"
+                    )
+                  '';
+                  seedBeforeStart = false;
+                  seedComments = [
+                    "  # Seed the fresh VM's already-migrated DB. This VM is single-use;"
+                    "  # create-pg-db + the delayed jaunder.service boot preStart"
+                    "  # (`jaunder init`) have already created and migrated an empty DB"
+                    "  # (incl. migration 0018 reference data), and nothing writes user data"
+                    "  # before this point, so no TRUNCATE is needed (#271)."
+                  ];
+                }
+              else
+                throw "unsupported e2e backend `${backend}`";
+            seedDefinition = pkgs.lib.concatStringsSep "\n" (
+              [
+                "def seed_db():"
+              ]
+              ++ backendPolicy.seedComments
+              ++ [
+                "  machine.succeed("
+                "    \"JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 devtool seed-e2e\""
+                "    + \" --db ${backendPolicy.jaunderDb}\""
+                "    + \" --test-support-bin test-support\""
+                "    + \" --jaunder-bin jaunder\""
+                "  )"
+                "  assert_seed_storage_spans()"
+              ]
+            );
+            # These separators preserve the existing generated Python byte-for-byte:
+            # SQLite defines its seed helper before VM start, while PostgreSQL does so
+            # after package copy. Keeping the bytes stable keeps all eight derivation
+            # paths stable, which proves this refactor changes no NixOS-test input.
+            beforeMachineStart = if backendPolicy.seedBeforeStart then "\n\n${seedDefinition}\n\n\n" else "\n";
+            setupBeforeJaunder =
+              if backendPolicy.setupBeforeJaunder == "" then
+                "\n"
+              else
+                "\n${pkgs.lib.removeSuffix "\n" backendPolicy.setupBeforeJaunder}\n\n";
+            afterPackageCopy =
+              if backendPolicy.seedBeforeStart then "\n\n" else "\n\n\n${seedDefinition}\n\n\n";
+          in
           pkgs.testers.nixosTest {
             name = checkName;
 
@@ -834,16 +917,18 @@
             nodes.machine =
               { pkgs, lib, ... }:
               {
-                imports = [ self.nixosModules.jaunder ];
+                imports = [
+                  self.nixosModules.jaunder
+                  (backendPolicy.nodeConfig lib)
+                ];
 
                 virtualisation.memorySize = vmMemory;
-                # Default (null) leaves the nixosTest core count alone; the #155
-                # worker probes set >1 so concurrent workers get real parallelism
-                # (a 1-vCPU VM would timeshare them, under-stressing SQLite
-                # write contention — the very thing the probe measures).
+                # Default (null) leaves the nixosTest core count alone. The gate
+                # sets 2 to match its worker count: one vCPU would under-stress
+                # SQLite write contention and starve the PostgreSQL client render.
                 virtualisation.cores = lib.mkIf (vmCores != null) vmCores;
                 environment.systemPackages = [
-                  pkgs.sqlite
+                  backendPolicy.package
                   pkgs.opentelemetry-collector-contrib
                   testSupportBin
                   devtoolBin
@@ -869,8 +954,8 @@
 
                 services.jaunder.enable = true;
                 services.jaunder.bind = "127.0.0.1:3000";
-                # The test script starts Jaunder only after both collector receivers
-                # are ready; systemd ordering alone cannot express port readiness.
+                # The test script starts Jaunder only after the collector receivers
+                # and any backend-specific database setup are ready.
                 systemd.services.jaunder.wantedBy = lib.mkForce [ ];
                 systemd.services.jaunder.after = [ "otel-collector.service" ];
                 systemd.services.jaunder.requires = [ "otel-collector.service" ];
@@ -881,183 +966,27 @@
               };
 
             testScript = ''
-              ${e2eOtelTestHelpers}
-
-              def seed_db():
-                # Seed the fresh VM's already-migrated DB. This VM is single-use and
-                # jaunder.service's boot preStart (`jaunder init`) has already created
-                # and migrated an empty DB (incl. migration 0018 reference data);
-                # nothing writes user data before this point, so no wipe is needed
-                # (#271). Seeding runs against the running boot service.
-                machine.succeed(
-                  "JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 devtool seed-e2e"
-                  + " --db sqlite:/var/lib/jaunder/data/jaunder.db"
-                  + " --test-support-bin test-support"
-                  + " --jaunder-bin jaunder"
-                )
-                assert_seed_storage_spans()
-
-
-              machine.start()
+              ${e2eOtelTestHelpers}${beforeMachineStart}machine.start()
               machine.wait_for_unit("otel-collector.service", timeout=60)
               # `active` precedes the OTLP receiver binds; seeding immediately can
               # export into that gap and leave no trace population to verify.
-              wait_for_otel_receivers()
-              machine.succeed("systemctl start jaunder.service")
+              wait_for_otel_receivers()${setupBeforeJaunder}machine.succeed("systemctl start jaunder.service")
               machine.wait_for_unit("jaunder.service", timeout=60)
               machine.wait_for_open_port(3000, timeout=30)
 
-              machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
-
-              # Seed a fresh DB and run the one browser this derivation targets.
+              machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")${afterPackageCopy}# Seed a fresh DB and run the one browser this derivation targets.
               # Browsers run as separate derivations (one VM each) so their state
               # mutations cannot interfere; that also lets CI fan them out.
               seed_db()
               ${e2eRunAndCapture {
-                backend = "sqlite";
-                jaunderDb = "sqlite:/var/lib/jaunder/data/jaunder.db";
                 inherit
+                  backend
                   browser
                   traceId
                   traceParent
                   extraEnv
                   ;
-              }}
-            '';
-          };
-
-        mkE2ePostgresCheck =
-          {
-            checkName,
-            browser,
-            traceId,
-            traceParent,
-            extraEnv ? "",
-            vmMemory ? 2048,
-            vmCores ? null,
-          }:
-          pkgs.testers.nixosTest {
-            name = checkName;
-
-            # Cap the test-driver budget (default is 3600 s) so a boot/infra hang
-            # fails near 20 min instead of burning the full hour. See issue #130.
-            # This is the OUTER budget: `e2ePlaywrightTimeout` above expires first
-            # and is the one sized against the test run itself (~10.6 min for the
-            # slowest single-browser combo, so ~1.6x headroom).
-            globalTimeout =
-              assert e2ePlaywrightTimeout < e2eGlobalTimeout;
-              e2eGlobalTimeout;
-
-            nodes.machine =
-              { pkgs, lib, ... }:
-              {
-                imports = [ self.nixosModules.jaunder ];
-
-                virtualisation.memorySize = vmMemory;
-                # Default (null) leaves the nixosTest core count alone; the
-                # gate sets 2, matching its worker count (workers>1 needs the
-                # cores; 1 vCPU timeshares and starves the client render).
-                virtualisation.cores = lib.mkIf (vmCores != null) vmCores;
-                environment.systemPackages = [
-                  pkgs.postgresql_16
-                  pkgs.opentelemetry-collector-contrib
-                  testSupportBin
-                  devtoolBin
-                  # `jaunder site-config set` seed steps resolve bare `jaunder` here.
-                  jaunderBin
-                ];
-                environment.etc."jaunder-otel-collector.yaml".source = ./end2end/otel-collector.yaml;
-
-                systemd.tmpfiles.rules = [ "d /var/lib/jaunder/capture 0755 jaunder jaunder -" ];
-                systemd.services.otel-collector = {
-                  description = "Jaunder e2e OTel Collector";
-                  wantedBy = [ "multi-user.target" ];
-                  after = [ "network.target" ];
-                  # The collector configuration reads these runtime endpoints and capture
-                  # directory through its environment providers.
-                  environment = e2eOtelCollectorEnv;
-                  serviceConfig = {
-                    ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
-                    Restart = "on-failure";
-                    RestartSec = "2s";
-                  };
-                };
-
-                services.postgresql = {
-                  enable = true;
-                  package = pkgs.postgresql_16;
-                  authentication = ''
-                    local all all trust
-                    host all all 0.0.0.0/0 trust
-                  '';
-                  settings = {
-                    listen_addresses = lib.mkForce "*";
-                  };
-                };
-
-                services.jaunder.enable = true;
-                services.jaunder.db = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
-                # We delay jaunder.service until we have run create-pg-db in the testScript.
-                systemd.services.jaunder.wantedBy = lib.mkForce [ ];
-                systemd.services.jaunder.after = [ "otel-collector.service" ];
-                systemd.services.jaunder.requires = [ "otel-collector.service" ];
-                systemd.services.jaunder.environment = captureEnv // {
-                  RUST_LOG = "info";
-                  JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
-                };
-              };
-
-            testScript = ''
-              ${e2eOtelTestHelpers}
-              machine.start()
-              machine.wait_for_unit("otel-collector.service", timeout=60)
-              # `active` precedes the OTLP receiver binds; seeding immediately can
-              # export into that gap and leave no trace population to verify.
-              wait_for_otel_receivers()
-              machine.wait_for_unit("postgresql.service", timeout=60)
-
-              machine.succeed(
-                "${jaunderBin}/bin/jaunder create-pg-db"
-                + " --bootstrap-db postgres://postgres@127.0.0.1/postgres"
-                + " --app-db postgres://jaunder@127.0.0.1/jaunder"
-                + " --app-role-password testpassword"
-              )
-
-              machine.succeed("systemctl start jaunder.service")
-              machine.wait_for_unit("jaunder.service", timeout=60)
-              machine.wait_for_open_port(3000, timeout=30)
-
-              machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
-
-
-              def seed_db():
-                # Seed the fresh VM's already-migrated DB. This VM is single-use;
-                # create-pg-db + the delayed jaunder.service boot preStart
-                # (`jaunder init`) have already created and migrated an empty DB
-                # (incl. migration 0018 reference data), and nothing writes user data
-                # before this point, so no TRUNCATE is needed (#271).
-                machine.succeed(
-                  "JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 devtool seed-e2e"
-                  + " --db postgres://jaunder:testpassword@127.0.0.1/jaunder"
-                  + " --test-support-bin test-support"
-                  + " --jaunder-bin jaunder"
-                )
-                assert_seed_storage_spans()
-
-
-              # Seed a fresh DB and run the one browser this derivation targets.
-              # Browsers run as separate derivations (one VM each) so their state
-              # mutations cannot interfere; that also lets CI fan them out.
-              seed_db()
-              ${e2eRunAndCapture {
-                backend = "postgres";
-                jaunderDb = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
-                inherit
-                  browser
-                  traceId
-                  traceParent
-                  extraEnv
-                  ;
+                jaunderDb = backendPolicy.jaunderDb;
               }}
             '';
           };
@@ -1115,11 +1044,10 @@
             vmCores ? null,
           }:
           let
-            mk = if backend == "sqlite" then mkE2eSqliteCheck else mkE2ePostgresCheck;
             traceId = pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 32);
             traceParent = "00-${traceId}-${pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 16)}-01";
           in
-          mk {
+          mkE2eCheck {
             checkName = "jaunder-e2e-${backend}-${browser}${nameSuffix}";
             # The salt rides the combo's generic extra-env string, which is
             # interpolated into the VM testScript above — so it reaches the
@@ -1127,6 +1055,7 @@
             # JAUNDER_E2E_SALT. Changing the hash is its whole job. Spliced here
             # rather than per-family so every combo salts alike.
             extraEnv = extraEnv + pkgs.lib.optionalString (e2eSalt != "") " JAUNDER_E2E_SALT=${e2eSalt}";
+            inherit backend;
             inherit
               browser
               traceId
