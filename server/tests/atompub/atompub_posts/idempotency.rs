@@ -6,9 +6,7 @@ use rstest::*;
 use rstest_reuse::*;
 use tower::ServiceExt;
 
-use crate::helpers::{
-    SeededSession, atompub, body_string, create_user_and_session, make_app, setup_with_base_url,
-};
+use crate::helpers::{SeededSession, atompub, body_string, create_user_and_session, make_app};
 use storage::test_support::{Backend, TestEnv, backends};
 
 use super::fixtures::{entry_xml, etag_of};
@@ -60,7 +58,7 @@ fn location_of(response: &axum::response::Response) -> String {
 #[tokio::test]
 async fn create_with_same_idempotency_key_dedups(#[case] backend: Backend) {
     // AC-S1: the same key creates one post; the retry returns it as 200.
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
     let xml = entry_xml("Hello", "text", "the body");
@@ -90,7 +88,7 @@ async fn create_with_same_idempotency_key_dedups(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_expired_idempotency_key_creates_a_replacement(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
     let first_xml = entry_xml("Original", "text", "original body");
@@ -124,7 +122,7 @@ async fn create_with_expired_idempotency_key_creates_a_replacement(#[case] backe
 #[tokio::test]
 async fn create_with_fresh_idempotency_key_is_201(#[case] backend: Backend) {
     // AC-S2: distinct keys create distinct posts.
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
     let xml = entry_xml("Hello", "text", "the body");
@@ -140,7 +138,7 @@ async fn create_with_fresh_idempotency_key_is_201(#[case] backend: Backend) {
 #[tokio::test]
 async fn create_without_idempotency_key_is_201(#[case] backend: Backend) {
     // AC-S3: no header → create as today.
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
     let xml = entry_xml("Hello", "text", "the body");
@@ -152,7 +150,7 @@ async fn create_without_idempotency_key_is_201(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn unreadable_or_blank_idempotency_keys_do_not_dedup(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
     let xml = entry_xml("Hello", "text", "the body");
@@ -181,7 +179,7 @@ async fn unreadable_or_blank_idempotency_keys_do_not_dedup(#[case] backend: Back
 #[apply(backends)]
 #[tokio::test]
 async fn idempotency_key_is_scoped_to_the_authenticated_user(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let alice = create_user_and_session(&state).await;
     let bob = create_user_and_session(&state).await;
     let app = make_app(&state, &base);

@@ -14,7 +14,7 @@ use tower::ServiceExt;
 
 use crate::helpers::{
     atompub_at, atompub_get, atompub_location, atompub_post_xml, atompub_put_xml, body_string,
-    create_user_and_session, make_app, setup_with_base_url,
+    create_user_and_session, make_app,
 };
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
@@ -23,7 +23,7 @@ use super::fixtures::{entry_xml, location_post_id};
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     // Set default format to Markdown so text entries round-trip properly.
     let user_config = Arc::clone(&state.user_config);
@@ -90,7 +90,7 @@ async fn create_post_returns_201_and_is_retrievable(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_applies_categories(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -111,7 +111,7 @@ async fn create_post_applies_categories(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_html_entry_is_stored_as_html(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -142,7 +142,7 @@ async fn create_format_media_type_round_trips(
     #[case] content_type: &str,
     #[case] content: &str,
 ) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -184,7 +184,7 @@ async fn create_format_media_type_round_trips(
 #[apply(backends)]
 #[tokio::test]
 async fn update_replaces_post_body(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let post = session.seed_post().seed(&state).await;
@@ -212,7 +212,7 @@ async fn update_replaces_post_body(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_rejects_malformed_entry(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -227,7 +227,7 @@ async fn create_rejects_malformed_entry(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let post = session.seed_post().seed(&state).await;
@@ -264,7 +264,7 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_put_returns_200_and_etag(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let post = session.seed_post().seed(&state).await;
@@ -311,7 +311,7 @@ enum EmptyEntryOp {
 #[case::update(EmptyEntryOp::Update)]
 #[tokio::test]
 async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let request = match op {
@@ -342,7 +342,7 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_title_only_org_entry_returns_400(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let response = make_app(&state, &base)
@@ -375,7 +375,7 @@ async fn create_title_only_org_entry_returns_400(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn malformed_org_header_update_returns_400_without_mutation(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let post = session
         .seed_post()
@@ -413,7 +413,7 @@ async fn malformed_org_header_update_returns_400_without_mutation(#[case] backen
 #[apply(backends)]
 #[tokio::test]
 async fn metadata_only_org_update_returns_400_without_mutation(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let post = session
         .seed_post()
@@ -450,7 +450,7 @@ async fn metadata_only_org_update_returns_400_without_mutation(#[case] backend: 
 #[apply(backends)]
 #[tokio::test]
 async fn mismatched_org_id_returns_400_without_mutation(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let post = session
         .seed_post()
@@ -486,7 +486,7 @@ async fn mismatched_org_id_returns_400_without_mutation(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -524,7 +524,7 @@ async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_blank_title_stores_an_untitled_post(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -561,7 +561,7 @@ async fn create_with_blank_title_stores_an_untitled_post(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn create_skips_invalid_category(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -593,7 +593,7 @@ async fn create_skips_invalid_category(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -636,7 +636,7 @@ async fn create_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let post = session.seed_post().seed(&state).await;
 
@@ -701,7 +701,7 @@ async fn update_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_dedupes_categories_keeping_first_casing(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -737,7 +737,7 @@ async fn create_dedupes_categories_keeping_first_casing(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn create_skips_malformed_category_beside_a_valid_one(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -774,7 +774,7 @@ async fn create_skips_malformed_category_beside_a_valid_one(#[case] backend: Bac
 #[apply(backends)]
 #[tokio::test]
 async fn update_keeps_unchanged_category(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 

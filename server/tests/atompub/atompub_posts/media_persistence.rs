@@ -5,7 +5,7 @@ use rstest::*;
 use rstest_reuse::*;
 use tower::ServiceExt;
 
-use crate::helpers::{atompub_post_xml, create_user_and_session, make_app, setup_with_base_url};
+use crate::helpers::{atompub_post_xml, create_user_and_session, make_app};
 use storage::test_support::{
     Backend, TestEnv, backends, fetch_post_media, media_ref_for, media_url_for,
 };
@@ -18,7 +18,7 @@ async fn create_writes_the_entrys_media_rows(#[case] backend: Backend) {
     // The AtomPub half of A14 (#711). The storage tests cover the web path; this one
     // drives the router, because the AtomPub handler reaches storage by its own route
     // and nothing in `storage` would notice if that path stopped recording references.
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 

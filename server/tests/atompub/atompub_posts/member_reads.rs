@@ -7,15 +7,13 @@ use rstest::*;
 use rstest_reuse::*;
 use tower::ServiceExt;
 
-use crate::helpers::{
-    atompub, atompub_get, body_string, create_user_and_session, make_app, setup_with_base_url,
-};
+use crate::helpers::{atompub, atompub_get, body_string, create_user_and_session, make_app};
 use storage::test_support::{Backend, TestEnv, backends};
 
 #[apply(backends)]
 #[tokio::test]
 async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let post = session
@@ -52,7 +50,7 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn member_get_serializes_empty_and_genuine_titles(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let untitled = session
@@ -108,7 +106,7 @@ async fn member_get_serializes_empty_and_genuine_titles(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn member_get_unknown_returns_404(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let app = make_app(&state, &base);
@@ -124,7 +122,7 @@ async fn member_get_unknown_returns_404(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_then_get_is_404(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let post = session.seed_post().seed(&state).await;
@@ -156,7 +154,7 @@ async fn delete_then_get_is_404(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let post = session

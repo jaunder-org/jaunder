@@ -137,6 +137,56 @@ pub trait SiteConfigStorage: Send + Sync {
             .unwrap_or(RegistrationPolicy::Closed))
     }
 
+    /// Stores the site's user-registration policy.
+    async fn set_registration_policy(
+        &self,
+        transaction: &mut WriteTransaction,
+        policy: RegistrationPolicy,
+    ) -> sqlx::Result<()> {
+        self.set(
+            transaction,
+            SiteConfigKey::SiteRegistrationPolicy,
+            policy.as_ref(),
+        )
+        .await
+    }
+
+    /// Stores the optional site base URL. `None` is represented by the existing
+    /// empty-value convention used by [`set_identity`](Self::set_identity).
+    async fn set_base_url(
+        &self,
+        transaction: &mut WriteTransaction,
+        base_url: Option<BaseUrl>,
+    ) -> sqlx::Result<()> {
+        self.set(
+            transaction,
+            SiteConfigKey::SiteBaseUrl,
+            base_url.as_ref().map_or("", AsRef::as_ref),
+        )
+        .await
+    }
+
+    /// Stores the two validated media limits together.
+    async fn set_media_limits(
+        &self,
+        transaction: &mut WriteTransaction,
+        max_file_size: MaxFileSize,
+        user_quota: UserQuota,
+    ) -> sqlx::Result<()> {
+        self.set(
+            transaction,
+            SiteConfigKey::MediaMaxFileSizeBytes,
+            &max_file_size.to_string(),
+        )
+        .await?;
+        self.set(
+            transaction,
+            SiteConfigKey::MediaUserQuotaBytes,
+            &user_quota.to_string(),
+        )
+        .await
+    }
+
     /// Returns the configured `feeds.min_items` value, falling back to the
     /// [`FeedMinItems`] default (20) if unset or unparseable (including a stored `0`,
     /// which the min-1 invariant rejects).
@@ -219,7 +269,6 @@ pub trait SiteConfigStorage: Send + Sync {
         };
         Ok(SiteIdentity { title, base_url })
     }
-
     /// Stores the site identity (title and base URL).
     /// For `base_url`, an empty string is stored when `None` is provided; a set
     /// value is stored in its canonical form (the `BaseUrl` normalized it).
@@ -230,10 +279,8 @@ pub trait SiteConfigStorage: Send + Sync {
     ) -> Result<()> {
         self.set(transaction, SiteConfigKey::SiteTitle, &config.title)
             .await?;
-        let base_url_value = config.base_url.as_deref().unwrap_or("");
-        self.set(transaction, SiteConfigKey::SiteBaseUrl, base_url_value)
-            .await?;
-        Ok(())
+        self.set_base_url(transaction, config.base_url.clone())
+            .await
     }
 
     async fn set_backup_config(
@@ -545,7 +592,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::{SiteConfigKey, SmtpTlsMode};
-    use crate::test_support::{Backend, TestEnv, backends, backends_matrix, confirmed};
+    use crate::test_support::{
+        Backend, TestEnv, backends, backends_matrix, confirmed, inject_invalid_site_config,
+    };
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::media::{MaxFileSize, UserQuota};
     use common::registration::RegistrationPolicy;
@@ -589,7 +638,7 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn site_config_primitives_round_trip(#[case] backend: Backend) {
-        let env = backend.setup().await;
+        let env = backend.setup().pristine().await;
         let store = &*env.state.site_config;
         set_config(&env, SiteConfigKey::SiteTitle, "T")
             .await
@@ -620,7 +669,7 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn list_preserves_unknown_keys_for_export_and_raw_cleanup(#[case] backend: Backend) {
-        let env = backend.setup().await;
+        let env = backend.setup().pristine().await;
         let store = &*env.state.site_config;
         let unknown_key = "legacy.unregistered_key";
         let opaque_value = "value retained verbatim";
@@ -810,7 +859,7 @@ mod tests {
         set_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
             .await
             .unwrap();
-        set_config(&env, SiteConfigKey::SmtpPort, "0")
+        inject_invalid_site_config(&env, SiteConfigKey::SmtpPort, "0")
             .await
             .unwrap();
         let err = storage.get_smtp_config().await.unwrap_err();
@@ -883,7 +932,7 @@ mod tests {
         // (7) rather than being kept — pruning can never be configured to remove every backup.
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        set_config(&env, SiteConfigKey::BackupRetentionCount, "0")
+        inject_invalid_site_config(&env, SiteConfigKey::BackupRetentionCount, "0")
             .await
             .unwrap();
         let config = storage.get_backup_config().await.unwrap();
@@ -893,7 +942,7 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn list_returns_all_entries_ordered_by_key(#[case] backend: Backend) {
-        let env = backend.setup().await;
+        let env = backend.setup().pristine().await;
         let storage = &*env.state.site_config;
         // Insert out of key order to prove the ORDER BY, not insertion order.
         set_config(&env, SiteConfigKey::SiteTitle, "T")
@@ -974,7 +1023,7 @@ mod tests {
     async fn feeds_min_items_falls_back_when_invalid_or_zero(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        set_config(&env, SiteConfigKey::FeedsMinItems, "not a number")
+        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinItems, "not a number")
             .await
             .unwrap();
         assert_eq!(
@@ -982,7 +1031,7 @@ mod tests {
             FeedMinItems::default()
         );
         // A stored `0` is rejected by the min-1 invariant and also falls back.
-        set_config(&env, SiteConfigKey::FeedsMinItems, "0")
+        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinItems, "0")
             .await
             .unwrap();
         assert_eq!(
@@ -1033,7 +1082,7 @@ mod tests {
             parse_max_file_size("1024")
         );
         // A stored 0/negative is rejected by the positive invariant → falls back.
-        set_config(&env, SiteConfigKey::MediaMaxFileSizeBytes, "0")
+        inject_invalid_site_config(&env, SiteConfigKey::MediaMaxFileSizeBytes, "0")
             .await
             .unwrap();
         assert_eq!(
@@ -1058,7 +1107,7 @@ mod tests {
             storage.get_media_user_quota().await.unwrap(),
             parse_user_quota("2048")
         );
-        set_config(&env, SiteConfigKey::MediaUserQuotaBytes, "-5")
+        inject_invalid_site_config(&env, SiteConfigKey::MediaUserQuotaBytes, "-5")
             .await
             .unwrap();
         assert_eq!(
@@ -1113,7 +1162,7 @@ mod tests {
         // Reads do not acquire write capabilities merely to repair legacy data.
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        set_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "not-a-url")
+        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "not-a-url")
             .await
             .unwrap();
         assert_eq!(storage.get_feeds_websub_hub_url().await.unwrap(), None);
@@ -1129,7 +1178,7 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn identity_returns_defaults_when_unset(#[case] backend: Backend) {
-        let env = backend.setup().await;
+        let env = backend.setup().base_url(None).await;
         let storage = &*env.state.site_config;
         let identity = storage.get_identity().await.expect("get_identity");
         assert_eq!(identity.title, common::site::DEFAULT_SITE_TITLE);
@@ -1139,7 +1188,7 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn identity_returns_override_when_title_set(#[case] backend: Backend) {
-        let env = backend.setup().await;
+        let env = backend.setup().base_url(None).await;
         let storage = &*env.state.site_config;
         set_config(&env, SiteConfigKey::SiteTitle, "My Blog")
             .await
@@ -1170,7 +1219,7 @@ mod tests {
         // Reads do not acquire write capabilities merely to repair legacy data.
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        set_config(&env, SiteConfigKey::SiteBaseUrl, "not-a-url")
+        inject_invalid_site_config(&env, SiteConfigKey::SiteBaseUrl, "not-a-url")
             .await
             .unwrap();
         assert_eq!(storage.get_identity().await.unwrap().base_url, None);
@@ -1295,7 +1344,7 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         for value in ["named", "not a real value", " private "] {
-            set_config(&env, SiteConfigKey::PostsDefaultAudience, value)
+            inject_invalid_site_config(&env, SiteConfigKey::PostsDefaultAudience, value)
                 .await
                 .unwrap();
             assert_eq!(
@@ -1324,7 +1373,7 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn registration_policy_defaults_to_closed_when_absent(#[case] backend: Backend) {
-        let env = backend.setup().await;
+        let env = backend.setup().pristine().await;
         let storage = &*env.state.site_config;
         assert_eq!(
             storage.get_registration_policy().await.unwrap(),
@@ -1337,15 +1386,26 @@ mod tests {
     async fn registration_policy_round_trips_each_token(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        for (token, expected) in [
-            ("open", RegistrationPolicy::Open),
-            ("invite_only", RegistrationPolicy::InviteOnly),
-            ("closed", RegistrationPolicy::Closed),
+        for policy in [
+            RegistrationPolicy::Open,
+            RegistrationPolicy::InviteOnly,
+            RegistrationPolicy::Closed,
         ] {
-            set_config(&env, SiteConfigKey::SiteRegistrationPolicy, token)
-                .await
-                .unwrap();
-            assert_eq!(storage.get_registration_policy().await.unwrap(), expected);
+            let config_storage = std::sync::Arc::clone(&env.state.site_config);
+            confirmed(
+                env.state
+                    .write_scope
+                    .run(move |transaction| {
+                        Box::pin(async move {
+                            config_storage
+                                .set_registration_policy(transaction, policy)
+                                .await
+                        })
+                    })
+                    .await
+                    .unwrap(),
+            );
+            assert_eq!(storage.get_registration_policy().await.unwrap(), policy);
         }
     }
 
@@ -1354,7 +1414,7 @@ mod tests {
     async fn registration_policy_falls_back_to_closed_when_garbage(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        set_config(&env, SiteConfigKey::SiteRegistrationPolicy, "garbage")
+        inject_invalid_site_config(&env, SiteConfigKey::SiteRegistrationPolicy, "garbage")
             .await
             .unwrap();
         assert_eq!(

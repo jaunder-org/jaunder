@@ -70,7 +70,7 @@ async fn site_config_round_trips_through_typed_keys(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn site_config_operations(#[case] backend: Backend) {
-    let env = backend.setup().await;
+    let env = backend.setup().pristine().await;
     let state = &env.state;
     let value = state.site_config.get_raw(SiteConfigKey::SiteBaseUrl).await;
     match value {

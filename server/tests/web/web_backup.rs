@@ -7,7 +7,9 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{create_operator_and_session, create_user_and_session, post_form};
-use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+use storage::test_support::{
+    Backend, TestEnv, backends, backends_matrix, inject_invalid_site_config,
+};
 
 #[apply(backends)]
 #[tokio::test]
@@ -34,20 +36,14 @@ async fn operator_gets_default_backup_settings(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let backup = BackupConfig {
+        destination_path: Some("/srv/backups".parse().unwrap()),
+        schedule: "0 30 2 * * *".parse().unwrap(),
+        retention_count: "4".parse().unwrap(),
+        mode: BackupMode::Archive,
+    };
+    let TestEnv { state, base: _base } = backend.setup().backup(backup).await;
     let cookie = create_operator_and_session(&state).await.cookie();
-    crate::helpers::set_site_config(&state, SiteConfigKey::BackupDestinationPath, "/srv/backups")
-        .await
-        .unwrap();
-    crate::helpers::set_site_config(&state, SiteConfigKey::BackupSchedule, "0 30 2 * * *")
-        .await
-        .unwrap();
-    crate::helpers::set_site_config(&state, SiteConfigKey::BackupRetentionCount, "4")
-        .await
-        .unwrap();
-    crate::helpers::set_site_config(&state, SiteConfigKey::BackupMode, "archive")
-        .await
-        .unwrap();
 
     let (status, body) = post_form(
         &state,
@@ -68,20 +64,22 @@ async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
-    crate::helpers::set_site_config(&state, SiteConfigKey::BackupDestinationPath, "/srv/backups")
+    let backup = BackupConfig {
+        destination_path: Some("/srv/backups".parse().unwrap()),
+        ..BackupConfig::default()
+    };
+    let env = backend.setup().backup(backup).await;
+    let cookie = create_operator_and_session(&env.state).await.cookie();
+    inject_invalid_site_config(&env, SiteConfigKey::BackupSchedule, "not-a-schedule")
         .await
         .unwrap();
-    crate::helpers::set_site_config(&state, SiteConfigKey::BackupSchedule, "not-a-schedule")
+    inject_invalid_site_config(&env, SiteConfigKey::BackupRetentionCount, "daily")
         .await
         .unwrap();
-    crate::helpers::set_site_config(&state, SiteConfigKey::BackupRetentionCount, "daily")
+    inject_invalid_site_config(&env, SiteConfigKey::BackupMode, "surprise")
         .await
         .unwrap();
-    crate::helpers::set_site_config(&state, SiteConfigKey::BackupMode, "surprise")
-        .await
-        .unwrap();
+    let TestEnv { state, base: _base } = env;
 
     let (status, body) = post_form(
         &state,
@@ -260,11 +258,12 @@ async fn backup_warning_visible_for_operator_without_destination(#[case] backend
 #[apply(backends)]
 #[tokio::test]
 async fn backup_warning_hidden_when_destination_configured(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let backup = BackupConfig {
+        destination_path: Some("/srv/backups".parse().unwrap()),
+        ..BackupConfig::default()
+    };
+    let TestEnv { state, base: _base } = backend.setup().backup(backup).await;
     let cookie = create_operator_and_session(&state).await.cookie();
-    crate::helpers::set_site_config(&state, SiteConfigKey::BackupDestinationPath, "/srv/backups")
-        .await
-        .unwrap();
 
     let (status, body) = post_form(
         &state,
@@ -281,14 +280,16 @@ async fn backup_warning_hidden_when_destination_configured(#[case] backend: Back
 #[apply(backends)]
 #[tokio::test]
 async fn backup_warning_visible_when_configured_schedule_is_invalid(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_operator_and_session(&state).await.cookie();
-    crate::helpers::set_site_config(&state, SiteConfigKey::BackupDestinationPath, "/srv/backups")
+    let backup = BackupConfig {
+        destination_path: Some("/srv/backups".parse().unwrap()),
+        ..BackupConfig::default()
+    };
+    let env = backend.setup().backup(backup).await;
+    let cookie = create_operator_and_session(&env.state).await.cookie();
+    inject_invalid_site_config(&env, SiteConfigKey::BackupSchedule, "not-a-schedule")
         .await
         .unwrap();
-    crate::helpers::set_site_config(&state, SiteConfigKey::BackupSchedule, "not-a-schedule")
-        .await
-        .unwrap();
+    let TestEnv { state, base: _base } = env;
 
     let (status, body) = post_form(
         &state,

@@ -47,7 +47,7 @@ async fn get_site_identity_requires_operator(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_site_identity_returns_defaults_when_unconfigured(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = backend.setup().base_url(None).await;
     let cookie = create_operator_and_session(&state).await.cookie();
 
     let (status, body) = post_form(
@@ -232,14 +232,14 @@ async fn update_site_identity_requires_operator(#[case] backend: Backend) {
     assert!(member_body.contains("unauthorized"), "body: {member_body}");
 }
 
-// #575 base-URL warning banner endpoint. Mirrors web_backup.rs's `backup_warning_*`
-// tests: a soft operator check (`Ok(false)`, never an error, for non-operators) over
-// whether `SiteIdentity.base_url` is unset. `base_url` defaults to `None`, so the
-// "visible" case needs no seeding.
+// #575 base-URL warning banner endpoint. Mirrors web_backup.rs's
+// `backup_warning_*` tests: a soft operator check (`Ok(false)`, never an error,
+// for non-operators) over whether `SiteIdentity.base_url` is unset. The visible
+// case explicitly omits the test fixture's default base URL.
 #[apply(backends)]
 #[tokio::test]
 async fn base_url_warning_visible_for_operator_when_unset(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = backend.setup().base_url(None).await;
     let cookie = create_operator_and_session(&state).await.cookie();
     let (status, body) = post_form(
         &state,

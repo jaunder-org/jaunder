@@ -7,9 +7,7 @@ use rstest::*;
 use rstest_reuse::*;
 use tower::ServiceExt;
 
-use crate::helpers::{
-    SeededSession, atompub_at, create_user_and_session, make_app, setup_with_base_url,
-};
+use crate::helpers::{SeededSession, atompub_at, create_user_and_session, make_app};
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
 use super::fixtures::entry_xml;
@@ -65,7 +63,7 @@ impl ForbiddenRequest {
 #[case::update(ForbiddenRequest::Update)]
 #[tokio::test]
 async fn forbids_other_user(backend: Backend, #[case] request: ForbiddenRequest) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
@@ -81,7 +79,7 @@ async fn forbids_other_user(backend: Backend, #[case] request: ForbiddenRequest)
 #[apply(backends)]
 #[tokio::test]
 async fn malformed_username_path_returns_400(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
     let uri = parse_root_relative_url("/atompub/a@b/posts");

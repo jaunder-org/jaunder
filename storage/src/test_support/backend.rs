@@ -10,11 +10,16 @@ use crate::{
 };
 
 use common::MutationOutcome;
+use common::backup::BackupConfig;
 use common::ids::{PostId, TagId, UserId};
-use common::media::MediaRef;
+use common::media::{MaxFileSize, MediaRef, UserQuota};
+use common::registration::RegistrationPolicy;
 use common::tag::TagLabel;
+use common::tagged_url::BaseUrl;
 use sqlx::pool::PoolConnection;
 use sqlx::{PgPool, Postgres, Sqlite, SqlitePool, Transaction};
+use std::future::{Future, IntoFuture};
+use std::pin::Pin;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -60,6 +65,32 @@ pub async fn set_site_config(
             })
             .await?,
     );
+    Ok(())
+}
+
+/// Physically injects an invalid site-config row for defensive-read tests.
+///
+/// This bypasses typed storage deliberately: legacy database state can contain
+/// values rejected at normal write boundaries.
+///
+/// # Errors
+///
+/// Returns an error if inserting the physical row fails.
+pub async fn inject_invalid_site_config(
+    env: &TestEnv,
+    key: host::config_key::SiteConfigKey,
+    value: &str,
+) -> Result<(), sqlx::Error> {
+    crate::with_closeable_pool!(env.base.pool(), pool, {
+        sqlx::query(
+            "INSERT INTO site_config (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(pool)
+        .await?;
+    });
     Ok(())
 }
 
@@ -511,16 +542,242 @@ impl std::ops::Deref for TestBase {
     }
 }
 
-impl Backend {
-    /// Builds a fresh [`TestEnv`] (an `AppState` plus its backing temp dir) for
-    /// this backend: a `SQLite` file under a tempdir, or a per-test Postgres
-    /// database cloned from the migrated template.
+enum BaseUrlSeed {
+    Default,
+    Value(Option<BaseUrl>),
+}
+
+/// Owned, typed configuration for a fresh [`TestEnv`].
+pub struct SetupBuilder {
+    backend: Backend,
+    registration: Option<RegistrationPolicy>,
+    base_url: BaseUrlSeed,
+    backup: Option<BackupConfig>,
+    media_limits: Option<(MaxFileSize, UserQuota)>,
+    pristine: bool,
+}
+
+impl SetupBuilder {
+    fn new(backend: Backend) -> Self {
+        Self {
+            backend,
+            registration: None,
+            base_url: BaseUrlSeed::Default,
+            backup: None,
+            media_limits: None,
+            pristine: false,
+        }
+    }
+
+    fn assert_can_override(&self, option: &str) {
+        assert!(
+            !self.pristine,
+            "fixture configuration cannot combine pristine with {option}"
+        );
+    }
+
+    /// Overrides the default Open registration policy.
     ///
     /// # Panics
     ///
-    /// If the database cannot be opened/migrated (e.g. Postgres is unreachable
-    /// or `JAUNDER_PG_TEST_URL` is misconfigured) — a setup failure fails the test.
-    pub async fn setup(self) -> TestEnv {
+    /// Panics if registration was already specified or the fixture is pristine.
+    #[must_use]
+    pub fn registration(mut self, policy: RegistrationPolicy) -> Self {
+        self.assert_can_override("registration");
+        assert!(
+            self.registration.replace(policy).is_none(),
+            "fixture configuration specifies registration more than once"
+        );
+        self
+    }
+
+    /// Overrides the default base URL; `None` omits only its row.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the base URL was already specified or the fixture is pristine.
+    #[must_use]
+    pub fn base_url(mut self, base_url: Option<BaseUrl>) -> Self {
+        self.assert_can_override("base URL");
+        assert!(
+            matches!(self.base_url, BaseUrlSeed::Default),
+            "fixture configuration specifies base URL more than once"
+        );
+        self.base_url = BaseUrlSeed::Value(base_url);
+        self
+    }
+
+    /// Seeds the aggregate backup configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if backup config was already specified or the fixture is pristine.
+    #[must_use]
+    pub fn backup(mut self, backup: BackupConfig) -> Self {
+        self.assert_can_override("backup");
+        assert!(
+            self.backup.replace(backup).is_none(),
+            "fixture configuration specifies backup more than once"
+        );
+        self
+    }
+
+    /// Seeds the aggregate media limits.
+    ///
+    /// # Panics
+    ///
+    /// Panics if media limits were already specified or the fixture is pristine.
+    #[must_use]
+    pub fn media_limits(mut self, max_file_size: MaxFileSize, user_quota: UserQuota) -> Self {
+        self.assert_can_override("media limits");
+        assert!(
+            self.media_limits
+                .replace((max_file_size, user_quota))
+                .is_none(),
+            "fixture configuration specifies media limits more than once"
+        );
+        self
+    }
+
+    /// Seeds no site-config rows.
+    ///
+    /// # Panics
+    ///
+    /// Panics if pristine or any override was already specified.
+    #[must_use]
+    pub fn pristine(mut self) -> Self {
+        assert!(
+            self.registration.is_none()
+                && matches!(self.base_url, BaseUrlSeed::Default)
+                && self.backup.is_none()
+                && self.media_limits.is_none(),
+            "fixture configuration cannot combine pristine with overrides"
+        );
+        assert!(
+            !self.pristine,
+            "fixture configuration specifies pristine more than once"
+        );
+        self.pristine = true;
+        self
+    }
+
+    fn seed(self) -> SiteConfigSeed {
+        if self.pristine {
+            SiteConfigSeed::Pristine
+        } else {
+            SiteConfigSeed::Configured {
+                registration: self.registration.unwrap_or(RegistrationPolicy::Open),
+                base_url: match self.base_url {
+                    BaseUrlSeed::Default => Some(
+                        "https://example.com/"
+                            .parse()
+                            .expect("valid default base URL"),
+                    ),
+                    BaseUrlSeed::Value(base_url) => base_url,
+                },
+                backup: self.backup,
+                media_limits: self.media_limits,
+            }
+        }
+    }
+}
+
+impl IntoFuture for SetupBuilder {
+    type Output = TestEnv;
+    type IntoFuture = Pin<Box<dyn Future<Output = TestEnv> + Send>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            let env = self.backend.provision().await;
+            seed_site_config(&env, self.seed(), SeedFailure::Never)
+                .await
+                .expect("seed site-config fixture");
+            env
+        })
+    }
+}
+
+enum SiteConfigSeed {
+    Pristine,
+    Configured {
+        registration: RegistrationPolicy,
+        base_url: Option<BaseUrl>,
+        backup: Option<BackupConfig>,
+        media_limits: Option<(MaxFileSize, UserQuota)>,
+    },
+}
+
+#[derive(Copy, Clone)]
+enum SeedFailure {
+    Never,
+    #[cfg(test)]
+    AfterFirst,
+}
+
+async fn seed_site_config(
+    env: &TestEnv,
+    seed: SiteConfigSeed,
+    failure: SeedFailure,
+) -> anyhow::Result<()> {
+    let SiteConfigSeed::Configured {
+        registration,
+        base_url,
+        backup,
+        media_limits,
+    } = seed
+    else {
+        return Ok(());
+    };
+    #[cfg(test)]
+    let fail_after_first = matches!(failure, SeedFailure::AfterFirst);
+    #[cfg(not(test))]
+    let fail_after_first = {
+        let _ = failure;
+        false
+    };
+    let site_config = Arc::clone(&env.state.site_config);
+    let outcome = env
+        .state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                site_config
+                    .set_registration_policy(transaction, registration)
+                    .await?;
+                if fail_after_first {
+                    return Err(sqlx::Error::Protocol(
+                        "forced site-config seed failure".to_owned(),
+                    ));
+                }
+                if let Some(base_url) = base_url {
+                    site_config
+                        .set_base_url(transaction, Some(base_url))
+                        .await?;
+                }
+                if let Some(backup) = backup.as_ref() {
+                    site_config.set_backup_config(transaction, backup).await?;
+                }
+                if let Some((max_file_size, user_quota)) = media_limits {
+                    site_config
+                        .set_media_limits(transaction, max_file_size, user_quota)
+                        .await?;
+                }
+                Ok(())
+            })
+        })
+        .await?;
+    confirmed(outcome);
+    Ok(())
+}
+
+impl Backend {
+    /// Starts configuring a fresh [`TestEnv`] for this backend.
+    #[must_use]
+    pub fn setup(self) -> SetupBuilder {
+        SetupBuilder::new(self)
+    }
+
+    async fn provision(self) -> TestEnv {
         let dir = TempDir::new().unwrap();
         let runtime = StorageRuntimeConfig::default();
         let (state, base) = match self {
@@ -537,7 +794,6 @@ impl Backend {
             Backend::Postgres => {
                 let config = PostgresTestConfig::from_env();
                 let (url, guard) = template_postgres_url(&config).await;
-                // template_postgres_url() always yields Postgres, so unreachable.
                 let DbConnectOptions::Postgres { options, .. } = &url else {
                     unreachable!("template_postgres_url always yields Postgres")
                 };
@@ -545,11 +801,6 @@ impl Backend {
                     crate::postgres::open_postgres_database_with_pool(options, &runtime)
                         .await
                         .unwrap();
-                // Record the per-test DB URL so raw-SQL helpers reuse this exact
-                // database rather than minting a fresh (empty) template clone.
-                // `expose_url`, not `to_string`: this URL is read back by
-                // `recorded_postgres_url` and reconnected with, so it must keep any
-                // password. `Display` redacts.
                 std::fs::write(dir.path().join(PG_URL_FILE), url.expose_url())
                     .expect("write recorded Postgres URL");
                 (state, TestBase::postgres(dir, guard, pool, instance_id))
@@ -604,7 +855,198 @@ pub fn sqlite_url(base: &TempDir) -> DbConnectOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::{CloseablePool, confirmed_for};
+    use super::{
+        Backend, CloseablePool, SeedFailure, SetupBuilder, SiteConfigSeed, confirmed_for,
+        seed_site_config,
+    };
+    use crate::test_support::backends;
+    use common::backup::BackupConfig;
+    use common::media::{MaxFileSize, UserQuota};
+    use common::registration::RegistrationPolicy;
+    use rstest::*;
+    use rstest_reuse::*;
+
+    #[derive(Copy, Clone)]
+    enum FixtureOverride {
+        Registration,
+        BaseUrl,
+        Backup,
+        MediaLimits,
+    }
+
+    impl FixtureOverride {
+        fn apply(self, setup: SetupBuilder) -> SetupBuilder {
+            match self {
+                Self::Registration => setup.registration(RegistrationPolicy::InviteOnly),
+                Self::BaseUrl => setup.base_url(Some("https://override.example/".parse().unwrap())),
+                Self::Backup => setup.backup(BackupConfig::default()),
+                Self::MediaLimits => setup.media_limits("5".parse().unwrap(), "6".parse().unwrap()),
+            }
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn bare_setup_seeds_open_registration_and_canonical_base_url(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        assert_eq!(
+            storage.get_registration_policy().await.unwrap(),
+            RegistrationPolicy::Open
+        );
+        assert_eq!(
+            storage.get_identity().await.unwrap().base_url.as_deref(),
+            Some("https://example.com/")
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn setup_overrides_seeded_values(#[case] backend: Backend) {
+        let base_url = "https://configured.example/".parse().unwrap();
+        let max_file_size = "1024".parse::<MaxFileSize>().unwrap();
+        let user_quota = "2048".parse::<UserQuota>().unwrap();
+        let backup = BackupConfig::default();
+        let env = backend
+            .setup()
+            .registration(RegistrationPolicy::InviteOnly)
+            .base_url(Some(base_url))
+            .backup(backup.clone())
+            .media_limits(max_file_size, user_quota)
+            .await;
+        let storage = &*env.state.site_config;
+        assert_eq!(
+            storage.get_registration_policy().await.unwrap(),
+            RegistrationPolicy::InviteOnly
+        );
+        assert_eq!(
+            storage.get_identity().await.unwrap().base_url.as_deref(),
+            Some("https://configured.example/")
+        );
+        assert_eq!(storage.get_backup_config().await.unwrap(), backup);
+        assert_eq!(
+            storage.get_media_max_file_size().await.unwrap(),
+            max_file_size
+        );
+        assert_eq!(storage.get_media_user_quota().await.unwrap(), user_quota);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn base_url_none_omits_only_the_base_url_row(#[case] backend: Backend) {
+        let env = backend.setup().base_url(None).await;
+        let storage = &*env.state.site_config;
+        assert_eq!(
+            storage.get_registration_policy().await.unwrap(),
+            RegistrationPolicy::Open
+        );
+        assert_eq!(
+            storage
+                .get_raw(host::config_key::SiteConfigKey::SiteBaseUrl)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn pristine_setup_seeds_no_site_config_rows(#[case] backend: Backend) {
+        let env = backend.setup().pristine().await;
+        let storage = &*env.state.site_config;
+        assert!(storage.list().await.unwrap().is_empty());
+        assert_eq!(
+            storage.get_registration_policy().await.unwrap(),
+            RegistrationPolicy::Closed
+        );
+    }
+
+    #[apply(backends)]
+    #[test]
+    fn setup_options_reject_duplicates_and_pristine_combinations(#[case] backend: Backend) {
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _ = backend
+                    .setup()
+                    .registration(RegistrationPolicy::Open)
+                    .registration(RegistrationPolicy::Closed);
+            })
+            .is_err()
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _ = backend
+                    .setup()
+                    .base_url(Some("https://first.example/".parse().unwrap()))
+                    .base_url(None);
+            })
+            .is_err()
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _ = backend
+                    .setup()
+                    .backup(BackupConfig::default())
+                    .backup(BackupConfig::default());
+            })
+            .is_err()
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _ = backend
+                    .setup()
+                    .media_limits("1".parse().unwrap(), "2".parse().unwrap())
+                    .media_limits("3".parse().unwrap(), "4".parse().unwrap());
+            })
+            .is_err()
+        );
+        for setup_override in [
+            FixtureOverride::Registration,
+            FixtureOverride::BaseUrl,
+            FixtureOverride::Backup,
+            FixtureOverride::MediaLimits,
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| {
+                    let _ = setup_override.apply(backend.setup().pristine());
+                })
+                .is_err()
+            );
+            assert!(
+                std::panic::catch_unwind(|| {
+                    let _ = setup_override.apply(backend.setup()).pristine();
+                })
+                .is_err()
+            );
+        }
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _ = backend.setup().pristine().pristine();
+            })
+            .is_err()
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn seed_failure_after_first_write_rolls_back_every_selected_row(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.provision().await;
+        let result = seed_site_config(
+            &env,
+            SiteConfigSeed::Configured {
+                registration: RegistrationPolicy::Open,
+                base_url: Some("https://example.com/".parse().unwrap()),
+                backup: None,
+                media_limits: None,
+            },
+            SeedFailure::AfterFirst,
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(env.state.site_config.list().await.unwrap().is_empty());
+    }
 
     // guard:no-backend — harness type-guard on the SQLite CloseablePool variant; no database ops
     #[tokio::test]

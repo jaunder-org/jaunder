@@ -7,12 +7,10 @@ use std::sync::Arc;
 
 use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, fp};
 
-use crate::helpers::setup_with_base_url;
-
 #[apply(backends)]
 #[tokio::test]
 async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let user = SeedUser::new().seed(&state).await;
 
@@ -56,7 +54,7 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn regenerate_writes_empty_feed_for_user_with_no_posts(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user but no posts
     let user = SeedUser::new().seed(&state).await;
@@ -96,7 +94,7 @@ async fn regenerate_writes_empty_feed_for_user_with_no_posts(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user (posts are not required: the tag-window queries and the
     // SiteTag/UserTag canonical_url arms execute regardless of matches).
@@ -158,7 +156,7 @@ async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend)
 #[apply(backends)]
 #[tokio::test]
 async fn regenerate_writes_each_format(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user with one post
     let user = SeedUser::new().seed(&state).await;
@@ -211,7 +209,7 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn feed_contains_only_public_posts(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let user = SeedUser::new().seed(&state).await;
 
@@ -265,7 +263,7 @@ async fn feed_contains_only_public_posts(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn regenerated_json_feed_carries_slug_ordered_tags(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
 
     let user = SeedUser::new().seed(&state).await;
     // Applied in reverse-slug order: an unordered read would surface "web" first.

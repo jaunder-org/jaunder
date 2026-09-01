@@ -19,7 +19,6 @@ use storage::test_support::{Backend, SeedRawPost, TestEnv, backends, backends_ma
 use crate::helpers::{
     ForeignReferenceResolver, atompub, atompub_at, atompub_get, atompub_location, atompub_upload,
     body_string, create_user_and_session, make_app, make_app_with_media_ownership_resolver,
-    setup_with_base_url,
 };
 
 const PNG: &[u8] = &[
@@ -33,7 +32,7 @@ const PNG: &[u8] = &[
 #[apply(backends)]
 #[tokio::test]
 async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
@@ -71,7 +70,7 @@ async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn upload_accepts_pdf_content_type(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
@@ -95,7 +94,7 @@ async fn upload_accepts_pdf_content_type(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn upload_without_content_type_defaults_to_octet_stream(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
@@ -121,7 +120,7 @@ async fn upload_without_content_type_defaults_to_octet_stream(#[case] backend: B
 #[apply(backends)]
 #[tokio::test]
 async fn upload_rejects_invalid_present_content_type(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
@@ -143,7 +142,7 @@ async fn upload_rejects_invalid_present_content_type(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn upload_rejects_opaque_present_content_type(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
@@ -168,7 +167,7 @@ async fn upload_rejects_opaque_present_content_type(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn reupload_identical_returns_200(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
@@ -192,7 +191,7 @@ async fn reupload_identical_returns_200(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_media_member_returns_entry(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
@@ -252,7 +251,7 @@ async fn get_unknown_media_returns_404(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     let storage = TempDir::new().unwrap();
@@ -300,7 +299,7 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_media_member_force_bypasses_owner_retained_file(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
@@ -337,7 +336,7 @@ async fn delete_media_member_force_bypasses_owner_retained_file(#[case] backend:
 async fn delete_media_member_returns_409_for_another_owners_retained_reference(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let owner = create_user_and_session(&state).await;
     let other_owner = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
@@ -387,7 +386,7 @@ async fn delete_media_member_returns_409_for_another_owners_retained_reference(
 async fn delete_media_member_force_bypasses_owner_reference_ownership_evidence(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let resolver = Arc::new(ForeignReferenceResolver::new([]));
@@ -536,7 +535,7 @@ async fn member_get_resolves_a_filename_needing_encoding(#[case] backend: Backen
     // private member-address extractor skipped re-encoding. This one would: Axum decodes
     // the `my%20photo.jpg` segment to `my photo.jpg`, and only the conversion recovers
     // the stored spelling to match the row.
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
@@ -569,7 +568,7 @@ async fn member_get_resolves_a_filename_needing_encoding(#[case] backend: Backen
 async fn member_delete_resolves_a_filename_needing_encoding(#[case] backend: Backend) {
     // As above, for `member_delete`: the delete must match the stored row rather than
     // missing it, which the follow-up 404 confirms actually happened.
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
@@ -607,7 +606,7 @@ async fn an_over_long_segment_does_not_truncate_onto_a_stored_name(#[case] backe
     // name sitting exactly at the budget, then request a *longer* one whose truncation
     // would land on it. If the decoded-segment conversion ever repaired instead of
     // rejecting, this would resolve to another user's file rather than missing.
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);

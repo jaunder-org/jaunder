@@ -10,7 +10,6 @@ use tower::ServiceExt;
 
 use crate::helpers::{
     atompub_get, atompub_post_xml, atompub_put_xml, body_string, create_user_and_session, make_app,
-    setup_with_base_url,
 };
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
@@ -21,7 +20,7 @@ use super::fixtures::{entry_xml, location_post_id};
 #[apply(backends)]
 #[tokio::test]
 async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let author = create_user_and_session(&state).await;
     let foreign = create_user_and_session(&state).await;
     let owned_name = common::test_support::parse_audience_name("Owned");
@@ -93,7 +92,7 @@ async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     // A Subscribers-targeted post is hidden from an anonymous viewer. Editing it
@@ -135,7 +134,7 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     // A Subscribers-targeted post is hidden from Anonymous; the owner must still
@@ -177,7 +176,7 @@ async fn create_widens_each_default_audience(
     #[case] default_audience: DefaultAudience,
     #[case] expected_audiences: Vec<AudienceTarget>,
 ) {
-    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
     // AtomPub has no audience field, so post creation is the per-Post boundary
