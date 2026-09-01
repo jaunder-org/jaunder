@@ -568,14 +568,10 @@ pub async fn collection_post(
     // hidden, and so the response entry carries the post's tags.
     let viewer = owner_viewer(&auth_user);
 
-    // A reused idempotency key returns the original post as `200` — skipping category
-    // re-application (the original already carries its tags).
-    if let Err(storage::PerformCreationError::IdempotencyConflict) = &created {
-        let key = idempotency_key.as_ref().ok_or(HandlerError::Invariant)?;
-        let post_id = posts
-            .post_id_for_idempotency_key(auth_user.user_id, key, request_clock)
-            .await?
-            .ok_or(HandlerError::Invariant)?;
+    // A reused idempotency key returns the transaction-selected original post
+    // as `200`, skipping category re-application (it already carries its tags).
+    if let Err(storage::PerformCreationError::IdempotencyConflict(post_id)) = &created {
+        let post_id = *post_id;
         // If the original was soft-deleted between the create and this replay, a
         // stale-key retry deserves a 404 rather than a 500.
         let post = posts

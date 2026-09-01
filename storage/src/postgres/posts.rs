@@ -10,6 +10,7 @@ use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
     UpdatePostError, UpdatePostInput, WriteTransaction, postgres_connection,
 };
+use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
 use common::time::UtcInstant;
@@ -308,6 +309,28 @@ impl PostDialect for Postgres {
                 .await?;
         }
         Ok(())
+    }
+
+    async fn lock_live_idempotency_mapping(
+        conn: &mut <Self as sqlx::Database>::Connection,
+        user_id: UserId,
+        key: &IdempotencyKey,
+        cutoff: UtcInstant,
+    ) -> sqlx::Result<Option<PostId>> {
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(posts::idempotency_advisory_lock_key(user_id, key))
+            .execute(&mut *conn)
+            .await?;
+        sqlx::query_scalar(
+            "SELECT post_id FROM idempotency_keys
+             WHERE user_id = $1 AND key = $2 AND created_at > $3
+             FOR UPDATE",
+        )
+        .bind(user_id)
+        .bind(key)
+        .bind(cutoff)
+        .fetch_optional(&mut *conn)
+        .await
     }
 
     const DELETE_POST_MEDIA: &'static str = "DELETE FROM post_media WHERE post_id = $1 AND subject_kind = 'current' AND revision_id = 0";

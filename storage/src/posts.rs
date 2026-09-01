@@ -339,10 +339,10 @@ pub enum CreatePostError {
     /// A non-authoritative bookkeeping property disagreed with the final row.
     #[error("post bookkeeping does not match the stored post")]
     BookkeepingMismatch,
-    /// The `(user_id, idempotency_key)` pair has already been used to create a
-    /// post; the create is a duplicate of an earlier one.
+    /// The `(user_id, key)` pair already maps to the returned Post. The mapping
+    /// was selected under the same transaction that rejected this duplicate.
     #[error("idempotency key already used for this user")]
-    IdempotencyConflict,
+    IdempotencyConflict(PostId),
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
@@ -452,9 +452,9 @@ pub struct CreatePostInput {
     pub tags: Vec<TagLabel>,
     /// Non-authoritative Org bookkeeping to compare after the successful row insert.
     pub expectations: PostBookkeepingExpectation,
-    /// If `Some`, register this idempotency key against the new post in the
-    /// same transaction. A `(user_id, key)` collision maps to
-    /// [`CreatePostError::IdempotencyConflict`] and rolls the whole create back.
+    /// If `Some`, atomically replay its live `(user_id, key)` mapping or
+    /// register the key against the new post. A replay returns
+    /// [`CreatePostError::IdempotencyConflict`] carrying the selected Post.
     pub idempotency_key: Option<IdempotencyKey>,
 }
 
@@ -1514,6 +1514,17 @@ pub trait PostDialect: Backend {
         conn: &mut Self::Connection,
         media: &BTreeSet<MediaRef>,
     ) -> sqlx::Result<()>;
+
+    /// Serializes this `(user_id, key)` with competing creates and returns its
+    /// live mapping under a row lock. `SQLite` already holds its writer lock;
+    /// `PostgreSQL` additionally takes a transaction-scoped advisory lock so an
+    /// absent mapping is serialized too.
+    async fn lock_live_idempotency_mapping(
+        conn: &mut Self::Connection,
+        user_id: UserId,
+        key: &IdempotencyKey,
+        cutoff: UtcInstant,
+    ) -> sqlx::Result<Option<PostId>>;
 
     /// Deletes every `post_media` row for a post. Bind order: `post_id`.
     const DELETE_POST_MEDIA: &'static str;
@@ -3616,17 +3627,18 @@ fn create_expectations_match(input: &CreatePostInput) -> bool {
             .is_none_or(|published_at| published_at == input.published_at)
 }
 
-/// Maps an error from the idempotency-key `INSERT`. A `(user_id, key)` unique
-/// violation is a [`CreatePostError::IdempotencyConflict`] (a duplicate create),
-/// distinct from the post `INSERT`'s `SlugConflict` — attribution is by which
-/// statement's mapper runs. Any other error passes through as `Internal`.
-fn map_idempotency_insert_error(e: sqlx::Error) -> CreatePostError {
-    match e {
-        sqlx::Error::Database(db) if db.is_unique_violation() => {
-            CreatePostError::IdempotencyConflict
-        }
-        e => CreatePostError::Internal(e),
-    }
+/// Derives the `PostgreSQL` advisory-lock key for one user's `Idempotency Key`.
+///
+/// A collision only serializes unrelated creates; it cannot change behavior.
+#[must_use]
+pub(crate) fn idempotency_advisory_lock_key(user_id: UserId, key: &IdempotencyKey) -> i64 {
+    let mut digest = Sha256::new();
+    digest.update(i64::from(user_id).to_be_bytes());
+    digest.update(key.as_ref().as_bytes());
+    let digest: [u8; 32] = digest.finalize().into();
+    i64::from_be_bytes([
+        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
+    ])
 }
 
 /// Maps every distinct media identity to the signed 64-bit advisory-lock key
@@ -3791,6 +3803,12 @@ where
     DB::lock_media_references(conn, &media_lock_set(input.rendered.media())).await?;
 
     let idempotency_key_expired = if let Some(key) = input.idempotency_key.as_ref() {
+        let cutoff = idempotency_replay_cutoff(now);
+        if let Some(post_id) =
+            DB::lock_live_idempotency_mapping(conn, input.user_id, key, cutoff).await?
+        {
+            return Err(CreatePostError::IdempotencyConflict(post_id));
+        }
         sqlx::query_scalar::<_, RowCount>(
             "DELETE FROM idempotency_keys
              WHERE user_id = $1 AND key = $2 AND created_at <= $3
@@ -3798,7 +3816,7 @@ where
         )
         .bind(input.user_id)
         .bind(key)
-        .bind(idempotency_replay_cutoff(now))
+        .bind(cutoff)
         .fetch_optional(&mut *conn)
         .await
         .map_err(CreatePostError::Internal)?
@@ -3848,7 +3866,7 @@ where
         .bind(now)
         .execute(&mut *conn)
         .await
-        .map_err(map_idempotency_insert_error)?;
+        .map_err(CreatePostError::Internal)?;
     }
 
     Ok((post_id, idempotency_key_expired))
@@ -5985,14 +6003,6 @@ mod tests {
                     .expect("valid current media form"),
             )]
         );
-    }
-
-    #[test]
-    fn map_idempotency_insert_error_passes_non_unique_errors_through() {
-        // A unique violation becomes IdempotencyConflict (covered by the create
-        // dedup integration test); any other error passes through as Internal.
-        let mapped = map_idempotency_insert_error(sqlx::Error::PoolClosed);
-        assert!(matches!(mapped, CreatePostError::Internal(_)));
     }
 
     #[test]

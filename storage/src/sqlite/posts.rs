@@ -10,6 +10,7 @@ use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
     UpdatePostError, UpdatePostInput, WriteTransaction, sqlite_connection,
 };
+use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
 use common::time::UtcInstant;
@@ -193,6 +194,25 @@ impl PostDialect for Sqlite {
         _media: &std::collections::BTreeSet<common::media::MediaRef>,
     ) -> sqlx::Result<()> {
         Ok(())
+    }
+
+    async fn lock_live_idempotency_mapping(
+        conn: &mut <Self as sqlx::Database>::Connection,
+        user_id: UserId,
+        key: &IdempotencyKey,
+        cutoff: UtcInstant,
+    ) -> sqlx::Result<Option<PostId>> {
+        // WriteScope starts SQLite mutations with BEGIN IMMEDIATE, so the
+        // database writer lock serializes both present and absent mappings.
+        sqlx::query_scalar(
+            "SELECT post_id FROM idempotency_keys
+             WHERE user_id = $1 AND key = $2 AND created_at > $3",
+        )
+        .bind(user_id)
+        .bind(key)
+        .bind(cutoff)
+        .fetch_optional(&mut *conn)
+        .await
     }
 
     const DELETE_POST_MEDIA: &'static str =

@@ -109,8 +109,10 @@ its semantics and bounded cleanup until proven commonality justifies extraction.
 
 Idempotency is explicitly a one-hour retry contract rather than indefinite
 history, qualifying ADR-0136 without changing its durable local-content
-retention. Callers and storage must use one authoritative cutoff comparison, and
-cleanup remains an optimization rather than a correctness prerequisite.
+retention. Callers and storage use one authoritative cutoff comparison. Storage
+serializes each same-user key and returns any live mapping selected inside that
+create transaction, so a later lookup cannot change the replay decision; cleanup
+remains an optimization rather than a correctness prerequisite.
 
 Startup takes responsibility for a bounded cleanup pass before service begins,
 and daily cleanup bounds later accumulation. Domain-owned cleanup interfaces

@@ -305,15 +305,19 @@ ADR-0047. At the AtomPub boundary, a missing header, a value rejected by
 `HeaderValue::to_str` (including non-ASCII UTF-8 bytes and invalid UTF-8), or
 text that is blank after trimming means no key rather than a `400`. A readable,
 non-blank value is parsed once into an owned `IdempotencyKey`; typed borrowed
-keys carry it through post creation and duplicate lookup, and the owned type is
-bound for persistence.
+keys carry it through post creation and the owned type is bound for persistence.
 
 The existing `idempotency_keys` table stores the key as `TEXT NOT NULL` and
-enforces `UNIQUE(user_id, key)`. A fresh keyed create writes its post and key
-row atomically; a uniqueness collision rolls the attempted creation back. The
-fresh keyed create returns `201`; when its original post remains available,
-same-user key reuse returns that original post as `200`, even when the new
-payload differs. Another user may use the same key independently. The
+enforces `UNIQUE(user_id, key)`. Storage serializes each `(user_id, key)` pair
+inside the create transaction (`SQLite`'s writer lock; a `PostgreSQL` advisory
+lock plus row lock) and applies the request's authoritative cutoff there. A live
+mapping returns its selected `PostId` as the replay decision without attempting
+new post or feed-event writes; the AtomPub handler fetches that fixed Post
+rather than looking the mapping up again after rollback. An expired mapping is
+removed and its replacement post and key row are written atomically. Fresh
+creation returns `201`; when its original post remains available, same-user key
+reuse returns that original post as `200`, even when the new payload differs.
+Another user may use the same key independently. The
 [bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
 replaces indefinite mapping retention with a one-hour semantic replay window: at
 `cutoff <= now`, the mapping no longer coordinates a replay, whether or not a

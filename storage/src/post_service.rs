@@ -414,10 +414,10 @@ pub enum PerformCreationError {
     Exhausted(usize),
     #[error("created post not found")]
     CreatedNotFound,
-    /// The idempotency key was already used to create a post for this user; the
-    /// create is a duplicate and no new post was written.
+    /// The idempotency key already maps to this Post. The mapping was chosen
+    /// atomically with the rejected create.
     #[error("idempotency key already used for this user")]
-    IdempotencyConflict,
+    IdempotencyConflict(PostId),
     #[error("post bookkeeping does not match the stored post")]
     BookkeepingMismatch,
     #[error("storage error: {0}")]
@@ -442,10 +442,9 @@ impl From<PerformCreationError> for host::error::InternalError {
             // attempt count) rather than a hardcoded literal that lies when the retry bound
             // isn't 100. Wire projection is unchanged (kind `Internal` → "server operation failed").
             //
-            // `IdempotencyConflict` is unreachable in practice — the AtomPub handler
-            // intercepts the conflict and returns the original post as `200` before this
-            // conversion — but shares the same internal-failure projection.
-            PerformCreationError::Exhausted(_) | PerformCreationError::IdempotencyConflict => {
+            // The AtomPub handler intercepts the replay decision and returns the
+            // selected post as `200`; this conversion covers non-AtomPub misuse.
+            PerformCreationError::Exhausted(_) | PerformCreationError::IdempotencyConflict(_) => {
                 InternalError::server(error)
             }
             PerformCreationError::CreatedNotFound => {
@@ -616,11 +615,11 @@ pub async fn perform_post_creation_at(
                 return Err(PerformCreationError::BookkeepingMismatch);
             }
             Err(CreatePostError::SlugConflict) => {}
-            // A duplicate idempotency key is not a slug collision — do not retry;
-            // the whole create (post included) rolled back. The caller looks up
-            // and returns the original post.
-            Err(CreatePostError::IdempotencyConflict) => {
-                return Err(PerformCreationError::IdempotencyConflict);
+            // A duplicate key is not a slug collision. Storage chose the live
+            // mapping inside this transaction, so return that immutable decision
+            // rather than performing a racy lookup after rollback.
+            Err(CreatePostError::IdempotencyConflict(post_id)) => {
+                return Err(PerformCreationError::IdempotencyConflict(post_id));
             }
             Err(CreatePostError::BookkeepingMismatch) => {
                 return Err(PerformCreationError::BookkeepingMismatch);
@@ -2084,8 +2083,8 @@ mod tests {
         .unwrap();
         let first = confirmed(first);
 
-        // The duplicate reaches the post, audience, and media writes before its
-        // idempotency insert collides; the transaction must roll every attempted row back.
+        // Storage resolves the live mapping before any duplicate post, audience,
+        // media, tag, or feed-event writes occur.
         let mut replay = creation_with_key(
             user_id,
             parse_post_body(&format!("<img src=\"{}\">", media_url_for("attempted.jpg"))),
@@ -2101,7 +2100,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, PerformCreationError::IdempotencyConflict));
+        assert!(matches!(
+            err,
+            PerformCreationError::IdempotencyConflict(post_id) if post_id == first.post_id
+        ));
 
         let posts = storage
             .list_collection_by_user(user_id, None, parse_row_limit("50"))
@@ -2461,11 +2463,17 @@ mod tests {
             creation_with_key(user_id, parse_post_body("replacement two"), Some(&key)),
         );
         let outcomes = tokio::join!(first_attempt, second_attempt);
-        let replacement = match outcomes {
-            (Ok(outcome), Err(PerformCreationError::IdempotencyConflict))
-            | (Err(PerformCreationError::IdempotencyConflict), Ok(outcome)) => confirmed(outcome),
-            other => panic!("expected one replacement and one conflict, got {other:?}"),
+        let (replacement, replayed_post_id) = match outcomes {
+            (Ok(outcome), Err(PerformCreationError::IdempotencyConflict(post_id)))
+            | (Err(PerformCreationError::IdempotencyConflict(post_id)), Ok(outcome)) => {
+                (confirmed(outcome), post_id)
+            }
+            other => panic!("expected one replacement and one replay decision, got {other:?}"),
         };
+        assert_eq!(
+            replayed_post_id, replacement.post_id,
+            "the losing request must retain the winner chosen inside its transaction"
+        );
 
         assert_ne!(replacement.post_id, original.post_id);
         assert_eq!(
@@ -2541,9 +2549,9 @@ mod tests {
     fn idempotency_conflict_converts_to_internal_error() {
         use host::error::{ErrorKind, InternalError};
 
-        // Covers the otherwise-unreachable `From` arm (the handler intercepts the
-        // conflict before this conversion) so the coverage gate stays green.
-        let err: InternalError = PerformCreationError::IdempotencyConflict.into();
+        // Covers the non-AtomPub conversion arm; the AtomPub handler normally
+        // intercepts the replay decision first.
+        let err: InternalError = PerformCreationError::IdempotencyConflict(PostId::from(42)).into();
         assert_eq!(err.kind(), ErrorKind::Internal);
         assert_eq!(err.public_message(), "server operation failed");
     }
