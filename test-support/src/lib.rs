@@ -16,7 +16,7 @@ use std::sync::Arc;
 use common::display_name::DisplayName;
 use common::ids::{PostId, UserId};
 use common::username::Username;
-use storage::{AppState, seed_post_input};
+use storage::{AppState, OperatorStatus, seed_post_input};
 
 pub mod panic_gate;
 
@@ -141,6 +141,11 @@ pub async fn create_user(
         .await
         .map_err(|error| anyhow::anyhow!("fixture password preparation failed: {error}"))?;
     let display_name = display_name.cloned();
+    let operator = if operator {
+        OperatorStatus::OPERATOR
+    } else {
+        OperatorStatus::STANDARD
+    };
     let users = Arc::clone(&state.users);
     let outcome = state
         .write_scope
@@ -281,7 +286,14 @@ pub async fn create_session_for_user(
         .get_user_by_username(&uname)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no such user: {username}"))?;
-    session_record(state, user.user_id, &uname, user.is_operator, label).await
+    session_record(
+        state,
+        user.user_id,
+        &uname,
+        user.is_operator.is_operator(),
+        label,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -407,7 +419,7 @@ mod create_user_tests {
             .expect("lookup ok")
             .expect("user exists");
         assert_eq!(u.user_id, id);
-        assert!(u.is_operator, "--operator should set is_operator");
+        assert_eq!(u.is_operator, OperatorStatus::OPERATOR);
 
         // A freshly-init'd DB has a per-user uniqueness constraint, so a second
         // create with the same username surfaces as an error (no upsert).

@@ -1,6 +1,7 @@
 //! Email verification token storage.
 
 use crate::WriteTransaction;
+use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
 use chrono::Duration;
 
@@ -12,9 +13,24 @@ use crate::helpers::{self, TokenStateRow};
 use crate::sql::RowCount;
 use common::email::Email;
 use common::ids::UserId;
+use common::pagination::RowLimit;
 use common::time::UtcInstant;
 use common::token::RawToken;
 use host::{metrics, retention::Domain, token};
+/// Test-only invalid `email_verifications.email` column value.
+///
+/// Fixtures use this role to bypass `Email` validation deliberately without
+/// admitting arbitrary text to production storage interfaces.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptEmailAddress(String);
+
+#[cfg(test)]
+impl CorruptEmailAddress {
+    fn malformed() -> Self {
+        Self("not-an-email".to_owned())
+    }
+}
 
 /// Errors returned by [`EmailVerificationStorage::use_email_verification`].
 #[derive(Debug, Error)]
@@ -102,7 +118,7 @@ pub trait EmailVerificationStorage: Send + Sync {
 ///
 /// Zero backend divergence (identical SQL across `SQLite` and Postgres),
 /// so it is implemented once here; see ADR-0019.
-const PRUNE_BATCH_SIZE: i64 = 100;
+const PRUNE_BATCH_SIZE: RowLimit = RowLimit::at_most(100);
 
 pub struct EmailVerificationStore<DB: Database> {
     pool: Pool<DB>,
@@ -152,8 +168,8 @@ where
              SET expires_at = created_at
              WHERE user_id = $1 AND used_at IS NULL AND expires_at > $2",
         )
-        .bind(user_id)
-        .bind(now)
+        .bind_storage(user_id)
+        .bind_storage(now)
         .execute(&mut *connection)
         .await?;
 
@@ -162,11 +178,11 @@ where
              (token_hash, user_id, email, created_at, expires_at)
              VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(token_hash)
-        .bind(user_id)
-        .bind(email)
-        .bind(now)
-        .bind(expires_at)
+        .bind_storage(token_hash)
+        .bind_storage(user_id)
+        .bind_storage(email)
+        .bind_storage(now)
+        .bind_storage(expires_at)
         .execute(&mut *connection)
         .await?;
 
@@ -195,9 +211,9 @@ where
              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
              RETURNING user_id, email",
         )
-        .bind(now)
-        .bind(&token_hash)
-        .bind(now)
+        .bind_storage(now)
+        .bind_storage(&token_hash)
+        .bind_storage(now)
         .fetch_optional(&mut *connection)
         .await
         .map_err(UseEmailVerificationError::Internal)?;
@@ -211,7 +227,7 @@ where
         let row = sqlx::query_as::<_, TokenStateRow>(
             "SELECT used_at, expires_at FROM email_verifications WHERE token_hash = $1",
         )
-        .bind(&token_hash)
+        .bind_storage(&token_hash)
         .fetch_optional(&self.pool)
         .await
         .map_err(UseEmailVerificationError::Internal)?;
@@ -235,9 +251,9 @@ where
                  )
                  RETURNING CAST(1 AS BIGINT)",
             )
-            .bind(now)
-            .bind(unused_cutoff)
-            .bind(PRUNE_BATCH_SIZE)
+            .bind_storage(now)
+            .bind_storage(unused_cutoff)
+            .bind_storage(PRUNE_BATCH_SIZE)
             .fetch_all(&self.pool)
             .await?
             .len() as u64;
@@ -340,12 +356,11 @@ mod tests {
             .unwrap();
         let raw_token = confirmed_for(outcome, "email-verification fixture setup");
 
-        // Overwrite the `email` column with a value `Email::from_str` rejects,
-        // binding it as a raw `&str` so the bad value actually lands in the column.
+        // Overwrite the `email` column with a value `Email::from_str` rejects.
         let sql = "UPDATE email_verifications SET email = $1";
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
-                .bind("not-an-email")
+                .bind_storage(CorruptEmailAddress::malformed())
                 .execute(pool)
                 .await
                 .unwrap();

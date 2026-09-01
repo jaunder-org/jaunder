@@ -5,6 +5,7 @@ use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
 use common::time::UtcInstant;
 use server_fn::ServerFn;
+use storage::EmailVerified;
 
 use crate::helpers::{
     assert_no_email, assert_one_absolute_link_email, create_user_and_session,
@@ -102,7 +103,7 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
 
     let user = state.users.get_user(user_id).await.unwrap().unwrap();
     assert_eq!(user.email, Some(email));
-    assert!(user.email_verified, "email should be marked as verified");
+    assert_eq!(user.email_verified, EmailVerified::VERIFIED);
 }
 
 /// A later email update failure rolls back verification-token consumption.
@@ -202,7 +203,7 @@ async fn verify_email_set_failure_rolls_back_token_consumption(#[case] backend: 
     assert_eq!(status, StatusCode::OK);
     let user = state.users.get_user(user_id).await.unwrap().unwrap();
     assert_eq!(user.email, Some(email));
-    assert!(user.email_verified);
+    assert_eq!(user.email_verified, EmailVerified::VERIFIED);
 }
 
 // M3.10.9: verify_email with an expired token returns an error.

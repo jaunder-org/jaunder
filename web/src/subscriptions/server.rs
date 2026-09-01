@@ -36,7 +36,8 @@ mod tests {
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
     use storage::{
-        MockSubscriptionStorage, MockUserStorage, SubscriptionStorage, UserRecord, UserStorage,
+        EmailVerified, MockSubscriptionStorage, MockUserStorage, OperatorStatus,
+        SubscriptionStorage, UserRecord, UserStorage,
     };
 
     fn user(user_id: UserId, username: &str) -> UserRecord {
@@ -48,8 +49,8 @@ mod tests {
             created_at: UtcInstant::now(),
             last_authenticated_at: None,
             email: None,
-            email_verified: false,
-            is_operator: false,
+            email_verified: EmailVerified::UNVERIFIED,
+            is_operator: OperatorStatus::STANDARD,
         }
     }
 

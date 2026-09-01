@@ -22,6 +22,7 @@ use thiserror::Error;
 use tokio::sync::{Notify, RwLock};
 
 use crate::backend::Backend;
+use crate::sql::QueryStorageExt;
 
 /// A nonnegative retry count stored on a feed event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::NumNewtype)]
@@ -30,7 +31,7 @@ use crate::backend::Backend;
     min = 0,
     error = "feed event attempts must be a non-negative integer"
 )]
-struct FeedEventAttempts(i32);
+pub(crate) struct FeedEventAttempts(i32);
 
 impl FeedEventAttempts {
     const fn into_i32(self) -> i32 {
@@ -40,7 +41,7 @@ impl FeedEventAttempts {
 
 /// Free-form feed processing diagnostic retained exactly for the public record.
 #[derive(Debug, macros::SqlxBridge)]
-struct StoredFeedDiagnostic(String);
+pub(crate) struct StoredFeedDiagnostic(String);
 
 impl StoredFeedDiagnostic {
     fn into_inner(self) -> String {
@@ -298,7 +299,7 @@ pub trait FeedEventStorage: Send + Sync {
 /// they use a dynamically-built `IN (?, ?, …)` pattern; Postgres uses
 /// `WHERE id = ANY($n)` with a slice binding — a cleaner and cheaper approach.
 #[async_trait]
-pub trait FeedEventDialect: Backend {
+pub(crate) trait FeedEventDialect: Backend {
     /// Atomically claim and return up to `limit` eligible rows.
     async fn claim_pending_batch(
         connection: &mut Self::Connection,
@@ -331,7 +332,7 @@ pub trait FeedEventDialect: Backend {
     async fn mark_failed(
         connection: &mut Self::Connection,
         ids: &[FeedEventId],
-        error: &str,
+        error: &StoredFeedDiagnostic,
         next_attempt_at: UtcInstant,
     ) -> Result<(), FeedEventError>;
 
@@ -340,7 +341,7 @@ pub trait FeedEventDialect: Backend {
     async fn mark_exhausted(
         connection: &mut Self::Connection,
         ids: &[FeedEventId],
-        error: &str,
+        error: &StoredFeedDiagnostic,
         now: UtcInstant,
     ) -> Result<(), FeedEventError>;
     /// Delete one bounded batch of terminal rows eligible at the frozen `now`.
@@ -413,7 +414,7 @@ where
         let connection = DB::write_connection(transaction)?;
         let sql = format!("{INSERT_FEED_EVENT} RETURNING id");
         let id = sqlx::query_scalar::<_, FeedEventId>(&sql)
-            .bind(feed_path)
+            .bind_storage(feed_path)
             .fetch_one(&mut *connection)
             .await?;
         Ok(id)
@@ -432,7 +433,7 @@ where
         let connection = DB::write_connection(transaction)?;
         for feed_path in feed_paths {
             sqlx::query(INSERT_FEED_EVENT)
-                .bind(feed_path)
+                .bind_storage(feed_path)
                 .execute(&mut *connection)
                 .await?;
         }
@@ -519,7 +520,8 @@ where
             return Ok(());
         }
         let connection = DB::write_connection(transaction)?;
-        DB::mark_failed(connection, ids, error, next_attempt_at).await
+        let error = StoredFeedDiagnostic(error.to_owned());
+        DB::mark_failed(connection, ids, &error, next_attempt_at).await
     }
 
     #[tracing::instrument(
@@ -538,7 +540,8 @@ where
             return Ok(());
         }
         let connection = DB::write_connection(transaction)?;
-        DB::mark_exhausted(connection, ids, error, now).await
+        let error = StoredFeedDiagnostic(error.to_owned());
+        DB::mark_exhausted(connection, ids, &error, now).await
     }
     #[tracing::instrument(
         name = "storage.feed_events.prune_terminal_events",
@@ -1458,11 +1461,11 @@ mod tests {
                     "INSERT INTO feed_events (feed_url, status, next_attempt_at, claimed_at, created_at) \
                      VALUES ($1, $2, $3, $4, $5)",
                 )
-                .bind(&fixture.0)
-                .bind(fixture.1)
-                .bind(fixture.2)
-                .bind(fixture.3)
-                .bind(fixture_instant(100_000))
+                .bind_storage(&fixture.0)
+                .bind_storage(fixture.1)
+                .bind_storage(fixture.2)
+                .bind_storage(fixture.3)
+                .bind_storage(fixture_instant(100_000))
                 .execute(pool)
                 .await
                 .unwrap();
@@ -1540,21 +1543,25 @@ mod tests {
 
         let claimed_rows = crate::with_closeable_pool!(env.base.pool(), pool, {
             for fixture in &fixtures {
+                let attempts = FeedEventAttempts(fixture.2);
+                let last_error = fixture
+                    .3
+                    .map(|error| StoredFeedDiagnostic(error.to_owned()));
                 sqlx::query(
                     "INSERT INTO feed_events \
                      (feed_url, status, attempts, last_error, next_attempt_at, claimed_at, terminal_at, created_at, regenerated_at, pinged_at) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
                 )
-                .bind(&fixture.0)
-                .bind(fixture.1)
-                .bind(fixture.2)
-                .bind(fixture.3)
-                .bind(fixture.4)
-                .bind(fixture.5)
-                .bind(fixture.6)
-                .bind(fixture.7)
-                .bind(fixture.8)
-                .bind(fixture.9)
+                .bind_storage(&fixture.0)
+                .bind_storage(fixture.1)
+                .bind_storage(attempts)
+                .bind_storage(last_error)
+                .bind_storage(fixture.4)
+                .bind_storage(fixture.5)
+                .bind_storage(fixture.6)
+                .bind_storage(fixture.7)
+                .bind_storage(fixture.8)
+                .bind_storage(fixture.9)
                 .execute(pool)
                 .await
                 .unwrap();

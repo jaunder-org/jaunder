@@ -68,6 +68,7 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+    use crate::feed::FeedDescription;
     use crate::feed::test_support::{feed_item, feed_metadata};
     use common::{
         ids::PostId,
@@ -76,8 +77,7 @@ mod tests {
 
     fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
         FeedMetadata {
-            description: description
-                .map(|value| value.parse::<crate::feed::FeedDescription>().unwrap()),
+            description: description.map(|value| value.parse::<FeedDescription>().unwrap()),
             hub_url: hub.map(parse_url),
             ..feed_metadata(parse_url("https://example.com/feed.rss"))
         }

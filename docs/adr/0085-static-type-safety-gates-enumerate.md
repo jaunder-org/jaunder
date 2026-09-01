@@ -217,6 +217,29 @@ of a line-based scan"; under this ADR it is a violation of a decided principle,
 with a decided direction. That issue is updated to carry this scope rather than
 having it asserted for it here.
 
+### Amendment — #1146 (2026-08-31)
+
+The `sqlx-newtype-bind` non-conformance and #716 future-work description above
+are historical. #1146 replaces the strip-spelling check and its primitive-bind
+allowlist expectation with compile-time admission through an explicit sealed
+`StorageBind` registry. `bind_storage` on native `Query`, `QueryAs`, and
+`QueryScalar`, and `push_storage_bind` on native `QueryBuilder` and `Separated`,
+are the only normal value-admission APIs. Registry leaves are approved by exact
+Rust type, with only approval-preserving reference, optional, and collection
+composition; primitives do not gain admission merely because SQLx can encode
+them.
+
+The residual `sqlx-newtype-bind` detector now conforms as defense in depth: it
+enumerates and denies the governed source-visible raw admission syntax, has no
+allowlist or marker escape, permits only the typed seam's five exact raw
+delegations, and fails closed for unreadable or unparsable inputs. It resolves
+imports, aliases, and simple receiver shapes structurally and reports ambiguity
+rather than silently excluding it. Its honest boundary is source syntax, not
+rustc type resolution, a call graph, arbitrary proc-macro expansion, or
+SQL-column semantics; the resulting query-macro prohibition is part of the
+invariant. The current decision is
+[typed storage bind admission](drafts/typed-storage-bind-admission.md).
+
 ## Consequences
 
 **What this commits us to.** New type-safety gates start from "what is the total
@@ -240,10 +263,11 @@ the discriminator. It does not displace `sqlx-newtype-decode`'s central list,
 whose entries carry a rationale category and a tracking issue that no single
 site could hold.
 
-**What it creates.** #716 is re-framed from an acknowledged gap into scheduled
-work. Rebuilding `sqlx-newtype-bind` to enumerate will require an allowlist for
-every legitimate primitive bind in `storage/src`, which is a larger population
-than the decode side — that cost is now decided rather than debated.
+**What it creates.** #716's bind-admission work is completed by #1146: the
+compiler-first sealed `StorageBind` registry admits only exact approved
+domain/persistence-role types at the normal seam, and the residual detector
+rejects source-visible raw bypasses. Legitimate primitive binds are not
+allowlisted; they must be replaced by a named approved type.
 
 **What it rules out.** Gates that grep for violation spellings; exemptions
 inferred from SQL text or any other content heuristic; allowlist entries scoped
@@ -257,9 +281,11 @@ static gates are sufficient. A conforming gate's population is bounded by what
 its parser can read: `syn` has no type information, so a decode whose type is
 never written down — `let value = row.get(…)`, where the receiver could be an
 sqlx row or a JSON map — is outside the population, not exempt from it.
-Attribution across a function boundary is likewise out of reach (see #716
-above). Enumerating shrinks the blind spot to something statable; it does not
-abolish it.
+Attribution across a function boundary remains out of reach because source
+analysis has no call graph, but the closed bind-admission seam does not rely on
+such attribution: a stripped primitive cannot satisfy the registry. Enumerating
+shrinks the remaining source-analysis blind spots to statable limits; it does
+not abolish them.
 
 The obligation this creates is that a conforming gate must **state its
 unreadable classes in its own documentation**, so the boundary is inherited by

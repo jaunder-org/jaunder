@@ -10,23 +10,24 @@ use host::feed::{
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
+use crate::sql::QueryStorageExt;
 use crate::{WriteTransaction, backend::Backend, role_instant::impl_role_instant};
 
 /// The `feed_cache.updated_at` storage timestamp role, distinct from
 /// `generated_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct FeedCacheUpdatedAt(UtcInstant);
+pub(crate) struct FeedCacheUpdatedAt(UtcInstant);
 impl_role_instant!(FeedCacheUpdatedAt, UtcInstant);
 
 /// The `feed_cache.generated_at` storage timestamp role, distinct from
 /// `updated_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct FeedCacheGeneratedAt(UtcInstant);
+pub(crate) struct FeedCacheGeneratedAt(UtcInstant);
 impl_role_instant!(FeedCacheGeneratedAt, UtcInstant);
 
 /// A rendered feed body stored and served verbatim until representation validation.
 #[derive(Debug, macros::SqlxBridge)]
-struct StoredFeedBody(String);
+pub(crate) struct StoredFeedBody(String);
 
 impl StoredFeedBody {
     fn into_inner(self) -> String {
@@ -232,7 +233,7 @@ where
             "SELECT feed_url, body, etag, content_type, updated_at, generated_at \
              FROM feed_cache WHERE feed_url = $1",
         )
-        .bind(feed_path)
+        .bind_storage(feed_path)
         .fetch_optional(&self.pool)
         .await?;
         row.map(row_from_record).transpose()
@@ -249,24 +250,20 @@ where
         row: FeedCacheRow,
     ) -> Result<(), FeedCacheError> {
         let connection = DB::write_connection(transaction)?;
+        let body = StoredFeedBody(row.representation().body().to_owned());
         sqlx::query(
             "INSERT INTO feed_cache (feed_url, body, etag, content_type, updated_at, generated_at) \
              VALUES ($1, $2, $3, $4, $5, $6) \
              ON CONFLICT(feed_url) DO UPDATE SET \
-               body = excluded.body, \
-               etag = excluded.etag, \
-               content_type = excluded.content_type, \
-               updated_at = excluded.updated_at, \
-               generated_at = excluded.generated_at",
+             body = excluded.body, etag = excluded.etag, content_type = excluded.content_type, \
+             updated_at = excluded.updated_at, generated_at = excluded.generated_at",
         )
-        .bind(row.feed_path())
-        // The closed representation owns the exact opaque rendered bytes and
-        // derives the persisted content type from its format.
-        .bind(row.representation().body())
-        .bind(&row.etag)
-        .bind(row.representation().content_type())
-        .bind(row.updated_at)
-        .bind(row.generated_at)
+        .bind_storage(&row.feed_path)
+        .bind_storage(body)
+        .bind_storage(&row.etag)
+        .bind_storage(row.representation().content_type())
+        .bind_storage(row.updated_at)
+        .bind_storage(row.generated_at)
         .execute(&mut *connection)
         .await?;
         Ok(())
@@ -284,7 +281,7 @@ where
     ) -> Result<(), FeedCacheError> {
         let connection = DB::write_connection(transaction)?;
         sqlx::query("DELETE FROM feed_cache WHERE feed_url = $1")
-            .bind(feed_path)
+            .bind_storage(feed_path)
             .execute(&mut *connection)
             .await?;
         Ok(())

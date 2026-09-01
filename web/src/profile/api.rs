@@ -44,7 +44,7 @@ pub async fn get() -> WebResult<Data> {
         display_name: user.display_name,
         bio: user.bio,
         email: user.email,
-        email_verified: user.email_verified,
+        email_verified: user.email_verified.is_verified(),
     })
 }
 

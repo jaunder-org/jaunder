@@ -6,13 +6,14 @@ use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaRef, Medi
 use common::pagination::{PageOffset, RowLimit};
 use common::tagged_url::MediaSourceUrl;
 use common::time::UtcInstant;
-use sqlx::{Database, FromRow, Pool};
+use sqlx::{Database, Encode, Executor, FromRow, Pool, Result, Type};
 
 use crate::InstanceId;
 use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::helpers;
 use crate::posts::MediaReferenceEvidence;
+use crate::sql::QueryStorageExt;
 use thiserror::Error;
 
 /// A media metadata record returned by [`MediaStorage`] queries.
@@ -79,6 +80,20 @@ pub enum TryDeleteOutcome {
     RefusedReferenced,
 }
 
+/// Whether media deletion must honor the owner's live-reference guard.
+///
+/// This persists directly as the existing SQL boolean representation while
+/// keeping guarded and forced deletion distinct at every storage boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+pub struct MediaDeleteMode(bool);
+
+impl MediaDeleteMode {
+    /// Refuse deletion when the requesting owner's live post references media.
+    pub const GUARDED: Self = Self(false);
+    /// Permit deletion despite the requesting owner's retained history.
+    pub const FORCED: Self = Self(true);
+}
+
 /// Async operations on the `media` table.
 ///
 /// This trait manages the metadata for media files, supporting both user
@@ -107,7 +122,7 @@ pub trait MediaStorage: Send + Sync {
         &self,
         transaction: &mut WriteTransaction,
         media: &MediaRef,
-    ) -> sqlx::Result<()>;
+    ) -> Result<()>;
 
     /// Fetches a single media record by its composite key.
     async fn get_media(
@@ -116,7 +131,7 @@ pub trait MediaStorage: Send + Sync {
         sha256: &ContentHash,
         filename: &Filename,
         source: &MediaSource,
-    ) -> sqlx::Result<Option<MediaRecord>>;
+    ) -> Result<Option<MediaRecord>>;
 
     /// Lists media records for a user, with optional filtering and pagination.
     // Explicit `'a` for `mockall::automock` — see
@@ -127,10 +142,10 @@ pub trait MediaStorage: Send + Sync {
         source: Option<&'a MediaSource>,
         limit: RowLimit,
         offset: PageOffset,
-    ) -> sqlx::Result<Vec<MediaRecord>>;
+    ) -> Result<Vec<MediaRecord>>;
 
-    /// Deletes a media record, refusing when `force` is absent and one of
-    /// `user_id`'s live posts references it, or when deleting it would leave a
+    /// Deletes a media record according to `mode`, refusing guarded deletion when
+    /// `user_id`'s live posts reference it, or when deleting it would leave a
     /// live Post anywhere naming a file with no remaining media row.
     ///
     /// The guards and the delete are **one statement**, so the storage decision has
@@ -147,7 +162,7 @@ pub trait MediaStorage: Send + Sync {
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-        force: bool,
+        mode: MediaDeleteMode,
     ) -> Result<TryDeleteOutcome, DeleteMediaError>;
 
     /// Whether the physical file named by `media` can be unlinked after a row
@@ -160,13 +175,13 @@ pub trait MediaStorage: Send + Sync {
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-    ) -> sqlx::Result<bool>;
+    ) -> Result<bool>;
 
     /// Calculates the total storage used by a user's uploads (in bytes).
-    async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<ByteSize>;
+    async fn get_user_upload_usage(&self, user_id: UserId) -> Result<ByteSize>;
 
     /// Calculates total storage used by all local uploads (in bytes).
-    async fn total_upload_bytes(&self) -> sqlx::Result<ByteSize>;
+    async fn total_upload_bytes(&self) -> Result<ByteSize>;
 
     /// Finds a media record by its content hash and source across all users.
     ///
@@ -175,7 +190,7 @@ pub trait MediaStorage: Send + Sync {
         &self,
         sha256: &ContentHash,
         source: &MediaSource,
-    ) -> sqlx::Result<Option<MediaRecord>>;
+    ) -> Result<Option<MediaRecord>>;
 }
 
 /// Backend-specific divergence for [`MediaStore`].
@@ -190,28 +205,25 @@ pub trait MediaStorage: Send + Sync {
 #[async_trait]
 pub trait MediaDialect: Backend {
     /// Returns the total upload bytes for `user_id` using backend-appropriate SQL.
-    async fn get_user_upload_usage(pool: &Pool<Self>, user_id: UserId) -> sqlx::Result<ByteSize>;
+    async fn get_user_upload_usage(pool: &Pool<Self>, user_id: UserId) -> Result<ByteSize>;
 
     /// Acquires this transaction's stable lock for one media identity.
-    async fn lock_media_reference(
-        conn: &mut Self::Connection,
-        media: &MediaRef,
-    ) -> sqlx::Result<()>;
+    async fn lock_media_reference(conn: &mut Self::Connection, media: &MediaRef) -> Result<()>;
 
     /// Returns the total upload bytes across all users using backend-appropriate SQL.
-    async fn total_upload_bytes(pool: &Pool<Self>) -> sqlx::Result<ByteSize>;
+    async fn total_upload_bytes(pool: &Pool<Self>) -> Result<ByteSize>;
 
-    /// Executes the locked, conditional delete for a concrete `SQLx` dialect.
     /// `true` means the row was deleted; `false` preserves the caller's
-    /// NotFound-versus-refusal classification.
+    /// NotFound-versus-refusal classification. `mode` remains typed through the
+    /// dialect so its SQL representation cannot be substituted with another bool.
     async fn try_delete_media(
         conn: &mut Self::Connection,
         user_id: UserId,
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-        force: bool,
-    ) -> sqlx::Result<bool>;
+        mode: MediaDeleteMode,
+    ) -> Result<bool>;
 
     /// Executes the locked global reclaimability decision for a concrete dialect
     /// in the caller-owned write transaction.
@@ -220,7 +232,7 @@ pub trait MediaDialect: Backend {
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-    ) -> sqlx::Result<bool>;
+    ) -> Result<bool>;
 }
 
 /// Generic [`MediaStorage`] backed by any [`MediaDialect`] database.
@@ -243,29 +255,29 @@ impl<DB> MediaStorage for MediaStore<DB>
 where
     DB: MediaDialect,
     helpers::MediaRow: for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
     // `ContentHash`/`Filename` bind and decode as themselves via the ADR-0071 sqlx
     // bridge (the `sha256`/`filename` columns in `MediaRow` decode into their
     // newtypes, and the write/lookup binds encode `&ContentHash`/`&Filename`).
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
     // `source_url` binds as `Option<MediaSourceUrl>` (#675). The newtype's own `Type`/`Encode`
     // follow from the `String` bounds above via the generic `StrNewtype` bridge, but the
     // `Option` wrapper has to be named explicitly — same reason the `Option<String>` bound
     // it replaces was spelled out.
-    for<'q> Option<MediaSourceUrl>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<MediaSourceUrl>: Encode<'q, DB> + Type<DB>,
     // `RowLimit`/`PageOffset` bind as themselves via the ADR-0071 sqlx bridge (both
     // delegate to `i64`) — the listing's `LIMIT`/`OFFSET` placeholders (#696).
-    for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> PageOffset: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `try_delete_media` binds `force` into the guard's boolean expressions.
-    for<'q> bool: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> RowLimit: Encode<'q, DB> + Type<DB>,
+    for<'q> PageOffset: Encode<'q, DB> + Type<DB>,
+    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
+    // `MediaDeleteMode` binds directly into the guarded-delete expression.
+    for<'q> MediaDeleteMode: Encode<'q, DB> + Type<DB>,
     for<'q> i64: sqlx::Decode<'q, DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
-    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     #[tracing::instrument(
@@ -294,14 +306,14 @@ where
             "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
-        .bind(record.user_id)
-        .bind(&record.sha256)
-        .bind(&record.filename)
-        .bind(record.source)
-        .bind(&record.content_type)
-        .bind(record.size_bytes)
-        .bind(record.source_url.clone())
-        .bind(record.created_at)
+        .bind_storage(record.user_id)
+        .bind_storage(&record.sha256)
+        .bind_storage(&record.filename)
+        .bind_storage(record.source)
+        .bind_storage(&record.content_type)
+        .bind_storage(record.size_bytes)
+        .bind_storage(record.source_url.clone())
+        .bind_storage(record.created_at)
         .execute(connection)
         .await;
 
@@ -328,16 +340,16 @@ where
         sha256: &ContentHash,
         filename: &Filename,
         source: &MediaSource,
-    ) -> sqlx::Result<Option<MediaRecord>> {
+    ) -> Result<Option<MediaRecord>> {
         let row = sqlx::query_as::<_, helpers::MediaRow>(
             "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
              FROM media
              WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
         )
-        .bind(user_id)
-        .bind(sha256)
-        .bind(filename)
-        .bind(*source)
+        .bind_storage(user_id)
+        .bind_storage(sha256)
+        .bind_storage(filename)
+        .bind_storage(*source)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -355,7 +367,7 @@ where
         source: Option<&'a MediaSource>,
         limit: RowLimit,
         offset: PageOffset,
-    ) -> sqlx::Result<Vec<MediaRecord>> {
+    ) -> Result<Vec<MediaRecord>> {
         // Fetch raw rows (not `query_as::<MediaRow>`) so each row decodes
         // independently: the `sha256`/`filename` columns decode into their newtypes
         // *inside* `MediaRow::from_row` (#438), so a single corrupt row would fail a
@@ -369,10 +381,10 @@ where
                  ORDER BY created_at DESC
                  LIMIT $3 OFFSET $4",
             )
-            .bind(user_id)
-            .bind(*src)
-            .bind(limit)
-            .bind(offset)
+            .bind_storage(user_id)
+            .bind_storage(*src)
+            .bind_storage(limit)
+            .bind_storage(offset)
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -383,9 +395,9 @@ where
                  ORDER BY created_at DESC
                  LIMIT $2 OFFSET $3",
             )
-            .bind(user_id)
-            .bind(limit)
-            .bind(offset)
+            .bind_storage(user_id)
+            .bind_storage(limit)
+            .bind_storage(offset)
             .fetch_all(&self.pool)
             .await?
         };
@@ -416,7 +428,7 @@ where
         &self,
         transaction: &mut WriteTransaction,
         media: &MediaRef,
-    ) -> sqlx::Result<()> {
+    ) -> Result<()> {
         DB::lock_media_reference(DB::write_connection(transaction)?, media).await
     }
     #[tracing::instrument(
@@ -431,7 +443,7 @@ where
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-        force: bool,
+        mode: MediaDeleteMode,
     ) -> Result<TryDeleteOutcome, DeleteMediaError> {
         let connection = DB::write_connection(transaction)?;
         let removed = DB::try_delete_media(
@@ -440,7 +452,7 @@ where
             media,
             current_instance_id,
             evidence,
-            force,
+            mode,
         )
         .await?;
         if removed {
@@ -451,10 +463,10 @@ where
             "SELECT 1 FROM media \
              WHERE user_id = $1 AND source = $2 AND sha256 = $3 AND filename = $4",
         )
-        .bind(user_id)
-        .bind(media.source)
-        .bind(&media.sha256)
-        .bind(&media.filename)
+        .bind_storage(user_id)
+        .bind_storage(media.source)
+        .bind_storage(&media.sha256)
+        .bind_storage(&media.filename)
         .fetch_optional(DB::write_connection(transaction)?)
         .await?;
 
@@ -476,7 +488,7 @@ where
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-    ) -> sqlx::Result<bool> {
+    ) -> Result<bool> {
         DB::media_entry_is_reclaimable(
             DB::write_connection(transaction)?,
             media,
@@ -491,7 +503,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<ByteSize> {
+    async fn get_user_upload_usage(&self, user_id: UserId) -> Result<ByteSize> {
         // The dialect twin decodes `COALESCE(SUM(…), 0)` straight into `ByteSize`; the
         // bridge's bound-checking `Decode` rejects a negative total at the column.
         DB::get_user_upload_usage(&self.pool, user_id).await
@@ -502,7 +514,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn total_upload_bytes(&self) -> sqlx::Result<ByteSize> {
+    async fn total_upload_bytes(&self) -> Result<ByteSize> {
         // Same shape as per-user usage, but intentionally all-users: this is the
         // DB-declared upload footprint exported by observability, not filesystem usage.
         DB::total_upload_bytes(&self.pool).await
@@ -517,15 +529,15 @@ where
         &self,
         sha256: &ContentHash,
         source: &MediaSource,
-    ) -> sqlx::Result<Option<MediaRecord>> {
+    ) -> Result<Option<MediaRecord>> {
         let row = sqlx::query_as::<_, helpers::MediaRow>(
             "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
              FROM media
              WHERE sha256 = $1 AND source = $2
              LIMIT 1",
         )
-        .bind(sha256)
-        .bind(*source)
+        .bind_storage(sha256)
+        .bind_storage(*source)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(helpers::media_record_from_row))
@@ -569,7 +581,7 @@ mod tests {
         media_ref: &MediaRef,
         instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-        force: bool,
+        mode: MediaDeleteMode,
     ) -> Result<common::MutationOutcome<TryDeleteOutcome>, crate::WriteScopeError<DeleteMediaError>>
     {
         let media = Arc::clone(&state.media);
@@ -587,7 +599,7 @@ mod tests {
                             &media_ref,
                             &instance_id,
                             &evidence,
-                            force,
+                            mode,
                         )
                         .await
                 })
@@ -704,10 +716,16 @@ mod tests {
                 delete_started_tx
                     .send(())
                     .expect("parent waits for delete start");
-                let result =
-                    try_delete_media_scoped(&state, owner, &media, &instance_id, &evidence, false)
-                        .await
-                        .map(confirmed);
+                let result = try_delete_media_scoped(
+                    &state,
+                    owner,
+                    &media,
+                    &instance_id,
+                    &evidence,
+                    MediaDeleteMode::GUARDED,
+                )
+                .await
+                .map(confirmed);
                 delete_finished_tx
                     .send(result)
                     .expect("parent waits for delete completion");
@@ -1183,7 +1201,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("the guarded delete succeeds as a scoped write"),
@@ -1233,7 +1251,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &near_match,
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("near-match guarded delete succeeds"),
@@ -1257,7 +1275,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &exact_match,
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("exact-evidence delete succeeds"),
@@ -1399,7 +1417,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &current_evidence,
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("guarded delete succeeds"),
@@ -1421,7 +1439,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &revision_evidence,
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("guarded delete succeeds"),
@@ -1447,7 +1465,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &complete_evidence,
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("guarded delete succeeds"),
@@ -1474,7 +1492,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                    true,
+                    MediaDeleteMode::FORCED,
                 )
                 .await
                 .expect("forced delete succeeds"),
@@ -1507,7 +1525,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                    true,
+                    MediaDeleteMode::FORCED,
                 )
                 .await
                 .expect("forced delete succeeds"),
@@ -1534,7 +1552,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("delete succeeds"),
@@ -1559,7 +1577,7 @@ mod tests {
             &media_ref_for("never-uploaded.jpg"),
             env.base.instance_id(),
             &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-            false,
+            MediaDeleteMode::GUARDED,
         )
         .await;
 
@@ -1626,7 +1644,7 @@ mod tests {
                     &media,
                     env.base.instance_id(),
                     &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                    false,
+                    MediaDeleteMode::GUARDED,
                 )
                 .await
                 .expect("no SQLite busy under concurrent scoped writes"),
@@ -1665,7 +1683,7 @@ mod tests {
                                 &delete_media_ref,
                                 &instance_id,
                                 &evidence,
-                                false,
+                                MediaDeleteMode::GUARDED,
                             )
                             .await?,
                         TryDeleteOutcome::Deleted
@@ -1712,7 +1730,7 @@ mod tests {
                             &delete_media_ref,
                             &instance_id,
                             &evidence,
-                            false,
+                            MediaDeleteMode::GUARDED,
                         )
                         .await
                 })

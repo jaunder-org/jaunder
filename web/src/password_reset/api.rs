@@ -59,7 +59,7 @@ pub async fn request(username: Username) -> WebResult<MutationOutcome<()>> {
     // to avoid username enumeration.
     let (user_id, verified_email) = user
         .and_then(|u| {
-            if u.email_verified {
+            if u.email_verified.is_verified() {
                 u.email.map(|e| (u.user_id, e))
             } else {
                 None

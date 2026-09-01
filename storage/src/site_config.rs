@@ -1,6 +1,7 @@
 //! Site-wide configuration storage.
 
 use crate::backend::Backend;
+use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use common::media::{MaxFileSize, UserQuota};
@@ -21,7 +22,7 @@ use common::smtp_tls_mode::SmtpTlsMode;
 use common::smtp_username::SmtpUsername;
 use common::tagged_url::{BaseUrl, HubUrl};
 use common::visibility::DefaultAudience;
-use sqlx::{Database, Pool};
+use sqlx::{Database, Encode, Executor, Pool, Result, Type};
 
 /// Async operations on the `site_config` key-value table.
 ///
@@ -31,7 +32,7 @@ use sqlx::{Database, Pool};
 #[async_trait]
 pub trait SiteConfigStorage: Send + Sync {
     /// Returns the raw stored text for a specific configuration key.
-    async fn get_raw(&self, key: SiteConfigKey) -> sqlx::Result<Option<String>>;
+    async fn get_raw(&self, key: SiteConfigKey) -> Result<Option<String>>;
 
     /// Sets or updates the value for a configuration key within the caller-owned write scope.
     async fn set(
@@ -39,23 +40,19 @@ pub trait SiteConfigStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         key: SiteConfigKey,
         value: &str,
-    ) -> sqlx::Result<()>;
+    ) -> Result<()>;
 
     /// Enumerates every `site_config` entry as `(key, value)`, ordered by key.
     ///
     /// A third primitive alongside [`get_raw`](Self::get_raw)/[`set`](Self::set) (no
     /// default: a `vec![]` default would silently under-report for any
     /// implementor). Backs `jaunder site-config list`.
-    async fn list(&self) -> sqlx::Result<Vec<(String, String)>>;
+    async fn list(&self) -> Result<Vec<(String, String)>>;
     /// Deletes a `site_config` entry within the caller-owned write scope, returning whether a row was removed.
     ///
     /// Idempotent: deleting an absent key is a no-op that returns `false`. Backs
     /// `jaunder site-config unset`.
-    async fn delete(
-        &self,
-        transaction: &mut WriteTransaction,
-        key: SiteConfigKey,
-    ) -> sqlx::Result<bool>;
+    async fn delete(&self, transaction: &mut WriteTransaction, key: SiteConfigKey) -> Result<bool>;
 
     /// Reads the whole SMTP block as one typed [`SmtpConfig`], or `None` when
     /// `smtp.host` is unset (which is how an instance says "no outbound mail").
@@ -67,12 +64,12 @@ pub trait SiteConfigStorage: Send + Sync {
     /// The optional fields fall back to their types' own defaults
     /// ([`SmtpPort`] 587, [`SmtpTlsMode::StartTls`], [`SmtpSender`]
     /// `Jaunder <noreply@localhost>`).
-    async fn get_smtp_config(&self) -> sqlx::Result<Option<SmtpConfig>>;
+    async fn get_smtp_config(&self) -> Result<Option<SmtpConfig>>;
 
     /// Returns the configured media max upload size, falling back to the
     /// [`MaxFileSize`] default (50 MiB) if unset or unparseable (including a stored
     /// `0`/negative, which the positive invariant rejects).
-    async fn get_media_max_file_size(&self) -> sqlx::Result<MaxFileSize> {
+    async fn get_media_max_file_size(&self) -> Result<MaxFileSize> {
         Ok(self
             .get_raw(SiteConfigKey::MediaMaxFileSizeBytes)
             .await?
@@ -84,7 +81,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Returns the configured per-user media quota, falling back to the
     /// [`UserQuota`] default (1 GiB) if unset or unparseable (including a stored
     /// `0`/negative, which the positive invariant rejects).
-    async fn get_media_user_quota(&self) -> sqlx::Result<UserQuota> {
+    async fn get_media_user_quota(&self) -> Result<UserQuota> {
         Ok(self
             .get_raw(SiteConfigKey::MediaUserQuotaBytes)
             .await?
@@ -94,7 +91,7 @@ pub trait SiteConfigStorage: Send + Sync {
     }
 
     /// Returns the backup configuration from stored values, using defaults for missing/invalid fields.
-    async fn get_backup_config(&self) -> sqlx::Result<BackupConfig> {
+    async fn get_backup_config(&self) -> Result<BackupConfig> {
         let destination_path = self
             .get_raw(SiteConfigKey::BackupDestinationPath)
             .await?
@@ -131,7 +128,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// safe default that prevents unintended open registration on a freshly
     /// initialised instance. Like [`get_backup_config`](Self::get_backup_config), a
     /// genuine DB read error propagates (only the absent/garbage value defaults).
-    async fn get_registration_policy(&self) -> sqlx::Result<RegistrationPolicy> {
+    async fn get_registration_policy(&self) -> Result<RegistrationPolicy> {
         Ok(self
             .get_raw(SiteConfigKey::SiteRegistrationPolicy)
             .await?
@@ -143,7 +140,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Returns the configured `feeds.min_items` value, falling back to the
     /// [`FeedMinItems`] default (20) if unset or unparseable (including a stored `0`,
     /// which the min-1 invariant rejects).
-    async fn get_feeds_min_items(&self) -> sqlx::Result<FeedMinItems> {
+    async fn get_feeds_min_items(&self) -> Result<FeedMinItems> {
         Ok(self
             .get_raw(SiteConfigKey::FeedsMinItems)
             .await?
@@ -155,7 +152,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Returns the configured `feeds.min_days` value, falling back to the
     /// [`FeedMinDays`] default (30) if unset or unparseable (including a stored `0`,
     /// which the min-1 invariant rejects).
-    async fn get_feeds_min_days(&self) -> sqlx::Result<FeedMinDays> {
+    async fn get_feeds_min_days(&self) -> Result<FeedMinDays> {
         Ok(self
             .get_raw(SiteConfigKey::FeedsMinDays)
             .await?
@@ -168,7 +165,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// treated as unset; a non-empty value that no longer parses as an absolute
     /// `http(s)` URL (corruption, or legacy data pre-dating this validation) is
     /// read as unset.
-    async fn get_feeds_websub_hub_url(&self) -> sqlx::Result<Option<HubUrl>> {
+    async fn get_feeds_websub_hub_url(&self) -> Result<Option<HubUrl>> {
         let Some(raw) = self
             .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
             .await?
@@ -188,7 +185,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// the same per-field defaults as the granular getters it delegates to.
     /// The granular getters remain for single-value callers (e.g. the worker's
     /// hub-URL read).
-    async fn get_feeds_config(&self) -> sqlx::Result<FeedsConfig> {
+    async fn get_feeds_config(&self) -> Result<FeedsConfig> {
         Ok(FeedsConfig {
             min_items: self.get_feeds_min_items().await?,
             min_days: self.get_feeds_min_days().await?,
@@ -197,7 +194,7 @@ pub trait SiteConfigStorage: Send + Sync {
     }
 
     /// Returns the site identity (title and base URL).
-    async fn get_identity(&self) -> sqlx::Result<SiteIdentity> {
+    async fn get_identity(&self) -> Result<SiteIdentity> {
         let title = self
             .get_raw(SiteConfigKey::SiteTitle)
             .await?
@@ -230,7 +227,7 @@ pub trait SiteConfigStorage: Send + Sync {
         &self,
         transaction: &mut WriteTransaction,
         config: &SiteIdentity,
-    ) -> sqlx::Result<()> {
+    ) -> Result<()> {
         self.set(transaction, SiteConfigKey::SiteTitle, &config.title)
             .await?;
         let base_url_value = config.base_url.as_deref().unwrap_or("");
@@ -243,7 +240,7 @@ pub trait SiteConfigStorage: Send + Sync {
         &self,
         transaction: &mut WriteTransaction,
         config: &BackupConfig,
-    ) -> sqlx::Result<()> {
+    ) -> Result<()> {
         self.set(
             transaction,
             SiteConfigKey::BackupDestinationPath,
@@ -267,7 +264,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// [`DefaultAudience::Private`] when unset or unparseable. A Default
     /// Audience is a closed instance-wide value, distinct from the
     /// payload-bearing per-Post `AudienceTarget`.
-    async fn get_default_audience(&self) -> sqlx::Result<DefaultAudience> {
+    async fn get_default_audience(&self) -> Result<DefaultAudience> {
         Ok(self
             .get_raw(SiteConfigKey::PostsDefaultAudience)
             .await?
@@ -282,7 +279,7 @@ pub trait SiteConfigStorage: Send + Sync {
         &self,
         transaction: &mut WriteTransaction,
         audience: &DefaultAudience,
-    ) -> sqlx::Result<()> {
+    ) -> Result<()> {
         self.set(
             transaction,
             SiteConfigKey::PostsDefaultAudience,
@@ -295,7 +292,7 @@ pub trait SiteConfigStorage: Send + Sync {
         &self,
         transaction: &mut WriteTransaction,
         config: &FeedsConfig,
-    ) -> sqlx::Result<()> {
+    ) -> Result<()> {
         self.set(
             transaction,
             SiteConfigKey::FeedsMinItems,
@@ -343,7 +340,7 @@ const SELECT_VALUE_SQL: &str = "SELECT value FROM site_config WHERE key = $1";
 
 /// A site-config value preserved exactly until its key-specific read policy parses it.
 #[derive(Debug, macros::SqlxBridge)]
-struct StoredSiteConfigValue(String);
+pub(crate) struct StoredSiteConfigValue(String);
 
 impl StoredSiteConfigValue {
     fn into_inner(self) -> String {
@@ -397,19 +394,20 @@ where
     (SmtpSender,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SmtpUsername,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SmtpPassword,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
     // `SiteConfigKey`'s sqlx bridge reports `String` as its type (the token is bound as
     // borrowed text), so binding a key directly needs `String: Type<DB>` in scope.
-    String: sqlx::Type<DB>,
-    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
-    async fn get_raw(&self, key: SiteConfigKey) -> sqlx::Result<Option<String>> {
+    async fn get_raw(&self, key: SiteConfigKey) -> Result<Option<String>> {
         let row = sqlx::query_as::<_, (StoredSiteConfigValue,)>(
             "SELECT value FROM site_config WHERE key = $1",
         )
-        .bind(key)
+        .bind_storage(key)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|(value,)| value.into_inner()))
@@ -425,27 +423,17 @@ where
         transaction: &mut WriteTransaction,
         key: SiteConfigKey,
         value: &str,
-    ) -> sqlx::Result<()> {
-        let connection = DB::write_connection(transaction)?;
-        sqlx::query(
-            "INSERT INTO site_config (key, value) VALUES ($1, $2)
-             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-        )
-        .bind(key)
-        // sqlx-newtype-bind:allow permanent-primitive — typed site config values are persisted through their string representation.
-        .bind(value)
-        .execute(connection)
-        .await?;
-        Ok(())
+    ) -> Result<()> {
+        set_stored::<DB>(transaction, key, StoredSiteConfigValue(value.to_owned())).await
     }
 
-    async fn get_smtp_config(&self) -> sqlx::Result<Option<SmtpConfig>> {
+    async fn get_smtp_config(&self) -> Result<Option<SmtpConfig>> {
         // Six direct reads, each decoding the `value` column straight into its newtype via
         // that type's sqlx bridge: a garbage stored value fails `FromStr` and surfaces as a
         // `ColumnDecode` labelled with the key (see `read_value`), never as a silently
         // coerced default.
         let host = sqlx::query_as::<_, (SmtpHost,)>(SELECT_VALUE_SQL)
-            .bind(SiteConfigKey::SmtpHost)
+            .bind_storage(SiteConfigKey::SmtpHost)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpHost, e))?
@@ -456,35 +444,35 @@ where
         };
 
         let port = sqlx::query_as::<_, (SmtpPort,)>(SELECT_VALUE_SQL)
-            .bind(SiteConfigKey::SmtpPort)
+            .bind_storage(SiteConfigKey::SmtpPort)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpPort, e))?
             .map_or_else(SmtpPort::default, |(port,)| port);
 
         let tls_mode = sqlx::query_as::<_, (SmtpTlsMode,)>(SELECT_VALUE_SQL)
-            .bind(SiteConfigKey::SmtpTlsMode)
+            .bind_storage(SiteConfigKey::SmtpTlsMode)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpTlsMode, e))?
             .map_or_else(SmtpTlsMode::default, |(tls_mode,)| tls_mode);
 
         let sender = sqlx::query_as::<_, (SmtpSender,)>(SELECT_VALUE_SQL)
-            .bind(SiteConfigKey::SmtpSender)
+            .bind_storage(SiteConfigKey::SmtpSender)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpSender, e))?
             .map_or_else(SmtpSender::default, |(sender,)| sender);
 
         let username = sqlx::query_as::<_, (SmtpUsername,)>(SELECT_VALUE_SQL)
-            .bind(SiteConfigKey::SmtpUsername)
+            .bind_storage(SiteConfigKey::SmtpUsername)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpUsername, e))?
             .map(|(username,)| username);
 
         let password = sqlx::query_as::<_, (SmtpPassword,)>(SELECT_VALUE_SQL)
-            .bind(SiteConfigKey::SmtpPassword)
+            .bind_storage(SiteConfigKey::SmtpPassword)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| label_decode_error(SiteConfigKey::SmtpPassword, e))?
@@ -500,7 +488,7 @@ where
         }))
     }
 
-    async fn list(&self) -> sqlx::Result<Vec<(String, String)>> {
+    async fn list(&self) -> Result<Vec<(String, String)>> {
         let rows = sqlx::query_as::<_, SiteConfigExportRow>(
             "SELECT key, value FROM site_config ORDER BY key",
         )
@@ -512,11 +500,7 @@ where
             .collect())
     }
 
-    async fn delete(
-        &self,
-        transaction: &mut WriteTransaction,
-        key: SiteConfigKey,
-    ) -> sqlx::Result<bool> {
+    async fn delete(&self, transaction: &mut WriteTransaction, key: SiteConfigKey) -> Result<bool> {
         let connection = DB::write_connection(transaction)?;
         // `RETURNING` + `fetch_optional` detects a no-match generically (a `None`),
         // avoiding `rows_affected()` which sqlx exposes only on concrete results
@@ -524,11 +508,38 @@ where
         let removed = sqlx::query_as::<_, (StoredSiteConfigKey,)>(
             "DELETE FROM site_config WHERE key = $1 RETURNING key",
         )
-        .bind(key)
+        .bind_storage(key)
         .fetch_optional(connection)
         .await?;
         Ok(removed.is_some())
     }
+}
+async fn set_stored<DB>(
+    transaction: &mut WriteTransaction,
+    key: SiteConfigKey,
+    value: StoredSiteConfigValue,
+) -> Result<()>
+where
+    DB: Database + Backend,
+    SiteConfigKey: Type<DB>,
+    for<'q> SiteConfigKey: Encode<'q, DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+    StoredSiteConfigValue: Type<DB>,
+    for<'q> StoredSiteConfigValue: Encode<'q, DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    let connection = DB::write_connection(transaction)?;
+    sqlx::query(
+        "INSERT INTO site_config (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    )
+    .bind_storage(key)
+    .bind_storage(value)
+    .execute(connection)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]

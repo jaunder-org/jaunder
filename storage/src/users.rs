@@ -1,10 +1,10 @@
 //! User account and profile storage.
 
 use crate::WriteTransaction;
+use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
 
-use sqlx::{Database, Pool};
-use thiserror::Error;
+use sqlx::{Database, Decode, Encode, Error, Executor, Pool, Result, Type};
 use tracing::Instrument;
 
 use crate::backend::Backend;
@@ -17,7 +17,47 @@ use common::username::Username;
 use host::password::Password;
 use host::stored_password_hash::StoredPasswordHash;
 
-use crate::helpers::{self, EmailVerified, OperatorStatus, UserRow};
+use crate::helpers::{self, UserRow};
+
+/// Whether a user has site-wide administrative privileges.
+///
+/// This is carried through application and storage interfaces rather than
+/// flattened to a boolean, so it cannot be transposed with [`EmailVerified`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+pub struct OperatorStatus(bool);
+
+impl OperatorStatus {
+    /// The account has no site-wide administrative privileges.
+    pub const STANDARD: Self = Self(false);
+    /// The account has site-wide administrative privileges.
+    pub const OPERATOR: Self = Self(true);
+
+    /// Returns whether this account has site-wide administrative privileges.
+    #[must_use]
+    pub const fn is_operator(self) -> bool {
+        self.0
+    }
+}
+
+/// Whether a user's email address has completed verification.
+///
+/// This is distinct from [`OperatorStatus`] even though both persist as SQL
+/// booleans, preventing accidental privilege grants through transposition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+pub struct EmailVerified(bool);
+
+impl EmailVerified {
+    /// The email address has not completed verification.
+    pub const UNVERIFIED: Self = Self(false);
+    /// The email address has completed verification.
+    pub const VERIFIED: Self = Self(true);
+
+    /// Returns whether the email address has completed verification.
+    #[must_use]
+    pub const fn is_verified(self) -> bool {
+        self.0
+    }
+}
 
 /// A user account record returned by [`UserStorage`] queries.
 ///
@@ -41,9 +81,9 @@ pub struct UserRecord {
     /// User's verified or pending email address.
     pub email: Option<Email>,
     /// Whether the email address has been verified.
-    pub email_verified: bool,
+    pub email_verified: EmailVerified,
     /// Whether the user has site-wide administrative privileges.
-    pub is_operator: bool,
+    pub is_operator: OperatorStatus,
 }
 /// An Argon2-hashed password ready for a capability-guarded user mutation.
 ///
@@ -52,6 +92,20 @@ pub struct UserRecord {
 /// capability claim.
 pub struct PreparedPassword(StoredPasswordHash);
 
+/// Test-only invalid `users.username` column value.
+///
+/// Fixtures use this role to bypass `Username` validation deliberately without
+/// admitting arbitrary text to production storage interfaces.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptUsername(String);
+
+#[cfg(test)]
+impl CorruptUsername {
+    fn malformed() -> Self {
+        Self("bad name".to_owned())
+    }
+}
 /// A successfully verified login ready to record its authentication timestamp.
 ///
 /// Password verification and the account lookup happen before the write scope;
@@ -71,18 +125,18 @@ pub async fn prepare_password(password: Password) -> std::io::Result<PreparedPas
 }
 
 /// Errors that can occur when creating a user.
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum CreateUserError {
     /// The requested username is already in use by another account.
     #[error("username is already taken")]
     UsernameTaken,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] sqlx::Error),
+    Internal(#[from] Error),
 }
 
 /// Errors that can occur when authenticating a user by password.
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum UserAuthError {
     /// The username or password was incorrect.
     #[error("invalid credentials")]
@@ -98,7 +152,7 @@ pub enum UserAuthError {
 }
 
 /// Preserves a write-connection acquisition failure as an authentication source.
-fn map_user_auth_connection_error(error: sqlx::Error) -> UserAuthError {
+fn map_user_auth_connection_error(error: Error) -> UserAuthError {
     UserAuthError::Internal(Box::new(error))
 }
 
@@ -169,9 +223,8 @@ pub trait UserStorage: Send + Sync {
         username: &Username,
         password: &PreparedPassword,
         display_name: Option<&'a DisplayName>,
-        is_operator: bool,
+        is_operator: OperatorStatus,
     ) -> Result<UserId, CreateUserError>;
-
     /// Looks up and verifies login credentials without acquiring a write transaction.
     async fn prepare_authentication(
         &self,
@@ -187,10 +240,10 @@ pub trait UserStorage: Send + Sync {
     ) -> Result<UserRecord, UserAuthError>;
 
     /// Fetches a user record by its internal ID.
-    async fn get_user(&self, user_id: UserId) -> sqlx::Result<Option<UserRecord>>;
+    async fn get_user(&self, user_id: UserId) -> Result<Option<UserRecord>>;
 
     /// Fetches a user record by their username.
-    async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>>;
+    async fn get_user_by_username(&self, username: &Username) -> Result<Option<UserRecord>>;
 
     /// Updates the display name and/or bio for a user.
     // Explicit `'a` for `mockall::automock` — see
@@ -200,7 +253,7 @@ pub trait UserStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         user_id: UserId,
         update: &ProfileUpdate<'a>,
-    ) -> sqlx::Result<()>;
+    ) -> Result<()>;
 
     /// Sets or clears a user's email address and verification status.
     // Explicit `'a` for `mockall::automock` — see
@@ -210,9 +263,8 @@ pub trait UserStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         user_id: UserId,
         email: Option<&'a Email>,
-        verified: bool,
-    ) -> sqlx::Result<()>;
-
+        verified: EmailVerified,
+    ) -> Result<()>;
     /// Replaces the stored password hash for `user_id` with a prepared hash.
     ///
     /// Callers prepare ordinary password changes before acquiring their write
@@ -222,7 +274,7 @@ pub trait UserStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         user_id: UserId,
         password: &PreparedPassword,
-    ) -> sqlx::Result<()>;
+    ) -> Result<()>;
 }
 
 /// Generic [`UserStorage`] backed by any [`Backend`] database.
@@ -259,14 +311,14 @@ impl<DB: Database> UserStore<DB> {
             EmailVerified,
             OperatorStatus,
         ): for<'r> sqlx::FromRow<'r, DB::Row>,
-        for<'r> UserId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        for<'r> UserId: Decode<'r, DB> + Type<DB>,
         usize: sqlx::ColumnIndex<DB::Row>,
-        for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-        String: sqlx::Type<DB>,
-        for<'q> String: sqlx::Encode<'q, DB>,
-        for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-        for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
-        for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+        for<'q> i64: Encode<'q, DB> + Type<DB>,
+        String: Type<DB>,
+        for<'q> String: Encode<'q, DB>,
+        for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
+        for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
+        for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
         for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
     {
         let row = sqlx::query_as::<
@@ -288,7 +340,7 @@ impl<DB: Database> UserStore<DB> {
                     password_hash, email, email_verified, is_operator
              FROM users WHERE username = $1",
         )
-        .bind(username)
+        .bind_storage(username)
         .fetch_optional(&self.pool)
         .instrument(tracing::info_span!(
             "storage.user.authenticate.lookup_user",
@@ -351,8 +403,8 @@ impl<DB: Database> UserStore<DB> {
                 created_at,
                 last_authenticated_at: None,
                 email,
-                email_verified: email_verified.value(),
-                is_operator: is_operator.value(),
+                email_verified,
+                is_operator,
             },
         )))
     }
@@ -377,24 +429,25 @@ where
     ): for<'r> sqlx::FromRow<'r, DB::Row>,
     // `create_user`'s `RETURNING user_id` decodes straight into `UserId` via the
     // ADR-0071 bridge (#686), so the id never exists as a bare `i64` here (#715).
-    for<'r> UserId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> UserId: Decode<'r, DB> + Type<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
     // Not residue: the ADR-0071 bridge *delegates* to `i64`, so this pair is what
     // makes every id newtype bind on a generic backend.
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
     // `Username`/`DisplayName`/`Bio`/`Email` bind/decode as themselves via the
     // ADR-0071 sqlx bridge (the `String` pair covers the by-value newtype impls;
     // the `Option<&…>` pairs cover the nullable profile binds).
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
-    for<'q> Option<&'q DisplayName>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<&'q Bio>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<&'q Email>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> bool: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+    for<'q> Option<&'q DisplayName>: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<&'q Bio>: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<&'q Email>: Encode<'q, DB> + Type<DB>,
+    for<'q> EmailVerified: Encode<'q, DB> + Type<DB>,
+    for<'q> OperatorStatus: Encode<'q, DB> + Type<DB>,
+    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     #[tracing::instrument(
@@ -407,7 +460,7 @@ where
         username: &Username,
         password: &PreparedPassword,
         display_name: Option<&'a DisplayName>,
-        is_operator: bool,
+        is_operator: OperatorStatus,
     ) -> Result<UserId, CreateUserError> {
         let now = UtcInstant::now();
         let connection = DB::write_connection(transaction).map_err(CreateUserError::Internal)?;
@@ -417,12 +470,11 @@ where
              VALUES ($1, $2, $3, $4, $5)
              RETURNING user_id",
         )
-        .bind(username)
-        .bind(&password.0)
-        .bind(display_name)
-        .bind(now)
-        // sqlx-newtype-bind:allow permanent-primitive — boolean operator flag has no domain identity.
-        .bind(is_operator)
+        .bind_storage(username)
+        .bind_storage(&password.0)
+        .bind_storage(display_name)
+        .bind_storage(now)
+        .bind_storage(is_operator)
         .fetch_one(&mut *connection)
         .instrument(tracing::info_span!(
             "storage.user.create_user.insert_user_row",
@@ -432,7 +484,7 @@ where
 
         match result {
             Ok(id) => Ok(id),
-            Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
+            Err(Error::Database(error)) if error.is_unique_violation() => {
                 Err(CreateUserError::UsernameTaken)
             }
             Err(error) => Err(CreateUserError::Internal(error)),
@@ -462,8 +514,8 @@ where
         let connection =
             DB::write_connection(transaction).map_err(map_user_auth_connection_error)?;
         sqlx::query("UPDATE users SET last_authenticated_at = $1 WHERE user_id = $2")
-            .bind(now)
-            .bind(authentication.0.user_id)
+            .bind_storage(now)
+            .bind_storage(authentication.0.user_id)
             .execute(&mut *connection)
             .instrument(tracing::info_span!(
                 "storage.user.authenticate.update_last_authenticated_at",
@@ -475,25 +527,25 @@ where
         Ok(authentication.0)
     }
 
-    async fn get_user(&self, user_id: UserId) -> sqlx::Result<Option<UserRecord>> {
+    async fn get_user(&self, user_id: UserId) -> Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
                     email, email_verified, is_operator
              FROM users WHERE user_id = $1",
         )
-        .bind(user_id)
+        .bind_storage(user_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(helpers::user_record_from_row))
     }
 
-    async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>> {
+    async fn get_user_by_username(&self, username: &Username) -> Result<Option<UserRecord>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
                     email, email_verified, is_operator
              FROM users WHERE username = $1",
         )
-        .bind(username)
+        .bind_storage(username)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(helpers::user_record_from_row))
@@ -504,12 +556,12 @@ where
         transaction: &mut WriteTransaction,
         user_id: UserId,
         update: &ProfileUpdate<'a>,
-    ) -> sqlx::Result<()> {
+    ) -> Result<()> {
         let connection = DB::write_connection(transaction)?;
         sqlx::query("UPDATE users SET display_name = $1, bio = $2 WHERE user_id = $3")
-            .bind(update.display_name)
-            .bind(update.bio)
-            .bind(user_id)
+            .bind_storage(update.display_name)
+            .bind_storage(update.bio)
+            .bind_storage(user_id)
             .execute(&mut *connection)
             .await?;
         Ok(())
@@ -520,14 +572,13 @@ where
         transaction: &mut WriteTransaction,
         user_id: UserId,
         email: Option<&'a Email>,
-        verified: bool,
-    ) -> sqlx::Result<()> {
+        verified: EmailVerified,
+    ) -> Result<()> {
         let connection = DB::write_connection(transaction)?;
         sqlx::query("UPDATE users SET email = $1, email_verified = $2 WHERE user_id = $3")
-            .bind(email)
-            // sqlx-newtype-bind:allow permanent-primitive — email verification is a boolean storage fact with no domain identity.
-            .bind(verified)
-            .bind(user_id)
+            .bind_storage(email)
+            .bind_storage(verified)
+            .bind_storage(user_id)
             .execute(&mut *connection)
             .await?;
         Ok(())
@@ -538,12 +589,12 @@ where
         transaction: &mut WriteTransaction,
         user_id: UserId,
         password: &PreparedPassword,
-    ) -> sqlx::Result<()> {
+    ) -> Result<()> {
         let connection = DB::write_connection(transaction)?;
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
-            .bind(&password.0)
-            .bind(user_id)
+            .bind_storage(&password.0)
+            .bind_storage(user_id)
             .execute(&mut *connection)
             .await?;
         Ok(())
@@ -564,7 +615,7 @@ mod tests {
         username: Username,
         password: host::password::Password,
         display_name: Option<DisplayName>,
-        is_operator: bool,
+        is_operator: OperatorStatus,
     ) -> UserId {
         let users = Arc::clone(&state.users);
         let password = prepare_password(password)
@@ -630,7 +681,7 @@ mod tests {
             username.clone(),
             password.clone(),
             Some(display_name.clone()),
-            true,
+            OperatorStatus::OPERATOR,
         )
         .await;
 
@@ -643,7 +694,12 @@ mod tests {
             .run(|transaction| {
                 Box::pin(async move {
                     users
-                        .set_email(transaction, user_id, Some(&updated_email), true)
+                        .set_email(
+                            transaction,
+                            user_id,
+                            Some(&updated_email),
+                            EmailVerified::VERIFIED,
+                        )
                         .await
                 })
             })
@@ -655,8 +711,8 @@ mod tests {
         assert_eq!(record.username, username);
         assert_eq!(record.display_name, Some(display_name));
         assert_eq!(record.email, Some(email));
-        assert!(record.email_verified);
-        assert!(record.is_operator);
+        assert_eq!(record.email_verified, EmailVerified::VERIFIED);
+        assert_eq!(record.is_operator, OperatorStatus::OPERATOR);
 
         // `get_user_by_username` binds the `Username` and decodes the same columns
         // via a second query.
@@ -668,14 +724,14 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(by_name.username, username);
-        assert!(by_name.email_verified);
-        assert!(by_name.is_operator);
+        assert_eq!(by_name.email_verified, EmailVerified::VERIFIED);
+        assert_eq!(by_name.is_operator, OperatorStatus::OPERATOR);
 
         let authenticated = authenticate(&env.state, username.clone(), password.clone())
             .await
             .unwrap();
-        assert!(authenticated.email_verified);
-        assert!(authenticated.is_operator);
+        assert_eq!(authenticated.email_verified, EmailVerified::VERIFIED);
+        assert_eq!(authenticated.is_operator, OperatorStatus::OPERATOR);
     }
 
     #[apply(backends)]
@@ -689,7 +745,7 @@ mod tests {
             username.clone(),
             host::test_support::parse_password("password123"),
             None,
-            false,
+            OperatorStatus::STANDARD,
         )
         .await;
 
@@ -705,9 +761,14 @@ mod tests {
         let env = backend.setup().await;
         let username = parse_username("authenticated");
         let password = host::test_support::parse_password("password123");
-        let user_id =
-            create_user_confirmed(&env.state, username.clone(), password.clone(), None, false)
-                .await;
+        let user_id = create_user_confirmed(
+            &env.state,
+            username.clone(),
+            password.clone(),
+            None,
+            OperatorStatus::STANDARD,
+        )
+        .await;
 
         let created = env.state.users.get_user(user_id).await.unwrap().unwrap();
         assert!(created.created_at <= UtcInstant::now());
@@ -736,15 +797,14 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
 
-        // Overwrite the `username` column with a value `Username::from_str`
-        // rejects (a space is not a valid username character), binding it as a raw
-        // `&str` so the bad value actually lands in the column — the typed bind
-        // could not produce it.
+        // Overwrite the `username` column with an intentionally invalid
+        // column-specific fixture role so the malformed value actually lands in
+        // the column — `Username` itself could not produce it.
         let sql = "UPDATE users SET username = $1 WHERE user_id = $2";
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(sql)
-                .bind("bad name")
-                .bind(user_id)
+                .bind_storage(CorruptUsername::malformed())
+                .bind_storage(user_id)
                 .execute(pool)
                 .await
                 .unwrap();
@@ -752,8 +812,7 @@ mod tests {
 
         // The read decodes the `username` column into `Username` via the sqlx
         // bridge, which validates through `FromStr`; the malformed value surfaces
-        // as a column-decode error rather than being silently admitted (covers the
-        // bridge's `Decode` error arm).
+        // as a column-decode error rather than being silently admitted.
         let err = env.state.users.get_user(user_id).await.unwrap_err();
         assert!(
             matches!(err, sqlx::Error::ColumnDecode { .. }),
@@ -1016,7 +1075,14 @@ mod tests {
         let env = backend.setup().await;
         let username = parse_username("alice");
         let password = host::test_support::parse_password("password123");
-        create_user_confirmed(&env.state, username.clone(), password.clone(), None, false).await;
+        create_user_confirmed(
+            &env.state,
+            username.clone(),
+            password.clone(),
+            None,
+            OperatorStatus::STANDARD,
+        )
+        .await;
         let expected = crate::helpers::forced_verify_failure(
             &password,
             crate::helpers::dummy_password_hash().as_ref(),

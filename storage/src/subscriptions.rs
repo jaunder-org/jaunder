@@ -18,11 +18,15 @@ use common::visibility::{
     SubscriptionStatus, ViewerIdentity,
 };
 use host::error::InternalResult;
-use sqlx::{Database, Pool, Row};
+use sqlx::{Database, Decode, Encode, Executor, Pool, Result, Row, Type};
 
 use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::error::RequireRow;
+use crate::sql::QueryStorageExt;
+#[derive(Debug, macros::SqlxBridge)]
+pub(crate) struct SubscriptionStatusName(String);
+
 use crate::sql::Exists;
 /// A subscription row returned by [`SubscriptionStorage::list_subscribers`].
 #[derive(Clone, Debug)]
@@ -63,7 +67,7 @@ pub trait SubscriptionStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         author_user_id: UserId,
         subscriber: &SubscriberIdentity,
-    ) -> sqlx::Result<SubscriptionId>;
+    ) -> Result<SubscriptionId>;
 
     /// Removes a subscription. A no-op if it does not exist.
     async fn unsubscribe(
@@ -71,27 +75,20 @@ pub trait SubscriptionStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         author_user_id: UserId,
         subscriber: &SubscriberIdentity,
-    ) -> sqlx::Result<()>;
+    ) -> Result<()>;
 
     /// Returns `true` only for an `active` subscription matching the viewer.
     /// `Anonymous` short-circuits to `Ok(false)` without a query.
-    async fn is_subscriber(
-        &self,
-        author_user_id: UserId,
-        viewer: &ViewerIdentity,
-    ) -> sqlx::Result<bool>;
+    async fn is_subscriber(&self, author_user_id: UserId, viewer: &ViewerIdentity) -> Result<bool>;
 
     /// Lists the author's `active` subscribers.
-    async fn list_subscribers(
-        &self,
-        author_user_id: UserId,
-    ) -> sqlx::Result<Vec<SubscriptionRecord>>;
+    async fn list_subscribers(&self, author_user_id: UserId) -> Result<Vec<SubscriptionRecord>>;
 
     /// Lists the author's active subscribers with the display label resolved.
     async fn list_subscriber_summaries(
         &self,
         author_user_id: UserId,
-    ) -> sqlx::Result<Vec<SubscriberSummaryRecord>>;
+    ) -> Result<Vec<SubscriberSummaryRecord>>;
 
     /// Returns the `channel_id` of the seeded `local` channel.
     ///
@@ -202,17 +199,19 @@ where
     (Exists,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SubscriptionId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (ChannelId,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'r> SubscriptionId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> ChannelId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> SubscriberRef: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> Username: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> UtcInstant: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> SubscriptionId: Decode<'r, DB> + Type<DB>,
+    for<'r> ChannelId: Decode<'r, DB> + Type<DB>,
+    for<'r> SubscriberRef: Decode<'r, DB> + Type<DB>,
+    for<'r> Username: Decode<'r, DB> + Type<DB>,
+    for<'r> UtcInstant: Decode<'r, DB> + Type<DB>,
     for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q SubscriberRef: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q SubscriberRef: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     async fn subscribe(
@@ -220,7 +219,7 @@ where
         transaction: &mut WriteTransaction,
         author_user_id: UserId,
         subscriber: &SubscriberIdentity,
-    ) -> sqlx::Result<SubscriptionId> {
+    ) -> Result<SubscriptionId> {
         let connection = DB::write_connection(transaction)?;
         let status = self.policy.initial_status(author_user_id, subscriber);
         // The insert resolves the status *name* to its FK `status_id` (the column is
@@ -233,11 +232,10 @@ where
         // conflict arm alike, so the row is guaranteed and `fetch_one` is the
         // honest read.
         sqlx::query_as::<_, (SubscriptionId,)>(DB::INSERT_SUBSCRIPTION)
-            .bind(author_user_id)
-            .bind(subscriber.channel_id)
-            .bind(&subscriber.subscriber_ref)
-            // sqlx-newtype-bind:allow permanent-primitive — FK-normalized subscription status binds its lookup token, not a text column value.
-            .bind(status_name)
+            .bind_storage(author_user_id)
+            .bind_storage(subscriber.channel_id)
+            .bind_storage(&subscriber.subscriber_ref)
+            .bind_storage(SubscriptionStatusName(status_name.into()))
             .fetch_one(&mut *connection)
             .await
             .map(|(id,)| id)
@@ -248,22 +246,18 @@ where
         transaction: &mut WriteTransaction,
         author_user_id: UserId,
         subscriber: &SubscriberIdentity,
-    ) -> sqlx::Result<()> {
+    ) -> Result<()> {
         let connection = DB::write_connection(transaction)?;
         sqlx::query(DB::DELETE_SUBSCRIPTION)
-            .bind(author_user_id)
-            .bind(subscriber.channel_id)
-            .bind(&subscriber.subscriber_ref)
+            .bind_storage(author_user_id)
+            .bind_storage(subscriber.channel_id)
+            .bind_storage(&subscriber.subscriber_ref)
             .execute(&mut *connection)
             .await?;
         Ok(())
     }
 
-    async fn is_subscriber(
-        &self,
-        author_user_id: UserId,
-        viewer: &ViewerIdentity,
-    ) -> sqlx::Result<bool> {
+    async fn is_subscriber(&self, author_user_id: UserId, viewer: &ViewerIdentity) -> Result<bool> {
         // Bind arity is per-variant: a local viewer's channel is the seeded
         // `local` row, resolved inside `IS_ACTIVE_LOCAL_SUBSCRIBER` rather than
         // bound, so that arm has one fewer bind (#6).
@@ -274,8 +268,8 @@ where
             ViewerIdentity::Local { user_id } => {
                 let subscriber_ref = visibility::local_subscriber_ref(*user_id);
                 sqlx::query_as::<_, (Exists,)>(DB::IS_ACTIVE_LOCAL_SUBSCRIBER)
-                    .bind(author_user_id)
-                    .bind(&subscriber_ref)
+                    .bind_storage(author_user_id)
+                    .bind_storage(&subscriber_ref)
                     .fetch_one(&self.pool)
                     .await?
             }
@@ -284,9 +278,9 @@ where
                 subscriber_ref,
             } => {
                 sqlx::query_as::<_, (Exists,)>(DB::IS_ACTIVE_SUBSCRIBER)
-                    .bind(author_user_id)
-                    .bind(*channel_id)
-                    .bind(subscriber_ref)
+                    .bind_storage(author_user_id)
+                    .bind_storage(*channel_id)
+                    .bind_storage(subscriber_ref)
                     .fetch_one(&self.pool)
                     .await?
             }
@@ -294,16 +288,13 @@ where
         Ok(exists.into_bool())
     }
 
-    async fn list_subscribers(
-        &self,
-        author_user_id: UserId,
-    ) -> sqlx::Result<Vec<SubscriptionRecord>> {
+    async fn list_subscribers(&self, author_user_id: UserId) -> Result<Vec<SubscriptionRecord>> {
         // Decode every unrelated column before the one this bulk-read policy
         // may skip. That keeps the diversion column-scoped: an invalid
         // `subscriber_ref` costs only its row, while identity, channel, and
         // timestamp failures still fail the batch (ADR-0122).
         let rows = sqlx::query(DB::LIST_ACTIVE_SUBSCRIBERS)
-            .bind(author_user_id)
+            .bind_storage(author_user_id)
             .fetch_all(&self.pool)
             .await?;
         let mut records = Vec::with_capacity(rows.len());
@@ -342,11 +333,11 @@ where
     async fn list_subscriber_summaries(
         &self,
         author_user_id: UserId,
-    ) -> sqlx::Result<Vec<SubscriberSummaryRecord>> {
+    ) -> Result<Vec<SubscriberSummaryRecord>> {
         // As above, decode every non-divertible column first so only the
         // validated subscriber reference can make this summary skip a row.
         let rows = sqlx::query(DB::LIST_SUBSCRIBER_SUMMARIES)
-            .bind(author_user_id)
+            .bind_storage(author_user_id)
             .fetch_all(&self.pool)
             .await?;
         let mut summaries = Vec::with_capacity(rows.len());

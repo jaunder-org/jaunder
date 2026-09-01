@@ -6,7 +6,10 @@ use common::test_support::{parse_bio, parse_display_name, parse_email};
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, backends};
-use storage::{AppState, CreateUserError, ProfileUpdate, UserAuthError, WriteScopeError};
+use storage::{
+    AppState, CreateUserError, EmailVerified, OperatorStatus, ProfileUpdate, UserAuthError,
+    WriteScopeError,
+};
 
 use crate::storage::fixtures::{password, username};
 #[apply(backends)]
@@ -20,7 +23,7 @@ async fn create_user_succeeds_and_get_by_username_returns_record(#[case] backend
         username("alice"),
         password("password123"),
         Some(parse_display_name("Alice")),
-        false,
+        OperatorStatus::STANDARD,
     )
     .await;
 
@@ -46,7 +49,7 @@ async fn duplicate_username_returns_username_taken(#[case] backend: Backend) {
         username("alice"),
         password("password123"),
         None,
-        false,
+        OperatorStatus::STANDARD,
     )
     .await;
 
@@ -55,7 +58,7 @@ async fn duplicate_username_returns_username_taken(#[case] backend: Backend) {
         username("alice"),
         password("other_password"),
         None,
-        false,
+        OperatorStatus::STANDARD,
     )
     .await
     .unwrap_err();
@@ -164,11 +167,11 @@ async fn set_email_persists_and_get_user_reflects_it(#[case] backend: Backend) {
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let addr = parse_email("alice@example.com");
-    set_email(state, user_id, Some(addr.clone()), true).await;
+    set_email(state, user_id, Some(addr.clone()), EmailVerified::VERIFIED).await;
 
     let record = state.users.get_user(user_id).await.unwrap().unwrap();
     assert_eq!(record.email, Some(addr));
-    assert!(record.email_verified);
+    assert_eq!(record.email_verified, EmailVerified::VERIFIED);
 }
 
 #[apply(backends)]
@@ -180,13 +183,13 @@ async fn set_email_clears_previously_set_email(#[case] backend: Backend) {
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let addr = parse_email("bob@example.com");
-    set_email(state, user_id, Some(addr), true).await;
+    set_email(state, user_id, Some(addr), EmailVerified::VERIFIED).await;
 
-    set_email(state, user_id, None, false).await;
+    set_email(state, user_id, None, EmailVerified::UNVERIFIED).await;
 
     let record = state.users.get_user(user_id).await.unwrap().unwrap();
     assert!(record.email.is_none());
-    assert!(!record.email_verified);
+    assert_eq!(record.email_verified, EmailVerified::UNVERIFIED);
 }
 #[apply(backends)]
 #[tokio::test]
@@ -221,7 +224,7 @@ async fn create_user(
     username: common::username::Username,
     password: host::password::Password,
     display_name: Option<common::display_name::DisplayName>,
-    is_operator: bool,
+    is_operator: OperatorStatus,
 ) -> UserId {
     let outcome = create_user_result(state, username, password, display_name, is_operator)
         .await
@@ -234,7 +237,7 @@ async fn create_user_result(
     username: common::username::Username,
     password: host::password::Password,
     display_name: Option<common::display_name::DisplayName>,
-    is_operator: bool,
+    is_operator: OperatorStatus,
 ) -> Result<MutationOutcome<UserId>, WriteScopeError<CreateUserError>> {
     let users = Arc::clone(&state.users);
     let password = storage::prepare_password(password).await.map_err(|error| {
@@ -319,7 +322,7 @@ async fn set_email(
     state: &AppState,
     user_id: UserId,
     email: Option<common::email::Email>,
-    verified: bool,
+    verified: EmailVerified,
 ) {
     let users = Arc::clone(&state.users);
     let outcome = state

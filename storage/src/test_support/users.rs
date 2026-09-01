@@ -2,7 +2,7 @@
 //! Authentication and user-storage behavior remain the responsibility of the tests under setup.
 
 use super::confirmed_for;
-use crate::AppState;
+use crate::{AppState, OperatorStatus};
 
 use common::ids::UserId;
 use common::test_support::{parse_display_name, parse_username};
@@ -43,7 +43,7 @@ static SEED_SEQ: AtomicU64 = AtomicU64::new(0);
 pub struct SeedUser<'a> {
     password: &'a str,
     display_name: Option<&'a str>,
-    is_operator: bool,
+    is_operator: OperatorStatus,
 }
 
 impl Default for SeedUser<'_> {
@@ -61,7 +61,7 @@ impl<'a> SeedUser<'a> {
         Self {
             password: "password123",
             display_name: None,
-            is_operator: false,
+            is_operator: OperatorStatus::STANDARD,
         }
     }
 
@@ -82,7 +82,7 @@ impl<'a> SeedUser<'a> {
     /// Mark the user an operator.
     #[must_use]
     pub fn operator(mut self) -> Self {
-        self.is_operator = true;
+        self.is_operator = OperatorStatus::OPERATOR;
         self
     }
 
@@ -139,7 +139,7 @@ pub async fn seed_users<const N: usize>(state: &Arc<AppState>) -> [UserId; N] {
 
 #[cfg(test)]
 mod tests {
-    use super::SeedUser;
+    use super::{OperatorStatus, SeedUser};
     use crate::test_support::{Backend, backends};
     use std::sync::Arc;
 
@@ -159,7 +159,7 @@ mod tests {
             .unwrap()
             .expect("user exists");
         assert_eq!(u.username, user.username);
-        assert!(!u.is_operator);
+        assert_eq!(u.is_operator, OperatorStatus::STANDARD);
         assert!(u.display_name.is_none());
         let users = Arc::clone(&state.users);
         let username = user.username.clone();
@@ -197,7 +197,7 @@ mod tests {
             .await
             .unwrap()
             .expect("user exists");
-        assert!(u.is_operator);
+        assert_eq!(u.is_operator, OperatorStatus::OPERATOR);
         assert_eq!(u.display_name.expect("display name set"), "Bob B");
         let users = Arc::clone(&state.users);
         let username = user.username.clone();

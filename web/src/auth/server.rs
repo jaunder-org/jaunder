@@ -11,7 +11,7 @@ use host::{
     auth::{self, CredentialResolutionError, CredentialTransport},
     metrics,
 };
-use leptos::prelude::expect_context;
+use leptos::{context, prelude};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -172,7 +172,7 @@ pub async fn require_auth_with_parts(parts: Option<Parts>) -> InternalResult<Use
 /// Returns `Err` if the request is not authenticated (missing or invalid session token).
 #[tracing::instrument(name = "web.auth.require_auth")]
 pub async fn require_auth() -> InternalResult<User> {
-    require_auth_with_parts(leptos::context::use_context::<Parts>()).await
+    require_auth_with_parts(context::use_context::<Parts>()).await
 }
 
 /// Resolves an optional authenticated user inside a Leptos server function.
@@ -185,7 +185,7 @@ pub async fn require_auth() -> InternalResult<User> {
 /// Returns an authentication error when a present Authorization credential
 /// cannot be resolved or authenticated, and propagates infrastructure failures.
 pub(crate) async fn optional_auth() -> InternalResult<Option<User>> {
-    let mut parts = leptos::context::use_context::<Parts>()
+    let mut parts = context::use_context::<Parts>()
         .ok_or_else(|| InternalError::server_message("missing request Parts context"))?;
     match User::from_request_parts(&mut parts, &()).await {
         Ok(auth) => Ok(Some(auth)),
@@ -214,12 +214,12 @@ pub(crate) async fn optional_auth() -> InternalResult<Option<User>> {
 /// longer exists, or the user is not an operator.
 pub async fn require_operator() -> InternalResult<()> {
     let auth = require_auth().await?;
-    let users = expect_context::<Arc<dyn UserStorage>>();
+    let users = prelude::expect_context::<Arc<dyn UserStorage>>();
     let Some(user) = users.get_user(auth.user_id).await? else {
         return Err(InternalError::unauthorized("user does not exist"));
     };
 
-    if !user.is_operator {
+    if !user.is_operator.is_operator() {
         return Err(InternalError::unauthorized("operator access required"));
     }
 
@@ -239,11 +239,11 @@ pub async fn is_operator_soft() -> InternalResult<bool> {
     let Some(auth) = optional_auth().await? else {
         return Ok(false);
     };
-    let users = expect_context::<Arc<dyn UserStorage>>();
+    let users = prelude::expect_context::<Arc<dyn UserStorage>>();
     Ok(users
         .get_user(auth.user_id)
         .await?
-        .is_some_and(|u| u.is_operator))
+        .is_some_and(|u| u.is_operator.is_operator()))
 }
 
 pub(crate) fn auth_rejection_error(error: Rejection) -> InternalError {
@@ -304,12 +304,11 @@ fn verify_basic_username(
 // ---------------------------------------------------------------------------
 
 pub fn set_session_cookie(raw_token: &RawToken) {
-    use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
 
-    let secure = use_context::<CookieSettings>().is_none_or(|settings| settings.secure);
+    let secure = context::use_context::<CookieSettings>().is_none_or(|settings| settings.secure);
 
-    if let Some(opts) = use_context::<ResponseOptions>() {
+    if let Some(opts) = context::use_context::<ResponseOptions>() {
         let cookie = auth::session_cookie_header(raw_token, secure);
         if let Ok(val) = axum::http::HeaderValue::from_str(&cookie) {
             opts.insert_header(axum::http::header::SET_COOKIE, val);
@@ -318,12 +317,11 @@ pub fn set_session_cookie(raw_token: &RawToken) {
 }
 
 pub fn clear_session_cookie() {
-    use leptos::context::use_context;
     use leptos_axum::ResponseOptions;
 
-    let secure = use_context::<CookieSettings>().is_none_or(|settings| settings.secure);
+    let secure = context::use_context::<CookieSettings>().is_none_or(|settings| settings.secure);
 
-    if let Some(opts) = use_context::<ResponseOptions>() {
+    if let Some(opts) = context::use_context::<ResponseOptions>() {
         let cookie = auth::clear_session_cookie_header(secure);
         if let Ok(val) = axum::http::HeaderValue::from_str(&cookie) {
             opts.insert_header(axum::http::header::SET_COOKIE, val);

@@ -2216,26 +2216,42 @@ and held inward (ADR-0063 §4).
 **The database.** Every derive-based newtype is a first-class column type: the
 derives emit a transparent, feature-gated `sqlx::Type`/`Encode`/`Decode` bridge
 delegating to the inner value, plus an opt-in Postgres `PgHasArrayType`
-([ADR-0071](adr/0071-sqlx-string-newtype-bridge.md)). `.bind(newtype)` binds
-directly and `query_as` decodes straight into the newtype, so
-`query_as::<_, (PostId, TagId, …)>` makes a swapped destructuring a compile
-error where two adjacent bare `i64`s made it invisible. `Decode` re-validates
-for a string newtype and re-runs the bound for a `NumNewtype`; it is an
-infallible wrap for an `IdNewtype`, which has no value invariant. `Encode` is a
-storability capability, not a conversion — which is why `secret` drops the
-bridge by default and `no_sqlx` exists. Feature isolation keeps `sqlx` out of
-the wasm build, guarded by a `compile_error!` in `common`. Two xtask gates keep
-the bridge from being bypassed — `xtask/src/steps/sqlx_newtype_bind_check.rs` on
-the write side and `xtask/src/steps/sqlx_newtype_decode_check/` on the read
-side. The decode gate structurally enumerates readable targets under
-`storage/src` and accepts only declaration-backed bridge types, approved foreign
-types, or composites whose leaves it polices; it has no primitive or
-site-exception path. Intentional persisted values therefore use explicit
-role-specific types, and custom row policy decodes a fully policed intermediate
-row before conversion
-([decision record](adr/0163-sqlx-decode-approval-is-type-only.md)). The gate
-reads no SQL, cannot prove column-to-field correspondence or types known only by
-later use, and fails unreadable inputs and incomplete macro models closed. Since
+([ADR-0071](adr/0071-sqlx-string-newtype-bridge.md)). `query_as` therefore
+decodes straight into the newtype, so `query_as::<_, (PostId, TagId, …)>` makes
+a swapped destructuring a compile error where two adjacent bare `i64`s made it
+invisible. `Decode` re-validates for a string newtype and re-runs the bound for
+a `NumNewtype`; it is an infallible wrap for an `IdNewtype`, which has no value
+invariant. `Encode` is a storability capability, not a conversion — which is why
+`secret` drops the bridge by default and `no_sqlx` exists. Feature isolation
+keeps `sqlx` out of the wasm build, guarded by a `compile_error!` in `common`.
+
+At the storage write boundary, the sealed explicit `StorageBind` registry admits
+approved domain and persistence-role values by exact Rust type, independently of
+each backend's SQLx representation capabilities. References, `Option`, vectors,
+and slices preserve only an approved leaf; this retains PostgreSQL's existing
+`PgHasArrayType` slice-array capability without adding a SQLite abstraction.
+Native `Query`, `QueryAs`, and `QueryScalar` use `bind_storage`; native
+`QueryBuilder` and `Separated` use `push_storage_bind`. Those extension traits
+are the only normal value-admission APIs and directly delegate to SQLx, keeping
+the native execution/fetch surface. The registry does not infer SQL-column
+meaning: exact helper and storage-trait signatures retain wrong-role safety
+([typed storage bind admission](adr/drafts/typed-storage-bind-admission.md)).
+
+`sqlx-newtype-bind` is the residual defense-in-depth detector. It parses every
+Rust source file under `storage/src`, including test-support code, and fails
+closed if its root or input cannot be read or parsed. It rejects raw bind,
+builder-bind, prebuilt-argument, native-argument, and SQLx query-macro syntax;
+the sole raw admissions are the typed seam's five exact direct delegations. It
+follows source-visible aliases and treats uncertain receiver syntax
+conservatively, but does not claim rustc type resolution, call-graph analysis,
+arbitrary proc-macro expansion, or SQL-column inference; SQLx query macros are
+forbidden under the root for that reason. The separate decode gate structurally
+enumerates readable targets and accepts only declaration-backed bridge types,
+approved foreign types, or composites whose leaves it polices; it has no
+primitive or site-exception path. Intentional persisted values therefore use
+explicit role-specific types, and custom row policy decodes a fully policed
+intermediate row before conversion
+([decision record](adr/0163-sqlx-decode-approval-is-type-only.md)). Since
 ADR-0091 there is exactly one bridge implementation,
 `macros/src/sqlx_bridge.rs:67`, driven by a `BridgeSpec`; the three newtype
 derives, `#[derive(SqlxBridge)]`, and `#[text_enum(sqlx)]` all call it.
@@ -2804,7 +2820,7 @@ native host checks because `xtask/` is excluded from the flake source.
 | `target-arch-placement`                                         | host/wasm split at module wiring only                                                                                                                            |
 | `lint-suppression`                                              | reviewed Rust lint expectation markers; no `#[allow]`                                                                                                            |
 | `thin-components`                                               | `#[component]` control-flow budget                                                                                                                               |
-| `sqlx-newtype-bind`, `sqlx-newtype-decode`                      | newtypes at the SQL boundary                                                                                                                                     |
+| `sqlx-newtype-bind`, `sqlx-newtype-decode`                      | typed SQLx admission and decode boundaries                                                                                                                       |
 | `doctest-fences`                                                | the doctest population Nix cannot reach                                                                                                                          |
 | `rendered-html-compiler-boundary`, `raw-html-door`, `html-sink` | compiler privacy for trusted HTML plus the two XSS DOM doors                                                                                                     |
 | `xlang-literal`                                                 | Rust/TypeScript literal agreement                                                                                                                                |
@@ -2824,6 +2840,16 @@ exemption to a single site (stating multiplicity where sites are genuinely
 indistinguishable), parses rather than scans when the invariant spans lines, and
 fails on input it cannot read. It also states, in its own module docs, what it
 does not claim to cover.
+
+**Typed storage admission is compiler-first, with a syntactic backstop.** The
+sealed `StorageBind` registry makes normal query and builder value admission
+fail at compile time unless an exact domain or persistence-role type is
+approved. The residual `sqlx-newtype-bind` detector enumerates source-visible
+raw SQLx admission doors and fails closed; it follows local aliases and
+conservatively rejects unresolved receiver shapes, but is not type resolution or
+SQL analysis. SQLx query macros are forbidden in its root because their
+generated argument admission is outside that source AST
+([typed storage bind admission](adr/drafts/typed-storage-bind-admission.md)).
 
 **Membership is structural and fails closed.**
 [ADR-0110](adr/0110-gate-population-membership-is-structural.md) separates two

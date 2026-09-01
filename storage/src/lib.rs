@@ -37,7 +37,7 @@ mod role_instant;
 mod sessions;
 mod site_config;
 mod smtp;
-pub(crate) mod sql;
+pub mod sql;
 mod sqlite;
 mod subscriptions;
 mod user_config;

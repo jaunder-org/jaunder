@@ -7,7 +7,8 @@ use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, postgres_only};
 use storage::{
-    AppState, InviteRecord, InviteStorage, UseInviteError, WriteScopeError, WriteTransaction,
+    AppState, InviteRecord, InviteStorage, OperatorStatus, UseInviteError, WriteScopeError,
+    WriteTransaction,
     account_mutations::{self, RegisterWithInviteError, RegisterWithInviteInput},
 };
 
@@ -118,7 +119,7 @@ async fn register_after_claim_barrier(
                         username: &username,
                         password: &password,
                         display_name: None,
-                        is_operator: false,
+                        is_operator: OperatorStatus::STANDARD,
                         invite_code: &code,
                     },
                 )

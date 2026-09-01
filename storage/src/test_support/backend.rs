@@ -3,6 +3,7 @@
 //! this leaf selects and wires that lifecycle into a uniform harness surface.
 use super::postgres::{PG_URL_FILE, PostgresDbGuard, PostgresTestConfig, template_postgres_url};
 use crate::posts::{INSERT_POST_TAG, UPSERT_TAG_RETURNING_ID};
+use crate::sql::QueryStorageExt;
 use crate::{
     AppState, DbConnectOptions, PostStorage, StorageRuntimeConfig, TaggingError, WriteScope,
     WriteScopeError,
@@ -205,7 +206,7 @@ impl CloseablePool {
                 sqlx::query_scalar::<_, PostId>(
                     "SELECT post_id FROM posts WHERE post_id = $1 FOR UPDATE",
                 )
-                .bind(post_id)
+                .bind_storage(post_id)
                 .fetch_one(&mut *tx)
                 .await?;
                 HeldWrite::Postgres(tx)
@@ -251,7 +252,7 @@ impl CloseablePool {
                 let mut tx = pool.begin().await?;
                 let key = crate::posts::media_advisory_lock_key(media);
                 sqlx::query("SELECT pg_advisory_xact_lock($1)")
-                    .bind(key)
+                    .bind_storage(key)
                     .execute(&mut *tx)
                     .await?;
                 HeldMediaReferenceWrite::Postgres(tx)
@@ -341,25 +342,25 @@ impl PostWriteLock<'_> {
         match &mut self.held {
             HeldWrite::Sqlite(conn) => {
                 let tag_id = sqlx::query_scalar::<_, TagId>(UPSERT_TAG_RETURNING_ID)
-                    .bind(&slug)
+                    .bind_storage(&slug)
                     .fetch_one(&mut **conn)
                     .await?;
                 sqlx::query(INSERT_POST_TAG)
-                    .bind(post_id)
-                    .bind(tag_id)
-                    .bind(label)
+                    .bind_storage(post_id)
+                    .bind_storage(tag_id)
+                    .bind_storage(label)
                     .execute(&mut **conn)
                     .await?;
             }
             HeldWrite::Postgres(tx) => {
                 let tag_id = sqlx::query_scalar::<_, TagId>(UPSERT_TAG_RETURNING_ID)
-                    .bind(&slug)
+                    .bind_storage(&slug)
                     .fetch_one(&mut **tx)
                     .await?;
                 sqlx::query(INSERT_POST_TAG)
-                    .bind(post_id)
-                    .bind(tag_id)
-                    .bind(label)
+                    .bind_storage(post_id)
+                    .bind_storage(tag_id)
+                    .bind_storage(label)
                     .execute(&mut **tx)
                     .await?;
             }

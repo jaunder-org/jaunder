@@ -7,6 +7,7 @@ use common::token::TokenHash;
 use crate::WriteTransaction;
 use crate::helpers::SessionRow;
 use crate::sessions::{SessionDialect, SessionStore};
+use crate::sql::QueryStorageExt;
 
 /// Postgres-backed session storage.
 pub type PostgresSessionStorage = SessionStore<Postgres>;
@@ -32,9 +33,9 @@ impl SessionDialect for Postgres {
              FROM updated
              JOIN users u ON updated.user_id = u.user_id",
         )
-        .bind(now)
-        .bind(token_hash)
-        .bind(stale_before)
+        .bind_storage(now)
+        .bind_storage(token_hash)
+        .bind_storage(stale_before)
         .fetch_optional(&mut *connection)
         .await?;
 
@@ -48,7 +49,7 @@ impl SessionDialect for Postgres {
              JOIN users u ON u.user_id = s.user_id
              WHERE s.token_hash = $1",
         )
-        .bind(token_hash)
+        .bind_storage(token_hash)
         .fetch_optional(&mut *connection)
         .await
     }

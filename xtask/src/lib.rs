@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
+use xshell::Shell;
 
 mod adr;
 mod adr_readme;
@@ -557,13 +558,7 @@ enum HostGateStep {
 }
 
 impl HostGateStep {
-    fn run(
-        &self,
-        sh: &xshell::Shell,
-        mode: Mode,
-        policy: ExecutionPolicy,
-        result: &mut CommandResult,
-    ) {
+    fn run(&self, sh: &Shell, mode: Mode, policy: ExecutionPolicy, result: &mut CommandResult) {
         match self {
             Self::StaticChecks(phase) => {
                 steps::static_checks::run_phase_with(
@@ -807,12 +802,12 @@ const HOST_TESTS_STEP: HostGateStep = HostGateStep::HostTests {
 };
 
 fn run_host_steps_with<'a>(
-    sh: &xshell::Shell,
+    sh: &Shell,
     mode: Mode,
     policy: ExecutionPolicy,
     result: &mut CommandResult,
     steps: impl IntoIterator<Item = &'a HostGateStep>,
-    mut run_step: impl FnMut(&HostGateStep, &xshell::Shell, Mode, ExecutionPolicy, &mut CommandResult),
+    mut run_step: impl FnMut(&HostGateStep, &Shell, Mode, ExecutionPolicy, &mut CommandResult),
 ) {
     run_with_policy(policy, result, steps, |step, result| {
         run_step(step, sh, mode, policy, result);
@@ -820,7 +815,7 @@ fn run_host_steps_with<'a>(
 }
 
 fn run_host_gate_without_tests(
-    sh: &xshell::Shell,
+    sh: &Shell,
     mode: Mode,
     policy: ExecutionPolicy,
     result: &mut CommandResult,
@@ -836,7 +831,7 @@ fn run_host_gate_without_tests(
 }
 
 fn run_markdown_host_gate(
-    sh: &xshell::Shell,
+    sh: &Shell,
     mode: Mode,
     policy: ExecutionPolicy,
     result: &mut CommandResult,
@@ -853,12 +848,7 @@ fn run_markdown_host_gate(
     );
 }
 
-fn run_host_gate(
-    sh: &xshell::Shell,
-    mode: Mode,
-    policy: ExecutionPolicy,
-    result: &mut CommandResult,
-) {
+fn run_host_gate(sh: &Shell, mode: Mode, policy: ExecutionPolicy, result: &mut CommandResult) {
     run_host_steps_with(
         sh,
         mode,
@@ -905,7 +895,7 @@ enum PrepushPhase {
 }
 
 impl PrepushPhase {
-    fn run(self, sh: &xshell::Shell, policy: ExecutionPolicy, result: &mut CommandResult) {
+    fn run(self, sh: &Shell, policy: ExecutionPolicy, result: &mut CommandResult) {
         match self {
             Self::HostGate => run_host_gate(sh, Mode::Check, policy, result),
             Self::LocalTests => steps::test_local::run(sh, result, &[]),
@@ -929,18 +919,18 @@ const PREPUSH_PHASES: &[PrepushPhase] = &[
     PrepushPhase::WorkspaceDoctests,
 ];
 
-fn run_local_push_gate(sh: &xshell::Shell, policy: ExecutionPolicy, result: &mut CommandResult) {
+fn run_local_push_gate(sh: &Shell, policy: ExecutionPolicy, result: &mut CommandResult) {
     run_with_policy(policy, result, PREPUSH_PHASES, |phase, result| {
         phase.run(sh, policy, result);
     });
 }
 
 fn run_prepush_with(
-    sh: &xshell::Shell,
+    sh: &Shell,
     policy: ExecutionPolicy,
     result: &mut CommandResult,
     precheck: impl FnOnce() -> StepResult,
-    run_gate: impl FnOnce(&xshell::Shell, ExecutionPolicy, &mut CommandResult),
+    run_gate: impl FnOnce(&Shell, ExecutionPolicy, &mut CommandResult),
 ) {
     let precheck_start = std::time::Instant::now();
     let precheck = precheck().with_duration(precheck_start.elapsed());
@@ -1023,7 +1013,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     match cli.command {
         Command::Check { no_test } => {
             let policy = Command::Check { no_test }.execution_policy();
-            let sh = xshell::Shell::new()?;
+            let sh = Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("check");
             run_host_gate(&sh, Mode::Fix, policy, &mut result);
@@ -1036,14 +1026,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         }
         Command::Precommit => {
             let policy = Command::Precommit.execution_policy();
-            let sh = xshell::Shell::new()?;
+            let sh = Shell::new()?;
             run_precommit_with_host_gate(Path::new("."), |class, result| {
                 dispatch_precommit_host_gate(class, &sh, policy, result);
             })
         }
         Command::Prepush => {
             let policy = Command::Prepush.execution_policy();
-            let sh = xshell::Shell::new()?;
+            let sh = Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("prepush");
             run_prepush_with(
@@ -1065,7 +1055,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 allow_dirty,
             }
             .execution_policy();
-            let sh = xshell::Shell::new()?;
+            let sh = Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("validate");
             // Clean-tree backstop: refuse a dirty tree so what is measured equals the
@@ -1201,7 +1191,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             test,
             update_visual_snapshots,
         } => {
-            let sh = xshell::Shell::new()?;
+            let sh = Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("e2e-local");
             steps::e2e_local::run(&sh, &mut result, test.as_deref(), update_visual_snapshots);
@@ -1209,7 +1199,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             Ok(result)
         }
         Command::TestLocal { nextest_args } => {
-            let sh = xshell::Shell::new()?;
+            let sh = Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("test-local");
             steps::test_local::run(&sh, &mut result, &nextest_args);
@@ -1217,7 +1207,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             Ok(result)
         }
         Command::BuildCsr { release } => {
-            let sh = xshell::Shell::new()?;
+            let sh = Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("build-csr");
             steps::build_csr::run(&sh, &mut result, release);
@@ -1686,7 +1676,7 @@ mod cli_tests {
 
     #[test]
     fn prepush_clean_tree_short_circuits_the_local_gate() {
-        let sh = xshell::Shell::new().expect("create shell");
+        let sh = Shell::new().expect("create shell");
         let mut result = CommandResult::new("prepush");
         let invoked = std::cell::Cell::new(false);
 
@@ -2701,7 +2691,7 @@ mod cli_tests {
 
 #[cfg(test)]
 mod git_env_tests {
-    use crate::git::at as git_at;
+    use crate::git;
 
     #[test]
     fn git_at_scrubs_repo_redirecting_env() {
@@ -2709,7 +2699,7 @@ mod git_env_tests {
         // (a throwaway test repo) would be redirected at the hook's repo when run
         // inside a git hook, corrupting it. `get_envs()` yields `(key, None)` for a
         // removed var.
-        let cmd = git_at(std::path::Path::new("/tmp/x"));
+        let cmd = git::at(std::path::Path::new("/tmp/x"));
         let removed: std::collections::HashSet<std::ffi::OsString> = cmd
             .get_envs()
             .filter(|(_, v)| v.is_none())

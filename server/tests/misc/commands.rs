@@ -16,8 +16,8 @@ use jaunder::commands::{
 };
 use sqlx::{postgres::PgPoolOptions, sqlite::SqlitePoolOptions};
 use storage::{
-    BackupError, BackupManifest, BackupMode, OpenedDatabase, open_database, open_existing_database,
-    open_existing_database_with_observer,
+    BackupError, BackupManifest, BackupMode, OpenedDatabase, OperatorStatus, open_database,
+    open_existing_database, open_existing_database_with_observer,
 };
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -594,8 +594,9 @@ async fn cmd_user_create_with_operator_flag_sets_is_operator(#[case] backend: Ba
         .await
         .expect("db query")
         .expect("user should exist");
-    assert!(
+    assert_eq!(
         user.is_operator,
+        OperatorStatus::OPERATOR,
         "is_operator should be true for operator user"
     );
 }

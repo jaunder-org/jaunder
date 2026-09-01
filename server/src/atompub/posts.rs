@@ -28,8 +28,8 @@ use host::metrics::{self, IdempotencyEvent};
 use host::{etag, feed};
 use storage::{
     AudienceStorage, CollectionCursor, FeedEventError, FeedEventStorage, InvalidAudienceTargets,
-    MediaContentLocks, PostRecord, PostStorage, SiteConfigStorage, UserConfigStorage, WriteScope,
-    WriteScopeError,
+    MediaContentLocks, PerformCreationError, PostCreation, PostRecord, PostStorage, PublishUpdate,
+    SiteConfigStorage, UserConfigStorage, WriteScope, WriteScopeError,
 };
 use web::auth;
 
@@ -258,14 +258,11 @@ fn create_published_at(
     }
 }
 
-fn update_publish(
-    lifecycle: &Presence<PublicationState>,
-    is_draft: bool,
-) -> storage::PublishUpdate {
+fn update_publish(lifecycle: &Presence<PublicationState>, is_draft: bool) -> PublishUpdate {
     match lifecycle {
         Presence::Present(state) => (*state).into(),
-        Presence::Absent if is_draft => storage::PublishUpdate::Unpublish,
-        Presence::Absent => storage::PublishUpdate::Publish { at: None },
+        Presence::Absent if is_draft => PublishUpdate::Unpublish,
+        Presence::Absent => PublishUpdate::Publish { at: None },
     }
 }
 
@@ -547,7 +544,7 @@ pub async fn collection_post(
         Arc::clone(&posts),
         Arc::clone(&feed_events),
         request_clock,
-        storage::PostCreation {
+        PostCreation {
             user_id: auth_user.user_id,
             body,
             title: title.as_ref(),
@@ -570,7 +567,7 @@ pub async fn collection_post(
 
     // A reused idempotency key returns the transaction-selected original post
     // as `200`, skipping category re-application (it already carries its tags).
-    if let Err(storage::PerformCreationError::IdempotencyConflict(post_id)) = &created {
+    if let Err(PerformCreationError::IdempotencyConflict(post_id)) = &created {
         let post_id = *post_id;
         // If the original was soft-deleted between the create and this replay, a
         // stale-key retry deserves a 404 rather than a 500.

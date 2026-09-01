@@ -10,7 +10,7 @@ use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, CloseablePool, SeedUser, backends, confirmed_for};
 use storage::{
-    AppState, WriteScopeError,
+    AppState, OperatorStatus, WriteScopeError,
     account_mutations::{self, RegisterWithInviteError, RegisterWithInviteInput},
 };
 #[apply(backends)]
@@ -100,7 +100,7 @@ async fn create_user_with_invite_creates_user_and_marks_invite_used(#[case] back
         username("alice"),
         password("password123"),
         Some(parse_display_name("Alice")),
-        false,
+        OperatorStatus::STANDARD,
         code.clone(),
     )
     .await;
@@ -129,7 +129,7 @@ async fn create_user_with_invite_second_call_returns_already_used(#[case] backen
         username("alice"),
         password("password123"),
         None,
-        false,
+        OperatorStatus::STANDARD,
         code.clone(),
     )
     .await;
@@ -139,7 +139,7 @@ async fn create_user_with_invite_second_call_returns_already_used(#[case] backen
         username("bob"),
         password("password123"),
         None,
-        false,
+        OperatorStatus::STANDARD,
         code,
     )
     .await
@@ -214,7 +214,7 @@ async fn create_user_with_invite_expired_returns_invite_expired(#[case] backend:
         username("alice"),
         password("password123"),
         None,
-        false,
+        OperatorStatus::STANDARD,
         code,
     )
     .await
@@ -246,7 +246,7 @@ async fn create_user_with_invite_unknown_code_returns_not_found(#[case] backend:
         username("alice"),
         password("password123"),
         None,
-        false,
+        OperatorStatus::STANDARD,
         "no-such-code".parse().unwrap(),
     )
     .await
@@ -286,7 +286,7 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
         user.username.clone(),
         password("other_password"),
         None,
-        false,
+        OperatorStatus::STANDARD,
         code,
     )
     .await
@@ -320,7 +320,7 @@ async fn create_user_with_invite_hash_failure_preserves_password_error_and_invit
         username("alice"),
         password("force-hash-error-for-test-coverage"),
         None,
-        false,
+        OperatorStatus::STANDARD,
         code,
     )
     .await
@@ -393,7 +393,7 @@ async fn create_user_with_invite(
     username: common::username::Username,
     password: host::password::Password,
     display_name: Option<common::display_name::DisplayName>,
-    is_operator: bool,
+    is_operator: OperatorStatus,
     code: InviteCode,
 ) -> common::ids::UserId {
     let outcome =
@@ -408,7 +408,7 @@ async fn create_user_with_invite_result(
     username: common::username::Username,
     password: host::password::Password,
     display_name: Option<common::display_name::DisplayName>,
-    is_operator: bool,
+    is_operator: OperatorStatus,
     code: InviteCode,
 ) -> Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>> {
     let users = Arc::clone(&state.users);
@@ -443,7 +443,15 @@ async fn register_after_start_barrier(
     password: host::password::Password,
 ) -> Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>> {
     start_barrier.wait().await;
-    create_user_with_invite_result(&state, username, password, None, false, code).await
+    create_user_with_invite_result(
+        &state,
+        username,
+        password,
+        None,
+        OperatorStatus::STANDARD,
+        code,
+    )
+    .await
 }
 
 pub(super) async fn assert_exactly_one_invite_registration(
@@ -459,7 +467,7 @@ pub(super) async fn assert_exactly_one_invite_registration(
         | (
             Err(WriteScopeError::Operation(RegisterWithInviteError::InviteAlreadyUsed)),
             Ok(outcome),
-        ) => storage::test_support::confirmed_for(outcome, "winning concurrent registration"),
+        ) => confirmed_for(outcome, "winning concurrent registration"),
         (first, second) => panic!(
             "expected one confirmed registration and one InviteAlreadyUsed, got {first:?} and {second:?}"
         ),

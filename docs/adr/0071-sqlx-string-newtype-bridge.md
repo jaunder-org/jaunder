@@ -177,12 +177,33 @@ three ways, deliberately:
 stayed off because nothing bound a slice of one, not because it cannot. That
 asymmetry is deliberate and one line to reverse.
 
+### Amendment — #1146 (2026-08-31)
+
+The bridge remains the capability that makes a newtype SQLx-representable; it is
+not the current write-admission policy. As of #1146, storage admits values only
+through the sealed, explicit `StorageBind` registry and native
+`bind_storage`/`push_storage_bind` extension traits, including `QueryBuilder`
+and `Separated`. The old `.bind(newtype)` normal-path wording, strip-spelling
+search, and substring allowlist described the historical implementation and are
+obsolete.
+
+The current `sqlx-newtype-bind` gate is a residual source-level bypass detector:
+it rejects raw admission syntax and permits only the typed seam's five exact
+delegations. It parses and fails closed for unreadable or invalid governed
+source, tracks source-visible aliases structurally, and is deliberately not
+rustc type resolution, call-graph analysis, proc-macro expansion, or SQL-column
+inference. SQLx query macros are therefore forbidden under `storage/src`. The
+current decision is
+[typed storage bind admission](drafts/typed-storage-bind-admission.md).
+
 ## Consequences
 
-- Every derive-based newtype — string, id, or bounded numeric — is a first-class
-  DB column type: `.bind(newtype)` binds directly and `query_as` decodes
-  straight into the newtype. New stored newtypes are DB-ready with no annotation
-  and **cannot silently miss the bridge** — the gate enforces it.
+- Every derive-based newtype — string, id, or bounded numeric — remains a
+  first-class SQLx column type: `query_as` decodes it directly, and an approved
+  newtype can cross the current write seam through `bind_storage`. The bridge
+  supplies representation capability; the explicit `StorageBind` registry, not
+  `.bind(newtype)`, decides admission, with the residual detector rejecting raw
+  bypass syntax.
 - A row tuple can name what its positions mean.
   `query_as::<_, (PostId, TagId, …)>` makes a swapped destructuring a compile
   error, where two adjacent bare `i64`s made it invisible — the transposition
@@ -208,9 +229,9 @@ asymmetry is deliberate and one line to reverse.
   to a query by accident. Ids and bounded numerics have no such case, so their
   bridges are unconditional; the asymmetry is deliberate, not an oversight.
 - Commits us to: the `common` optional-`sqlx`-feature seam (kept off for wasm by
-  the `compile_error!` guard and the wasm-clippy gate); the `sqlx-newtype-bind`
-  gate and its allowlist (two typed `Option<_>::as_ref()` binds after #502 and
-  #696 — nothing numeric).
+  the `compile_error!` guard and the wasm-clippy gate); the explicit
+  `StorageBind` registry; and the no-allowlist `sqlx-newtype-bind` residual
+  detector that permits only the typed seam's exact delegations.
 - Rules out per-type hand-written sqlx impls (orphan-rule-bound and duplicative)
   and a storage-side wrapper type (second-class, conversion at every edge) — for
   derive-eligible newtypes. The lone sanctioned exception is `RenderedHtml`

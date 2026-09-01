@@ -7,6 +7,7 @@ use common::token::TokenHash;
 use crate::WriteTransaction;
 use crate::helpers::SessionRow;
 use crate::sessions::{SessionDialect, SessionStore};
+use crate::sql::QueryStorageExt;
 
 /// SQLite-backed session storage.
 pub type SqliteSessionStorage = SessionStore<Sqlite>;
@@ -26,7 +27,7 @@ impl SessionDialect for Sqlite {
              JOIN users u ON u.user_id = s.user_id
              WHERE s.token_hash = $1",
         )
-        .bind(token_hash)
+        .bind_storage(token_hash)
         .fetch_optional(&mut *connection)
         .await?;
 
@@ -43,9 +44,9 @@ impl SessionDialect for Sqlite {
              SET last_used_at = $1
              WHERE token_hash = $2 AND last_used_at < $3",
         )
-        .bind(now)
-        .bind(token_hash)
-        .bind(stale_before)
+        .bind_storage(now)
+        .bind_storage(token_hash)
+        .bind_storage(stale_before)
         .execute(&mut *connection)
         .await?;
 
@@ -55,7 +56,7 @@ impl SessionDialect for Sqlite {
              JOIN users u ON u.user_id = s.user_id
              WHERE s.token_hash = $1",
         )
-        .bind(token_hash)
+        .bind_storage(token_hash)
         .fetch_optional(&mut *connection)
         .await
     }

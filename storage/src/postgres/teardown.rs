@@ -4,7 +4,9 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::backup::CatalogDatabaseName;
     use crate::sql::Exists;
+    use crate::sql::QueryStorageExt;
     use crate::test_support::{
         Backend, PostgresTestConfig, postgres_only, recorded_postgres_url, unique_postgres_url,
     };
@@ -14,17 +16,19 @@ mod tests {
     use rstest_reuse::*;
 
     /// Database name (last path segment, query stripped) from a Postgres test URL.
-    fn db_name_from_url(url: &str) -> String {
+    fn db_name_from_url(url: &str) -> CatalogDatabaseName {
         let without_query = url.split('?').next().unwrap_or(url);
-        without_query
-            .rsplit('/')
-            .next()
-            .expect("URL has a database segment")
-            .to_owned()
+        CatalogDatabaseName::from(
+            without_query
+                .rsplit('/')
+                .next()
+                .expect("URL has a database segment")
+                .to_owned(),
+        )
     }
 
     /// True if `db_name` currently exists in the ephemeral cluster.
-    async fn database_exists(config: &PostgresTestConfig, db_name: &str) -> bool {
+    async fn database_exists(config: &PostgresTestConfig, db_name: &CatalogDatabaseName) -> bool {
         let options: sqlx::postgres::PgConnectOptions = config
             .bootstrap_url()
             .parse()
@@ -35,8 +39,7 @@ mod tests {
         let exists = sqlx::query_scalar::<_, Exists>(
             "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
         )
-        // sqlx-newtype-bind:allow permanent-primitive — bootstrap database name is a Postgres catalog lookup input.
-        .bind(db_name)
+        .bind_storage(db_name)
         .fetch_one(&mut conn)
         .await
         .expect("query pg_database")
@@ -56,14 +59,14 @@ mod tests {
 
         assert!(
             database_exists(&config, &db_name).await,
-            "per-test database {db_name} should exist while the TestEnv is alive"
+            "per-test database {db_name:?} should exist while the TestEnv is alive"
         );
 
         drop(env);
 
         assert!(
             !database_exists(&config, &db_name).await,
-            "per-test database {db_name} should be dropped once the TestEnv is gone"
+            "per-test database {db_name:?} should be dropped once the TestEnv is gone"
         );
     }
 
@@ -76,14 +79,14 @@ mod tests {
 
         assert!(
             database_exists(&config, &db_name).await,
-            "unique_postgres_url() database {db_name} should exist while its guard is held"
+            "unique_postgres_url() database {db_name:?} should exist while its guard is held"
         );
 
         drop(guard);
 
         assert!(
             !database_exists(&config, &db_name).await,
-            "unique_postgres_url() database {db_name} should be dropped once its guard is gone"
+            "unique_postgres_url() database {db_name:?} should be dropped once its guard is gone"
         );
     }
 }

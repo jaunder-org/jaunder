@@ -25,7 +25,8 @@ use {
     leptos::prelude::*,
     std::sync::Arc,
     storage::{
-        InviteStorage, SessionStorage, SiteConfigStorage, UserStorage, WriteScope, WriteScopeError,
+        InviteStorage, OperatorStatus, SessionStorage, SiteConfigStorage, UserStorage, WriteScope,
+        WriteScopeError,
         account_mutations::{self, RegisterWithInviteInput},
     },
     tracing::Instrument,
@@ -165,7 +166,13 @@ pub async fn register(
                             unreachable!("open registration always prepares its password");
                         };
                         users
-                            .create_user(transaction, &username, password, None, false)
+                            .create_user(
+                                transaction,
+                                &username,
+                                password,
+                                None,
+                                OperatorStatus::STANDARD,
+                            )
                             .instrument(tracing::info_span!(
                                 "web.registration.register.create_user"
                             ))
@@ -187,7 +194,7 @@ pub async fn register(
                                     username: &username,
                                     password: &password,
                                     display_name: None,
-                                    is_operator: false,
+                                    is_operator: OperatorStatus::STANDARD,
                                     invite_code: &code,
                                 },
                             )

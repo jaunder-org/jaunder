@@ -25,7 +25,7 @@ use host::metrics::{self, UploadOutcome};
 
 use crate::media_ownership::resolve_media_reference_ownership;
 use crate::{
-    CreateMediaError, MediaContentLocks, MediaRecord, MediaReferenceEvidence,
+    CreateMediaError, MediaContentLocks, MediaDeleteMode, MediaRecord, MediaReferenceEvidence,
     MediaReferenceOwnershipResolver, MediaReferenceSnapshot, MediaStorage, PersistedMediaReference,
     PostStorage, SiteConfigStorage, TryDeleteOutcome, WriteScope, WriteScopeError,
 };
@@ -635,7 +635,11 @@ impl MediaManager {
             identity.base_url.as_ref(),
         )
         .await;
-
+        let mode = if force {
+            MediaDeleteMode::FORCED
+        } else {
+            MediaDeleteMode::GUARDED
+        };
         let _content_lock = self.content_locks.acquire_one(&media.sha256).await?;
         let storage = Arc::clone(&self.media);
         let media_for_write = media.clone();
@@ -652,7 +656,7 @@ impl MediaManager {
                             &media_for_write,
                             &instance_for_write,
                             &evidence_for_write,
-                            force,
+                            mode,
                         )
                         .await
                         .map_err(anyhow::Error::from)
@@ -1037,12 +1041,12 @@ mod tests {
         let expected_reclaim_reference = reference;
         let mut media = crate::MockMediaStorage::new();
         media.expect_try_delete_media().times(1).returning(
-            move |_, actual_user, actual_media, actual_instance, evidence, force| {
+            move |_, actual_user, actual_media, actual_instance, evidence, mode| {
                 assert_eq!(actual_user, user_id);
                 assert_eq!(actual_media, &expected_guard_media);
                 assert_eq!(actual_instance, &expected_guard_instance);
                 assert!(evidence.proves_foreign(&expected_guard_reference));
-                assert!(!force);
+                assert_eq!(mode, MediaDeleteMode::GUARDED);
                 Ok(TryDeleteOutcome::Deleted)
             },
         );

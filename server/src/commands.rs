@@ -38,7 +38,8 @@ use host::password::Password;
 use host::smtp_config::SmtpConfig;
 use storage::{
     AppState, BackupExportOptions, BackupRestoreOptions, BackupRestoreOutcome, DbConnectOptions,
-    DbPoolObserver, MediaManager, RestoreValidationReport, SiteConfigStorage, StorageRuntimeConfig,
+    DbPoolObserver, InstanceId, MediaManager, OperatorStatus, RestoreValidationReport,
+    SiteConfigStorage, StorageRuntimeConfig,
 };
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
@@ -314,7 +315,7 @@ async fn create_command_user(
     username: Username,
     password: Password,
     display_name: Option<DisplayName>,
-    is_operator: bool,
+    is_operator: OperatorStatus,
 ) -> anyhow::Result<common::ids::UserId> {
     let password = storage::prepare_password(password)
         .await
@@ -376,7 +377,11 @@ pub async fn cmd_user_create(
         username.clone(),
         password,
         display_name.cloned(),
-        is_operator,
+        if is_operator {
+            OperatorStatus::OPERATOR
+        } else {
+            OperatorStatus::STANDARD
+        },
     )
     .await?;
 
@@ -685,9 +690,9 @@ trait StartupDatabaseOperations: Sync {
 struct RealStartupDatabaseOperations;
 
 struct StartupDatabase {
-    state: Arc<storage::AppState>,
-    instance_id: storage::InstanceId,
-    pool_observer: storage::DbPoolObserver,
+    state: Arc<AppState>,
+    instance_id: InstanceId,
+    pool_observer: DbPoolObserver,
 }
 
 #[async_trait::async_trait]

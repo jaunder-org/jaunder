@@ -3,9 +3,10 @@ use sqlx::{Pool, QueryBuilder, Sqlite};
 
 use crate::helpers;
 use crate::posts::{
-    self, MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill, PostTagDiff,
-    PostTagRow,
+    self, MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill,
+    PostPublicationClear, PostTagDiff, PostTagRow,
 };
+use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
     UpdatePostError, UpdatePostInput, WriteTransaction, sqlite_connection,
@@ -35,20 +36,20 @@ async fn apply_lifecycle_change(
     posts::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
     if delete {
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
-            .bind(now)
-            .bind(post_id)
+            .bind_storage(now)
+            .bind_storage(post_id)
             .execute(&mut *conn)
             .await?;
     } else if publish {
         sqlx::query("UPDATE posts SET published_at = $1, updated_at = $1 WHERE post_id = $2")
-            .bind(now)
-            .bind(post_id)
+            .bind_storage(now)
+            .bind_storage(post_id)
             .execute(&mut *conn)
             .await?;
     } else {
         sqlx::query("UPDATE posts SET published_at = NULL, updated_at = $1 WHERE post_id = $2")
-            .bind(now)
-            .bind(post_id)
+            .bind_storage(now)
+            .bind_storage(post_id)
             .execute(&mut *conn)
             .await?;
     }
@@ -71,7 +72,7 @@ async fn lifecycle_post(
             Option<common::time::UtcInstant>,
         ),
     >("SELECT user_id, deleted_at, published_at FROM posts WHERE post_id = $1")
-    .bind(post_id)
+    .bind_storage(post_id)
     .fetch_optional(&mut *conn)
     .await?;
     let Some((owner, deleted_at, published_at)) = state else {
@@ -95,7 +96,7 @@ async fn lifecycle_post(
                 WHERE pt.post_id = p.post_id), '[]') AS tags
          FROM posts p JOIN users u ON u.user_id = p.user_id WHERE p.post_id = $1",
     )
-    .bind(post_id)
+    .bind_storage(post_id)
     .fetch_one(&mut *conn)
     .await
     .map(Some)
@@ -117,7 +118,7 @@ async fn fetch_post(
                 ), '[]') AS tags
          FROM posts p JOIN users u ON u.user_id = p.user_id WHERE p.post_id = $1",
     )
-    .bind(post_id)
+    .bind_storage(post_id)
     .fetch_one(&mut *conn)
     .await
     .map_err(UpdatePostError::from)
@@ -131,9 +132,10 @@ async fn apply_post_update(
 ) -> Result<PostRecord, UpdatePostError> {
     let now = input.request_clock;
     posts::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
-    let (unpublish, explicit_published_at) = match input.publish {
-        PublishUpdate::Unpublish => (true, None),
-        PublishUpdate::Publish { at } => (false, at),
+    let publication_clear = PostPublicationClear::for_update(input.publish);
+    let explicit_published_at = match input.publish {
+        PublishUpdate::Unpublish => None,
+        PublishUpdate::Publish { at } => at,
     };
     let row = sqlx::query_as::<_, PostRecord>(
         "UPDATE posts SET title = $1, slug = CASE WHEN published_at IS NULL THEN $2 ELSE slug END,
@@ -144,27 +146,27 @@ async fn apply_post_update(
          title, slug, body, format, rendered_html, created_at, updated_at, published_at, deleted_at, summary,
          COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display)) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]') AS tags",
     )
-    .bind(input.title.as_ref()).bind(&input.slug).bind(&input.body).bind(input.format)
-    .bind(input.rendered.html()).bind(unpublish).bind(explicit_published_at)
-    .bind(explicit_published_at).bind(now).bind(now).bind(input.summary.as_ref()).bind(post_id)
+    .bind_storage(input.title.as_ref()).bind_storage(&input.slug).bind_storage(&input.body).bind_storage(input.format)
+    .bind_storage(input.rendered.html()).bind_storage(publication_clear).bind_storage(explicit_published_at)
+    .bind_storage(explicit_published_at).bind_storage(now).bind_storage(now).bind_storage(input.summary.as_ref()).bind_storage(post_id)
     .fetch_one(&mut *conn).await?;
     posts::replace_post_audiences::<Sqlite>(&mut *conn, post_id, &input.audiences).await?;
     for label in tag_diff.to_add {
         let tag_id = sqlx::query_scalar::<_, TagId>(posts::UPSERT_TAG_RETURNING_ID)
-            .bind(label.slug())
+            .bind_storage(label.slug())
             .fetch_one(&mut *conn)
             .await?;
         sqlx::query(posts::INSERT_POST_TAG)
-            .bind(post_id)
-            .bind(tag_id)
-            .bind(label)
+            .bind_storage(post_id)
+            .bind_storage(tag_id)
+            .bind_storage(label)
             .execute(&mut *conn)
             .await?;
     }
     for slug in tag_diff.to_remove {
         sqlx::query(posts::DELETE_POST_TAG_BY_SLUG)
-            .bind(post_id)
-            .bind(slug)
+            .bind_storage(post_id)
+            .bind_storage(slug)
             .execute(&mut *conn)
             .await?;
     }
@@ -208,9 +210,9 @@ impl PostDialect for Sqlite {
             "SELECT post_id FROM idempotency_keys
              WHERE user_id = $1 AND key = $2 AND created_at > $3",
         )
-        .bind(user_id)
-        .bind(key)
-        .bind(cutoff)
+        .bind_storage(user_id)
+        .bind_storage(key)
+        .bind_storage(cutoff)
         .fetch_optional(&mut *conn)
         .await
     }
@@ -229,7 +231,7 @@ impl PostDialect for Sqlite {
             "SELECT user_id, deleted_at, title, slug, body, format, rendered_html, summary, published_at
              FROM posts WHERE post_id = $1",
         )
-        .bind(post_id)
+        .bind_storage(post_id)
         .fetch_optional(&mut *conn)
         .await?;
         let existing = match existing {
@@ -246,14 +248,14 @@ impl PostDialect for Sqlite {
              JOIN tags t ON t.tag_id = pt.tag_id
              WHERE pt.post_id = $1 ORDER BY t.tag_slug",
         )
-        .bind(post_id)
+        .bind_storage(post_id)
         .fetch_all(&mut *conn)
         .await?;
         if let Some(error) = posts::update_expectation_error(post_id, &existing, &tags, input) {
             return Err(error);
         }
         let tag_rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
-            .bind(post_id)
+            .bind_storage(post_id)
             .fetch_all(&mut *conn)
             .await?;
         let existing_tags = posts::post_tags_from_rows(tag_rows);
@@ -269,14 +271,14 @@ impl PostDialect for Sqlite {
              JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
              WHERE pa.post_id = $1",
         )
-        .bind(post_id)
+        .bind_storage(post_id)
         .fetch_all(&mut *conn)
         .await?;
         let old_media: Vec<MediaRefRow> = sqlx::query_as(
             "SELECT source, sha256, filename, reference_kind, reference_form FROM post_media
              WHERE post_id = $1 AND subject_kind = 'current' AND revision_id = 0",
         )
-        .bind(post_id)
+        .bind_storage(post_id)
         .fetch_all(&mut *conn)
         .await?;
         let old_media_set: std::collections::BTreeSet<_> = old_media.iter().cloned().collect();
@@ -341,7 +343,7 @@ impl PostDialect for Sqlite {
         let post = sqlx::query_as::<_, (UserId, Option<common::time::UtcInstant>)>(
             "SELECT user_id, deleted_at FROM posts WHERE post_id = $1",
         )
-        .bind(post_id)
+        .bind_storage(post_id)
         .fetch_optional(&mut *connection)
         .await?;
         match post {
@@ -350,7 +352,7 @@ impl PostDialect for Sqlite {
             Some(_) => {}
         }
         let rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
-            .bind(post_id)
+            .bind_storage(post_id)
             .fetch_all(&mut *connection)
             .await?;
         let existing = posts::post_tags_from_rows(rows);
@@ -366,20 +368,20 @@ impl PostDialect for Sqlite {
         .await?;
         for label in diff.to_add {
             let tag_id = sqlx::query_scalar::<_, TagId>(posts::UPSERT_TAG_RETURNING_ID)
-                .bind(label.slug())
+                .bind_storage(label.slug())
                 .fetch_one(&mut *connection)
                 .await?;
             sqlx::query(posts::INSERT_POST_TAG)
-                .bind(post_id)
-                .bind(tag_id)
-                .bind(label)
+                .bind_storage(post_id)
+                .bind_storage(tag_id)
+                .bind_storage(label)
                 .execute(&mut *connection)
                 .await?;
         }
         for slug in diff.to_remove {
             sqlx::query(posts::DELETE_POST_TAG_BY_SLUG)
-                .bind(post_id)
-                .bind(slug)
+                .bind_storage(post_id)
+                .bind_storage(slug)
                 .execute(&mut *connection)
                 .await?;
         }
@@ -456,12 +458,12 @@ impl PostDialect for Sqlite {
         );
         query.push_values(rows, |mut values, (post_id, media, kind, form)| {
             values
-                .push_bind(post_id)
-                .push_bind(media.source)
-                .push_bind(media.sha256)
-                .push_bind(media.filename)
-                .push_bind(kind.to_string())
-                .push_bind(form);
+                .push_storage_bind(post_id)
+                .push_storage_bind(media.source)
+                .push_storage_bind(media.sha256)
+                .push_storage_bind(media.filename)
+                .push_storage_bind(kind)
+                .push_storage_bind(form);
         });
         query.build().execute(&mut *conn).await?;
         Ok(())

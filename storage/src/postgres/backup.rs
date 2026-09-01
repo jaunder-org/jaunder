@@ -6,19 +6,20 @@ use std::{
 
 use futures_util::TryStreamExt;
 use sha2::{Digest, Sha256};
-use sqlx::{PgConnection, PgPool, Row};
+use sqlx::{Error, PgConnection, PgPool, Postgres, Row, query::Query};
 
 use crate::backup::{
     self, BackupError, BackupManifest, BackupMode, BackupRowJson, CatalogColumnName,
     CatalogNullability, CatalogTableName, CatalogTypeName, ColumnInfo, MigrationVersion,
-    RestoreValidationReport,
+    RestoreBindValue, RestoreText, RestoreValidationReport,
 };
 use crate::helpers;
 use crate::sql;
+use crate::sql::QueryStorageExt;
 
 fn finish_export_rollback(
     primary: Result<BackupManifest, BackupError>,
-    rollback: Result<(), sqlx::Error>,
+    rollback: Result<(), Error>,
 ) -> Result<BackupManifest, BackupError> {
     helpers::preserve_after_secondary(
         primary,
@@ -31,7 +32,7 @@ fn finish_export_rollback(
 
 fn finish_restore_rollback<T>(
     primary: Result<T, BackupError>,
-    rollback: Result<(), sqlx::Error>,
+    rollback: Result<(), Error>,
 ) -> Result<T, BackupError> {
     helpers::preserve_after_secondary(
         primary,
@@ -46,7 +47,7 @@ fn finish_restore_rollback<T>(
 /// the backend-independent restore category. `SQLite` applies the same contract
 /// to its native constraint kinds and final foreign-key validation; all other
 /// database errors remain infrastructure failures.
-fn map_restore_error(error: sqlx::Error) -> BackupError {
+fn map_restore_error(error: Error) -> BackupError {
     let constraint_message = error
         .as_database_error()
         .filter(|db| db.code().is_some_and(|code| code.starts_with("23")))
@@ -77,7 +78,8 @@ pub(crate) async fn export_database(
         let schema_checksum = schema_checksum(&mut connection).await?;
 
         for table in &tables {
-            let columns = columns(&mut connection, table).await?;
+            let table_name = CatalogTableName::from(table.as_str());
+            let columns = columns(&mut connection, &table_name).await?;
             export_table(&mut connection, destination_path, table, &columns).await?;
         }
 
@@ -143,7 +145,8 @@ pub(crate) async fn restore_database(
                 .map_err(map_restore_error)?;
         }
         for table in backup::restore_table_order(&manifest.tables) {
-            let columns = columns(&mut connection, table).await?;
+            let table_name = CatalogTableName::from(table);
+            let columns = columns(&mut connection, &table_name).await?;
             import_table(
                 &mut connection,
                 source_path,
@@ -228,7 +231,7 @@ async fn import_table(
                     column.name
                 ))
             })?;
-            query = query.bind(backup::json_value_as_restore_text(value));
+            query = bind_restore_value(query, RestoreBindValue::from_json(value));
         }
         query
             .execute(&mut *connection)
@@ -237,6 +240,20 @@ async fn import_table(
     }
 
     Ok(())
+}
+
+fn bind_restore_value(
+    query: Query<'_, Postgres, sqlx::postgres::PgArguments>,
+    value: RestoreBindValue,
+) -> Query<'_, Postgres, sqlx::postgres::PgArguments> {
+    match value {
+        RestoreBindValue::Null => query.bind_storage(Option::<RestoreText>::None),
+        RestoreBindValue::Boolean(value) => query.bind_storage(value.into_text()),
+        RestoreBindValue::Integer(value) => query.bind_storage(value.into_text()),
+        RestoreBindValue::Real { text, .. } => query.bind_storage(text),
+        RestoreBindValue::Text(value) => query.bind_storage(value),
+        RestoreBindValue::Json(value) => query.bind_storage(value),
+    }
 }
 
 fn insert_sql(table: &str, columns: &[ColumnInfo]) -> String {
@@ -316,7 +333,7 @@ async fn repair_sequences(connection: &mut PgConnection) -> Result<(), BackupErr
 
 async fn columns(
     connection: &mut PgConnection,
-    table: &str,
+    table: &CatalogTableName,
 ) -> Result<Vec<ColumnInfo>, BackupError> {
     let rows = sqlx::query(
         "SELECT column_name, udt_name
@@ -324,8 +341,7 @@ async fn columns(
          WHERE table_schema = 'public' AND table_name = $1
          ORDER BY ordinal_position",
     )
-    // sqlx-newtype-bind:allow permanent-primitive — Postgres catalog table names are introspection inputs, not domain values.
-    .bind(table)
+    .bind_storage(table)
     .fetch_all(&mut *connection)
     .await?;
     rows.into_iter()
@@ -539,6 +555,38 @@ mod tests {
             matches!(error, BackupError::Sqlx(_)),
             "non-constraint (class 22) restore error must map to Sqlx, got {error:?}"
         );
+        Ok(())
+    }
+
+    // reason: validates PostgreSQL restore's exact text encoding for real and JSON cells
+    #[apply(postgres_only)]
+    #[tokio::test]
+    async fn restore_bind_values_preserve_real_and_json_text(
+        #[case] backend: Backend,
+    ) -> Result<(), Error> {
+        let env = backend.setup().await;
+        let CloseablePool::Postgres(pool) = env.base.pool() else {
+            unreachable!("postgres_only yields a Postgres pool")
+        };
+
+        let real = bind_restore_value(
+            sqlx::query("SELECT $1::text AS value"),
+            RestoreBindValue::from_json(&serde_json::json!(1.25)),
+        )
+        .fetch_one(pool)
+        .await?
+        .try_get::<RestoreText, _>("value")?;
+        assert_eq!(real.as_str(), "1.25");
+
+        let json = bind_restore_value(
+            sqlx::query("SELECT $1::text AS value"),
+            RestoreBindValue::from_json(&serde_json::json!({"items": [1, true]})),
+        )
+        .fetch_one(pool)
+        .await?
+        .try_get::<RestoreText, _>("value")?;
+        assert_eq!(json.as_str(), r#"{"items":[1,true]}"#);
+
         Ok(())
     }
 

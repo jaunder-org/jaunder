@@ -14,9 +14,24 @@ use sqlx::{Database, Pool};
 use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::helpers::{self, InviteTokenStateRow, TokenState};
-use crate::sql::RowCount;
+use crate::sql::{QueryStorageExt, RowCount};
 use common::ids::UserId;
+use common::pagination::RowLimit;
 use common::time::UtcInstant;
+/// Test-only invalid `invites.code` column value.
+///
+/// Fixtures use this role to bypass `InviteCode` validation deliberately without
+/// admitting arbitrary text to production storage interfaces.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptInviteCode(String);
+
+#[cfg(test)]
+impl CorruptInviteCode {
+    fn malformed() -> Self {
+        Self("bad code".to_owned())
+    }
+}
 
 /// An invite code record returned by [`InviteStorage`] queries.
 #[derive(Clone, Debug)]
@@ -98,7 +113,7 @@ pub struct InviteStore<DB: Database> {
     pool: Pool<DB>,
 }
 
-const PRUNE_BATCH_SIZE: i64 = 100;
+const PRUNE_BATCH_SIZE: RowLimit = RowLimit::at_most(100);
 
 impl<DB: Database> InviteStore<DB> {
     #[must_use]
@@ -137,9 +152,9 @@ where
         let connection = DB::write_connection(transaction)?;
 
         sqlx::query("INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)")
-            .bind(&code)
-            .bind(now)
-            .bind(expires_at)
+            .bind_storage(&code)
+            .bind_storage(now)
+            .bind_storage(expires_at)
             .execute(&mut *connection)
             .await?;
 
@@ -151,7 +166,7 @@ where
         let row = sqlx::query_as::<_, InviteTokenStateRow>(
             "SELECT used_at, expires_at FROM invites WHERE code = $1",
         )
-        .bind(code)
+        .bind_storage(code)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -178,9 +193,9 @@ where
              WHERE code = $3 AND used_at IS NULL AND expires_at > $1
              RETURNING used_at, expires_at",
         )
-        .bind(now)
-        .bind(user_id)
-        .bind(code)
+        .bind_storage(now)
+        .bind_storage(user_id)
+        .bind_storage(code)
         .fetch_optional(&mut *connection)
         .await?;
 
@@ -191,7 +206,7 @@ where
         let row = sqlx::query_as::<_, InviteTokenStateRow>(
             "SELECT used_at, expires_at FROM invites WHERE code = $1",
         )
-        .bind(code)
+        .bind_storage(code)
         .fetch_optional(&mut *connection)
         .await?;
         match helpers::classify_invite_token_state(row, now) {
@@ -234,9 +249,9 @@ where
                  )
                  RETURNING CAST(1 AS BIGINT)",
             )
-            .bind(now)
-            .bind(unused_cutoff)
-            .bind(PRUNE_BATCH_SIZE)
+            .bind_storage(now)
+            .bind_storage(unused_cutoff)
+            .bind_storage(PRUNE_BATCH_SIZE)
             .fetch_all(&self.pool)
             .await?
             .len() as u64;
@@ -296,14 +311,13 @@ mod tests {
         let expires_at = UtcInstant::from(now.value() + Duration::days(7));
 
         // Seed a row whose `code` column holds a value `InviteCode::from_str`
-        // rejects (a space is not a base64url character), binding it as a raw `&str`
-        // so the bad value actually lands in the column (the typed bind could not).
+        // rejects (a space is not a base64url character).
         let sql = "INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)";
         crate::with_closeable_pool!(base.pool(), pool, {
             sqlx::query(sql)
-                .bind("bad code")
-                .bind(now)
-                .bind(expires_at)
+                .bind_storage(CorruptInviteCode::malformed())
+                .bind_storage(now)
+                .bind_storage(expires_at)
                 .execute(pool)
                 .await
                 .unwrap();

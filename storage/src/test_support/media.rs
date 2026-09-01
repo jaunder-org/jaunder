@@ -5,6 +5,7 @@ use super::TestBase;
 use super::confirmed_for;
 use crate::media::MediaRecord;
 use crate::sql::Exists;
+use crate::sql::QueryStorageExt;
 use crate::{AppState, DbConnectOptions, StorageRuntimeConfig, resolved_postgres_options};
 
 use common::ids::PostId;
@@ -14,7 +15,7 @@ use common::media::{
 };
 use common::test_support::{parse_byte_size, parse_content_hash};
 use common::time::UtcInstant;
-use sqlx::{PgPool, SqlitePool};
+use sqlx::{PgPool, SqlitePool, postgres::PgConnectOptions, sqlite::SqliteConnectOptions};
 use std::{fmt::Write as _, path::Path, sync::Arc};
 
 /// Rewrites every row in a directory backup's `media.ndjson` to use `filename`.
@@ -51,39 +52,63 @@ pub fn rewrite_media_filename_in_backup(backup_path: &Path, filename: &str) {
 const RAW_MEDIA_FILENAME_EXISTS_SQL: &str =
     "SELECT EXISTS(SELECT 1 FROM media WHERE filename = $1)";
 
+/// A deliberately unvalidated filename used only to prove restore rejects a
+/// corrupt media row before decode policy can admit it.
+#[derive(Debug, macros::SqlxBridge)]
+pub(crate) struct RawMediaFilename(String);
+
+impl RawMediaFilename {
+    fn new(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
 /// Returns whether the live `media` table contains `filename` as its raw stored value.
 ///
 /// # Panics
 ///
 /// If connecting to the configured test database or querying `media` fails.
 pub async fn raw_media_filename_exists(db: &DbConnectOptions, filename: &str) -> bool {
+    let filename = RawMediaFilename::new(filename);
     match db {
         DbConnectOptions::Sqlite(options) => {
-            let pool = SqlitePool::connect_with(options.clone())
-                .await
-                .expect("connect sqlite");
-            sqlx::query_scalar::<_, Exists>(RAW_MEDIA_FILENAME_EXISTS_SQL)
-                // sqlx-newtype-bind:allow permanent-primitive — intentionally invalid backup filename fixture may not parse as Filename.
-                .bind(filename)
-                .fetch_one(&pool)
-                .await
-                .expect("query sqlite media")
-                .into_bool()
+            raw_media_filename_exists_sqlite(options, &filename).await
         }
         DbConnectOptions::Postgres { options, .. } => {
-            let options = resolved_postgres_options(options, &StorageRuntimeConfig::default());
-            let pool = PgPool::connect_with(options)
-                .await
-                .expect("connect postgres");
-            sqlx::query_scalar::<_, Exists>(RAW_MEDIA_FILENAME_EXISTS_SQL)
-                // sqlx-newtype-bind:allow permanent-primitive — intentionally invalid backup filename fixture may not parse as Filename.
-                .bind(filename)
-                .fetch_one(&pool)
-                .await
-                .expect("query postgres media")
-                .into_bool()
+            raw_media_filename_exists_postgres(options, &filename).await
         }
     }
+}
+
+async fn raw_media_filename_exists_sqlite(
+    options: &SqliteConnectOptions,
+    filename: &RawMediaFilename,
+) -> bool {
+    let pool = SqlitePool::connect_with(options.clone())
+        .await
+        .expect("connect sqlite");
+    sqlx::query_scalar::<_, Exists>(RAW_MEDIA_FILENAME_EXISTS_SQL)
+        .bind_storage(filename)
+        .fetch_one(&pool)
+        .await
+        .expect("query sqlite media")
+        .into_bool()
+}
+
+async fn raw_media_filename_exists_postgres(
+    options: &PgConnectOptions,
+    filename: &RawMediaFilename,
+) -> bool {
+    let options = resolved_postgres_options(options, &StorageRuntimeConfig::default());
+    let pool = PgPool::connect_with(options)
+        .await
+        .expect("connect postgres");
+    sqlx::query_scalar::<_, Exists>(RAW_MEDIA_FILENAME_EXISTS_SQL)
+        .bind_storage(filename)
+        .fetch_one(&pool)
+        .await
+        .expect("query postgres media")
+        .into_bool()
 }
 
 /// The content hash every media fixture is stored under, re-exported from
