@@ -35,7 +35,9 @@ This change adds observation only. Browser diagnostics do not fail a test.
 - Event payloads are normalized synchronously in the listener. No `JSHandle`
   values or live Playwright objects enter the sink.
 - Phase attribution is decided when the event is delivered. Pretest records stay
-  in the pretest sink; test records stay in the test sink.
+  in the pretest sink; test records stay in the test sink. When the test body
+  ends, capture enters a sinkless teardown phase before settlement so later
+  diagnostics cannot enter a closed test or page span.
 
 ## Trace schema
 
@@ -92,12 +94,14 @@ This change adds observation only. Browser diagnostics do not fail a test.
   associated request using the shared sequence.
 - A deterministic transform test proves the first 20 records are serialized in
   order and the exact dropped count is reported.
-- Existing trace-schema checks accept `e2e.console_json` and
-  `e2e.console_dropped` on both `e2e.test` and `e2e.page` without changing their
+- Trace-schema coverage proves `e2e.console_json` and `e2e.console_dropped` use
+  the shared projection on both `e2e.test` and `e2e.page` without changing their
   span ranges or identities.
-- Privacy-boundary tests or structural checks prove that listener installation
-  and raw browser-diagnostic export remain inside the Playwright E2E harness;
-  production client code gains no corresponding exporter.
+- A traced-context case proves pretest diagnostics stay excluded, test
+  diagnostics reach the page-owned sink, and teardown diagnostics are sinkless.
+- The fail-closed `e2e-telemetry-boundary` structural check proves that listener
+  installation and raw browser-diagnostic export remain inside the Playwright
+  E2E harness; production client code gains no corresponding exporter.
 
 ## Non-goals
 

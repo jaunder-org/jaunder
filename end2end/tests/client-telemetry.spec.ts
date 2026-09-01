@@ -1,6 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { capturePathViaTool } from "./capture";
-import { test, expect } from "./fixtures";
+import {
+  browserDiagnosticSpanProjectionFor,
+  expect,
+  test,
+  tracedContextCapture,
+} from "./fixtures";
 import { goto, waitForSelector } from "./helpers";
 import { pollUntil } from "./polling";
 import { applySeededSession } from "./seed";
@@ -15,6 +20,76 @@ function captureLines(path: string): string[] {
     .split("\n")
     .filter((line) => line.length > 0);
 }
+
+test("traced contexts separate pretest, test, and teardown diagnostics", async ({
+  tracedContext,
+}) => {
+  const context = await tracedContext();
+  const capture = tracedContextCapture(context);
+  if (capture === undefined) {
+    throw new Error("tracedContext did not expose its attached capture");
+  }
+  try {
+    const page = await context.newPage();
+
+    capture.setPhase("pretest");
+    const pretestConsole = page.waitForEvent(
+      "console",
+      (message) => message.text() === "traced pretest diagnostic",
+    );
+    await page.evaluate(() => console.warn("traced pretest diagnostic"));
+    await pretestConsole;
+
+    capture.setPhase("test");
+    const testConsole = page.waitForEvent(
+      "console",
+      (message) => message.text() === "traced test diagnostic",
+    );
+    await page.evaluate(() => console.warn("traced test diagnostic"));
+    await testConsole;
+
+    capture.beginTeardown();
+    const teardownConsole = page.waitForEvent(
+      "console",
+      (message) => message.text() === "traced teardown diagnostic",
+    );
+    await page.evaluate(() => console.warn("traced teardown diagnostic"));
+    await teardownConsole;
+
+    const pretest = capture.sinkFor("pretest").browserDiagnostics;
+    const testDiagnostics = capture.sinkFor("test").browserDiagnostics;
+    expect(pretest).toHaveLength(1);
+    expect(pretest[0]).toMatchObject({ text: "traced pretest diagnostic" });
+    expect(testDiagnostics).toHaveLength(1);
+    expect(testDiagnostics[0]).toMatchObject({
+      text: "traced test diagnostic",
+    });
+    const testProjection = browserDiagnosticSpanProjectionFor(
+      "e2e.test",
+      capture,
+    );
+    const pageProjection = browserDiagnosticSpanProjectionFor(
+      "e2e.page",
+      capture,
+    );
+    expect(testProjection.spanName).toBe("e2e.test");
+    expect(pageProjection.spanName).toBe("e2e.page");
+    expect(JSON.stringify(testProjection.attributes)).toContain(
+      "traced test diagnostic",
+    );
+    expect(JSON.stringify(pageProjection.attributes)).toContain(
+      "traced test diagnostic",
+    );
+    expect(JSON.stringify(testProjection.attributes)).not.toContain(
+      "traced pretest diagnostic",
+    );
+    expect(JSON.stringify(pageProjection.attributes)).not.toContain(
+      "traced pretest diagnostic",
+    );
+  } finally {
+    await context.close();
+  }
+});
 
 test("capture records normalized browser diagnostics in phase and delivery order", async ({
   page,

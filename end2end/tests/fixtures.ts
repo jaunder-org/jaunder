@@ -72,10 +72,12 @@ setTestInfoAccessor(() => test.info());
 export { expect, test };
 export {
   applyTestTraceparent,
+  browserDiagnosticSpanProjectionFor,
   navigationBridgeFieldsFrom,
   navigationSummariesFrom,
   navigationTopTelemetryFrom,
   stylesheetModuleDiagnosticsFrom,
+  tracedContextCapture,
 } from "./performance";
 export type {
   NavigationBridgeFields,

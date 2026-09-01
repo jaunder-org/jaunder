@@ -33,7 +33,7 @@ coordinates default-page and secondary-context capture contracts.
   - Add deterministic transform/schema tests for empty, boundary, and over-cap
     inputs and for both span surfaces.
   - Leave pretest records in the pretest sink and exclude them from test/page
-    attributes.
+    attributes; switch captures to a sinkless teardown phase before settlement.
 
 - [ ] Task 3: Record the test-only telemetry boundary
   - Add a numberless proposed ADR draft amending ADR-0011: production telemetry
@@ -61,7 +61,7 @@ coordinates default-page and secondary-context capture contracts.
 - Every listener is installed once per context through `attachTraceCapture` and
   covers seeded and future pages.
 - Phase is selected at event delivery; pretest noise never enters test
-  attributes.
+  attributes, and diagnostics delivered after the test body are sinkless.
 - Raw diagnostic records remain exact; only list length is truncated at OTLP
   serialization.
 - Every truncated list reports its exact dropped count.

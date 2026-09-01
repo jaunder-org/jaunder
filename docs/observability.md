@@ -133,8 +133,11 @@ type BrowserDiagnosticRecord =
 At the `pretest` → `test` phase switch, the default test sink owns the records
 exported on `e2e.test`; every `tracedContext` test sink is exported on its
 existing `e2e.page` span. Records delivered before that switch remain in the
-pretest sink and are never exported on either test span. Diagnostics are
-observation-only: warnings, errors, and page errors do not fail a test.
+pretest sink and are never exported on either test span. When the test body
+ends, both default and secondary captures enter a sinkless teardown phase before
+settlement, so diagnostics delivered after the recorded span end are not
+misattributed to it. Diagnostics are observation-only: warnings, errors, and
+page errors do not fail a test.
 
 The harness serializes the first 20 test-phase records in sequence order as the
 `e2e.console_json` JSON-string attribute, and writes

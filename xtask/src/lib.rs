@@ -41,6 +41,7 @@ mod steps {
     pub mod e2e_local;
     pub mod e2e_scaffold_check;
     pub mod e2e_server_fn_endpoint_check;
+    pub mod e2e_telemetry_boundary_check;
     pub mod error_swallowing_inventory_check;
     pub mod flaky;
     pub mod flow_docs;
@@ -652,6 +653,10 @@ const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
     HostGateStep::ResultOnly {
         name: "traced-context",
         run: steps::traced_context_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "e2e-telemetry-boundary",
+        run: steps::e2e_telemetry_boundary_check::run,
     },
     HostGateStep::ResultOnly {
         name: "proffered-secret",
