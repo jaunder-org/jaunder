@@ -1,3 +1,9 @@
+//! Scheduled database retention maintenance.
+//!
+//! This composition-root worker invokes each storage domain's bounded cleanup
+//! operation with one shared cutoff instant. Policy, batching, and SQL remain
+//! owned by the individual storage domains.
+
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;

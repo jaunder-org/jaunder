@@ -424,11 +424,22 @@ impl SaturationSampler {
     ///
     /// Returns an error if the sampler task panicked.
     pub(crate) async fn shutdown(mut self) -> Result<(), JoinError> {
+        self.stop();
+        (&mut self.task).await
+    }
+
+    fn stop(&mut self) {
         if let Some(stop) = self.stop.take() {
             // A closed receiver means the task already finished.
             let _ = stop.send(());
         }
-        self.task.await
+    }
+}
+impl Drop for SaturationSampler {
+    fn drop(&mut self) {
+        // Drop cannot await an active filesystem measurement, but it must stop
+        // future samples if setup ownership is abandoned.
+        self.stop();
     }
 }
 
