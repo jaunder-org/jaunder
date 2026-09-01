@@ -12,8 +12,8 @@ use common::pagination::{PageOffset, PageSize};
 use common::root_relative_url::RootRelativeUrl;
 
 use super::{
-    Delete, DeleteMediaRequest, Item, MediaDeletion, UploadCallbacks, UploadState, UsageData,
-    delete_invalidates_media_resources,
+    Delete, DeleteMediaRequest, Item, MediaDeletion, UploadCallbacks, UploadState, UsageData, api,
+    upload_state,
 };
 use crate::error::{WebError, WebResult};
 use crate::forms;
@@ -142,8 +142,10 @@ fn uploaded_url_view(url: RootRelativeUrl) -> impl IntoView {
 #[component]
 pub fn MediaPage() -> impl IntoView {
     let media = Invalidator::new();
-    let delete_action =
-        reactive::action_if::<Delete>(move || media.notify(), delete_invalidates_media_resources);
+    let delete_action = reactive::action_if::<Delete>(
+        move || media.notify(),
+        upload_state::delete_invalidates_media_resources,
+    );
     // `Action::input()` is cleared when its future settles. Retain the submitted
     // aggregate while it is in flight so a refusal can offer the same request with
     // `force` enabled, without making the form's validity constructor stateful.
@@ -154,10 +156,10 @@ pub fn MediaPage() -> impl IntoView {
         }
     });
 
-    let usage = reactive::resource(move || media.track(), super::get_usage);
+    let usage = reactive::resource(move || media.track(), api::get_usage);
     let media_list = reactive::resource(
         move || media.track(),
-        || super::list_mine(None, Some(PageSize::default()), Some(PageOffset::default())),
+        || api::list_mine(None, Some(PageSize::default()), Some(PageOffset::default())),
     );
 
     view! {
