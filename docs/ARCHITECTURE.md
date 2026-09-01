@@ -2404,7 +2404,7 @@ before `TestEnv` is returned. `.pristine()` is the explicit, mutually exclusive
 request for no site-config rows, while `base_url(None)` omits only that default
 row. Production's absent or invalid registration policy remains Closed; the Open
 policy belongs only to the test fixture
-([typed test site-config baseline](adr/drafts/typed-test-site-config-baseline.md)).
+([typed test site-config baseline](adr/0170-typed-test-site-config-baseline.md)).
 
 The four templates live with their backend provisioning in
 `storage/src/test_support/backend.rs`: `backends` and `backends_matrix` (both
