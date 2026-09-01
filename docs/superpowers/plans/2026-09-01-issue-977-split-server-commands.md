@@ -37,7 +37,7 @@ Out:
     paths, including the updated subprocess filter; existing command
     integration-test files remain content-identical and compile against
     unchanged imports.
-- [ ] Task 2: Extract account/operator commands and tests.
+- [x] Task 2: Extract account/operator commands and tests.
   - Contract: private `account` owns user, app-password, invitation, and SMTP
     diagnostic handlers. It consumes production `support` and only the shared
     test fixtures named by Task 1; SMTP-only fixtures remain local. Existing
