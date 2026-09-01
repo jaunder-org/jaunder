@@ -193,6 +193,7 @@ convention). See the Status column below for each ADR's current status.
 | [0165](adr/0165-playwright-report-defines-trace-gate-population.md) | Playwright report defines trace-gate population                                                              | accepted   |
 | [0166](adr/0166-account-mutations-compose-storage-primitives.md)    | Account Mutations Compose Storage Primitives                                                                 | accepted   |
 | [0167](adr/0167-bounded-transient-data-retention.md)                | Bound retention for transient data                                                                           | accepted   |
+| [0168](adr/0168-isolated-e2e-browser-diagnostic-payloads.md)        | Allow synthetic browser diagnostic payloads in isolated E2E telemetry                                        | accepted   |
 
 <!-- adr-table:end -->
 
