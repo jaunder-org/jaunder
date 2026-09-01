@@ -17,7 +17,7 @@ use quote::ToTokens;
 use syn::visit::{self, Visit};
 
 use crate::result::CommandResult;
-use crate::steps::scan::run_source_scan;
+use crate::steps::scan;
 
 const POLICED_ROOT: &str = "storage/src";
 const RAW_METHODS: &[&str] = &[
@@ -398,7 +398,7 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
 
 /// Scan every Rust file under [`POLICED_ROOT`] and push the result step.
 pub fn run(result: &mut CommandResult) {
-    run_source_scan(result, "sqlx-newtype-bind", &[POLICED_ROOT], problems);
+    scan::run_source_scan(result, "sqlx-newtype-bind", &[POLICED_ROOT], problems);
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ use std::{
 
 use common::time::UtcInstant;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use super::{BackupMode, error::BackupError};
 
@@ -153,7 +154,7 @@ pub(crate) fn ensure_schema_version(
 pub(crate) fn read_table_rows(
     source_path: &Path,
     table: &str,
-) -> Result<Vec<serde_json::Map<String, serde_json::Value>>, BackupError> {
+) -> Result<Vec<Map<String, Value>>, BackupError> {
     let path = source_path.join("db").join(format!("{table}.ndjson"));
     if !path.is_file() {
         return Err(BackupError::InvalidBackup(format!(
@@ -170,8 +171,8 @@ pub(crate) fn read_table_rows(
             continue;
         }
 
-        let value: serde_json::Value = serde_json::from_str(&line)?;
-        let serde_json::Value::Object(row) = value else {
+        let value: Value = serde_json::from_str(&line)?;
+        let Value::Object(row) = value else {
             return Err(BackupError::InvalidBackup(format!(
                 "table {table} contains a non-object row"
             )));
@@ -181,13 +182,13 @@ pub(crate) fn read_table_rows(
     Ok(rows)
 }
 
-pub(crate) fn json_value_as_restore_text(value: &serde_json::Value) -> Option<String> {
+pub(crate) fn json_value_as_restore_text(value: &Value) -> Option<String> {
     match value {
-        serde_json::Value::Null => None,
-        serde_json::Value::String(value) => Some(value.clone()),
-        serde_json::Value::Bool(value) => Some(value.to_string()),
-        serde_json::Value::Number(value) => Some(value.to_string()),
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => Some(value.to_string()),
+        Value::Null => None,
+        Value::String(value) => Some(value.clone()),
+        Value::Bool(value) => Some(value.to_string()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Array(_) | Value::Object(_) => Some(value.to_string()),
     }
 }
 

@@ -6,7 +6,7 @@ use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaRef, Medi
 use common::pagination::{PageOffset, RowLimit};
 use common::tagged_url::MediaSourceUrl;
 use common::time::UtcInstant;
-use sqlx::{Database, FromRow, Pool};
+use sqlx::{Database, Encode, Executor, FromRow, Pool, Result, Type};
 
 use crate::InstanceId;
 use crate::WriteTransaction;
@@ -122,7 +122,7 @@ pub trait MediaStorage: Send + Sync {
         &self,
         transaction: &mut WriteTransaction,
         media: &MediaRef,
-    ) -> sqlx::Result<()>;
+    ) -> Result<()>;
 
     /// Fetches a single media record by its composite key.
     async fn get_media(
@@ -131,7 +131,7 @@ pub trait MediaStorage: Send + Sync {
         sha256: &ContentHash,
         filename: &Filename,
         source: &MediaSource,
-    ) -> sqlx::Result<Option<MediaRecord>>;
+    ) -> Result<Option<MediaRecord>>;
 
     /// Lists media records for a user, with optional filtering and pagination.
     // Explicit `'a` for `mockall::automock` — see
@@ -142,7 +142,7 @@ pub trait MediaStorage: Send + Sync {
         source: Option<&'a MediaSource>,
         limit: RowLimit,
         offset: PageOffset,
-    ) -> sqlx::Result<Vec<MediaRecord>>;
+    ) -> Result<Vec<MediaRecord>>;
 
     /// Deletes a media record according to `mode`, refusing guarded deletion when
     /// `user_id`'s live posts reference it, or when deleting it would leave a
@@ -175,13 +175,13 @@ pub trait MediaStorage: Send + Sync {
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-    ) -> sqlx::Result<bool>;
+    ) -> Result<bool>;
 
     /// Calculates the total storage used by a user's uploads (in bytes).
-    async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<ByteSize>;
+    async fn get_user_upload_usage(&self, user_id: UserId) -> Result<ByteSize>;
 
     /// Calculates total storage used by all local uploads (in bytes).
-    async fn total_upload_bytes(&self) -> sqlx::Result<ByteSize>;
+    async fn total_upload_bytes(&self) -> Result<ByteSize>;
 
     /// Finds a media record by its content hash and source across all users.
     ///
@@ -190,7 +190,7 @@ pub trait MediaStorage: Send + Sync {
         &self,
         sha256: &ContentHash,
         source: &MediaSource,
-    ) -> sqlx::Result<Option<MediaRecord>>;
+    ) -> Result<Option<MediaRecord>>;
 }
 
 /// Backend-specific divergence for [`MediaStore`].
@@ -205,16 +205,13 @@ pub trait MediaStorage: Send + Sync {
 #[async_trait]
 pub trait MediaDialect: Backend {
     /// Returns the total upload bytes for `user_id` using backend-appropriate SQL.
-    async fn get_user_upload_usage(pool: &Pool<Self>, user_id: UserId) -> sqlx::Result<ByteSize>;
+    async fn get_user_upload_usage(pool: &Pool<Self>, user_id: UserId) -> Result<ByteSize>;
 
     /// Acquires this transaction's stable lock for one media identity.
-    async fn lock_media_reference(
-        conn: &mut Self::Connection,
-        media: &MediaRef,
-    ) -> sqlx::Result<()>;
+    async fn lock_media_reference(conn: &mut Self::Connection, media: &MediaRef) -> Result<()>;
 
     /// Returns the total upload bytes across all users using backend-appropriate SQL.
-    async fn total_upload_bytes(pool: &Pool<Self>) -> sqlx::Result<ByteSize>;
+    async fn total_upload_bytes(pool: &Pool<Self>) -> Result<ByteSize>;
 
     /// `true` means the row was deleted; `false` preserves the caller's
     /// NotFound-versus-refusal classification. `mode` remains typed through the
@@ -226,7 +223,7 @@ pub trait MediaDialect: Backend {
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
         mode: MediaDeleteMode,
-    ) -> sqlx::Result<bool>;
+    ) -> Result<bool>;
 
     /// Executes the locked global reclaimability decision for a concrete dialect
     /// in the caller-owned write transaction.
@@ -235,7 +232,7 @@ pub trait MediaDialect: Backend {
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-    ) -> sqlx::Result<bool>;
+    ) -> Result<bool>;
 }
 
 /// Generic [`MediaStorage`] backed by any [`MediaDialect`] database.
@@ -258,29 +255,29 @@ impl<DB> MediaStorage for MediaStore<DB>
 where
     DB: MediaDialect,
     helpers::MediaRow: for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
     // `ContentHash`/`Filename` bind and decode as themselves via the ADR-0071 sqlx
     // bridge (the `sha256`/`filename` columns in `MediaRow` decode into their
     // newtypes, and the write/lookup binds encode `&ContentHash`/`&Filename`).
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
     // `source_url` binds as `Option<MediaSourceUrl>` (#675). The newtype's own `Type`/`Encode`
     // follow from the `String` bounds above via the generic `StrNewtype` bridge, but the
     // `Option` wrapper has to be named explicitly — same reason the `Option<String>` bound
     // it replaces was spelled out.
-    for<'q> Option<MediaSourceUrl>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<MediaSourceUrl>: Encode<'q, DB> + Type<DB>,
     // `RowLimit`/`PageOffset` bind as themselves via the ADR-0071 sqlx bridge (both
     // delegate to `i64`) — the listing's `LIMIT`/`OFFSET` placeholders (#696).
-    for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> PageOffset: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> RowLimit: Encode<'q, DB> + Type<DB>,
+    for<'q> PageOffset: Encode<'q, DB> + Type<DB>,
+    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
     // `MediaDeleteMode` binds directly into the guarded-delete expression.
-    for<'q> MediaDeleteMode: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> MediaDeleteMode: Encode<'q, DB> + Type<DB>,
     for<'q> i64: sqlx::Decode<'q, DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
-    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     #[tracing::instrument(
@@ -343,7 +340,7 @@ where
         sha256: &ContentHash,
         filename: &Filename,
         source: &MediaSource,
-    ) -> sqlx::Result<Option<MediaRecord>> {
+    ) -> Result<Option<MediaRecord>> {
         let row = sqlx::query_as::<_, helpers::MediaRow>(
             "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
              FROM media
@@ -370,7 +367,7 @@ where
         source: Option<&'a MediaSource>,
         limit: RowLimit,
         offset: PageOffset,
-    ) -> sqlx::Result<Vec<MediaRecord>> {
+    ) -> Result<Vec<MediaRecord>> {
         // Fetch raw rows (not `query_as::<MediaRow>`) so each row decodes
         // independently: the `sha256`/`filename` columns decode into their newtypes
         // *inside* `MediaRow::from_row` (#438), so a single corrupt row would fail a
@@ -431,7 +428,7 @@ where
         &self,
         transaction: &mut WriteTransaction,
         media: &MediaRef,
-    ) -> sqlx::Result<()> {
+    ) -> Result<()> {
         DB::lock_media_reference(DB::write_connection(transaction)?, media).await
     }
     #[tracing::instrument(
@@ -491,7 +488,7 @@ where
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-    ) -> sqlx::Result<bool> {
+    ) -> Result<bool> {
         DB::media_entry_is_reclaimable(
             DB::write_connection(transaction)?,
             media,
@@ -506,7 +503,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<ByteSize> {
+    async fn get_user_upload_usage(&self, user_id: UserId) -> Result<ByteSize> {
         // The dialect twin decodes `COALESCE(SUM(…), 0)` straight into `ByteSize`; the
         // bridge's bound-checking `Decode` rejects a negative total at the column.
         DB::get_user_upload_usage(&self.pool, user_id).await
@@ -517,7 +514,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn total_upload_bytes(&self) -> sqlx::Result<ByteSize> {
+    async fn total_upload_bytes(&self) -> Result<ByteSize> {
         // Same shape as per-user usage, but intentionally all-users: this is the
         // DB-declared upload footprint exported by observability, not filesystem usage.
         DB::total_upload_bytes(&self.pool).await
@@ -532,7 +529,7 @@ where
         &self,
         sha256: &ContentHash,
         source: &MediaSource,
-    ) -> sqlx::Result<Option<MediaRecord>> {
+    ) -> Result<Option<MediaRecord>> {
         let row = sqlx::query_as::<_, helpers::MediaRow>(
             "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
              FROM media

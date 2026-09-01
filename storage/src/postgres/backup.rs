@@ -6,7 +6,7 @@ use std::{
 
 use futures_util::TryStreamExt;
 use sha2::{Digest, Sha256};
-use sqlx::{PgConnection, PgPool, Row};
+use sqlx::{Error, PgConnection, PgPool, Postgres, Row, query::Query};
 
 use crate::backup::{
     self, BackupError, BackupManifest, BackupMode, BackupRowJson, CatalogColumnName,
@@ -19,7 +19,7 @@ use crate::sql::QueryStorageExt;
 
 fn finish_export_rollback(
     primary: Result<BackupManifest, BackupError>,
-    rollback: Result<(), sqlx::Error>,
+    rollback: Result<(), Error>,
 ) -> Result<BackupManifest, BackupError> {
     helpers::preserve_after_secondary(
         primary,
@@ -32,7 +32,7 @@ fn finish_export_rollback(
 
 fn finish_restore_rollback<T>(
     primary: Result<T, BackupError>,
-    rollback: Result<(), sqlx::Error>,
+    rollback: Result<(), Error>,
 ) -> Result<T, BackupError> {
     helpers::preserve_after_secondary(
         primary,
@@ -47,7 +47,7 @@ fn finish_restore_rollback<T>(
 /// the backend-independent restore category. `SQLite` applies the same contract
 /// to its native constraint kinds and final foreign-key validation; all other
 /// database errors remain infrastructure failures.
-fn map_restore_error(error: sqlx::Error) -> BackupError {
+fn map_restore_error(error: Error) -> BackupError {
     let constraint_message = error
         .as_database_error()
         .filter(|db| db.code().is_some_and(|code| code.starts_with("23")))
@@ -243,9 +243,9 @@ async fn import_table(
 }
 
 fn bind_restore_value(
-    query: sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    query: Query<'_, Postgres, sqlx::postgres::PgArguments>,
     value: RestoreBindValue,
-) -> sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments> {
+) -> Query<'_, Postgres, sqlx::postgres::PgArguments> {
     match value {
         RestoreBindValue::Null => query.bind_storage(Option::<RestoreText>::None),
         RestoreBindValue::Boolean(value) => query.bind_storage(value.into_text()),

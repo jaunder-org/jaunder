@@ -28,8 +28,8 @@ use host::metrics::{self, IdempotencyEvent};
 use host::{etag, feed};
 use storage::{
     AudienceStorage, CollectionCursor, FeedEventError, FeedEventStorage, InvalidAudienceTargets,
-    MediaContentLocks, PostRecord, PostStorage, SiteConfigStorage, UserConfigStorage, WriteScope,
-    WriteScopeError,
+    MediaContentLocks, PostRecord, PostStorage, PublishUpdate, SiteConfigStorage,
+    UserConfigStorage, WriteScope, WriteScopeError,
 };
 use web::auth;
 
@@ -258,14 +258,11 @@ fn create_published_at(
     }
 }
 
-fn update_publish(
-    lifecycle: &Presence<PublicationState>,
-    is_draft: bool,
-) -> storage::PublishUpdate {
+fn update_publish(lifecycle: &Presence<PublicationState>, is_draft: bool) -> PublishUpdate {
     match lifecycle {
         Presence::Present(state) => (*state).into(),
-        Presence::Absent if is_draft => storage::PublishUpdate::Unpublish,
-        Presence::Absent => storage::PublishUpdate::Publish { at: None },
+        Presence::Absent if is_draft => PublishUpdate::Unpublish,
+        Presence::Absent => PublishUpdate::Publish { at: None },
     }
 }
 

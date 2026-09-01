@@ -2,9 +2,13 @@
 
 use async_trait::async_trait;
 
-use thiserror::Error;
+use sqlx::{Database, Encode, Error, Executor, Pool, Result, Type};
+
+use thiserror::Error as ThisError;
 
 use crate::WriteTransaction;
+#[cfg(test)]
+use crate::helpers::StoredSessionLabel;
 use crate::sql::QueryStorageExt;
 use common::ids::UserId;
 use common::session_label::SessionLabel;
@@ -49,7 +53,7 @@ pub struct SessionRecord {
 }
 
 /// Errors that can occur when authenticating a session token.
-#[derive(Debug, Error)]
+#[derive(Debug, ThisError)]
 pub enum SessionAuthError {
     /// The token is malformed or invalid.
     #[error("invalid token")]
@@ -59,7 +63,7 @@ pub enum SessionAuthError {
     SessionNotFound,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] sqlx::Error),
+    Internal(#[from] Error),
 }
 
 /// Maps a session-validation failure to its bounded `outcome` attribute for the
@@ -93,7 +97,7 @@ pub trait SessionStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         user_id: UserId,
         label: &SessionLabel,
-    ) -> sqlx::Result<RawToken>;
+    ) -> Result<RawToken>;
 
     /// Validates a raw session token and returns the associated record.
     ///
@@ -110,7 +114,7 @@ pub trait SessionStorage: Send + Sync {
         &self,
         transaction: &mut WriteTransaction,
         token_hash: &TokenHash,
-    ) -> sqlx::Result<()>;
+    ) -> Result<()>;
 
     /// Revokes every active session belonging to `user_id`.
     async fn revoke_all_for_user(
@@ -120,7 +124,7 @@ pub trait SessionStorage: Send + Sync {
     ) -> sqlx::Result<()>;
 
     /// Returns a list of all active sessions for a user.
-    async fn list_sessions(&self, user_id: UserId) -> sqlx::Result<Vec<SessionRecord>>;
+    async fn list_sessions(&self, user_id: UserId) -> Result<Vec<SessionRecord>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +133,6 @@ pub trait SessionStorage: Send + Sync {
 
 use crate::backend::Backend;
 use crate::helpers::{self, SessionRow};
-use sqlx::{Database, Pool};
 
 const SESSION_TOUCH_FRESHNESS_SECONDS: i64 = 60;
 
@@ -146,10 +149,10 @@ where
     // Bounds repeated from `Backend`: Rust does not propagate a supertrait's
     // `where`-clause to subtraits or `impl` headers, so each generic user must
     // restate them (see ADR-0019).
-    for<'q> i64: sqlx::Encode<'q, Self> + sqlx::Type<Self>,
-    for<'q> &'q str: sqlx::Encode<'q, Self> + sqlx::Type<Self>,
-    for<'q> UtcInstant: sqlx::Encode<'q, Self> + sqlx::Type<Self>,
-    for<'c> &'c sqlx::Pool<Self>: sqlx::Executor<'c, Database = Self>,
+    for<'q> i64: Encode<'q, Self> + Type<Self>,
+    for<'q> &'q str: Encode<'q, Self> + Type<Self>,
+    for<'q> UtcInstant: Encode<'q, Self> + Type<Self>,
+    for<'c> &'c Pool<Self>: Executor<'c, Database = Self>,
     SessionRow: for<'r> sqlx::FromRow<'r, Self::Row>,
 {
     /// Return the joined session row (with username), touching `last_used_at`
@@ -160,7 +163,7 @@ where
         token_hash: &TokenHash,
         now: UtcInstant,
         stale_before: UtcInstant,
-    ) -> sqlx::Result<Option<SessionRow>>;
+    ) -> Result<Option<SessionRow>>;
 }
 
 /// Generic `SessionStorage` backed by any [`SessionDialect`] database.
@@ -180,15 +183,15 @@ impl<DB> SessionStorage for SessionStore<DB>
 where
     DB: SessionDialect,
     SessionRow: for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
     // `TokenHash`/`Username` bind/decode as themselves via the ADR-0071 sqlx
     // bridge (the `SessionRow: FromRow` bound above threads the decode).
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
-    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     #[tracing::instrument(
@@ -201,7 +204,7 @@ where
         transaction: &mut WriteTransaction,
         user_id: UserId,
         label: &SessionLabel,
-    ) -> sqlx::Result<RawToken> {
+    ) -> Result<RawToken> {
         let (raw_token, token_hash) = token::generate_hashed();
         let now = UtcInstant::now();
         let connection = DB::write_connection(transaction)?;
@@ -253,7 +256,7 @@ where
         &self,
         transaction: &mut WriteTransaction,
         token_hash: &TokenHash,
-    ) -> sqlx::Result<()> {
+    ) -> Result<()> {
         let connection = DB::write_connection(transaction)?;
         sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
             .bind_storage(token_hash)
@@ -266,16 +269,16 @@ where
         &self,
         transaction: &mut WriteTransaction,
         user_id: UserId,
-    ) -> sqlx::Result<()> {
+    ) -> Result<()> {
         let connection = DB::write_connection(transaction)?;
         sqlx::query("DELETE FROM sessions WHERE user_id = $1")
-            .bind(user_id)
+            .bind_storage(user_id)
             .execute(&mut *connection)
             .await?;
         Ok(())
     }
 
-    async fn list_sessions(&self, user_id: UserId) -> sqlx::Result<Vec<SessionRecord>> {
+    async fn list_sessions(&self, user_id: UserId) -> Result<Vec<SessionRecord>> {
         let rows = sqlx::query_as::<_, SessionRow>(
             "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
              FROM sessions s JOIN users u ON s.user_id = u.user_id
@@ -403,7 +406,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(outcome, common::MutationOutcome::Confirmed(_)));
-        let stored = crate::helpers::StoredSessionLabel::new("x".repeat(1_000));
+        let stored = StoredSessionLabel::new("x".repeat(1_000));
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query("UPDATE sessions SET label = $1")
                 .bind_storage(&stored)

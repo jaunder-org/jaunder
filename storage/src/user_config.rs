@@ -6,7 +6,7 @@ use crate::posts::PostFormat;
 use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
 use common::ids::UserId;
-use sqlx::{Database, Pool};
+use sqlx::{Database, Encode, Executor, Pool, Result, Type};
 
 use host::config_key::UserConfigKey;
 
@@ -27,7 +27,7 @@ impl StoredUserConfigValue {
 #[async_trait]
 pub trait UserConfigStorage: Send + Sync {
     /// Returns a user's configuration value for a specific key.
-    async fn get(&self, user_id: UserId, key: UserConfigKey) -> sqlx::Result<Option<String>>;
+    async fn get(&self, user_id: UserId, key: UserConfigKey) -> Result<Option<String>>;
 
     /// Sets or updates a user's configuration value.
     async fn set(
@@ -36,7 +36,7 @@ pub trait UserConfigStorage: Send + Sync {
         user_id: UserId,
         key: UserConfigKey,
         value: &str,
-    ) -> sqlx::Result<()>;
+    ) -> Result<()>;
 
     /// Deletes a specific configuration key for a user.
     async fn delete(
@@ -44,7 +44,7 @@ pub trait UserConfigStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         user_id: UserId,
         key: UserConfigKey,
-    ) -> sqlx::Result<()>;
+    ) -> Result<()>;
 }
 
 /// Reads a user's default post format preference, falling back to `Markdown`
@@ -60,7 +60,7 @@ pub trait UserConfigStorage: Send + Sync {
 pub async fn get_default_post_format(
     config: &dyn UserConfigStorage,
     user_id: UserId,
-) -> sqlx::Result<PostFormat> {
+) -> Result<PostFormat> {
     let raw = config
         .get(user_id, UserConfigKey::DefaultPostFormat)
         .await?;
@@ -80,7 +80,7 @@ pub async fn set_default_post_format(
     transaction: &mut WriteTransaction,
     user_id: UserId,
     format: PostFormat,
-) -> sqlx::Result<()> {
+) -> Result<()> {
     config
         .set(
             transaction,
@@ -114,14 +114,14 @@ where
     // Restated from `Backend` (supertrait where-clauses don't propagate; ADR-0019),
     // plus the lossless stored-value row decode for `get` and the query-arguments bound.
     (StoredUserConfigValue,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
     // `UserConfigKey`'s sqlx bridge reports `String` as its type (the token is bound as
     // borrowed text), so binding a key directly needs `String: Type<DB>` in scope.
-    String: sqlx::Type<DB>,
-    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    String: Type<DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
+    for<'q> String: Encode<'q, DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     #[tracing::instrument(
@@ -129,7 +129,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get(&self, user_id: UserId, key: UserConfigKey) -> sqlx::Result<Option<String>> {
+    async fn get(&self, user_id: UserId, key: UserConfigKey) -> Result<Option<String>> {
         let row = sqlx::query_as::<_, (StoredUserConfigValue,)>(
             "SELECT value FROM user_config WHERE user_id = $1 AND key = $2",
         )
@@ -152,7 +152,7 @@ where
         user_id: UserId,
         key: UserConfigKey,
         value: &str,
-    ) -> sqlx::Result<()> {
+    ) -> Result<()> {
         set_stored::<DB>(
             transaction,
             user_id,
@@ -172,7 +172,7 @@ where
         transaction: &mut WriteTransaction,
         user_id: UserId,
         key: UserConfigKey,
-    ) -> sqlx::Result<()> {
+    ) -> Result<()> {
         let connection = DB::write_connection(transaction)?;
         sqlx::query("DELETE FROM user_config WHERE user_id = $1 AND key = $2")
             .bind_storage(user_id)
@@ -187,18 +187,18 @@ async fn set_stored<DB>(
     user_id: UserId,
     key: UserConfigKey,
     value: StoredUserConfigValue,
-) -> sqlx::Result<()>
+) -> Result<()>
 where
     DB: Database + Backend,
-    UserId: sqlx::Type<DB>,
-    for<'q> UserId: sqlx::Encode<'q, DB>,
-    UserConfigKey: sqlx::Type<DB>,
-    for<'q> UserConfigKey: sqlx::Encode<'q, DB>,
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
-    StoredUserConfigValue: sqlx::Type<DB>,
-    for<'q> StoredUserConfigValue: sqlx::Encode<'q, DB>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    UserId: Type<DB>,
+    for<'q> UserId: Encode<'q, DB>,
+    UserConfigKey: Type<DB>,
+    for<'q> UserConfigKey: Encode<'q, DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+    StoredUserConfigValue: Type<DB>,
+    for<'q> StoredUserConfigValue: Encode<'q, DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     let connection = DB::write_connection(transaction)?;

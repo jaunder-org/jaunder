@@ -16,7 +16,7 @@ use std::sync::Arc;
 use common::display_name::DisplayName;
 use common::ids::{PostId, UserId};
 use common::username::Username;
-use storage::{AppState, seed_post_input};
+use storage::{AppState, OperatorStatus, seed_post_input};
 
 pub mod panic_gate;
 
@@ -142,9 +142,9 @@ pub async fn create_user(
         .map_err(|error| anyhow::anyhow!("fixture password preparation failed: {error}"))?;
     let display_name = display_name.cloned();
     let operator = if operator {
-        storage::OperatorStatus::OPERATOR
+        OperatorStatus::OPERATOR
     } else {
-        storage::OperatorStatus::STANDARD
+        OperatorStatus::STANDARD
     };
     let users = Arc::clone(&state.users);
     let outcome = state
@@ -419,7 +419,7 @@ mod create_user_tests {
             .expect("lookup ok")
             .expect("user exists");
         assert_eq!(u.user_id, id);
-        assert_eq!(u.is_operator, storage::OperatorStatus::OPERATOR);
+        assert_eq!(u.is_operator, OperatorStatus::OPERATOR);
 
         // A freshly-init'd DB has a per-user uniqueness constraint, so a second
         // create with the same username surfaces as an error (no upsert).

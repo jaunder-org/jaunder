@@ -5,6 +5,8 @@
 //! Keeping that dispatch closed prevents a primitive from becoming a general
 //! restore bind sink.
 
+use serde_json::Value;
+
 /// A lossless textual cell from an NDJSON backup row.
 #[derive(Debug, macros::SqlxBridge)]
 pub(crate) struct RestoreText(String);
@@ -62,11 +64,11 @@ pub(crate) enum RestoreBindValue {
 }
 
 impl RestoreBindValue {
-    pub(crate) fn from_json(value: &serde_json::Value) -> Self {
+    pub(crate) fn from_json(value: &Value) -> Self {
         match value {
-            serde_json::Value::Null => Self::Null,
-            serde_json::Value::Bool(value) => Self::Boolean(RestoreBoolean(*value)),
-            serde_json::Value::Number(value) => {
+            Value::Null => Self::Null,
+            Value::Bool(value) => Self::Boolean(RestoreBoolean(*value)),
+            Value::Number(value) => {
                 if let Some(value) = value.as_i64() {
                     Self::Integer(RestoreInteger(value))
                 } else if value
@@ -82,10 +84,8 @@ impl RestoreBindValue {
                     }
                 }
             }
-            serde_json::Value::String(value) => Self::Text(RestoreText::new(value.clone())),
-            serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
-                Self::Json(RestoreJson(value.to_string()))
-            }
+            Value::String(value) => Self::Text(RestoreText::new(value.clone())),
+            Value::Array(_) | Value::Object(_) => Self::Json(RestoreJson(value.to_string())),
         }
     }
 }

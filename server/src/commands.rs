@@ -38,7 +38,8 @@ use host::password::Password;
 use host::smtp_config::SmtpConfig;
 use storage::{
     AppState, BackupExportOptions, BackupRestoreOptions, BackupRestoreOutcome, DbConnectOptions,
-    DbPoolObserver, MediaManager, RestoreValidationReport, SiteConfigStorage, StorageRuntimeConfig,
+    DbPoolObserver, MediaManager, OperatorStatus, RestoreValidationReport, SiteConfigStorage,
+    StorageRuntimeConfig,
 };
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
@@ -314,7 +315,7 @@ async fn create_command_user(
     username: Username,
     password: Password,
     display_name: Option<DisplayName>,
-    is_operator: storage::OperatorStatus,
+    is_operator: OperatorStatus,
 ) -> anyhow::Result<common::ids::UserId> {
     let password = storage::prepare_password(password)
         .await
@@ -377,9 +378,9 @@ pub async fn cmd_user_create(
         password,
         display_name.cloned(),
         if is_operator {
-            storage::OperatorStatus::OPERATOR
+            OperatorStatus::OPERATOR
         } else {
-            storage::OperatorStatus::STANDARD
+            OperatorStatus::STANDARD
         },
     )
     .await?;

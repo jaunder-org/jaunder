@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use chrono::Duration;
 use sha2::{Digest, Sha256};
-use sqlx::{Database, Decode, Pool, QueryBuilder, Row, Type};
+use sqlx::{Database, Decode, Encode, Executor, Pool, QueryBuilder, Result, Row, Type};
 use thiserror::Error;
 
 use crate::InstanceId;
@@ -36,7 +36,7 @@ use common::visibility::{self, AudienceTarget, SubscriberRef, TargetKind, Viewer
 use host::{
     error::{InternalError, InternalResult},
     etag,
-    feed::FeedPath,
+    feed::{FeedMinItems, FeedPath},
     metrics,
     render::{self, RenderOutput},
     retention::Domain,
@@ -172,19 +172,19 @@ impl<'r, R> sqlx::FromRow<'r, R> for PostRecord
 where
     R: Row,
     &'r str: sqlx::ColumnIndex<R>,
-    PostId: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    UserId: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    Username: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    PostTitle: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    Slug: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    PostBody: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    PostFormat: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    RenderedHtml: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    UtcInstant: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    PostSummary: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    SerializedPostTags: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    PostId: Decode<'r, R::Database> + Type<R::Database>,
+    UserId: Decode<'r, R::Database> + Type<R::Database>,
+    Username: Decode<'r, R::Database> + Type<R::Database>,
+    PostTitle: Decode<'r, R::Database> + Type<R::Database>,
+    Slug: Decode<'r, R::Database> + Type<R::Database>,
+    PostBody: Decode<'r, R::Database> + Type<R::Database>,
+    PostFormat: Decode<'r, R::Database> + Type<R::Database>,
+    RenderedHtml: Decode<'r, R::Database> + Type<R::Database>,
+    UtcInstant: Decode<'r, R::Database> + Type<R::Database>,
+    PostSummary: Decode<'r, R::Database> + Type<R::Database>,
+    SerializedPostTags: Decode<'r, R::Database> + Type<R::Database>,
 {
-    fn from_row(row: &'r R) -> sqlx::Result<Self> {
+    fn from_row(row: &'r R) -> Result<Self> {
         let post_id = row.try_get::<PostId, _>("post_id")?;
         let user_id = row.try_get::<UserId, _>("user_id")?;
         let author_username = row.try_get::<Username, _>("username")?;
@@ -1187,7 +1187,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         post_id: PostId,
         viewer: &ViewerIdentity,
-    ) -> sqlx::Result<Option<PostRecord>>;
+    ) -> Result<Option<PostRecord>>;
 
     /// Lists immutable owner history across every owned Post, newest revision ID
     /// first. The owner bind is part of the storage query so this cannot become a
@@ -1197,7 +1197,7 @@ pub trait PostStorage: Send + Sync {
         user_id: UserId,
         cursor: Option<PostRevisionCursor>,
         page_size: PageSize,
-    ) -> sqlx::Result<PostRevisionPage>;
+    ) -> Result<PostRevisionPage>;
 
     /// Lists immutable owner history for one Post, including a Deleted Post.
     /// A missing or foreign Post returns `None`; callers deliberately map that
@@ -1208,7 +1208,7 @@ pub trait PostStorage: Send + Sync {
         post_id: PostId,
         cursor: Option<PostRevisionCursor>,
         page_size: PageSize,
-    ) -> sqlx::Result<Option<PostRevisionPage>>;
+    ) -> Result<Option<PostRevisionPage>>;
 
     /// Returns the current owner-visible history heading, including a Deleted
     /// Post. Lifecycle is derived against the supplied request clock.
@@ -1217,7 +1217,7 @@ pub trait PostStorage: Send + Sync {
         user_id: UserId,
         post_id: PostId,
         now: UtcInstant,
-    ) -> sqlx::Result<Option<CurrentPostRevisionSummary>>;
+    ) -> Result<Option<CurrentPostRevisionSummary>>;
 
     /// Returns one complete immutable snapshot only when both the Post and
     /// revision belong to `user_id`. The exact triple is bound in SQL.
@@ -1226,7 +1226,7 @@ pub trait PostStorage: Send + Sync {
         user_id: UserId,
         post_id: PostId,
         revision_id: RevisionId,
-    ) -> sqlx::Result<Option<PostRevisionDetail>>;
+    ) -> Result<Option<PostRevisionDetail>>;
 
     /// Fetches a post by its public permalink components, applying the
     /// viewer-resolution filter. See ADR-0020.
@@ -1240,7 +1240,7 @@ pub trait PostStorage: Send + Sync {
         slug: &Slug,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> sqlx::Result<Option<PostRecord>>;
+    ) -> Result<Option<PostRecord>>;
 
     /// Fetches an author's own not-yet-live post by its canonical permalink.
     ///
@@ -1253,7 +1253,7 @@ pub trait PostStorage: Send + Sync {
         date: PermalinkDate,
         slug: &Slug,
         now: UtcInstant,
-    ) -> sqlx::Result<Option<PostRecord>>;
+    ) -> Result<Option<PostRecord>>;
 
     /// Updates a post and creates a new revision.
     ///
@@ -1332,7 +1332,7 @@ pub trait PostStorage: Send + Sync {
         limit: RowLimit,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> sqlx::Result<Vec<PostRecord>>;
+    ) -> Result<Vec<PostRecord>>;
 
     /// Lists all published posts across the entire site, applying the
     /// viewer-resolution filter. See ADR-0020.
@@ -1346,7 +1346,7 @@ pub trait PostStorage: Send + Sync {
         limit: RowLimit,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> sqlx::Result<Vec<PostRecord>>;
+    ) -> Result<Vec<PostRecord>>;
 
     /// Lists draft posts for a specific user.
     ///
@@ -1362,7 +1362,7 @@ pub trait PostStorage: Send + Sync {
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         now: UtcInstant,
-    ) -> sqlx::Result<Vec<PostRecord>>;
+    ) -> Result<Vec<PostRecord>>;
 
     /// Lists the authenticated author's scheduled posts only.
     ///
@@ -1377,7 +1377,7 @@ pub trait PostStorage: Send + Sync {
         cursor: Option<&'a ScheduledPostCursor>,
         limit: RowLimit,
         now: UtcInstant,
-    ) -> sqlx::Result<Vec<PostRecord>>;
+    ) -> Result<Vec<PostRecord>>;
 
     /// Lists all of a user's non-soft-deleted posts (drafts + published)
     /// ordered by `updated_at DESC, post_id DESC` for the `AtomPub` Collection
@@ -1388,7 +1388,7 @@ pub trait PostStorage: Send + Sync {
         user_id: UserId,
         cursor: Option<&'a CollectionCursor>,
         limit: RowLimit,
-    ) -> sqlx::Result<Vec<PostRecord>>;
+    ) -> Result<Vec<PostRecord>>;
 
     /// Makes the post's tags equal `desired`, in one transaction (#771, ADR-0092).
     ///
@@ -1458,7 +1458,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         prefix: Option<&'a str>,
         limit: RowLimit,
-    ) -> sqlx::Result<Vec<TagRecord>>;
+    ) -> Result<Vec<TagRecord>>;
 
     /// Lists published posts matching `surface`, applying the
     /// [`HybridWindow`](host::feed::HybridWindow) selection rule (union of
@@ -1473,7 +1473,7 @@ pub trait PostStorage: Send + Sync {
         window: &host::feed::HybridWindow,
         now: UtcInstant,
         viewer: &ViewerIdentity,
-    ) -> sqlx::Result<Vec<PostRecord>>;
+    ) -> Result<Vec<PostRecord>>;
 
     /// Lists posts that crossed into "live" within the window `(after, upto]`
     /// (exclusive lower, inclusive upper): `published_at > after AND
@@ -1484,13 +1484,13 @@ pub trait PostStorage: Send + Sync {
         &self,
         after: UtcInstant,
         upto: UtcInstant,
-    ) -> sqlx::Result<Vec<GoLivePost>>;
+    ) -> Result<Vec<GoLivePost>>;
 
     /// Returns the URLs of cached feeds whose surface has a live post
     /// (`published_at <= now`, not deleted) strictly newer than the feed's own
     /// `generated_at` — i.e. cached feeds that missed a go-live while the worker
     /// was down. Drives the feed-relative startup catch-up.
-    async fn feed_urls_needing_catchup(&self, now: UtcInstant) -> sqlx::Result<Vec<FeedPath>>;
+    async fn feed_urls_needing_catchup(&self, now: UtcInstant) -> Result<Vec<FeedPath>>;
 
     /// Reads a post's audience targeting as a [`Vec<AudienceTarget>`], for
     /// pre-selecting the editor's audience picker.
@@ -1501,14 +1501,13 @@ pub trait PostStorage: Send + Sync {
     /// `subscribers` → [`AudienceTarget::Subscribers`], `named` →
     /// [`AudienceTarget::Named`]); a post with no rows yields an empty vec
     /// (equivalent to [`AudienceTarget::Private`]). See ADR-0020.
-    async fn get_post_audiences(&self, post_id: PostId) -> sqlx::Result<Vec<AudienceTarget>>;
+    async fn get_post_audiences(&self, post_id: PostId) -> Result<Vec<AudienceTarget>>;
 
     /// Loads a bounded exact-reference snapshot for a media identity.
     ///
     /// `has_unexamined_references` reports the sentinel row, which remains live
     /// because it receives no foreign evidence.
-    async fn list_media_references(&self, media: &MediaRef)
-    -> sqlx::Result<MediaReferenceSnapshot>;
+    async fn list_media_references(&self, media: &MediaRef) -> Result<MediaReferenceSnapshot>;
 
     async fn list_posts_referencing_media(
         &self,
@@ -1516,7 +1515,7 @@ pub trait PostStorage: Send + Sync {
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-    ) -> sqlx::Result<Vec<PostId>>;
+    ) -> Result<Vec<PostId>>;
 }
 /// Backend-specific divergence for [`PostStore`].
 ///
@@ -1565,7 +1564,7 @@ pub trait PostDialect: Backend {
     async fn lock_media_references(
         conn: &mut Self::Connection,
         media: &BTreeSet<MediaRef>,
-    ) -> sqlx::Result<()>;
+    ) -> Result<()>;
 
     /// Serializes this `(user_id, key)` with competing creates and returns its
     /// live mapping under a row lock. `SQLite` already holds its writer lock;
@@ -1631,13 +1630,13 @@ pub trait PostDialect: Backend {
     async fn apply_post_media_reference_backfill(
         pool: &Pool<Self>,
         candidates: &[PostMediaReferenceBackfill],
-    ) -> sqlx::Result<()>;
+    ) -> Result<()>;
 
     /// Inserts a deduplicated `post_media` batch in one statement.
     async fn insert_post_media_rows(
         conn: &mut Self::Connection,
         rows: BTreeSet<(PostId, MediaRef, MediaReferenceKind, MediaReferenceForm)>,
-    ) -> sqlx::Result<()>;
+    ) -> Result<()>;
     /// Lists the owner's retained references after excluding evidence proved foreign for
     /// `current_instance_id`. Dynamic evidence binds require a concrete `SQLx` dialect.
     async fn list_posts_referencing_media(
@@ -1646,7 +1645,7 @@ pub trait PostDialect: Backend {
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-    ) -> sqlx::Result<Vec<PostId>>;
+    ) -> Result<Vec<PostId>>;
 }
 
 /// Appends a dynamic evidence relation for one ownership decision.
@@ -1660,11 +1659,11 @@ pub(crate) fn push_media_reference_evidence_cte<'a, DB>(
     evidence: &'a MediaReferenceEvidence,
 ) where
     DB: Database,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
-    for<'q> &'q InstanceId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+    for<'q> &'q InstanceId: Encode<'q, DB> + Type<DB>,
 {
     query.push(
         "WITH foreign_evidence \
@@ -1717,7 +1716,7 @@ pub(crate) fn push_live_media_reference_predicate<'a, DB>(
     current_instance_id: &'a InstanceId,
 ) where
     DB: Database,
-    for<'q> &'q InstanceId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q InstanceId: Encode<'q, DB> + Type<DB>,
 {
     query.push(
         " AND NOT EXISTS (\
@@ -1743,10 +1742,10 @@ pub(crate) fn push_owner_media_reference_from_where<DB>(
     media: &MediaRef,
 ) where
     DB: Database,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
 {
     query
         .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE p.user_id = ")
@@ -1763,9 +1762,9 @@ pub(crate) fn push_any_media_reference_from_where<DB>(
     media: &MediaRef,
 ) where
     DB: Database,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
 {
     query
         .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE pm.source = ")
@@ -1787,10 +1786,10 @@ pub(crate) fn push_other_owner_media_reference_from_where<DB>(
     media: &MediaRef,
 ) where
     DB: Database,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
 {
     query
         .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE p.user_id <> ")
@@ -1838,26 +1837,26 @@ struct RevisionMetadataRow {
 
 /// Decodes a raw SQL row into a storage-internal typed projection.
 trait DecodeRawRow<DB: Database>: Sized {
-    fn decode(row: DB::Row) -> sqlx::Result<Self>;
+    fn decode(row: DB::Row) -> Result<Self>;
 }
 
 impl<DB> DecodeRawRow<DB> for RevisionDetailRow
 where
     DB: Database,
-    for<'r> RevisionId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> PostId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> UserId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> Option<PostTitle>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> Slug: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> PostBody: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> PostFormat: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> RenderedHtml: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> Option<PostSummary>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> UtcInstant: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> Option<UtcInstant>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> RevisionId: Decode<'r, DB> + Type<DB>,
+    for<'r> PostId: Decode<'r, DB> + Type<DB>,
+    for<'r> UserId: Decode<'r, DB> + Type<DB>,
+    for<'r> Option<PostTitle>: Decode<'r, DB> + Type<DB>,
+    for<'r> Slug: Decode<'r, DB> + Type<DB>,
+    for<'r> PostBody: Decode<'r, DB> + Type<DB>,
+    for<'r> PostFormat: Decode<'r, DB> + Type<DB>,
+    for<'r> RenderedHtml: Decode<'r, DB> + Type<DB>,
+    for<'r> Option<PostSummary>: Decode<'r, DB> + Type<DB>,
+    for<'r> UtcInstant: Decode<'r, DB> + Type<DB>,
+    for<'r> Option<UtcInstant>: Decode<'r, DB> + Type<DB>,
     for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
 {
-    fn decode(row: DB::Row) -> sqlx::Result<Self> {
+    fn decode(row: DB::Row) -> Result<Self> {
         Ok(Self {
             revision_id: row.try_get::<RevisionId, _>("revision_id")?,
             post_id: row.try_get::<PostId, _>("post_id")?,
@@ -1880,15 +1879,15 @@ where
 impl<DB> DecodeRawRow<DB> for RevisionMetadataRow
 where
     DB: Database,
-    for<'r> RevisionId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> PostId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> Option<PostTitle>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> Slug: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> UtcInstant: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> Option<UtcInstant>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> RevisionId: Decode<'r, DB> + Type<DB>,
+    for<'r> PostId: Decode<'r, DB> + Type<DB>,
+    for<'r> Option<PostTitle>: Decode<'r, DB> + Type<DB>,
+    for<'r> Slug: Decode<'r, DB> + Type<DB>,
+    for<'r> UtcInstant: Decode<'r, DB> + Type<DB>,
+    for<'r> Option<UtcInstant>: Decode<'r, DB> + Type<DB>,
     for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
 {
-    fn decode(row: DB::Row) -> sqlx::Result<Self> {
+    fn decode(row: DB::Row) -> Result<Self> {
         Ok(Self {
             revision_id: row.try_get::<RevisionId, _>("revision_id")?,
             post_id: row.try_get::<PostId, _>("post_id")?,
@@ -1953,8 +1952,8 @@ where
     // `feed_urls_needing_catchup` reads `feed_cache` a row at a time (a bad `feed_url`
     // must not fail the scan), so it needs the column-decode bounds directly rather than
     // a `FromRow` tuple. `FeedPath` decodes as itself via the ADR-0071 bridge.
-    for<'r> FeedPath: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> UtcInstant: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> FeedPath: Decode<'r, DB> + Type<DB>,
+    for<'r> UtcInstant: Decode<'r, DB> + Type<DB>,
     for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
     usize: sqlx::ColumnIndex<DB::Row>,
     // Every post-media column decodes as its domain type through ADR-0071's
@@ -1986,40 +1985,40 @@ where
         MediaReferenceKind,
         MediaReferenceForm,
     ): for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> MediaReferenceKind: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> MediaSource: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q ContentHash: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q Filename: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> MediaReferenceForm: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> MediaReferenceKind: Encode<'q, DB> + Type<DB>,
+    for<'q> MediaSource: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q ContentHash: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q Filename: Encode<'q, DB> + Type<DB>,
+    for<'q> MediaReferenceForm: Encode<'q, DB> + Type<DB>,
     // makes every id newtype bind on a generic backend.
-    for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
     for<'q> RowCount: Decode<'q, DB> + Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<&'q str>: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<String>: Encode<'q, DB> + Type<DB>,
     // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
-    for<'q> Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q SubscriberRef: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<&'q SubscriberRef>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<UserId>: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<ChannelId>: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q SubscriberRef: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<&'q SubscriberRef>: Encode<'q, DB> + Type<DB>,
     // `Slug`/`Tag`/`Username` bind and decode as themselves via the ADR-0071 sqlx
     // into their newtypes). The `Option<&PostTitle>` bound is the nullable `title`
     // bind, forwarded from `write_post_in_tx` (create paths).
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
-    for<'q> &'q IdempotencyKey: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<&'q PostTitle>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+    for<'q> &'q IdempotencyKey: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<&'q PostTitle>: Encode<'q, DB> + Type<DB>,
     // `summary` binds as `Option<&PostSummary>` via the ADR-0071 sqlx bridge on
     // the create paths, mirroring the `Option<&PostTitle>` bound above.
-    for<'q> Option<&'q PostSummary>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<AudienceId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<&'q PostSummary>: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<AudienceId>: Encode<'q, DB> + Type<DB>,
     // `RowLimit` binds as itself via the ADR-0071 sqlx bridge (delegates to `i64`) —
     // every listing's `LIMIT` placeholder (#696).
-    for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<UtcInstant>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> RowLimit: Encode<'q, DB> + Type<DB>,
+    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<UtcInstant>: Encode<'q, DB> + Type<DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     #[tracing::instrument(
@@ -2151,7 +2150,7 @@ where
         &self,
         post_id: PostId,
         viewer: &ViewerIdentity,
-    ) -> sqlx::Result<Option<PostRecord>> {
+    ) -> Result<Option<PostRecord>> {
         let (resolution, binds, _) = resolution_where(viewer, 2);
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -2173,7 +2172,7 @@ where
         user_id: UserId,
         cursor: Option<PostRevisionCursor>,
         page_size: PageSize,
-    ) -> sqlx::Result<PostRevisionPage> {
+    ) -> Result<PostRevisionPage> {
         let rows =
             revision_metadata_rows(&self.pool, user_id, None, cursor, page_size.fetch_limit())
                 .await?;
@@ -2187,7 +2186,7 @@ where
         post_id: PostId,
         cursor: Option<PostRevisionCursor>,
         page_size: PageSize,
-    ) -> sqlx::Result<Option<PostRevisionPage>> {
+    ) -> Result<Option<PostRevisionPage>> {
         let owned = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM posts WHERE post_id = $1 AND user_id = $2",
         )
@@ -2215,7 +2214,7 @@ where
         user_id: UserId,
         post_id: PostId,
         now: UtcInstant,
-    ) -> sqlx::Result<Option<CurrentPostRevisionSummary>> {
+    ) -> Result<Option<CurrentPostRevisionSummary>> {
         let row: Option<(
             PostId,
             Option<PostTitle>,
@@ -2256,7 +2255,7 @@ where
         user_id: UserId,
         post_id: PostId,
         revision_id: RevisionId,
-    ) -> sqlx::Result<Option<PostRevisionDetail>> {
+    ) -> Result<Option<PostRevisionDetail>> {
         let row = sqlx::query(
             "SELECT revision_id, post_id, user_id, title, slug, body, format, rendered_html,
                     summary, created_at, updated_at, published_at, deleted_at, captured_at
@@ -2363,7 +2362,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get_post_audiences(&self, post_id: PostId) -> sqlx::Result<Vec<AudienceTarget>> {
+    async fn get_post_audiences(&self, post_id: PostId) -> Result<Vec<AudienceTarget>> {
         // Owner-only: no viewer resolution. `ORDER BY` makes the result
         // deterministic so callers can compare vecs directly.
         let rows: Vec<(TargetKind, Option<AudienceId>)> = sqlx::query_as(
@@ -2387,10 +2386,7 @@ where
         skip(self, media),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn list_media_references(
-        &self,
-        media: &MediaRef,
-    ) -> sqlx::Result<MediaReferenceSnapshot> {
+    async fn list_media_references(&self, media: &MediaRef) -> Result<MediaReferenceSnapshot> {
         let mut rows: Vec<(
             PostId,
             UserId,
@@ -2465,7 +2461,7 @@ where
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-    ) -> sqlx::Result<Vec<PostId>> {
+    ) -> Result<Vec<PostId>> {
         DB::list_posts_referencing_media(&self.pool, user_id, media, current_instance_id, evidence)
             .await
     }
@@ -2482,7 +2478,7 @@ where
         slug: &Slug,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> sqlx::Result<Option<PostRecord>> {
+    ) -> Result<Option<PostRecord>> {
         let date_text = PermalinkDateText::from(date);
         let (resolution, binds, _) = resolution_where(viewer, 5);
         // `published_at <= $4` hides scheduled (future-dated) posts until due.
@@ -2521,7 +2517,7 @@ where
         date: PermalinkDate,
         slug: &Slug,
         now: UtcInstant,
-    ) -> sqlx::Result<Option<PostRecord>> {
+    ) -> Result<Option<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let date_clause = DB::PERMALINK_DATE_CLAUSE;
         let date_text = PermalinkDateText::from(date);
@@ -2658,7 +2654,7 @@ where
         limit: RowLimit,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> sqlx::Result<Vec<PostRecord>> {
+    ) -> Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             // Binds: $1 username, $2/$3 cursor, $4 post_id, $5 now, then the
@@ -2734,7 +2730,7 @@ where
         limit: RowLimit,
         viewer: &ViewerIdentity,
         now: UtcInstant,
-    ) -> sqlx::Result<Vec<PostRecord>> {
+    ) -> Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             // Binds: $1/$2 cursor, $3 post_id, $4 now, then the variant-sized
@@ -2804,7 +2800,7 @@ where
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         now: UtcInstant,
-    ) -> sqlx::Result<Vec<PostRecord>> {
+    ) -> Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             // `published_at IS NULL OR published_at > $5` surfaces both true
@@ -2867,7 +2863,7 @@ where
         cursor: Option<&'a ScheduledPostCursor>,
         limit: RowLimit,
         now: UtcInstant,
-    ) -> sqlx::Result<Vec<PostRecord>> {
+    ) -> Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             let sql = format!(
@@ -2927,7 +2923,7 @@ where
         user_id: UserId,
         cursor: Option<&'a CollectionCursor>,
         limit: RowLimit,
-    ) -> sqlx::Result<Vec<PostRecord>> {
+    ) -> Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             let sql = format!(
@@ -3183,7 +3179,7 @@ where
         &self,
         prefix: Option<&'a str>,
         limit: RowLimit,
-    ) -> sqlx::Result<Vec<TagRecord>> {
+    ) -> Result<Vec<TagRecord>> {
         let normalized = prefix
             .map(str::trim)
             .filter(|p| !p.is_empty())
@@ -3236,7 +3232,7 @@ where
         window: &host::feed::HybridWindow,
         now: UtcInstant,
         viewer: &ViewerIdentity,
-    ) -> sqlx::Result<Vec<PostRecord>> {
+    ) -> Result<Vec<PostRecord>> {
         // ROW_NUMBER() identifies the top `min_items` posts; OR-combining with
         // `published_at >= cutoff` produces the hybrid-window union in a single
         // query. Only the JSON tag aggregation differs per backend, so the SQL
@@ -3263,7 +3259,7 @@ where
         &self,
         after: UtcInstant,
         upto: UtcInstant,
-    ) -> sqlx::Result<Vec<GoLivePost>> {
+    ) -> Result<Vec<GoLivePost>> {
         // `published_at > $1 AND published_at <= $2` selects exactly the posts
         // that crossed into "live" within the half-open window `(after, upto]`.
         // The standard post projection (incl. the JSON tag subquery) is reused so the row
@@ -3296,7 +3292,7 @@ where
             .collect())
     }
 
-    async fn feed_urls_needing_catchup(&self, now: UtcInstant) -> sqlx::Result<Vec<FeedPath>> {
+    async fn feed_urls_needing_catchup(&self, now: UtcInstant) -> Result<Vec<FeedPath>> {
         // Cached feeds live in the same database, so they are enumerated here
         // and, for each, the newest live post on that surface is compared
         // against the feed's own `generated_at`. Feed count is small, so a
@@ -3385,14 +3381,14 @@ async fn revision_metadata_rows<DB>(
     post_id: Option<PostId>,
     cursor: Option<PostRevisionCursor>,
     limit: RowLimit,
-) -> sqlx::Result<Vec<PostRevisionMetadata>>
+) -> Result<Vec<PostRevisionMetadata>>
 where
     DB: Database,
-    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
-    for<'q> UserId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> PostId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> RevisionId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
+    for<'q> UserId: Encode<'q, DB> + Type<DB>,
+    for<'q> PostId: Encode<'q, DB> + Type<DB>,
+    for<'q> RevisionId: Encode<'q, DB> + Type<DB>,
+    for<'q> RowLimit: Encode<'q, DB> + Type<DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
     RevisionMetadataRow: DecodeRawRow<DB>,
 {
@@ -3431,7 +3427,7 @@ where
     Ok(rows
         .into_iter()
         .map(RevisionMetadataRow::decode)
-        .collect::<sqlx::Result<Vec<_>>>()?
+        .collect::<Result<Vec<_>>>()?
         .into_iter()
         .map(|row| PostRevisionMetadata {
             revision_id: row.revision_id,
@@ -3596,17 +3592,17 @@ impl ResolutionBinds {
     ) -> sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments<'q>>
     where
         DB: Database,
-        i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-        &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-        &'q SubscriberRef: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-        Option<&'q SubscriberRef>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        i64: Encode<'q, DB> + Type<DB>,
+        &'q str: Encode<'q, DB> + Type<DB>,
+        &'q SubscriberRef: Encode<'q, DB> + Type<DB>,
+        Option<&'q SubscriberRef>: Encode<'q, DB> + Type<DB>,
         // sqlx implements `Encode for Option<T>` per concrete database (the
         // `impl_encode_for_option!` macro), not blanket over a generic `DB`, so
         // each NULL-able bind's type has to be restated here — and, per ADR-0019,
         // again on every caller.
-        Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-        Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-        Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        Option<UserId>: Encode<'q, DB> + Type<DB>,
+        Option<ChannelId>: Encode<'q, DB> + Type<DB>,
+        Option<&'q str>: Encode<'q, DB> + Type<DB>,
     {
         match self {
             Self::Anonymous => query
@@ -3838,22 +3834,27 @@ pub(crate) async fn write_post_in_tx<DB>(
 ) -> Result<(PostId, bool), CreatePostError>
 where
     DB: PostDialect,
-    for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
     for<'q> RowCount: Decode<'q, DB> + Type<DB>,
-    for<'q> Option<AudienceId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q IdempotencyKey: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<UtcInstant>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
-    for<'q> Option<&'q PostTitle>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<&'q PostSummary>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<AudienceId>: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<&'q str>: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<String>: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q IdempotencyKey: Encode<'q, DB> + Type<DB>,
+    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<UtcInstant>: Encode<'q, DB> + Type<DB>,
+    // `Slug`/`PostBody` bind as themselves and `PostTitle` as `Option<&PostTitle>`
+    // via the ADR-0071 sqlx bridge (the `Option<&…>` pair covers the nullable
+    // `title` bind).
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+    for<'q> Option<&'q PostTitle>: Encode<'q, DB> + Type<DB>,
+    // `summary` binds as `Option<&PostSummary>` via the ADR-0071 sqlx bridge on
+    // the create paths, mirroring the `Option<&PostTitle>` bound above.
+    for<'q> Option<&'q PostSummary>: Encode<'q, DB> + Type<DB>,
     (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     usize: sqlx::ColumnIndex<DB::Row>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     DB::lock_media_references(conn, &media_lock_set(input.rendered.media())).await?;
@@ -3943,13 +3944,13 @@ pub(crate) async fn replace_post_audiences<DB>(
     conn: &mut DB::Connection,
     post_id: PostId,
     audiences: &[AudienceTarget],
-) -> sqlx::Result<()>
+) -> Result<()>
 where
     DB: PostDialect,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<AudienceId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> TargetKind: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<AudienceId>: Encode<'q, DB> + Type<DB>,
+    for<'q> TargetKind: Encode<'q, DB> + Type<DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     sqlx::query(DB::DELETE_POST_AUDIENCES)
@@ -3977,16 +3978,16 @@ pub(crate) async fn insert_post_tags<DB>(
     conn: &mut DB::Connection,
     post_id: PostId,
     desired: &[TagLabel],
-) -> sqlx::Result<()>
+) -> Result<()>
 where
     DB: Database,
-    for<'q> PostId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Tag: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> TagLabel: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> TagId: sqlx::Decode<'q, DB> + sqlx::Type<DB>,
-    for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> PostId: Encode<'q, DB> + Type<DB>,
+    for<'q> Tag: Encode<'q, DB> + Type<DB>,
+    for<'q> TagLabel: Encode<'q, DB> + Type<DB>,
+    for<'q> TagId: Decode<'q, DB> + Type<DB>,
+    for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     let mut ordered = desired.to_vec();
@@ -4015,15 +4016,15 @@ pub(crate) async fn capture_complete_post_revision<DB>(
     conn: &mut DB::Connection,
     post_id: PostId,
     captured_at: UtcInstant,
-) -> sqlx::Result<RevisionId>
+) -> Result<RevisionId>
 where
     DB: Database,
-    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> PostId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> RevisionId: sqlx::Decode<'q, DB> + sqlx::Type<DB>,
-    for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
+    for<'q> PostId: Encode<'q, DB> + Type<DB>,
+    for<'q> RevisionId: Decode<'q, DB> + Type<DB>,
+    for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     let revision_id = sqlx::query_scalar::<_, RevisionId>(INSERT_COMPLETE_POST_REVISION)
@@ -4079,11 +4080,11 @@ pub struct PostMediaReferenceBackfill {
 /// Re-derives exact reference rows copied by migration 0027 before the application state
 /// becomes available. Derivation deliberately occurs before the backend acquires its write lock;
 /// the atomic write phase validates each authoritative HTML snapshot and retries if one changed.
-pub(crate) async fn backfill_post_media_references<DB>(pool: &Pool<DB>) -> sqlx::Result<()>
+pub(crate) async fn backfill_post_media_references<DB>(pool: &Pool<DB>) -> Result<()>
 where
     DB: PostDialect,
     (PostId, RenderedHtml): for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     let posts: Vec<(PostId, RenderedHtml)> = sqlx::query_as(
@@ -4120,14 +4121,14 @@ pub(crate) async fn replace_post_media<DB>(
     conn: &mut DB::Connection,
     post_id: PostId,
     media: &[MediaReference],
-) -> sqlx::Result<()>
+) -> Result<()>
 where
     DB: PostDialect,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     let rows = media_reference_rows([(post_id, media)]);
@@ -4142,14 +4143,14 @@ where
 pub(crate) async fn replace_legacy_post_media<DB>(
     conn: &mut DB::Connection,
     candidates: &[PostMediaReferenceBackfill],
-) -> sqlx::Result<()>
+) -> Result<()>
 where
     DB: PostDialect,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     sqlx::query(
@@ -4201,27 +4202,27 @@ async fn list_published_in_window_rows<DB>(
     surface: &common::feed::FeedSurface,
     now: UtcInstant,
     cutoff: UtcInstant,
-    min_items: host::feed::FeedMinItems,
+    min_items: FeedMinItems,
     viewer: &ViewerIdentity,
-) -> sqlx::Result<Vec<PostRecord>>
+) -> Result<Vec<PostRecord>>
 where
     DB: PostDialect,
     PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> host::feed::FeedMinItems: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> FeedMinItems: Encode<'q, DB> + Type<DB>,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
     // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
-    for<'q> Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q SubscriberRef: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<&'q SubscriberRef>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<UserId>: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<ChannelId>: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q SubscriberRef: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<&'q SubscriberRef>: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<&'q str>: Encode<'q, DB> + Type<DB>,
     // `Username`/`Tag` bind as themselves via the ADR-0071 sqlx bridge, for the
     // surface `username`/`tag` binds.
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
-    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     use common::feed::FeedSurface;
@@ -4389,17 +4390,17 @@ async fn max_published_at_for_surface<DB>(
     pool: &Pool<DB>,
     surface: &common::feed::FeedSurface,
     now: UtcInstant,
-) -> sqlx::Result<Option<UtcInstant>>
+) -> Result<Option<UtcInstant>>
 where
     DB: PostDialect,
     (UtcInstant,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
     // `Username`/`Tag` bind as themselves via the ADR-0071 sqlx bridge, for the
     // surface `username`/`tag` binds.
-    String: sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB>,
-    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     use common::feed::FeedSurface;

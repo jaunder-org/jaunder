@@ -190,7 +190,8 @@ mod tests {
     use common::time::UtcInstant;
     use common::visibility::ViewerIdentity;
     use storage::{
-        ListByTagError, MockPostStorage, MockUserStorage, PostFormat, PostRecord, UserRecord,
+        EmailVerified, ListByTagError, MockPostStorage, MockUserStorage, OperatorStatus,
+        PostFormat, PostRecord, UserRecord,
     };
 
     fn post(post_id: i64) -> PostRecord {
@@ -222,8 +223,8 @@ mod tests {
             created_at: UtcInstant::now(),
             last_authenticated_at: None,
             email: None,
-            email_verified: storage::EmailVerified::UNVERIFIED,
-            is_operator: storage::OperatorStatus::STANDARD,
+            email_verified: EmailVerified::UNVERIFIED,
+            is_operator: OperatorStatus::STANDARD,
         }
     }
 
