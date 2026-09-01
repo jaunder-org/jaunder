@@ -10,7 +10,7 @@ use common::{display_name::DisplayName, ids::UserId, token::RawToken, username::
 use host::{invite::InviteCode, password::Password};
 use thiserror::Error;
 
-use crate::password;
+use crate::users;
 use crate::{
     CreateUserError, InviteStorage, OperatorStatus, PasswordResetStorage, SessionStorage,
     UserStorage, WriteTransaction,
@@ -170,7 +170,7 @@ pub async fn register_with_invite(
 
     // An invite is a high-entropy capability. After its read-only precheck,
     // Argon2 may run before the transactional user insertion.
-    let prepared_password = password::prepare_password(input.password.clone())
+    let prepared_password = users::prepare_password(input.password.clone())
         .await
         .map_err(|error| RegisterWithInviteError::Internal(sqlx::Error::Io(error)))?;
     let user_id = users
@@ -219,7 +219,7 @@ pub async fn confirm_password_reset(
 
     // Reset tokens are high-entropy capabilities: only a successful claim
     // reaches password preparation and the following mutations.
-    let prepared_password = prepare_password(new_password.clone())
+    let prepared_password = users::prepare_password(new_password.clone())
         .await
         .map_err(|error| ConfirmPasswordResetError::Internal(sqlx::Error::Io(error)))?;
     users

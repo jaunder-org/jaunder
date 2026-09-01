@@ -165,7 +165,7 @@ where
         let row = sqlx::query_as::<_, InviteTokenStateRow>(
             "SELECT used_at, expires_at FROM invites WHERE code = $1",
         )
-        .bind(code)
+        .bind_storage(code)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -192,9 +192,9 @@ where
              WHERE code = $3 AND used_at IS NULL AND expires_at > $1
              RETURNING used_at, expires_at",
         )
-        .bind(now)
-        .bind(user_id)
-        .bind(code)
+        .bind_storage(now)
+        .bind_storage(user_id)
+        .bind_storage(code)
         .fetch_optional(&mut *connection)
         .await?;
 
@@ -205,7 +205,7 @@ where
         let row = sqlx::query_as::<_, InviteTokenStateRow>(
             "SELECT used_at, expires_at FROM invites WHERE code = $1",
         )
-        .bind(code)
+        .bind_storage(code)
         .fetch_optional(&mut *connection)
         .await?;
         match helpers::classify_invite_token_state(row, now) {

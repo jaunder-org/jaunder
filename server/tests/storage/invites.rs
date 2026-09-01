@@ -320,7 +320,7 @@ async fn create_user_with_invite_hash_failure_preserves_password_error_and_invit
         username("alice"),
         password("force-hash-error-for-test-coverage"),
         None,
-        false,
+        OperatorStatus::STANDARD,
         code,
     )
     .await
@@ -393,7 +393,7 @@ async fn create_user_with_invite(
     username: common::username::Username,
     password: host::password::Password,
     display_name: Option<common::display_name::DisplayName>,
-    is_operator: storage::OperatorStatus,
+    is_operator: OperatorStatus,
     code: InviteCode,
 ) -> common::ids::UserId {
     let outcome =
@@ -408,7 +408,7 @@ async fn create_user_with_invite_result(
     username: common::username::Username,
     password: host::password::Password,
     display_name: Option<common::display_name::DisplayName>,
-    is_operator: storage::OperatorStatus,
+    is_operator: OperatorStatus,
     code: InviteCode,
 ) -> Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>> {
     let users = Arc::clone(&state.users);
@@ -425,11 +425,7 @@ async fn create_user_with_invite_result(
                         username: &username,
                         password: &password,
                         display_name: display_name.as_ref(),
-                        is_operator: if is_operator {
-                            OperatorStatus::OPERATOR
-                        } else {
-                            OperatorStatus::STANDARD
-                        },
+                        is_operator,
                         invite_code: &code,
                     },
                 )
@@ -447,7 +443,15 @@ async fn register_after_start_barrier(
     password: host::password::Password,
 ) -> Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>> {
     start_barrier.wait().await;
-    create_user_with_invite_result(&state, username, password, None, false, code).await
+    create_user_with_invite_result(
+        &state,
+        username,
+        password,
+        None,
+        OperatorStatus::STANDARD,
+        code,
+    )
+    .await
 }
 
 pub(super) async fn assert_exactly_one_invite_registration(
