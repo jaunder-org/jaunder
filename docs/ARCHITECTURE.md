@@ -2610,12 +2610,13 @@ The ladder has four local entrypoints, all driven by `xtask`
   host unit tests, and — unless `--no-test` — the host-native `test-local`
   product Rust suite plus the Nix-only `wasm-tests` and `doctests` derivations.
 - **`cargo xtask precommit`** is the hook entrypoint. It runs the same host
-  surface as `cargo xtask check --no-test`, then applies the safe-staging
-  policy: re-stage only formatter/check mutations to already-staged tracked
-  paths that had no pre-existing unstaged change; fail closed for mixed tracked
-  paths, newly-created untracked files, and delete/rename state changed during
-  the hook. Pre-existing delete/rename state and untracked files stay unstaged
-  and tolerated.
+  surface as `cargo xtask check --no-test`, then always takes its after-snapshot
+  and applies the safe-staging policy, even when an earlier failed step stopped
+  gate execution: re-stage only formatter/check mutations to already-staged
+  tracked paths that had no pre-existing unstaged change; fail closed for mixed
+  tracked paths, newly-created untracked files, and delete/rename state changed
+  during the hook. Pre-existing delete/rename state and untracked files stay
+  unstaged and tolerated.
 - **`cargo xtask prepush`** is the fast local push-hook entrypoint. It opens
   with the same clean-tree precheck as `validate`, then runs the verify-only
   host/static surface, the auxiliary `xtask`/`tools` non-doc tests, the
@@ -2628,6 +2629,16 @@ The ladder has four local entrypoints, all driven by `xtask`
   followed by its host consumer. Full **`cargo xtask validate`** inherits that
   verdict and — unless `--no-e2e` — adds the browser/backend e2e aggregate; it
   never reruns live ERT.
+
+Both hook entrypoints select orchestration-owned **fail-fast** execution. At
+every ordered local boundary — individual static checks, host-gate steps, and
+prepush phases — the first newly appended failed, non-skipped step prevents
+later work. Unexecuted steps are absent from the command result, not
+green-skipped. This does not alter command membership, order, the clean-tree
+precondition, or the staged-subset reconciliation authority. Explicit
+**`cargo xtask check`** and **`cargo xtask validate`**, along with CI's
+corresponding surfaces, remain **exhaustive**: they retain the unchanged ordered
+diagnostic graph and their existing authority.
 
 Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
 `.githooks/pre-commit` calls `cargo xtask precommit`; the `xtask` Cargo alias
