@@ -719,6 +719,17 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   [the actionable-handoff decision](docs/adr/0135-pr-watch-actionable-handoff.md)
   for the stopping policy.
 
+  **Post-land cleanup:** after `pr land` reports `merged`, run
+  `cargo xtask pr cleanup [N]` from that PR's checkout. It is explicit and
+  local-only: it verifies the merged PR targets `main`, the checked-out branch
+  and HEAD exactly match the PR's head ref and SHA, and the tree is clean before
+  fetching, detaching at `origin/main`, safely deleting the local branch, and
+  running `cargo clean`. Omit `N` only to have cleanup exhaustively resolve
+  exactly one merged PR matching the current checkout. Cleanup exits 0 only when
+  complete; a refusal or operation failure exits 1. It does not alter the
+  `pr land` merge outcome or project Status—set Status to **Done** separately
+  after cleanup.
+
 ### Targeted Rust tests
 
 The server integration tests compile as a **single** `integration` binary, so
