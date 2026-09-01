@@ -16,7 +16,7 @@ use host::{
 use tokio::{net::TcpListener, sync::oneshot::Receiver, task::JoinHandle};
 
 use crate::backup;
-use crate::cli::{AppTarget, BootstrapDb, Commands, SiteConfigAction, StorageArgs};
+use crate::cli::{Commands, SiteConfigAction, StorageArgs};
 use crate::feed::worker::FeedWorker;
 use crate::mailer::LettreMailSender;
 use crate::maintenance::{self, DatabaseMaintenance};
@@ -28,7 +28,6 @@ use common::display_name::DisplayName;
 use common::email::Email;
 use common::invite::InviteTtlHours;
 use common::mailer::{EmailMessage, MailSender};
-use common::pg_role_password::PgRolePassword;
 use common::session_label::SessionLabel;
 use common::tagged_url::{self, MailConfirmUrl};
 use common::token::RawToken;
@@ -41,8 +40,15 @@ use storage::{
     DbPoolObserver, InstanceId, MediaManager, OperatorStatus, RestoreValidationReport,
     SiteConfigStorage, StorageRuntimeConfig,
 };
+mod storage_bootstrap;
+mod support;
+#[cfg(test)]
+mod test_support;
 
-const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
+pub use storage_bootstrap::{cmd_create_pg_db, cmd_init};
+
+use support::{INIT_FIRST_CONTEXT, require_confirmed_mutation, storage_runtime_config};
+
 const CAPTURE_FEED_INTERVAL: Duration = Duration::from_millis(250);
 const PRODUCTION_FEED_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -51,60 +57,6 @@ fn feed_worker_interval(capture_enabled: bool) -> Duration {
         CAPTURE_FEED_INTERVAL
     } else {
         PRODUCTION_FEED_INTERVAL
-    }
-}
-
-fn inherited(name: &str) -> Result<Option<String>, std::env::VarError> {
-    match std::env::var(name) {
-        Ok(value) => Ok(Some(value)),
-        Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
-/// Resolves the application connection snapshot at the command boundary.
-///
-/// Bootstrap commands intentionally do not call this: their credentials are
-/// explicit administrative inputs, never application password overrides.
-/// `SQLite` has no `PostgreSQL` credential path, so it must not observe a broken
-/// `PostgreSQL` password file or variable.
-fn storage_runtime_config_from_raw(
-    database: &storage::DbConnectOptions,
-    sql_slow_ms: Result<Option<String>, std::env::VarError>,
-    password_file: Result<Option<io::Result<String>>, std::env::VarError>,
-    password: Result<Option<String>, std::env::VarError>,
-) -> Result<StorageRuntimeConfig, storage::PostgresPasswordError> {
-    match database {
-        storage::DbConnectOptions::Sqlite(_) => {
-            StorageRuntimeConfig::from_raw(sql_slow_ms, Ok(None), Ok(None))
-        }
-        storage::DbConnectOptions::Postgres { .. } => {
-            StorageRuntimeConfig::from_raw(sql_slow_ms, password_file, password)
-        }
-    }
-}
-
-fn storage_runtime_config(
-    database: &storage::DbConnectOptions,
-) -> Result<StorageRuntimeConfig, storage::PostgresPasswordError> {
-    let sql_slow_ms = inherited("JAUNDER_SQL_SLOW_MS");
-    match database {
-        storage::DbConnectOptions::Sqlite(_) => {
-            storage_runtime_config_from_raw(database, sql_slow_ms, Ok(None), Ok(None))
-        }
-        storage::DbConnectOptions::Postgres { .. } => {
-            let password_file = match std::env::var("JAUNDER_DB_PASSWORD_FILE") {
-                Ok(path) => Ok(Some(fs::read_to_string(path))),
-                Err(std::env::VarError::NotPresent) => Ok(None),
-                Err(error) => Err(error),
-            };
-            storage_runtime_config_from_raw(
-                database,
-                sql_slow_ms,
-                password_file,
-                inherited("JAUNDER_DB_PASSWORD"),
-            )
-        }
     }
 }
 
@@ -225,87 +177,6 @@ impl SiteConfigAction {
             SiteConfigAction::List { storage } => cmd_site_config_list(&storage).await,
             SiteConfigAction::Unset { storage, key } => cmd_site_config_unset(&storage, key).await,
         }
-    }
-}
-
-/// Initializes the application's storage directory and database.
-///
-/// # Errors
-///
-/// Returns an error if the storage directory cannot be created, or if the
-/// database cannot be initialized.
-pub async fn cmd_init(storage: &StorageArgs, skip_if_exists: bool) -> anyhow::Result<()> {
-    match storage::init_storage(&storage.storage_path) {
-        Ok(()) => {}
-        Err(e) if skip_if_exists && e.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(e.into()),
-    }
-    let runtime = storage_runtime_config(&storage.db)?;
-    storage::open_database(&storage.db, &runtime).await?;
-    println!(
-        "Initialized: storage={} db={}",
-        storage.storage_path.display(),
-        storage.db,
-    );
-    Ok(())
-}
-
-/// Maps a [`storage::PgBootstrapError`] to a user-facing CLI error.
-fn describe_bootstrap_error(err: storage::PgBootstrapError) -> anyhow::Error {
-    match err {
-        storage::PgBootstrapError::RoleExists(role) => anyhow::anyhow!(
-            "application role '{role}' already exists; refusing to modify existing role state"
-        ),
-        storage::PgBootstrapError::DatabaseExists(name) => anyhow::anyhow!(
-            "database '{name}' already exists; refusing to modify existing database state"
-        ),
-        storage::PgBootstrapError::Sqlx(err) => err.into(),
-    }
-}
-
-/// Bootstraps a `PostgreSQL` database and application role.
-///
-/// Every argument is already validated by the time it arrives: the CLI is the parse
-/// boundary, so a non-`PostgreSQL` URL, a URL naming no database, and an empty password
-/// are all rejected at argument parsing rather than here (#693).
-///
-/// # Errors
-///
-/// Returns an error if the bootstrap connection fails, or if the role or
-/// database already exists.
-pub async fn cmd_create_pg_db(
-    bootstrap_db: &BootstrapDb,
-    app_db: &AppTarget,
-    app_role_password: &PgRolePassword,
-) -> anyhow::Result<()> {
-    let app_role = app_db.role();
-    let database_name = app_db.database();
-
-    storage::create_postgres_database_and_role(
-        bootstrap_db.options(),
-        app_role,
-        app_role_password,
-        database_name,
-    )
-    .await
-    .map_err(describe_bootstrap_error)?;
-
-    println!("PostgreSQL ready: role='{app_role}' database='{database_name}' owner='{app_role}'");
-    Ok(())
-}
-
-/// Converts a mutation outcome into its confirmed value for a CLI operation.
-///
-/// A lost commit acknowledgement leaves the operator unable to safely retry.
-fn require_confirmed_mutation<T>(
-    outcome: common::mutation::MutationOutcome<T>,
-    operation: &str,
-) -> anyhow::Result<T> {
-    match outcome {
-        common::mutation::MutationOutcome::Confirmed(value) => Ok(value),
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
-            "{operation} commit acknowledgement was indeterminate"
-        )),
     }
 }
 
@@ -1375,13 +1246,12 @@ fn format_entries(entries: &[(String, String)]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::{assert_command_source, sqlite_storage_args};
     use super::*;
     use common::smtp_tls_mode::SmtpTlsMode;
     use common::test_support::{parse_email, parse_invite_ttl_hours};
     use rstest::*;
     use rstest_reuse::*;
-    #[cfg(unix)]
-    use std::os::unix::ffi::OsStringExt as _;
     use storage::{
         DbConnectOptions, MediaTemporaryDirectoryError,
         test_support::{
@@ -1403,106 +1273,6 @@ mod tests {
                 e2e_seed_process: Ok(None),
             },
         )
-    }
-
-    #[test]
-    fn subprocess_classifies_command_configuration_inputs() {
-        const SCENARIO: &str = "JAUNDER_TEST_COMMAND_CONFIG_SCENARIO";
-        if let Some(scenario) = std::env::var_os(SCENARIO) {
-            let database: DbConnectOptions = "postgres://app@localhost/jaunder"
-                .parse()
-                .expect("PostgreSQL URL");
-            let result = storage_runtime_config(&database);
-            match scenario.to_string_lossy().as_ref() {
-                "file" | "password" | "invalid-threshold" => {
-                    result.expect("valid command configuration");
-                }
-                "invalid-file-variable" => {
-                    assert!(matches!(
-                        result,
-                        Err(storage::PostgresPasswordError::FileVariable(_))
-                    ));
-                }
-                _ => unreachable!("parent supplies a closed configuration scenario set"),
-            }
-            return;
-        }
-
-        let dir = TempDir::new().expect("password directory");
-        let password_file = dir.path().join("password");
-        std::fs::write(&password_file, "from-file\n").expect("password fixture");
-        for scenario in [
-            "file",
-            "password",
-            "invalid-threshold",
-            "invalid-file-variable",
-        ] {
-            let mut command =
-                std::process::Command::new(std::env::current_exe().expect("test executable"));
-            command.args([
-                "--exact",
-                "commands::tests::subprocess_classifies_command_configuration_inputs",
-                "--nocapture",
-            ]);
-            command.env(SCENARIO, scenario);
-            for name in [
-                "JAUNDER_SQL_SLOW_MS",
-                "JAUNDER_DB_PASSWORD_FILE",
-                "JAUNDER_DB_PASSWORD",
-            ] {
-                command.env_remove(name);
-            }
-            match scenario {
-                "file" => {
-                    command.env("JAUNDER_DB_PASSWORD_FILE", &password_file);
-                }
-                "password" => {
-                    command.env("JAUNDER_DB_PASSWORD", "from-variable");
-                }
-                "invalid-threshold" => {
-                    command.env(
-                        "JAUNDER_SQL_SLOW_MS",
-                        std::ffi::OsString::from_vec(vec![0xff]),
-                    );
-                }
-                "invalid-file-variable" => {
-                    command.env(
-                        "JAUNDER_DB_PASSWORD_FILE",
-                        std::ffi::OsString::from_vec(vec![0xff]),
-                    );
-                }
-                _ => unreachable!("closed parent scenario set"),
-            }
-            assert!(
-                command
-                    .status()
-                    .expect("spawn configuration child")
-                    .success(),
-                "configuration child scenario {scenario} must succeed"
-            );
-        }
-    }
-
-    #[test]
-    fn sqlite_runtime_config_ignores_broken_postgres_credential_inputs() {
-        let database: DbConnectOptions = "sqlite:/tmp/jaunder.db".parse().expect("SQLite URL");
-        let runtime = storage_runtime_config_from_raw(
-            &database,
-            Ok(None),
-            Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
-                "invalid-password-file-variable",
-            ))),
-            Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
-                "invalid-password-variable",
-            ))),
-        )
-        .expect("SQLite does not resolve PostgreSQL credentials");
-
-        assert_eq!(
-            runtime.sql_slow_query_threshold(),
-            Duration::from_secs(5),
-            "SQLite retains the shared threshold default"
-        );
     }
 
     #[test]
@@ -1539,13 +1309,6 @@ mod tests {
             },
             guard,
         )
-    }
-
-    fn sqlite_storage_args(temp: &TempDir) -> StorageArgs {
-        StorageArgs {
-            storage_path: temp.path().to_path_buf(),
-            db: crate::test_support::sqlite_db_options(temp.path()),
-        }
     }
 
     async fn background_worker_setup(
@@ -1612,16 +1375,6 @@ mod tests {
             .build_rustls()
             .err()
             .expect("rustls rejects TLS 1.0")
-    }
-
-    fn assert_command_source<T: std::error::Error + 'static>(error: &anyhow::Error, context: &str) {
-        assert_eq!(error.to_string(), context);
-        assert!(
-            error
-                .chain()
-                .any(|source| source.downcast_ref::<T>().is_some()),
-            "typed source must remain downcastable: {error:#}"
-        );
     }
 
     struct FailingMailSender;
@@ -1951,37 +1704,6 @@ mod tests {
     }
 
     #[test]
-    fn describe_bootstrap_error_role_exists_message() {
-        let msg =
-            describe_bootstrap_error(storage::PgBootstrapError::RoleExists("alice".to_owned()))
-                .to_string();
-        assert!(msg.contains("application role 'alice' already exists"));
-        assert!(msg.contains("refusing to modify existing role state"));
-    }
-
-    #[test]
-    fn describe_bootstrap_error_database_exists_message() {
-        let msg =
-            describe_bootstrap_error(storage::PgBootstrapError::DatabaseExists("blog".to_owned()))
-                .to_string();
-        assert!(msg.contains("database 'blog' already exists"));
-        assert!(msg.contains("refusing to modify existing database state"));
-    }
-
-    #[test]
-    fn describe_bootstrap_error_sqlx_passes_through_source_message() {
-        let expected = sqlx::Error::PoolClosed.to_string();
-        let err =
-            describe_bootstrap_error(storage::PgBootstrapError::Sqlx(sqlx::Error::PoolClosed));
-        assert_eq!(err.to_string(), expected);
-    }
-
-    // `PgBootstrapArgs` holds a `PgConnectOptions` and an `AppTarget`, so a
-    // non-PostgreSQL URL or one naming no database is rejected at argument parsing;
-    // those rejections are pinned by `app_target_rejects_*` and
-    // `create_pg_db_rejects_a_non_postgres_bootstrap_url` in `cli.rs`.
-
-    #[test]
     fn default_backup_path_is_under_storage_backups() {
         let storage = StorageArgs {
             storage_path: PathBuf::from("/tmp/jaunder"),
@@ -2035,31 +1757,6 @@ mod tests {
             "site.base_url=https://example.com/\nsite.title=My Site\n"
         );
         assert_eq!(format_entries(&[]), "");
-    }
-
-    #[test]
-    fn confirmed_mutation_returns_its_value() {
-        let value = require_confirmed_mutation(
-            common::mutation::MutationOutcome::Confirmed(42_u8),
-            "unused operation",
-        )
-        .expect("confirmed mutation");
-
-        assert_eq!(value, 42);
-    }
-
-    #[test]
-    fn indeterminate_mutation_reports_the_operation() {
-        let error = require_confirmed_mutation(
-            common::mutation::MutationOutcome::CommitIndeterminate(()),
-            "user creation",
-        )
-        .expect_err("indeterminate mutation");
-
-        assert_eq!(
-            error.to_string(),
-            "user creation commit acknowledgement was indeterminate"
-        );
     }
 
     /// A7: a known key with an invalid value is rejected before the write.
