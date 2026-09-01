@@ -1,7 +1,7 @@
 # Web Component Style Guide
 
-How page components (each vertical's wasm-only `component.rs` — see §8) and the
-shared leaf widgets (top-level modules like `web/src/topbar/`) should be
+How page components (each vertical's wasm-only `component` boundary — see §8)
+and the shared leaf widgets (top-level modules like `web/src/topbar/`) should be
 structured so that pages look and feel the same.
 
 This guide is **descriptive of the design system we already have**
@@ -216,7 +216,7 @@ web/src/feature/
 ├── mod.rs        # Module wiring only: mod declarations + re-exports
 ├── api.rs        # Shared wire DTOs + #[server] functions with real bodies
 ├── server.rs     # Host-only helpers and tests (omit if not needed)
-└── component.rs  # #[component] UI + browser-bound code (omit if no UI)
+└── component.rs  # #[component] UI + browser-bound code, or its wiring facade
 ```
 
 A **server-less** vertical — one with no `#[server]` fns or wire types of its
@@ -289,6 +289,13 @@ directly, and it never host-compiles. Keep pure, host-testable logic
 host-tested files — extraction precedes gating. The only `target_arch` cfgs in
 `web/src` are these wiring lines — the `mod component;` declarations and their
 paired `pub use` re-exports.
+
+When a vertical's wasm-only UI grows large, its `component.rs` may be a wiring
+facade containing module documentation, private leaf declarations, and explicit
+re-exports over cohesive private leaves under `component/`. Those leaves inherit
+the enclosing wasm-only boundary; they carry no cfg gates of their own. This
+does not move pure, host-testable logic behind the facade: it remains in
+ungated, host-tested files as above.
 
 ## 9. Resource → signal patterns (CSR)
 

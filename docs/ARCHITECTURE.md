@@ -1088,7 +1088,7 @@ projector-painted `#app` container, and mounts over (`csr/src/lib.rs:29-47`);
 client-side navigation falls back to the `#[server]` fns, still the data API on
 `/api`. Reactive components render their anonymous DOM via `inner_html` of the
 _same_ pure fns the projector uses (`web/src/home/component.rs:70`,
-`sidebar/component.rs:60-70`, `posts/component.rs:185-208`), so the CSR mount
+`sidebar/component.rs:60-70`, `posts/component/display.rs`), so the CSR mount
 causes no reflow: flash-free by coincidence, not markup twins.
 
 Markup is built with **maud's `html!`**
