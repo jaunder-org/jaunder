@@ -1,6 +1,6 @@
-# ADR-DRAFT: Bound retention for transient data
+# ADR-0167: Bound retention for transient data
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-31
 - Issue: [#393](https://github.com/jaunder-org/jaunder/issues/393)
 
@@ -13,7 +13,7 @@ retries, credential use, or operator diagnosis. A retention policy must state
 both the semantic cutoff that makes data unusable and the physical cleanup that
 reclaims it.
 
-[ADR-0136](../0136-local-post-lifecycle.md) deliberately retained local Posts,
+[ADR-0136](0136-local-post-lifecycle.md) deliberately retained local Posts,
 revisions, tombstones, idempotency records, and child relationships indefinitely
 until a future decision resolved a combined local-content purge policy. The
 idempotency mapping is not durable local content, however: it is retry
@@ -24,17 +24,16 @@ purging Posts, revisions, tombstones, child relationships, or referenced media.
 Credential and feed-event rows also need distinct terminal-state handling.
 Cleanup must be bounded, testable, observable, and safe to run repeatedly on
 both supported databases. The existing OpenTelemetry discipline
-([ADR-0011](../0011-unified-observability.md)) prohibits PII and secrets in
+([ADR-0011](0011-unified-observability.md)) prohibits PII and secrets in
 telemetry.
 
-[ADR-0035](../0035-elisp-live-integration-harness.md) introduced the
-runtime-info JSON file as both an ephemeral-port discovery handshake and a
-startup mutex. [ADR-0144](../0144-process-configuration-cli-contract.md) later
-made its path configurable. Runtime identity and discovery instead need one
-storage-scoped path: storage already isolates an instance, and no repository
-consumer needs a second path. Clearing `media/tmp` therefore requires
-storage-directory ownership that exists before cleanup and survives until
-shutdown.
+[ADR-0035](0035-elisp-live-integration-harness.md) introduced the runtime-info
+JSON file as both an ephemeral-port discovery handshake and a startup mutex.
+[ADR-0144](0144-process-configuration-cli-contract.md) later made its path
+configurable. Runtime identity and discovery instead need one storage-scoped
+path: storage already isolates an instance, and no repository consumer needs a
+second path. Clearing `media/tmp` therefore requires storage-directory ownership
+that exists before cleanup and survives until shutdown.
 
 ## Decision
 
