@@ -1,6 +1,6 @@
-# ADR-DRAFT: Account Mutations Compose Storage Primitives
+# ADR-0166: Account Mutations Compose Storage Primitives
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-31
 - Issue: [#238](https://github.com/jaunder-org/jaunder/issues/238)
 

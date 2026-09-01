@@ -76,7 +76,7 @@ behavior remains unchanged.
   ADR-0016. The generic builder does not implement the separately decided
   on-demand backend handle factory.
 - The structural change is recorded by
-  `docs/adr/drafts/account-mutations-compose-storage-primitives.md` and
+  `docs/adr/0166-account-mutations-compose-storage-primitives.md` and
   projected into `docs/ARCHITECTURE.md`. `CONTEXT.md` is unchanged because no
   domain term changes.
 
