@@ -251,10 +251,7 @@ fn create_published_at(
     request_clock: UtcInstant,
 ) -> Option<UtcInstant> {
     match lifecycle {
-        Presence::Present(PublicationState::Draft) => None,
-        Presence::Present(PublicationState::Scheduled(at) | PublicationState::Published(at)) => {
-            Some(*at)
-        }
+        Presence::Present(state) => state.published_at(),
         Presence::Absent if is_draft => None,
         Presence::Absent => Some(request_clock),
     }
@@ -265,10 +262,7 @@ fn update_publish(
     is_draft: bool,
 ) -> storage::PublishUpdate {
     match lifecycle {
-        Presence::Present(PublicationState::Draft) => storage::PublishUpdate::Unpublish,
-        Presence::Present(PublicationState::Scheduled(at) | PublicationState::Published(at)) => {
-            storage::PublishUpdate::Publish { at: Some(*at) }
-        }
+        Presence::Present(state) => (*state).into(),
         Presence::Absent if is_draft => storage::PublishUpdate::Unpublish,
         Presence::Absent => storage::PublishUpdate::Publish { at: None },
     }

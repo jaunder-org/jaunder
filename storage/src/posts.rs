@@ -16,6 +16,7 @@ use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
 use common::media::{self, MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind};
+use common::org::PublicationState;
 use common::pagination::{PageSize, RowLimit};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
@@ -445,6 +446,17 @@ pub enum PublishUpdate {
     /// past = backdated-live). `at = None` keeps an existing timestamp or
     /// stamps `now` for a previously-unpublished Post.
     Publish { at: Option<UtcInstant> },
+}
+
+impl From<PublicationState> for PublishUpdate {
+    fn from(state: PublicationState) -> Self {
+        match state {
+            PublicationState::Draft => Self::Unpublish,
+            PublicationState::Scheduled(at) | PublicationState::Published(at) => {
+                Self::Publish { at: Some(at) }
+            }
+        }
+    }
 }
 
 /// Input for updating an existing post.
@@ -4321,6 +4333,28 @@ mod tests {
     use sqlx::Row;
     use std::{sync::Arc, time::Duration};
     use tokio::sync::Barrier;
+
+    #[test]
+    fn publication_state_projects_publish_update() {
+        use common::org::PublicationState;
+
+        let at = parse_utc_instant("2026-11-01T05:30:00Z");
+
+        for (state, expected) in [
+            (PublicationState::Draft, PublishUpdate::Unpublish),
+            (
+                PublicationState::Scheduled(at),
+                PublishUpdate::Publish { at: Some(at) },
+            ),
+            (
+                PublicationState::Published(at),
+                PublishUpdate::Publish { at: Some(at) },
+            ),
+        ] {
+            assert_eq!(PublishUpdate::from(state), expected);
+        }
+    }
+
     async fn update_post_scoped(
         state: &Arc<crate::AppState>,
         post_id: PostId,
