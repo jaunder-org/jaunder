@@ -635,6 +635,43 @@ pub(crate) fn with_leading_param(base: &syn::Generics, extra: syn::GenericParam)
     merged
 }
 
+/// Emits the validating string serde bridge shared by string newtypes and text enums.
+///
+/// Serialization borrows the caller's string expression. Deserialization deliberately
+/// owns a `String` before routing through `FromStr`, preserving bare `serde_qs` form
+/// decoding and the domain validation chokepoint (ADR-0063/0091).
+pub(crate) fn fallible_string_serde_impls(
+    name: &syn::Ident,
+    generics: &syn::Generics,
+    serialize_expr: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let de = with_leading_param(generics, syn::parse_quote!('de));
+    let (de_impl_generics, _, _) = de.split_for_impl();
+    quote::quote! {
+        #[automatically_derived]
+        impl #impl_generics ::serde::Serialize for #name #ty_generics #where_clause {
+            fn serialize<S: ::serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> ::core::result::Result<S::Ok, S::Error> {
+                serializer.serialize_str(#serialize_expr)
+            }
+        }
+
+        #[automatically_derived]
+        impl #de_impl_generics ::serde::Deserialize<'de> for #name #ty_generics #where_clause {
+            fn deserialize<D: ::serde::Deserializer<'de>>(
+                deserializer: D,
+            ) -> ::core::result::Result<Self, D::Error> {
+                let s = <::std::string::String as ::serde::Deserialize>::deserialize(deserializer)?;
+                <#name #ty_generics as ::core::str::FromStr>::from_str(&s)
+                    .map_err(::serde::de::Error::custom)
+            }
+        }
+    }
+}
+
 /// Validates that `input` is a **non-generic** enum whose variants are all unit variants —
 /// the shape `#[text_enum]` requires, since every variant must map to exactly one token.
 /// Mirrors [`require_newtype_shape`], including its rejection of generics: the emitted
@@ -940,6 +977,28 @@ mod tests {
             out.contains("<X<T>as::core::str::FromStr>::from_str"),
             "a qualified `Self` must carry its type arguments: {out}"
         );
+    }
+    #[test]
+    fn str_newtype_serde_impl_template_preserves_generics_and_tokens() {
+        let input: DeriveInput = parse_quote! {
+            struct X<T: Role>(String, PhantomData<fn() -> T>) where T: Clone;
+        };
+        let out = sqlx_bridge::tests::norm(&str_newtype::expand(&input));
+        assert!(out.contains(
+            "#[automatically_derived]impl<T:Role>::serde::SerializeforX<T>whereT:Clone{"
+        ));
+        assert!(out.contains(
+            "#[automatically_derived]impl<'de,T:Role>::serde::Deserialize<'de>forX<T>whereT:Clone{"
+        ));
+        assert!(out.contains("serializer.serialize_str(&self.0)"));
+        assert!(
+            out.contains(
+                "<::std::string::Stringas::serde::Deserialize>::deserialize(deserializer)?"
+            )
+        );
+        assert!(out.contains(
+            "<X<T>as::core::str::FromStr>::from_str(&s).map_err(::serde::de::Error::custom)"
+        ));
     }
 
     #[test]

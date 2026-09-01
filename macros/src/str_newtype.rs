@@ -184,38 +184,10 @@ fn default_trailer(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::
     }
 }
 
-/// The serde bridge as direct impls (not `#[serde(try_from/into)]`): serialize borrows
-/// instead of cloning into a String, and deserialize routes through `FromStr` so invalid
-/// input is rejected on the wire. Shared by the default trailer and the `secret, serde`
-/// variant.
+/// The validating string serde bridge shared by the default trailer and the
+/// `secret, serde` variant.
 fn serde_impls(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::TokenStream {
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-    // `Deserialize` introduces `'de`, so its header is the user's generics with that
-    // lifetime merged in; `ty_generics`/`where_clause` still come from the original.
-    let de = crate::with_leading_param(generics, syn::parse_quote!('de));
-    let (de_impl_generics, _, _) = de.split_for_impl();
-    quote! {
-        #[automatically_derived]
-        impl #impl_generics ::serde::Serialize for #name #ty_generics #where_clause {
-            fn serialize<S: ::serde::Serializer>(
-                &self,
-                serializer: S,
-            ) -> ::core::result::Result<S::Ok, S::Error> {
-                serializer.serialize_str(&self.0)
-            }
-        }
-
-        #[automatically_derived]
-        impl #de_impl_generics ::serde::Deserialize<'de> for #name #ty_generics #where_clause {
-            fn deserialize<D: ::serde::Deserializer<'de>>(
-                deserializer: D,
-            ) -> ::core::result::Result<Self, D::Error> {
-                let s = <::std::string::String as ::serde::Deserialize>::deserialize(deserializer)?;
-                <#name #ty_generics as ::core::str::FromStr>::from_str(&s)
-                    .map_err(::serde::de::Error::custom)
-            }
-        }
-    }
+    super::fallible_string_serde_impls(name, generics, &quote! { &self.0 })
 }
 
 /// The inner type every string newtype's sqlx bridge delegates to.

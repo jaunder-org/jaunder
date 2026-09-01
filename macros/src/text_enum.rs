@@ -169,35 +169,14 @@ fn error_type(error: &syn::Ident, message: &syn::LitStr, enum_name: &syn::Ident)
     crate::public_unit_error_type(error, &doc, &message)
 }
 
-/// The serde bridge as direct impls: serialize the `&'static str` token (no allocation,
-/// no clone), and deserialize an owned `String` routed through `FromStr`.
-///
-/// This is the same owned-`String`-through-`FromStr` path `#[serde(try_from = "String")]`
-/// took, which is what keeps these types decodable as bare `serde_qs` form values.
+/// The validating string serde bridge, with text enums supplying their allocation-free
+/// static token as the serialized value.
 fn serde_impls(name: &syn::Ident) -> TokenStream {
-    quote! {
-        #[automatically_derived]
-        impl ::serde::Serialize for #name {
-            fn serialize<S: ::serde::Serializer>(
-                &self,
-                serializer: S,
-            ) -> ::core::result::Result<S::Ok, S::Error> {
-                serializer.serialize_str(
-                    <&#name as ::core::convert::Into<&'static str>>::into(self),
-                )
-            }
-        }
-
-        #[automatically_derived]
-        impl<'de> ::serde::Deserialize<'de> for #name {
-            fn deserialize<D: ::serde::Deserializer<'de>>(
-                deserializer: D,
-            ) -> ::core::result::Result<Self, D::Error> {
-                let s = <::std::string::String as ::serde::Deserialize>::deserialize(deserializer)?;
-                <#name as ::core::str::FromStr>::from_str(&s).map_err(::serde::de::Error::custom)
-            }
-        }
-    }
+    super::fallible_string_serde_impls(
+        name,
+        &syn::Generics::default(),
+        &quote! { <&#name as ::core::convert::Into<&'static str>>::into(self) },
+    )
 }
 
 /// The sqlx bridge for a stored token.
@@ -557,29 +536,26 @@ mod tests {
     }
 
     #[test]
-    fn serialize_writes_the_static_token_without_allocating() {
+    fn serde_impl_template_preserves_tokens_and_validation() {
         let out = norm(&expand_str(
             r#"error = InvalidX, message = "b""#,
             "pub enum X { A }",
         ));
-        assert!(out.contains("serializer.serialize_str"));
-        assert!(out.contains("<&Xas::core::convert::Into<&'staticstr>>::into(self)"));
-        assert!(!out.contains("to_owned"));
-        assert!(!out.contains("clone()"));
-    }
-
-    #[test]
-    fn deserialize_routes_an_owned_string_through_from_str() {
-        let out = norm(&expand_str(
-            r#"error = InvalidX, message = "b""#,
-            "pub enum X { A }",
+        assert!(out.contains("#[automatically_derived]impl::serde::SerializeforX{"));
+        assert!(out.contains("#[automatically_derived]impl<'de>::serde::Deserialize<'de>forX{"));
+        assert!(out.contains(
+            "serializer.serialize_str(<&Xas::core::convert::Into<&'staticstr>>::into(self))"
         ));
         assert!(
             out.contains(
                 "<::std::string::Stringas::serde::Deserialize>::deserialize(deserializer)?"
             )
         );
-        assert!(out.contains("::from_str(&s).map_err(::serde::de::Error::custom)"));
+        assert!(out.contains(
+            "<Xas::core::str::FromStr>::from_str(&s).map_err(::serde::de::Error::custom)"
+        ));
+        assert!(!out.contains("to_owned"));
+        assert!(!out.contains("clone()"));
     }
 
     #[test]
