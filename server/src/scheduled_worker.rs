@@ -136,13 +136,10 @@ impl ScheduledWorkerGuard {
     pub(crate) async fn start(mut scheduler: JobScheduler, tracker: WorkTracker) -> Result<Self> {
         if let Err(start_error) = scheduler.start().await {
             tracker.stop();
-            let shutdown_result = scheduler.shutdown().await;
+            let shutdown_context =
+                format!("cannot stop scheduled worker after startup failed: {start_error}");
+            scheduler.shutdown().await.context(shutdown_context)?;
             tracker.wait().await;
-            if let Err(shutdown_error) = shutdown_result {
-                return Err(shutdown_error).context(format!(
-                    "cannot stop scheduled worker after startup failed: {start_error}"
-                ));
-            }
             return Err(start_error).context("cannot start scheduled worker");
         }
         Ok(Self { scheduler, tracker })
@@ -179,6 +176,10 @@ mod tests {
     #[tokio::test]
     async fn stop_refuses_new_work_and_waits_for_active_work() {
         let tracker = WorkTracker::default();
+        let scheduler = JobScheduler::new().await.expect("scheduler");
+        let mut guard = ScheduledWorkerGuard::start(scheduler, tracker.clone())
+            .await
+            .expect("start worker");
         let started = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
         let active_tracker = tracker.clone();
@@ -194,16 +195,13 @@ mod tests {
         });
         started.notified().await;
 
-        tracker.stop();
-        let rejected = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let rejected_work = Arc::clone(&rejected);
+        guard.stop();
         tracker
             .clone()
             .run(async move {
-                rejected_work.store(true, std::sync::atomic::Ordering::SeqCst);
+                unreachable!("stopped tracker must reject new work");
             })
             .await;
-        assert!(!rejected.load(std::sync::atomic::Ordering::SeqCst));
 
         let waiting_tracker = tracker.clone();
         let mut waiting = tokio::spawn(async move { waiting_tracker.wait().await });
@@ -215,6 +213,23 @@ mod tests {
         release.notify_one();
         active.await.unwrap();
         waiting.await.unwrap();
+        guard.shutdown().await.expect("shutdown worker");
+    }
+
+    #[tokio::test]
+    async fn start_stops_a_scheduler_that_is_already_running() {
+        let scheduler = JobScheduler::new().await.expect("scheduler");
+        scheduler.start().await.expect("initial start");
+
+        let error = ScheduledWorkerGuard::start(scheduler, WorkTracker::default())
+            .await
+            .err()
+            .expect("an already-running scheduler must reject another start");
+
+        assert!(
+            error.to_string().contains("cannot start scheduled worker"),
+            "startup failure must retain lifecycle context: {error:#}"
+        );
     }
 
     #[tokio::test]

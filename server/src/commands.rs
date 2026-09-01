@@ -896,7 +896,8 @@ impl BackgroundWorkers {
                 if let Some(scheduler) = backup.as_mut() {
                     stop_worker_after_start_failure(scheduler, "server.backup.start_rollback")
                         .await;
-                }
+                    // The await body is covered; LLVM assigns this closing edge a zero count.
+                } // cov:ignore
                 stop_worker_after_start_failure(
                     &mut maintenance,
                     "server.maintenance.start_rollback",
@@ -978,12 +979,15 @@ async fn prepare_saturation_metrics(
 async fn stop_worker_after_start_failure(worker: &mut ScheduledWorkerGuard, context: &'static str) {
     worker.stop();
     if let Err(error) = worker.shutdown().await {
+        // cov:ignore-start -- tokio-cron-scheduler 0.13 shutdown always returns Ok;
+        // retain reporting so a future fallible implementation does not hide cleanup failure.
         error::report_swallowed(
             error::ErrorKind::Internal,
             error::ErrorClass::Transient,
             context,
             error::SwallowedSource::Error(error.root_cause()),
         );
+        // cov:ignore-stop
     }
 }
 
@@ -1537,6 +1541,51 @@ mod tests {
             storage_path: temp.path().to_path_buf(),
             db: crate::test_support::sqlite_db_options(temp.path()),
         }
+    }
+
+    async fn background_worker_setup(
+        storage: &StorageArgs,
+        backup_site_config: Arc<dyn SiteConfigStorage>,
+        feed_interval: Duration,
+    ) -> BackgroundWorkerSetup {
+        let state = storage::open_existing_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open test database");
+        BackgroundWorkerSetup {
+            maintenance: DatabaseMaintenance::new(
+                state.posts.clone(),
+                state.invites.clone(),
+                state.email_verifications.clone(),
+                state.password_resets.clone(),
+                state.feed_events.clone(),
+            ),
+            backup_site_config,
+            database: storage.db.clone(),
+            runtime: StorageRuntimeConfig::default(),
+            storage_path: storage.storage_path.clone(),
+            feed_worker: FeedWorker::new(
+                state.site_config.clone(),
+                state.posts.clone(),
+                state.feed_cache.clone(),
+                Arc::new(state.write_scope.clone()),
+                state.feed_events.clone(),
+                crate::websub::default_client(None),
+            ),
+            feed_interval,
+        }
+    }
+
+    async fn shutdown_prepared_server(mut prepared: PreparedServer) {
+        if let Some(metrics) = prepared.saturation_metrics.take() {
+            metrics
+                .shutdown()
+                .await
+                .expect("saturation sampler shutdown");
+        }
+        let (feed, maintenance, backup) = prepared.workers.shutdown().await;
+        feed.expect("feed worker shutdown");
+        maintenance.expect("maintenance worker shutdown");
+        backup.expect("backup worker shutdown");
     }
 
     fn smtp_config() -> SmtpConfig {
@@ -2263,6 +2312,119 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn background_workers_roll_back_maintenance_when_backup_config_load_fails() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let mut site_config = storage::MockSiteConfigStorage::new();
+        site_config.expect_get_backup_config().return_once(|| {
+            Err(sqlx::Error::Io(io::Error::other(
+                "injected backup configuration read failure",
+            )))
+        });
+
+        let error = BackgroundWorkers::start(
+            background_worker_setup(&storage, Arc::new(site_config), Duration::from_secs(1)).await,
+        )
+        .await
+        .err()
+        .expect("a backup configuration read failure must stop worker startup");
+
+        assert!(
+            error
+                .to_string()
+                .contains("injected backup configuration read failure"),
+            "startup error must retain the backup configuration failure: {error:#}"
+        );
+        assert!(
+            error
+                .chain()
+                .any(|source| source.downcast_ref::<sqlx::Error>().is_some()),
+            "the backup configuration source remains downcastable: {error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_workers_roll_back_backup_and_maintenance_when_feed_start_fails() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        let state = storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let destination = temp.path().join("backups");
+        let destination_for_config = destination.clone();
+        let site_config = Arc::clone(&state.site_config);
+        confirmed(
+            state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        site_config
+                            .set(
+                                transaction,
+                                SiteConfigKey::BackupDestinationPath,
+                                destination_for_config.to_str().expect("utf-8 path"),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .expect("configure backup destination"),
+        );
+
+        let error = BackgroundWorkers::start(
+            background_worker_setup(&storage, state.site_config.clone(), Duration::ZERO).await,
+        )
+        .await
+        .err()
+        .expect("a zero feed interval must stop worker startup");
+
+        assert_eq!(error.to_string(), "feed worker interval must be non-zero");
+    }
+
+    #[tokio::test]
+    async fn background_workers_shutdown_all_configured_workers() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        let state = storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let destination = temp.path().join("backups");
+        let destination_for_config = destination.clone();
+        let site_config = Arc::clone(&state.site_config);
+        confirmed(
+            state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        site_config
+                            .set(
+                                transaction,
+                                SiteConfigKey::BackupDestinationPath,
+                                destination_for_config.to_str().expect("utf-8 path"),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .expect("configure backup destination"),
+        );
+        let telemetry = test_telemetry(None);
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let prepared = prepare_server(&storage, bind, false, &telemetry, None)
+            .await
+            .expect("prepare server");
+
+        assert!(
+            prepared.workers.backup.is_some(),
+            "configured backup must start"
+        );
+        shutdown_prepared_server(prepared).await;
+    }
+
+    #[tokio::test]
     async fn prepare_server_auto_initializes_in_dev_mode() {
         // A fresh storage dir with no database: `open_existing_database` fails,
         // and because `prod == false`, `prepare_server` takes the dev auto-init
@@ -2283,48 +2445,43 @@ mod tests {
             .expect("dev-mode prepare_server must auto-initialize");
 
         assert!(db_path.exists(), "auto-init must have created the database");
-        // Drop the prepared server (and its background workers) without serving.
-        drop(prepared);
+        shutdown_prepared_server(prepared).await;
     }
 
-    #[test]
-    fn prepare_server_registers_saturation_sampler_when_otel_endpoint_is_set() {
-        let runtime = tokio::runtime::Runtime::new().expect("runtime");
-        runtime.block_on(async {
-            let temp = TempDir::new().expect("temp dir");
-            let storage = sqlite_storage_args(&temp);
-            storage::open_database(&storage.db, &StorageRuntimeConfig::default())
-                .await
-                .expect("open db");
-            let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+    #[tokio::test]
+    async fn prepare_server_registers_saturation_sampler_when_otel_endpoint_is_set() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
-            let telemetry = test_telemetry(Some("http://127.0.0.1:4318"));
-            let prepared = prepare_server(&storage, bind, false, &telemetry, None)
-                .await
-                .expect("prepare server");
+        let telemetry = test_telemetry(Some("http://127.0.0.1:4318"));
+        let prepared = prepare_server(&storage, bind, false, &telemetry, None)
+            .await
+            .expect("prepare server");
 
-            assert!(prepared.saturation_metrics.is_some());
-        });
+        assert!(prepared.saturation_metrics.is_some());
+        shutdown_prepared_server(prepared).await;
     }
 
-    #[test]
-    fn prepare_server_does_not_start_saturation_sampler_without_otel_endpoint() {
-        let runtime = tokio::runtime::Runtime::new().expect("runtime");
-        runtime.block_on(async {
-            let temp = TempDir::new().expect("temp dir");
-            let storage = sqlite_storage_args(&temp);
-            storage::open_database(&storage.db, &StorageRuntimeConfig::default())
-                .await
-                .expect("open db");
-            let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+    #[tokio::test]
+    async fn prepare_server_does_not_start_saturation_sampler_without_otel_endpoint() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
+        let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
-            let telemetry = test_telemetry(None);
-            let prepared = prepare_server(&storage, bind, false, &telemetry, None)
-                .await
-                .expect("prepare server");
+        let telemetry = test_telemetry(None);
+        let prepared = prepare_server(&storage, bind, false, &telemetry, None)
+            .await
+            .expect("prepare server");
 
-            assert!(prepared.saturation_metrics.is_none());
-        });
+        assert!(prepared.saturation_metrics.is_none());
+        shutdown_prepared_server(prepared).await;
     }
 
     #[tokio::test]
@@ -2367,7 +2524,7 @@ mod tests {
         assert_eq!(runtime["pid"], std::process::id());
         assert!(runtime["start_time"].as_u64().is_some());
         assert_eq!(runtime["port"], addr.port());
-        drop(prepared);
+        shutdown_prepared_server(prepared).await;
         assert!(
             !runtime_path.exists(),
             "dropping the server removes its canonical runtime file"
@@ -2525,6 +2682,15 @@ mod tests {
             stale_upload.exists(),
             "a live-instance refusal must occur before temporary cleanup"
         );
+    }
+
+    #[test]
+    fn successful_worker_shutdown_preserves_serve_result() {
+        let mut primary = Ok(());
+
+        merge_worker_shutdown(&mut primary, Ok(()), "server.test.shutdown");
+
+        assert!(primary.is_ok());
     }
 
     #[test]
