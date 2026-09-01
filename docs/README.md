@@ -196,6 +196,7 @@ convention). See the Status column below for each ADR's current status.
 | [0168](adr/0168-isolated-e2e-browser-diagnostic-payloads.md)        | Allow synthetic browser diagnostic payloads in isolated E2E telemetry                                        | accepted   |
 | [0169](adr/0169-typed-storage-bind-admission.md)                    | Typed storage bind admission                                                                                 | accepted   |
 | [0170](adr/0170-typed-test-site-config-baseline.md)                 | Use a typed site-config baseline for dual-backend tests                                                      | accepted   |
+| [0171](adr/0171-explicit-post-land-cleanup-command.md)              | Explicit post-land cleanup command                                                                           | accepted   |
 
 <!-- adr-table:end -->
 

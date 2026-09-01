@@ -40,7 +40,7 @@ identity, and partial-failure seams before those mutations are wired.
   complete cleanup exits 0; refused or failed cleanup exits 1; inability to
   construct the command environment before a result exists remains exit 2.
 - The new ADR is a tracked proposed draft at
-  `docs/adr/drafts/explicit-post-land-cleanup-command.md`; architecture cites
+  `docs/adr/0171-explicit-post-land-cleanup-command.md`; architecture cites
   that path for promoter rewriting. `CONTEXT.md` remains unchanged.
 
 ## Implementation slices
@@ -70,7 +70,7 @@ smallest necessary public helpers in `xtask/src/git.rs`, plus colocated tests.
 
 ### 2. Decision and workflow projection
 
-Own `docs/adr/drafts/explicit-post-land-cleanup-command.md`,
+Own `docs/adr/0171-explicit-post-land-cleanup-command.md`,
 `docs/ARCHITECTURE.md`, and `CONTRIBUTING.md`.
 
 - Create the proposed numberless ADR from the repository template. Record the

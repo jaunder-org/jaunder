@@ -1,6 +1,6 @@
-# ADR-DRAFT: Explicit post-land cleanup command
+# ADR-0171: Explicit post-land cleanup command
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-01
 - Issue: [#1155](https://github.com/jaunder-org/jaunder/issues/1155)
 

@@ -63,7 +63,7 @@ automatically.
   boundary; cleanup acquires no `PrArmer` and does not weaken ADR-0087's
   observer/approval split.
 - A new tracked ADR draft,
-  `docs/adr/drafts/explicit-post-land-cleanup-command.md`, records the third,
+  `docs/adr/0171-explicit-post-land-cleanup-command.md`, records the third,
   local-only PR command and its capability boundary. `docs/ARCHITECTURE.md`
   projects that draft and `CONTRIBUTING.md` owns the repository-tracked shipping
   workflow. The installed `.agents`/`.claude` skill mirrors are intentionally
