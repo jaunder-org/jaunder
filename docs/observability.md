@@ -147,7 +147,7 @@ environment. That limited diagnostic exception is not production telemetry:
 production browser code captures or exports neither console nor page-error
 payloads, and real-user data and infrastructure credentials remain forbidden.
 See the
-[isolated E2E browser-diagnostic payload decision](adr/drafts/isolated-e2e-browser-diagnostic-payloads.md).
+[isolated E2E browser-diagnostic payload decision](adr/0168-isolated-e2e-browser-diagnostic-payloads.md).
 
 ### The per-test span tree
 

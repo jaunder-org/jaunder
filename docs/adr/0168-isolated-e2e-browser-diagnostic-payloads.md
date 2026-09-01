@@ -1,23 +1,23 @@
-# ADR-DRAFT: Allow synthetic browser diagnostic payloads in isolated E2E telemetry
+# ADR-0168: Allow synthetic browser diagnostic payloads in isolated E2E telemetry
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-01
 - Issue: [#839](https://github.com/jaunder-org/jaunder/issues/839)
 
 ## Context
 
-[ADR-0011](../0011-unified-observability.md) requires exported telemetry to be
-free of user PII and secrets. That rule is necessary for production traces,
-which may reach operator-controlled backends and describe real users.
+[ADR-0011](0011-unified-observability.md) requires exported telemetry to be free
+of user PII and secrets. That rule is necessary for production traces, which may
+reach operator-controlled backends and describe real users.
 
 The disposable Playwright E2E environment has a different diagnostic boundary.
 Its browser console warnings/errors and uncaught page errors can contain the
 synthetic users, tokens, passwords, and application payloads deliberately seeded
 for a test. Redacting those values would make an E2E failure harder to diagnose,
 while the Playwright harness already confines this corpus to its isolated test
-environment. [ADR-0096](../0096-e2e-trace-capture-vs-attribution.md) requires
-page capture to attach at the context-level seam and assigns records before the
-test phase to a non-test sink.
+environment. [ADR-0096](0096-e2e-trace-capture-vs-attribution.md) requires page
+capture to attach at the context-level seam and assigns records before the test
+phase to a non-test sink.
 
 ## Decision
 
