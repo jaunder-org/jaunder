@@ -50,6 +50,10 @@ impl StepResult {
             detail: None,
         }
     }
+
+    pub(crate) const fn is_blocking_failure(&self) -> bool {
+        !self.ok && !self.skipped
+    }
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
         self

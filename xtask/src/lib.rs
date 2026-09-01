@@ -508,6 +508,41 @@ impl Command {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionPolicy {
+    Exhaustive,
+    FailFast,
+}
+
+impl Command {
+    fn execution_policy(&self) -> ExecutionPolicy {
+        match self {
+            Self::Precommit | Self::Prepush => ExecutionPolicy::FailFast,
+            Self::Check { .. } | Self::Validate { .. } => ExecutionPolicy::Exhaustive,
+            _ => ExecutionPolicy::Exhaustive,
+        }
+    }
+}
+
+fn run_with_policy<T>(
+    policy: ExecutionPolicy,
+    result: &mut CommandResult,
+    runners: impl IntoIterator<Item = T>,
+    mut run: impl FnMut(T, &mut CommandResult),
+) {
+    for runner in runners {
+        let before = result.steps.len();
+        run(runner, result);
+        if matches!(policy, ExecutionPolicy::FailFast)
+            && result.steps[before..]
+                .iter()
+                .any(StepResult::is_blocking_failure)
+        {
+            break;
+        }
+    }
+}
+
 enum HostGateStep {
     StaticChecks(steps::static_checks::Phase),
     ResultOnly {
@@ -518,10 +553,23 @@ enum HostGateStep {
 }
 
 impl HostGateStep {
-    fn run(&self, sh: &xshell::Shell, mode: Mode, result: &mut CommandResult) {
+    fn run(
+        &self,
+        sh: &xshell::Shell,
+        mode: Mode,
+        policy: ExecutionPolicy,
+        result: &mut CommandResult,
+    ) {
         match self {
             Self::StaticChecks(phase) => {
-                steps::static_checks::run_phase(sh, mode, *phase, result);
+                steps::static_checks::run_phase_with(
+                    sh,
+                    mode,
+                    *phase,
+                    policy,
+                    result,
+                    steps::static_checks::run_spec,
+                );
             }
             Self::ResultOnly { name, run } => {
                 debug_assert!(!name.is_empty());
@@ -677,15 +725,51 @@ const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
 
 const HOST_TESTS_STEP: HostGateStep = HostGateStep::HostTests;
 
-fn run_host_gate_without_tests(sh: &xshell::Shell, mode: Mode, result: &mut CommandResult) {
-    for step in HOST_GATE_NON_TEST_STEPS {
-        step.run(sh, mode, result);
-    }
+fn run_host_steps_with<'a>(
+    sh: &xshell::Shell,
+    mode: Mode,
+    policy: ExecutionPolicy,
+    result: &mut CommandResult,
+    steps: impl IntoIterator<Item = &'a HostGateStep>,
+    mut run_step: impl FnMut(&HostGateStep, &xshell::Shell, Mode, ExecutionPolicy, &mut CommandResult),
+) {
+    run_with_policy(policy, result, steps, |step, result| {
+        run_step(step, sh, mode, policy, result);
+    });
 }
 
-fn run_host_gate(sh: &xshell::Shell, mode: Mode, result: &mut CommandResult) {
-    run_host_gate_without_tests(sh, mode, result);
-    HOST_TESTS_STEP.run(sh, mode, result);
+fn run_host_gate_without_tests(
+    sh: &xshell::Shell,
+    mode: Mode,
+    policy: ExecutionPolicy,
+    result: &mut CommandResult,
+) {
+    run_host_steps_with(
+        sh,
+        mode,
+        policy,
+        result,
+        HOST_GATE_NON_TEST_STEPS,
+        HostGateStep::run,
+    );
+}
+
+fn run_host_gate(
+    sh: &xshell::Shell,
+    mode: Mode,
+    policy: ExecutionPolicy,
+    result: &mut CommandResult,
+) {
+    run_host_steps_with(
+        sh,
+        mode,
+        policy,
+        result,
+        HOST_GATE_NON_TEST_STEPS
+            .iter()
+            .chain(std::iter::once(&HOST_TESTS_STEP)),
+        HostGateStep::run,
+    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -696,9 +780,9 @@ enum PrepushPhase {
 }
 
 impl PrepushPhase {
-    fn run(self, sh: &xshell::Shell, result: &mut CommandResult) {
+    fn run(self, sh: &xshell::Shell, policy: ExecutionPolicy, result: &mut CommandResult) {
         match self {
-            Self::HostGate => run_host_gate(sh, Mode::Check, result),
+            Self::HostGate => run_host_gate(sh, Mode::Check, policy, result),
             Self::LocalTests => steps::test_local::run(sh, result, &[]),
             Self::WorkspaceDoctests => steps::doctest_fences::run_workspace(sh, result),
         }
@@ -720,24 +804,25 @@ const PREPUSH_PHASES: &[PrepushPhase] = &[
     PrepushPhase::WorkspaceDoctests,
 ];
 
-fn run_local_push_gate(sh: &xshell::Shell, result: &mut CommandResult) {
-    for phase in PREPUSH_PHASES {
-        phase.run(sh, result);
-    }
+fn run_local_push_gate(sh: &xshell::Shell, policy: ExecutionPolicy, result: &mut CommandResult) {
+    run_with_policy(policy, result, PREPUSH_PHASES, |phase, result| {
+        phase.run(sh, policy, result);
+    });
 }
 
 fn run_prepush_with(
     sh: &xshell::Shell,
+    policy: ExecutionPolicy,
     result: &mut CommandResult,
     precheck: impl FnOnce() -> StepResult,
-    run_gate: impl FnOnce(&xshell::Shell, &mut CommandResult),
+    run_gate: impl FnOnce(&xshell::Shell, ExecutionPolicy, &mut CommandResult),
 ) {
     let precheck_start = std::time::Instant::now();
     let precheck = precheck().with_duration(precheck_start.elapsed());
-    let blocked = !precheck.ok && !precheck.skipped;
+    let blocked = precheck.is_blocking_failure();
     result.push(precheck);
     if !blocked {
-        run_gate(sh, result);
+        run_gate(sh, policy, result);
     }
 }
 
@@ -788,10 +873,11 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     }
     match cli.command {
         Command::Check { no_test } => {
+            let policy = Command::Check { no_test }.execution_policy();
             let sh = xshell::Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("check");
-            run_host_gate(&sh, Mode::Fix, &mut result);
+            run_host_gate(&sh, Mode::Fix, policy, &mut result);
             if !no_test {
                 steps::test_local::run(&sh, &mut result, &[]);
             }
@@ -800,17 +886,20 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             Ok(result)
         }
         Command::Precommit => {
+            let policy = Command::Precommit.execution_policy();
             let sh = xshell::Shell::new()?;
             run_precommit_with_host_gate(Path::new("."), |result| {
-                run_host_gate(&sh, Mode::Fix, result);
+                run_host_gate(&sh, Mode::Fix, policy, result);
             })
         }
         Command::Prepush => {
+            let policy = Command::Prepush.execution_policy();
             let sh = xshell::Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("prepush");
             run_prepush_with(
                 &sh,
+                policy,
                 &mut result,
                 || clean_tree_precheck(false),
                 run_local_push_gate,
@@ -822,6 +911,11 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             no_e2e,
             allow_dirty,
         } => {
+            let policy = Command::Validate {
+                no_e2e,
+                allow_dirty,
+            }
+            .execution_policy();
             let sh = xshell::Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("validate");
@@ -829,18 +923,18 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             // committed tip (== what CI sees). Fail fast before the expensive steps.
             let precheck_start = std::time::Instant::now();
             let precheck = clean_tree_precheck(allow_dirty).with_duration(precheck_start.elapsed());
-            let blocked = !precheck.ok && !precheck.skipped;
+            let blocked = precheck.is_blocking_failure();
             result.push(precheck);
             if blocked {
                 finalize(&mut result, start);
                 return Ok(result);
             }
-            run_host_gate_without_tests(&sh, Mode::Check, &mut result);
+            run_host_gate_without_tests(&sh, Mode::Check, policy, &mut result);
             steps::nix::static_checks(&mut result);
             // Deliberately in `validate` and not `check`: it costs a
             // `nix build .#site`, which the pre-commit gate should not pay (#836).
             steps::wasm_budget::run(&mut result);
-            HOST_TESTS_STEP.run(&sh, Mode::Check, &mut result);
+            HOST_TESTS_STEP.run(&sh, Mode::Check, policy, &mut result);
             steps::nix::test_checks(&mut result, false);
             if !no_e2e {
                 // Each browser/backend combo is realized, lifted, and reconciled
@@ -1434,9 +1528,10 @@ mod cli_tests {
 
         run_prepush_with(
             &sh,
+            Command::Prepush.execution_policy(),
             &mut result,
             || StepResult::fail("clean-tree").detail("dirty"),
-            |_, _| invoked.set(true),
+            |_, _, _| invoked.set(true),
         );
 
         assert!(
@@ -1450,6 +1545,279 @@ mod cli_tests {
                 .map(|step| step.name.as_str())
                 .collect::<Vec<_>>(),
             ["clean-tree"]
+        );
+    }
+
+    #[test]
+    fn fail_fast_detects_a_failure_when_one_phase_appends_multiple_results() {
+        let mut result = CommandResult::new("prepush");
+        let mut invoked = Vec::new();
+
+        run_with_policy(
+            ExecutionPolicy::FailFast,
+            &mut result,
+            PREPUSH_PHASES.iter().copied(),
+            |phase, result| {
+                invoked.push(phase);
+                if matches!(phase, PrepushPhase::HostGate) {
+                    result.push(StepResult::ok("host-gate-started"));
+                    result.push(StepResult::fail("host-gate-failed").detail("preserved failure"));
+                } else {
+                    result.push(StepResult::ok(phase.name()));
+                }
+            },
+        );
+
+        assert_eq!(invoked, [PrepushPhase::HostGate]);
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .map(|step| step.name.as_str())
+                .collect::<Vec<_>>(),
+            ["host-gate-started", "host-gate-failed"]
+        );
+        assert_eq!(result.steps[1].detail.as_deref(), Some("preserved failure"));
+    }
+
+    #[test]
+    fn prepush_stops_before_product_and_doctest_phases_after_host_failure() {
+        let mut result = CommandResult::new("prepush");
+        let mut invoked = Vec::new();
+
+        run_with_policy(
+            Command::Prepush.execution_policy(),
+            &mut result,
+            PREPUSH_PHASES.iter().copied(),
+            |phase, result| {
+                invoked.push(phase);
+                match phase {
+                    PrepushPhase::HostGate => {
+                        result.push(StepResult::fail("synthetic-host").detail("host failed"))
+                    }
+                    PrepushPhase::LocalTests => result.push(StepResult::ok("synthetic-product")),
+                    PrepushPhase::WorkspaceDoctests => {
+                        result.push(StepResult::ok("synthetic-doctests"))
+                    }
+                }
+            },
+        );
+
+        assert_eq!(invoked, [PrepushPhase::HostGate]);
+        assert_eq!(result.steps[0].detail.as_deref(), Some("host failed"));
+    }
+
+    #[test]
+    fn prepush_stops_before_workspace_doctests_after_product_failure() {
+        let mut result = CommandResult::new("prepush");
+        let mut invoked = Vec::new();
+
+        run_with_policy(
+            Command::Prepush.execution_policy(),
+            &mut result,
+            PREPUSH_PHASES.iter().copied(),
+            |phase, result| {
+                invoked.push(phase);
+                if matches!(phase, PrepushPhase::LocalTests) {
+                    result.push(StepResult::fail("synthetic-product").detail("product failed"));
+                } else {
+                    result.push(StepResult::ok("synthetic-phase"));
+                }
+            },
+        );
+
+        assert_eq!(invoked, [PrepushPhase::HostGate, PrepushPhase::LocalTests]);
+        assert_eq!(result.steps[1].detail.as_deref(), Some("product failed"));
+    }
+
+    #[test]
+    fn precommit_reconciles_once_after_an_early_static_failure() {
+        let dir = crate::test_support::temp_repo("precommit", "early-failure-reconcile");
+        crate::test_support::commit(&dir, "a.rs", "fn a(){}\n");
+        crate::test_support::write(&dir, "a.rs", "fn a() { }\n");
+        crate::test_support::git_ok(&dir, &["add", "a.rs"]);
+        let sh = xshell::Shell::new().expect("create shell");
+        let first_static_spec = steps::static_checks::specs_for_phase(
+            steps::static_checks::Phase::SourceConsistency,
+            Mode::Fix,
+        )
+        .first()
+        .expect("source-consistency phase has a spec")
+        .name;
+        let mut invoked = Vec::new();
+
+        let result = run_precommit_with_host_gate(&dir, |result| {
+            run_host_steps_with(
+                &sh,
+                Mode::Fix,
+                Command::Precommit.execution_policy(),
+                result,
+                HOST_GATE_NON_TEST_STEPS,
+                |step, sh, mode, policy, result| match step {
+                    HostGateStep::StaticChecks(phase) => {
+                        steps::static_checks::run_phase_with(
+                            sh,
+                            mode,
+                            *phase,
+                            policy,
+                            result,
+                            |_, spec| {
+                                invoked.push(spec.name);
+                                crate::test_support::write(
+                                    &dir,
+                                    "a.rs",
+                                    "fn a() { }\n// formatted\n",
+                                );
+                                StepResult::fail(spec.name)
+                                    .detail("static diagnostic survives reconciliation")
+                            },
+                        );
+                    }
+                    HostGateStep::ResultOnly { name, .. } => {
+                        panic!("later host step {name} ran after static failure")
+                    }
+                    HostGateStep::HostTests => panic!("host tests ran after static failure"),
+                },
+            );
+        })
+        .expect("precommit orchestration");
+
+        assert_eq!(invoked, [first_static_spec]);
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .filter(|step| step.name == "precommit-staging")
+                .count(),
+            1
+        );
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .find(|step| step.name == first_static_spec)
+                .and_then(|step| step.detail.as_deref()),
+            Some("static diagnostic survives reconciliation")
+        );
+        assert_eq!(
+            git::output(&dir, &["diff", "--cached", "--name-only"]).expect("cached paths"),
+            "a.rs"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn command_execution_policies_keep_explicit_gates_exhaustive_and_hooks_fail_fast() {
+        assert_eq!(
+            Command::Check { no_test: true }.execution_policy(),
+            ExecutionPolicy::Exhaustive
+        );
+        assert_eq!(
+            Command::Validate {
+                no_e2e: true,
+                allow_dirty: false,
+            }
+            .execution_policy(),
+            ExecutionPolicy::Exhaustive
+        );
+        assert_eq!(
+            Command::Precommit.execution_policy(),
+            ExecutionPolicy::FailFast
+        );
+        assert_eq!(
+            Command::Prepush.execution_policy(),
+            ExecutionPolicy::FailFast
+        );
+    }
+
+    #[test]
+    fn explicit_host_gates_keep_running_production_steps_after_a_static_failure() {
+        fn assert_exhaustive(command: &str, policy: ExecutionPolicy, include_host_tests: bool) {
+            let sh = xshell::Shell::new().expect("create shell");
+            let mut result = CommandResult::new(command);
+            let expected = if include_host_tests {
+                host_gate_step_names_for_test(Mode::Check)
+            } else {
+                host_gate_without_tests_step_names_for_test(Mode::Check)
+            };
+            let mut invoked = Vec::new();
+            let mut failed = false;
+            let mut run_step =
+                |step: &HostGateStep,
+                 sh: &xshell::Shell,
+                 mode: Mode,
+                 policy: ExecutionPolicy,
+                 result: &mut CommandResult| match step {
+                    HostGateStep::StaticChecks(phase) => {
+                        steps::static_checks::run_phase_with(
+                            sh,
+                            mode,
+                            *phase,
+                            policy,
+                            result,
+                            |_, spec| {
+                                invoked.push(spec.name);
+                                if std::mem::replace(&mut failed, true) {
+                                    StepResult::ok(spec.name)
+                                } else {
+                                    StepResult::fail(spec.name).detail("synthetic static failure")
+                                }
+                            },
+                        );
+                    }
+                    HostGateStep::ResultOnly { name, .. } => {
+                        invoked.push(name);
+                        result.push(StepResult::ok(name));
+                    }
+                    HostGateStep::HostTests => {
+                        invoked.push("host-tests");
+                        result.push(StepResult::ok("host-tests"));
+                    }
+                };
+
+            if include_host_tests {
+                run_host_steps_with(
+                    &sh,
+                    Mode::Check,
+                    policy,
+                    &mut result,
+                    HOST_GATE_NON_TEST_STEPS
+                        .iter()
+                        .chain(std::iter::once(&HOST_TESTS_STEP)),
+                    &mut run_step,
+                );
+            } else {
+                run_host_steps_with(
+                    &sh,
+                    Mode::Check,
+                    policy,
+                    &mut result,
+                    HOST_GATE_NON_TEST_STEPS,
+                    &mut run_step,
+                );
+            }
+
+            assert_eq!(
+                invoked, expected,
+                "{command} must keep every later production host step after a static failure"
+            );
+            assert_eq!(result.steps.len(), expected.len());
+            assert!(!result.ok);
+        }
+
+        assert_exhaustive(
+            "check",
+            Command::Check { no_test: true }.execution_policy(),
+            true,
+        );
+        assert_exhaustive(
+            "validate",
+            Command::Validate {
+                no_e2e: true,
+                allow_dirty: false,
+            }
+            .execution_policy(),
+            false,
         );
     }
 

@@ -123,6 +123,18 @@ hook has the same clean-tree refusal as `validate` and invokes no Nix
 derivation. Hermetic Nix proof remains CI/explicit-`validate` work. Bypass with
 `SKIP_PRE_PUSH=1 git push` for WIP.
 
+Both local hook commands use fail-fast execution: at every ordered boundary
+(individual static checks, host-gate steps, and prepush phases), the first
+blocking failed, non-skipped step stops later gate work. Prepush's clean-tree
+refusal remains its first boundary. Precommit still performs its after-snapshot
+and conservative staging reconciliation after the gate stops; safe
+formatter/check changes can be restaged, while mixed or unsafe Git/index state
+still fails closed. Work not reached is absent from the result, not
+green-skipped. This does not change command membership, order, or the
+clean-tree/staged-subset authority. In contrast, explicit `cargo xtask check`
+and `cargo xtask validate`, and CI's corresponding surfaces, remain exhaustive
+diagnostic gates; local early stopping does not weaken CI's hermetic authority.
+
 ## Development workflow
 
 - Track development work in GitHub issues (`jaunder-org/jaunder`) rather than

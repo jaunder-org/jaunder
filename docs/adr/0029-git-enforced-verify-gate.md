@@ -150,3 +150,28 @@ Full `cargo xtask validate` additionally owns server-function flow verification
 through the e2e path. That is outside the `validate --no-e2e` comparator, not a
 missing prepush surface. The materialized per-surface contract is in
 [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#prepush-parity-by-failure-surface).
+
+## Supplement (2026-08-31, #1122): fail-fast local hook execution
+
+[#1122](https://github.com/jaunder-org/jaunder/issues/1122) refines the local
+hook execution policy without changing command membership, order, or authority.
+`precommit` and `prepush` select orchestration-owned fail-fast execution: at
+each ordered boundary — individual static checks, host-gate steps, and prepush
+phases — the first newly appended failed, non-skipped step stops later work.
+Unexecuted work is absent from the command result; it is not represented as a
+green skipped step. The failed step retains its ordinary diagnostic and the
+normal failed-command summary.
+
+`prepush` retains the clean-tree precondition as its first boundary, so a dirty
+tree prevents every gate phase from starting. `precommit` still always takes its
+after-snapshot and performs its conservative Git/index staging reconciliation
+after gate execution, including after an early failure: safe formatter/check
+mutations remain eligible for restaging, while mixed, ambiguous, or otherwise
+unsafe state continues to fail closed. This does not weaken clean-tree or
+staged-subset authority.
+
+The explicit `check` and `validate` commands, and CI's corresponding surfaces,
+remain exhaustive: they continue through the unchanged ordered diagnostic graph
+and retain their existing authority. The #1117 prepush parity-by-failure-surface
+contract remains unchanged; this supplement changes only when the local hook
+stops, not which surfaces it covers or which hermetic verdict CI owns.
