@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use chrono::Duration;
 use sha2::{Digest, Sha256};
-use sqlx::{Database, Decode, Error as SqlxError, Pool, QueryBuilder, Row, Type};
+use sqlx::{Database, Decode, Pool, QueryBuilder, Row, Type};
 use thiserror::Error;
 
 use crate::InstanceId;
@@ -1126,7 +1126,7 @@ pub trait PostStorage: Send + Sync {
     /// Physically removes every idempotency mapping expired at `now`, in
     /// fixed-size statements. Each completed statement releases its connection
     /// before the next one, so an accumulated backlog never extends one lock.
-    async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, SqlxError>;
+    async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, sqlx::Error>;
 
     /// Fetches a post by its ID, applying the viewer-resolution filter: the post
     /// is returned only if `viewer` is the author or a targeted audience admits
@@ -2059,7 +2059,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, SqlxError> {
+    async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, sqlx::Error> {
         const BATCH_SIZE: i64 = 100;
         let cutoff = idempotency_replay_cutoff(now);
         let mut deleted = 0;

@@ -4,7 +4,7 @@ use crate::WriteTransaction;
 use async_trait::async_trait;
 use chrono::Duration;
 
-use sqlx::{Database, Error as SqlxError, Pool};
+use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
@@ -30,7 +30,7 @@ pub enum UseEmailVerificationError {
     AlreadyUsed,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] SqlxError),
+    Internal(#[from] sqlx::Error),
 }
 
 impl From<UseEmailVerificationError> for host::error::InternalError {
