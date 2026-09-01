@@ -43,12 +43,24 @@ export type RequestStartRecord = {
   startedMs: number;
 };
 
-/** A browser console warning observed while its page was alive. */
-export type ConsoleWarningRecord = {
-  text: string;
-  sequence: number;
-  emittedMs: number;
-};
+/** A normalized browser diagnostic observed while its page was alive. */
+export type BrowserDiagnosticRecord =
+  | {
+      kind: "console";
+      type: "warning" | "error";
+      text: string;
+      location: { url: string; line: number; column: number };
+      sequence: number;
+      emittedMs: number;
+    }
+  | {
+      kind: "pageerror";
+      name: string;
+      message: string;
+      stack?: string;
+      sequence: number;
+      emittedMs: number;
+    };
 
 export type RequestRecord = {
   method: string;
@@ -90,14 +102,17 @@ export type PagePerfSummary = {
   longTasksDroppedCount: number;
 };
 
-/** Which lifecycle phase a record belongs to. */
+/** Which exported lifecycle phase a record belongs to. */
 export type Phase = "pretest" | "test";
+/** Teardown deliberately has no sink: post-body diagnostics cannot belong to an
+ * already-closed test or page span. */
+type CapturePhase = Phase | "teardown";
 
 export type CaptureSink = {
   requestStarts: RequestStartRecord[];
   requests: RequestRecord[];
   navigations: NavigationRecord[];
-  consoleWarnings: ConsoleWarningRecord[];
+  browserDiagnostics: BrowserDiagnosticRecord[];
 };
 
 /** One `performance.mark` the CSR client emitted, document-relative. */
@@ -355,8 +370,10 @@ export function mergeDocumentTiming(
 }
 
 export type TraceCapture = {
-  /** Route records that START after this call to `phase`. */
+  /** Route records that START after this call to an exported phase. */
   setPhase(phase: Phase): void;
+  /** Stop routing new records into exported spans during fixture teardown. */
+  beginTeardown(): void;
   sinkFor(phase: Phase): CaptureSink;
   /** Read the client-side perf summary. Must be called while `page` is alive. */
   readPagePerf(page: Page): Promise<PagePerfSummary>;
@@ -411,16 +428,16 @@ export async function attachTraceCapture(
       requestStarts: [],
       requests: [],
       navigations: [],
-      consoleWarnings: [],
+      browserDiagnostics: [],
     },
     test: {
       requestStarts: [],
       requests: [],
       navigations: [],
-      consoleWarnings: [],
+      browserDiagnostics: [],
     },
   };
-  let phase: Phase = "pretest";
+  let phase: CapturePhase = "pretest";
 
   const requestStartedMs = new Map<Request, number>();
   const requestPhase = new Map<Request, Phase>();
@@ -704,6 +721,7 @@ export async function attachTraceCapture(
   );
 
   context.on("request", (request) => {
+    if (phase === "teardown") return;
     const startedMs = Date.now();
     requestStartedMs.set(request, startedMs);
     // Tag and expose the request at START. Keep this separate from completion:
@@ -746,10 +764,12 @@ export async function attachTraceCapture(
   });
 
   const recordCompletion = (request: Request, failed: boolean) => {
+    const requestCapturePhase = requestPhase.get(request);
+    if (requestCapturePhase === undefined) return;
     const startedMs = requestStartedMs.get(request) ?? Date.now();
     const endedMs = Date.now();
     const failureText = failed ? request.failure()?.errorText : undefined;
-    sinks[requestPhase.get(request) ?? phase].requests.push({
+    sinks[requestCapturePhase].requests.push({
       method: request.method(),
       url: request.url(),
       resourceType: request.resourceType(),
@@ -784,15 +804,38 @@ export async function attachTraceCapture(
   const attachPage = (page: Page) => {
     const state = stateFor(page);
     page.on("console", (message) => {
-      if (message.type() !== "warning") return;
-      sinks[phase].consoleWarnings.push({
+      if (phase === "teardown") return;
+      const type = message.type();
+      if (type !== "warning" && type !== "error") return;
+      const location = message.location();
+      sinks[phase].browserDiagnostics.push({
+        kind: "console",
+        type,
         text: message.text(),
+        location: {
+          url: location.url,
+          line: location.lineNumber,
+          column: location.columnNumber,
+        },
         emittedMs: Date.now(),
         sequence: nextRecordSequence,
       });
       nextRecordSequence += 1;
     });
 
+    page.on("pageerror", (error) => {
+      if (phase === "teardown") return;
+      const stack = error.stack;
+      sinks[phase].browserDiagnostics.push({
+        kind: "pageerror",
+        name: error.name,
+        message: error.message,
+        ...(stack === undefined ? {} : { stack }),
+        emittedMs: Date.now(),
+        sequence: nextRecordSequence,
+      });
+      nextRecordSequence += 1;
+    });
     page.on("framenavigated", (frame) => {
       if (frame !== page.mainFrame()) return;
       const navigationId = state.pending.shift() ?? null;
@@ -832,6 +875,9 @@ export async function attachTraceCapture(
   return {
     setPhase(next: Phase) {
       phase = next;
+    },
+    beginTeardown() {
+      phase = "teardown";
     },
     sinkFor(which: Phase) {
       return sinks[which];

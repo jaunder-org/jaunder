@@ -16,6 +16,7 @@ import {
 import {
   attachTraceCapture,
   type BootMark,
+  type BrowserDiagnosticRecord,
   type CaptureSink,
   type DocumentTiming,
   type NavigationRecord,
@@ -50,7 +51,56 @@ type TracedContextRecord = {
 };
 
 const tracedContextRecords = new Map<string, TracedContextRecord[]>();
+
+const BROWSER_DIAGNOSTIC_LIMIT = 20;
+
+/** Serialize the earliest browser diagnostics without capping the raw sink. */
+export function browserDiagnosticTelemetryFrom(
+  diagnostics: BrowserDiagnosticRecord[],
+): { json: string; dropped: number } {
+  const exported = diagnostics.slice(0, BROWSER_DIAGNOSTIC_LIMIT);
+  return {
+    json: JSON.stringify(exported),
+    dropped: diagnostics.length - exported.length,
+  };
+}
+
+/** The shared browser-diagnostic schema for `e2e.test` and `e2e.page`. */
+export function browserDiagnosticAttributesFrom(
+  diagnostics: BrowserDiagnosticRecord[],
+) {
+  const telemetry = browserDiagnosticTelemetryFrom(diagnostics);
+  return [
+    otlpAttribute("e2e.console_json", telemetry.json),
+    otlpAttribute("e2e.console_dropped", telemetry.dropped),
+  ];
+}
 const captureByTestSpanId = new Map<string, TraceCapture>();
+const captureByTracedContext = new WeakMap<BrowserContext, TraceCapture>();
+
+/** Return the capture already attached by `tracedContext`, if this fixture made it. */
+export function tracedContextCapture(
+  context: BrowserContext,
+): TraceCapture | undefined {
+  return captureByTracedContext.get(context);
+}
+
+/**
+ * The diagnostics projected onto one of the two span owners that carries browser
+ * output. Keeping the owner beside its attributes makes their shared routing
+ * explicit without widening either span's time range.
+ */
+export function browserDiagnosticSpanProjectionFor(
+  spanName: "e2e.test" | "e2e.page",
+  capture: TraceCapture,
+) {
+  return {
+    spanName,
+    attributes: browserDiagnosticAttributesFrom(
+      capture.sinkFor("test").browserDiagnostics,
+    ),
+  };
+}
 
 export type NavigationSummary = {
   id: number;
@@ -490,51 +540,56 @@ export const tracedContextFixture = async (
 ) => {
   const { traceId } = traceContextFromEnvironment();
   const opened: TracedContextRecord[] = [];
-  await use(async (options) => {
-    const context = await browser.newContext(options);
-    await applyTestTraceparent(context, traceId, testSpanId);
-    // Same instrumentation the default page gets, through the same code path —
-    // an uninstrumented extra context makes a multi-context test under-report
-    // its own client cost (#794).
-    const capture = await attachTraceCapture(context);
-    capture.setPhase("test");
-    const record: TracedContextRecord = { capture, perf: null };
-    opened.push(record);
+  try {
+    await use(async (options) => {
+      const context = await browser.newContext(options);
+      await applyTestTraceparent(context, traceId, testSpanId);
+      // Same instrumentation the default page gets, through the same code path —
+      // an uninstrumented extra context makes a multi-context test under-report
+      // its own client cost (#794).
+      const capture = await attachTraceCapture(context);
+      capture.setPhase("test");
+      captureByTracedContext.set(context, capture);
+      const record: TracedContextRecord = { capture, perf: null };
+      opened.push(record);
 
-    // Arm the boot budget on every page this context opens (#867). Wrapping
-    // `newPage` here covers all 15 spec-side `newPage()` sites at once — the
-    // budget's unit is the `Page`, so a second page that is never armed is a
-    // blind spot, not a page exempt from the rule.
-    const newPage = context.newPage.bind(context);
-    context.newPage = async (...args: Parameters<typeof newPage>) => {
-      const page = await newPage(...args);
-      trackBoots(page);
-      return page;
-    };
+      // Arm the boot budget on every page this context opens (#867). Wrapping
+      // `newPage` here covers all 15 spec-side `newPage()` sites at once — the
+      // budget's unit is the `Page`, so a second page that is never armed is a
+      // blind spot, not a page exempt from the rule.
+      const newPage = context.newPage.bind(context);
+      context.newPage = async (...args: Parameters<typeof newPage>) => {
+        const page = await newPage(...args);
+        trackBoots(page);
+        return page;
+      };
 
-    // Snapshot the client-side perf BEFORE the context closes. `on("close")`
-    // fires *after* closing, when `page.evaluate` would throw — and the caller
-    // owns this context's lifetime, so wrapping `close` is the only hook that
-    // reliably runs while a page is still alive. Settle first so secondary
-    // captures expose the same complete per-navigation timing as the default
-    // page before any read consumes them.
-    const close = context.close.bind(context);
-    context.close = async (...args: Parameters<typeof close>) => {
-      await capture.settle();
-      const [page] = context.pages();
-      if (page !== undefined) {
-        record.perf = await capture.readPagePerf(page);
-      }
-      return close(...args);
-    };
-    return context;
-  });
-  // Hand the records to `_autoPerfSpan`, which builds the spans. It cannot
-  // read this fixture's value directly (it does not depend on it), and a
-  // module-level handoff keyed by span id is the same shape `actions.ts`
-  // already uses. Safe on ordering: auto fixtures set up first and so tear
-  // down last, meaning this runs before `_autoPerfSpan`'s teardown reads it.
-  tracedContextRecords.set(testSpanId, opened);
+      // Snapshot the client-side perf BEFORE the context closes. `on("close")`
+      // fires *after* closing, when `page.evaluate` would throw — and the caller
+      // owns this context's lifetime, so wrapping `close` is the only hook that
+      // reliably runs while a page is still alive. Settle first so secondary
+      // captures expose the same complete per-navigation timing as the default
+      // page before any read consumes them.
+      const close = context.close.bind(context);
+      context.close = async (...args: Parameters<typeof close>) => {
+        await capture.settle();
+        const [page] = context.pages();
+        if (page !== undefined) {
+          record.perf = await capture.readPagePerf(page);
+        }
+        return close(...args);
+      };
+      return context;
+    });
+  } finally {
+    for (const record of opened) record.capture.beginTeardown();
+    // Hand the records to `_autoPerfSpan`, which builds the spans. It cannot
+    // read this fixture's value directly (it does not depend on it), and a
+    // module-level handoff keyed by span id is the same shape `actions.ts`
+    // already uses. Safe on ordering: auto fixtures set up first and so tear
+    // down last, meaning this runs before `_autoPerfSpan`'s teardown reads it.
+    tracedContextRecords.set(testSpanId, opened);
+  }
 };
 
 export const autoPerfSpanFixture = [
@@ -584,6 +639,9 @@ export const autoPerfSpanFixture = [
     try {
       await use();
     } finally {
+      // The exported test span ends before teardown work begins. New browser
+      // diagnostics are deliberately sinkless from this point onward.
+      capture.beginTeardown();
       setCurrentActionTestKey(null);
       // Collect-and-clear unconditionally, so a test that failed cannot leak
       // its budget state into the next test in this worker. Whether to FAIL on
@@ -623,6 +681,11 @@ export const autoPerfSpanFixture = [
     );
     const topNavigations = navigationTelemetry.topNavigations;
 
+    const browserDiagnosticProjection = browserDiagnosticSpanProjectionFor(
+      "e2e.test",
+      capture,
+    );
+
     const attributes = [
       otlpAttribute("e2e.file", testInfo.file),
       otlpAttribute("e2e.test", testInfo.title),
@@ -649,6 +712,7 @@ export const autoPerfSpanFixture = [
         "e2e.request_top_slow_dropped",
         requests.length - topSlowRequests.length,
       ),
+      ...browserDiagnosticProjection.attributes,
       otlpAttribute(
         "e2e.navigation_json",
         JSON.stringify(pagePerfSummary.navigation),
@@ -859,6 +923,8 @@ export const autoPerfSpanFixture = [
         ),
         sink.navigations.length,
       );
+      const pageBrowserDiagnosticProjection =
+        browserDiagnosticSpanProjectionFor("e2e.page", record.capture);
       spans.push(
         phaseSpan(
           "e2e.page",
@@ -883,6 +949,7 @@ export const autoPerfSpanFixture = [
               "e2e.navigation_json",
               JSON.stringify(record.perf?.navigation ?? null),
             ),
+            ...pageBrowserDiagnosticProjection.attributes,
           ].filter(
             (attribute): attribute is NonNullable<typeof attribute> =>
               attribute !== null,
@@ -920,6 +987,10 @@ export const autoPerfSpanFixture = [
   },
   { auto: true },
 ] satisfies AutoFixture<
-  { page: Page; testSpanId: string; _lifecycleStart: number },
+  {
+    page: Page;
+    testSpanId: string;
+    _lifecycleStart: number;
+  },
   void
 >;

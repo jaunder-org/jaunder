@@ -1459,7 +1459,14 @@ trace. Span fields and metric attributes are exported, so they MUST NOT carry
 user PII or secrets — stable identifiers (`user_id`, `error.kind`) only. Branch
 determinants follow the same rule: record bounded decisions and stable internal
 IDs, never passwords, tokens, raw emails, invite codes, request bodies,
-arbitrary source text, or whole-struct dumps.
+arbitrary source text, or whole-struct dumps. The
+[isolated E2E browser-diagnostic payload decision](adr/drafts/isolated-e2e-browser-diagnostic-payloads.md)
+is a deliberately narrow proposed exception: the disposable Playwright harness
+may export raw diagnostic payloads containing synthetic application values, but
+production browser code installs no console/page-error listener and production
+telemetry remains PII- and secret-free. The exception excludes real-user
+deployments and infrastructure credentials; browser diagnostics observe failures
+without failing tests.
 
 The
 [bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
