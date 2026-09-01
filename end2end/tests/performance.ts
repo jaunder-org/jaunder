@@ -16,6 +16,7 @@ import {
 import {
   attachTraceCapture,
   type BootMark,
+  type BrowserDiagnosticRecord,
   type CaptureSink,
   type DocumentTiming,
   type NavigationRecord,
@@ -50,6 +51,30 @@ type TracedContextRecord = {
 };
 
 const tracedContextRecords = new Map<string, TracedContextRecord[]>();
+
+const BROWSER_DIAGNOSTIC_LIMIT = 20;
+
+/** Serialize the earliest browser diagnostics without capping the raw sink. */
+export function browserDiagnosticTelemetryFrom(
+  diagnostics: BrowserDiagnosticRecord[],
+): { json: string; dropped: number } {
+  const exported = diagnostics.slice(0, BROWSER_DIAGNOSTIC_LIMIT);
+  return {
+    json: JSON.stringify(exported),
+    dropped: diagnostics.length - exported.length,
+  };
+}
+
+/** The shared browser-diagnostic schema for `e2e.test` and `e2e.page`. */
+export function browserDiagnosticAttributesFrom(
+  diagnostics: BrowserDiagnosticRecord[],
+) {
+  const telemetry = browserDiagnosticTelemetryFrom(diagnostics);
+  return [
+    otlpAttribute("e2e.console_json", telemetry.json),
+    otlpAttribute("e2e.console_dropped", telemetry.dropped),
+  ];
+}
 const captureByTestSpanId = new Map<string, TraceCapture>();
 
 export type NavigationSummary = {
@@ -623,6 +648,10 @@ export const autoPerfSpanFixture = [
     );
     const topNavigations = navigationTelemetry.topNavigations;
 
+    const browserDiagnosticAttributes = browserDiagnosticAttributesFrom(
+      capture.sinkFor("test").browserDiagnostics,
+    );
+
     const attributes = [
       otlpAttribute("e2e.file", testInfo.file),
       otlpAttribute("e2e.test", testInfo.title),
@@ -649,6 +678,7 @@ export const autoPerfSpanFixture = [
         "e2e.request_top_slow_dropped",
         requests.length - topSlowRequests.length,
       ),
+      ...browserDiagnosticAttributes,
       otlpAttribute(
         "e2e.navigation_json",
         JSON.stringify(pagePerfSummary.navigation),
@@ -859,6 +889,9 @@ export const autoPerfSpanFixture = [
         ),
         sink.navigations.length,
       );
+      const pageBrowserDiagnosticAttributes = browserDiagnosticAttributesFrom(
+        sink.browserDiagnostics,
+      );
       spans.push(
         phaseSpan(
           "e2e.page",
@@ -883,6 +916,7 @@ export const autoPerfSpanFixture = [
               "e2e.navigation_json",
               JSON.stringify(record.perf?.navigation ?? null),
             ),
+            ...pageBrowserDiagnosticAttributes,
           ].filter(
             (attribute): attribute is NonNullable<typeof attribute> =>
               attribute !== null,

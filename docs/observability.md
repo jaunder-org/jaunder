@@ -92,13 +92,59 @@ exact:
 - **Per-test JSON attributes on `e2e.test`**: actions (`e2e.action_top_json`),
   default-page navigations (`e2e.navigation_top_json`), resources
   (`e2e.resource_summary_json`), long tasks (`e2e.long_tasks_json`), slow
-  requests (`e2e.request_top_slow_json`). **Per-secondary-page JSON attributes
-  on `e2e.page`**: secondary-page navigations (`e2e.navigation_top_json`).
-  `action.timed` / `action.failed` / `navigation.lifecycle` / `request.slow` are
-  span **events**, not spans.
+  requests (`e2e.request_top_slow_json`), and default-context browser
+  diagnostics (`e2e.console_json`). **Per-secondary-page JSON attributes on
+  `e2e.page`**: secondary-page navigations (`e2e.navigation_top_json`) and
+  browser diagnostics (`e2e.console_json`). Both diagnostic owners also carry
+  `e2e.console_dropped`. `action.timed` / `action.failed` /
+  `navigation.lifecycle` / `request.slow` are span **events**, not spans.
 
 Counting "spans named `action.timed`" therefore finds nothing; the data is
 inside the attribute blobs.
+
+### Browser diagnostics are isolated E2E observations
+
+The Playwright harness records only browser console messages whose Playwright
+type is `warning` or `error`, plus uncaught `pageerror` events. It excludes
+`log`, `info`, `debug`, and every other console level. Listener delivery
+synchronously normalizes each event into the ordered `BrowserDiagnosticRecord`
+union; no `JSHandle` or live Playwright object enters the sink:
+
+```ts
+type BrowserDiagnosticRecord =
+  | {
+      kind: "console";
+      type: "warning" | "error";
+      text: string;
+      location: { url: string; line: number; column: number };
+      sequence: number;
+      emittedMs: number;
+    }
+  | {
+      kind: "pageerror";
+      name: string;
+      message: string;
+      stack?: string;
+      sequence: number;
+      emittedMs: number;
+    };
+```
+
+At the `pretest` → `test` phase switch, the default test sink owns the records
+exported on `e2e.test`; every `tracedContext` test sink is exported on its
+existing `e2e.page` span. Records delivered before that switch remain in the
+pretest sink and are never exported on either test span. Diagnostics are
+observation-only: warnings, errors, and page errors do not fail a test.
+
+The harness serializes the first 20 test-phase records in sequence order as the
+`e2e.console_json` JSON-string attribute, and writes
+`e2e.console_dropped = total records - exported records`. Its raw text and stack
+may contain synthetic application values from the disposable seeded E2E
+environment. That limited diagnostic exception is not production telemetry:
+production browser code captures or exports neither console nor page-error
+payloads, and real-user data and infrastructure credentials remain forbidden.
+See the
+[isolated E2E browser-diagnostic payload decision](adr/drafts/isolated-e2e-browser-diagnostic-payloads.md).
 
 ### The per-test span tree
 
@@ -227,8 +273,8 @@ decomposition, 1 ms closure, and zero dropped records.
 
 ### Truncation is reported, never silent
 
-Five lists are capped. Each now emits a companion dropped-count, because raising
-a cap only moves the cliff and OTLP attribute size limits are real:
+Six lists are capped. Each emits a companion dropped-count, because raising a
+cap only moves the cliff and OTLP attribute size limits are real:
 
 | Attribute                   | Cap | Dropped count                   |
 | --------------------------- | --- | ------------------------------- |
@@ -237,10 +283,14 @@ a cap only moves the cliff and OTLP attribute size limits are real:
 | `e2e.navigation_top_json`   | 20  | `e2e.navigation_top_dropped`    |
 | `e2e.resource_summary_json` | 20  | `e2e.resource_top_slow_dropped` |
 | `e2e.long_tasks_json`       | 20  | `e2e.long_tasks_dropped`        |
+| `e2e.console_json`          | 20  | `e2e.console_dropped`           |
 
-The last two are the ones that were genuinely lossy — the first three could
-already be derived against `e2e.*_count`. `long_tasks_json` is a **tail** slice,
-so it is the _earliest_ long tasks that are discarded.
+Resource summaries, long tasks, and console diagnostics are genuinely lossy; the
+first three lists can already be derived against `e2e.*_count`.
+`long_tasks_json` is a **tail** slice, so it discards the earliest long tasks;
+`e2e.console_json` deliberately preserves the **first** 20 records, retaining
+the likely root cause rather than a later cascade. Its dropped count is the
+exact remainder, never a rounded or approximate value.
 
 ### Firefox reports zero long tasks — engine limitation, not a bug
 

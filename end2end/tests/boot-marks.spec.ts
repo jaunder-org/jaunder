@@ -9,10 +9,13 @@ import { test, expect } from "./fixtures";
 import {
   mergeDocumentTiming,
   wasmInitFromMarks,
+  type BrowserDiagnosticRecord,
   type DocumentTiming,
   type NavigationRecord,
 } from "./capture-trace";
 import {
+  browserDiagnosticAttributesFrom,
+  browserDiagnosticTelemetryFrom,
   navigationBridgeFieldsFrom,
   navigationSummariesFrom,
   navigationTopTelemetryFrom,
@@ -454,6 +457,62 @@ test("e2e.page navigation telemetry carries URL-bearing top JSON and dropped cou
   expect(
     top.every((navigation) => navigation.url.includes("/secondary-")),
   ).toBe(true);
+});
+
+const browserDiagnostics = (count: number): BrowserDiagnosticRecord[] =>
+  Array.from({ length: count }, (_, index) => ({
+    kind: "console",
+    type: index % 2 === 0 ? "warning" : "error",
+    text: `diagnostic-${index}`,
+    location: {
+      url: `https://example.test/diagnostic-${index}`,
+      line: index,
+      column: index + 1,
+    },
+    sequence: index + 1,
+    emittedMs: 1_000 + index,
+  }));
+
+test("browser diagnostics serialize the first twenty records with an exact drop count", () => {
+  expect(browserDiagnosticTelemetryFrom([])).toEqual({
+    json: "[]",
+    dropped: 0,
+  });
+
+  const boundary = browserDiagnostics(20);
+  const boundaryTelemetry = browserDiagnosticTelemetryFrom(boundary);
+  expect(JSON.parse(boundaryTelemetry.json)).toEqual(boundary);
+  expect(boundaryTelemetry.dropped).toBe(0);
+
+  const overCap = [
+    ...browserDiagnostics(20),
+    {
+      kind: "pageerror" as const,
+      name: "TypeError",
+      message: "twenty-first diagnostic",
+      stack: "TypeError: twenty-first diagnostic",
+      sequence: 21,
+      emittedMs: 1_020,
+    },
+  ] satisfies BrowserDiagnosticRecord[];
+  const overCapTelemetry = browserDiagnosticTelemetryFrom(overCap);
+  expect(overCap).toHaveLength(21);
+  expect(JSON.parse(overCapTelemetry.json)).toEqual(overCap.slice(0, 20));
+  expect(overCapTelemetry.dropped).toBe(1);
+});
+
+test("browser diagnostic span schema has the shared JSON and dropped attributes", () => {
+  const attributes = browserDiagnosticAttributesFrom(browserDiagnostics(21));
+  expect(attributes).toEqual([
+    {
+      key: "e2e.console_json",
+      value: { stringValue: JSON.stringify(browserDiagnostics(20)) },
+    },
+    {
+      key: "e2e.console_dropped",
+      value: { intValue: "1" },
+    },
+  ]);
 });
 
 // The regression guard for #818's actual defect. Unthresholded on purpose: it

@@ -43,12 +43,24 @@ export type RequestStartRecord = {
   startedMs: number;
 };
 
-/** A browser console warning observed while its page was alive. */
-export type ConsoleWarningRecord = {
-  text: string;
-  sequence: number;
-  emittedMs: number;
-};
+/** A normalized browser diagnostic observed while its page was alive. */
+export type BrowserDiagnosticRecord =
+  | {
+      kind: "console";
+      type: "warning" | "error";
+      text: string;
+      location: { url: string; line: number; column: number };
+      sequence: number;
+      emittedMs: number;
+    }
+  | {
+      kind: "pageerror";
+      name: string;
+      message: string;
+      stack?: string;
+      sequence: number;
+      emittedMs: number;
+    };
 
 export type RequestRecord = {
   method: string;
@@ -97,7 +109,7 @@ export type CaptureSink = {
   requestStarts: RequestStartRecord[];
   requests: RequestRecord[];
   navigations: NavigationRecord[];
-  consoleWarnings: ConsoleWarningRecord[];
+  browserDiagnostics: BrowserDiagnosticRecord[];
 };
 
 /** One `performance.mark` the CSR client emitted, document-relative. */
@@ -411,13 +423,13 @@ export async function attachTraceCapture(
       requestStarts: [],
       requests: [],
       navigations: [],
-      consoleWarnings: [],
+      browserDiagnostics: [],
     },
     test: {
       requestStarts: [],
       requests: [],
       navigations: [],
-      consoleWarnings: [],
+      browserDiagnostics: [],
     },
   };
   let phase: Phase = "pretest";
@@ -784,15 +796,36 @@ export async function attachTraceCapture(
   const attachPage = (page: Page) => {
     const state = stateFor(page);
     page.on("console", (message) => {
-      if (message.type() !== "warning") return;
-      sinks[phase].consoleWarnings.push({
+      const type = message.type();
+      if (type !== "warning" && type !== "error") return;
+      const location = message.location();
+      sinks[phase].browserDiagnostics.push({
+        kind: "console",
+        type,
         text: message.text(),
+        location: {
+          url: location.url,
+          line: location.lineNumber,
+          column: location.columnNumber,
+        },
         emittedMs: Date.now(),
         sequence: nextRecordSequence,
       });
       nextRecordSequence += 1;
     });
 
+    page.on("pageerror", (error) => {
+      const stack = error.stack;
+      sinks[phase].browserDiagnostics.push({
+        kind: "pageerror",
+        name: error.name,
+        message: error.message,
+        ...(stack === undefined ? {} : { stack }),
+        emittedMs: Date.now(),
+        sequence: nextRecordSequence,
+      });
+      nextRecordSequence += 1;
+    });
     page.on("framenavigated", (frame) => {
       if (frame !== page.mainFrame()) return;
       const navigationId = state.pending.shift() ?? null;
