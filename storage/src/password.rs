@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use chrono::Duration;
 
-use sqlx::{Database, Error as SqlxError, Pool};
+use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use common::time::UtcInstant;
@@ -30,7 +30,7 @@ pub enum UsePasswordResetError {
     AlreadyUsed,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] SqlxError),
+    Internal(#[from] sqlx::Error),
 }
 
 /// Storage for password-reset tokens.

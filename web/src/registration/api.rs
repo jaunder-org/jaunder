@@ -20,10 +20,7 @@ use {
     common::session_label::SessionLabel,
     common::token::RawToken,
     host::invite::InviteCode,
-    host::metrics::{
-        self, InviteEvent, RegistrationPolicy as RegistrationMetricPolicy, RegistrationResult,
-        RegistrationSource,
-    },
+    host::metrics::{self, InviteEvent, RegistrationResult, RegistrationSource},
     host::password,
     leptos::prelude::*,
     std::sync::Arc,
@@ -41,7 +38,7 @@ fn classify_registration_scope_result(
         WriteScopeError<InternalError>,
     >,
     span: &tracing::Span,
-    metric_policy: RegistrationMetricPolicy,
+    metric_policy: metrics::RegistrationPolicy,
     is_invite_registration: bool,
 ) -> InternalResult<MutationOutcome<RawToken>> {
     match scope_result {

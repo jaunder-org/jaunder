@@ -16,7 +16,7 @@ use host::{
     metrics,
     retention::Domain,
 };
-use sqlx::{Database, Error as SqlxError, Pool};
+use sqlx::{Database, Pool};
 use thiserror::Error;
 #[cfg(test)]
 use tokio::sync::{Notify, RwLock};
@@ -92,7 +92,7 @@ pub struct FeedEventRecord {
 #[derive(Debug, Error)]
 pub enum FeedEventError {
     #[error("database error: {0}")]
-    Db(#[from] SqlxError),
+    Db(#[from] sqlx::Error),
 }
 
 /// One row of a claim batch: either a converted record, or the id of a row whose
@@ -169,7 +169,7 @@ pub(crate) fn partition_claimed(rows: Vec<ClaimedRow>) -> (Vec<FeedEventRecord>,
 /// once at the dialect's useful aggregation boundary.
 pub(crate) fn finish_corrupt_purge(
     records: Vec<FeedEventRecord>,
-    purge: Result<(), SqlxError>,
+    purge: Result<(), sqlx::Error>,
     context: &'static str,
 ) -> Vec<FeedEventRecord> {
     crate::helpers::preserve_after_secondary(

@@ -9,7 +9,8 @@ use std::{
 use anyhow::Context;
 use axum::Router;
 use host::{
-    metrics::{self, SaturationObservableGuard, SaturationSnapshot},
+    error,
+    metrics::{SaturationObservableGuard, SaturationSnapshot},
     telemetry::TelemetryConfig,
 };
 use tokio::{net::TcpListener, sync::oneshot::Receiver, task::JoinHandle};
@@ -18,8 +19,8 @@ use crate::backup;
 use crate::cli::{AppTarget, BootstrapDb, Commands, SiteConfigAction, StorageArgs};
 use crate::feed::worker::FeedWorker;
 use crate::mailer::LettreMailSender;
-use crate::maintenance::{DATABASE_MAINTENANCE_INTERVAL, DatabaseMaintenance};
-use crate::metrics::{self as server_metrics, SaturationSources};
+use crate::maintenance::{self, DatabaseMaintenance};
+use crate::metrics::{self, SaturationSources};
 use crate::runtime_file::{self, RuntimeGuard, StartupCheck, StartupLockGuard};
 use crate::scheduled_worker::ScheduledWorkerGuard;
 use common::backup::BackupMode;
@@ -380,7 +381,7 @@ pub async fn cmd_user_create(
     .await?;
 
     // CLI user creation bypasses the site registration policy entirely.
-    metrics::registration(
+    host::metrics::registration(
         host::metrics::RegistrationSource::Cli,
         host::metrics::RegistrationPolicy::CliBypass,
         host::metrics::RegistrationResult::Ok,
@@ -481,7 +482,7 @@ pub async fn cmd_user_invite(
         .map_err(anyhow::Error::from)
         .context("failed to create invite")?;
     let code = require_confirmed_mutation(outcome, "invite creation")?;
-    metrics::invite(host::metrics::InviteEvent::Created);
+    host::metrics::invite(host::metrics::InviteEvent::Created);
     // Deliberate operator-facing reveal via `AsRef` (InviteCode has no Display/serde). With a
     // configured base URL, print a ready-to-send invitation link; otherwise the bare code.
     match state.site_config().get_identity().await?.base_url {
@@ -855,7 +856,7 @@ impl SaturationMetricsSetup {
     fn start(self) -> PreparedSaturationMetrics {
         PreparedSaturationMetrics {
             _observables: self.observables,
-            sampler: server_metrics::spawn_saturation_sampler(self.sources, self.snapshot),
+            sampler: metrics::spawn_saturation_sampler(self.sources, self.snapshot),
         }
     }
 }
@@ -864,7 +865,7 @@ impl BackgroundWorkers {
     async fn start(setup: BackgroundWorkerSetup) -> anyhow::Result<Self> {
         let mut maintenance = setup
             .maintenance
-            .start(DATABASE_MAINTENANCE_INTERVAL)
+            .start(maintenance::DATABASE_MAINTENANCE_INTERVAL)
             .await?;
         let mut backup = match backup::start_backup_worker(
             setup.backup_site_config,
@@ -933,7 +934,7 @@ impl BackgroundWorkers {
 
 pub struct PreparedSaturationMetrics {
     _observables: SaturationObservableGuard,
-    sampler: server_metrics::SaturationSampler,
+    sampler: metrics::SaturationSampler,
 }
 
 impl PreparedSaturationMetrics {
@@ -959,7 +960,7 @@ async fn prepare_saturation_metrics(
         .context("failed to load backup configuration for saturation metrics")?;
     let backup_destination_root = backup_config.destination_path.as_deref().map(PathBuf::from);
     let snapshot = Arc::new(RwLock::new(SaturationSnapshot::default()));
-    let observables = metrics::register_saturation_observables(snapshot.clone());
+    let observables = host::metrics::register_saturation_observables(snapshot.clone());
     let sources = SaturationSources::real(
         db.feed_events.clone(),
         db.media.clone(),
@@ -977,11 +978,11 @@ async fn prepare_saturation_metrics(
 async fn stop_worker_after_start_failure(worker: &mut ScheduledWorkerGuard, context: &'static str) {
     worker.stop();
     if let Err(error) = worker.shutdown().await {
-        host::error::report_swallowed(
-            host::error::ErrorKind::Internal,
-            host::error::ErrorClass::Transient,
+        error::report_swallowed(
+            error::ErrorKind::Internal,
+            error::ErrorClass::Transient,
             context,
-            host::error::SwallowedSource::Error(error.root_cause()),
+            error::SwallowedSource::Error(error.root_cause()),
         );
     }
 }
@@ -998,11 +999,11 @@ fn merge_worker_shutdown(
     if primary.is_ok() {
         *primary = Err(error);
     } else {
-        host::error::report_swallowed(
-            host::error::ErrorKind::Internal,
-            host::error::ErrorClass::Transient,
+        error::report_swallowed(
+            error::ErrorKind::Internal,
+            error::ErrorClass::Transient,
             context,
-            host::error::SwallowedSource::Error(error.root_cause()),
+            error::SwallowedSource::Error(error.root_cause()),
         );
     }
 }
@@ -1254,11 +1255,11 @@ pub async fn cmd_serve(
         match supervisor.await {
             Err(error) if error.is_cancelled() => {}
             Ok(()) => {}
-            Err(error) => host::error::report_swallowed(
-                host::error::ErrorKind::Internal,
-                host::error::ErrorClass::Transient,
+            Err(error) => error::report_swallowed(
+                error::ErrorKind::Internal,
+                error::ErrorClass::Transient,
                 "server.shutdown_supervisor.join",
-                host::error::SwallowedSource::Error(&error),
+                error::SwallowedSource::Error(&error),
             ),
         }
     }
