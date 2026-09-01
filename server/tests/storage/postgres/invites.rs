@@ -13,7 +13,7 @@ use storage::{
 
 use super::super::{
     fixtures::{password, username},
-    invites::create_invite,
+    invites::{assert_exactly_one_invite_registration, create_invite},
 };
 
 struct BarrierInviteStorage {
@@ -51,7 +51,8 @@ impl InviteStorage for BarrierInviteStorage {
 }
 
 #[apply(postgres_only)]
-// reason: forces both registrations through user insertion before competing to claim one invite.
+// reason: SQLite's BEGIN IMMEDIATE serializes writers before the operation callback, so only
+// Postgres can force both user inserts to complete before the claim-stage collision tested here.
 #[tokio::test]
 async fn concurrent_registrations_claim_exactly_one_invite(#[case] backend: Backend) {
     let env = backend.setup().await;
@@ -85,42 +86,12 @@ async fn concurrent_registrations_claim_exactly_one_invite(#[case] backend: Back
     })
     .await
     .expect("concurrent registrations must finish");
-    let first = first.expect("first concurrent registration task must not panic");
-    let second = second.expect("second concurrent registration task must not panic");
-
-    let winner = match (first, second) {
-        (
-            Ok(outcome),
-            Err(WriteScopeError::Operation(RegisterWithInviteError::InviteAlreadyUsed)),
-        )
-        | (
-            Err(WriteScopeError::Operation(RegisterWithInviteError::InviteAlreadyUsed)),
-            Ok(outcome),
-        ) => storage::test_support::confirmed_for(outcome, "winning concurrent registration"),
-        (first, second) => panic!(
-            "expected one confirmed registration and one InviteAlreadyUsed, got {first:?} and {second:?}"
-        ),
-    };
-
-    let invite = state.invites.list_invites().await.unwrap().pop().unwrap();
-    assert_eq!(invite.used_by, Some(winner));
-    let alice = state
-        .users
-        .get_user_by_username(&username("alice"))
-        .await
-        .unwrap();
-    let bob = state
-        .users
-        .get_user_by_username(&username("bob"))
-        .await
-        .unwrap();
-    match (alice, bob) {
-        (Some(alice), None) => assert_eq!(alice.user_id, winner),
-        (None, Some(bob)) => assert_eq!(bob.user_id, winner),
-        (alice, bob) => panic!(
-            "only the winning registration user must persist, found alice={alice:?}, bob={bob:?}"
-        ),
-    }
+    assert_exactly_one_invite_registration(
+        &state,
+        first.expect("first concurrent registration task must not panic"),
+        second.expect("second concurrent registration task must not panic"),
+    )
+    .await;
 }
 
 async fn register_after_claim_barrier(

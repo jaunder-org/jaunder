@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use crate::storage::fixtures::{password, username};
 use chrono::Utc;
@@ -158,6 +158,46 @@ async fn create_user_with_invite_second_call_returns_already_used(#[case] backen
             .unwrap()
             .is_none()
     );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn concurrent_registrations_claim_exactly_one_invite(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = Arc::clone(&env.state);
+    let code = create_invite(
+        &state,
+        "2099-01-02T03:04:05.123457Z".parse::<UtcInstant>().unwrap(),
+    )
+    .await;
+    let start_barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+    let first = tokio::spawn(register_after_start_barrier(
+        Arc::clone(&state),
+        Arc::clone(&start_barrier),
+        code.clone(),
+        username("alice"),
+        password("alice-password"),
+    ));
+    let second = tokio::spawn(register_after_start_barrier(
+        Arc::clone(&state),
+        start_barrier,
+        code,
+        username("bob"),
+        password("bob-password"),
+    ));
+    let (first, second) = tokio::time::timeout(Duration::from_secs(20), async {
+        tokio::join!(first, second)
+    })
+    .await
+    .expect("concurrent registrations must finish");
+
+    assert_exactly_one_invite_registration(
+        &state,
+        first.expect("first concurrent registration task must not panic"),
+        second.expect("second concurrent registration task must not panic"),
+    )
+    .await;
 }
 
 #[apply(backends)]
@@ -393,4 +433,55 @@ async fn create_user_with_invite_result(
             })
         })
         .await
+}
+
+async fn register_after_start_barrier(
+    state: Arc<AppState>,
+    start_barrier: Arc<tokio::sync::Barrier>,
+    code: InviteCode,
+    username: common::username::Username,
+    password: host::password::Password,
+) -> Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>> {
+    start_barrier.wait().await;
+    create_user_with_invite_result(&state, username, password, None, false, code).await
+}
+
+pub(super) async fn assert_exactly_one_invite_registration(
+    state: &AppState,
+    first: Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>>,
+    second: Result<MutationOutcome<common::ids::UserId>, WriteScopeError<RegisterWithInviteError>>,
+) {
+    let winner = match (first, second) {
+        (
+            Ok(outcome),
+            Err(WriteScopeError::Operation(RegisterWithInviteError::InviteAlreadyUsed)),
+        )
+        | (
+            Err(WriteScopeError::Operation(RegisterWithInviteError::InviteAlreadyUsed)),
+            Ok(outcome),
+        ) => storage::test_support::confirmed_for(outcome, "winning concurrent registration"),
+        (first, second) => panic!(
+            "expected one confirmed registration and one InviteAlreadyUsed, got {first:?} and {second:?}"
+        ),
+    };
+
+    let invite = state.invites.list_invites().await.unwrap().pop().unwrap();
+    assert_eq!(invite.used_by, Some(winner));
+    let alice = state
+        .users
+        .get_user_by_username(&username("alice"))
+        .await
+        .unwrap();
+    let bob = state
+        .users
+        .get_user_by_username(&username("bob"))
+        .await
+        .unwrap();
+    match (alice, bob) {
+        (Some(alice), None) => assert_eq!(alice.user_id, winner),
+        (None, Some(bob)) => assert_eq!(bob.user_id, winner),
+        (alice, bob) => panic!(
+            "only the winning registration user must persist, found alice={alice:?}, bob={bob:?}"
+        ),
+    }
 }
