@@ -72,16 +72,22 @@ Out:
     fields.
 
 - [x] Task 5: Establish a clean media temporary directory at startup
-  - Contract: after the runtime single-instance guard is successfully acquired
-    but before upload handling is prepared, startup removes all artifacts under
-    `media/tmp` and recreates a usable empty directory. A competing live
-    instance refuses startup before cleanup and its files remain untouched.
-    Cleanup failure is a typed fatal startup error; finalized and referenced
+  - Contract: startup acquires the storage-scoped OS-backed runtime lock and
+    writes the sole `<storage>/runtime.json` identity with port zero before
+    cleanup. If its `pid` plus start time identifies a competing live instance,
+    startup refuses before cleanup and its files remain untouched. Before upload
+    handling is prepared, startup removes all artifacts under `media/tmp` and
+    recreates a usable empty directory. After binding, it best-effort updates
+    the canonical identity without replacing the live reservation on failure;
+    shutdown removes the file before releasing the lock. Cleanup or pre-bind
+    reservation failure is a typed fatal startup error; finalized and referenced
     media paths are unreachable from this operation.
   - Verification: filesystem behavior tests cover absent, empty, populated,
     nested, and cleanup-failure cases. Server preparation tests prove successful
-    guard acquisition precedes cleanup, live-instance refusal performs no
-    cleanup, and cleanup completes before uploads are accepted.
+    guard acquisition and pre-bind reservation precede cleanup, live-instance
+    refusal performs no cleanup, post-bind publication preserves the identity on
+    failure, shutdown removal precedes lock release, and cleanup completes before
+    uploads are accepted.
 
 - [x] Task 6: Integrate startup and daily database maintenance
   - Contract: the composition root runs database maintenance once during startup

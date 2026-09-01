@@ -27,12 +27,14 @@ both supported databases. The existing OpenTelemetry discipline
 ([ADR-0011](../0011-unified-observability.md)) prohibits PII and secrets in
 telemetry.
 
-[ADR-0035](../0035-elisp-live-integration-harness.md) made the runtime-info JSON
-file both an ephemeral-port discovery handshake and the startup mutex. That
-single file cannot safely protect startup cleanup when `--runtime-file` moves
-discovery outside the storage directory or when publication remains best-effort
-until after binding. Clearing `media/tmp` therefore requires a storage-directory
-ownership mechanism that exists before cleanup and survives until shutdown.
+[ADR-0035](../0035-elisp-live-integration-harness.md) introduced the
+runtime-info JSON file as both an ephemeral-port discovery handshake and a
+startup mutex. [ADR-0144](../0144-process-configuration-cli-contract.md) later
+made its path configurable. Runtime identity and discovery instead need one
+storage-scoped path: storage already isolates an instance, and no repository
+consumer needs a second path. Clearing `media/tmp` therefore requires
+storage-directory ownership that exists before cleanup and survives until
+shutdown.
 
 ## Decision
 
@@ -54,19 +56,18 @@ Jaunder adopts fixed product retention policies for four transient surfaces:
 
 To make temporary-upload cleanup exclusive, `serve` acquires an OS-backed
 exclusive lock keyed only by the storage directory before inspecting or deleting
-transient files, and retains it through shutdown. It also publishes the
-canonical `<storage>/runtime.json` identity before cleanup; failure to publish
-this legacy-visible reservation is fatal. A distinct `--runtime-file` is
-additional discovery output, not the lock identity or a replacement for the
-canonical reservation. Existing JSON `pid` plus process-start-time checks
-continue to refuse live legacy processes that predate the OS lock. After the
-listener binds, address updates are best-effort and must preserve the existing
-live identity on failure. The pre-bind reservation carries port zero; discovery
-consumers treat that value as not ready and reread until a nonzero bound port is
-published. Graceful and forced shutdown remove every published runtime file
-before releasing the lock. This qualifies ADR-0035's JSON-as-mutex,
-override-replaces-default, post-bind publication, and best-effort initial-write
-rules while retaining its discovery contract.
+transient files, and retains it through shutdown. Before cleanup it publishes
+the sole runtime identity at `<storage>/runtime.json`; failure to publish this
+pre-bind reservation is fatal. If that file's JSON `pid` plus process start time
+identifies a live process, startup refuses before cleanup. The pre-bind
+reservation carries port zero; discovery consumers treat that value as not ready
+and reread until a nonzero bound port is published. After the listener binds,
+the address update is best-effort and must preserve the live identity on
+failure. Graceful and forced shutdown remove the canonical runtime file before
+releasing the lock. This qualifies ADR-0035's JSON-as-mutex and best-effort
+initial-write rules, and removes ADR-0144's `--runtime-file` and
+`JAUNDER_RUNTIME_FILE` override: storage already provides instance isolation,
+and no repository consumer needs a second path.
 
 For database-backed transient data, semantic expiry is authoritative at
 `cutoff <= now`; physical cleanup is not required to occur at that instant.
@@ -116,10 +117,10 @@ structured state-transition telemetry to understand cleanup and terminal states
 without receiving tokens, credentials, payloads, or other PII; they configure
 and retain that telemetry outside Jaunder.
 
-The storage-directory lock prevents runtime discovery overrides from splitting
-startup ownership. Mandatory pre-cleanup canonical publication keeps older
-processes able to observe the new instance, while retaining separate discovery
-output for harnesses and operators.
+The storage-directory lock and canonical runtime file give startup one ownership
+and discovery identity. Mandatory pre-cleanup publication, live pid/start-time
+refusal, and port-zero-before-bind preserve the competing-live instance safety
+and discovery handshake without a second runtime path.
 
 The different outcomes are intentional: a failed `media/tmp` cleanup stops
 startup, while a database cleanup failure is reported and later domain passes

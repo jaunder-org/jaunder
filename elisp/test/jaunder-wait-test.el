@@ -38,24 +38,26 @@ elapsed time."
 
 (ert-deftest jaunder-test--runtime-reader-waits-through-pre-bind-reservation ()
   "A live identity with port zero is ownership evidence, not readiness."
-  (let ((path (make-temp-file "jaunder-runtime-")))
+  (let* ((storage (make-temp-file "jaunder-storage-" t))
+         (runtime (expand-file-name "runtime.json" storage)))
     (unwind-protect
         (progn
-          (with-temp-file path
+          (with-temp-file runtime
             (insert "{\"ip\":\"127.0.0.1\",\"port\":0,\"pid\":1,\"start_time\":2}"))
-          (should-not (jaunder-test--read-runtime-file path)))
-      (delete-file path))))
+          (should-not (jaunder-test--read-runtime-file runtime)))
+      (delete-directory storage t))))
 
 (ert-deftest jaunder-test--runtime-reader-accepts-bound-address ()
   "A valid nonzero bound port completes the discovery handshake."
-  (let ((path (make-temp-file "jaunder-runtime-")))
+  (let* ((storage (make-temp-file "jaunder-storage-" t))
+         (runtime (expand-file-name "runtime.json" storage)))
     (unwind-protect
         (progn
-          (with-temp-file path
+          (with-temp-file runtime
             (insert "{\"ip\":\"127.0.0.1\",\"port\":34567,\"pid\":1,\"start_time\":2}"))
           (should (equal '("127.0.0.1" . 34567)
-                         (jaunder-test--read-runtime-file path))))
-      (delete-file path))))
+                         (jaunder-test--read-runtime-file runtime))))
+      (delete-directory storage t))))
 
 ;; --- Shared-server boot retry (#628) ---
 

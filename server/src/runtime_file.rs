@@ -1,13 +1,13 @@
-//! The `serve` runtime-info file — a small JSON file recording the bound address
-//! so an ephemeral (`--bind …:0`) server is discoverable by an out-of-process
-//! caller (the elisp test harness). See ADR-0035.
+//! The canonical `serve` runtime-info file at `<storage>/runtime.json` records
+//! the bound address so an ephemeral (`--bind …:0`) server is discoverable by an
+//! out-of-process caller (the elisp test harness). See ADR-0035.
 //!
 //! Contents: `{ "ip": <ip>, "port": <port>, "pid": <pid>, "start_time": <jiffies> }`.
-//! The JSON file remains the out-of-process discovery contract. The adjacent
-//! OS-backed `.lock` file is the startup mutex: its kernel lock, not its
-//! on-disk existence, determines whether another live instance owns the data
-//! directory. We still inspect the JSON identity during rollout so a live legacy
-//! process without the lock remains protected.
+//! The JSON file is the out-of-process discovery contract. The adjacent OS-backed
+//! `.lock` file is the startup mutex: its kernel lock, not its on-disk existence,
+//! determines whether another live instance owns the storage directory. We still
+//! inspect the JSON identity during rollout so a live legacy process without the
+//! lock remains protected.
 
 use anyhow::{Context, Result};
 use host::error;
@@ -84,17 +84,9 @@ pub(crate) fn holder_is_live(pid: u32, recorded: u64) -> std::io::Result<bool> {
     })
 }
 
-/// The canonical runtime-file path under a storage directory. This is the
-/// legacy-visible reservation and the basis for the process-wide startup lock;
-/// `--runtime-file` affects only additional discovery output.
+/// The sole runtime-file path under a storage directory.
 pub(crate) fn canonical_runtime_path(storage_path: &Path) -> PathBuf {
     storage_path.join("runtime.json")
-}
-
-/// The optional discovery-file path: the explicit `override_path`, else the
-/// canonical legacy-visible runtime file.
-pub(crate) fn resolve_runtime_path(override_path: Option<PathBuf>, storage_path: &Path) -> PathBuf {
-    override_path.unwrap_or_else(|| canonical_runtime_path(storage_path))
 }
 
 /// Outcome of the start-up mutex check.
@@ -204,7 +196,8 @@ fn lock_path(storage_path: &Path) -> PathBuf {
 /// An OS-backed exclusive lock held from before temporary-upload cleanup until
 /// shutdown. Its file may outlive its holder; only the live kernel lock matters.
 pub struct StartupLockGuard {
-    _file: File,
+    runtime_path: PathBuf,
+    file: File,
 }
 
 impl StartupLockGuard {
@@ -230,70 +223,51 @@ impl StartupLockGuard {
             .with_context(|| format!("cannot open startup lock {}", path.display()))?;
         file.try_lock()
             .with_context(|| format!("cannot acquire exclusive startup lock {}", path.display()))?;
-        Ok(Self { _file: file })
+        Ok(Self {
+            runtime_path: canonical_runtime_path(storage_path),
+            file,
+        })
     }
 
-    /// Publishes the canonical reservation and, when distinct, the discovery
-    /// override while retaining the startup lock for their lifetime.
+    /// Publishes the canonical runtime reservation while retaining the startup
+    /// lock for its lifetime.
     ///
     /// # Errors
     ///
-    /// Returns an error if either runtime file cannot be reserved.
-    pub fn reserve(
-        self,
-        reservation_path: PathBuf,
-        discovery_path: PathBuf,
-        addr: SocketAddr,
-        start_time: u64,
-    ) -> Result<RuntimeGuard> {
-        let reservation = RuntimeFileGuard::reserve(reservation_path, addr, start_time)?;
-        let discovery = if reservation.path() == Some(discovery_path.as_path()) {
-            None
-        } else {
-            Some(RuntimeFileGuard::reserve(discovery_path, addr, start_time)?)
-        };
+    /// Returns an error if the runtime file cannot be reserved.
+    pub fn reserve(self, addr: SocketAddr, start_time: u64) -> Result<RuntimeGuard> {
+        let Self { runtime_path, file } = self;
+        let runtime_file = RuntimeFileGuard::reserve(runtime_path, addr, start_time)?;
         Ok(RuntimeGuard {
-            reservation,
-            discovery,
-            _lock: self,
+            runtime_file,
+            _lock: file,
         })
     }
 }
 
-/// Holds both the OS-backed startup lock and runtime-file publication. The
-/// reservation drops before the lock, so legacy discovery disappears before a
-/// new process may acquire the data-directory lock.
+/// Holds the OS-backed startup lock and canonical runtime-file publication. The
+/// runtime file drops before the lock, so discovery disappears before a new
+/// process may acquire the storage-directory lock.
 pub struct RuntimeGuard {
-    reservation: RuntimeFileGuard,
-    discovery: Option<RuntimeFileGuard>,
-    _lock: StartupLockGuard,
+    runtime_file: RuntimeFileGuard,
+    _lock: File,
 }
 
 impl RuntimeGuard {
-    /// Updates the reservations with the bound listener address. Address
-    /// publication is best-effort only after both live identities exist.
-    pub fn update_addresses(&self, addr: SocketAddr, start_time: u64) {
-        self.reservation.update(addr, start_time);
-        if let Some(discovery) = &self.discovery {
-            discovery.update(addr, start_time);
-        }
+    /// Updates the canonical reservation with the bound listener address.
+    /// Address publication is best-effort after the live identity exists.
+    pub fn update_address(&self, addr: SocketAddr, start_time: u64) {
+        self.runtime_file.update(addr, start_time);
     }
 
-    /// Every active runtime-file path, for forced-shutdown removal.
+    /// The canonical runtime-file path, for forced-shutdown removal.
     #[must_use]
-    pub fn paths(&self) -> Vec<PathBuf> {
-        [
-            self.reservation.path(),
-            self.discovery.as_ref().and_then(RuntimeFileGuard::path),
-        ]
-        .into_iter()
-        .flatten()
-        .map(Path::to_path_buf)
-        .collect()
+    pub fn path(&self) -> &Path {
+        self.runtime_file.path()
     }
 }
 
-/// RAII guard for the discoverability file: writes it on construction and
+/// RAII guard for the canonical runtime file: reserves it before cleanup and
 /// removes it on `Drop`.
 ///
 /// Removal is signal-robust on a normal service stop (#140): the graceful
@@ -302,48 +276,25 @@ impl RuntimeGuard {
 /// [`remove_runtime_file`] before `process::exit`. A hard `SIGKILL` still skips
 /// both, but releases [`StartupLockGuard`]'s OS lock automatically.
 pub struct RuntimeFileGuard {
-    path: Option<PathBuf>,
+    path: PathBuf,
 }
 
 impl RuntimeFileGuard {
-    /// Writes the runtime file at `path` recording `addr` + our pid + `start_time`.
-    ///
-    /// Best-effort: on a write failure this logs and returns an inert guard, so
-    /// a runtime-file problem never stops the server from serving.
-    #[must_use]
-    pub fn write(path: PathBuf, addr: SocketAddr, start_time: u64) -> Self {
-        match write_atomic(&path, addr, start_time) {
-            Ok(()) => Self { path: Some(path) },
-            Err(error) => {
-                error::report_swallowed(
-                    host::error::ErrorKind::Internal,
-                    host::error::ErrorClass::Transient,
-                    "server.runtime_file.write",
-                    host::error::SwallowedSource::Error(&error),
-                );
-                Self { path: None }
-            }
-        }
-    }
-
-    /// Writes the initial legacy-visible runtime reservation. Unlike ordinary
-    /// discovery publication, failure is fatal because startup cleanup must not
-    /// run unless another process can observe this live identity.
+    /// Writes the initial canonical runtime reservation. Failure is fatal because
+    /// startup cleanup must not run unless another process can observe this live
+    /// identity.
     fn reserve(path: PathBuf, addr: SocketAddr, start_time: u64) -> Result<Self> {
         write_atomic(&path, addr, start_time).with_context(|| {
             format!("cannot publish live runtime reservation {}", path.display())
         })?;
-        Ok(Self { path: Some(path) })
+        Ok(Self { path })
     }
 
     /// Replaces the reservation's provisional address after listener binding.
     /// The existing live reservation remains valid if the atomic replacement
-    /// fails, so preserve ordinary discovery publication's best-effort behavior.
+    /// fails, so preserve best-effort address publication.
     fn update(&self, addr: SocketAddr, start_time: u64) {
-        let Some(path) = self.path() else {
-            return;
-        };
-        if let Err(error) = write_atomic(path, addr, start_time) {
+        if let Err(error) = write_atomic(&self.path, addr, start_time) {
             error::report_swallowed(
                 host::error::ErrorKind::Internal,
                 host::error::ErrorClass::Transient,
@@ -353,20 +304,17 @@ impl RuntimeFileGuard {
         }
     }
 
-    /// The active runtime-file path, or `None` for an inert guard (write failed).
     /// Lets the shutdown supervisor clone the path before the guard is moved into
     /// the serve future, so the forced-exit path can remove it without the guard.
     #[must_use]
-    pub fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 }
 
 impl Drop for RuntimeFileGuard {
     fn drop(&mut self) {
-        if let Some(p) = &self.path {
-            remove_runtime_file(p);
-        }
+        remove_runtime_file(&self.path);
     }
 }
 
@@ -444,24 +392,6 @@ mod tests {
     }
 
     #[test]
-    fn startup_lock_ignores_distinct_discovery_overrides() {
-        let dir = TempDir::new().unwrap();
-        let first_path = resolve_runtime_path(Some(dir.path().join("first.json")), dir.path());
-        let second_path = resolve_runtime_path(Some(dir.path().join("second.json")), dir.path());
-        assert_ne!(
-            first_path, second_path,
-            "test needs distinct discovery paths"
-        );
-
-        let first = StartupLockGuard::acquire(dir.path()).expect("first lock");
-        assert!(
-            StartupLockGuard::acquire(dir.path()).is_err(),
-            "distinct discovery overrides must contend for one storage lock"
-        );
-        drop(first);
-    }
-
-    #[test]
     fn stale_startup_lock_file_does_not_block_acquisition() {
         let dir = TempDir::new().unwrap();
         let lock_path = lock_path(dir.path());
@@ -509,18 +439,12 @@ mod tests {
     #[test]
     fn startup_lock_reservation_write_failure_is_fatal_and_contextual() {
         let dir = TempDir::new().unwrap();
-        let reservation_path = dir.path().join("reservation");
-        let discovery_path = dir.path().join("discovery.json");
-        fs::create_dir(&reservation_path).unwrap();
+        let runtime_path = canonical_runtime_path(dir.path());
+        fs::create_dir(&runtime_path).unwrap();
         let lock = StartupLockGuard::acquire(dir.path()).expect("startup lock");
 
         let error = lock
-            .reserve(
-                reservation_path.clone(),
-                discovery_path.clone(),
-                addr(),
-                own_start_time(),
-            )
+            .reserve(addr(), own_start_time())
             .err()
             .expect("a directory cannot receive a runtime reservation");
 
@@ -528,7 +452,7 @@ mod tests {
             error.to_string(),
             format!(
                 "cannot publish live runtime reservation {}",
-                reservation_path.display()
+                runtime_path.display()
             )
         );
         assert!(
@@ -538,35 +462,30 @@ mod tests {
             "fatal reservation failure must retain its typed I/O source: {error:#}"
         );
         assert!(
-            reservation_path.is_dir(),
-            "failed publication must not replace the reservation target"
-        );
-        assert!(
-            !discovery_path.exists(),
-            "a failed canonical reservation must not publish discovery output"
+            runtime_path.is_dir(),
+            "failed publication must not replace the canonical runtime path"
         );
         StartupLockGuard::acquire(dir.path())
             .expect("failed reservation drops its lock instead of blocking retry");
     }
 
     #[test]
-    fn runtime_guard_removes_discovery_file_before_releasing_lock() {
+    fn runtime_guard_removes_canonical_file_before_releasing_lock() {
         let dir = TempDir::new().unwrap();
         let runtime_path = canonical_runtime_path(dir.path());
         let lock = StartupLockGuard::acquire(dir.path()).expect("startup lock");
         let guard = lock
-            .reserve(
-                runtime_path.clone(),
-                runtime_path.clone(),
-                addr(),
-                own_start_time(),
-            )
+            .reserve(SocketAddr::new(addr().ip(), 0), own_start_time())
             .expect("reservation");
         let reservation: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&runtime_path).expect("reservation file"))
                 .expect("valid reservation");
         assert_eq!(reservation["pid"], std::process::id());
         assert!(reservation["start_time"].as_u64().is_some());
+        assert_eq!(
+            reservation["port"], 0,
+            "reservation is not ready to connect"
+        );
 
         drop(guard);
         assert!(
@@ -587,27 +506,6 @@ mod tests {
             std::io::ErrorKind::NotFound,
             "already absent",
         ))
-    }
-
-    #[test]
-    fn writes_ip_and_port_json() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("runtime.json");
-        let _guard = RuntimeFileGuard::write(path.clone(), addr(), 0);
-        let v: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(v["ip"], "127.0.0.1");
-        assert_eq!(v["port"], 34567);
-    }
-
-    #[test]
-    fn removes_file_on_drop() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("runtime.json");
-        let guard = RuntimeFileGuard::write(path.clone(), addr(), 0);
-        assert!(path.exists());
-        drop(guard);
-        assert!(!path.exists());
     }
 
     #[test]
@@ -641,42 +539,22 @@ mod tests {
     }
 
     #[test]
-    fn path_is_some_for_active_guard_and_none_for_inert() {
+    fn runtime_guard_updates_canonical_reservation_after_binding() {
         let dir = TempDir::new().unwrap();
-        let active = RuntimeFileGuard::write(dir.path().join("runtime.json"), addr(), 0);
-        assert!(active.path().is_some());
-        let inert = RuntimeFileGuard::write(
-            std::path::Path::new("/nonexistent-jaunder-xyz/sub/runtime.json").to_path_buf(),
-            addr(),
-            0,
-        );
-        assert!(inert.path().is_none());
-    }
+        let runtime_path = canonical_runtime_path(dir.path());
+        let start_time = own_start_time();
+        let guard = StartupLockGuard::acquire(dir.path())
+            .expect("startup lock")
+            .reserve(SocketAddr::new(addr().ip(), 0), start_time)
+            .expect("initial reservation");
+        let bound = SocketAddr::new(addr().ip(), 45678);
 
-    #[test]
-    fn inert_guard_update_is_a_silent_noop() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("missing").join("runtime.json");
-        let guard = RuntimeFileGuard::write(path.clone(), addr(), 0);
-        assert!(
-            guard.path().is_none(),
-            "failed initial publication is inert"
-        );
+        guard.update_address(bound, start_time);
 
-        let ((), trace) = capture(|| guard.update(addr(), 1));
-
-        assert!(
-            trace.is_empty(),
-            "an inert guard must not report updates: {trace}"
-        );
-        assert!(
-            !path.exists(),
-            "an inert update must not create its unavailable runtime file"
-        );
-        assert!(
-            !path.with_extension("tmp").exists(),
-            "an inert update must not attempt an atomic replacement"
-        );
+        let runtime: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(runtime_path).expect("runtime file"))
+                .expect("valid runtime file");
+        assert_eq!(runtime["port"], bound.port());
     }
 
     #[test]
@@ -756,7 +634,7 @@ mod tests {
     fn writes_pid_and_start_time_json() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("runtime.json");
-        let _guard = RuntimeFileGuard::write(path.clone(), addr(), 4242);
+        let _guard = RuntimeFileGuard::reserve(path.clone(), addr(), 4242).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(v["ip"], "127.0.0.1");

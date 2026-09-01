@@ -75,12 +75,18 @@ unbounded audit log.
 
 ### Media Temporary Files
 
-- Before the server can accept uploads, startup establishes an empty `media/tmp`
-  directory by removing every leftover temporary upload artifact.
+- Before the server can accept uploads, startup acquires the storage-scoped
+  OS-backed runtime lock, refuses if `<storage>/runtime.json` identifies a live
+  process by its `pid` plus start time, and removes every leftover temporary
+  upload artifact from `media/tmp`.
+- It publishes `<storage>/runtime.json` with port zero before cleanup; after
+  binding, it best-effort updates the address without replacing the live
+  identity on failure, and removes that canonical file on shutdown before
+  releasing the lock.
 - The single-instance runtime guard means no valid upload is active during this
   startup cleanup.
-- Failure to establish the clean directory is a fatal startup error rather than
-  a best-effort maintenance warning.
+- Failure to establish the clean directory or its pre-bind runtime reservation
+  is a fatal startup error rather than a best-effort maintenance warning.
 - Finalized media, media metadata, reference-guarded files, and Emacs Local
   Media Copies are never affected.
 

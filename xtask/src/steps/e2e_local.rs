@@ -1,7 +1,8 @@
 //! Host e2e loop driver (#249): `cargo xtask e2e-local` OWNS the whole loop —
 //! build the CSR bundle + server, start `jaunder serve` on an ephemeral port with
-//! the VM's capture env, discover the port from the runtime file, seed via the
-//! shared `devtool seed-e2e`, run Playwright against the discovered URL, and tear
+//! the VM's capture env, discover the port from the canonical
+//! `<storage>/runtime.json`, seed via the shared `devtool seed-e2e`, run
+//! Playwright against the discovered URL, and tear
 //! the server down on every exit path. Each run gets a fresh temp storage dir + DB
 //! (distinct ephemeral port + DB ⇒ concurrent runs don't collide at the server/DB
 //! layer, and the dev `data/jaunder.db` is never touched). Loads the same
@@ -10,16 +11,16 @@
 //!
 //! Canonical e2e-server env-var set the host driver and the flake both provide
 //! (names shared, values per-environment; see also `flake.nix` `captureEnv`):
-//! `JAUNDER_BIND`, `JAUNDER_DB`, `JAUNDER_RUNTIME_FILE`, `JAUNDER_CAPTURE_DIR`
-//! (the single capture-dir contract, #227) — plus `JAUNDER_STORAGE_PATH`
-//! host-side only (the VM instead relies on systemd
-//! `WorkingDirectory=/var/lib/jaunder` + the `./data` default). Values differ per
-//! environment (host: a temp dir + ephemeral port; VM: `/var/lib/jaunder` +
-//! `:3000`). The DB + capture-dir vars are ALSO set on the Playwright process (with
-//! `target/debug` prepended to PATH) so `mail.ts`/`websub.ts` resolve the same
-//! capture paths (via `test-support capture-path`) the server writes, and
-//! `seed.ts`'s bare-`test-support` `seedPostsViaTool` resolves the same binary +
-//! DB — VM parity for the mail/websub/pagination specs.
+//! `JAUNDER_BIND`, `JAUNDER_DB`, `JAUNDER_CAPTURE_DIR` (the single capture-dir
+//! contract, #227) — plus `JAUNDER_STORAGE_PATH` host-side only (the VM instead
+//! relies on systemd `WorkingDirectory=/var/lib/jaunder` + the `./data` default).
+//! Values differ per environment (host: a temp dir + ephemeral port; VM:
+//! `/var/lib/jaunder` + `:3000`). The DB + capture-dir vars are ALSO set on the
+//! Playwright process (with `target/debug` prepended to PATH) so
+//! `mail.ts`/`websub.ts` resolve the same capture paths (via `test-support
+//! capture-path`) the server writes, and `seed.ts`'s bare-`test-support`
+//! `seedPostsViaTool` resolves the same binary + DB — VM parity for the
+//! mail/websub/pagination specs.
 mod capture;
 mod process;
 
@@ -679,7 +680,6 @@ fn run_lifecycle(
         .env("JAUNDER_BIND", "127.0.0.1:0")
         .env("JAUNDER_STORAGE_PATH", storage.path())
         .env("JAUNDER_DB", &db)
-        .env("JAUNDER_RUNTIME_FILE", &runtime)
         .env("JAUNDER_CAPTURE_DIR", &capture)
         .env("RUST_LOG", "info")
         .env(

@@ -1735,27 +1735,25 @@ feature.
 **What is inside the executable.** Two `rust-embed` trees, so **no external file
 is needed to serve the client** ([ADR-0003](adr/0003-asset-management.md)).
 Request handling still touches disk for user data — media blobs are opened per
-request from the storage path (`server/src/media.rs`) — and the process writes a
-canonical runtime identity under that path, may write an additional discovery
-override, and may read a PostgreSQL password file; see "Outside the binary"
-below.
+request from the storage path (`server/src/media.rs`) — and the process writes
+its sole runtime identity to `<storage>/runtime.json` and may read a PostgreSQL
+password file; see "Outside the binary" below.
 
 Startup ownership is an OS-backed exclusive `runtime.lock` keyed only by the
 storage directory. `serve` acquires it before transient cleanup and retains it
-through shutdown, so distinct `--runtime-file` discovery overrides cannot let
-two processes clean the same `media/tmp`. Before cleanup it also writes the
-canonical `<storage>/runtime.json` identity; that initial reservation is fatal
-on failure and remains visible to older binaries whose JSON `pid` plus process
-start-time check predates the OS lock. `--runtime-file` adds a second discovery
-file rather than replacing the canonical reservation. The pre-bind reservation
-uses port zero; discovery consumers treat it as not ready and reread until the
-bound nonzero port is published. Address updates are best-effort but preserve
-the live reservation on failure; graceful and forced shutdown remove every
-published identity before releasing the lock. The e2e and Elisp harnesses read
-the configured discovery file for this port handshake. This retains ADR-0035's
-discovery contract while qualifying its former JSON-as-mutex and override
-behavior ([ADR-0035](adr/0035-elisp-live-integration-harness.md);
-[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)).
+through shutdown, so two processes cannot clean the same `media/tmp`. Before
+cleanup it writes the canonical `<storage>/runtime.json` identity; that initial
+reservation is fatal on failure. If the file identifies a live process through
+its JSON `pid` plus process start time, startup refuses before cleanup. The
+pre-bind reservation uses port zero; discovery consumers treat it as not ready
+and reread until the bound nonzero port is published. Address updates are
+best-effort but preserve the live reservation on failure; graceful and forced
+shutdown remove the canonical identity before releasing the lock. The e2e and
+Elisp harnesses read that canonical file for this port handshake. This retains
+ADR-0035's discovery contract while the
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
+qualifies its JSON-as-mutex behavior and removes ADR-0144's runtime-path
+override.
 
 - `StaticAssets` (`server/src/assets.rs:3-5`, `#[folder = "assets/"]`) carries
   the base stylesheets `jaunder.css` and `jaunder-themes.css`, mounted at
@@ -1829,19 +1827,21 @@ closed-enum convention rather than a config-specific matcher
 
 Deployment is configured by clap flags with matching `JAUNDER_*` environment
 fallbacks and documented defaults
-([process configuration](adr/0144-process-configuration-cli-contract.md)). The
-process-shape variables are `JAUNDER_BIND` (listen address, `:267`),
+([process configuration](adr/0144-process-configuration-cli-contract.md), as
+qualified by the
+[bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)).
+The process-shape variables are `JAUNDER_BIND` (listen address, `:267`),
 `JAUNDER_DB` (database URL, default `sqlite:./data/jaunder.db`, `:41`),
 `JAUNDER_STORAGE_PATH` (the data directory, default `./data`, `:33`),
-`JAUNDER_ENV` (`dev` | `prod`, `:271`), `JAUNDER_RUNTIME_FILE` (`:276`) and
-`JAUNDER_VERBOSE` (`:25`). PostgreSQL takes its secret by either
-`JAUNDER_DB_PASSWORD` or `JAUNDER_DB_PASSWORD_FILE`; the file source wins over
-the variable, and either wins over an embedded URL password. All runtime
-environment inputs — including the observability variables covered under
-[Observability](#observability) — are resolved once at an executable, command,
-or test-harness composition root into narrow typed configuration, then injected
-into the subsystems that own them. Library modules neither reread ambient
-configuration nor receive a general environment reader or process-config bundle
+`JAUNDER_ENV` (`dev` | `prod`, `:271`), and `JAUNDER_VERBOSE` (`:25`).
+PostgreSQL takes its secret by either `JAUNDER_DB_PASSWORD` or
+`JAUNDER_DB_PASSWORD_FILE`; the file source wins over the variable, and either
+wins over an embedded URL password. All runtime environment inputs — including
+the observability variables covered under [Observability](#observability) — are
+resolved once at an executable, command, or test-harness composition root into
+narrow typed configuration, then injected into the subsystems that own them.
+Library modules neither reread ambient configuration nor receive a general
+environment reader or process-config bundle
 ([peripheral process configuration](adr/0158-peripheral-process-configuration.md)).
 `prod` is load-bearing in two places: it sets the `secure_cookies` flag passed
 to `create_router` (`server/src/commands.rs:546`, `server/src/lib.rs:32`), and
