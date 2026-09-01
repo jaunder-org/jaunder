@@ -844,14 +844,13 @@ mod tests {
     #[test]
     fn unpublish_refetches_only_when_the_permalink_stays_the_same() {
         let refetches = Cell::new(0);
+        let refetch = || {
+            refetches.set(refetches.get() + 1);
+        };
         let same_permalink = parse_root_relative_url("/~alice/2026/01/02/hello");
-        refetch_unpublished_post_if_needed("/~alice/2026/01/02/hello", &same_permalink, || {
-            refetches.set(refetches.get() + 1);
-        });
+        refetch_unpublished_post_if_needed("/~alice/2026/01/02/hello", &same_permalink, refetch);
         let moved_permalink = parse_root_relative_url("/~alice/2025/12/31/hello");
-        refetch_unpublished_post_if_needed("/~alice/2026/01/02/hello", &moved_permalink, || {
-            refetches.set(refetches.get() + 1);
-        });
+        refetch_unpublished_post_if_needed("/~alice/2026/01/02/hello", &moved_permalink, refetch);
         assert_eq!(refetches.get(), 1);
     }
 
