@@ -3147,6 +3147,17 @@ Distinguishing outcomes — including `ready-to-land`, `ejected`, `dequeued`,
 — live in `pr.outcome` in the result envelope; success is command-specific
 rather than a global synonym for merged.
 
+**Post-land checkout cleanup.** After a confirmed merge,
+`cargo xtask pr cleanup [N]` is the explicit local-only cleanup command
+([docs/adr/drafts/explicit-post-land-cleanup-command.md](adr/drafts/explicit-post-land-cleanup-command.md)).
+It independently proves that the PR is merged into exactly `main`, the current
+branch and HEAD exactly match its head ref and SHA, and the tree is clean; an
+omitted number cursor-paginates merged candidates and accepts exactly one match.
+It then fails closed through fetch, `origin/main` ancestry verification, detach,
+safe local-branch deletion, and root cargo cleanup. This capability neither
+approves nor changes the already reported `pr land` merge, and it does not
+mutate a tracker or remote branch.
+
 ## Documentation & decision process
 
 The documentation architecture is event-sourced: ADRs in `docs/adr/` are

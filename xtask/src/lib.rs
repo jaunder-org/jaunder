@@ -317,6 +317,17 @@ pub enum PrCommand {
         #[arg(long, value_name = "MINUTES", default_value_t = 90, value_parser = clap::value_parser!(u64).range(1..))]
         timeout: u64,
     },
+    /// Clean this checkout after a PR has merged. This is local-only: it proves the
+    /// exact merged head before fetching, detaching, safely deleting the branch, and
+    /// running `cargo clean`.
+    #[command(after_help = "EXAMPLES:\n  \
+        cargo xtask pr cleanup\n  \
+        cargo xtask pr cleanup 1155")]
+    Cleanup {
+        /// Merged PR number. Omitted: exhaustively find the merged PR for this exact
+        /// checked-out branch and HEAD.
+        number: Option<u64>,
+    },
 }
 
 /// `server-fn-coverage` subcommands (#681).
@@ -484,6 +495,7 @@ impl Cli {
                 steps::server_fn_coverage_check::VERIFY_STEP
             }
             Command::Pr(PrCommand::Watch { .. }) => "pr-watch",
+            Command::Pr(PrCommand::Cleanup { .. }) => "pr-cleanup",
             Command::Pr(PrCommand::Land { .. }) => "pr-land",
             Command::Issue(issue::IssueCommand::Candidates { .. }) => "issue-candidates",
             Command::Issue(issue::IssueCommand::Create { .. }) => "issue-create",
@@ -1367,6 +1379,12 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             Ok(result)
         }
         Command::Issue(sub) => issue::execute(sub),
+        Command::Pr(PrCommand::Cleanup { number }) => {
+            let start = std::time::Instant::now();
+            let mut result = pr::cleanup::execute(number);
+            finalize(&mut result, start);
+            Ok(result)
+        }
         Command::Pr(sub) => {
             let start = std::time::Instant::now();
             let (operation, number, cfg) = match sub {
@@ -1402,6 +1420,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                         ..Default::default()
                     },
                 ),
+                PrCommand::Cleanup { .. } => unreachable!("cleanup dispatches separately"),
             };
             // An `Err` here means the subject could not be established at all (exit
             // 2, no report). Every other failure — including `gh` being broken — is
@@ -2429,6 +2448,23 @@ mod cli_tests {
             }
             _ => panic!("expected pr watch"),
         }
+    }
+
+    #[test]
+    fn pr_cleanup_parses_optional_number_and_names_itself() {
+        let cli = Cli::try_parse_from(["xtask", "pr", "cleanup"]).unwrap();
+        assert_eq!(cli.command_name(), "pr-cleanup");
+        assert!(matches!(
+            cli.command,
+            Command::Pr(PrCommand::Cleanup { number: None })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["xtask", "pr", "cleanup", "1155"])
+                .unwrap()
+                .command,
+            Command::Pr(PrCommand::Cleanup { number: Some(1155) })
+        ));
+        assert!(Cli::try_parse_from(["xtask", "pr", "cleanup", "not-a-number"]).is_err());
     }
 
     #[test]

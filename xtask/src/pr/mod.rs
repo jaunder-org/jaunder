@@ -6,6 +6,7 @@
 //! observation; `promoter` separately owns bot policy and delegates Git to
 //! [`crate::git`].
 
+pub mod cleanup;
 pub mod decide;
 pub mod gh;
 pub mod land;
