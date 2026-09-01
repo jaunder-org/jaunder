@@ -204,7 +204,7 @@ reset-token claiming, password replacement, and whole-user session revocation.
 Each receives the caller's mutable `WriteTransaction` plus only the exact
 object-safe storage traits it uses. Invalid reset capabilities use their typed
 client-validation mapping
-([account mutations compose storage primitives](adr/drafts/account-mutations-compose-storage-primitives.md)).
+([account mutations compose storage primitives](adr/0166-account-mutations-compose-storage-primitives.md)).
 
 ### Query and transaction discipline
 
@@ -360,7 +360,7 @@ Details in the testing section.
   Password Reset (2), Post (7), Session (4), Site Config (6), Subscription (2),
   User Config (2), and User (5). Cross-store account mutations compose these
   capability-taking primitives as storage-owned functions
-  ([account mutations compose storage primitives](adr/drafts/account-mutations-compose-storage-primitives.md)).
+  ([account mutations compose storage primitives](adr/0166-account-mutations-compose-storage-primitives.md)).
   Each declaration takes `&mut WriteTransaction`; there are no pool-backed,
   auto-committing, standalone, or compatibility mutation paths. The structural
   gate derives the observed declarations, compares them with the closed
