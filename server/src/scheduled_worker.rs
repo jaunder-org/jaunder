@@ -1,7 +1,7 @@
 //! Lifecycle guard for cron-backed server workers.
 
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::{Context, Result};
 use tokio::sync::Notify;
@@ -40,7 +40,7 @@ impl WorkTracker {
             .state
             .inner
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         inner.stopping = true;
         drop(inner);
         self.state.changed.notify_waiters();
@@ -55,7 +55,7 @@ impl WorkTracker {
                 .state
                 .inner
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .stopping
             {
                 return;
@@ -73,7 +73,7 @@ impl WorkTracker {
                 .state
                 .inner
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .active
                 == 0
             {
@@ -88,7 +88,7 @@ impl WorkTracker {
             .state
             .inner
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         if inner.stopping {
             return None;
         }
@@ -109,7 +109,7 @@ impl Drop for ActiveWork {
             .state
             .inner
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         inner.active -= 1;
         let idle = inner.active == 0;
         drop(inner);
