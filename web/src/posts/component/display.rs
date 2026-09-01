@@ -196,14 +196,15 @@ fn post_action_column(
 }
 
 fn notify_unpublish_outcome(
-    outcome: &MutationOutcome<SavedPost>,
-    on_unpublish: Option<Callback<()>>,
+    outcome: MutationOutcome<SavedPost>,
+    on_unpublish: Option<Callback<SavedPost>>,
     on_mutate: Option<Callback<()>>,
 ) {
     match outcome {
-        MutationOutcome::Confirmed(_) => {
-            posts::notify_with_fallback(on_unpublish, on_mutate);
-        }
+        MutationOutcome::Confirmed(unpublished) => match on_unpublish {
+            Some(on_unpublish) => on_unpublish.run(unpublished),
+            None => posts::notify(on_mutate),
+        },
         MutationOutcome::CommitIndeterminate(_) => posts::notify(on_mutate),
     }
 }
@@ -216,7 +217,7 @@ pub fn PostCard<'a>(
     #[prop(default = &TagCtx::SiteWide)]
     tag_context: &'a TagCtx,
     #[prop(optional)] on_mutate: Option<Callback<()>>,
-    #[prop(optional)] on_unpublish: Option<Callback<()>>,
+    #[prop(optional)] on_unpublish: Option<Callback<SavedPost>>,
     /// Fired only after a successful *publish* (distinct from `on_mutate`, which delete
     /// and unpublish share). The permalink page uses it to refetch itself in place when a
     /// same-URL publish leaves navigation a no-op, without delete/unpublish also
@@ -254,7 +255,7 @@ pub fn PostCard<'a>(
     );
     support::on_settled_ok(
         move || unpublish_action.value().get(),
-        move |outcome| notify_unpublish_outcome(&outcome, on_unpublish, on_mutate),
+        move |outcome| notify_unpublish_outcome(outcome, on_unpublish, on_mutate),
     );
     let navigate = use_navigate();
     support::on_settled_ok(
