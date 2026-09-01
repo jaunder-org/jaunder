@@ -17,10 +17,10 @@ use common::seed::{AuthoredPost, PageSeed};
 use common::slug::Slug;
 use common::{MutationOutcome, permalink_route::PermalinkRoute};
 
-use super::audience::load_named_audiences;
+use super::audience;
 use super::composers::{ComposeOptions, ComposerFields, MediaSection, PostSaveActions};
 use super::display::PostCard;
-use super::support::on_settled_ok;
+use super::support;
 
 /// First-paint view for [`PostPage`]'s `Suspense`: the projector-seeded content
 /// (flash-free) when the server painted this permalink, or a spinner while the
@@ -150,13 +150,13 @@ pub fn EditPostPage() -> impl IntoView {
     // page-level here — unlike the composer, where only the full shape has one.
     let state = ComposeState::new();
     let slug_field = Field::<Slug>::optional();
-    let named = load_named_audiences();
+    let named = audience::load_named_audiences();
     // The redirect-on-publish effect reacts to the client-only ServerAction
     // dispatch. Whether a settled update redirects at all, and to where, is the
     // host-tested `publish_redirect` (#306), leaving this the bare `Effect`
     // `on_settled_ok` wraps.
     let navigate = use_navigate();
-    on_settled_ok(
+    support::on_settled_ok(
         move || posts::publish_redirect(update_post_action.value().get()),
         move |permalink: RootRelativeUrl| navigate(&permalink, NavigateOptions::default()),
     );

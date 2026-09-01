@@ -19,8 +19,8 @@ use common::render::PostFormat;
 use common::slug::Slug;
 use common::username::Username;
 
-use super::audience::{AudiencePickerWithState, load_named_audiences};
-use super::support::on_settled_ok;
+use super::audience::AudiencePickerWithState;
+use super::{audience, support};
 
 /// The `.j-seg` Markdown/Org format toggle, shared by every post editor. Renders one
 /// button per user-selectable `PostFormat` — those carrying a `strum` editor message;
@@ -127,14 +127,14 @@ pub fn PostCreateForm(
     // render immediately (no Suspense), so seed the editable `audience` signal
     // once the Resource resolves, over the Public placeholder `ComposeState::new`
     // sets. The author can then edit the selection via `AudiencePicker`.
-    on_settled_ok(
+    support::on_settled_ok(
         move || default_audience.get(),
         move |default| state.audience.set(default),
     );
 
     // Revalidate parent state after either outcome, but reserve success UI and
     // form reset for a confirmed create.
-    on_settled_ok(
+    support::on_settled_ok(
         move || create_action.value().get(),
         move |outcome| {
             if posts::notify_create_settlement(outcome, on_mutation, on_success) {
@@ -239,7 +239,7 @@ fn FullComposer(
     placeholder: &'static str,
 ) -> impl IntoView {
     let slug_field = Field::<Slug>::optional();
-    let named = load_named_audiences();
+    let named = audience::load_named_audiences();
     // The one-call form gate also carries the named-audience load decision: a
     // failed or unresolved picker cannot dispatch as though an empty list had
     // loaded. The callback repeats the pure guard so direct invocation cannot

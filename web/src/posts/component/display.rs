@@ -14,7 +14,7 @@ use common::seed::RenderedPost;
 use common::username::Username;
 use common::{client_telemetry::ClientErrorContext, ids::PostId};
 
-use super::support::on_settled_ok;
+use super::support;
 
 #[component]
 pub fn PostDisplay<'a>(
@@ -242,7 +242,7 @@ pub fn PostCard<'a>(
     let publish_action = ServerAction::<Publish>::new();
     let deleted = RwSignal::new(false);
 
-    on_settled_ok(
+    support::on_settled_ok(
         move || delete_action.value().get(),
         move |outcome| {
             match outcome {
@@ -252,12 +252,12 @@ pub fn PostCard<'a>(
             posts::notify(on_mutate);
         },
     );
-    on_settled_ok(
+    support::on_settled_ok(
         move || unpublish_action.value().get(),
         move |outcome| notify_unpublish_outcome(&outcome, on_unpublish, on_mutate),
     );
     let navigate = use_navigate();
-    on_settled_ok(
+    support::on_settled_ok(
         move || publish_action.value().get(),
         move |outcome| {
             match outcome {
