@@ -125,11 +125,12 @@ impl crate::feed::window::HasPublishedAt for FeedItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feed::test_support::feed_item;
     use chrono::TimeZone;
     use common::feed::FeedSurface;
     use common::{
         site::SiteTitle,
-        test_support::{parse_post_title, parse_url},
+        test_support::{parse_post_title, parse_url, rendered_html},
     };
 
     #[test]
@@ -185,14 +186,13 @@ mod tests {
 
     fn item(id: PostId, ts: DateTime<Utc>) -> FeedItem {
         FeedItem {
-            id,
             title: Some(parse_post_title("t")),
-            permalink: parse_url("https://ex.com/p"),
-            summary: None,
-            content_html: common::test_support::rendered_html("<p>c</p>"),
-            published_at: ts,
-            updated_at: ts,
-            tags: vec![],
+            ..feed_item(
+                id,
+                parse_url("https://ex.com/p"),
+                rendered_html("<p>c</p>"),
+                ts,
+            )
         }
     }
 

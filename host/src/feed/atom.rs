@@ -83,34 +83,32 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
-    use crate::feed::metadata::{FeedItem, FeedMetadata};
+    use crate::feed::test_support::{feed_item, feed_metadata};
     use common::{
         ids::PostId,
-        test_support::{parse_post_summary, parse_post_title, parse_url},
+        test_support::{parse_post_summary, parse_post_title, parse_url, rendered_html},
     };
 
     fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
         FeedMetadata {
-            title: "Site".parse::<crate::feed::FeedTitle>().unwrap(),
             description: description
                 .map(|value| value.parse::<crate::feed::FeedDescription>().unwrap()),
-            canonical_url: parse_url("https://example.com/"),
-            self_url: parse_url("https://example.com/feed.atom"),
             hub_url: hub.map(parse_url),
-            updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            ..feed_metadata(parse_url("https://example.com/feed.atom"))
         }
     }
 
     fn item() -> FeedItem {
         FeedItem {
-            id: PostId::from(1),
             title: Some(parse_post_title("Hello")),
-            permalink: parse_url("https://example.com/~alice/posts/1"),
             summary: Some(parse_post_summary("hi")),
-            content_html: common::test_support::rendered_html("<p>hi</p>"),
-            published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
-            updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             tags: vec!["rust".parse().unwrap()],
+            ..feed_item(
+                PostId::from(1),
+                parse_url("https://example.com/~alice/posts/1"),
+                rendered_html("<p>hi</p>"),
+                chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            )
         }
     }
 
@@ -146,8 +144,10 @@ mod tests {
 
     #[test]
     fn renders_empty_title_for_titleless_post() {
-        let mut item = item();
-        item.title = None;
+        let item = FeedItem {
+            title: None,
+            ..item()
+        };
 
         let out = render_atom(&meta(None, Some("A site")), &[item]);
         let body = out.body();

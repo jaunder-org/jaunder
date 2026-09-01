@@ -4,6 +4,9 @@
 //! CSR discovery and host producers build identical canonical URLs. This module
 //! owns everything that requires host storage, scheduling, or serialization.
 
+#[cfg(test)]
+mod test_support;
+
 pub mod feed_path;
 pub use feed_path::{FeedPath, InvalidFeedPath, affected_feed_urls, parse};
 

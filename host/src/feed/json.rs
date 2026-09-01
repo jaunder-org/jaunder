@@ -50,22 +50,20 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+    use crate::feed::test_support::{feed_item, feed_metadata};
     use common::{
         ids::PostId,
         post_summary::PostSummary,
         post_title::PostTitle,
-        test_support::{parse_post_summary, parse_post_title, parse_url},
+        test_support::{parse_post_summary, parse_post_title, parse_url, rendered_html},
     };
 
     fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
         FeedMetadata {
-            title: "Site".parse::<crate::feed::FeedTitle>().unwrap(),
             description: description
                 .map(|value| value.parse::<crate::feed::FeedDescription>().unwrap()),
-            canonical_url: parse_url("https://example.com/"),
-            self_url: parse_url("https://example.com/feed.json"),
             hub_url: hub.map(parse_url),
-            updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            ..feed_metadata(parse_url("https://example.com/feed.json"))
         }
     }
 
@@ -79,14 +77,15 @@ mod tests {
         summary: Option<PostSummary>,
     ) -> FeedItem {
         FeedItem {
-            id: PostId::from(1),
             title,
-            permalink: parse_url("https://example.com/~alice/posts/1"),
             summary,
-            content_html: common::test_support::rendered_html("<p>hi</p>"),
-            published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
-            updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             tags: tags.into_iter().map(|t| t.parse().unwrap()).collect(),
+            ..feed_item(
+                PostId::from(1),
+                parse_url("https://example.com/~alice/posts/1"),
+                rendered_html("<p>hi</p>"),
+                chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            )
         }
     }
 
