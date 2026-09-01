@@ -113,8 +113,6 @@ where
         }
         Err(error) => {
             metrics::retention_run(domain, CleanupResult::Failure);
-            let domain = domain.label();
-            tracing::warn!(retention.domain = domain, error = %error, "database.maintenance.failed");
             error::report_swallowed(
                 ErrorKind::Storage,
                 ErrorClass::Transient,
@@ -457,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn report_cleanup_logs_a_bounded_failure_and_reports_its_error() {
+    fn report_cleanup_reports_a_bounded_failure_once() {
         let (guard, output) = trace_capture();
 
         report_cleanup(
@@ -469,17 +467,17 @@ mod tests {
         let trace = trace_text(&output);
         assert_eq!(
             trace
-                .matches(r#""message":"database.maintenance.failed""#)
+                .matches(r#""message":"error swallowed after reporting""#)
                 .count(),
             1,
-            "trace: {trace}"
+            "failure must produce exactly one warning: {trace}"
         );
         assert!(
-            trace.contains(r#""retention.domain":"feed_events""#),
-            "trace: {trace}"
+            !trace.contains("database.maintenance.failed"),
+            "the swallowed-error reporter owns the warning: {trace}"
         );
         assert!(
-            trace.contains(r#""error":"cleanup storage unavailable""#),
+            trace.contains(r#""error.source":"cleanup storage unavailable""#),
             "trace: {trace}"
         );
         assert_eq!(
