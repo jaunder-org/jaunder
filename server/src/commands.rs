@@ -13,14 +13,15 @@ use host::{
     telemetry::TelemetryConfig,
 };
 use tokio::{net::TcpListener, sync::oneshot::Receiver, task::JoinHandle};
-use tokio_cron_scheduler::JobScheduler;
 
 use crate::backup;
 use crate::cli::{AppTarget, BootstrapDb, Commands, SiteConfigAction, StorageArgs};
+use crate::feed::worker::FeedWorker;
 use crate::mailer::LettreMailSender;
 use crate::maintenance::{DATABASE_MAINTENANCE_INTERVAL, DatabaseMaintenance};
 use crate::metrics::{self as server_metrics, SaturationSources};
 use crate::runtime_file::{self, RuntimeGuard, StartupCheck, StartupLockGuard};
+use crate::scheduled_worker::ScheduledWorkerGuard;
 use common::backup::BackupMode;
 use common::display_name::DisplayName;
 use common::email::Email;
@@ -35,8 +36,8 @@ use host::config_key::SiteConfigKey;
 use host::password::Password;
 use host::smtp_config::SmtpConfig;
 use storage::{
-    AppState, BackupExportOptions, BackupRestoreOptions, BackupRestoreOutcome, DbPoolObserver,
-    MediaManager, RestoreValidationReport, StorageRuntimeConfig,
+    AppState, BackupExportOptions, BackupRestoreOptions, BackupRestoreOutcome, DbConnectOptions,
+    DbPoolObserver, MediaManager, RestoreValidationReport, SiteConfigStorage, StorageRuntimeConfig,
 };
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
@@ -816,30 +817,129 @@ async fn open_server_database(
     open_server_database_with(storage, runtime, prod, &RealStartupDatabaseOperations).await
 }
 
-/// A bound listener and router ready to serve, plus the live background-worker
-/// schedulers that must outlive the serve loop. Produced by [`prepare_server`].
+/// A bound listener and router ready to serve, plus the live background workers
+/// that must outlive the serve loop. Produced by [`prepare_server`].
 pub struct PreparedServer {
     /// The bound TCP listener.
     pub listener: TcpListener,
     /// The fully wired application router.
     pub router: Router,
-    // Held only to keep the workers running for the server's lifetime.
-    backup_scheduler: Option<JobScheduler>,
-    maintenance_scheduler: JobScheduler,
-    feed_scheduler: JobScheduler,
+    workers: BackgroundWorkers,
     /// Owns the OS-backed startup lock and removes the runtime-info file on drop.
     runtime_guard: RuntimeGuard,
     pub saturation_metrics: Option<PreparedSaturationMetrics>,
 }
 
-pub struct PreparedSaturationMetrics {
-    _observables: SaturationObservableGuard,
-    sampler: JoinHandle<()>,
+struct BackgroundWorkerSetup {
+    maintenance: DatabaseMaintenance,
+    backup_site_config: Arc<dyn SiteConfigStorage>,
+    database: DbConnectOptions,
+    runtime: StorageRuntimeConfig,
+    storage_path: PathBuf,
+    feed_worker: FeedWorker,
+    feed_interval: Duration,
 }
 
-impl Drop for PreparedSaturationMetrics {
-    fn drop(&mut self) {
-        self.sampler.abort();
+struct BackgroundWorkers {
+    backup: Option<ScheduledWorkerGuard>,
+    maintenance: ScheduledWorkerGuard,
+    feed: ScheduledWorkerGuard,
+}
+struct SaturationMetricsSetup {
+    observables: SaturationObservableGuard,
+    sources: SaturationSources,
+    snapshot: Arc<RwLock<SaturationSnapshot>>,
+}
+
+impl SaturationMetricsSetup {
+    fn start(self) -> PreparedSaturationMetrics {
+        PreparedSaturationMetrics {
+            _observables: self.observables,
+            sampler: server_metrics::spawn_saturation_sampler(self.sources, self.snapshot),
+        }
+    }
+}
+
+impl BackgroundWorkers {
+    async fn start(setup: BackgroundWorkerSetup) -> anyhow::Result<Self> {
+        let mut maintenance = setup
+            .maintenance
+            .start(DATABASE_MAINTENANCE_INTERVAL)
+            .await?;
+        let mut backup = match backup::start_backup_worker(
+            setup.backup_site_config,
+            setup.database,
+            setup.runtime,
+            setup.storage_path,
+        )
+        .await
+        {
+            Ok(scheduler) => scheduler,
+            Err(error) => {
+                maintenance.stop();
+                stop_worker_after_start_failure(
+                    &mut maintenance,
+                    "server.maintenance.start_rollback",
+                )
+                .await;
+                return Err(error);
+            }
+        };
+        let feed = match setup.feed_worker.start(setup.feed_interval).await {
+            Ok(scheduler) => scheduler,
+            Err(error) => {
+                maintenance.stop();
+                if let Some(scheduler) = backup.as_ref() {
+                    scheduler.stop();
+                }
+                if let Some(scheduler) = backup.as_mut() {
+                    stop_worker_after_start_failure(scheduler, "server.backup.start_rollback")
+                        .await;
+                }
+                stop_worker_after_start_failure(
+                    &mut maintenance,
+                    "server.maintenance.start_rollback",
+                )
+                .await;
+                return Err(error);
+            }
+        };
+        Ok(Self {
+            backup,
+            maintenance,
+            feed,
+        })
+    }
+
+    fn stop(&self) {
+        self.feed.stop();
+        self.maintenance.stop();
+        if let Some(worker) = self.backup.as_ref() {
+            worker.stop();
+        }
+    }
+
+    async fn shutdown(&mut self) -> (anyhow::Result<()>, anyhow::Result<()>, anyhow::Result<()>) {
+        self.stop();
+        let feed = self.feed.shutdown().await;
+        let maintenance = self.maintenance.shutdown().await;
+        let backup = match self.backup.as_mut() {
+            Some(worker) => worker.shutdown().await,
+            None => Ok(()),
+        };
+        (feed, maintenance, backup)
+    }
+}
+
+pub struct PreparedSaturationMetrics {
+    _observables: SaturationObservableGuard,
+    sampler: server_metrics::SaturationSampler,
+}
+
+impl PreparedSaturationMetrics {
+    async fn shutdown(self) -> anyhow::Result<()> {
+        self.sampler.shutdown().await?;
+        Ok(())
     }
 }
 
@@ -848,7 +948,7 @@ async fn prepare_saturation_metrics(
     pool_observer: DbPoolObserver,
     media_root: PathBuf,
     telemetry: &TelemetryConfig,
-) -> anyhow::Result<Option<PreparedSaturationMetrics>> {
+) -> anyhow::Result<Option<SaturationMetricsSetup>> {
     if !telemetry.otlp_endpoint_configured() {
         return Ok(None);
     }
@@ -867,12 +967,44 @@ async fn prepare_saturation_metrics(
         backup_destination_root,
         pool_observer,
     );
-    let sampler = server_metrics::spawn_saturation_sampler(sources, snapshot);
-
-    Ok(Some(PreparedSaturationMetrics {
-        _observables: observables,
-        sampler,
+    Ok(Some(SaturationMetricsSetup {
+        observables,
+        sources,
+        snapshot,
     }))
+}
+
+async fn stop_worker_after_start_failure(worker: &mut ScheduledWorkerGuard, context: &'static str) {
+    worker.stop();
+    if let Err(error) = worker.shutdown().await {
+        host::error::report_swallowed(
+            host::error::ErrorKind::Internal,
+            host::error::ErrorClass::Transient,
+            context,
+            host::error::SwallowedSource::Error(error.root_cause()),
+        );
+    }
+}
+
+fn merge_worker_shutdown(
+    primary: &mut anyhow::Result<()>,
+    shutdown: anyhow::Result<()>,
+    context: &'static str,
+) {
+    let Err(error) = shutdown else {
+        return;
+    };
+    let error = error.context(context);
+    if primary.is_ok() {
+        *primary = Err(error);
+    } else {
+        host::error::report_swallowed(
+            host::error::ErrorKind::Internal,
+            host::error::ErrorClass::Transient,
+            context,
+            host::error::SwallowedSource::Error(error.root_cause()),
+        );
+    }
 }
 
 /// Performs all of [`cmd_serve`]'s setup — open the database (auto-initializing
@@ -927,16 +1059,28 @@ pub async fn prepare_server(
         instance_id,
         pool_observer,
     } = open_server_database(storage, &runtime, prod).await?;
-    let maintenance_scheduler = DatabaseMaintenance::new(
+
+    let maintenance = DatabaseMaintenance::new(
         db.posts.clone(),
         db.invites.clone(),
         db.email_verifications.clone(),
         db.password_resets.clone(),
         db.feed_events.clone(),
-    )
-    .start(DATABASE_MAINTENANCE_INTERVAL)
-    .await?;
-
+    );
+    let backup_site_config = db.site_config.clone();
+    // The `WebSub` publisher is a service, not storage: it is constructed at the
+    // composition root and injected into the feed worker (ADR-0016). Capture mode
+    // also selects the shorter e2e cadence without changing the production policy.
+    let websub_capture = capture.map(|paths| paths.websub.clone());
+    let feed_interval = feed_worker_interval(websub_capture.is_some());
+    let feed_worker = crate::feed::worker::FeedWorker::new(
+        db.site_config.clone(),
+        db.posts.clone(),
+        db.feed_cache.clone(),
+        Arc::new(db.write_scope.clone()),
+        db.feed_events.clone(),
+        crate::websub::default_client(websub_capture),
+    );
     let saturation_metrics = prepare_saturation_metrics(
         db.clone(),
         pool_observer,
@@ -944,34 +1088,24 @@ pub async fn prepare_server(
         telemetry,
     )
     .await?;
-    let backup_scheduler = backup::start_backup_worker(
-        db.site_config.clone(),
-        storage.db.clone(),
-        runtime,
-        storage.storage_path.clone(),
-    )
-    .await?;
-    // The `WebSub` publisher is a service, not storage: it is constructed at the
-    // composition root and injected into the feed worker (ADR-0016). Capture mode
-    // also selects the shorter e2e cadence without changing the production policy.
-    let websub_capture = capture.map(|paths| paths.websub.clone());
-    let feed_interval = feed_worker_interval(websub_capture.is_some());
-    let websub = crate::websub::default_client(websub_capture);
-    let feed_scheduler = crate::feed::worker::FeedWorker::new(
-        db.site_config.clone(),
-        db.posts.clone(),
-        db.feed_cache.clone(),
-        Arc::new(db.write_scope.clone()),
-        db.feed_events.clone(),
-        websub,
-    )
-    .start(feed_interval)
-    .await?;
     let mailer =
         crate::mailer::build_mailer(db.site_config(), capture.map(|paths| paths.mail.clone()))
             .await?;
     let router = crate::create_router(db, instance_id, mailer, prod, storage.storage_path.clone())?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
+
+    let workers = BackgroundWorkers::start(BackgroundWorkerSetup {
+        maintenance,
+        backup_site_config,
+        database: storage.db.clone(),
+        runtime,
+        storage_path: storage.storage_path.clone(),
+        feed_worker,
+        feed_interval,
+    })
+    .await?;
+    let saturation_metrics = saturation_metrics.map(SaturationMetricsSetup::start);
+
     // `local_addr` cannot fail on a just-bound listener; fall back to the
     // requested `bind` rather than add a never-taken error branch.
     let addr = listener.local_addr().unwrap_or(bind);
@@ -981,9 +1115,7 @@ pub async fn prepare_server(
     Ok(PreparedServer {
         listener,
         router,
-        backup_scheduler,
-        maintenance_scheduler,
-        feed_scheduler,
+        workers,
         runtime_guard,
         saturation_metrics,
     })
@@ -1019,12 +1151,12 @@ async fn serve_with_shutdown(
 ///
 /// Returns an error if a signal handler cannot be installed.
 #[cfg(unix)]
-fn spawn_shutdown_supervisor(runtime_path: PathBuf) -> io::Result<Receiver<()>> {
+fn spawn_shutdown_supervisor(runtime_path: PathBuf) -> io::Result<(Receiver<()>, JoinHandle<()>)> {
     use tokio::signal::unix::{SignalKind, signal};
     let mut sigint = signal(SignalKind::interrupt())?;
     let mut sigterm = signal(SignalKind::terminate())?;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    tokio::spawn(async move {
+    let supervisor = tokio::spawn(async move {
         // cov:ignore-start -- async signal wait-loop; the forced branch ends in
         // process::exit and is unreachable by a survivable test. The synchronous
         // setup above and serve_with_shutdown are host-covered by the signal tests.
@@ -1043,7 +1175,7 @@ fn spawn_shutdown_supervisor(runtime_path: PathBuf) -> io::Result<Receiver<()>> 
         std::process::exit(0);
         // cov:ignore-stop
     });
-    Ok(rx)
+    Ok((rx, supervisor))
 }
 
 /// Starts the HTTP server and the background workers.
@@ -1072,34 +1204,65 @@ pub async fn cmd_serve(
     let PreparedServer {
         listener,
         router,
-        backup_scheduler,
-        maintenance_scheduler,
-        feed_scheduler,
+        mut workers,
         runtime_guard,
         saturation_metrics,
     } = prepare_server(storage, bind, prod, telemetry, capture).await?;
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     #[cfg(unix)]
-    let serve_result = {
-        let runtime_path = runtime_guard.path().to_path_buf();
-        let shutdown_rx = spawn_shutdown_supervisor(runtime_path)?;
-        serve_with_shutdown(listener, router, async move {
-            let _ = shutdown_rx.await;
-        })
-        .await
-    };
+    let (mut serve_result, shutdown_supervisor) =
+        match spawn_shutdown_supervisor(runtime_guard.path().to_path_buf()) {
+            Ok((shutdown_rx, supervisor)) => (
+                serve_with_shutdown(listener, router, async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await,
+                Some(supervisor),
+            ),
+            Err(error) => (Err(error.into()), None),
+        };
     #[cfg(not(unix))]
-    let serve_result = {
+    let mut serve_result = {
         // No signal handling off unix (jaunder targets Linux/NixOS): serve until
         // the process is otherwise terminated.
         serve_with_shutdown(listener, router, std::future::pending::<()>()).await
     };
-    // End every background task before releasing storage ownership.
-    drop(saturation_metrics);
-    drop(feed_scheduler);
-    drop(maintenance_scheduler);
-    drop(backup_scheduler);
+    // Refuse every new background activation together. Admitted work and the
+    // current saturation sample must finish while both the storage lock and the
+    // second-signal forced-exit supervisor remain live.
+    workers.stop();
+    if let Some(metrics) = saturation_metrics {
+        let saturation_shutdown = metrics.shutdown().await;
+        merge_worker_shutdown(
+            &mut serve_result,
+            saturation_shutdown,
+            "server.metrics.shutdown",
+        );
+    }
+    let (feed_shutdown, maintenance_shutdown, backup_shutdown) = workers.shutdown().await;
+    merge_worker_shutdown(&mut serve_result, feed_shutdown, "server.feed.shutdown");
+    merge_worker_shutdown(
+        &mut serve_result,
+        maintenance_shutdown,
+        "server.maintenance.shutdown",
+    );
+    merge_worker_shutdown(&mut serve_result, backup_shutdown, "server.backup.shutdown");
+    #[cfg(unix)]
+    if let Some(supervisor) = shutdown_supervisor {
+        supervisor.abort();
+        match supervisor.await {
+            Err(error) if error.is_cancelled() => {}
+            Ok(()) => {}
+            Err(error) => host::error::report_swallowed(
+                host::error::ErrorKind::Internal,
+                host::error::ErrorClass::Transient,
+                "server.shutdown_supervisor.join",
+                host::error::SwallowedSource::Error(&error),
+            ),
+        }
+    }
+    drop(workers);
     drop(runtime_guard);
     serve_result
     // cov:ignore-stop
@@ -2363,6 +2526,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn worker_shutdown_error_becomes_primary_after_successful_serve() {
+        let mut primary = Ok(());
+        merge_worker_shutdown(
+            &mut primary,
+            Err(anyhow::anyhow!("shutdown failed")),
+            "server.test.shutdown",
+        );
+        assert!(
+            primary
+                .expect_err("shutdown failure must be returned")
+                .to_string()
+                .contains("server.test.shutdown")
+        );
+    }
+
+    #[test]
+    fn worker_shutdown_error_preserves_existing_serve_failure() {
+        let mut primary = Err(anyhow::anyhow!("serve failed"));
+        merge_worker_shutdown(
+            &mut primary,
+            Err(anyhow::anyhow!("shutdown failed")),
+            "server.test.shutdown",
+        );
+        assert_eq!(
+            primary
+                .expect_err("serve failure must remain primary")
+                .to_string(),
+            "serve failed"
+        );
+    }
+
     // The two shutdown tests below raise a REAL signal to their own process. This
     // is safe only under `cargo nextest` (one process per test) — the tokio
     // handler, installed synchronously by spawn_shutdown_supervisor *before* we
@@ -2384,7 +2579,8 @@ mod tests {
 
         // Installs the SIGINT/SIGTERM handlers synchronously, so the raise below
         // cannot beat handler installation.
-        let shutdown_rx = spawn_shutdown_supervisor(guard.path().to_path_buf()).unwrap();
+        let (shutdown_rx, supervisor) =
+            spawn_shutdown_supervisor(guard.path().to_path_buf()).unwrap();
         let handle = tokio::spawn(serve_with_shutdown(
             listener,
             axum::Router::new(),
@@ -2399,6 +2595,14 @@ mod tests {
             .await
             .unwrap()
             .expect("serve_with_shutdown returns Ok on graceful shutdown");
+        supervisor.abort();
+        assert!(
+            supervisor
+                .await
+                .expect_err("supervisor was aborted")
+                .is_cancelled(),
+            "graceful shutdown must cancel the forced-exit supervisor"
+        );
         assert!(
             path.exists(),
             "serve completion must not release runtime ownership"

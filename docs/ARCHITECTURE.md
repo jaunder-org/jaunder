@@ -1747,10 +1747,12 @@ reservation is fatal on failure. If the file identifies a live process through
 its JSON `pid` plus process start time, startup refuses before cleanup. The
 pre-bind reservation uses port zero; discovery consumers treat it as not ready
 and reread until the bound nonzero port is published. Address updates are
-best-effort but preserve the live reservation on failure; graceful and forced
-shutdown remove the canonical identity before releasing the lock. The e2e and
-Elisp harnesses read that canonical file for this port handshake. This retains
-ADR-0035's discovery contract while the
+best-effort but preserve the live reservation on failure. Graceful shutdown
+first stops background admission and drains every admitted job and active
+measurement, then removes the canonical identity before releasing the lock;
+forced process exit removes the identity and lets the OS release the lock. The
+e2e and Elisp harnesses read that canonical file for this port handshake. This
+retains ADR-0035's discovery contract while the
 [bounded transient-data retention decision](adr/drafts/bounded-transient-data-retention.md)
 qualifies its JSON-as-mutex behavior and removes ADR-0144's runtime-path
 override.

@@ -78,16 +78,20 @@ Out:
     startup refuses before cleanup and its files remain untouched. Before upload
     handling is prepared, startup removes all artifacts under `media/tmp` and
     recreates a usable empty directory. After binding, it best-effort updates
-    the canonical identity without replacing the live reservation on failure;
-    shutdown removes the file before releasing the lock. Cleanup or pre-bind
-    reservation failure is a typed fatal startup error; finalized and referenced
-    media paths are unreachable from this operation.
+    the canonical identity without replacing the live reservation on failure.
+    Graceful shutdown stops background admission and drains admitted work and
+    active measurements before removing the file and releasing the lock; forced
+    exit removes the file
+    before OS lock release. Cleanup or pre-bind reservation failure is a typed
+    fatal startup error; finalized and referenced media paths are unreachable
+    from this operation.
   - Verification: filesystem behavior tests cover absent, empty, populated,
     nested, and cleanup-failure cases. Server preparation tests prove successful
     guard acquisition and pre-bind reservation precede cleanup, live-instance
     refusal performs no cleanup, post-bind publication preserves the identity on
-    failure, shutdown removal precedes lock release, and cleanup completes before
-    uploads are accepted.
+    failure, graceful shutdown drains admitted work before identity removal and
+    lock release, the forced supervisor cannot outlive ownership, and cleanup
+    completes before uploads are accepted.
 
 - [x] Task 6: Integrate startup and daily database maintenance
   - Contract: the composition root runs database maintenance once during startup

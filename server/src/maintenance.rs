@@ -2,6 +2,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::scheduled_worker::{ScheduledWorkerGuard, WorkTracker};
 use anyhow::Result;
 use common::time::UtcInstant;
 use host::{
@@ -75,7 +76,7 @@ impl DatabaseMaintenance {
     /// Returns an error when `interval` is zero or the scheduler cannot be
     /// constructed, populated, or started. Cleanup failures are reported and
     /// swallowed per domain so they do not fail startup.
-    pub(crate) async fn start(self, interval: Duration) -> Result<JobScheduler> {
+    pub(crate) async fn start(self, interval: Duration) -> Result<ScheduledWorkerGuard> {
         anyhow::ensure!(
             !interval.is_zero(),
             "database maintenance interval must be non-zero"
@@ -85,15 +86,17 @@ impl DatabaseMaintenance {
 
         let maintenance = Arc::new(self);
         let scheduler = JobScheduler::new().await?;
+        let tracker = WorkTracker::default();
+        let job_tracker = tracker.clone();
         let job = Job::new_repeated_async(interval, move |_uuid, _lock| {
             let maintenance = Arc::clone(&maintenance);
-            Box::pin(async move {
+            let tracker = job_tracker.clone();
+            Box::pin(tracker.run(async move {
                 maintenance.run_at(UtcInstant::now()).await;
-            })
+            }))
         })?;
         scheduler.add(job).await?;
-        scheduler.start().await?;
-        Ok(scheduler)
+        ScheduledWorkerGuard::start(scheduler, tracker).await
     }
 }
 

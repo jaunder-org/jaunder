@@ -7,6 +7,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::scheduled_worker::{ScheduledWorkerGuard, WorkTracker};
 use flate2::read::GzDecoder;
 use tokio_cron_scheduler::{Job, JobScheduler};
 
@@ -24,12 +25,12 @@ use storage::{
 ///
 /// Returns an error if the site configuration cannot be loaded, or if the
 /// job scheduler fails to start.
-pub async fn start_backup_worker(
+pub(crate) async fn start_backup_worker(
     site_config: Arc<dyn SiteConfigStorage>,
     database: DbConnectOptions,
     runtime: StorageRuntimeConfig,
     storage_path: PathBuf,
-) -> anyhow::Result<Option<JobScheduler>> {
+) -> anyhow::Result<Option<ScheduledWorkerGuard>> {
     let config = site_config.get_backup_config().await?;
     let Some(destination_root) = config.destination_path.as_deref().map(PathBuf::from) else {
         tracing::warn!("backup worker disabled: backup.destination_path is not configured");
@@ -37,6 +38,8 @@ pub async fn start_backup_worker(
     };
 
     let scheduler = JobScheduler::new().await?;
+    let tracker = WorkTracker::default();
+    let job_tracker = tracker.clone();
     let schedule = config.schedule.to_string();
     let job = Job::new_async(schedule.as_str(), move |_uuid, _lock| {
         let database = database.clone();
@@ -44,7 +47,8 @@ pub async fn start_backup_worker(
         let media_path = storage_path.join("media");
         let destination_root = destination_root.clone();
         let config = config.clone();
-        Box::pin(async move {
+        let tracker = job_tracker.clone();
+        Box::pin(tracker.run(async move {
             run_scheduled_backup_logged(
                 &database,
                 &runtime,
@@ -53,11 +57,12 @@ pub async fn start_backup_worker(
                 &config,
             )
             .await;
-        })
+        }))
     })?;
     scheduler.add(job).await?;
-    scheduler.start().await?;
-    Ok(Some(scheduler))
+    ScheduledWorkerGuard::start(scheduler, tracker)
+        .await
+        .map(Some)
 }
 
 async fn run_scheduled_backup(

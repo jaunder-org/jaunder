@@ -14,6 +14,7 @@ pub mod metrics;
 pub mod observability;
 pub mod projector;
 pub mod runtime_file;
+mod scheduled_worker;
 pub mod site;
 mod soft_path;
 pub mod websub;

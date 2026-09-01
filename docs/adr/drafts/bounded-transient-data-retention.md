@@ -63,11 +63,13 @@ identifies a live process, startup refuses before cleanup. The pre-bind
 reservation carries port zero; discovery consumers treat that value as not ready
 and reread until a nonzero bound port is published. After the listener binds,
 the address update is best-effort and must preserve the live identity on
-failure. Graceful and forced shutdown remove the canonical runtime file before
-releasing the lock. This qualifies ADR-0035's JSON-as-mutex and best-effort
-initial-write rules, and removes ADR-0144's `--runtime-file` and
-`JAUNDER_RUNTIME_FILE` override: storage already provides instance isolation,
-and no repository consumer needs a second path.
+failure. Graceful shutdown stops background admission and drains every admitted
+job and active measurement before removing the canonical runtime file and
+releasing the lock; forced process exit removes the file before the OS releases
+the lock. This qualifies ADR-0035's JSON-as-mutex and best-effort initial-write
+rules, and removes ADR-0144's `--runtime-file` and `JAUNDER_RUNTIME_FILE`
+override: storage already provides instance isolation, and no repository
+consumer needs a second path.
 
 For database-backed transient data, semantic expiry is authoritative at
 `cutoff <= now`; physical cleanup is not required to occur at that instant.

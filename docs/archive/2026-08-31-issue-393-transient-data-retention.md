@@ -81,8 +81,9 @@ unbounded audit log.
   upload artifact from `media/tmp`.
 - It publishes `<storage>/runtime.json` with port zero before cleanup; after
   binding, it best-effort updates the address without replacing the live
-  identity on failure, and removes that canonical file on shutdown before
-  releasing the lock.
+  identity on failure. Graceful shutdown stops background admission and drains
+  admitted work and active measurements before removing that file and releasing
+  the lock; forced exit removes the file before the OS releases the lock.
 - The single-instance runtime guard means no valid upload is active during this
   startup cleanup.
 - Failure to establish the clean directory or its pre-bind runtime reservation

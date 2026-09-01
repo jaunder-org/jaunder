@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::scheduled_worker::{ScheduledWorkerGuard, WorkTracker};
 use crate::websub::WebSubClient;
 use chrono::Utc;
 use common::ids::FeedEventId;
@@ -521,43 +522,49 @@ impl FeedWorker {
     /// Starts the feed worker scheduler at the cadence selected by the
     /// composition root. Subsecond cadences use one scheduler activation to
     /// drive a Tokio interval because `tokio-cron-scheduler` stores repeated
-    /// durations at whole-second precision. Returns the scheduler; the caller
-    /// must keep it alive for the worker to run.
+    /// durations at whole-second precision. The returned guard owns scheduler
+    /// admission and drains admitted work during shutdown.
     ///
     /// # Errors
     ///
     /// Returns an error if the interval is zero or the scheduler fails to start.
-    pub async fn start(
-        self,
-        interval: Duration,
-    ) -> anyhow::Result<tokio_cron_scheduler::JobScheduler> {
+    pub(crate) async fn start(self, interval: Duration) -> anyhow::Result<ScheduledWorkerGuard> {
         anyhow::ensure!(!interval.is_zero(), "feed worker interval must be non-zero");
 
         let worker = Arc::new(self);
         let scheduler = tokio_cron_scheduler::JobScheduler::new().await?;
+        let tracker = WorkTracker::default();
         let job = if interval < Duration::from_secs(1) {
             // cov:ignore-start -- the closure body fires only when the scheduler
             // activates it; tick behavior is unit-tested through spawn_tick.
+            let job_tracker = tracker.clone();
+            let stop_tracker = tracker.clone();
             tokio_cron_scheduler::Job::new_one_shot_async(Duration::ZERO, move |_uuid, _lock| {
                 let worker = worker.clone();
-                Box::pin(async move {
+                let tracker = job_tracker.clone();
+                let stop = stop_tracker.clone();
+                Box::pin(tracker.run(async move {
                     let mut ticker = time::interval(interval);
                     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
                     loop {
-                        ticker.tick().await;
-                        spawn_tick(worker.clone()).await;
+                        tokio::select! {
+                            biased;
+                            () = stop.stopped() => break,
+                            _ = ticker.tick() => spawn_tick(worker.clone()).await,
+                        }
                     }
-                })
+                }))
             })?
         } else {
+            let job_tracker = tracker.clone();
             tokio_cron_scheduler::Job::new_repeated_async(interval, move |_uuid, _lock| {
-                spawn_tick(worker.clone())
+                let tracker = job_tracker.clone();
+                Box::pin(tracker.run(spawn_tick(worker.clone())))
             })?
         };
         // cov:ignore-stop
         scheduler.add(job).await?;
-        scheduler.start().await?;
-        Ok(scheduler)
+        ScheduledWorkerGuard::start(scheduler, tracker).await
     }
 }
 
