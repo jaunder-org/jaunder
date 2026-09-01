@@ -47,7 +47,6 @@ pub struct ServeCapturePaths {
     pub websub: PathBuf,
 }
 
-
 #[async_trait::async_trait]
 trait StartupDatabaseOperations: Sync {
     async fn open_existing(

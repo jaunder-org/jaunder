@@ -11,6 +11,7 @@ use common::token::RawToken;
 use common::username::Username;
 use host::password::Password;
 use host::smtp_config::SmtpConfig;
+use storage::OperatorStatus;
 
 use crate::cli::StorageArgs;
 use crate::mailer::LettreMailSender;
@@ -23,7 +24,7 @@ async fn create_command_user(
     username: Username,
     password: Password,
     display_name: Option<DisplayName>,
-    is_operator: bool,
+    is_operator: OperatorStatus,
 ) -> anyhow::Result<common::ids::UserId> {
     let password = storage::prepare_password(password)
         .await
@@ -85,7 +86,11 @@ pub async fn cmd_user_create(
         username.clone(),
         password,
         display_name.cloned(),
-        is_operator,
+        if is_operator {
+            OperatorStatus::OPERATOR
+        } else {
+            OperatorStatus::STANDARD
+        },
     )
     .await?;
 
