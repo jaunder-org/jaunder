@@ -1087,7 +1087,7 @@ impl MediaReferenceEvidence {
     }
 }
 
-#[cfg_attr(feature = "test-utils", mockall::automock)]
+#[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait PostStorage: Send + Sync {
     /// Creates a new post at `now`.

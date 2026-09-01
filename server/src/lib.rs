@@ -32,7 +32,9 @@ use axum_embed::ServeEmbed;
 use leptos::prelude::*;
 
 use crate::{assets::StaticAssets, media_ownership::LiveMediaReferenceOwnershipResolver};
-use ::storage::{AppState, InstanceId, MediaReferenceOwnershipResolver};
+use ::storage::{
+    AppState, InstanceId, MediaContentLocks, MediaManager, MediaReferenceOwnershipResolver,
+};
 
 async fn retire_session_cookie(
     axum::extract::State(secure): axum::extract::State<bool>,
@@ -89,6 +91,23 @@ pub fn create_router(
     )
 }
 
+fn build_media_manager(
+    state: &AppState,
+    content_locks: Arc<MediaContentLocks>,
+    instance_id: InstanceId,
+    ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
+) -> Arc<MediaManager> {
+    Arc::new(MediaManager::new(
+        state.media.clone(),
+        state.posts.clone(),
+        state.site_config.clone(),
+        state.write_scope.clone(),
+        content_locks,
+        instance_id,
+        ownership_resolver,
+    ))
+}
+
 /// Builds a router with an injected foreign-reference ownership resolver.
 ///
 /// This is the narrow test composition seam; production callers use
@@ -126,15 +145,18 @@ pub fn create_router_with_media_reference_ownership_resolver(
     let sessions_ext = state.sessions.clone();
     let write_scope_ext = state.write_scope.clone();
     let instance_header = instance_id.to_string().parse::<HeaderValue>()?;
-    let server_fn_instance_id = instance_id.clone();
-    let server_fn_media_ownership_resolver = media_ownership_resolver.clone();
-    let server_fn_state = state;
-    let server_fn_mailer = mailer;
     let serve_assets = ServeEmbed::<StaticAssets>::new();
     let storage_path_ext = Arc::new(storage_path);
-    let media_content_locks_ext = Arc::new(storage::MediaContentLocks::new(Arc::clone(
-        &storage_path_ext,
-    )));
+    let media_content_locks_ext = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path_ext)));
+    let media_manager = build_media_manager(
+        &state,
+        Arc::clone(&media_content_locks_ext),
+        instance_id,
+        media_ownership_resolver,
+    );
+    let server_fn_media_manager = Arc::clone(&media_manager);
+    let server_fn_state = state;
+    let server_fn_mailer = mailer;
     let server_fn_media_content_locks = Arc::clone(&media_content_locks_ext);
     let client_telemetry = crate::client_telemetry::router(
         sessions_ext.clone(),
@@ -149,17 +171,16 @@ pub fn create_router_with_media_reference_ownership_resolver(
         .route(
             "/api/{*fn_name}",
             axum::routing::post(move |req: axum::extract::Request| {
-                let instance_id = server_fn_instance_id.clone();
-                let resolver = server_fn_media_ownership_resolver.clone();
                 let state = server_fn_state.clone();
                 let mailer = server_fn_mailer.clone();
+                let media_manager = Arc::clone(&server_fn_media_manager);
                 let media_content_locks = Arc::clone(&server_fn_media_content_locks);
                 leptos_axum::handle_server_fns_with_context(
                     move || {
                         context::provide_app_state_contexts(&state);
                         context::provide_media_content_locks_context(&media_content_locks);
                         context::provide_mailer_context(&mailer);
-                        context::provide_media_ownership_context(&resolver, &instance_id);
+                        context::provide_media_manager_context(&media_manager);
                         provide_context(web::auth::CookieSettings {
                             secure: secure_cookies,
                         });
@@ -206,10 +227,9 @@ pub fn create_router_with_media_reference_ownership_resolver(
     };
 
     let app = app
-        .layer(axum::Extension(media_ownership_resolver))
-        .layer(axum::Extension(instance_id))
-        .layer(axum::Extension(storage_path_ext))
+        .layer(axum::Extension(media_manager))
         .layer(axum::Extension(media_content_locks_ext))
+        .layer(axum::Extension(storage_path_ext))
         .layer(axum::Extension(posts_ext))
         .layer(axum::Extension(audiences_ext))
         .layer(axum::Extension(users_ext))

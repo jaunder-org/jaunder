@@ -25,11 +25,10 @@ use {
     common::media::MediaRef,
     // Server-only: the delete guard's key. The CSR build never runs a query.
     leptos::prelude::*,
-    std::{collections::BTreeSet, sync::Arc},
+    std::sync::Arc,
     storage::{
-        self, DeleteMediaError, InstanceId, MediaContentLocks, MediaError, MediaManager,
-        MediaReferenceOwnershipResolver, MediaStorage, PostStorage, SiteConfigStorage,
-        TryDeleteOutcome, WriteScope,
+        DeleteMediaError, MediaError, MediaManager, MediaStorage, SiteConfigStorage,
+        TryDeleteOutcome,
     },
 };
 
@@ -143,11 +142,7 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MutationOutcome<Me
         force,
     } = request;
     let auth = auth::require_auth().await?;
-    let media = expect_context::<Arc<dyn MediaStorage>>();
-    let posts = expect_context::<Arc<dyn PostStorage>>();
-    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    let write_scope = expect_context::<WriteScope>();
-    let content_locks = expect_context::<Arc<MediaContentLocks>>();
+    let manager = expect_context::<Arc<MediaManager>>();
 
     let media_ref = MediaRef {
         source,
@@ -155,55 +150,14 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MutationOutcome<Me
         filename,
     };
 
-    // Site identity and the global reference set are a request-scoped snapshot.
-    // Resolve foreign ownership before the manager takes storage locks, then pass
-    // the same immutable evidence to deletion, reclamation, and refusal reporting.
-    let identity = site_config.get_identity().await?;
-    let references = posts.list_media_references(&media_ref).await?;
-    let resolver = expect_context::<Arc<dyn MediaReferenceOwnershipResolver>>();
-    let instance_id = expect_context::<InstanceId>();
-    let evidence = storage::resolve_media_reference_ownership(
-        resolver.as_ref(),
-        references.references(),
-        &instance_id,
-        identity.base_url.as_ref(),
-    )
-    .await;
-
-    // The manager delegates the row decision to storage's one-statement guard, then
-    // reclaims the file only when that decision deleted the row.
-    let manager = MediaManager::new(media.clone(), site_config, write_scope, content_locks);
-    let outcome = manager
-        .delete_media(
-            auth.user_id,
-            &media_ref,
-            &instance_id,
-            &evidence,
-            force.unwrap_or(false),
-        )
+    let result = manager
+        .delete_media(auth.user_id, &media_ref, force.unwrap_or(false))
         .await
         .map_err(map_delete_error)?;
 
-    // Reporting is derived from the exact globally resolved rows; querying after
-    // the guarded delete would race a concurrent post edit into the explanation.
-    let referenced_in_posts: Vec<PostId> = if *outcome.value()
-        == TryDeleteOutcome::RefusedReferenced
-    {
-        references
-            .references()
-            .iter()
-            .filter(|reference| {
-                reference.owner_id() == Some(auth.user_id) && !evidence.proves_foreign(reference)
-            })
-            .map(storage::PersistedMediaReference::post_id)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let referenced_in_posts = result.referenced_post_ids(auth.user_id);
 
-    Ok(outcome.map(|outcome| MediaDeletion {
+    Ok(result.into_outcome().map(|outcome| MediaDeletion {
         deleted: outcome == TryDeleteOutcome::Deleted,
         referenced_in_posts,
     }))
@@ -287,11 +241,7 @@ fn map_multipart_error(error: multer::Error) -> InternalError {
 #[macros::server(input = MultipartFormData, skip_all)]
 pub async fn upload(data: MultipartData) -> WebResult<MutationOutcome<UploadedMedia>> {
     let auth = auth::require_auth().await?;
-    let media = expect_context::<Arc<dyn MediaStorage>>();
-    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    let write_scope = expect_context::<WriteScope>();
-
-    let content_locks = expect_context::<Arc<MediaContentLocks>>();
+    let manager = expect_context::<Arc<MediaManager>>();
 
     // `into_inner()` is `Some` on the server (the parsed multipart body).
     let mut multipart = data
@@ -322,7 +272,6 @@ pub async fn upload(data: MultipartData) -> WebResult<MutationOutcome<UploadedMe
         })
         .transpose()?; // cov:ignore
 
-    let manager = MediaManager::new(media, site_config, write_scope, content_locks);
     manager
         .upload(auth.user_id, &filename, content_type, field)
         .await

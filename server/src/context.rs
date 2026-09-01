@@ -14,10 +14,10 @@ use std::sync::Arc;
 use common::mailer::MailSender;
 use leptos::prelude::provide_context;
 use storage::{
-    AppState, AudienceStorage, EmailVerificationStorage, FeedEventStorage, InstanceId,
-    InviteStorage, MediaContentLocks, MediaReferenceOwnershipResolver, MediaStorage,
-    PasswordResetStorage, PostStorage, SessionStorage, SiteConfigStorage, SubscriptionStorage,
-    UserConfigStorage, UserStorage, WriteScope,
+    AppState, AudienceStorage, EmailVerificationStorage, FeedEventStorage, InviteStorage,
+    MediaContentLocks, MediaManager, MediaStorage, PasswordResetStorage, PostStorage,
+    SessionStorage, SiteConfigStorage, SubscriptionStorage, UserConfigStorage, UserStorage,
+    WriteScope,
 };
 
 /// Place every storage handle and the factory-minted write scope in `state` into
@@ -46,14 +46,9 @@ pub fn provide_media_content_locks_context(content_locks: &Arc<MediaContentLocks
     provide_context(Arc::clone(content_locks));
 }
 
-/// Places the immutable instance identity and live media-reference resolver in
-/// the current Leptos request context.
-pub fn provide_media_ownership_context(
-    resolver: &Arc<dyn MediaReferenceOwnershipResolver>,
-    instance_id: &InstanceId,
-) {
-    provide_context::<Arc<dyn MediaReferenceOwnershipResolver>>(resolver.clone());
-    provide_context(instance_id.clone());
+/// Places the shared media operation manager in the current Leptos request context.
+pub fn provide_media_manager_context(manager: &Arc<MediaManager>) {
+    provide_context(Arc::clone(manager));
 }
 
 /// Place the mailer in the current Leptos context. Server functions that

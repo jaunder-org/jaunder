@@ -1,8 +1,8 @@
-//! Content-addressed media upload service: streams an upload to a hashed,
-//! dedup'd on-disk path, enforces per-file and per-user limits, and records the
-//! result. Relocated from `server` (#517) so a `web` `#[server]` fn can construct
-//! it directly — its work is persistence and its deps are all `storage`'s.
+//! Root-injected media operation service. It streams uploads to content-addressed,
+//! deduplicated paths, enforces file and user limits, and owns the evidence-bearing
+//! deletion sequence.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
 use crate::InstanceId;
-use common::ids::UserId;
+use common::ids::{PostId, UserId};
 use common::media::{
     self, ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaRef, MediaSource,
     UploadedMedia, UserQuota,
@@ -23,9 +23,11 @@ use common::media::{
 use common::time::UtcInstant;
 use host::metrics::{self, UploadOutcome};
 
+use crate::media_ownership::resolve_media_reference_ownership;
 use crate::{
-    CreateMediaError, MediaContentLocks, MediaRecord, MediaReferenceEvidence, MediaStorage,
-    SiteConfigStorage, TryDeleteOutcome, WriteScope, WriteScopeError,
+    CreateMediaError, MediaContentLocks, MediaRecord, MediaReferenceEvidence,
+    MediaReferenceOwnershipResolver, MediaReferenceSnapshot, MediaStorage, PersistedMediaReference,
+    PostStorage, SiteConfigStorage, TryDeleteOutcome, WriteScope, WriteScopeError,
 };
 use common::MutationOutcome;
 
@@ -75,12 +77,67 @@ impl MediaTemporaryDirectoryError {
 // by storage + web (both targets) + server, so the manager returns it directly with no
 // mapping layer.
 
+/// Result of one evidence-bearing media deletion attempt.
+#[derive(Debug)]
+pub struct MediaDeletionResult {
+    outcome: MutationOutcome<TryDeleteOutcome>,
+    references: MediaReferenceSnapshot,
+    evidence: MediaReferenceEvidence,
+}
+
+impl MediaDeletionResult {
+    fn new(
+        outcome: MutationOutcome<TryDeleteOutcome>,
+        references: MediaReferenceSnapshot,
+        evidence: MediaReferenceEvidence,
+    ) -> Self {
+        Self {
+            outcome,
+            references,
+            evidence,
+        }
+    }
+
+    /// Borrow the guarded storage outcome.
+    #[must_use]
+    pub fn outcome(&self) -> &MutationOutcome<TryDeleteOutcome> {
+        &self.outcome
+    }
+
+    /// Consume the evidence wrapper and return the guarded storage outcome.
+    #[must_use]
+    pub fn into_outcome(self) -> MutationOutcome<TryDeleteOutcome> {
+        self.outcome
+    }
+
+    /// Return owner-scoped Posts that explain a retained-reference refusal.
+    #[must_use]
+    pub fn referenced_post_ids(&self, user_id: UserId) -> Vec<PostId> {
+        if !matches!(self.outcome.value(), TryDeleteOutcome::RefusedReferenced) {
+            return Vec::new();
+        }
+        self.references
+            .references()
+            .iter()
+            .filter(|reference| {
+                reference.owner_id() == Some(user_id) && !self.evidence.proves_foreign(reference)
+            })
+            .map(PersistedMediaReference::post_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+}
+
 pub struct MediaManager {
     media: Arc<dyn MediaStorage>,
+    posts: Arc<dyn PostStorage>,
     site_config: Arc<dyn SiteConfigStorage>,
     write_scope: WriteScope,
     storage_path: Arc<PathBuf>,
     content_locks: Arc<MediaContentLocks>,
+    instance_id: InstanceId,
+    ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
 }
 
 /// File metadata for upload finalization.
@@ -114,16 +171,22 @@ impl MediaManager {
     #[must_use]
     pub fn new(
         media: Arc<dyn MediaStorage>,
+        posts: Arc<dyn PostStorage>,
         site_config: Arc<dyn SiteConfigStorage>,
         write_scope: WriteScope,
         content_locks: Arc<MediaContentLocks>,
+        instance_id: InstanceId,
+        ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
     ) -> Self {
         Self {
             media,
+            posts,
             site_config,
             write_scope,
             storage_path: Arc::clone(content_locks.storage_path()),
             content_locks,
+            instance_id,
+            ownership_resolver,
         }
     }
 
@@ -548,25 +611,35 @@ impl MediaManager {
     /// Deletes a media row and reclaims the on-disk entry when no remaining row
     /// or live Post names the same canonical media address.
     ///
-    /// A content lock serializes the scoped database checks with upload
-    /// placement. Confirmed reclamation removes the file only after the
-    /// database scope completes.
+    /// Ownership resolution uses one global reference snapshot and completes
+    /// before the content lock serializes the guarded storage decision with upload
+    /// placement. Confirmed reclamation removes the file only after the database
+    /// scope completes.
     /// # Errors
     ///
-    /// Returns write-scope acquisition or operation errors. Reclaim failures are
-    /// reported diagnostically without changing a confirmed database outcome.
+    /// Returns identity/reference reads, write-scope acquisition, or operation
+    /// errors. Reclaim failures are reported diagnostically without changing a
+    /// confirmed database outcome.
     pub async fn delete_media(
         &self,
         user_id: UserId,
         media: &MediaRef,
-        current_instance_id: &InstanceId,
-        evidence: &MediaReferenceEvidence,
         force: bool,
-    ) -> anyhow::Result<MutationOutcome<TryDeleteOutcome>> {
+    ) -> anyhow::Result<MediaDeletionResult> {
+        let identity = self.site_config.get_identity().await?;
+        let references = self.posts.list_media_references(media).await?;
+        let evidence = resolve_media_reference_ownership(
+            self.ownership_resolver.as_ref(),
+            references.references(),
+            &self.instance_id,
+            identity.base_url.as_ref(),
+        )
+        .await;
+
         let _content_lock = self.content_locks.acquire_one(&media.sha256).await?;
         let storage = Arc::clone(&self.media);
         let media_for_write = media.clone();
-        let instance_for_write = current_instance_id.clone();
+        let instance_for_write = self.instance_id.clone();
         let evidence_for_write = evidence.clone();
         let outcome = self
             .write_scope
@@ -587,13 +660,13 @@ impl MediaManager {
             })
             .await
             .map_err(Self::scope_error)?;
-        if matches!(
+        let outcome = if matches!(
             outcome,
             MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
         ) {
             let storage = Arc::clone(&self.media);
             let media_for_reclaim = media.clone();
-            let instance_for_reclaim = current_instance_id.clone();
+            let instance_for_reclaim = self.instance_id.clone();
             let evidence_for_reclaim = evidence.clone();
             let reclaimability = self
                 .write_scope
@@ -613,9 +686,11 @@ impl MediaManager {
             let reclaim =
                 Self::reclaim_file_after_scope(self.storage_path.as_ref(), media, reclaimability)
                     .await;
-            return Ok(Self::finish_reclaim(outcome, reclaim));
-        }
-        Ok(outcome)
+            Self::finish_reclaim(outcome, reclaim)
+        } else {
+            outcome
+        };
+        Ok(MediaDeletionResult::new(outcome, references, evidence))
     }
 
     fn reclaimable_from_scope(
@@ -752,8 +827,13 @@ mod tests {
     use super::*;
 
     use crate::test_support::{
-        Backend, SeedUser, backends, create_post_via_service, media_row_exists,
+        Backend, SeedUser, backends, create_post_via_service, media_row_exists, media_url_for,
     };
+    use crate::{
+        ForeignEvidenceSink, MediaReferenceOwnershipResolver, MediaReferenceSnapshot,
+        PersistedMediaReference, ProvenForeignReference,
+    };
+    use common::ids::PostId;
     use common::media::MediaRef;
     use common::test_support::{
         parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_post_body,
@@ -762,6 +842,245 @@ mod tests {
     use rstest::*;
     use rstest_reuse::*;
     use tempfile::TempDir;
+
+    struct NoForeignResolver;
+
+    #[async_trait::async_trait]
+    impl MediaReferenceOwnershipResolver for NoForeignResolver {
+        async fn resolve(
+            &self,
+            _references: &[PersistedMediaReference],
+            _instance_id: &InstanceId,
+            _base_url: Option<&common::tagged_url::BaseUrl>,
+            foreign: ForeignEvidenceSink,
+        ) -> MediaReferenceEvidence {
+            foreign.finish()
+        }
+    }
+
+    fn no_posts() -> Arc<dyn PostStorage> {
+        Arc::new(crate::MockPostStorage::new())
+    }
+
+    fn test_instance_id() -> InstanceId {
+        "123e4567-e89b-12d3-a456-426614174000"
+            .parse()
+            .expect("canonical instance ID")
+    }
+
+    fn no_foreign_resolver() -> Arc<dyn MediaReferenceOwnershipResolver> {
+        Arc::new(NoForeignResolver)
+    }
+
+    struct FirstForeignResolver;
+
+    #[async_trait::async_trait]
+    impl MediaReferenceOwnershipResolver for FirstForeignResolver {
+        async fn resolve(
+            &self,
+            references: &[PersistedMediaReference],
+            _instance_id: &InstanceId,
+            _base_url: Option<&common::tagged_url::BaseUrl>,
+            mut foreign: ForeignEvidenceSink,
+        ) -> MediaReferenceEvidence {
+            foreign.prove_foreign(references[0].clone());
+            foreign.finish()
+        }
+    }
+
+    struct BlockingResolver {
+        started: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        release: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+        completed: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MediaReferenceOwnershipResolver for BlockingResolver {
+        async fn resolve(
+            &self,
+            _references: &[PersistedMediaReference],
+            _instance_id: &InstanceId,
+            _base_url: Option<&common::tagged_url::BaseUrl>,
+            foreign: ForeignEvidenceSink,
+        ) -> MediaReferenceEvidence {
+            self.started
+                .lock()
+                .await
+                .take()
+                .expect("resolver starts once")
+                .send(())
+                .expect("test observes resolver start");
+            self.release
+                .lock()
+                .await
+                .take()
+                .expect("resolver completes once")
+                .await
+                .expect("test releases resolver");
+            let evidence = foreign.finish();
+            self.completed
+                .lock()
+                .await
+                .take()
+                .expect("resolver completes once")
+                .send(())
+                .expect("test observes resolver completion");
+            evidence
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn delete_media_resolves_one_snapshot_before_acquiring_the_content_lock(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let posts = env.state.posts.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
+        let resolver = Arc::new(BlockingResolver {
+            started: tokio::sync::Mutex::new(Some(started_tx)),
+            release: tokio::sync::Mutex::new(Some(release_rx)),
+            completed: tokio::sync::Mutex::new(Some(completed_tx)),
+        });
+        let content_locks = Arc::new(MediaContentLocks::new(Arc::new(
+            env.base.path().to_path_buf(),
+        )));
+        let manager = Arc::new(MediaManager::new(
+            env.state.media.clone(),
+            posts,
+            env.state.site_config.clone(),
+            env.state.write_scope.clone(),
+            Arc::clone(&content_locks),
+            env.base.instance_id().clone(),
+            resolver,
+        ));
+        let uploaded = manager
+            .upload_bytes(
+                user_id,
+                &parse_filename("ordered.jpg"),
+                "image/jpeg".parse().unwrap(),
+                b"ordered",
+            )
+            .await
+            .unwrap();
+        let media = upload_ref(&uploaded);
+        let held_lock = content_locks.acquire_one(&media.sha256).await.unwrap();
+        let delete_manager = Arc::clone(&manager);
+        let delete_media = media.clone();
+        let deletion = tokio::spawn(async move {
+            delete_manager
+                .delete_media(user_id, &delete_media, false)
+                .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), started_rx)
+            .await
+            .expect("ownership resolution starts while the content lock is held")
+            .expect("resolver reports start");
+        release_tx.send(()).expect("release resolver");
+        tokio::time::timeout(std::time::Duration::from_secs(1), completed_rx)
+            .await
+            .expect("ownership resolution completes while the content lock is held")
+            .expect("resolver reports completion");
+        drop(held_lock);
+        let result = deletion.await.expect("deletion task joins").unwrap();
+
+        assert!(matches!(
+            result.outcome(),
+            MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
+        ));
+    }
+
+    // guard:no-backend — mock storages expose snapshot and evidence forwarding at the manager seam
+    #[tokio::test]
+    async fn delete_media_reuses_one_snapshot_and_evidence_for_guard_and_reclaim() {
+        let parsed =
+            common::media::parse_media_url(&media_url_for("evidence.jpg")).expect("media parses");
+        let media_ref = parsed.media().clone();
+        let user_id = UserId::from(7);
+        let reference = PersistedMediaReference::new(
+            PostId::from(11),
+            media_ref.clone(),
+            parsed.kind(),
+            parsed.reference_form().clone(),
+        )
+        .with_owner(user_id);
+        let snapshot = MediaReferenceSnapshot::new(vec![reference.clone()], false);
+
+        let expected_media_for_snapshot = media_ref.clone();
+        let mut posts = crate::MockPostStorage::new();
+        posts
+            .expect_list_media_references()
+            .times(1)
+            .return_once(move |actual_media| {
+                assert_eq!(actual_media, &expected_media_for_snapshot);
+                Ok(snapshot)
+            });
+
+        let mut site_config = crate::MockSiteConfigStorage::new();
+        site_config.expect_get_identity().times(1).return_once(|| {
+            Ok(common::site::SiteIdentity {
+                title: common::site::SiteTitle::default(),
+                base_url: None,
+            })
+        });
+
+        let instance_id = test_instance_id();
+        let expected_guard_media = media_ref.clone();
+        let expected_guard_instance = instance_id.clone();
+        let expected_guard_reference = reference.clone();
+        let expected_reclaim_media = media_ref.clone();
+        let expected_reclaim_instance = instance_id.clone();
+        let expected_reclaim_reference = reference;
+        let mut media = crate::MockMediaStorage::new();
+        media.expect_try_delete_media().times(1).returning(
+            move |_, actual_user, actual_media, actual_instance, evidence, force| {
+                assert_eq!(actual_user, user_id);
+                assert_eq!(actual_media, &expected_guard_media);
+                assert_eq!(actual_instance, &expected_guard_instance);
+                assert!(evidence.proves_foreign(&expected_guard_reference));
+                assert!(!force);
+                Ok(TryDeleteOutcome::Deleted)
+            },
+        );
+        media
+            .expect_lock_media_reference()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        media
+            .expect_media_entry_is_reclaimable()
+            .times(1)
+            .returning(move |_, actual_media, actual_instance, evidence| {
+                assert_eq!(actual_media, &expected_reclaim_media);
+                assert_eq!(actual_instance, &expected_reclaim_instance);
+                assert!(evidence.proves_foreign(&expected_reclaim_reference));
+                Ok(false)
+            });
+
+        let temp = TempDir::new().unwrap();
+        let manager = MediaManager::new(
+            Arc::new(media),
+            Arc::new(posts),
+            Arc::new(site_config),
+            WriteScope::mock(),
+            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            instance_id,
+            Arc::new(FirstForeignResolver),
+        );
+
+        let result = manager
+            .delete_media(user_id, &media_ref, false)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            result.outcome(),
+            MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
+        ));
+    }
 
     fn upload_ref(response: &MutationOutcome<UploadedMedia>) -> MediaRef {
         let response = response.value();
@@ -914,6 +1233,73 @@ mod tests {
     }
 
     #[test]
+    fn deletion_result_reports_only_owned_nonforeign_posts_on_refusal() {
+        let instance_id: InstanceId = "123e4567-e89b-12d3-a456-426614174000"
+            .parse()
+            .expect("canonical instance ID");
+        let parsed =
+            common::media::parse_media_url(&media_url_for("photo.jpg")).expect("media form parses");
+        let owner_id = UserId::from(7);
+        let foreign = PersistedMediaReference::new(
+            PostId::from(3),
+            parsed.media().clone(),
+            parsed.kind(),
+            parsed.reference_form().clone(),
+        )
+        .with_owner(owner_id);
+        let references = MediaReferenceSnapshot::new(
+            vec![
+                PersistedMediaReference::new(
+                    PostId::from(2),
+                    parsed.media().clone(),
+                    parsed.kind(),
+                    parsed.reference_form().clone(),
+                )
+                .with_owner(owner_id),
+                PersistedMediaReference::new(
+                    PostId::from(1),
+                    parsed.media().clone(),
+                    parsed.kind(),
+                    parsed.reference_form().clone(),
+                )
+                .with_owner(owner_id),
+                PersistedMediaReference::new(
+                    PostId::from(1),
+                    parsed.media().clone(),
+                    parsed.kind(),
+                    parsed.reference_form().clone(),
+                )
+                .with_owner(owner_id),
+                PersistedMediaReference::new(
+                    PostId::from(4),
+                    parsed.media().clone(),
+                    parsed.kind(),
+                    parsed.reference_form().clone(),
+                )
+                .with_owner(UserId::from(8)),
+                foreign.clone(),
+            ],
+            false,
+        );
+        let mut evidence = MediaReferenceEvidence::new(instance_id.clone());
+        assert!(evidence.insert(ProvenForeignReference::new(foreign, instance_id)));
+        let result = MediaDeletionResult::new(
+            MutationOutcome::Confirmed(TryDeleteOutcome::RefusedReferenced),
+            references,
+            evidence,
+        );
+
+        assert_eq!(
+            result.referenced_post_ids(owner_id),
+            vec![PostId::from(1), PostId::from(2)]
+        );
+        assert!(matches!(
+            result.outcome(),
+            MutationOutcome::Confirmed(TryDeleteOutcome::RefusedReferenced)
+        ));
+    }
+
+    #[test]
     fn upload_outcome_maps_each_media_error() {
         use host::metrics::UploadOutcome;
         assert!(matches!(
@@ -1045,9 +1431,12 @@ mod tests {
         };
         let manager = MediaManager::new(
             Arc::new(crate::MockMediaStorage::new()),
+            no_posts(),
             Arc::new(crate::MockSiteConfigStorage::new()),
             WriteScope::mock(),
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            test_instance_id(),
+            no_foreign_resolver(),
         );
 
         assert!(
@@ -1104,9 +1493,12 @@ mod tests {
         pool.close().await;
         let manager = MediaManager::new(
             Arc::new(crate::MockMediaStorage::new()),
+            no_posts(),
             Arc::new(crate::MockSiteConfigStorage::new()),
             write_scope,
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            test_instance_id(),
+            no_foreign_resolver(),
         );
 
         let error = manager
@@ -1153,9 +1545,12 @@ mod tests {
             .returning(|_, _| Err(CreateMediaError::Internal(sqlx::Error::PoolClosed)));
         let manager = MediaManager::new(
             Arc::new(media),
+            no_posts(),
             Arc::new(crate::MockSiteConfigStorage::new()),
             WriteScope::mock(),
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            test_instance_id(),
+            no_foreign_resolver(),
         );
         let metadata = UploadMetadata {
             filename: parse_filename("failed.png"),
@@ -1203,9 +1598,12 @@ mod tests {
         pool.close().await;
         let manager = MediaManager::new(
             Arc::new(media),
+            no_posts(),
             Arc::new(crate::MockSiteConfigStorage::new()),
             write_scope,
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            test_instance_id(),
+            no_foreign_resolver(),
         );
         let metadata = UploadMetadata {
             filename: parse_filename("begin-failed.png"),
@@ -1248,9 +1646,12 @@ mod tests {
             .returning(|_| Ok(parse_byte_size("0")));
         let manager = MediaManager::new(
             Arc::new(media),
+            no_posts(),
             Arc::new(crate::MockSiteConfigStorage::new()),
             WriteScope::mock(),
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            test_instance_id(),
+            no_foreign_resolver(),
         );
         let metadata = UploadMetadata {
             filename: parse_filename("content-lock-failed.png"),
@@ -1300,9 +1701,12 @@ mod tests {
             .returning(|_, _| Err(sqlx::Error::PoolClosed));
         let manager = MediaManager::new(
             Arc::new(media),
+            no_posts(),
             Arc::new(crate::MockSiteConfigStorage::new()),
             WriteScope::mock(),
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            test_instance_id(),
+            no_foreign_resolver(),
         );
         let metadata = UploadMetadata {
             filename: parse_filename("lock-failed.png"),
@@ -1351,9 +1755,12 @@ mod tests {
             .returning(|_, _| Err(CreateMediaError::Internal(sqlx::Error::PoolClosed)));
         let manager = MediaManager::new(
             Arc::new(media),
+            no_posts(),
             Arc::new(crate::MockSiteConfigStorage::new()),
             WriteScope::mock(),
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            test_instance_id(),
+            no_foreign_resolver(),
         );
         let metadata = UploadMetadata {
             filename: parse_filename("failed-link.png"),
@@ -1599,11 +2006,14 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
             env.state.media.clone(),
+            env.state.posts.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
         );
 
         // A tiny PNG signature + IHDR-ish bytes (content need not be a valid image).
@@ -1650,6 +2060,7 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
             env.state.media.clone(),
+            env.state.posts.clone(),
             env.state.site_config.clone(),
             env.state
                 .write_scope
@@ -1657,6 +2068,8 @@ mod tests {
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
         );
 
         let outcome = manager
@@ -1687,11 +2100,14 @@ mod tests {
             .unwrap();
         let manager = MediaManager::new(
             env.state.media.clone(),
+            env.state.posts.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
         );
 
         let err = manager
@@ -1719,11 +2135,14 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
             env.state.media.clone(),
+            env.state.posts.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
         );
 
         let chunks = [
@@ -1763,11 +2182,14 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
             env.state.media.clone(),
+            env.state.posts.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
         );
 
         let uploaded = manager
@@ -1785,15 +2207,10 @@ mod tests {
 
         assert_eq!(
             manager
-                .delete_media(
-                    user_id,
-                    &media,
-                    env.base.instance_id(),
-                    &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                    false,
-                )
+                .delete_media(user_id, &media, false)
                 .await
-                .unwrap(),
+                .unwrap()
+                .into_outcome(),
             MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
         );
 
@@ -1816,11 +2233,14 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let confirmed_manager = MediaManager::new(
             env.state.media.clone(),
+            env.state.posts.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
         );
         let uploaded = confirmed_manager
             .upload_bytes(
@@ -1835,6 +2255,7 @@ mod tests {
         let file_path = stored_path(env.base.path(), &media);
         let manager = MediaManager::new(
             env.state.media.clone(),
+            env.state.posts.clone(),
             env.state.site_config.clone(),
             env.state
                 .write_scope
@@ -1842,18 +2263,15 @@ mod tests {
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
         );
 
         let outcome = manager
-            .delete_media(
-                user_id,
-                &media,
-                env.base.instance_id(),
-                &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                false,
-            )
+            .delete_media(user_id, &media, false)
             .await
-            .unwrap();
+            .unwrap()
+            .into_outcome();
         assert_eq!(
             outcome,
             MutationOutcome::CommitIndeterminate(TryDeleteOutcome::Deleted)
@@ -1872,11 +2290,14 @@ mod tests {
         let other_user = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
             env.state.media.clone(),
+            env.state.posts.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
         );
         let uploaded = manager
             .upload_bytes(
@@ -1892,13 +2313,7 @@ mod tests {
 
         assert!(
             manager
-                .delete_media(
-                    other_user,
-                    &media,
-                    env.base.instance_id(),
-                    &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                    false,
-                )
+                .delete_media(other_user, &media, false)
                 .await
                 .is_err()
         );
@@ -1916,11 +2331,14 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
             env.state.media.clone(),
+            env.state.posts.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
         );
 
         let uploaded = manager
@@ -1938,15 +2356,10 @@ mod tests {
         std_fs::create_dir(&file_path).unwrap();
 
         let outcome = manager
-            .delete_media(
-                user_id,
-                &media,
-                env.base.instance_id(),
-                &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                false,
-            )
+            .delete_media(user_id, &media, false)
             .await
-            .unwrap();
+            .unwrap()
+            .into_outcome();
 
         assert_eq!(
             outcome,
@@ -1961,11 +2374,14 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
             env.state.media.clone(),
+            env.state.posts.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
         );
 
         let uploaded = manager
@@ -1988,15 +2404,10 @@ mod tests {
 
         assert_eq!(
             manager
-                .delete_media(
-                    user_id,
-                    &media,
-                    env.base.instance_id(),
-                    &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                    true,
-                )
+                .delete_media(user_id, &media, true)
                 .await
-                .unwrap(),
+                .unwrap()
+                .into_outcome(),
             MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
         );
         assert!(!media_row_exists(&env.state, user_id, &media).await);
@@ -2014,11 +2425,14 @@ mod tests {
         let second_user = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
             env.state.media.clone(),
+            env.state.posts.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
         );
 
         let first = manager
@@ -2044,13 +2458,7 @@ mod tests {
         assert_eq!(upload_ref(&second), media);
 
         manager
-            .delete_media(
-                first_user,
-                &media,
-                env.base.instance_id(),
-                &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                false,
-            )
+            .delete_media(first_user, &media, false)
             .await
             .unwrap();
 
@@ -2059,13 +2467,7 @@ mod tests {
         assert!(file_path.exists(), "remaining media row retains the file");
 
         manager
-            .delete_media(
-                second_user,
-                &media,
-                env.base.instance_id(),
-                &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                false,
-            )
+            .delete_media(second_user, &media, false)
             .await
             .unwrap();
 
@@ -2081,11 +2483,14 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
             env.state.media.clone(),
+            env.state.posts.clone(),
             env.state.site_config.clone(),
             env.state.write_scope.clone(),
             Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
         );
 
         let first = manager
@@ -2112,13 +2517,7 @@ mod tests {
         let second_path = stored_path(env.base.path(), &second_media);
 
         manager
-            .delete_media(
-                user_id,
-                &first_media,
-                env.base.instance_id(),
-                &MediaReferenceEvidence::new(env.base.instance_id().clone()),
-                false,
-            )
+            .delete_media(user_id, &first_media, false)
             .await
             .unwrap();
 
