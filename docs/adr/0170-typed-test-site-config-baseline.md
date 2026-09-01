@@ -1,6 +1,6 @@
-# ADR-DRAFT: Use a typed site-config baseline for dual-backend tests
+# ADR-0170: Use a typed site-config baseline for dual-backend tests
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-01
 - Issue: [#841](https://github.com/jaunder-org/jaunder/issues/841)
 
@@ -14,10 +14,10 @@ while omission silently selected production's safe Closed registration policy
 and produced misleading assertion failures.
 
 The harness location and backend parity are already governed by the
-[shared database test harness](../0033-shared-db-test-harness-crate.md). Site
+[shared database test harness](0033-shared-db-test-harness-crate.md). Site
 configuration remains a
-[closed typed registry](../0102-config-key-closed-registry.md), and production
-must continue treating absent or invalid registration policy as Closed. The
+[closed typed registry](0102-config-key-closed-registry.md), and production must
+continue treating absent or invalid registration policy as Closed. The
 unresolved decision is the default state of a test fixture and how tests request
 deviations from it.
 

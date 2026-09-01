@@ -41,7 +41,7 @@ requirements, while production configuration defaults remain unchanged.
 - The redundant `setup_with_base_url()` convention is deleted and every caller
   migrates to bare setup or a deliberate override.
 - The durable fixture-baseline contract is recorded in
-  `docs/adr/drafts/typed-test-site-config-baseline.md` and projected into
+  `docs/adr/0170-typed-test-site-config-baseline.md` and projected into
   `docs/ARCHITECTURE.md`.
 
 ## Acceptance
