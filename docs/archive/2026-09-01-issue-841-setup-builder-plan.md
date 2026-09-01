@@ -6,7 +6,7 @@
 > setup.
 
 > Approved specification:
-> `docs/superpowers/specs/2026-09-01-issue-841-setup-builder.md`
+> `docs/archive/2026-09-01-issue-841-setup-builder-spec.md`
 
 ## Scope
 
