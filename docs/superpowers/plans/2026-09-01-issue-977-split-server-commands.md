@@ -58,7 +58,7 @@ Out:
     site-configuration functions retain `jaunder::commands::…` paths.
   - Verification: focused dual-backend site-configuration tests pass; command
     integration-test files remain content-identical.
-- [ ] Task 5: Extract dispatch and lifecycle, then finalize the assembly-only
+- [x] Task 5: Extract dispatch and lifecycle, then finalize the assembly-only
       facade.
   - Contract: private `dispatch` retains `Commands::execute`,
     `SiteConfigAction::execute`, and `CommandOutput`; private `lifecycle` owns

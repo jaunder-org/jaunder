@@ -3,7 +3,7 @@ use std::io;
 use crate::cli::{AppTarget, BootstrapDb, StorageArgs};
 use common::pg_role_password::PgRolePassword;
 
-use super::support::storage_runtime_config;
+use super::support;
 
 /// Initializes the application's storage directory and database.
 ///
@@ -17,7 +17,7 @@ pub async fn cmd_init(storage: &StorageArgs, skip_if_exists: bool) -> anyhow::Re
         Err(e) if skip_if_exists && e.kind() == io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.into()),
     }
-    let runtime = storage_runtime_config(&storage.db)?;
+    let runtime = support::storage_runtime_config(&storage.db)?;
     storage::open_database(&storage.db, &runtime).await?;
     println!(
         "Initialized: storage={} db={}",

@@ -15,7 +15,7 @@ use host::smtp_config::SmtpConfig;
 use crate::cli::StorageArgs;
 use crate::mailer::LettreMailSender;
 
-use super::support::{INIT_FIRST_CONTEXT, require_confirmed_mutation, storage_runtime_config};
+use super::support;
 
 async fn create_command_user(
     write_scope: &storage::WriteScope,
@@ -45,7 +45,7 @@ async fn create_command_user(
         .await
         .map_err(anyhow::Error::from)
         .context("failed to create user")?;
-    require_confirmed_mutation(outcome, "user creation")
+    support::require_confirmed_mutation(outcome, "user creation")
 }
 
 /// Creates a new user in the database.
@@ -61,10 +61,10 @@ pub async fn cmd_user_create(
     display_name: Option<&DisplayName>,
     is_operator: bool,
 ) -> anyhow::Result<()> {
-    let runtime = storage_runtime_config(&storage.db)?;
+    let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime)
         .await
-        .context(INIT_FIRST_CONTEXT)?;
+        .context(support::INIT_FIRST_CONTEXT)?;
 
     let password = if let Some(p) = password {
         p
@@ -131,7 +131,7 @@ pub async fn app_password_create(
         .await
         .map_err(anyhow::Error::from)
         .context("failed to create app password")?;
-    require_confirmed_mutation(outcome, "app password")
+    support::require_confirmed_mutation(outcome, "app password")
 }
 
 /// CLI wrapper: opens the database, mints an app password, prints it to stdout.
@@ -144,10 +144,10 @@ pub async fn cmd_app_password_create(
     username: &Username,
     label: &SessionLabel,
 ) -> anyhow::Result<()> {
-    let runtime = storage_runtime_config(&storage.db)?;
+    let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime)
         .await
-        .context(INIT_FIRST_CONTEXT)?;
+        .context(support::INIT_FIRST_CONTEXT)?;
     let token = app_password_create(
         &state.write_scope,
         state.users(),
@@ -170,10 +170,10 @@ pub async fn cmd_user_invite(
     storage: &StorageArgs,
     expires_in: Option<InviteTtlHours>,
 ) -> anyhow::Result<()> {
-    let runtime = storage_runtime_config(&storage.db)?;
+    let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime)
         .await
-        .context(INIT_FIRST_CONTEXT)?;
+        .context(support::INIT_FIRST_CONTEXT)?;
 
     // The 1..=336 bound lives in `InviteTtlHours` (clap rejects an out-of-range `--expires-in`
     // at parse), so no in-body overflow check is needed.
@@ -190,7 +190,7 @@ pub async fn cmd_user_invite(
         .await
         .map_err(anyhow::Error::from)
         .context("failed to create invite")?;
-    let code = require_confirmed_mutation(outcome, "invite creation")?;
+    let code = support::require_confirmed_mutation(outcome, "invite creation")?;
     host::metrics::invite(host::metrics::InviteEvent::Created);
     // Deliberate operator-facing reveal via `AsRef` (InviteCode has no Display/serde). With a
     // configured base URL, print a ready-to-send invitation link; otherwise the bare code.
@@ -211,10 +211,10 @@ pub async fn cmd_user_invite(
 /// Returns an error if SMTP is not configured, or if the test email cannot be
 /// sent.
 pub async fn cmd_smtp_test(storage: &StorageArgs, to: &Email) -> anyhow::Result<()> {
-    let runtime = storage_runtime_config(&storage.db)?;
+    let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime)
         .await
-        .context(INIT_FIRST_CONTEXT)?;
+        .context(support::INIT_FIRST_CONTEXT)?;
 
     smtp_test_with(state.site_config(), to, |config| {
         Ok(Box::new(LettreMailSender::from_config(config)?) as Box<dyn MailSender>)

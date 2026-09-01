@@ -15,7 +15,7 @@ use host::{
 };
 use tokio::{net::TcpListener, sync::oneshot::Receiver, task::JoinHandle};
 
-use crate::cli::{Commands, SiteConfigAction, StorageArgs};
+use crate::cli::StorageArgs;
 use crate::feed::worker::FeedWorker;
 use crate::maintenance::{self, DatabaseMaintenance};
 use crate::metrics::{self, SaturationSources};
@@ -24,26 +24,11 @@ use crate::scheduled_worker::ScheduledWorkerGuard;
 #[cfg(test)]
 use host::config_key::SiteConfigKey;
 use storage::{
-    AppState, BackupRestoreOutcome, DbConnectOptions, DbPoolObserver, InstanceId, MediaManager,
-    SiteConfigStorage, StorageRuntimeConfig,
+    AppState, DbConnectOptions, DbPoolObserver, InstanceId, MediaManager, SiteConfigStorage,
+    StorageRuntimeConfig,
 };
-mod account;
-mod backup;
-mod site_config;
-mod storage_bootstrap;
-mod support;
-#[cfg(test)]
-mod test_support;
 
-pub use account::{
-    app_password_create, cmd_app_password_create, cmd_smtp_test, cmd_user_create, cmd_user_invite,
-};
-pub use backup::{cmd_backup, cmd_restore};
-use site_config::{
-    cmd_site_config_get, cmd_site_config_list, cmd_site_config_set, cmd_site_config_unset,
-};
-pub use storage_bootstrap::{cmd_create_pg_db, cmd_init};
-use support::{INIT_FIRST_CONTEXT, storage_runtime_config};
+use super::support;
 
 const CAPTURE_FEED_INTERVAL: Duration = Duration::from_millis(250);
 const PRODUCTION_FEED_INTERVAL: Duration = Duration::from_secs(10);
@@ -56,124 +41,10 @@ fn feed_worker_interval(capture_enabled: bool) -> Duration {
     }
 }
 
-pub enum CommandOutput {
-    None,
-    Backup(PathBuf),
-    Restore(BackupRestoreOutcome),
-}
-
 /// Capture leaf paths resolved by the serve composition root.
 pub struct ServeCapturePaths {
     pub mail: PathBuf,
     pub websub: PathBuf,
-}
-
-impl Commands {
-    /// Dispatch this parsed subcommand to its handler. A flat match-expression:
-    /// each arm evaluates to the command's `Result<CommandOutput>`, so there is no `?` on
-    /// the dispatch call and no trailing `Ok(())` — keeping any single function's
-    /// cyclomatic complexity (and thus CRAP) low as subcommands are added (#147).
-    ///
-    /// # Errors
-    ///
-    /// Propagates the selected command's failure.
-    pub async fn execute(
-        self,
-        telemetry: &host::telemetry::TelemetryConfig,
-        capture: Option<ServeCapturePaths>,
-    ) -> anyhow::Result<CommandOutput> {
-        match self {
-            Commands::Init {
-                storage,
-                skip_if_exists,
-            } => cmd_init(&storage, skip_if_exists)
-                .await
-                .map(|()| CommandOutput::None),
-            Commands::CreatePgDb { pg } => {
-                cmd_create_pg_db(&pg.bootstrap_db, &pg.app_db, &pg.app_role_password)
-                    .await
-                    .map(|()| CommandOutput::None)
-            }
-            Commands::Serve {
-                storage,
-                bind,
-                environment,
-            } => cmd_serve(
-                &storage,
-                bind,
-                environment.is_prod(),
-                telemetry,
-                capture.as_ref(),
-            )
-            .await
-            .map(|()| CommandOutput::None),
-            Commands::UserCreate {
-                storage,
-                username,
-                password,
-                display_name,
-                operator,
-            } => cmd_user_create(
-                &storage,
-                &username,
-                password,
-                display_name.as_ref(),
-                operator,
-            )
-            .await
-            .map(|()| CommandOutput::None),
-            Commands::AppPasswordCreate {
-                storage,
-                username,
-                label,
-            } => cmd_app_password_create(&storage, &username, &label)
-                .await
-                .map(|()| CommandOutput::None),
-            Commands::UserInvite {
-                storage,
-                expires_in,
-            } => cmd_user_invite(&storage, expires_in)
-                .await
-                .map(|()| CommandOutput::None),
-            Commands::SmtpTest { storage, to } => cmd_smtp_test(&storage, &to)
-                .await
-                .map(|()| CommandOutput::None),
-            Commands::Backup {
-                storage,
-                mode,
-                path,
-            } => cmd_backup(&storage, mode.into(), path)
-                .await
-                .map(CommandOutput::Backup),
-            Commands::Restore { storage, path } => cmd_restore(&storage, &path)
-                .await
-                .map(CommandOutput::Restore),
-            // First nested subcommand group: the arm stays a thin delegation to
-            // SiteConfigAction::execute (a sibling match), preserving the low-CRAP
-            // one-arm-per-command dispatch shape. Copy this pattern for future groups.
-            Commands::SiteConfig { action } => action.execute().await.map(|()| CommandOutput::None),
-        }
-    }
-}
-
-impl SiteConfigAction {
-    /// Dispatch a `site-config` leaf to its handler (mirrors [`Commands::execute`]).
-    ///
-    /// # Errors
-    ///
-    /// Propagates the selected leaf's failure.
-    pub async fn execute(self) -> anyhow::Result<()> {
-        match self {
-            SiteConfigAction::Set {
-                storage,
-                key,
-                value,
-            } => cmd_site_config_set(&storage, key, &value).await,
-            SiteConfigAction::Get { storage, key } => cmd_site_config_get(&storage, key).await,
-            SiteConfigAction::List { storage } => cmd_site_config_list(&storage).await,
-            SiteConfigAction::Unset { storage, key } => cmd_site_config_unset(&storage, key).await,
-        }
-    }
 }
 
 
@@ -274,7 +145,7 @@ fn startup_database_error_context(
     {
         "PostgreSQL database does not exist; run `jaunder create-pg-db` first"
     } else {
-        INIT_FIRST_CONTEXT
+        support::INIT_FIRST_CONTEXT
     }
 }
 
@@ -570,7 +441,7 @@ pub async fn prepare_server(
     MediaManager::prepare_temporary_upload_directory(&storage.storage_path)
         .await
         .context("failed to prepare media temporary upload directory")?;
-    let runtime = storage_runtime_config(&storage.db)?;
+    let runtime = support::storage_runtime_config(&storage.db)?;
     let StartupDatabase {
         state: db,
         instance_id,
@@ -787,7 +658,7 @@ pub async fn cmd_serve(
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{assert_command_source, sqlite_storage_args};
+    use super::super::test_support::{assert_command_source, sqlite_storage_args};
     use super::*;
     use storage::{DbConnectOptions, MediaTemporaryDirectoryError, test_support::confirmed};
     use tempfile::TempDir;
@@ -1079,7 +950,7 @@ mod tests {
         .err()
         .expect("connection failure must propagate");
 
-        assert_command_source::<sqlx::Error>(&error, INIT_FIRST_CONTEXT);
+        assert_command_source::<sqlx::Error>(&error, support::INIT_FIRST_CONTEXT);
         assert!(
             error.chain().any(|source| matches!(
                 source.downcast_ref::<sqlx::Error>(),

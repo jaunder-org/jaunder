@@ -4,7 +4,7 @@ use host::config_key::SiteConfigKey;
 
 use crate::cli::StorageArgs;
 
-use super::support::{require_confirmed_mutation, storage_runtime_config};
+use super::support;
 
 /// Upsert a `site_config` key/value through the real storage path.
 ///
@@ -16,7 +16,7 @@ pub(super) async fn cmd_site_config_set(
     value: &str,
 ) -> anyhow::Result<()> {
     key.validate(value)?;
-    let runtime = storage_runtime_config(&storage.db)?;
+    let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime).await?;
     let site_config = Arc::clone(&state.site_config);
     let value = value.to_owned();
@@ -27,7 +27,7 @@ pub(super) async fn cmd_site_config_set(
             Box::pin(async move { site_config.set(transaction, key, &value_for_set).await })
         })
         .await?;
-    require_confirmed_mutation(outcome, "site_config set")?;
+    support::require_confirmed_mutation(outcome, "site_config set")?;
     eprintln!("set site_config {key} = {value}");
     Ok(())
 }
@@ -38,7 +38,7 @@ pub(super) async fn cmd_site_config_get(
     storage: &StorageArgs,
     key: SiteConfigKey,
 ) -> anyhow::Result<()> {
-    let runtime = storage_runtime_config(&storage.db)?;
+    let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime).await?;
     match state.site_config.get_raw(key).await? {
         Some(value) => {
@@ -51,7 +51,7 @@ pub(super) async fn cmd_site_config_get(
 
 /// Print all `site_config` entries as `key=value`, one per line, ordered by key.
 pub(super) async fn cmd_site_config_list(storage: &StorageArgs) -> anyhow::Result<()> {
-    let runtime = storage_runtime_config(&storage.db)?;
+    let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime).await?;
     let entries = state.site_config.list().await?;
     print!("{}", format_entries(&entries));
@@ -64,14 +64,14 @@ pub(super) async fn cmd_site_config_unset(
     storage: &StorageArgs,
     key: SiteConfigKey,
 ) -> anyhow::Result<()> {
-    let runtime = storage_runtime_config(&storage.db)?;
+    let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime).await?;
     let site_config = Arc::clone(&state.site_config);
     let outcome = state
         .write_scope
         .run(move |transaction| Box::pin(async move { site_config.delete(transaction, key).await }))
         .await?;
-    let removed = require_confirmed_mutation(outcome, "site_config unset")?;
+    let removed = support::require_confirmed_mutation(outcome, "site_config unset")?;
     if removed {
         eprintln!("unset site_config {key}");
     } else {

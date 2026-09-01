@@ -9,7 +9,7 @@ use storage::{
     StorageRuntimeConfig,
 };
 
-use super::support::storage_runtime_config;
+use super::support;
 use crate::cli::StorageArgs;
 
 /// Performs a full backup of the application database and media.
@@ -22,7 +22,7 @@ pub async fn cmd_backup(
     mode: BackupMode,
     path: Option<PathBuf>,
 ) -> anyhow::Result<PathBuf> {
-    let runtime = storage_runtime_config(&storage.db)?;
+    let runtime = support::storage_runtime_config(&storage.db)?;
     let destination_path = path.unwrap_or_else(|| default_backup_path(storage, mode));
     let manifest = storage::export_backup(BackupExportOptions {
         database: &storage.db,
@@ -57,7 +57,7 @@ pub async fn cmd_restore(
             path.display()
         ));
     }
-    let runtime = storage_runtime_config(&storage.db)?;
+    let runtime = support::storage_runtime_config(&storage.db)?;
     ensure_restore_target_empty(storage, &runtime).await?;
     let outcome = storage::restore_backup(BackupRestoreOptions {
         database: &storage.db,
