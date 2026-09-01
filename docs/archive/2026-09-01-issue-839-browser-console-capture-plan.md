@@ -1,7 +1,7 @@
 # Issue #839 implementation outline
 
 > Approved specification:
-> `docs/superpowers/specs/2026-09-01-issue-839-browser-console-capture.md`
+> `docs/archive/2026-09-01-issue-839-browser-console-capture-spec.md`
 
 ## Risk trigger
 
