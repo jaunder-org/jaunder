@@ -6,7 +6,7 @@ use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
 use common::time::UtcInstant;
 use server_fn::ServerFn;
-use storage::AppState;
+use storage::{AppState, EmailVerified};
 
 use crate::helpers::{
     SeededSession, assert_no_email, assert_one_absolute_link_email, create_session_for,
@@ -38,7 +38,7 @@ async fn create_user_with_verified_email(state: &Arc<AppState>, email: &str) -> 
                         transaction,
                         session.user_id,
                         Some(&email),
-                        storage::EmailVerified::VERIFIED,
+                        EmailVerified::VERIFIED,
                     )
                     .await
             })

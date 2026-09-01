@@ -2111,7 +2111,7 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, sqlx::Error> {
-        const BATCH_SIZE: i64 = 100;
+        const BATCH_SIZE: RowLimit = RowLimit::at_most(100);
         let cutoff = idempotency_replay_cutoff(now);
         let mut deleted = 0;
 
@@ -2126,8 +2126,8 @@ where
                  )
                  RETURNING CAST(1 AS BIGINT)",
             )
-            .bind(cutoff)
-            .bind(BATCH_SIZE)
+            .bind_storage(cutoff)
+            .bind_storage(BATCH_SIZE)
             .fetch_all(&self.pool)
             .await?
             .len() as u64;
@@ -2135,7 +2135,7 @@ where
                 metrics::retention_pruned(Domain::IdempotencyKeys, batch);
             }
             deleted += batch;
-            if batch < BATCH_SIZE as u64 {
+            if batch < BATCH_SIZE.value().unsigned_abs() {
                 return Ok(deleted);
             }
         }
@@ -3672,18 +3672,25 @@ fn create_expectations_match(input: &CreatePostInput) -> bool {
             .is_none_or(|published_at| published_at == input.published_at)
 }
 
+/// `PostgreSQL`'s signed advisory-lock key for one user/idempotency-key pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, macros::SqlxBridge)]
+pub(crate) struct IdempotencyAdvisoryLockKey(i64);
+
 /// Derives the `PostgreSQL` advisory-lock key for one user's `Idempotency Key`.
 ///
 /// A collision only serializes unrelated creates; it cannot change behavior.
 #[must_use]
-pub(crate) fn idempotency_advisory_lock_key(user_id: UserId, key: &IdempotencyKey) -> i64 {
+pub(crate) fn idempotency_advisory_lock_key(
+    user_id: UserId,
+    key: &IdempotencyKey,
+) -> IdempotencyAdvisoryLockKey {
     let mut digest = Sha256::new();
     digest.update(i64::from(user_id).to_be_bytes());
     digest.update(key.as_ref().as_bytes());
     let digest: [u8; 32] = digest.finalize().into();
-    i64::from_be_bytes([
+    IdempotencyAdvisoryLockKey(i64::from_be_bytes([
         digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
-    ])
+    ]))
 }
 
 /// `PostgreSQL`'s signed advisory-lock key for one exact media identity.
@@ -3871,9 +3878,9 @@ where
              WHERE user_id = $1 AND key = $2 AND created_at <= $3
              RETURNING CAST(1 AS BIGINT)",
         )
-        .bind(input.user_id)
-        .bind(key)
-        .bind(cutoff)
+        .bind_storage(input.user_id)
+        .bind_storage(key)
+        .bind_storage(cutoff)
         .fetch_optional(&mut *conn)
         .await
         .map_err(CreatePostError::Internal)?
@@ -3928,7 +3935,7 @@ where
         .bind_storage(now)
         .execute(&mut *conn)
         .await
-        .map_err(map_idempotency_insert_error)?;
+        .map_err(CreatePostError::Internal)?;
     }
 
     Ok((post_id, idempotency_key_expired))

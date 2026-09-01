@@ -3,8 +3,8 @@ use sqlx::{Pool, Postgres, QueryBuilder};
 
 use crate::helpers;
 use crate::posts::{
-    self, MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill, PostTag,
-    PostTagDiff, PostTagRow,
+    self, MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill,
+    PostPublicationClear, PostTag, PostTagDiff, PostTagRow,
 };
 use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use crate::{
@@ -225,7 +225,7 @@ async fn apply_post_update(
 ) -> Result<PostRecord, UpdatePostError> {
     let now = input.request_clock;
     posts::capture_complete_post_revision::<Postgres>(tx, post_id, now).await?;
-    let publication_clear = posts::PostPublicationClear::for_update(input.publish);
+    let publication_clear = PostPublicationClear::for_update(input.publish);
     let explicit_published_at = match input.publish {
         PublishUpdate::Unpublish => None,
         PublishUpdate::Publish { at } => at,
@@ -320,7 +320,7 @@ impl PostDialect for Postgres {
         cutoff: UtcInstant,
     ) -> sqlx::Result<Option<PostId>> {
         sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(posts::idempotency_advisory_lock_key(user_id, key))
+            .bind_storage(posts::idempotency_advisory_lock_key(user_id, key))
             .execute(&mut *conn)
             .await?;
         sqlx::query_scalar(
@@ -328,9 +328,9 @@ impl PostDialect for Postgres {
              WHERE user_id = $1 AND key = $2 AND created_at > $3
              FOR UPDATE",
         )
-        .bind(user_id)
-        .bind(key)
-        .bind(cutoff)
+        .bind_storage(user_id)
+        .bind_storage(key)
+        .bind_storage(cutoff)
         .fetch_optional(&mut *conn)
         .await
     }

@@ -100,7 +100,7 @@ async fn create_user_with_invite_creates_user_and_marks_invite_used(#[case] back
         username("alice"),
         password("password123"),
         Some(parse_display_name("Alice")),
-        storage::OperatorStatus::STANDARD,
+        OperatorStatus::STANDARD,
         code.clone(),
     )
     .await;
@@ -129,7 +129,7 @@ async fn create_user_with_invite_second_call_returns_already_used(#[case] backen
         username("alice"),
         password("password123"),
         None,
-        storage::OperatorStatus::STANDARD,
+        OperatorStatus::STANDARD,
         code.clone(),
     )
     .await;
@@ -139,7 +139,7 @@ async fn create_user_with_invite_second_call_returns_already_used(#[case] backen
         username("bob"),
         password("password123"),
         None,
-        storage::OperatorStatus::STANDARD,
+        OperatorStatus::STANDARD,
         code,
     )
     .await
@@ -214,7 +214,7 @@ async fn create_user_with_invite_expired_returns_invite_expired(#[case] backend:
         username("alice"),
         password("password123"),
         None,
-        storage::OperatorStatus::STANDARD,
+        OperatorStatus::STANDARD,
         code,
     )
     .await
@@ -246,7 +246,7 @@ async fn create_user_with_invite_unknown_code_returns_not_found(#[case] backend:
         username("alice"),
         password("password123"),
         None,
-        storage::OperatorStatus::STANDARD,
+        OperatorStatus::STANDARD,
         "no-such-code".parse().unwrap(),
     )
     .await
@@ -286,7 +286,7 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
         user.username.clone(),
         password("other_password"),
         None,
-        storage::OperatorStatus::STANDARD,
+        OperatorStatus::STANDARD,
         code,
     )
     .await
@@ -467,7 +467,7 @@ pub(super) async fn assert_exactly_one_invite_registration(
         | (
             Err(WriteScopeError::Operation(RegisterWithInviteError::InviteAlreadyUsed)),
             Ok(outcome),
-        ) => storage::test_support::confirmed_for(outcome, "winning concurrent registration"),
+        ) => confirmed_for(outcome, "winning concurrent registration"),
         (first, second) => panic!(
             "expected one confirmed registration and one InviteAlreadyUsed, got {first:?} and {second:?}"
         ),

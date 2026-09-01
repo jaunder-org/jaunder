@@ -13,8 +13,13 @@
 //! root or a file cannot be read.  Parsing failures are reported as failures too.
 use std::collections::HashSet;
 
+use proc_macro2::Span;
 use quote::ToTokens;
-use syn::visit::{self, Visit};
+use syn::{
+    Block, Expr, ExprCall, ExprClosure, ExprMacro, ExprMethodCall, FnArg, Ident, ImplItemFn,
+    ItemFn, ItemImpl, ItemMacro, ItemType, Local, Macro, Pat, Path, StmtMacro, UseName, UseRename,
+    visit::{self, Visit},
+};
 
 use crate::result::CommandResult;
 use crate::steps::scan;
@@ -53,18 +58,18 @@ struct AdmissionVisitor {
     allow_seam_delegations: bool,
 }
 impl AdmissionVisitor {
-    fn record<T: ToTokens>(&mut self, span: proc_macro2::Span, detail: T) {
+    fn record<T: ToTokens>(&mut self, span: Span, detail: T) {
         self.sites.push(Site {
             line: span.start().line,
             detail: detail.to_token_stream().to_string(),
         });
     }
 
-    fn raw_method(method: &syn::Ident) -> bool {
+    fn raw_method(method: &Ident) -> bool {
         RAW_METHODS.contains(&method.to_string().as_str())
     }
 
-    fn direct_seam_delegation(&self, call: &syn::ExprMethodCall) -> bool {
+    fn direct_seam_delegation(&self, call: &ExprMethodCall) -> bool {
         let Some(seam_method) = &self.seam_method else {
             return false;
         };
@@ -80,7 +85,7 @@ impl AdmissionVisitor {
             )
     }
 
-    fn native_arguments(&self, path: &syn::Path) -> bool {
+    fn native_arguments(&self, path: &Path) -> bool {
         path.segments.iter().any(|segment| {
             let name = segment.ident.to_string();
             matches!(name.as_str(), "PgArguments" | "SqliteArguments")
@@ -88,7 +93,7 @@ impl AdmissionVisitor {
         })
     }
 
-    fn ufcs_sqlx_method(&self, path: &syn::Path) -> bool {
+    fn ufcs_sqlx_method(&self, path: &Path) -> bool {
         RAW_METHODS.contains(
             &path
                 .segments
@@ -106,7 +111,7 @@ impl AdmissionVisitor {
         })
     }
 
-    fn forbidden_query_macro(&self, path: &syn::Path) -> bool {
+    fn forbidden_query_macro(&self, path: &Path) -> bool {
         let name = path
             .segments
             .last()
@@ -120,7 +125,7 @@ impl AdmissionVisitor {
                 || name.starts_with("query_")
         })
     }
-    fn inspect_macro<T: ToTokens>(&mut self, mac: &syn::Macro, detail: T) {
+    fn inspect_macro<T: ToTokens>(&mut self, mac: &Macro, detail: T) {
         if self.forbidden_query_macro(&mac.path) {
             self.record(
                 mac.path
@@ -141,9 +146,9 @@ impl AdmissionVisitor {
             .any(|scope| scope.contains(name))
     }
 
-    fn collect_argument(&mut self, pat: &syn::Pat) {
-        let syn::Pat::Type(pat) = pat else { return };
-        let syn::Pat::Ident(ident) = pat.pat.as_ref() else {
+    fn collect_argument(&mut self, pat: &Pat) {
+        let Pat::Type(pat) = pat else { return };
+        let Pat::Ident(ident) = pat.pat.as_ref() else {
             return;
         };
         let tokens = pat.ty.to_token_stream().to_string();
@@ -154,13 +159,7 @@ impl AdmissionVisitor {
                 .insert(ident.ident.to_string());
         }
     }
-    fn inspect_import<T: ToTokens>(
-        &mut self,
-        original: &str,
-        local: &str,
-        span: proc_macro2::Span,
-        detail: T,
-    ) {
+    fn inspect_import<T: ToTokens>(&mut self, original: &str, local: &str, span: Span, detail: T) {
         if matches!(original, "query" | "query_as" | "query_scalar") {
             self.query_macro_aliases.insert(local.to_owned());
         }
@@ -195,10 +194,10 @@ impl AdmissionVisitor {
 }
 
 impl<'ast> Visit<'ast> for AdmissionVisitor {
-    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+    fn visit_impl_item_fn(&mut self, node: &'ast ImplItemFn) {
         self.native_argument_scopes.push(HashSet::new());
         for input in &node.sig.inputs {
-            if let syn::FnArg::Typed(argument) = input {
+            if let FnArg::Typed(argument) = input {
                 self.collect_argument(&argument.pat);
             }
         }
@@ -208,23 +207,23 @@ impl<'ast> Visit<'ast> for AdmissionVisitor {
         self.native_argument_scopes.pop();
     }
 
-    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+    fn visit_item_fn(&mut self, node: &'ast ItemFn) {
         self.native_argument_scopes.push(HashSet::new());
         for input in &node.sig.inputs {
-            if let syn::FnArg::Typed(argument) = input {
+            if let FnArg::Typed(argument) = input {
                 self.collect_argument(&argument.pat);
             }
         }
         visit::visit_item_fn(self, node);
         self.native_argument_scopes.pop();
     }
-    fn visit_block(&mut self, node: &'ast syn::Block) {
+    fn visit_block(&mut self, node: &'ast Block) {
         self.native_argument_scopes.push(HashSet::new());
         visit::visit_block(self, node);
         self.native_argument_scopes.pop();
     }
 
-    fn visit_expr_closure(&mut self, node: &'ast syn::ExprClosure) {
+    fn visit_expr_closure(&mut self, node: &'ast ExprClosure) {
         self.native_argument_scopes.push(HashSet::new());
         for input in &node.inputs {
             self.collect_argument(input);
@@ -233,20 +232,20 @@ impl<'ast> Visit<'ast> for AdmissionVisitor {
         self.native_argument_scopes.pop();
     }
 
-    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+    fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
         if Self::raw_method(&node.method) && !self.direct_seam_delegation(node) {
             self.record(node.method.span(), node);
         }
         if node.method == "add"
-            && matches!(&*node.receiver, syn::Expr::Path(path) if self.native_argument_local(&path.path.to_token_stream().to_string()))
+            && matches!(&*node.receiver, Expr::Path(path) if self.native_argument_local(&path.path.to_token_stream().to_string()))
         {
             self.record(node.method.span(), node);
         }
         visit::visit_expr_method_call(self, node);
     }
 
-    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
-        if let syn::Expr::Path(path) = node.func.as_ref()
+    fn visit_expr_call(&mut self, node: &'ast ExprCall) {
+        if let Expr::Path(path) = node.func.as_ref()
             && (self.native_arguments(&path.path)
                 || RAW_CONSTRUCTORS.contains(
                     &path
@@ -283,22 +282,22 @@ impl<'ast> Visit<'ast> for AdmissionVisitor {
         visit::visit_expr_call(self, node);
     }
 
-    fn visit_expr_macro(&mut self, node: &'ast syn::ExprMacro) {
+    fn visit_expr_macro(&mut self, node: &'ast ExprMacro) {
         self.inspect_macro(&node.mac, node);
         visit::visit_expr_macro(self, node);
     }
 
-    fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
+    fn visit_item_macro(&mut self, node: &'ast ItemMacro) {
         self.inspect_macro(&node.mac, node);
         visit::visit_item_macro(self, node);
     }
 
-    fn visit_stmt_macro(&mut self, node: &'ast syn::StmtMacro) {
+    fn visit_stmt_macro(&mut self, node: &'ast StmtMacro) {
         self.inspect_macro(&node.mac, node);
         visit::visit_stmt_macro(self, node);
     }
 
-    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+    fn visit_item_impl(&mut self, node: &'ast ItemImpl) {
         let trait_name = node
             .trait_
             .as_ref()
@@ -319,11 +318,11 @@ impl<'ast> Visit<'ast> for AdmissionVisitor {
         self.in_typed_seam_impl = previous;
     }
 
-    fn visit_local(&mut self, node: &'ast syn::Local) {
+    fn visit_local(&mut self, node: &'ast Local) {
         let (ident, type_tokens) = match &node.pat {
-            syn::Pat::Ident(ident) => (&ident.ident, String::new()),
-            syn::Pat::Type(pat) if matches!(pat.pat.as_ref(), syn::Pat::Ident(_)) => {
-                let syn::Pat::Ident(ident) = pat.pat.as_ref() else {
+            Pat::Ident(ident) => (&ident.ident, String::new()),
+            Pat::Type(pat) if matches!(pat.pat.as_ref(), Pat::Ident(_)) => {
+                let Pat::Ident(ident) = pat.pat.as_ref() else {
                     unreachable!()
                 };
                 (&ident.ident, pat.ty.to_token_stream().to_string())
@@ -341,20 +340,20 @@ impl<'ast> Visit<'ast> for AdmissionVisitor {
         }
         visit::visit_local(self, node);
     }
-    fn visit_item_type(&mut self, node: &'ast syn::ItemType) {
+    fn visit_item_type(&mut self, node: &'ast ItemType) {
         if self.native_arguments_type(&node.ty.to_token_stream().to_string()) {
             self.native_argument_aliases.insert(node.ident.to_string());
         }
         visit::visit_item_type(self, node);
     }
 
-    fn visit_use_name(&mut self, node: &'ast syn::UseName) {
+    fn visit_use_name(&mut self, node: &'ast UseName) {
         let name = node.ident.to_string();
         self.inspect_import(&name, &name, node.ident.span(), node);
         visit::visit_use_name(self, node);
     }
 
-    fn visit_use_rename(&mut self, node: &'ast syn::UseRename) {
+    fn visit_use_rename(&mut self, node: &'ast UseRename) {
         let original = node.ident.to_string();
         let local = node.rename.to_string();
         self.inspect_import(&original, &local, node.rename.span(), node);

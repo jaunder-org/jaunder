@@ -3,8 +3,8 @@ use sqlx::{Pool, QueryBuilder, Sqlite};
 
 use crate::helpers;
 use crate::posts::{
-    self, MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill, PostTagDiff,
-    PostTagRow,
+    self, MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill,
+    PostPublicationClear, PostTagDiff, PostTagRow,
 };
 use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use crate::{
@@ -132,7 +132,7 @@ async fn apply_post_update(
 ) -> Result<PostRecord, UpdatePostError> {
     let now = input.request_clock;
     posts::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
-    let publication_clear = posts::PostPublicationClear::for_update(input.publish);
+    let publication_clear = PostPublicationClear::for_update(input.publish);
     let explicit_published_at = match input.publish {
         PublishUpdate::Unpublish => None,
         PublishUpdate::Publish { at } => at,
@@ -210,9 +210,9 @@ impl PostDialect for Sqlite {
             "SELECT post_id FROM idempotency_keys
              WHERE user_id = $1 AND key = $2 AND created_at > $3",
         )
-        .bind(user_id)
-        .bind(key)
-        .bind(cutoff)
+        .bind_storage(user_id)
+        .bind_storage(key)
+        .bind_storage(cutoff)
         .fetch_optional(&mut *conn)
         .await
     }

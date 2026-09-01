@@ -8,7 +8,7 @@ use common::test_support::{
 };
 use host::config_key::SiteConfigKey;
 use server_fn::ServerFn;
-use storage::ProfileUpdate;
+use storage::{EmailVerified, ProfileUpdate};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -89,7 +89,7 @@ async fn get_profile_with_email_returns_email(#[case] backend: Backend) {
                         transaction,
                         session.user_id,
                         Some(&email),
-                        storage::EmailVerified::VERIFIED,
+                        EmailVerified::VERIFIED,
                     )
                     .await
             })

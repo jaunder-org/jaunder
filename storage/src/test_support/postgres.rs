@@ -4,7 +4,7 @@ use crate::DbConnectOptions;
 use crate::sql::QueryStorageExt;
 use crate::sql::{Exists, quote_identifier};
 
-use sqlx::Connection;
+use sqlx::{Connection, PgPool};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
 
@@ -323,7 +323,7 @@ async fn ensure_template_db(config: &PostgresTestConfig, template: &TemplateData
         // Migrate the template through its own pool, then close it: a database
         // can only serve as a CREATE DATABASE template when nobody is connected
         // to it.
-        let pool = sqlx::PgPool::connect(&postgres_url_with_db_name(config, template.as_str()))
+        let pool = PgPool::connect(&postgres_url_with_db_name(config, template.as_str()))
             .await
             .unwrap();
         sqlx::migrate!("../storage/migrations/postgres")

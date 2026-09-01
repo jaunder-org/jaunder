@@ -13,8 +13,8 @@ use crate::helpers::{
 };
 use crate::media::MediaDeleteMode;
 use crate::posts::{
-    MediaAdvisoryLockKey, MediaReferenceSnapshotLimit, PermalinkDateText,
-    PersistedMediaSubjectKind, PostPublicationClear, TagSlugPrefixPattern,
+    IdempotencyAdvisoryLockKey, MediaAdvisoryLockKey, MediaReferenceSnapshotLimit,
+    PermalinkDateText, PersistedMediaSubjectKind, PostPublicationClear, TagSlugPrefixPattern,
 };
 use crate::subscriptions::SubscriptionStatusName;
 use crate::user_config::StoredUserConfigValue;
@@ -194,6 +194,7 @@ approve_storage_binds!(
     FeedEventId,
     Filename,
     IdempotencyKey,
+    IdempotencyAdvisoryLockKey,
     InstanceId,
     MediaAdvisoryLockKey,
     MediaDeleteMode,

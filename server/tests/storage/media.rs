@@ -9,10 +9,11 @@ use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, backends, confirmed_for, seed_users};
 use storage::{
-    CreateMediaError, DeleteMediaError, MediaRecord, MediaReferenceEvidence, TryDeleteOutcome,
+    AppState, CreateMediaError, DeleteMediaError, MediaDeleteMode, MediaRecord,
+    MediaReferenceEvidence, TryDeleteOutcome,
 };
 
-async fn create_media(state: &storage::AppState, record: MediaRecord) {
+async fn create_media(state: &AppState, record: MediaRecord) {
     let media = state.media.clone();
     let outcome = state
         .write_scope
@@ -274,7 +275,7 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
                         &media_ref,
                         &instance_id,
                         &evidence,
-                        storage::MediaDeleteMode::GUARDED,
+                        MediaDeleteMode::GUARDED,
                     )
                     .await
             })
@@ -325,7 +326,7 @@ async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
                         &media_ref,
                         &instance_id,
                         &evidence,
-                        storage::MediaDeleteMode::GUARDED,
+                        MediaDeleteMode::GUARDED,
                     )
                     .await
             })

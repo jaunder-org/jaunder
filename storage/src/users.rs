@@ -5,7 +5,6 @@ use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
 
 use sqlx::{Database, Decode, Encode, Error, Executor, Pool, Result, Type};
-use thiserror::Error as ThisError;
 use tracing::Instrument;
 
 use crate::backend::Backend;
@@ -126,7 +125,7 @@ pub async fn prepare_password(password: Password) -> std::io::Result<PreparedPas
 }
 
 /// Errors that can occur when creating a user.
-#[derive(Debug, ThisError)]
+#[derive(Debug, thiserror::Error)]
 pub enum CreateUserError {
     /// The requested username is already in use by another account.
     #[error("username is already taken")]
@@ -137,7 +136,7 @@ pub enum CreateUserError {
 }
 
 /// Errors that can occur when authenticating a user by password.
-#[derive(Debug, ThisError)]
+#[derive(Debug, thiserror::Error)]
 pub enum UserAuthError {
     /// The username or password was incorrect.
     #[error("invalid credentials")]

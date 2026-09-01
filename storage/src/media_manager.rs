@@ -1041,12 +1041,12 @@ mod tests {
         let expected_reclaim_reference = reference;
         let mut media = crate::MockMediaStorage::new();
         media.expect_try_delete_media().times(1).returning(
-            move |_, actual_user, actual_media, actual_instance, evidence, force| {
+            move |_, actual_user, actual_media, actual_instance, evidence, mode| {
                 assert_eq!(actual_user, user_id);
                 assert_eq!(actual_media, &expected_guard_media);
                 assert_eq!(actual_instance, &expected_guard_instance);
                 assert!(evidence.proves_foreign(&expected_guard_reference));
-                assert!(!force);
+                assert_eq!(mode, MediaDeleteMode::GUARDED);
                 Ok(TryDeleteOutcome::Deleted)
             },
         );

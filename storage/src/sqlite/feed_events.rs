@@ -177,9 +177,7 @@ impl FeedEventDialect for Sqlite {
         let sql = format!(
             "UPDATE feed_events SET status = 'failed', last_error = ?, terminal_at = ? WHERE id IN ({ph})"
         );
-        let mut q = sqlx::query(&sql)
-            .bind_storage(error)
-            .bind_storage(now);
+        let mut q = sqlx::query(&sql).bind_storage(error).bind_storage(now);
         for id in ids {
             q = q.bind_storage(*id);
         }
@@ -201,9 +199,9 @@ impl FeedEventDialect for Sqlite {
                 LIMIT $3 \
              )",
         )
-        .bind(now)
-        .bind(failed_cutoff)
-        .bind(limit)
+        .bind_storage(now)
+        .bind_storage(failed_cutoff)
+        .bind_storage(limit)
         .execute(pool)
         .await?;
         Ok(result.rows_affected())

@@ -13,6 +13,7 @@ use crate::helpers::{self, TokenStateRow};
 use crate::sql::RowCount;
 use common::email::Email;
 use common::ids::UserId;
+use common::pagination::RowLimit;
 use common::time::UtcInstant;
 use common::token::RawToken;
 use host::{metrics, retention::Domain, token};
@@ -117,7 +118,7 @@ pub trait EmailVerificationStorage: Send + Sync {
 ///
 /// Zero backend divergence (identical SQL across `SQLite` and Postgres),
 /// so it is implemented once here; see ADR-0019.
-const PRUNE_BATCH_SIZE: i64 = 100;
+const PRUNE_BATCH_SIZE: RowLimit = RowLimit::at_most(100);
 
 pub struct EmailVerificationStore<DB: Database> {
     pool: Pool<DB>,
@@ -250,9 +251,9 @@ where
                  )
                  RETURNING CAST(1 AS BIGINT)",
             )
-            .bind(now)
-            .bind(unused_cutoff)
-            .bind(PRUNE_BATCH_SIZE)
+            .bind_storage(now)
+            .bind_storage(unused_cutoff)
+            .bind_storage(PRUNE_BATCH_SIZE)
             .fetch_all(&self.pool)
             .await?
             .len() as u64;

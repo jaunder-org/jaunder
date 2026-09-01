@@ -187,9 +187,9 @@ impl FeedEventDialect for Postgres {
              ) \
              DELETE FROM feed_events WHERE id IN (SELECT id FROM eligible)",
         )
-        .bind(now)
-        .bind(failed_cutoff)
-        .bind(limit)
+        .bind_storage(now)
+        .bind_storage(failed_cutoff)
+        .bind_storage(limit)
         .execute(pool)
         .await?;
         Ok(result.rows_affected())

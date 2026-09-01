@@ -4,8 +4,6 @@ use async_trait::async_trait;
 
 use sqlx::{Database, Encode, Error, Executor, Pool, Result, Type};
 
-use thiserror::Error as ThisError;
-
 use crate::WriteTransaction;
 #[cfg(test)]
 use crate::helpers::StoredSessionLabel;
@@ -53,7 +51,7 @@ pub struct SessionRecord {
 }
 
 /// Errors that can occur when authenticating a session token.
-#[derive(Debug, ThisError)]
+#[derive(Debug, thiserror::Error)]
 pub enum SessionAuthError {
     /// The token is malformed or invalid.
     #[error("invalid token")]

@@ -563,7 +563,7 @@ mod tests {
     #[tokio::test]
     async fn restore_bind_values_preserve_real_and_json_text(
         #[case] backend: Backend,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<(), Error> {
         let env = backend.setup().await;
         let CloseablePool::Postgres(pool) = env.base.pool() else {
             unreachable!("postgres_only yields a Postgres pool")

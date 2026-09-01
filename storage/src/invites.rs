@@ -16,6 +16,7 @@ use crate::backend::Backend;
 use crate::helpers::{self, InviteTokenStateRow, TokenState};
 use crate::sql::{QueryStorageExt, RowCount};
 use common::ids::UserId;
+use common::pagination::RowLimit;
 use common::time::UtcInstant;
 /// Test-only invalid `invites.code` column value.
 ///
@@ -112,7 +113,7 @@ pub struct InviteStore<DB: Database> {
     pool: Pool<DB>,
 }
 
-const PRUNE_BATCH_SIZE: i64 = 100;
+const PRUNE_BATCH_SIZE: RowLimit = RowLimit::at_most(100);
 
 impl<DB: Database> InviteStore<DB> {
     #[must_use]
@@ -248,9 +249,9 @@ where
                  )
                  RETURNING CAST(1 AS BIGINT)",
             )
-            .bind(now)
-            .bind(unused_cutoff)
-            .bind(PRUNE_BATCH_SIZE)
+            .bind_storage(now)
+            .bind_storage(unused_cutoff)
+            .bind_storage(PRUNE_BATCH_SIZE)
             .fetch_all(&self.pool)
             .await?
             .len() as u64;

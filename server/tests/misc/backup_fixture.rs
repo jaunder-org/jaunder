@@ -14,7 +14,9 @@ use host::password::Password;
 use jaunder::cli::StorageArgs;
 use std::sync::Arc;
 use storage::test_support::{SeedRawPost, confirmed_for, fp};
-use storage::{AppState, MediaRecord, open_existing_database};
+use storage::{
+    AppState, MediaRecord, OperatorStatus, StorageRuntimeConfig, open_existing_database,
+};
 
 /// SHA-256 the media-table fixture row is keyed by; any stable value works, since
 /// the media *files* are mirrored separately from the media *table*.
@@ -71,7 +73,7 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
                         &username,
                         &password_for_author,
                         Some(&display_name),
-                        storage::OperatorStatus::OPERATOR,
+                        OperatorStatus::OPERATOR,
                     )
                     .await
             })
@@ -125,7 +127,7 @@ async fn seed_named_audience_post(
                         &viewer_name,
                         &password,
                         Some(&display_name),
-                        storage::OperatorStatus::STANDARD,
+                        OperatorStatus::STANDARD,
                     )
                     .await
             })
@@ -246,7 +248,7 @@ async fn seed_side_tables(state: &AppState, author: UserId) {
 }
 
 pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixtureIds) {
-    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+    let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
         .await
         .expect("open restored database");
     let username: Username = "backupuser".parse().expect("valid username");
@@ -256,7 +258,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
         .await
         .expect("get user")
         .expect("restored user");
-    assert_eq!(user.is_operator, storage::OperatorStatus::OPERATOR);
+    assert_eq!(user.is_operator, OperatorStatus::OPERATOR);
     assert_eq!(user.display_name.as_deref(), Some("Backup User"));
 
     // The public post resolves for its author.

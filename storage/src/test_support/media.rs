@@ -15,7 +15,7 @@ use common::media::{
 };
 use common::test_support::{parse_byte_size, parse_content_hash};
 use common::time::UtcInstant;
-use sqlx::{PgPool, SqlitePool};
+use sqlx::{PgPool, SqlitePool, postgres::PgConnectOptions, sqlite::SqliteConnectOptions};
 use std::{fmt::Write as _, path::Path, sync::Arc};
 
 /// Rewrites every row in a directory backup's `media.ndjson` to use `filename`.
@@ -81,7 +81,7 @@ pub async fn raw_media_filename_exists(db: &DbConnectOptions, filename: &str) ->
 }
 
 async fn raw_media_filename_exists_sqlite(
-    options: &sqlx::sqlite::SqliteConnectOptions,
+    options: &SqliteConnectOptions,
     filename: &RawMediaFilename,
 ) -> bool {
     let pool = SqlitePool::connect_with(options.clone())
@@ -96,7 +96,7 @@ async fn raw_media_filename_exists_sqlite(
 }
 
 async fn raw_media_filename_exists_postgres(
-    options: &sqlx::postgres::PgConnectOptions,
+    options: &PgConnectOptions,
     filename: &RawMediaFilename,
 ) -> bool {
     let options = resolved_postgres_options(options, &StorageRuntimeConfig::default());

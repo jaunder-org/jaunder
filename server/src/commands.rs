@@ -38,8 +38,8 @@ use host::password::Password;
 use host::smtp_config::SmtpConfig;
 use storage::{
     AppState, BackupExportOptions, BackupRestoreOptions, BackupRestoreOutcome, DbConnectOptions,
-    DbPoolObserver, MediaManager, OperatorStatus, RestoreValidationReport, SiteConfigStorage,
-    StorageRuntimeConfig,
+    DbPoolObserver, InstanceId, MediaManager, OperatorStatus, RestoreValidationReport,
+    SiteConfigStorage, StorageRuntimeConfig,
 };
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
@@ -690,9 +690,9 @@ trait StartupDatabaseOperations: Sync {
 struct RealStartupDatabaseOperations;
 
 struct StartupDatabase {
-    state: Arc<storage::AppState>,
-    instance_id: storage::InstanceId,
-    pool_observer: storage::DbPoolObserver,
+    state: Arc<AppState>,
+    instance_id: InstanceId,
+    pool_observer: DbPoolObserver,
 }
 
 #[async_trait::async_trait]
