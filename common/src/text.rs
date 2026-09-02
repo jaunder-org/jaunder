@@ -43,6 +43,14 @@ pub fn non_empty(s: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
+/// Trims `s` and returns it when non-empty and no longer than `max_chars`
+/// Unicode scalar values.
+#[must_use]
+pub(crate) fn bounded_non_empty(s: &str, max_chars: usize) -> Option<&str> {
+    let trimmed = non_empty(s)?;
+    trimmed.chars().nth(max_chars).is_none().then_some(trimmed)
+}
+
 /// Owned-`String` counterpart of [`non_empty`]: trims and returns the value,
 /// or `None` when it is empty or whitespace-only. Convenient for
 /// `Option<String>` pipelines via `opt.and_then(non_empty_owned)`.
@@ -61,7 +69,7 @@ pub fn non_empty_owned(s: String) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{non_empty, non_empty_owned};
+    use super::{bounded_non_empty, non_empty, non_empty_owned};
 
     #[test]
     fn non_empty_returns_none_for_empty() {
@@ -82,6 +90,12 @@ mod tests {
     #[test]
     fn non_empty_returns_value_when_unpadded() {
         assert_eq!(non_empty("Alice"), Some("Alice"));
+    }
+
+    #[test]
+    fn bounded_non_empty_counts_unicode_scalars_after_trimming() {
+        assert_eq!(bounded_non_empty("  é界  ", 2), Some("é界"));
+        assert_eq!(bounded_non_empty("é界x", 2), None);
     }
 
     #[test]

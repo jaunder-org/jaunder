@@ -3,6 +3,8 @@ use std::str::FromStr;
 use macros::StrNewtype;
 use thiserror::Error;
 
+use crate::text;
+
 /// A validated audience name: non-empty after trimming, original casing preserved.
 ///
 /// Constructed via [`FromStr`] — the single validating chokepoint; the ADR-0063
@@ -24,10 +26,7 @@ impl FromStr for AudienceName {
     type Err = InvalidAudienceName;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        if trimmed.is_empty() {
-            return Err(InvalidAudienceName);
-        }
+        let trimmed = text::non_empty(s).ok_or(InvalidAudienceName)?;
         Ok(AudienceName(trimmed.to_owned()))
     }
 }

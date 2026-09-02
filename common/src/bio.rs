@@ -3,6 +3,8 @@ use std::str::FromStr;
 use macros::StrNewtype;
 use thiserror::Error;
 
+use crate::text;
+
 /// Maximum profile-biography length, in Unicode scalar values.
 pub const MAX_BIO_CHARS: usize = 1000;
 
@@ -30,10 +32,7 @@ impl FromStr for Bio {
     type Err = InvalidBio;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        if trimmed.is_empty() || trimmed.chars().count() > MAX_BIO_CHARS {
-            return Err(InvalidBio);
-        }
+        let trimmed = text::bounded_non_empty(s, MAX_BIO_CHARS).ok_or(InvalidBio)?;
         Ok(Bio(trimmed.to_owned()))
     }
 }
@@ -58,6 +57,14 @@ mod tests {
     fn rejects_empty_and_whitespace_only() {
         assert!("".parse::<Bio>().is_err());
         assert!("   \t\n".parse::<Bio>().is_err());
+    }
+
+    #[test]
+    fn invalid_error_display_is_the_public_message() {
+        assert_eq!(
+            InvalidBio.to_string(),
+            "biography must be non-empty and at most 1000 characters"
+        );
     }
 
     #[test]

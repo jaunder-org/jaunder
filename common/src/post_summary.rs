@@ -5,6 +5,7 @@ use thiserror::Error;
 
 use crate::post_body::PostBody;
 use crate::post_title::PostTitle;
+use crate::text;
 
 /// Maximum post-summary length, in Unicode scalar values.
 pub const MAX_POST_SUMMARY_CHARS: usize = 500;
@@ -34,10 +35,8 @@ impl FromStr for PostSummary {
     type Err = InvalidPostSummary;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        if trimmed.is_empty() || trimmed.chars().count() > MAX_POST_SUMMARY_CHARS {
-            return Err(InvalidPostSummary);
-        }
+        let trimmed =
+            text::bounded_non_empty(s, MAX_POST_SUMMARY_CHARS).ok_or(InvalidPostSummary)?;
         Ok(PostSummary(trimmed.to_owned()))
     }
 }
@@ -133,6 +132,14 @@ mod tests {
     fn rejects_empty_and_whitespace_only() {
         assert!("".parse::<PostSummary>().is_err());
         assert!("   \t\n".parse::<PostSummary>().is_err());
+    }
+
+    #[test]
+    fn invalid_error_display_is_the_public_message() {
+        assert_eq!(
+            InvalidPostSummary.to_string(),
+            "post summary must be non-empty and at most 500 characters"
+        );
     }
 
     #[test]
