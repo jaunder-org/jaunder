@@ -3,12 +3,6 @@
 //! - `cargo xtask adr promote`: number tracked drafts in `docs/adr/drafts/`,
 //!   graduating each into `docs/adr/NNNN-<slug>.md` and staging the complete
 //!   source-to-destination promotion.
-//! - `cargo xtask adr renumber`: deprecated compatibility tooling for legacy
-//!   numbered-ADR collisions. New work commits tracked drafts and lets the
-//!   serialized post-merge promoter allocate numbers. The implementation stays
-//!   available until https://github.com/jaunder-org/jaunder/issues/1169.
-//!   It moves only branch additions and scopes ambiguous bare-reference rewrites
-//!   to branch-touched files.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -23,30 +17,13 @@ use crate::result::StepResult;
 
 const ADR_DIR: &str = "docs/adr";
 const DRAFTS_DIR: &str = "docs/adr/drafts";
-const RENUMBER_DEPRECATION: &str = "DEPRECATED: `cargo xtask adr renumber` is legacy compatibility tooling; new work uses tracked drafts and serialized post-merge promotion. Removal: https://github.com/jaunder-org/jaunder/issues/1169";
 
 /// Four-digit zero-padded number, e.g. `34 -> "0034"`.
 pub fn pad(n: u32) -> String {
     format!("{n:04}")
 }
 
-/// Replace the leading number of `filename`, preserving the separator, slug, and
-/// extension: `replace_number("0034-bar.md", 35) -> "0035-bar.md"`.
-pub fn replace_number(filename: &str, new: u32) -> String {
-    let rest = filename.trim_start_matches(|c: char| c.is_ascii_digit());
-    format!("{}{rest}", pad(new))
-}
-
-/// Replace every occurrence of `old_stem` with `new_stem`. The stem carries the
-/// slug (`0034-bar`), so it is unambiguous and safe to rewrite repo-wide.
-///
-/// This is a plain substring replace, which assumes ADR slugs are unique and not
-/// prefixes of one another (e.g. no `0034-bar` alongside `0034-bartender`). That
-/// holds because a collision is on the *number*, and the slugs of two
-/// same-numbered ADRs are written by different authors for different decisions —
-/// a shared prefix would be a coincidence, and even then only the over-matched
-/// reference (not the file) would be affected, which the duplicate-prefix check
-/// would still surface. Worth tightening to a boundary match if that ever bites.
+/// Replace every occurrence of `old_stem` with `new_stem`.
 pub fn rewrite_stem(content: &str, old_stem: &str, new_stem: &str) -> String {
     content.replace(old_stem, new_stem)
 }
@@ -115,29 +92,6 @@ pub(crate) fn accept_proposed_status(body: &str) -> Option<String> {
     ))
 }
 
-/// Replace bare `ADR-NNNN` references for `old` -> `new`. The padded `ADR-` prefix
-/// keeps `10034`-style substrings from matching. The caller scopes this to
-/// branch-touched files because the bare form lacks a slug.
-pub fn rewrite_bare(content: &str, old: u32, new: u32) -> String {
-    content.replace(&format!("ADR-{}", pad(old)), &format!("ADR-{}", pad(new)))
-}
-
-/// Filename without its final extension: `0034-bar.md` -> `0034-bar`.
-fn stem(filename: &str) -> &str {
-    filename.rsplit_once('.').map_or(filename, |(s, _)| s)
-}
-
-/// Deprecated entry point for `cargo xtask adr renumber`: retain the legacy
-/// implementation against `origin/main` until #1169 removes the command.
-pub fn renumber() -> StepResult {
-    match run_renumber(Path::new("."), "origin/main") {
-        Ok(summary) => {
-            StepResult::ok("adr-renumber").detail(format!("{RENUMBER_DEPRECATION}\n{summary}"))
-        }
-        Err(e) => StepResult::fail("adr-renumber").detail(format!("{RENUMBER_DEPRECATION}\n{e:#}")),
-    }
-}
-
 /// ADR filenames currently in `repo`'s `docs/adr`.
 fn adr_filenames(repo: &Path) -> Result<Vec<String>> {
     regular_file_names(&repo.join(ADR_DIR))
@@ -188,98 +142,6 @@ fn rewrite_file(repo: &Path, rel: &str, f: impl Fn(&str) -> String) -> Result<()
         std::fs::write(&path, updated).with_context(|| format!("writing {}", path.display()))?;
     }
     Ok(())
-}
-
-/// Bump each colliding branch-added ADR to the next free number and rewrite
-/// references. `main_ref` is the integration branch (`origin/main` in practice;
-/// a local `main` in tests). Returns a human summary of the moves.
-fn run_renumber(repo: &Path, main_ref: &str) -> Result<String> {
-    let base = git::merge_base(repo, main_ref, "HEAD").context("finding merge-base with main")?;
-    let range = format!("{base}..HEAD");
-
-    // ADR files this branch ADDED (filenames only).
-    let added: Vec<String> = git::diff_added(repo, &range, ADR_DIR)?
-        .into_iter()
-        .filter_map(|p| p.rsplit('/').next().map(str::to_string))
-        .collect();
-
-    // Files this branch touched at all — the scope for bare-ref rewrites.
-    let touched: Vec<String> = git::diff_names(repo, &range)?;
-
-    let mut all = adr_filenames(repo)?;
-    let mut summary = Vec::new();
-
-    for added_name in &added {
-        let Some(num) = ids::leading_number(added_name) else {
-            continue;
-        };
-        // Collision iff another ADR in the working tree shares this number.
-        let collides = all
-            .iter()
-            .filter(|n| ids::leading_number(n) == Some(num))
-            .count()
-            > 1;
-        if !collides {
-            continue;
-        }
-
-        let new_num = ids::next_number(&all);
-        let new_name = replace_number(added_name, new_num);
-        let old_stem = stem(added_name).to_string();
-        let new_stem = stem(&new_name).to_string();
-        let old_rel = format!("{ADR_DIR}/{added_name}");
-        let new_rel = format!("{ADR_DIR}/{new_name}");
-
-        // 1. Move the colliding newcomer.
-        git::mv(repo, &old_rel, &new_rel)?;
-
-        // 2. Path-form (slug-bearing) refs: rewrite repo-wide.
-        for file in git::grep_files(repo, &old_stem)? {
-            rewrite_file(repo, &file, |c| rewrite_stem(c, &old_stem, &new_stem))?;
-        }
-
-        // 3. Bare `ADR-NNNN` refs: rewrite only in branch-touched files (the moved
-        //    ADR's own content counts — match its old and new paths too).
-        let bare_token = format!("ADR-{}", pad(num));
-        for file in git::grep_files(repo, &bare_token)? {
-            let touched_by_branch =
-                touched.iter().any(|t| t == &file) || file == new_rel || file == old_rel;
-            if touched_by_branch {
-                rewrite_file(repo, &file, |c| rewrite_bare(c, num, new_num))?;
-            }
-        }
-
-        // Reflect the rename so a second newcomer gets a fresh number.
-        all.retain(|n| n != added_name);
-        all.push(new_name.clone());
-        summary.push(format!("{added_name} -> {new_name}"));
-    }
-
-    if summary.is_empty() {
-        return Ok("no ADR collisions to resolve".to_string());
-    }
-
-    // Keep the README ADR table in lockstep with the renamed/renumbered files: a
-    // bump changes a number, a link target, and (for a brand-new ADR) adds a row.
-    // Tolerate a README without the table markers — a scratch/test repo may omit
-    // them — by noting the skip; a genuine sync failure (unreadable README, a
-    // malformed table) still fails the renumber rather than hiding in the summary.
-    let table_note = if crate::adr_readme::readme_has_markers(repo)? {
-        format!(
-            "README table synced ({})",
-            crate::adr_readme::sync_readme_at(repo)?
-        )
-    } else {
-        "README table not synced (no adr-table markers)".to_string()
-    };
-
-    // The rename is staged (`git mv`); the reference rewrites and the table
-    // regen are written to the worktree but left unstaged, so flag the mixed
-    // state for the caller.
-    Ok(format!(
-        "{} — {table_note}; review and `git add` the renamed files, rewritten references, and README before committing",
-        summary.join("; ")
-    ))
 }
 
 /// One draft's graduation, threaded through promote's three passes: Pass A assigns
@@ -337,9 +199,9 @@ fn promote_heading(body: &str, number: u32, draft_rel: &str) -> Result<String> {
 /// `docs/adr/NNNN-<slug>.md`, record its acceptance in the status line, rewrite its
 /// path-form references, sync the README table, and stage the complete result.
 ///
-/// Unlike `renumber`, the source carries no ADR number. Its tracked path is moved
-/// with `git mv`, then the destination content and every projection are rewritten
-/// and staged. There is no bare `ADR-NNNN` form to rewrite, since a draft is
+/// A draft has no ADR number before promotion. Its tracked path is moved with
+/// `git mv`, then the destination content and every projection are rewritten and
+/// staged. There is no bare `ADR-NNNN` form to rewrite, since a draft is
 /// referenced only by its `drafts/<slug>` path.
 pub(crate) fn run_promote(repo: &Path) -> Result<String> {
     let slugs = draft_slugs(repo)?;
@@ -349,7 +211,7 @@ pub(crate) fn run_promote(repo: &Path) -> Result<String> {
 
     // Pass A — assign every draft a number before rewriting anything, so a draft
     // that references another draft can resolve to the assigned number. `all`
-    // grows with each assignment, exactly as the renumber loop does.
+    // grows with each assignment.
     let mut all = adr_filenames(repo)?;
     let mut assigned: Vec<Promotion> = Vec::new();
     for slug in &slugs {
@@ -409,8 +271,7 @@ pub(crate) fn run_promote(repo: &Path) -> Result<String> {
     }
 
     // Pass C — rewrite path-form references repo-wide. `drafts/<slug>` carries the
-    // slug, so it is unambiguous (same substring-replace assumption
-    // `rewrite_stem` documents). The graduated files are staged (tracked), so a
+    // slug, so it is unambiguous. The graduated files are staged (tracked), so a
     // draft-to-draft reference is rewritten too.
     let mut summary = Vec::new();
     for p in &assigned {
@@ -490,15 +351,6 @@ mod tests {
     fn pad_is_four_digits() {
         assert_eq!(pad(34), "0034");
         assert_eq!(pad(5), "0005");
-    }
-
-    #[test]
-    fn replace_number_keeps_slug_and_extension() {
-        assert_eq!(replace_number("0034-bar.md", 35), "0035-bar.md");
-        assert_eq!(
-            replace_number("0034-multi-word-slug.md", 35),
-            "0035-multi-word-slug.md"
-        );
     }
 
     #[test]
@@ -845,13 +697,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn rewrite_bare_replaces_only_the_padded_token() {
-        let content = "ADR-0034 governs this. Unrelated number 10034 stays.";
-        let out = rewrite_bare(content, 34, 35);
-        assert_eq!(out, "ADR-0035 governs this. Unrelated number 10034 stays.");
-    }
-
     /// Trimmed stdout of a git command that must succeed — for asserting index
     /// state (`diff --cached`).
     fn git_stdout(dir: &Path, args: &[&str]) -> String {
@@ -882,159 +727,6 @@ mod tests {
         git(&tmp, &["add", "."]);
         git(&tmp, &["commit", "-qm", "main: 0001-foo"]);
         tmp
-    }
-
-    #[test]
-    fn renumber_bumps_newcomer_and_rewrites_refs() {
-        let tmp = std::env::temp_dir().join(format!("jaunder-adr-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-
-        git(&tmp, &["init", "-q", "-b", "main"]);
-        git(&tmp, &["config", "user.email", "t@t"]);
-        git(&tmp, &["config", "user.name", "t"]);
-
-        // main: ADR-0034-foo plus a doc that references it by both forms.
-        write(&tmp, "docs/adr/0034-foo.md", "# ADR-0034: Foo\n");
-        write(
-            &tmp,
-            "CONTRIBUTING.md",
-            "See ADR-0034 at docs/adr/0034-foo.md.\n",
-        );
-        git(&tmp, &["add", "."]);
-        git(&tmp, &["commit", "-qm", "main: 0034-foo"]);
-
-        // branch: a colliding ADR-0034-bar plus a NEW file referencing it.
-        git(&tmp, &["checkout", "-q", "-b", "feature"]);
-        write(
-            &tmp,
-            "docs/adr/0034-bar.md",
-            "# ADR-0034: Bar\nsee docs/adr/0034-bar.md\n",
-        );
-        write(
-            &tmp,
-            "docs/notes.md",
-            "Decided in ADR-0034 (docs/adr/0034-bar.md).\n",
-        );
-        git(&tmp, &["add", "."]);
-        git(&tmp, &["commit", "-qm", "feature: 0034-bar"]);
-
-        let summary = run_renumber(&tmp, "main").unwrap();
-        assert!(
-            summary.contains("0034-bar.md -> 0035-bar.md"),
-            "summary: {summary}"
-        );
-
-        // The newcomer moved; main's ADR is untouched.
-        assert!(tmp.join("docs/adr/0035-bar.md").exists());
-        assert!(!tmp.join("docs/adr/0034-bar.md").exists());
-        assert!(tmp.join("docs/adr/0034-foo.md").exists());
-
-        // Branch-added file: both forms rewritten to 0035.
-        let notes = std::fs::read_to_string(tmp.join("docs/notes.md")).unwrap();
-        assert_eq!(notes, "Decided in ADR-0035 (docs/adr/0035-bar.md).\n");
-
-        // The moved ADR's own title (bare form, branch-touched) rewritten.
-        let bar = std::fs::read_to_string(tmp.join("docs/adr/0035-bar.md")).unwrap();
-        assert!(bar.contains("# ADR-0035: Bar"));
-        assert!(bar.contains("docs/adr/0035-bar.md"));
-
-        // main's pre-existing file keeps its bare ADR-0034 (NOT branch-touched).
-        let contributing = std::fs::read_to_string(tmp.join("CONTRIBUTING.md")).unwrap();
-        assert_eq!(contributing, "See ADR-0034 at docs/adr/0034-foo.md.\n");
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn renumber_syncs_the_readme_table() {
-        // A bump must move the row's number + link target and add a row for a
-        // brand-new ADR (seeded from its heading), leaving the existing row intact.
-        let tmp = std::env::temp_dir().join(format!("jaunder-adr-readme-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-
-        git(&tmp, &["init", "-q", "-b", "main"]);
-        git(&tmp, &["config", "user.email", "t@t"]);
-        git(&tmp, &["config", "user.name", "t"]);
-
-        // main: ADR-0034-foo with a status line + a README carrying the marked
-        // table with foo's (curated) row.
-        write(
-            &tmp,
-            "docs/adr/0034-foo.md",
-            "# ADR-0034: Foo\n\n- Status: accepted\n",
-        );
-        write(
-            &tmp,
-            "docs/README.md",
-            "# Docs\n\n<!-- adr-table:begin -->\n\n\
-             | #   | Title | Status |\n| --- | ----- | ------ |\n\
-             | [0034](adr/0034-foo.md) | Foo | accepted |\n\n\
-             <!-- adr-table:end -->\n",
-        );
-        git(&tmp, &["add", "."]);
-        git(&tmp, &["commit", "-qm", "main: 0034-foo + README"]);
-
-        // branch: a colliding ADR-0034-bar (no README row — the point of the flow).
-        git(&tmp, &["checkout", "-q", "-b", "feature"]);
-        write(
-            &tmp,
-            "docs/adr/0034-bar.md",
-            "# ADR-0034: Bar\n\n- Status: accepted\n",
-        );
-        git(&tmp, &["add", "."]);
-        git(&tmp, &["commit", "-qm", "feature: 0034-bar"]);
-
-        run_renumber(&tmp, "main").unwrap();
-
-        let readme = std::fs::read_to_string(tmp.join("docs/README.md")).unwrap();
-        // Bar's row was added under its bumped number, seeded from the heading.
-        assert!(
-            readme.contains("[0035](adr/0035-bar.md)"),
-            "README: {readme}"
-        );
-        assert!(readme.contains("| Bar |"), "seeded title from heading");
-        // Foo's existing row is untouched; no stale 0034-bar link remains.
-        assert!(readme.contains("[0034](adr/0034-foo.md)"));
-        assert!(!readme.contains("0034-bar.md"));
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn renumber_assigns_distinct_numbers_to_multiple_newcomers() {
-        // Guards the `all`-mutation loop: two newcomers colliding on the same number
-        // must each get a distinct fresh number, not the same one. `added` arrives in
-        // git's sorted order (bar before baz), so the assignment is deterministic.
-        let tmp = std::env::temp_dir().join(format!("jaunder-adr-multi-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-
-        git(&tmp, &["init", "-q", "-b", "main"]);
-        git(&tmp, &["config", "user.email", "t@t"]);
-        git(&tmp, &["config", "user.name", "t"]);
-
-        write(&tmp, "docs/adr/0034-foo.md", "# ADR-0034: Foo\n");
-        git(&tmp, &["add", "."]);
-        git(&tmp, &["commit", "-qm", "main: 0034-foo"]);
-
-        git(&tmp, &["checkout", "-q", "-b", "feature"]);
-        write(&tmp, "docs/adr/0034-bar.md", "# ADR-0034: Bar\n");
-        write(&tmp, "docs/adr/0034-baz.md", "# ADR-0034: Baz\n");
-        git(&tmp, &["add", "."]);
-        git(&tmp, &["commit", "-qm", "feature: two colliding ADRs"]);
-
-        run_renumber(&tmp, "main").unwrap();
-
-        // main's ADR untouched; both newcomers got distinct fresh numbers.
-        assert!(tmp.join("docs/adr/0034-foo.md").exists());
-        assert!(!tmp.join("docs/adr/0034-bar.md").exists());
-        assert!(!tmp.join("docs/adr/0034-baz.md").exists());
-        assert!(tmp.join("docs/adr/0035-bar.md").exists());
-        assert!(tmp.join("docs/adr/0036-baz.md").exists());
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1264,8 +956,8 @@ mod tests {
 
     #[test]
     fn adr_filenames_skips_the_drafts_subdir() {
-        // The renumber/promote base set must not see draft entries: `adr_filenames`
-        // is non-recursive and file-only, so the `docs/adr/drafts/` subdirectory
+        // The promotion base set must not see draft entries: `adr_filenames` is
+        // non-recursive and file-only, so the `docs/adr/drafts/` subdirectory
         // (and anything inside it) is excluded — the same rule that keeps a
         // numberless draft invisible to the ADR gates (#219).
         let tmp =

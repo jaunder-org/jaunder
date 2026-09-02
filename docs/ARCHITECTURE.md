@@ -3279,7 +3279,7 @@ to `accepted`. Any other token a draft carries — `superseded`, `rejected`,
 rewrite alone would not hold the property, so `adr-format` enforces the other
 half by rejecting `proposed` on any numbered file; rewrite, gate, and table
 renderer share one status-line parse, so they cannot disagree about which line
-they are reading (`xtask/src/adr.rs:105`, `xtask/src/adr_readme/files.rs:125`,
+they are reading (`xtask/src/adr.rs:81`, `xtask/src/adr_readme/files.rs:125`,
 `xtask/src/adr_readme/files.rs:213`).
 
 Identifier collisions remain loud
@@ -3287,10 +3287,8 @@ Identifier collisions remain loud
 `identifier-collisions` gate in `cargo xtask check`/`validate` fails on
 duplicate numeric prefixes in `docs/adr/` and the migration directories. The
 serialized promoter prevents feature branches from allocating ADR numbers at
-all; `cargo xtask adr renumber` remains only as deprecated compatibility tooling
-pending [#1169](https://github.com/jaunder-org/jaunder/issues/1169), not as the
-current recovery path. The gate still runs against the merge-queue tree, where
-GitHub stacks the PR on an ephemeral queue branch and runs the required checks
+all. The gate still runs against the merge-queue tree, where GitHub stacks the
+PR on an ephemeral queue branch and runs the required checks
 ([ADR-0077](adr/0077-adopt-github-merge-queue.md)).
 
 The ADR index table in `docs/README.md` is a generated projection of the ADR
