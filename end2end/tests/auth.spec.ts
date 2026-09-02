@@ -2,6 +2,7 @@ import { test, expect } from "./fixtures";
 import { createPerfProbe } from "./perf";
 import {
   BASE_URL,
+  generateUsername,
   goto,
   click,
   waitForSelector,
@@ -81,7 +82,7 @@ test("register server failure renders error", async ({ page }) => {
 
 test("register with open policy succeeds", async ({ page }) => {
   // Holdout (spec D6): registration::register coverage.
-  const username = `newuser${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+  const username = generateUsername("newuser");
   await goto(page, "/register");
 
   await page.fill(SEL.username, username);

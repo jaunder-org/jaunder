@@ -1,5 +1,6 @@
 import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
 import {
+  generateUsername,
   goto,
   signInAs,
   click,
@@ -58,9 +59,7 @@ test("invite link registration completes end-to-end", async ({
   try {
     const invitee = await context.newPage();
     const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
-    const username = `invitee${Date.now()}${Math.random()
-      .toString(36)
-      .slice(2, 8)}`;
+    const username = generateUsername("invitee");
     await goto(invitee, `/register?invite_code=${code}`, { timeout: firstNav });
     await invitee.fill(SEL.username, username);
     await invitee.fill(SEL.password, "testpassword123");
