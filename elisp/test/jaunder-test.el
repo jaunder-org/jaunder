@@ -217,67 +217,58 @@
 
 ;;; org->atom — publish time / timezone
 
-(ert-deftest jaunder-org->atom-published-iana-dst-summer ()
-  (should (equal (jaunder-entry-published
-                  (jaunder-test--entry
-                   (concat "#+DATE: [2026-07-01 Wed 09:00]\n"
-                           "#+PROPERTY: JAUNDER_STATUS published\n"
-                           "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n")))
-                 "2026-07-01T13:00:00Z")))
-
-(ert-deftest jaunder-org->atom-published-iana-dst-winter ()
-  (should (equal (jaunder-entry-published
-                  (jaunder-test--entry
-                   (concat "#+DATE: [2026-01-01 Thu 09:00]\n"
-                           "#+PROPERTY: JAUNDER_STATUS published\n"
-                           "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n")))
-                 "2026-01-01T14:00:00Z")))
-
-(ert-deftest jaunder-org->atom-published-numeric-offset-string ()
-  ;; G1 regression: a raw offset *string* is silently misread by `encode-time'
-  ;; as UTC; the mapping must parse it to integer seconds.
-  (should (equal (jaunder-entry-published
-                  (jaunder-test--entry
-                   (concat "#+DATE: [2026-07-01 Wed 09:00]\n"
-                           "#+PROPERTY: JAUNDER_STATUS published\n"
-                           "#+PROPERTY: JAUNDER_DATE_TZ -0500\n\nB\n")))
-                 "2026-07-01T14:00:00Z")))
-
-(ert-deftest jaunder-org->atom-published-numeric-offset-colon ()
-  (should (equal (jaunder-entry-published
-                  (jaunder-test--entry
-                   (concat "#+DATE: [2026-07-01 Wed 09:00]\n"
-                           "#+PROPERTY: JAUNDER_STATUS published\n"
-                           "#+PROPERTY: JAUNDER_DATE_TZ -05:00\n\nB\n")))
-                 "2026-07-01T14:00:00Z")))
-
-(ert-deftest jaunder-org->atom-published-scheduled ()
-  (should (equal (jaunder-entry-published
-                  (jaunder-test--entry
-                   (concat "#+DATE: [2026-07-01 Wed 09:00]\n"
-                           "#+PROPERTY: JAUNDER_STATUS scheduled\n"
-                           "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n")))
-                 "2026-07-01T13:00:00Z")))
-
-(ert-deftest jaunder-org->atom-published-publish-now-is-nil ()
-  ;; status=published with no #+DATE -> omit (server stamps).
-  (should (null (jaunder-entry-published
-                 (jaunder-test--entry
-                  "#+PROPERTY: JAUNDER_STATUS published\n\nB\n")))))
-
-(ert-deftest jaunder-org->atom-published-draft-is-nil ()
-  ;; drafts carry no publish time even with a #+DATE.
-  (should (null (jaunder-entry-published
-                 (jaunder-test--entry
-                  (concat "#+DATE: [2026-07-01 Wed 09:00]\n"
-                          "#+PROPERTY: JAUNDER_STATUS draft\n"
-                          "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n"))))))
-
-(ert-deftest jaunder-org->atom-published-missing-date-is-nil ()
-  (should (null (jaunder-entry-published
-                 (jaunder-test--entry
-                  (concat "#+PROPERTY: JAUNDER_STATUS scheduled\n"
-                          "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n"))))))
+(ert-deftest jaunder-org->atom-publication-time-projections ()
+  (let ((cases
+         `((published-iana-dst-summer
+            ,(concat "#+DATE: [2026-07-01 Wed 09:00]\n"
+                     "#+PROPERTY: JAUNDER_STATUS published\n"
+                     "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n")
+            "2026-07-01T13:00:00Z")
+           (published-iana-dst-winter
+            ,(concat "#+DATE: [2026-01-01 Thu 09:00]\n"
+                     "#+PROPERTY: JAUNDER_STATUS published\n"
+                     "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n")
+            "2026-01-01T14:00:00Z")
+           ;; G1 regression: a raw offset string is silently misread by
+           ;; `encode-time' as UTC; the mapping must parse it to integer seconds.
+           (published-numeric-offset-string
+            ,(concat "#+DATE: [2026-07-01 Wed 09:00]\n"
+                     "#+PROPERTY: JAUNDER_STATUS published\n"
+                     "#+PROPERTY: JAUNDER_DATE_TZ -0500\n\nB\n")
+            "2026-07-01T14:00:00Z")
+           (published-numeric-offset-colon
+            ,(concat "#+DATE: [2026-07-01 Wed 09:00]\n"
+                     "#+PROPERTY: JAUNDER_STATUS published\n"
+                     "#+PROPERTY: JAUNDER_DATE_TZ -05:00\n\nB\n")
+            "2026-07-01T14:00:00Z")
+           (published-scheduled
+            ,(concat "#+DATE: [2026-07-01 Wed 09:00]\n"
+                     "#+PROPERTY: JAUNDER_STATUS scheduled\n"
+                     "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n")
+            "2026-07-01T13:00:00Z")
+           ;; status=published with no #+DATE -> omit (server stamps).
+           (published-publish-now-is-nil
+            "#+PROPERTY: JAUNDER_STATUS published\n\nB\n"
+            nil)
+           ;; Drafts carry no publish time even with a #+DATE.
+           (published-draft-is-nil
+            ,(concat "#+DATE: [2026-07-01 Wed 09:00]\n"
+                     "#+PROPERTY: JAUNDER_STATUS draft\n"
+                     "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n")
+            nil)
+           ;; Scheduled entries without a #+DATE omit the publish time.
+           (published-missing-date-is-nil
+            ,(concat "#+PROPERTY: JAUNDER_STATUS scheduled\n"
+                     "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n\nB\n")
+            nil))))
+    (dolist (case cases)
+      (pcase-let ((`(,label ,source ,expected) case))
+        (ert-info ((format "publication-time projection case: %s" label))
+                  (should
+                   (equal
+                    (jaunder-entry-published
+                     (jaunder-test--entry source))
+                    expected)))))))
 
 ;;; utc->org-date + machine-zone capture
 
