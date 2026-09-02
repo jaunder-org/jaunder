@@ -10,33 +10,9 @@ use storage::{PostRecord, PostTag};
 /// timeline; `listing::page_from_rows` drops the `None` (see the guard test).
 #[must_use]
 pub fn rendered_post(post: PostRecord, viewer_user_id: Option<UserId>) -> Option<RenderedPost> {
-    let published_at = post.published_at?;
-    let permalink = post.permalink();
-    let PostRecord {
-        post_id,
-        user_id,
-        author_username,
-        title,
-        summary,
-        slug,
-        rendered_html,
-        created_at,
-        tags,
-        ..
-    } = post;
-    Some(RenderedPost {
-        post_id,
-        username: author_username,
-        title,
-        summary,
-        slug,
-        rendered_html,
-        created_at,
-        published_at: Some(published_at),
-        permalink: Some(permalink),
-        is_author: viewer_user_id == Some(user_id),
-        tags: post_tags_to_summaries(tags),
-    })
+    post.published_at?;
+    let is_author = viewer_user_id == Some(post.user_id);
+    Some(authored_post(post, is_author).post)
 }
 
 fn post_tags_to_summaries(tags: Vec<PostTag>) -> Vec<TagSummary> {
@@ -51,12 +27,9 @@ fn post_tags_to_summaries(tags: Vec<PostTag>) -> Vec<TagSummary> {
 /// Build a permalink post — draft or published — for its author's own surfaces
 /// and for the projector's seed.
 ///
-/// Deliberately **not** built on [`rendered_post`]: two inner fields are derived
-/// differently here. A draft permalink is exactly what this serves, so there is
-/// no bail; `is_author` comes from the caller's session check rather than a viewer
-/// comparison; and the permalink is withheld from a draft, which has no public URL.
-/// Routing this through the listing builder would change the seeded draft paint with
-/// nothing to point at.
+/// This function owns the shared `PostRecord` to `RenderedPost` translation.
+/// Drafts remain valid here: `is_author` comes from the caller's session check,
+/// and the permalink is withheld from a draft, which has no public URL.
 #[must_use]
 pub fn authored_post(post: PostRecord, is_author: bool) -> AuthoredPost {
     // Only published posts have a public permalink. For drafts, the permalink is None.
