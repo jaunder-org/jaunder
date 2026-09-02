@@ -59,12 +59,6 @@ pub(crate) fn files(
     })
 }
 
-pub(crate) fn balanced_elisp(source: &str) -> bool {
-    source.chars().fold(0i32, |depth, character| {
-        depth + i32::from(character == '(') - i32::from(character == ')')
-    }) == 0
-}
-
 #[cfg(test)]
 pub(crate) fn context(files: &[(&str, &str)]) -> CollectorContext {
     use super::SourceSnapshot;
