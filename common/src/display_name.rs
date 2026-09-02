@@ -3,6 +3,8 @@ use std::str::FromStr;
 use macros::StrNewtype;
 use thiserror::Error;
 
+use crate::text;
+
 /// Maximum display-name length, in Unicode scalar values. Generous — a display
 /// name is a free-form human label, not an identifier — while still bounding the
 /// stored value and the profile form.
@@ -33,10 +35,8 @@ impl FromStr for DisplayName {
     type Err = InvalidDisplayName;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        if trimmed.is_empty() || trimmed.chars().count() > MAX_DISPLAY_NAME_CHARS {
-            return Err(InvalidDisplayName);
-        }
+        let trimmed =
+            text::bounded_non_empty(s, MAX_DISPLAY_NAME_CHARS).ok_or(InvalidDisplayName)?;
         Ok(DisplayName(trimmed.to_owned()))
     }
 }
@@ -68,6 +68,14 @@ mod tests {
         assert!("".parse::<DisplayName>().is_err());
         assert!("   ".parse::<DisplayName>().is_err());
         assert!("\t\n".parse::<DisplayName>().is_err());
+    }
+
+    #[test]
+    fn invalid_error_display_is_the_public_message() {
+        assert_eq!(
+            InvalidDisplayName.to_string(),
+            "display name must be non-empty and at most 255 characters"
+        );
     }
 
     #[test]

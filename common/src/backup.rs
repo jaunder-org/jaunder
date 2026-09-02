@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::UserFacingMessage;
+use crate::text;
 
 /// How a backup is written to its destination.
 ///
@@ -150,10 +151,7 @@ impl FromStr for DestinationPath {
     type Err = InvalidDestinationPath;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        if trimmed.is_empty() {
-            return Err(InvalidDestinationPath);
-        }
+        let trimmed = text::non_empty(s).ok_or(InvalidDestinationPath)?;
         Ok(DestinationPath(trimmed.to_owned()))
     }
 }
