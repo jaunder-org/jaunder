@@ -1,5 +1,4 @@
-use atom_syndication::Link;
-use rss::extension::atom::AtomExtension;
+use rss::extension::atom::{AtomExtension, Link};
 use rss::{ChannelBuilder, GuidBuilder, ItemBuilder};
 
 use crate::feed::{FeedItem, FeedMetadata, SyndicationFeedRepresentation};

@@ -211,10 +211,41 @@ fn graph_from_metadata(metadata: CargoMetadata, root_name: &str) -> Result<Graph
     })
 }
 
+/// Returns the root manifest's crates.io patch table, if it has one.
+fn crates_io_patch_section(manifest: &str) -> Option<&str> {
+    let mut offset = 0;
+    let mut section_start = None;
+
+    for line in manifest.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[')
+            && let Some(start) = section_start
+        {
+            return Some(&manifest[start..offset]);
+        }
+        if trimmed == "[patch.crates-io]" {
+            section_start = Some(offset);
+        }
+        offset += line.len();
+    }
+
+    section_start.map(|start| &manifest[start..])
+}
+
+/// Reads the root manifest's crates.io patches for an isolated metadata root.
+fn root_crates_io_patch_section(root: &Path) -> Result<String> {
+    let manifest =
+        fs::read_to_string(root.join("Cargo.toml")).context("reading root Cargo.toml patches")?;
+    Ok(crates_io_patch_section(&manifest)
+        .unwrap_or_default()
+        .to_owned())
+}
+
 /// Obtains metadata for one target root, avoiding feature unification between
 /// the host floor and the exact CSR wasm closure.
 fn load_graph(sh: &Shell, package: &str, target: Option<&str>) -> Result<Graph> {
     let root = git::toplevel(Path::new("."))?;
+    let patches = root_crates_io_patch_section(Path::new(&root))?;
     let temporary = tempfile::tempdir().context("creating temporary metadata root")?;
     let manifest = temporary.path().join("Cargo.toml");
     let source = temporary.path().join("src");
@@ -227,7 +258,7 @@ fn load_graph(sh: &Shell, package: &str, target: Option<&str>) -> Result<Graph> 
         &manifest,
         format!(
             "[package]\nname = \"target-closure-root\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\
-             [dependencies]\n{package} = {{ path = {package_path} }}\n"
+             [dependencies]\n{package} = {{ path = {package_path} }}\n{patches}"
         ),
     )
     .context("writing temporary metadata manifest")?;
@@ -262,10 +293,52 @@ pub fn run(result: &mut CommandResult) {
         );
     result.push(step.with_duration(start.elapsed()));
 }
+
 #[cfg(test)]
 mod tests {
-    use super::{Dependency, Graph, Node, Package, evaluate};
+    use super::{Dependency, Graph, Node, Package, crates_io_patch_section, evaluate};
     use std::collections::{BTreeMap, BTreeSet};
+
+    #[test]
+    fn extracts_all_crates_io_patch_entries() {
+        let manifest = "\
+[patch.crates-io]
+first = { path = \"first\" }
+second = { path = \"second\" }
+";
+
+        assert_eq!(crates_io_patch_section(manifest), Some(manifest));
+    }
+
+    #[test]
+    fn stops_crates_io_patch_section_at_next_table() {
+        let manifest = "\
+[patch.crates-io]
+first = { path = \"first\" }
+[workspace]
+members = [\"host\"]
+";
+
+        assert_eq!(
+            crates_io_patch_section(manifest),
+            Some(
+                "\
+[patch.crates-io]
+first = { path = \"first\" }
+"
+            )
+        );
+    }
+
+    #[test]
+    fn returns_no_crates_io_patch_section_when_absent() {
+        let manifest = "\
+[workspace]
+members = [\"host\"]
+";
+
+        assert_eq!(crates_io_patch_section(manifest), None);
+    }
 
     fn graph(root: &str, edges: &[(&str, &str)], common_features: &[&str]) -> Graph {
         let packages = [

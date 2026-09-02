@@ -16,6 +16,10 @@
     };
     flake-utils.url = "github:numtide/flake-utils";
     crane.url = "github:ipetkov/crane";
+    atom-fork = {
+      url = "github:jaunder-org/atom/921118c311d2117956d86e25052918e7c549ef00";
+      flake = false;
+    };
   };
 
   outputs =
@@ -25,6 +29,7 @@
       fenix,
       flake-utils,
       crane,
+      atom-fork,
     }:
     let
       interactiveTestingVmSystem = "x86_64-linux";
@@ -291,8 +296,30 @@
             );
         };
 
-        commonArgs = {
+        # The #813 draft ADR pins atom_syndication's namespace-aware upstream
+        # revision. Substitute its flake checkout during vendoring so product
+        # builds resolve the Cargo git patch without sandbox network access.
+        cargoVendorDir = craneLib.vendorCargoDeps {
           inherit src;
+          overrideVendorGitCheckout =
+            ps: drv:
+            let
+              p = builtins.head ps;
+            in
+            if p.name == "atom_syndication" then
+              pkgs.runCommandLocal "atom-fork-vendor-${p.name}-${p.version}" { } ''
+                dst="$out/${p.name}-${p.version}"
+                mkdir -p "$dst"
+                cp -a ${atom-fork}/. "$dst/"
+                chmod -R u+w "$dst"
+                echo '{"files":{},"package":null}' > "$dst/.cargo-checksum.json"
+              ''
+            else
+              drv;
+        };
+
+        commonArgs = {
+          inherit src cargoVendorDir;
           pname = "jaunder";
           version = "0.1.0";
           strictDeps = true;
@@ -320,7 +347,7 @@
             EOF
           '';
 
-        appCargoVendorDir = craneLib.vendorCargoDeps commonArgs;
+        appCargoVendorDir = cargoVendorDir;
         appOfflineCargoHome = mkOfflineCargoHome {
           name = "jaunder";
           vendorDir = appCargoVendorDir;

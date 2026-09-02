@@ -201,6 +201,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "atom_syndication"
+version = "0.13.0"
+source = "git+https://github.com/jaunder-org/atom?rev=921118c311d2117956d86e25052918e7c549ef00#921118c311d2117956d86e25052918e7c549ef00"
+dependencies = [
+ "chrono",
+ "diligent-date-parser",
+ "quick-xml",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1537,7 +1547,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argon2",
- "atom_syndication",
+ "atom_syndication 0.13.0",
  "base64 0.22.1",
  "chrono",
  "common",
@@ -3670,7 +3680,7 @@ version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc13570823abc675c60d7837f1fe7daaf18dd181a3cacb3c6ba7a062eef581c0"
 dependencies = [
- "atom_syndication",
+ "atom_syndication 0.12.10",
  "derive_builder",
  "quick-xml",
 ]

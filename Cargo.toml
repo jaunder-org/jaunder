@@ -121,6 +121,12 @@ syn = "2"
 quote = "1"
 proc-macro2 = "1"
 
+# Jaunder #813 / docs/adr/drafts/temporary-atom-namespace-fork.md pin the
+# upstream AtomPub namespace fix until upstream releases the same complete
+# namespace-aware API and behavior; use an exact rev so Cargo and Nix consume
+# reviewed source rather than a moving branch.
+#
+# rev 921118c = recursively preserve extension expanded names and namespace scopes.
 # Our lettre fork, until the mailbox-grammar fix lands upstream; pinned by rev,
 # not branch, and paired with a deny.toml allow entry — the why, the removal
 # condition, and how to move the rev are in
@@ -128,6 +134,7 @@ proc-macro2 = "1"
 #
 # rev cb9e574 = fix/mailbox-quoted-local-part-and-domain-literal
 [patch.crates-io]
+atom_syndication = { git = "https://github.com/jaunder-org/atom", rev = "921118c311d2117956d86e25052918e7c549ef00" }
 lettre = { git = "https://github.com/jaunder-org/lettre", rev = "cb9e5747e5ed4012d41b5ff4bba8dd503fc148e2" }
 
 [workspace.lints.clippy]

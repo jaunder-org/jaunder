@@ -3,11 +3,9 @@
 //! This leaf assembles collection metadata and member entries into the upstream
 //! Atom Feed model; shared XML and link construction remain private siblings.
 
-use std::collections::BTreeMap;
-
 use atom_syndication::{Entry, Feed, Text};
 
-use super::super::{AtomPubError, CollectionFeedTitle, ns};
+use super::super::{AtomPubError, CollectionFeedTitle};
 use super::render::{rel_link, to_xml_string};
 use common::tagged_url::{EntryIdUrl, FeedUrl, PaginationUrl};
 use common::time::UtcInstant;
@@ -36,9 +34,8 @@ pub struct FeedMeta {
 /// Serializes a collection `<feed>` wrapping the given entries, with RFC 5005
 /// paging links.
 ///
-/// The `<feed>` root declares `xmlns` plus the `app` and `j` prefixes; the
-/// embedded entries inherit the default namespace from it rather than
-/// redeclaring it.
+/// Namespace declarations for embedded extensions are synthesized from their
+/// expanded names; entries inherit the Atom default namespace from this root.
 ///
 /// # Errors
 ///
@@ -62,10 +59,6 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPub
         updated: meta.updated.value().fixed_offset(),
         links,
         entries: entries.to_vec(),
-        namespaces: BTreeMap::from([
-            ("app".to_string(), ns::APP_NS.to_string()),
-            ("j".to_string(), ns::J_NS.to_string()),
-        ]),
         ..Default::default()
     };
 
@@ -74,10 +67,10 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPub
 
 #[cfg(test)]
 mod tests {
+    use super::super::foreign_markers::set_j_slug;
     use super::*;
     use atom_syndication::Text;
-
-    use super::super::foreign_markers::set_j_slug;
+    use atom_syndication::extension::{ExpandedName, Extension, ExtensionContent};
     use common::test_support::{parse_url, parse_utc_instant};
 
     fn sample_entry() -> Entry {
@@ -113,15 +106,13 @@ mod tests {
 
         // Feed structure and metadata
         assert!(out.contains("<feed"), "out: {out}");
-        assert!(out.contains("xmlns:app"), "out: {out}");
         assert!(
             out.contains("<title>alice&apos;s posts</title>"),
             "out: {out}"
         );
-        assert!(
-            out.contains("xmlns=\"http://www.w3.org/2005/Atom\""),
-            "out: {out}"
-        );
+        // The feed owns only Atom's default namespace. Extension declarations are
+        // emitted at the extension element that needs them.
+        assert!(!out.contains("xmlns:app"), "out: {out}");
 
         // Paging links
         assert!(out.contains("rel=\"self\""), "out: {out}");
@@ -145,18 +136,64 @@ mod tests {
             "Entries should not redeclare xmlns; out: {out}"
         );
 
-        // A marker-bearing entry *does* carry its own prefix declaration, because the
-        // writer emits `Entry::namespaces` whether or not the entry is embedded. The
-        // redundancy with the feed root is valid XML and is the accepted delta.
+        // A marker-bearing embedded entry declares what it needs itself; the feed
+        // root does not carry unrelated marker declarations.
         let mut marked = sample_entry();
         set_j_slug(&mut marked, "my-post");
         let out = render_feed(&meta, &[marked]).expect("serialize");
-        assert!(out.contains("<entry xmlns:j="), "out: {out}");
-
-        // Feed closing tag present
-        assert!(out.contains("</feed>"), "out: {out}");
+        let parsed = out.parse::<Feed>().expect("reparse");
+        assert_eq!(parsed.entries().len(), 1);
+        assert_eq!(
+            super::super::foreign_markers::j_slug(&parsed.entries()[0]),
+            Some("my-post".to_string())
+        );
     }
 
+    #[test]
+    fn render_feed_preserves_nested_rebound_extension_names() {
+        // The same preferred prefix labels two different URIs in nested scopes.
+        // Reparse proves the collection seam retains expanded names, not spelling.
+        let mut entry = sample_entry();
+        entry.extensions.push(Extension {
+            name: ExpandedName {
+                namespace_uri: Some("urn:outer".to_string()),
+                local_name: "outer".to_string(),
+                preferred_prefix: Some("x".to_string()),
+            },
+            attributes: Vec::new(),
+            content: vec![ExtensionContent::Element(Extension {
+                name: ExpandedName {
+                    namespace_uri: Some("urn:inner".to_string()),
+                    local_name: "inner".to_string(),
+                    preferred_prefix: Some("x".to_string()),
+                },
+                attributes: Vec::new(),
+                content: Vec::new(),
+            })],
+        });
+        let meta = FeedMeta {
+            id: parse_url("https://example.com/atompub/alice/posts"),
+            title: CollectionFeedTitle::posts(&"alice".parse().unwrap()),
+            updated: parse_utc_instant("2026-05-31T12:00:00Z"),
+            self_url: parse_url("https://example.com/atompub/alice/posts"),
+            first: None,
+            next: None,
+            previous: None,
+        };
+
+        let parsed = render_feed(&meta, &[entry])
+            .expect("serialize")
+            .parse::<Feed>()
+            .expect("reparse");
+        let outer = &parsed.entries()[0].extensions()[0];
+        assert_eq!(outer.name.namespace_uri.as_deref(), Some("urn:outer"));
+        assert_eq!(outer.name.local_name, "outer");
+        let ExtensionContent::Element(inner) = &outer.content[0] else {
+            unreachable!("nested extension was parsed as text")
+        };
+        assert_eq!(inner.name.namespace_uri.as_deref(), Some("urn:inner"));
+        assert_eq!(inner.name.local_name, "inner");
+    }
     #[test]
     fn render_feed_without_paging_omits_optional_links() {
         let mut entry = sample_entry();

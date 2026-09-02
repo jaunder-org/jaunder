@@ -788,26 +788,46 @@ closed `CollectionAccept` type, separately from concrete uploaded-media
 `*/*`. The wildcard therefore exists only at the AtomPub discovery boundary and
 can never enter media request parsing or storage.
 
-Atom document I/O is upstream's, not ours
-([ADR-0089](adr/0089-upstream-atom-document-io.md)). `atom_syndication` 0.12.10
-made bare-`<entry>` I/O public, so the hand-rolled reader and writers are gone:
-parsing is `Entry::from_str` at the host call site and serialization is
-`Entry::write_to` / `Feed::write_to`. Jaunder's own foreign markup stays
-Jaunder's — `app:control/app:draft` and `j:slug` live in the entry's extension
-map behind helpers that own each `xmlns:` prefix. `quick-xml` is a direct host
-dependency for the non-Atom documents Jaunder writes itself: the Service
-Document, RSD, and shared XML helpers. Category discovery is inline: an
-applicable Collection declares its open-set `app:categories` terms with
-`fixed="no"` in the Service Document. Jaunder does not advertise an
-`app:categories href` or serve an out-of-line Categories Document
-([inline-only AtomPub category discovery decision](adr/0157-inline-only-atompub-category-discovery.md)).
+Atom document I/O remains upstream's, not ours
+([ADR-0089](adr/0089-upstream-atom-document-io.md)): parsing is
+`Entry::from_str` at the host call site and serialization is `Entry::write_to` /
+`Feed::write_to`. The
+[proposed temporary Atom namespace-fork decision](adr/drafts/temporary-atom-namespace-fork.md)
+qualifies ADR-0089's registry-only state without rewriting the accepted ADR.
+`jaunder-org/atom` supplies the complete breaking `atom_syndication` 0.13.0
+model at exact revision `921118c311d2117956d86e25052918e7c549ef00` until
+upstream releases the same complete namespace-aware public API and behavior. It
+provides Entry, Feed, and Source parity; represents element and attribute
+identity as namespace URI plus local name with source prefixes only as
+preferred-prefix serialization metadata; preserves namespace-qualified
+attributes, ordered mixed content and duplicate children, default namespaces,
+and nested rebinding; and rejects unbound prefixes. Thus upstream still owns
+Atom serialization, including Jaunder's `app:control/app:draft` and `j:slug`
+extensions, without turning an element-scoped `xmlns:` declaration into an
+ordinary attribute.
 
-The crates come from the registry — `atom_syndication` 0.12.10 and `rss` 2.1.
-Earlier, [ADR-0043](adr/0043-quick-xml-fork-patch.md) (now **superseded**) had
-cleared two RUSTSEC advisories by forking both crates onto `quick-xml` 0.41 and
-wiring the forks in through `[patch.crates-io]`, flake inputs, and a crane
-vendor override. **That apparatus was deleted outright** — the only surviving
-requirement is that the registry releases resolve `quick-xml` ≥ 0.41, as before.
+The user reviewed and accepted that revision, closed fork PR #1, and will open
+the upstream pull request from its branch. Jaunder pins the exact commit
+directly through Cargo `[patch.crates-io]`; it does not depend on a fork
+pull-request merge. The same source is a `flake = false` input and is vendored
+by the atom-only crane `overrideVendorGitCheckout` for hermetic Nix builds. The
+existing `jaunder-org` cargo-deny source allowance remains shared with the live
+lettre fork and is neither removed nor duplicated. Upstream submission, landing,
+and release remain user-owned and outside this cycle. Only after upstream
+releases that same complete namespace-aware API and behavior does Jaunder remove
+the atom-only Cargo patch, flake input, and crane vendoring machinery together
+and archive the fork. This is not a revival of the **superseded**
+[ADR-0043](adr/0043-quick-xml-fork-patch.md) two-crate advisory bridge: `rss`
+remains a registry dependency, `quick-xml` remains a direct host dependency for
+non-Atom Service Document, RSD, and shared XML helpers, and lettre's separately
+pinned revision is unchanged
+([ADR-0119](adr/0119-lettre-fork-pinned-by-rev.md)). `CONTEXT.md` remains
+unchanged because no domain vocabulary changes.
+
+Applicable Collections declare open-set `app:categories` terms with `fixed="no"`
+in the Service Document. Jaunder does not advertise `app:categories href` or
+serve an out-of-line Categories Document
+([ADR-0157](adr/0157-inline-only-atompub-category-discovery.md)).
 
 **Accepted publisher target.** Publisher-side WebSub is to cover every Site,
 User, Site Tag, and User Tag Syndication Feed URL in RSS, Atom, and JSON. One

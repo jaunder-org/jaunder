@@ -172,12 +172,12 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_string(response).await;
-    assert!(
-        body.contains("xmlns:j=\"https://jaunder.org/ns/atompub\""),
-        "member should declare xmlns:j: {body}"
-    );
-    assert!(
-        body.contains(&format!("<j:slug>{}</j:slug>", post.slug.as_ref())),
-        "member should carry the post's slug as j:slug: {body}"
+    let entry = body
+        .parse::<host::atompub::Entry>()
+        .expect("Member response is an Atom Entry");
+    assert_eq!(
+        host::atompub::j_slug(&entry).as_deref(),
+        Some(post.slug.as_ref()),
+        "Member should carry the Post's slug as j:slug"
     );
 }

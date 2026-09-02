@@ -83,17 +83,13 @@ async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
         .unwrap();
     assert_eq!(get.status(), StatusCode::OK);
     let body = body_string(get).await;
-    // A draft post round-trips the app:draft marker.
-    assert!(body.contains("app:draft"), "draft marker missing: {body}");
-    // The read-only j:slug is emitted on every entry, drafts included (ADR-0023).
-    assert!(
-        body.contains("xmlns:j=\"https://jaunder.org/ns/atompub\""),
-        "draft entry should declare xmlns:j: {body}"
-    );
-    assert!(
-        body.contains("<j:slug>"),
-        "draft entry should carry j:slug: {body}"
-    );
+    let entry = body
+        .parse::<host::atompub::Entry>()
+        .expect("draft Member response is an Atom Entry");
+    // A draft Post round-trips the app:draft marker.
+    assert!(host::atompub::is_draft(&entry));
+    // The read-only j:slug is emitted on every Entry, drafts included (ADR-0023).
+    assert_eq!(host::atompub::j_slug(&entry).as_deref(), Some("draft"));
 }
 
 /// Atom's explicit `app:draft` is a structured lifecycle scalar: `no` publishes
