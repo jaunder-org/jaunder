@@ -28,7 +28,6 @@ host = { path = "../host", optional = true }
 macros = { path = "../macros" }
 storage = { workspace = true, optional = true }
 http.workspace = true
-cfg-if.workspace = true
 chrono = { workspace = true, optional = true }
 maud.workspace = true
 serde.workspace = true
