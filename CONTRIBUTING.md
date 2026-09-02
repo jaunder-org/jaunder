@@ -197,16 +197,15 @@ See [`docs/adr/drafts/README.md`](docs/adr/drafts/README.md) for the link forms
 that resolve both while the draft is tracked and after its one-directory
 promotion.
 
-Feature shipping must not invoke either `cargo xtask adr promote` or the
-deprecated `cargo xtask adr renumber`, and must not edit `docs/README.md`. The
-draft remains `proposed` when the feature reaches `main`. A serialized workflow
-then derives from current `main`, runs the deterministic promotion mutation, and
-opens one stable promoter PR. Promotion assigns each draft the next free number,
-stages the tracked source deletion and `docs/adr/NNNN-<slug>.md` destination,
-rewrites path citations and `proposed` to `accepted`, and regenerates the ADR
-index. The dedicated least-privilege GitHub App arms auto-merge; ordinary
-pull-request and merge-group checks run, and only the merge queue writes the
-result to `main`.
+Feature shipping must not invoke `cargo xtask adr promote` and must not edit
+`docs/README.md`. The draft remains `proposed` when the feature reaches `main`.
+A serialized workflow then derives from current `main`, runs the deterministic
+promotion mutation, and opens one stable promoter PR. Promotion assigns each
+draft the next free number, stages the tracked source deletion and
+`docs/adr/NNNN-<slug>.md` destination, rewrites path citations and `proposed` to
+`accepted`, and regenerates the ADR index. The dedicated least-privilege GitHub
+App arms auto-merge; ordinary pull-request and merge-group checks run, and only
+the merge queue writes the result to `main`.
 
 An open promoter's head SHA and generated diff never change. Drafts merged later
 wait for its merge and the next promotion pass. The ordinary promoter CI/queue
@@ -235,12 +234,8 @@ numbered-ADR enumeration used by `identifier-collisions`, `adr-format`, and
 `adr-readme-parity`; `doc-links` does check them because they are tracked. The
 collision gate still makes duplicate numbered ADR or migration prefixes loud,
 but serialized post-merge allocation removes the feature-branch ADR collision
-class. `cargo xtask adr renumber` remains executable for one compatibility
-release but is **deprecated** and must not be used for new feature recovery;
-removal is tracked by
-[#1169](https://github.com/jaunder-org/jaunder/issues/1169). Migrations keep
-their sequential convention and are renumbered by hand on the rare occasion it
-is needed.
+class. Migrations keep their sequential convention and are renumbered by hand on
+the rare occasion it is needed.
 
 ## Testing
 

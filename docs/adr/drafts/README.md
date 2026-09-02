@@ -55,10 +55,6 @@ no-op. The draft remains proposed during the normal promoter CI/queue interval;
 if the promoter fails, it remains proposed until that visible automation failure
 is repaired.
 
-`cargo xtask adr renumber` is deprecated compatibility tooling, not feature
-recovery. Its removal is tracked by
-[#1169](https://github.com/jaunder-org/jaunder/issues/1169).
-
 ## Gate invisibility
 
 The `identifier-collisions`, `adr-format`, and `adr-readme-parity` gates share

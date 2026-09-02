@@ -739,32 +739,6 @@ fn output_or(dir: &Path, args: &[&str], tolerated: i32) -> Result<Option<String>
     }
 }
 
-/// `git merge-base <a> <b>`.
-pub(crate) fn merge_base(dir: &Path, a: &str, b: &str) -> Result<String> {
-    output(dir, &["merge-base", a, b])
-}
-
-/// `git diff --name-only <range>` — every file touched in the range.
-pub(crate) fn diff_names(dir: &Path, range: &str) -> Result<Vec<String>> {
-    lines(dir, &["diff", "--name-only", range])
-}
-
-/// `git diff --diff-filter=A --name-only <range> -- <pathspec>` — files ADDED in
-/// the range, scoped to `pathspec`.
-pub(crate) fn diff_added(dir: &Path, range: &str, pathspec: &str) -> Result<Vec<String>> {
-    lines(
-        dir,
-        &[
-            "diff",
-            "--diff-filter=A",
-            "--name-only",
-            range,
-            "--",
-            pathspec,
-        ],
-    )
-}
-
 /// `git grep -l --fixed-strings <pattern>` — files containing `pattern`.
 /// Grep's exit 1 = no match → `Ok(vec![])`; exit 128 (or any other non-zero) =
 /// real error → `Err` (see [`output_or`]).
@@ -869,32 +843,6 @@ mod tests {
             std::env::temp_dir().join(format!("jaunder-git-missing-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&missing);
         assert!(grep_files(&missing, "x").is_err());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn merge_base_diff_added_and_diff_names() {
-        let dir = temp_repo("diff");
-        commit(&dir, "base.txt", "b\n");
-        let base = output(&dir, &["rev-parse", "HEAD"]).unwrap();
-        assert!(
-            at(&dir)
-                .args(["checkout", "-q", "-b", "feature"])
-                .status()
-                .unwrap()
-                .success()
-        );
-        commit(&dir, "docs/new.md", "n\n");
-        let range = format!("{base}..HEAD");
-        assert_eq!(merge_base(&dir, "main", "HEAD").unwrap(), base);
-        assert_eq!(
-            diff_names(&dir, &range).unwrap(),
-            vec!["docs/new.md".to_string()]
-        );
-        assert_eq!(
-            diff_added(&dir, &range, "docs").unwrap(),
-            vec!["docs/new.md".to_string()]
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

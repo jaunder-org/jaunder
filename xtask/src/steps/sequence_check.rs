@@ -1,8 +1,8 @@
 //! The `identifier-collisions` static check: scans the ADR and migration
 //! directories for duplicate numeric prefixes (which git merges silently because
 //! the filenames differ) and for sqlite/postgres backend parity. Read-only in
-//! every mode. Tracked feature drafts avoid ADR collisions; the legacy
-//! `adr renumber` compatibility command is deprecated pending #1169.
+//! every mode. Feature ADRs are tracked numberless drafts; serialized promoter
+//! automation allocates their numbers after merge.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -67,11 +67,7 @@ pub fn problems(adr: &[String], sqlite: &[String], postgres: &[String]) -> Optio
     }
     if !adr_dups.is_empty() {
         lines.push(
-            "  recovery: new ADRs must be tracked numberless drafts; diagnose why numbered files bypassed the serialized promoter"
-                .to_string(),
-        );
-        lines.push(
-            "  deprecated compatibility only: cargo xtask adr renumber (removal: https://github.com/jaunder-org/jaunder/issues/1169)"
+            "  recovery: restore feature ADRs as tracked numberless drafts; after merge, leave drafts on main and diagnose/rerun visible serialized promoter automation"
                 .to_string(),
         );
     }
@@ -133,14 +129,14 @@ mod tests {
     }
 
     #[test]
-    fn adr_collision_points_to_tracked_drafts_and_deprecates_legacy_recovery() {
+    fn adr_collision_points_to_tracked_drafts_and_serialized_promoter_recovery() {
         let adr = vec!["0034-foo.md".to_string(), "0034-bar.md".to_string()];
         let detail = problems(&adr, &[], &[]).expect("a problem");
         assert!(detail.contains("ADR number 0034"));
         assert!(detail.contains("0034-bar.md"));
-        assert!(detail.contains("tracked numberless drafts"));
-        assert!(detail.contains("deprecated compatibility only"));
-        assert!(detail.contains("https://github.com/jaunder-org/jaunder/issues/1169"));
+        assert!(detail.contains(
+            "restore feature ADRs as tracked numberless drafts; after merge, leave drafts on main and diagnose/rerun visible serialized promoter automation"
+        ));
     }
 
     #[test]
@@ -148,7 +144,7 @@ mod tests {
         let mig = vec!["0007_a.sql".to_string(), "0007_b.sql".to_string()];
         let detail = problems(&[], &mig, &mig).expect("a problem");
         assert!(detail.contains("sqlite migration 0007"));
-        assert!(!detail.contains("cargo xtask adr renumber"));
+        assert!(!detail.contains("feature ADRs are tracked numberless drafts"));
     }
 
     #[test]

@@ -354,14 +354,6 @@ pub enum ServerFnCoverageCommand {
 /// `adr` subcommands.
 #[derive(Subcommand)]
 pub enum AdrCommand {
-    /// DEPRECATED compatibility command for pre-promoter numbered-ADR
-    /// collisions. New feature work commits numberless tracked drafts and lets
-    /// the serialized post-merge promoter allocate numbers. Scheduled for
-    /// removal in https://github.com/jaunder-org/jaunder/issues/1169.
-    #[command(
-        after_help = "DEPRECATED: do not use for new feature recovery; see https://github.com/jaunder-org/jaunder/issues/1169\n\nLEGACY EXAMPLE:\n  cargo xtask adr renumber"
-    )]
-    Renumber,
     /// Regenerate the ADR index table in `docs/README.md` from `docs/adr/`: the
     /// number, link target, and status cells. Hand-curated titles are preserved
     /// (a new row seeds its title from the ADR heading). Idempotent; touches only
@@ -481,7 +473,6 @@ impl Cli {
             Command::E2eLocal { .. } => "e2e-local",
             Command::TestLocal { .. } => "test-local",
             Command::BuildCsr { .. } => "build-csr",
-            Command::Adr(AdrCommand::Renumber) => "adr-renumber",
             Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
             Command::Adr(AdrCommand::Promote) => "adr-promote",
             Command::Adr(AdrCommand::Promoter) => "adr-promoter",
@@ -1223,14 +1214,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("build-csr");
             steps::build_csr::run(&sh, &mut result, release);
-            finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::Adr(AdrCommand::Renumber) => {
-            let start = std::time::Instant::now();
-            let mut result = CommandResult::new("adr-renumber");
-            let step_start = std::time::Instant::now();
-            result.push(adr::renumber().with_duration(step_start.elapsed()));
             finalize(&mut result, start);
             Ok(result)
         }
@@ -2339,9 +2322,8 @@ mod cli_tests {
     }
 
     #[test]
-    fn adr_renumber_parses() {
-        let cli = Cli::try_parse_from(["xtask", "adr", "renumber"]).unwrap();
-        assert_eq!(cli.command_name(), "adr-renumber");
+    fn adr_renumber_is_rejected() {
+        assert!(Cli::try_parse_from(["xtask", "adr", "renumber"]).is_err());
     }
 
     #[test]
