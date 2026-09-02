@@ -46,6 +46,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: refs/heads/main
+          fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
       - uses: ./.github/actions/setup-ci
@@ -55,5 +56,6 @@ jobs:
 
       - name: Run ADR promoter
         env:
+          ADR_PROMOTER_APP_CLIENT_ID: ${{ vars.ADR_PROMOTER_CLIENT_ID }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: nix develop .#ci --accept-flake-config -c cargo xtask adr promoter

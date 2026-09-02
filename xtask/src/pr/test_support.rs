@@ -61,6 +61,7 @@ pub fn green() -> Vec<CheckEntry> {
 pub fn open(checks: Vec<CheckEntry>) -> PrSnapshot {
     PrSnapshot {
         state: PrState::Open,
+        base_sha: "base".into(),
         merged_at: None,
         merge_commit: None,
         mergeable: Mergeable::Mergeable,

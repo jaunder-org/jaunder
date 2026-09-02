@@ -72,6 +72,14 @@ collision-era `adr renumber` command is deprecated for one compatibility release
 and removed by [#1169](https://github.com/jaunder-org/jaunder/issues/1169) after
 the promoter has operated in production.
 
+## Decision history
+
+On 2026-09-02, [#1214](https://github.com/jaunder-org/jaunder/issues/1214)
+recorded a guarded replacement for a promoter attempt that was positively proved
+conflicted after `main` advanced; the original immutable-head decision remained
+unchanged. See the proposed
+[replacement decision](drafts/replace-conflicted-promoter-attempts.md).
+
 ## Consequences
 
 Concurrent feature PRs no longer allocate the same ADR number or edit the ADR

@@ -718,6 +718,34 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Compare-and-delete a remote branch.  This is the only forceful promoter
+/// operation: it has an expected old object and cannot update a changed ref.
+pub(crate) fn delete_remote_with_lease(
+    dir: &Path,
+    remote: &str,
+    branch: &str,
+    expected: &str,
+) -> Result<()> {
+    let lease = format!("--force-with-lease=refs/heads/{branch}:{expected}");
+    let destination = format!(":refs/heads/{branch}");
+    run(dir, &["push", &lease, remote, &destination])
+}
+
+/// Whether an exact three-way merge of the supplied objects has content
+/// conflicts. Exit 1 is Git's documented conflict result; all other failures
+/// remain errors rather than becoming conflict authorization.
+pub(crate) fn merge_tree_conflicts(dir: &Path, main: &str, head: &str) -> Result<bool> {
+    let status = at(dir)
+        .args(["merge-tree", "--write-tree", main, head])
+        .status()
+        .context("running git merge-tree")?;
+    match status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => anyhow::bail!("git merge-tree failed ({status})"),
+    }
+}
+
 /// Trimmed stdout of a git command, or `None` when it exits with `tolerated`
 /// instead of bailing — the shared core of the two helpers that read one exit
 /// code as a valid "nothing" answer (`grep`'s exit 1 = no match, `config --get`'s
@@ -1493,5 +1521,59 @@ mod tests {
         let plan = precommit_stage_plan(&before, &after);
         assert!(plan.stage_paths.is_empty());
         assert!(plan.failures[0].contains("complete git status evidence"));
+    }
+    #[test]
+    fn merge_tree_classifies_exact_conflicts_and_non_conflicting_ancestry() {
+        let dir = temp_repo("promoter-merge-tree");
+        commit(&dir, "shared.txt", "base\n");
+        git_ok(&dir, &["branch", "candidate"]);
+        write(&dir, "shared.txt", "main\n");
+        git_ok(&dir, &["commit", "-am", "main"]);
+        let main = output(&dir, &["rev-parse", "HEAD"]).unwrap();
+        git_ok(&dir, &["switch", "-q", "candidate"]);
+        write(&dir, "shared.txt", "candidate\n");
+        git_ok(&dir, &["commit", "-am", "candidate"]);
+        let candidate = output(&dir, &["rev-parse", "HEAD"]).unwrap();
+
+        assert!(merge_tree_conflicts(&dir, &main, &candidate).unwrap());
+        assert!(!merge_tree_conflicts(&dir, &candidate, &candidate).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn leased_deletion_refuses_changed_head_and_ordinary_push_recreates_absent_branch() {
+        let dir = temp_repo("promoter-lease");
+        commit(&dir, "seed.txt", "one\n");
+        let remote = dir.join("remote.git");
+        git_ok(&dir, &["init", "--bare", "remote.git"]);
+        git_ok(&dir, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        git_ok(
+            &dir,
+            &["push", "origin", "HEAD:refs/heads/automation/adr-promoter"],
+        );
+        let original = output(&dir, &["rev-parse", "HEAD"]).unwrap();
+        commit(&dir, "seed.txt", "two\n");
+        git_ok(
+            &dir,
+            &["push", "origin", "HEAD:refs/heads/automation/adr-promoter"],
+        );
+
+        assert!(
+            delete_remote_with_lease(&dir, "origin", "automation/adr-promoter", &original).is_err()
+        );
+        let changed = output(&dir, &["rev-parse", "HEAD"]).unwrap();
+        delete_remote_with_lease(&dir, "origin", "automation/adr-promoter", &changed).unwrap();
+        git_ok(
+            &dir,
+            &["push", "origin", "HEAD:refs/heads/automation/adr-promoter"],
+        );
+        assert_eq!(
+            output(
+                &remote,
+                &["rev-parse", "refs/heads/automation/adr-promoter"]
+            )
+            .unwrap(),
+            changed
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

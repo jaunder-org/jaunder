@@ -214,6 +214,11 @@ acceptance model. A draft that remains proposed because the promoter failed to
 create, check, or merge is failed-automation lag and requires diagnosis; it is
 not a reason to promote from the feature branch.
 
+When promoter automation fails, diagnose the visible PR, ref, check, or workflow
+state and rerun the authorized controller. Never manually close, delete, rebase,
+or promote a promoter attempt: only the controller may perform its guarded
+replacement or incomplete-publication abort.
+
 ADRs are `docs/adr/NNNN-slug.md` with a canonical `# ADR-NNNN: <title>` heading
 and a single-token `- Status: <token>` line. A **numbered** ADR carries one of
 accepted/superseded/deprecated/rejected — never `proposed`, because promotion

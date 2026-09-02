@@ -42,6 +42,29 @@ pub enum CheckState {
     Success,
     Failure,
 }
+/// The immutable identity of the GitHub App which performed a durable promoter
+/// mutation.  Login alone is not authority: a user can create a similarly named
+/// bot account, while GitHub records the issuing App on comments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppIdentity {
+    pub login: String,
+    pub client_id: String,
+}
+
+/// GitHub's author and `performed_via_github_app` evidence for an audit comment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentAuthor {
+    pub login: String,
+    pub app_client_id: Option<String>,
+}
+
+/// A comment is deliberately represented independently of a PR snapshot: the
+/// promoter consumes it as an immutable, durable transaction record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrComment {
+    pub body: String,
+    pub author: CommentAuthor,
+}
 
 /// One entry from `statusCheckRollup`, flattened across the `CheckRun` /
 /// `StatusContext` union so nothing above this file has to know the union exists.
@@ -71,6 +94,7 @@ pub struct PrSnapshot {
     pub queue: QueueState,
     pub head_sha: String,
     pub head_ref: String,
+    pub base_sha: String,
     /// Git refreshes this on rebase and amend, which is what lets a re-pushed head
     /// reliably post-date a stale merge-group run.
     pub head_committed_at: String,
@@ -112,6 +136,7 @@ pub const PR_QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!){
       mergeStateStatus
       isInMergeQueue
       mergeQueueEntry { position }
+      baseRefOid
       autoMergeRequest { enabledAt }
       headRefName
       commits(last:1){ nodes { commit { oid committedDate } } }
@@ -238,6 +263,8 @@ pub fn parse_snapshot(v: &Value) -> Result<PrSnapshot, ApiError> {
         // with no head.
         head_sha: owned(head, &["oid"])
             .ok_or_else(|| ApiError::Malformed("head commit has no oid".into()))?,
+        base_sha: owned(pr, &["baseRefOid"])
+            .ok_or_else(|| ApiError::Malformed("pull request has no baseRefOid".into()))?,
         head_ref: owned(pr, &["headRefName"]).unwrap_or_default(),
         head_committed_at: owned(head, &["committedDate"])
             .ok_or_else(|| ApiError::Malformed("head commit has no committedDate".into()))?,
@@ -517,6 +544,11 @@ mod tests {
         };
     }
 
+    fn with_base(mut value: Value) -> Value {
+        value["data"]["repository"]["pullRequest"]["baseRefOid"] = Value::String("base".into());
+        value
+    }
+
     fn io_error_kind(error: &(dyn std::error::Error + 'static)) -> Option<std::io::ErrorKind> {
         let mut current = Some(error);
         while let Some(error) = current {
@@ -545,7 +577,7 @@ mod tests {
 
     #[test]
     fn merged_pr_snapshot_carries_commit_and_timestamp() {
-        let s = parse_snapshot(&fixture!("pr-merged.json")).unwrap();
+        let s = parse_snapshot(&with_base(fixture!("pr-merged.json"))).unwrap();
         assert_eq!(s.state, PrState::Merged);
         assert!(s.merge_commit.is_some());
         assert!(s.merged_at.is_some());
@@ -553,7 +585,7 @@ mod tests {
 
     #[test]
     fn queued_pr_snapshot_carries_queue_position() {
-        let s = parse_snapshot(&fixture!("pr-queued.json")).unwrap();
+        let s = parse_snapshot(&with_base(fixture!("pr-queued.json"))).unwrap();
         assert_eq!(s.state, PrState::Open);
         assert!(s.queue.in_queue);
         assert_eq!(s.queue.position, Some(2));
@@ -561,7 +593,7 @@ mod tests {
 
     #[test]
     fn checks_flatten_both_union_members() {
-        let s = parse_snapshot(&fixture!("pr-open-green.json")).unwrap();
+        let s = parse_snapshot(&with_base(fixture!("pr-open-green.json"))).unwrap();
         assert!(s.checks.iter().any(|c| c.name == "Validate (no e2e)"));
         assert!(s.checks.iter().any(|c| c.name == "e2e gate"));
         assert!(s.checks.iter().all(|c| !c.name.is_empty()));
@@ -613,7 +645,7 @@ mod tests {
     fn head_sha_ref_and_committed_at_are_populated() {
         // All three are load-bearing: the ejection discriminator needs the timestamp,
         // the divergence guard needs the ref and the sha.
-        let s = parse_snapshot(&fixture!("pr-open-green.json")).unwrap();
+        let s = parse_snapshot(&with_base(fixture!("pr-open-green.json"))).unwrap();
         assert!(!s.head_committed_at.is_empty());
         assert!(!s.head_sha.is_empty());
         assert_eq!(s.head_ref, "worktree-issue-671-timeline-gate");

@@ -3265,6 +3265,34 @@ this numberless workflow; the tracked
 superseding those two requirements while preserving path-only identity and late
 allocation.
 
+### Committed direction
+
+The proposed
+[conflicted-promoter replacement decision](adr/drafts/replace-conflicted-promoter-attempts.md)
+keeps each promoter head and generated diff immutable while defining it as one
+replaceable attempt. Only serialized Generate events (`main` push and manual
+dispatch) may replace a positively conflicted attempt; dequeue remains
+exact-head re-arm recovery. Replacement requires both GitHub's `CONFLICTING` /
+`DIRTY` result and an exact-object local merge-tree conflict after proving the
+generated sole parent is a strict ancestor of current `main`. Pending, delayed,
+unknown, blocked, or failed checks do not authorize it.
+
+The controller first records and revalidates an App-authenticated immutable
+retirement intent. It then performs exact leased deletion of the
+controller-owned stable branch at the stale head, verifies absence, and only
+then closes the exact PR; it recreates the branch only after the close through
+the ordinary non-force push. The branch trust boundary assumes no privileged
+external mutation during a controller run. Version-selected generated provenance
+and deterministic reconstruction of its tree make interrupted replacement
+recoverable without trusting self-asserted commit metadata.
+
+Generation always starts from fresh `main`. A generated PR that becomes stale
+before its current-base check and auto-merge arm is an incomplete publication
+artifact, not an attempt: the controller records a publication-abort intent,
+lease-deletes and closes it, then regenerates. Later Generate runs resume only
+the exact durable intent and verified postcondition; malformed, foreign, or
+ambiguous state fails closed.
+
 After the feature reaches `main`, branch generation derives from fresh `main`,
 runs the deterministic ADR promotion mutation, and opens a stable promoter PR.
 Main-push and manual generation events share one coalescing concurrency group;
