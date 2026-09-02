@@ -14,9 +14,10 @@ use oxc_ast::ast::Statement;
 use oxc_parser::{Parser, ParserReturn};
 use syn::visit::Visit;
 
-use super::common::{balanced_elisp, failed, files, structural};
-use super::model::Candidate;
-use super::{CellReport, CollectorContext, Language, SignalFamily};
+use super::common::{STRUCTURAL_VERSION, failed, files, structural};
+use super::elisp::{self, ReaderError};
+use super::model::{Candidate, CollectorMetadata};
+use super::{CellReport, CollectorContext, EvidenceMethod, Language, SignalFamily};
 struct RustUses {
     paths: BTreeSet<String>,
 }
@@ -153,18 +154,53 @@ fn typescript_modules(path: &str, source: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
+trait ElispReader {
+    fn top_level_dependencies(&mut self, source: &str) -> Result<Vec<String>, ReaderError>;
+}
+
+struct EmacsElispReader;
+
+impl ElispReader for EmacsElispReader {
+    fn top_level_dependencies(&mut self, source: &str) -> Result<Vec<String>, ReaderError> {
+        elisp::top_level_dependencies(source)
+    }
+}
+
 pub(crate) fn elisp_dependencies(context: &CollectorContext) -> CellReport {
+    elisp_dependencies_with_reader(context, &mut EmacsElispReader)
+}
+
+fn elisp_dependencies_with_reader(
+    context: &CollectorContext,
+    reader: &mut impl ElispReader,
+) -> CellReport {
     let mut dependencies = BTreeMap::<String, Vec<String>>::new();
     for (path, source) in files(context, Language::Elisp) {
-        if !balanced_elisp(source) {
-            return failed(
-                SignalFamily::DependencyStructure,
-                Language::Elisp,
-                "census-elisp-structural",
-                format!("{path}: unbalanced Elisp forms"),
-            );
-        }
-        for dependency in source.lines().filter_map(elisp_require) {
+        let source_dependencies = match reader.top_level_dependencies(source) {
+            Ok(dependencies) => dependencies,
+            Err(ReaderError::Unavailable) => {
+                return CellReport::unavailable_with_collector(
+                    SignalFamily::DependencyStructure,
+                    Language::Elisp,
+                    CollectorMetadata {
+                        identity: "census-elisp-structural".into(),
+                        version: Some(STRUCTURAL_VERSION.into()),
+                        evidence_method: EvidenceMethod::Structural,
+                        limitation: "the declared Emacs reader is not available".into(),
+                    },
+                    "Emacs reader structural dependency collector is not available",
+                );
+            }
+            Err(ReaderError::Failed(error)) => {
+                return failed(
+                    SignalFamily::DependencyStructure,
+                    Language::Elisp,
+                    "census-elisp-structural",
+                    format!("{path}: {error}"),
+                );
+            }
+        };
+        for dependency in source_dependencies {
             dependencies
                 .entry(dependency)
                 .or_default()
@@ -187,13 +223,6 @@ pub(crate) fn elisp_dependencies(context: &CollectorContext) -> CellReport {
         "only top-level require forms are modeled; dynamic feature loading is excluded",
         candidates,
     )
-}
-fn elisp_require(line: &str) -> Option<String> {
-    let form = line.trim().strip_prefix("(require '")?;
-    form.split(')')
-        .next()
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
 }
 #[cfg(test)]
 mod tests {
@@ -248,5 +277,67 @@ mod tests {
             elisp_dependencies(&context(&[("a.el", "(require 'dash)")])).state,
             CellState::Clean
         ));
+    }
+    #[test]
+    fn elisp_dependency_reader_ignores_parentheses_in_strings_and_comments() {
+        // Reader-valid lexical parentheses must not hide a real top-level dependency.
+        let report = elisp_dependencies(&context(&[
+            ("a.el", "\"((\"\n; ((\n(require\n 'dash)\n"),
+            ("b.el", "(require 'dash)"),
+        ]));
+
+        let CellState::Candidates { candidates, .. } = report.state else {
+            panic!("expected a dependency candidate");
+        };
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].identity, "elisp-dependency:dash");
+        assert_eq!(candidates[0].paths, ["a.el", "b.el"]);
+    }
+
+    #[test]
+    fn elisp_dependency_reader_ignores_non_code_and_nested_requires() {
+        // Dependency evidence is limited to literal quoted require forms at top level.
+        let report = elisp_dependencies(&context(&[(
+            "a.el",
+            r#"; (require 'dash)
+"(require 'dash)"
+(when t (require 'dash))
+(require feature)
+(require (intern "dash"))
+"#,
+        )]));
+
+        assert_eq!(report.state, CellState::Clean);
+    }
+
+    #[test]
+    fn malformed_elisp_dependency_source_fails_with_its_path() {
+        // A reader failure must remain visible and attributable to the source file.
+        let report = elisp_dependencies(&context(&[("broken.el", "(require 'dash")]));
+
+        let CellState::Failed { error } = report.state else {
+            panic!("expected a failed dependency cell");
+        };
+        assert!(error.starts_with("broken.el: "));
+    }
+
+    #[test]
+    fn unavailable_elisp_reader_produces_unavailable_cell() {
+        struct UnavailableReader;
+
+        impl ElispReader for UnavailableReader {
+            fn top_level_dependencies(&mut self, _: &str) -> Result<Vec<String>, ReaderError> {
+                Err(ReaderError::Unavailable)
+            }
+        }
+
+        // Missing declared tooling is unavailable rather than inferred clean or failed.
+        let report = elisp_dependencies_with_reader(
+            &context(&[("a.el", "(require 'dash)")]),
+            &mut UnavailableReader,
+        );
+
+        assert!(matches!(report.state, CellState::Unavailable { .. }));
+        assert_eq!(report.collector.identity, "census-elisp-structural");
     }
 }

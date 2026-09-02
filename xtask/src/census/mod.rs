@@ -11,6 +11,7 @@ mod clone;
 mod common;
 mod conversion;
 mod dependency;
+mod elisp;
 pub(crate) mod history;
 mod lsp;
 pub(crate) mod model;

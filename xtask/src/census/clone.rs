@@ -4,13 +4,9 @@
 //! definitions/tests, then compares normalized syntax shapes across tracked
 //! files. Its candidates are structural prompts rather than proof of duplicated
 //! behavior. Parser and reader failures remain failed cells; a missing Emacs
-//! reader is unavailable. The owned Emacs process drains stderr at spawn and is
-//! always terminated and reaped on its error path, with cleanup warnings never
-//! replacing reader evidence.
+//! reader is unavailable.
 
 use std::collections::BTreeMap;
-use std::io::Write;
-use std::process::{Command, Stdio};
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
@@ -26,8 +22,8 @@ use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use syn::visit::Visit;
 
 use super::common::{STRUCTURAL_VERSION, failed, files, structural};
+use super::elisp::{self, ReaderError};
 use super::model::{Candidate, CollectorMetadata};
-use super::process::{StderrDrain, StdoutDrain, terminate_and_reap};
 use super::{CellReport, CollectorContext, EvidenceMethod, Language, SignalFamily};
 
 pub(crate) fn rust_clones(context: &CollectorContext) -> CellReport {
@@ -54,7 +50,9 @@ fn clones_with_elisp_reader(
     reader: &mut impl ElispReader,
 ) -> CellReport {
     clone_shapes(context, Language::Elisp, |_, source| {
-        reader.function_shapes(source)
+        reader
+            .function_shapes(source)
+            .map_err(CloneShapeError::from)
     })
 }
 
@@ -123,6 +121,15 @@ enum CloneShapeError {
 impl From<String> for CloneShapeError {
     fn from(error: String) -> Self {
         Self::Failed(error)
+    }
+}
+
+impl From<ReaderError> for CloneShapeError {
+    fn from(error: ReaderError) -> Self {
+        match error {
+            ReaderError::Unavailable => Self::ReaderUnavailable,
+            ReaderError::Failed(error) => Self::Failed(error),
+        }
     }
 }
 
@@ -312,151 +319,14 @@ fn normalize_typescript_span(
 }
 
 trait ElispReader {
-    fn function_shapes(&mut self, source: &str) -> Result<Vec<String>, CloneShapeError>;
+    fn function_shapes(&mut self, source: &str) -> Result<Vec<String>, ReaderError>;
 }
 
 struct EmacsElispReader;
 
 impl ElispReader for EmacsElispReader {
-    fn function_shapes(&mut self, source: &str) -> Result<Vec<String>, CloneShapeError> {
-        const READER: &str = r#"(progn
-(defun census-normalize-tail (value)
-  (cond ((consp value) (cons (census-normalize (car value))
-                              (census-normalize-tail (cdr value))))
-        ((null value) nil)
-        (t (census-normalize value))))
-(defun census-normalize-binding (binding)
-  (if (consp binding)
-      (cons 'id (mapcar #'census-normalize (cdr binding)))
-    'id))
-(defun census-normalize (value &optional head)
-  (cond ((and (consp value) (memq (car value) '(let let*)))
-         (cons (car value)
-               (cons (mapcar #'census-normalize-binding (nth 1 value))
-                     (mapcar #'census-normalize (cddr value)))))
-        ((and (consp value) (eq (car value) 'lambda))
-         (cons 'lambda
-               (cons (mapcar (lambda (_argument) 'id) (nth 1 value))
-                     (mapcar #'census-normalize (cddr value)))))
-        ((consp value) (cons (census-normalize (car value) t)
-                             (census-normalize-tail (cdr value))))
-        ((symbolp value) (if head value 'id))
-        ((numberp value) 'number)
-        ((stringp value) 'string)
-        (t 'literal)))
-(defun census-normalize-definition (form)
-  (append (list (car form)
-                'id
-                (mapcar (lambda (_argument) 'id) (nth 2 form)))
-          (mapcar #'census-normalize (cdddr form))))
-(with-temp-buffer
-  (insert-file-contents "/dev/stdin")
-  (emacs-lisp-mode)
-  (check-parens)
-  (goto-char (point-min))
-  (condition-case nil
-      (while t
-        (let ((form (read (current-buffer))))
-          (when (memq (car-safe form) '(defun ert-deftest))
-            (princ (prin1-to-string (census-normalize-definition form)))
-            (princ "\n"))))
-    (end-of-file nil))))"#;
-        let mut reader = Command::new("emacs")
-            .args(["--batch", "--quick", "--eval", READER])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    CloneShapeError::ReaderUnavailable
-                } else {
-                    CloneShapeError::Failed(error.to_string())
-                }
-            })?;
-        let stderr = match reader.stderr.take() {
-            Some(stderr) => stderr,
-            None => {
-                terminate_and_reap(&mut reader, "Emacs reader");
-                return Err(CloneShapeError::Failed(
-                    "Emacs reader stderr was not piped".into(),
-                ));
-            }
-        };
-        let mut stderr = StderrDrain::start(stderr);
-        let stdout = match reader.stdout.take() {
-            Some(stdout) => stdout,
-            None => {
-                terminate_and_reap(&mut reader, "Emacs reader");
-                let diagnostics = stderr.finish("Emacs reader");
-                return Err(CloneShapeError::Failed(with_diagnostics(
-                    "Emacs reader stdout was not piped".into(),
-                    diagnostics,
-                )));
-            }
-        };
-        let mut stdout = StdoutDrain::start(stdout);
-        let write_result = match reader.stdin.take() {
-            Some(mut stdin) => stdin.write_all(source.as_bytes()),
-            None => Err(std::io::Error::other("Emacs reader stdin was not piped")),
-        };
-        if let Err(error) = write_result {
-            terminate_and_reap(&mut reader, "Emacs reader");
-            finish_stdout_after_failure(&mut stdout);
-            let diagnostics = stderr.finish("Emacs reader");
-            return Err(CloneShapeError::Failed(with_diagnostics(
-                error.to_string(),
-                diagnostics,
-            )));
-        }
-        let status = match reader.wait() {
-            Ok(status) => status,
-            Err(error) => {
-                terminate_and_reap(&mut reader, "Emacs reader");
-                finish_stdout_after_failure(&mut stdout);
-                let diagnostics = stderr.finish("Emacs reader");
-                return Err(CloneShapeError::Failed(with_diagnostics(
-                    error.to_string(),
-                    diagnostics,
-                )));
-            }
-        };
-        let output = match stdout.finish() {
-            Ok(output) => output,
-            Err(error) => {
-                terminate_and_reap(&mut reader, "Emacs reader");
-                let diagnostics = stderr.finish("Emacs reader");
-                return Err(CloneShapeError::Failed(with_diagnostics(
-                    error,
-                    diagnostics,
-                )));
-            }
-        };
-        let diagnostics = stderr.finish("Emacs reader");
-        if !status.success() {
-            return Err(CloneShapeError::Failed(with_diagnostics(
-                format!("Emacs reader exited with {status}"),
-                diagnostics,
-            )));
-        }
-        Ok(String::from_utf8_lossy(&output)
-            .lines()
-            .map(str::to_owned)
-            .collect())
-    }
-}
-
-fn finish_stdout_after_failure(stdout: &mut StdoutDrain) {
-    if let Err(error) = stdout.finish() {
-        eprintln!("warning: draining census Emacs reader stdout failed: {error}");
-    }
-}
-
-fn with_diagnostics(error: String, diagnostics: String) -> String {
-    if diagnostics.is_empty() {
-        error
-    } else {
-        format!("{error}; Emacs stderr: {diagnostics}")
+    fn function_shapes(&mut self, source: &str) -> Result<Vec<String>, ReaderError> {
+        elisp::function_shapes(source)
     }
 }
 
@@ -649,8 +519,8 @@ mod tests {
     struct UnavailableReader;
 
     impl ElispReader for UnavailableReader {
-        fn function_shapes(&mut self, _: &str) -> Result<Vec<String>, CloneShapeError> {
-            Err(CloneShapeError::ReaderUnavailable)
+        fn function_shapes(&mut self, _: &str) -> Result<Vec<String>, ReaderError> {
+            Err(ReaderError::Unavailable)
         }
     }
 
