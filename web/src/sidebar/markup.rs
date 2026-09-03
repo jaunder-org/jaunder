@@ -115,7 +115,7 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 14]> = LazyLock::new(|| {
             key: "settings",
             label: "Settings",
             icon_path: Icons::COG,
-            href: None,
+            href: Some(root_relative_url("/profile")),
             requires_auth: true,
             requires_operator: false,
         },
@@ -277,6 +277,7 @@ mod tests {
                 ("history", "/history"),
                 ("media", "/media"),
                 ("audiences", "/audiences"),
+                ("settings", "/profile"),
                 ("admin-backups", "/admin/backups"),
                 ("admin-site", "/admin/site"),
             ]
@@ -286,10 +287,7 @@ mod tests {
             .iter()
             .filter_map(|item| item.href.is_none().then_some(item.key))
             .collect::<Vec<_>>();
-        assert_eq!(
-            placeholders,
-            ["local", "federated", "replies", "bookmarks", "settings"]
-        );
+        assert_eq!(placeholders, ["local", "federated", "replies", "bookmarks"]);
     }
 
     #[test]

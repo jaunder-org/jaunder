@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
-import { goto } from "./helpers";
+import { goto, signInAsNewUser } from "./helpers";
+import { allowSecondBoot } from "./bootBudget";
 import { seedPostsViaTool, seedUserViaTool } from "./seed";
 import { expectVisual } from "./visual";
 import { expectAccessible } from "./accessibility";
@@ -54,3 +55,86 @@ test(
     await expectAccessible(page);
   },
 );
+
+const ROOT = ".j-root";
+
+test("theme selector applies built-ins immediately and persists the selection", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/profile");
+  const theme = page.getByRole("group", { name: "Theme" });
+
+  await expect(theme).toBeVisible();
+  await expect(theme.getByRole("button", { name: "Terminal" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(theme.getByRole("button", { name: "Studio" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(theme.getByRole("button", { name: "Reader" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+
+  for (const [themeId, label] of [
+    ["terminal", "Terminal"],
+    ["studio", "Studio"],
+    ["reader", "Reader"],
+  ]) {
+    const button = theme.getByRole("button", { name: label });
+
+    await expect(button).toHaveAttribute("aria-pressed", "false");
+    await button.click();
+    await expect(page.locator(ROOT)).toHaveAttribute("data-theme", themeId);
+    await expect(button).toHaveAttribute("aria-pressed", "true");
+  }
+
+  allowSecondBoot(
+    page,
+    "reloading proves the browser-local theme selection survives a fresh CSR mount",
+  );
+  await goto(page, "/profile");
+  await expect(page.locator(ROOT)).toHaveAttribute("data-theme", "reader");
+  await expect(theme.getByRole("button", { name: "Reader" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+});
+
+test("theme selector preserves an unknown stored identifier until selection", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("theme-selector-seeded") !== "true") {
+      localStorage.setItem("jaunder_theme", "custom-dark");
+      sessionStorage.setItem("theme-selector-seeded", "true");
+    }
+  });
+  await goto(page, "/profile");
+
+  const theme = page.getByRole("group", { name: "Theme" });
+  await expect(page.locator(ROOT)).toHaveAttribute("data-theme", "custom-dark");
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("jaunder_theme")))
+    .toBe("custom-dark");
+
+  for (const label of ["Terminal", "Studio", "Reader"]) {
+    await expect(theme.getByRole("button", { name: label })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  }
+
+  await theme.getByRole("button", { name: "Terminal" }).click();
+  await expect(page.locator(ROOT)).toHaveAttribute("data-theme", "terminal");
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("jaunder_theme")))
+    .toBe("terminal");
+  await expect(theme.getByRole("button", { name: "Terminal" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+});

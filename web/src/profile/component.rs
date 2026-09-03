@@ -91,6 +91,7 @@ pub fn ProfilePage() -> impl IntoView {
                         }
                     })}
                 </Suspense>
+                <ThemeControl />
                 {move || {
                     update_action
                         .value()
@@ -107,6 +108,58 @@ pub fn ProfilePage() -> impl IntoView {
                             }
                         })
                 }}
+            </div>
+        </div>
+    }
+}
+
+/// Browser-local built-in theme selector.
+///
+/// The shell owns persistence and error telemetry for its shared theme signal;
+/// this control only changes that signal so applying a selection is immediate.
+#[component]
+fn ThemeControl() -> impl IntoView {
+    let theme = use_context::<RwSignal<String>>()
+        .unwrap_or_else(|| RwSignal::new(crate::app::DEFAULT_THEME.to_string()));
+
+    view! {
+        <div class="j-card">
+            <div class="j-card-head">
+                <div>
+                    <h2>"Theme"</h2>
+                    <div class="j-sub">"Choose how Jaunder looks in this browser."</div>
+                </div>
+            </div>
+            <div class="j-form-body">
+                <div class="j-seg" role="group" aria-label="Theme">
+                    {[("terminal", "Terminal"), ("studio", "Studio"), ("reader", "Reader")]
+                        .into_iter()
+                        .map(|(theme_id, label)| {
+                            view! {
+                                <button
+                                    type="button"
+                                    class=move || {
+                                        if theme.with(|current| current == theme_id) {
+                                            "j-btn is-selected"
+                                        } else {
+                                            "j-btn"
+                                        }
+                                    }
+                                    aria-pressed=move || {
+                                        if theme.with(|current| current == theme_id) {
+                                            "true"
+                                        } else {
+                                            "false"
+                                        }
+                                    }
+                                    on:click=move |_| theme.set(theme_id.to_string())
+                                >
+                                    {label}
+                                </button>
+                            }
+                        })
+                        .collect_view()}
+                </div>
             </div>
         </div>
     }
