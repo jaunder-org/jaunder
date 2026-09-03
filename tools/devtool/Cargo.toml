@@ -18,3 +18,5 @@ tempfile = "3"
 signal-hook = "0.3"
 brotli = "8"
 flate2 = "1"
+processkit = "3.3.4"
+tokio = { version = "1", features = ["rt-multi-thread"] }
