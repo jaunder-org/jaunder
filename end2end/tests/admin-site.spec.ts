@@ -1,31 +1,8 @@
-import type { Page } from "@playwright/test";
+import { reenterAdminSettings } from "./admin-settings";
 import { test, expect } from "./fixtures";
 import { goto, signInAs, waitForSelector } from "./helpers";
 import { allowSecondBoot } from "./bootBudget";
-import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
-
-// The operator sidebar carries both admin routes (`web/src/sidebar/component.rs`),
-// so re-entering this page is an in-app move, not a reload. Leaving and returning
-// remounts `SiteSettingsPage`, whose `Resource` is created at mount — so the form
-// is repopulated from a fresh `site::get`, which is what the round-trip
-// assertions need.
-const BACKUPS_LINK = 'a.j-nav-item[href="/admin/backups"]';
-const SITE_LINK = 'a.j-nav-item[href="/admin/site"]';
-const BACKUPS_READY = 'input[name="destination_path"]';
-const SITE_READY = 'input[name="title"]';
-
-/** Leave `/admin/site` and come back, remounting the page from the server. */
-async function reenterSiteSettings(page: Page): Promise<void> {
-  await navigateInApp(page, () => page.click(BACKUPS_LINK), {
-    url: "/admin/backups",
-    ready: BACKUPS_READY,
-  });
-  await navigateInApp(page, () => page.click(SITE_LINK), {
-    url: "/admin/site",
-    ready: SITE_READY,
-  });
-}
 
 // M8.5: Site settings admin page allows operators to configure site identity.
 test("admin site settings page loads and allows updating title and base_url", async ({
@@ -54,7 +31,7 @@ test("admin site settings page loads and allows updating title and base_url", as
 
   // Re-enter the page in-app and verify the values are persisted: the remount
   // refetches through site::get, so the form is populated from the server.
-  await reenterSiteSettings(page);
+  await reenterAdminSettings(page, "site");
 
   // The title round-trips verbatim; the base URL round-trips in its canonical form
   // (`BaseUrl` adds the root path slash).
@@ -84,7 +61,7 @@ test("site base URL round-trips, clears via omission, and validates inline", asy
   await waitForSelector(page, ".j-settings-saved");
 
   // Re-enter in-app and confirm it round-trips in canonical form.
-  await reenterSiteSettings(page);
+  await reenterAdminSettings(page, "site");
   await expect(page.locator('input[name="base_url"]')).toHaveValue(
     "https://roundtrip.example.com/",
   );
@@ -96,7 +73,7 @@ test("site base URL round-trips, clears via omission, and validates inline", asy
   await waitForSelector(page, ".j-settings-saved");
 
   // Re-enter in-app and confirm the base URL is now empty.
-  await reenterSiteSettings(page);
+  await reenterAdminSettings(page, "site");
   await expect(page.locator('input[name="base_url"]')).toHaveValue("");
 
   // A malformed URL shows an inline client-side error (once the field is touched)
