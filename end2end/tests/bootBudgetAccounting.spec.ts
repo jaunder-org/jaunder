@@ -46,9 +46,11 @@ nonBrowserTest("a scoped allowance is inert for another pathname", () => {
   );
   budget.recordDocumentLoad(LOGIN);
 
-  expect(budget.takeFailures()).toEqual([
-    expect.stringContaining("undeclared second load"),
-  ]);
+  const failures = budget.takeFailures();
+  expect(failures).toHaveLength(1);
+  expect(failures[0]).toContain("undeclared second load");
+  expect(failures[0]).toContain("/login");
+  expect(failures[0]).toContain("allowSecondBoot");
 });
 
 nonBrowserTest("both allowance forms require a non-empty reason", () => {
