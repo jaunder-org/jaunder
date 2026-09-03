@@ -306,7 +306,7 @@ where
         // currently guarantees it cannot occur, but it carries no failure
         // source and therefore remains ordinary non-reporting control flow.
         let Some((surface, _)) = feed_path.parts() else {
-            continue;
+            continue; // cov:ignore
         };
         if let Some(max) = max_published_at_for_surface::<DB>(pool, &surface, now).await?
             && max > generated_at
