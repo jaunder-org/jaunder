@@ -71,6 +71,7 @@ pub struct PrSnapshot {
     pub queue: QueueState,
     pub head_sha: String,
     pub head_ref: String,
+    pub base_sha: String,
     /// Git refreshes this on rebase and amend, which is what lets a re-pushed head
     /// reliably post-date a stale merge-group run.
     pub head_committed_at: String,
@@ -114,6 +115,7 @@ pub const PR_QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!){
       mergeQueueEntry { position }
       autoMergeRequest { enabledAt }
       headRefName
+      baseRefOid
       commits(last:1){ nodes { commit { oid committedDate } } }
       statusCheckRollup {
         contexts(first:100){
@@ -239,6 +241,8 @@ pub fn parse_snapshot(v: &Value) -> Result<PrSnapshot, ApiError> {
         head_sha: owned(head, &["oid"])
             .ok_or_else(|| ApiError::Malformed("head commit has no oid".into()))?,
         head_ref: owned(pr, &["headRefName"]).unwrap_or_default(),
+        base_sha: owned(pr, &["baseRefOid"])
+            .ok_or_else(|| ApiError::Malformed("pull request has no base ref oid".into()))?,
         head_committed_at: owned(head, &["committedDate"])
             .ok_or_else(|| ApiError::Malformed("head commit has no committedDate".into()))?,
         checks,
@@ -511,10 +515,17 @@ mod tests {
     use super::*;
 
     macro_rules! fixture {
-        ($name:literal) => {
-            serde_json::from_str::<serde_json::Value>(include_str!(concat!("testdata/", $name)))
-                .expect("fixture parses")
-        };
+        ($name:literal) => {{
+            let mut value = serde_json::from_str::<serde_json::Value>(include_str!(concat!(
+                "testdata/",
+                $name
+            )))
+            .expect("fixture parses");
+            if let Some(pr) = value.pointer_mut("/data/repository/pullRequest") {
+                pr["baseRefOid"] = Value::String("base".into());
+            }
+            value
+        }};
     }
 
     fn io_error_kind(error: &(dyn std::error::Error + 'static)) -> Option<std::io::ErrorKind> {

@@ -16,8 +16,9 @@ use super::decide;
 use super::gh;
 use super::land::{GhArmer, PrArmer, arm_is_verified};
 use super::snapshot::{
-    COMMIT_CHECKS_QUERY, CheckState, CommitChecks, PR_QUERY, RequiredChecks, parse_commit_checks,
-    parse_required_checks, parse_snapshot,
+    COMMIT_CHECKS_QUERY, CheckState, CommitChecks, MergeStateStatus, Mergeable, PR_QUERY,
+    PrSnapshot, PrState, RequiredChecks, parse_commit_checks, parse_required_checks,
+    parse_snapshot,
 };
 use super::{PrNumber, Subject};
 use crate::{StepResult, adr, git};
@@ -25,6 +26,7 @@ use crate::{StepResult, adr, git};
 pub const BRANCH: &str = "automation/adr-promoter";
 pub const TITLE: &str = "docs(adr): promote pending ADR drafts";
 pub const MARKER: &str = "<!-- jaunder-adr-promoter -->";
+pub const BOT_LOGIN: &str = "jaunder-adr-promoter[bot]";
 pub const BASE_BRANCH: &str = "main";
 const MERGE_GROUP_LIMIT: usize = 100;
 const PROMOTION_COMMIT_ARGS: [&str; 8] = [
@@ -106,6 +108,7 @@ impl PromoterEvent {
 pub struct PromoterPullRequest {
     pub number: PrNumber,
     pub head_owner: String,
+    pub author: String,
     pub head_ref: String,
     pub head_sha: String,
     pub base_ref: String,
@@ -120,6 +123,10 @@ pub enum PromoterOutcome {
     NoChanges,
     Existing(PrNumber),
     Created(PrNumber),
+    Replaced {
+        stale: PrNumber,
+        successor: PrNumber,
+    },
     IgnoredEvent,
     Rearmed(PrNumber),
     NotRearmed(&'static str),
@@ -131,6 +138,9 @@ impl std::fmt::Display for PromoterOutcome {
             Self::NoChanges => f.write_str("no ADR promotion diff"),
             Self::Existing(number) => write!(f, "promoter PR {number} already owns the branch"),
             Self::Created(number) => write!(f, "created and armed promoter PR {number}"),
+            Self::Replaced { stale, successor } => {
+                write!(f, "replaced stale promoter PR {stale} with {successor}")
+            }
             Self::IgnoredEvent => f.write_str("event does not target the ADR promoter"),
             Self::Rearmed(number) => write!(f, "re-armed promoter PR {number}"),
             Self::NotRearmed(reason) => write!(f, "promoter PR not re-armed: {reason}"),
@@ -149,23 +159,29 @@ pub trait PromoterGit {
     fn commit(&self) -> Result<()>;
     fn head_sha(&self) -> Result<String>;
     fn push(&self) -> Result<()>;
+    fn fetch_exact(&self, reference: &str) -> Result<()>;
+    fn refreshed_main_sha(&self) -> Result<String>;
+    fn sole_parent(&self, commit: &str) -> Result<Option<String>>;
+    fn is_strict_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool>;
+    fn merge_conflicts(&self, main: &str, head: &str) -> Result<bool>;
+    fn delete_branch(&self, expected: &str) -> Result<()>;
 }
 
-/// GitHub reads used to establish singleton identity and dequeue evidence.
 pub trait PromoterPrRead {
     fn repository(&self) -> Result<(String, String)>;
-    fn open_pull_requests(&self) -> Result<Vec<PromoterPullRequest>>;
+    fn promoter_pull_request(&self) -> Result<Option<PromoterPullRequest>>;
     fn pull_request(&self, number: PrNumber) -> Result<Option<PromoterPullRequest>>;
+    fn snapshot(&self, number: PrNumber) -> Result<Option<PrSnapshot>>;
     fn remote_branch_head(&self) -> Result<Option<String>>;
     fn required_checks(&self, base: &str) -> Result<RequiredChecks>;
     fn merge_group_shas(&self, event: &PullRequestEvent) -> Result<Vec<String>>;
     fn commit_checks(&self, sha: &str) -> Result<CommitChecks>;
 }
 
-/// The only GitHub writes the promoter can perform.
 pub trait PromoterPrWrite {
     fn create_pull_request(&self) -> Result<()>;
     fn arm_auto_merge(&self, number: PrNumber) -> Result<()>;
+    fn close_pull_request(&self, number: PrNumber) -> Result<()>;
 }
 
 pub struct RealPromoterGit {
@@ -254,6 +270,49 @@ impl PromoterGit for RealPromoterGit {
         git::head_sha(&self.repo)?.ok_or_else(|| anyhow!("promoter commit has no HEAD"))
     }
 
+    fn fetch_exact(&self, reference: &str) -> Result<()> {
+        git::run(&self.repo, &["fetch", "origin", reference])
+    }
+
+    fn refreshed_main_sha(&self) -> Result<String> {
+        git::run(&self.repo, &["fetch", "origin", BASE_BRANCH])?;
+        git::output(&self.repo, &["rev-parse", &format!("origin/{BASE_BRANCH}")])
+    }
+
+    fn sole_parent(&self, commit: &str) -> Result<Option<String>> {
+        let parents = git::lines(&self.repo, &["show", "-s", "--format=%P", commit])?;
+        let parents = parents
+            .first()
+            .map(String::as_str)
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect::<Vec<_>>();
+        Ok((parents.len() == 1).then(|| parents[0].to_string()))
+    }
+
+    fn is_strict_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
+        if ancestor == descendant {
+            return Ok(false);
+        }
+        let status = git::at(&self.repo)
+            .args(["merge-base", "--is-ancestor", ancestor, descendant])
+            .status()
+            .context("checking commit ancestry")?;
+        match status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => bail!("git merge-base failed ({status})"),
+        }
+    }
+
+    fn merge_conflicts(&self, main: &str, head: &str) -> Result<bool> {
+        git::merge_tree_conflicts(&self.repo, main, head)
+    }
+
+    fn delete_branch(&self, expected: &str) -> Result<()> {
+        git::delete_remote_with_lease(&self.repo, "origin", BRANCH, expected)
+    }
+
     fn push(&self) -> Result<()> {
         let destination = format!("HEAD:refs/heads/{BRANCH}");
         git::run(&self.repo, &["push", "origin", &destination])
@@ -294,15 +353,20 @@ impl GhPromoterPr {
                 .map(str::to_string)
                 .ok_or_else(|| anyhow!("promoter PR response has no {key}"))
         };
-        let head_owner = value
-            .get("headRepositoryOwner")
-            .and_then(|owner| owner.get("login"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
         Ok(PromoterPullRequest {
             number: PrNumber(number),
-            head_owner,
+            head_owner: value
+                .get("headRepositoryOwner")
+                .and_then(|owner| owner.get("login"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            author: value
+                .get("author")
+                .and_then(|author| author.get("login"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
             head_ref: text("headRefName")?,
             head_sha: text("headRefOid")?,
             base_ref: text("baseRefName")?,
@@ -315,23 +379,19 @@ impl GhPromoterPr {
             auto_merge_armed: value
                 .get("autoMergeRequest")
                 .is_some_and(|request| !request.is_null()),
-            // Queue state is not available from `gh pr ... --json`; exact-head
-            // verification enriches a single PR from the shared GraphQL snapshot.
             in_merge_queue: false,
         })
     }
 
     fn pr_fields() -> &'static str {
-        "number,state,headRepositoryOwner,headRefName,headRefOid,baseRefName,body,autoMergeRequest"
+        "number,state,author,headRepositoryOwner,headRefName,headRefOid,baseRefName,body,autoMergeRequest"
     }
 
-    fn open_pull_requests_with(
+    fn promoter_pull_request_with(
         &self,
         run: impl FnOnce(&[&str]) -> std::result::Result<Value, gh::ApiError>,
-    ) -> Result<Vec<PromoterPullRequest>> {
+    ) -> Result<Option<PromoterPullRequest>> {
         let slug = self.slug();
-        // `gh pr list --head` accepts only a branch name. Repository-owner
-        // identity remains enforced from the parsed `headRepositoryOwner`.
         let value = run(&[
             "pr",
             "list",
@@ -347,63 +407,60 @@ impl GhPromoterPr {
             Self::pr_fields(),
         ])
         .map_err(github_error)?;
-        value
+        let pulls = value
             .as_array()
             .ok_or_else(|| anyhow!("promoter PR list is not an array"))?
             .iter()
             .map(|pr| self.parse_pull_request(pr))
-            .collect()
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|pr| is_promoter_occupant(pr, &self.owner))
+            .collect::<Vec<_>>();
+        match pulls.as_slice() {
+            [] => Ok(None),
+            [pr] => Ok(Some(pr.clone())),
+            _ => bail!("multiple open pull requests occupy the ADR promoter branch"),
+        }
     }
 
-    fn pull_request_with(
+    fn pull_request_rest_with(
         &self,
         number: PrNumber,
-        run_pr: impl FnOnce(&[&str]) -> std::result::Result<Value, gh::ApiError>,
-        run_snapshot: impl FnOnce(&[&str]) -> std::result::Result<Value, gh::ApiError>,
+        run: impl FnOnce(&[&str]) -> std::result::Result<Value, gh::ApiError>,
     ) -> Result<Option<PromoterPullRequest>> {
         let slug = self.slug();
-        let number_text = number.to_string();
-        let value = match run_pr(&[
+        let number = number.to_string();
+        match run(&[
             "pr",
             "view",
-            &number_text,
+            &number,
             "--repo",
             &slug,
             "--json",
             Self::pr_fields(),
         ]) {
-            Ok(value) => value,
-            Err(gh::ApiError::NotFound) => return Ok(None),
-            Err(error) => return Err(github_error(error)),
-        };
-        let mut pr = self.parse_pull_request(&value)?;
+            Ok(value) => self.parse_pull_request(&value).map(Some),
+            Err(gh::ApiError::NotFound) => Ok(None),
+            Err(error) => Err(github_error(error)),
+        }
+    }
 
+    fn snapshot_with(
+        &self,
+        number: PrNumber,
+        run: impl FnOnce(&[&str]) -> std::result::Result<Value, gh::ApiError>,
+    ) -> Result<Option<PrSnapshot>> {
         let query = format!("query={PR_QUERY}");
         let owner = format!("owner={}", self.owner);
         let name = format!("name={}", self.repo);
-        let number_arg = format!("number={number}");
-        let snapshot = parse_snapshot(
-            &run_snapshot(&[
-                "api",
-                "graphql",
-                "-f",
-                &query,
-                "-f",
-                &owner,
-                "-f",
-                &name,
-                "-F",
-                &number_arg,
-            ])
-            .map_err(github_error)?,
-        )
-        .map_err(github_error)?;
-        if snapshot.head_sha != pr.head_sha {
-            bail!("promoter PR GraphQL snapshot names a different head");
+        let number = format!("number={number}");
+        match run(&[
+            "api", "graphql", "-f", &query, "-f", &owner, "-f", &name, "-F", &number,
+        ]) {
+            Ok(value) => parse_snapshot(&value).map(Some).map_err(github_error),
+            Err(gh::ApiError::NotFound) => Ok(None),
+            Err(error) => Err(github_error(error)),
         }
-        pr.auto_merge_armed = snapshot.auto_merge_armed;
-        pr.in_merge_queue = snapshot.queue.in_queue;
-        Ok(Some(pr))
     }
 }
 
@@ -412,14 +469,17 @@ impl PromoterPrRead for GhPromoterPr {
         Ok((self.owner.clone(), self.repo.clone()))
     }
 
-    fn open_pull_requests(&self) -> Result<Vec<PromoterPullRequest>> {
-        self.open_pull_requests_with(gh::run_gh)
+    fn promoter_pull_request(&self) -> Result<Option<PromoterPullRequest>> {
+        self.promoter_pull_request_with(gh::run_gh)
     }
 
     fn pull_request(&self, number: PrNumber) -> Result<Option<PromoterPullRequest>> {
-        self.pull_request_with(number, gh::run_gh, gh::run_gh)
+        self.pull_request_rest_with(number, gh::run_gh)
     }
 
+    fn snapshot(&self, number: PrNumber) -> Result<Option<PrSnapshot>> {
+        self.snapshot_with(number, gh::run_gh)
+    }
     fn remote_branch_head(&self) -> Result<Option<String>> {
         let path = format!("/repos/{}/{}/git/ref/heads/{BRANCH}", self.owner, self.repo);
         match gh::run_gh(&["api", &path]) {
@@ -439,9 +499,6 @@ impl PromoterPrRead for GhPromoterPr {
         parse_required_checks(&value).map_err(github_error)
     }
 
-    // This historical workflow-run lookup is the sole consumer of the App's
-    // Actions-read permission; commit-parent correlation remains the
-    // authorization check for dequeue recovery.
     fn merge_group_shas(&self, event: &PullRequestEvent) -> Result<Vec<String>> {
         let path = format!(
             "/repos/{}/{}/actions/runs?event=merge_group&per_page={MERGE_GROUP_LIMIT}",
@@ -505,6 +562,13 @@ impl PromoterPrWrite for GhPromoterPr {
         GhArmer.arm_auto_merge(&subject).map_err(github_error)?;
         Ok(())
     }
+
+    fn close_pull_request(&self, number: PrNumber) -> Result<()> {
+        let slug = self.slug();
+        let number = number.to_string();
+        gh::run_gh_raw(&["pr", "close", &number, "--repo", &slug]).map_err(github_error)?;
+        Ok(())
+    }
 }
 
 fn parse_merge_group_candidates(value: &Value, event: &PullRequestEvent) -> Vec<String> {
@@ -544,25 +608,18 @@ fn is_promoter_occupant(pr: &PromoterPullRequest, owner: &str) -> bool {
 }
 
 fn is_promoter_identity(pr: &PromoterPullRequest, owner: &str) -> bool {
-    is_promoter_occupant(pr, owner) && pr.body.contains(MARKER)
+    is_promoter_occupant(pr, owner) && pr.author == BOT_LOGIN && pr.body.contains(MARKER)
 }
 
 fn singleton<R: PromoterPrRead>(read: &R) -> Result<Option<PromoterPullRequest>> {
     let (owner, _) = read.repository()?;
-    let occupants = read
-        .open_pull_requests()?
-        .into_iter()
-        .filter(|pr| is_promoter_occupant(pr, &owner))
-        .collect::<Vec<_>>();
-    match occupants.as_slice() {
-        [] => Ok(None),
-        [pr] if pr.body.contains(MARKER) => Ok(Some(pr.clone())),
-        [pr] => bail!(
-            "open pull request #{} occupies the ADR promoter branch but lacks the durable marker",
-            pr.number
-        ),
-        _ => bail!("multiple open pull requests occupy the ADR promoter branch"),
+    let Some(pr) = read.promoter_pull_request()? else {
+        return Ok(None);
+    };
+    if !is_promoter_identity(&pr, &owner) {
+        bail!("open pull request occupies the ADR promoter branch with a different identity");
     }
+    Ok(Some(pr))
 }
 
 fn contexts_are_green(required: &RequiredChecks, checks: &CommitChecks) -> bool {
@@ -590,64 +647,208 @@ where
     }
 }
 
+fn failed_context(required: &RequiredChecks, snapshot: &PrSnapshot) -> bool {
+    required.contexts.iter().any(|name| {
+        decide::resolve_context(&snapshot.checks, name)
+            .is_some_and(|check| check.state == CheckState::Failure)
+    })
+}
+
+fn close_verified<R: PromoterPrRead, W: PromoterPrWrite>(
+    read: &R,
+    write: &W,
+    expected: &PromoterPullRequest,
+) -> Result<()> {
+    let (owner, _) = read.repository()?;
+    let current = read
+        .pull_request(expected.number)?
+        .ok_or_else(|| anyhow!("promoter PR disappeared before close"))?;
+    if !is_promoter_identity(&current, &owner)
+        || current.number != expected.number
+        || current.head_sha != expected.head_sha
+        || current.head_ref != expected.head_ref
+        || current.base_ref != expected.base_ref
+        || read.remote_branch_head()?.is_some()
+    {
+        bail!("promoter PR changed before close");
+    }
+    let close = write.close_pull_request(expected.number);
+    let closed = read
+        .pull_request(expected.number)?
+        .ok_or_else(|| anyhow!("promoter PR disappeared after close"))?;
+    if !closed.is_open
+        && closed.number == expected.number
+        && closed.head_owner == expected.head_owner
+        && closed.author == expected.author
+        && closed.head_sha == expected.head_sha
+        && closed.head_ref == expected.head_ref
+        && closed.base_ref == expected.base_ref
+        && closed.body.contains(MARKER)
+    {
+        return Ok(());
+    }
+    match close {
+        Ok(()) => bail!("promoter PR close was not verified"),
+        Err(error) => Err(error).context("closing promoter PR was not verified"),
+    }
+}
+
+fn delete_verified<G: PromoterGit, R: PromoterPrRead>(
+    git: &G,
+    read: &R,
+    expected: &str,
+) -> Result<()> {
+    let deleted = git.delete_branch(expected);
+    match read.remote_branch_head()? {
+        None => Ok(()),
+        Some(actual) if actual == expected => {
+            deleted.and_then(|_| bail!("promoter branch remained after leased deletion"))
+        }
+        Some(_) => bail!("promoter branch changed during leased deletion"),
+    }
+}
+
+fn arm_verified<R: PromoterPrRead, W: PromoterPrWrite>(
+    read: &R,
+    write: &W,
+    number: PrNumber,
+    expected_head: &str,
+) -> Result<()> {
+    let arm = write.arm_auto_merge(number);
+    let (owner, _) = read.repository()?;
+    let pr = read
+        .pull_request(number)?
+        .ok_or_else(|| anyhow!("promoter PR disappeared after auto-merge arm"))?;
+    let snapshot = read
+        .snapshot(number)?
+        .ok_or_else(|| anyhow!("promoter PR snapshot disappeared after auto-merge arm"))?;
+    if is_promoter_identity(&pr, &owner)
+        && pr.number == number
+        && pr.head_sha == expected_head
+        && read.remote_branch_head()?.as_deref() == Some(expected_head)
+        && snapshot.state == PrState::Open
+        && snapshot.head_ref == BRANCH
+        && snapshot.head_sha == expected_head
+        && arm_is_verified(snapshot.auto_merge_armed, snapshot.queue.in_queue)
+    {
+        return Ok(());
+    }
+    match arm {
+        Ok(()) => bail!(
+            "GitHub did not verify auto-merge or queue membership on the unchanged promoter head"
+        ),
+        Err(error) => Err(error).context("auto-merge arm was not verified"),
+    }
+}
+
+fn existing_or_retire<G: PromoterGit, R: PromoterPrRead, W: PromoterPrWrite>(
+    git: &G,
+    read: &R,
+    write: &W,
+) -> Result<Option<PrNumber>> {
+    let branch = read.remote_branch_head()?;
+    let Some(pr) = singleton(read)? else {
+        if let Some(head) = branch {
+            delete_verified(git, read, &head)?;
+        }
+        return Ok(None);
+    };
+    let Some(head) = branch else {
+        close_verified(read, write, &pr)?;
+        return Ok(Some(pr.number));
+    };
+    if head != pr.head_sha {
+        bail!("open promoter PR head differs from stable branch");
+    }
+    let snapshot = read
+        .snapshot(pr.number)?
+        .ok_or_else(|| anyhow!("promoter PR disappeared during classification"))?;
+    if snapshot.state != PrState::Open || snapshot.head_ref != BRANCH || snapshot.head_sha != head {
+        bail!("promoter snapshot differs from the stable branch");
+    }
+    if snapshot.mergeable == Mergeable::Conflicting
+        && snapshot.merge_state_status == MergeStateStatus::Dirty
+    {
+        git.fetch_exact(&head)?;
+        let main = git.refreshed_main_sha()?;
+        if snapshot.base_sha == main
+            && let Some(parent) = git.sole_parent(&head)?
+            && git.is_strict_ancestor(&parent, &main)?
+            && git.merge_conflicts(&main, &head)?
+        {
+            delete_verified(git, read, &head)?;
+            close_verified(read, write, &pr)?;
+            return Ok(Some(pr.number));
+        }
+        // GitHub reports this head as conflicted, but local evidence did not
+        // authorize retirement. Preserve the immutable attempt rather than
+        // trying to arm or mutate it.
+        return Ok(Some(pr.number));
+    }
+    if snapshot.auto_merge_armed || snapshot.queue.in_queue {
+        return Ok(Some(pr.number));
+    }
+    let required = read.required_checks(BASE_BRANCH)?;
+    if !required.queue_present || required.contexts.is_empty() {
+        bail!("ADR promoter requires a merge queue with required contexts");
+    }
+    if failed_context(&required, &snapshot) {
+        return Ok(Some(pr.number));
+    }
+    arm_verified(read, write, pr.number, &head)?;
+    Ok(Some(pr.number))
+}
+
 fn generate<G: PromoterGit, R: PromoterPrRead, W: PromoterPrWrite>(
     git: &G,
     read: &R,
     write: &W,
 ) -> Result<PromoterOutcome> {
+    let retired = existing_or_retire(git, read, write)?;
+    if let Some(number) = retired
+        && singleton(read)?.is_some()
+    {
+        return Ok(PromoterOutcome::Existing(number));
+    }
     git.prepare_fresh_main()?;
     git.promote()?;
     if !git.has_staged_diff()? {
-        // Queue policy authorizes publication, not local no-op discovery. A
-        // main revision with nothing to promote succeeds even if policy reads
-        // are temporarily unavailable or incomplete.
         return Ok(PromoterOutcome::NoChanges);
     }
-
-    if let Some(existing) = singleton(read)? {
-        // A later draft must wait for this immutable PR to merge; even regeneration
-        // would risk turning a stable queue candidate into a different diff.
-        return Ok(PromoterOutcome::Existing(existing.number));
-    }
-
     let queue = read.required_checks(BASE_BRANCH)?;
     if !queue.queue_present || queue.contexts.is_empty() {
         bail!("ADR promoter requires a merge queue with required contexts");
     }
     git.format_staged_markdown()?;
     git.commit()?;
-    let armed_sha = git.head_sha()?;
-    git.push()?;
-
-    if read.remote_branch_head()?.as_deref() != Some(armed_sha.as_str()) {
-        bail!("remote promoter head does not equal the generated commit");
+    let head = git.head_sha()?;
+    let push = git.push();
+    if read.remote_branch_head()?.as_deref() != Some(head.as_str()) {
+        return match push {
+            Ok(()) => Err(anyhow!(
+                "remote promoter head does not equal the generated commit"
+            )),
+            Err(error) => Err(error).context("promoter push was not verified"),
+        };
     }
-
     let create_error = write.create_pull_request().err();
     let created = match singleton(read)? {
-        Some(pr) => pr,
+        Some(pr) if pr.head_sha == head => pr,
+        Some(_) => bail!("promoter PR head does not equal the generated commit"),
         None => {
-            if let Some(error) = create_error {
-                return Err(error).context("creating promoter pull request");
-            }
-            bail!("created promoter PR was not found");
+            return Err(
+                create_error.unwrap_or_else(|| anyhow!("created promoter PR was not found"))
+            );
         }
     };
-    if created.head_sha != armed_sha {
-        bail!("promoter PR head does not equal the generated commit");
-    }
-    write.arm_auto_merge(created.number)?;
-    let verified = read
-        .pull_request(created.number)?
-        .ok_or_else(|| anyhow!("promoter PR disappeared after auto-merge arm"))?;
-    if verified.head_sha != armed_sha
-        || !arm_is_verified(verified.auto_merge_armed, verified.in_merge_queue)
-    {
-        bail!(
-            "GitHub did not verify auto-merge or queue membership on the unchanged promoter head"
-        );
-    }
-    Ok(PromoterOutcome::Created(created.number))
+    arm_verified(read, write, created.number, &head)?;
+    Ok(match retired {
+        Some(stale) => PromoterOutcome::Replaced {
+            stale,
+            successor: created.number,
+        },
+        None => PromoterOutcome::Created(created.number),
+    })
 }
 
 fn recover_dequeue<R: PromoterPrRead, W: PromoterPrWrite>(
@@ -705,17 +906,7 @@ fn recover_dequeue<R: PromoterPrRead, W: PromoterPrWrite>(
         ));
     }
 
-    write.arm_auto_merge(event.number)?;
-    let Some(verified) = read.pull_request(event.number)? else {
-        bail!("promoter PR disappeared after dequeue recovery arm");
-    };
-    if verified.head_sha != event.head_sha
-        || !arm_is_verified(verified.auto_merge_armed, verified.in_merge_queue)
-    {
-        bail!(
-            "GitHub did not verify dequeue recovery arm or queue membership on the unchanged promoter head"
-        );
-    }
+    arm_verified(read, write, event.number, &event.head_sha)?;
     Ok(PromoterOutcome::Rearmed(event.number))
 }
 
@@ -735,17 +926,31 @@ pub fn execute() -> StepResult {
 mod tests {
     use std::cell::{Cell, RefCell};
     use std::collections::BTreeMap;
+    use std::rc::Rc;
 
     use serde_json::json;
 
     use super::*;
-    use crate::pr::snapshot::CheckEntry;
+    use crate::pr::snapshot::{CheckEntry, MergeStateStatus, Mergeable, PrSnapshot, QueueState};
 
     struct FakeGit {
         calls: RefCell<Vec<&'static str>>,
         staged_diff: bool,
         fail_on: Option<&'static str>,
         head_sha: String,
+        parent: Option<String>,
+        ancestor: bool,
+        conflicts: bool,
+        delete_updates: bool,
+        push_head: String,
+        remote_head: Option<Rc<RefCell<Option<String>>>>,
+        trace: Rc<RefCell<Vec<&'static str>>>,
+        fetched: RefCell<Vec<String>>,
+        parent_commits: RefCell<Vec<String>>,
+        ancestry: RefCell<Vec<(String, String)>>,
+        merges: RefCell<Vec<(String, String)>>,
+        deleted: RefCell<Vec<String>>,
+        push_updates: bool,
     }
 
     impl FakeGit {
@@ -755,6 +960,19 @@ mod tests {
                 staged_diff,
                 fail_on: None,
                 head_sha: "promoted-head".into(),
+                parent: Some("old-main".into()),
+                ancestor: true,
+                conflicts: true,
+                delete_updates: true,
+                push_head: "promoted-head".into(),
+                remote_head: None,
+                trace: Rc::new(RefCell::new(Vec::new())),
+                fetched: RefCell::new(Vec::new()),
+                parent_commits: RefCell::new(Vec::new()),
+                ancestry: RefCell::new(Vec::new()),
+                merges: RefCell::new(Vec::new()),
+                deleted: RefCell::new(Vec::new()),
+                push_updates: true,
             }
         }
 
@@ -765,8 +983,17 @@ mod tests {
             }
         }
 
+        fn connected(staged_diff: bool, github: &FakeGithub) -> Self {
+            Self {
+                remote_head: Some(Rc::clone(&github.remote_head)),
+                trace: Rc::clone(&github.trace),
+                ..Self::new(staged_diff)
+            }
+        }
+
         fn call(&self, operation: &'static str) -> Result<()> {
             self.calls.borrow_mut().push(operation);
+            self.trace.borrow_mut().push(operation);
             if self.fail_on == Some(operation) {
                 bail!("{operation} failed");
             }
@@ -802,21 +1029,76 @@ mod tests {
         }
 
         fn push(&self) -> Result<()> {
-            self.call("push")
+            let result = self.call("push");
+            if self.push_updates
+                && let Some(remote) = &self.remote_head
+            {
+                remote.borrow_mut().replace(self.push_head.clone());
+            }
+            result
+        }
+
+        fn fetch_exact(&self, reference: &str) -> Result<()> {
+            self.fetched.borrow_mut().push(reference.into());
+            self.call("fetch")
+        }
+
+        fn refreshed_main_sha(&self) -> Result<String> {
+            self.call("main")?;
+            Ok("main-head".into())
+        }
+
+        fn sole_parent(&self, commit: &str) -> Result<Option<String>> {
+            self.parent_commits.borrow_mut().push(commit.into());
+            self.call("parent")?;
+            Ok(self.parent.clone())
+        }
+
+        fn is_strict_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
+            self.ancestry
+                .borrow_mut()
+                .push((ancestor.into(), descendant.into()));
+            self.call("ancestor")?;
+            Ok(self.ancestor)
+        }
+
+        fn merge_conflicts(&self, main: &str, head: &str) -> Result<bool> {
+            self.merges.borrow_mut().push((main.into(), head.into()));
+            self.call("conflicts")?;
+            Ok(self.conflicts)
+        }
+
+        fn delete_branch(&self, _expected: &str) -> Result<()> {
+            self.deleted.borrow_mut().push(_expected.into());
+            let result = self.call("delete");
+            if self.delete_updates
+                && let Some(remote) = &self.remote_head
+            {
+                remote.borrow_mut().take();
+            }
+            result
         }
     }
 
     struct FakeGithub {
         owner: String,
         pulls: RefCell<Vec<PromoterPullRequest>>,
-        remote_head: Option<String>,
+        remote_head: Rc<RefCell<Option<String>>>,
         required: RequiredChecks,
         required_reads: Cell<usize>,
         merge_groups: Vec<String>,
         checks: BTreeMap<String, CommitChecks>,
         writes: RefCell<Vec<&'static str>>,
+        trace: Rc<RefCell<Vec<&'static str>>>,
         arm_to_queue: bool,
         head_after_arm: Option<String>,
+        snapshot_mergeable: Mergeable,
+        snapshot_status: MergeStateStatus,
+        snapshot_base: String,
+        snapshot_checks: Vec<CheckEntry>,
+        close_updates: bool,
+        close_fails: bool,
+        arm_fails: bool,
     }
 
     impl FakeGithub {
@@ -824,7 +1106,7 @@ mod tests {
             Self {
                 owner: "jaunder-org".into(),
                 pulls: RefCell::new(Vec::new()),
-                remote_head: Some("promoted-head".into()),
+                remote_head: Rc::new(RefCell::new(None)),
                 required: required(),
                 required_reads: Cell::new(0),
                 merge_groups: vec!["merge-group".into()],
@@ -832,15 +1114,23 @@ mod tests {
                     ("event-head".into(), green_checks("event-head")),
                     ("merge-group".into(), green_checks("merge-group")),
                 ]),
+                writes: RefCell::new(Vec::new()),
+                trace: Rc::new(RefCell::new(Vec::new())),
                 arm_to_queue: false,
                 head_after_arm: None,
-                writes: RefCell::new(Vec::new()),
+                snapshot_mergeable: Mergeable::Mergeable,
+                snapshot_status: MergeStateStatus::Clean,
+                snapshot_base: "base-head".into(),
+                snapshot_checks: green_checks("snapshot").checks,
+                close_updates: true,
+                close_fails: false,
+                arm_fails: false,
             }
         }
 
         fn dequeue_ready() -> Self {
-            let mut fake = Self::empty();
-            fake.remote_head = Some("event-head".into());
+            let fake = Self::empty();
+            fake.remote_head.borrow_mut().replace("event-head".into());
             fake.pulls.borrow_mut().push(promoter_pr("event-head"));
             fake
         }
@@ -851,8 +1141,19 @@ mod tests {
             Ok((self.owner.clone(), "jaunder".into()))
         }
 
-        fn open_pull_requests(&self) -> Result<Vec<PromoterPullRequest>> {
-            Ok(self.pulls.borrow().clone())
+        fn promoter_pull_request(&self) -> Result<Option<PromoterPullRequest>> {
+            let pulls = self
+                .pulls
+                .borrow()
+                .iter()
+                .filter(|pr| is_promoter_occupant(pr, &self.owner))
+                .cloned()
+                .collect::<Vec<_>>();
+            match pulls.as_slice() {
+                [] => Ok(None),
+                [pr] => Ok(Some(pr.clone())),
+                _ => bail!("multiple open pull requests occupy the ADR promoter branch"),
+            }
         }
 
         fn pull_request(&self, number: PrNumber) -> Result<Option<PromoterPullRequest>> {
@@ -864,8 +1165,28 @@ mod tests {
                 .cloned())
         }
 
+        fn snapshot(&self, number: PrNumber) -> Result<Option<PrSnapshot>> {
+            Ok(self.pull_request(number)?.map(|pr| PrSnapshot {
+                state: crate::pr::snapshot::PrState::Open,
+                merged_at: None,
+                merge_commit: None,
+                mergeable: self.snapshot_mergeable,
+                merge_state_status: self.snapshot_status,
+                auto_merge_armed: pr.auto_merge_armed,
+                queue: QueueState {
+                    in_queue: pr.in_merge_queue,
+                    position: None,
+                },
+                head_sha: pr.head_sha,
+                head_ref: pr.head_ref,
+                base_sha: self.snapshot_base.clone(),
+                head_committed_at: "2026-01-01T00:00:00Z".into(),
+                checks: self.snapshot_checks.clone(),
+            }))
+        }
+
         fn remote_branch_head(&self) -> Result<Option<String>> {
-            Ok(self.remote_head.clone())
+            Ok(self.remote_head.borrow().clone())
         }
 
         fn required_checks(&self, _base: &str) -> Result<RequiredChecks> {
@@ -888,12 +1209,23 @@ mod tests {
     impl PromoterPrWrite for FakeGithub {
         fn create_pull_request(&self) -> Result<()> {
             self.writes.borrow_mut().push("create");
-            self.pulls.borrow_mut().push(promoter_pr("promoted-head"));
+            self.trace.borrow_mut().push("create");
+            let number = self
+                .pulls
+                .borrow()
+                .iter()
+                .map(|pr| pr.number.0)
+                .max()
+                .map_or(742, |number| number + 1);
+            self.pulls
+                .borrow_mut()
+                .push(promoter_pr_with_number(number, "promoted-head"));
             Ok(())
         }
 
         fn arm_auto_merge(&self, number: PrNumber) -> Result<()> {
             self.writes.borrow_mut().push("arm");
+            self.trace.borrow_mut().push("arm");
             let mut pulls = self.pulls.borrow_mut();
             let pr = pulls
                 .iter_mut()
@@ -906,6 +1238,26 @@ mod tests {
             }
             if let Some(head) = &self.head_after_arm {
                 pr.head_sha.clone_from(head);
+            }
+            if self.arm_fails {
+                bail!("arm failed");
+            }
+            Ok(())
+        }
+
+        fn close_pull_request(&self, number: PrNumber) -> Result<()> {
+            self.writes.borrow_mut().push("close");
+            self.trace.borrow_mut().push("close");
+            if self.close_updates {
+                let mut pulls = self.pulls.borrow_mut();
+                let pr = pulls
+                    .iter_mut()
+                    .find(|pr| pr.number == number)
+                    .ok_or_else(|| anyhow!("missing PR"))?;
+                pr.is_open = false;
+            }
+            if self.close_fails {
+                bail!("close failed");
             }
             Ok(())
         }
@@ -940,9 +1292,14 @@ mod tests {
     }
 
     fn promoter_pr(sha: &str) -> PromoterPullRequest {
+        promoter_pr_with_number(742, sha)
+    }
+
+    fn promoter_pr_with_number(number: u64, sha: &str) -> PromoterPullRequest {
         PromoterPullRequest {
-            number: PrNumber(742),
+            number: PrNumber(number),
             head_owner: "jaunder-org".into(),
+            author: BOT_LOGIN.into(),
             head_ref: BRANCH.into(),
             head_sha: sha.into(),
             base_ref: BASE_BRANCH.into(),
@@ -951,6 +1308,14 @@ mod tests {
             auto_merge_armed: false,
             in_merge_queue: false,
         }
+    }
+
+    fn conflicted_github() -> FakeGithub {
+        let mut github = FakeGithub::dequeue_ready();
+        github.snapshot_mergeable = Mergeable::Conflicting;
+        github.snapshot_status = MergeStateStatus::Dirty;
+        github.snapshot_base = "main-head".into();
+        github
     }
 
     fn dequeue_event() -> PullRequestEvent {
@@ -1011,8 +1376,8 @@ mod tests {
             repo: "jaunder".into(),
         };
 
-        let pulls = github
-            .open_pull_requests_with(|args| {
+        let pull = github
+            .promoter_pull_request_with(|args| {
                 assert_eq!(
                     args,
                     [
@@ -1035,6 +1400,7 @@ mod tests {
                     "number": 742,
                     "state": "OPEN",
                     "headRepositoryOwner": {"login": "jaunder-org"},
+                    "author": {"login": BOT_LOGIN},
                     "headRefName": BRANCH,
                     "headRefOid": "queued-head",
                     "baseRefName": BASE_BRANCH,
@@ -1044,74 +1410,251 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(pulls[0].head_owner, "jaunder-org");
-        assert!(!pulls[0].in_merge_queue);
+        assert_eq!(pull.unwrap().head_owner, "jaunder-org");
     }
 
     #[test]
-    fn single_pr_lookup_enriches_queue_state_from_graphql() {
-        let github = GhPromoterPr {
-            owner: "jaunder-org".into(),
-            repo: "jaunder".into(),
-        };
+    fn marked_promoter_branch_from_a_non_bot_author_is_rejected() {
+        let github = FakeGithub::dequeue_ready();
+        github.pulls.borrow_mut()[0].author = "collaborator".into();
+        let error = run_with(
+            PromoterEvent::Generate,
+            &FakeGit::new(true),
+            &github,
+            &github,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("different identity"));
 
-        let pull = github
-            .pull_request_with(
-                PrNumber(742),
-                |args| {
-                    assert_eq!(args[0..2], ["pr", "view"]);
-                    assert!(!GhPromoterPr::pr_fields().contains("isInMergeQueue"));
-                    Ok(json!({
-                        "number": 742,
-                        "state": "OPEN",
-                        "headRepositoryOwner": {"login": "jaunder-org"},
-                        "headRefName": BRANCH,
-                        "headRefOid": "queued-head",
-                        "baseRefName": BASE_BRANCH,
-                        "body": MARKER,
-                        "autoMergeRequest": null
-                    }))
-                },
-                |args| {
-                    assert_eq!(args[0..2], ["api", "graphql"]);
-                    assert!(args.iter().any(|arg| arg.contains(PR_QUERY)));
-                    Ok(json!({
-                        "data": {"repository": {"pullRequest": {
-                            "state": "OPEN",
-                            "mergedAt": null,
-                            "mergeCommit": null,
-                            "mergeable": "MERGEABLE",
-                            "mergeStateStatus": "CLEAN",
-                            "isInMergeQueue": true,
-                            "mergeQueueEntry": {"position": 1},
-                            "autoMergeRequest": null,
-                            "headRefName": BRANCH,
-                            "commits": {"nodes": [{"commit": {
-                                "oid": "queued-head",
-                                "committedDate": "2026-08-25T00:00:00Z"
-                            }}]},
-                            "statusCheckRollup": {"contexts": {"nodes": []}}
-                        }}}
-                    }))
-                },
-            )
-            .unwrap()
-            .unwrap();
+        assert!(github.writes.borrow().is_empty());
+    }
 
-        assert_eq!(pull.head_sha, "queued-head");
-        assert!(pull.in_merge_queue);
-        assert!(!pull.auto_merge_armed);
+    #[test]
+    fn positive_conflict_replaces_after_exact_delete_then_close_even_with_failed_checks() {
+        let mut github = conflicted_github();
+        github.snapshot_checks[0].state = CheckState::Failure;
+        let git = FakeGit::connected(true, &github);
+
+        let outcome = run_with(PromoterEvent::Generate, &git, &github, &github).unwrap();
+
+        assert_eq!(
+            outcome,
+            PromoterOutcome::Replaced {
+                stale: PrNumber(742),
+                successor: PrNumber(743),
+            }
+        );
+        assert_eq!(
+            *github.trace.borrow(),
+            [
+                "fetch",
+                "main",
+                "parent",
+                "ancestor",
+                "conflicts",
+                "delete",
+                "close",
+                "prepare",
+                "promote",
+                "diff",
+                "format",
+                "commit",
+                "head",
+                "push",
+                "create",
+                "arm",
+            ]
+        );
+        assert_eq!(*git.fetched.borrow(), ["event-head"]);
+        assert_eq!(*git.parent_commits.borrow(), ["event-head"]);
+        assert_eq!(
+            *git.ancestry.borrow(),
+            [("old-main".into(), "main-head".into())]
+        );
+        assert_eq!(
+            *git.merges.borrow(),
+            [("main-head".into(), "event-head".into())]
+        );
+        assert_eq!(*git.deleted.borrow(), ["event-head"]);
+        assert!(!github.pulls.borrow()[0].is_open);
+        assert!(github.pulls.borrow()[1].auto_merge_armed);
+    }
+
+    #[test]
+    fn failed_checks_stay_visible_while_pending_checks_resume_arming() {
+        let mut failed = FakeGithub::dequeue_ready();
+        failed.snapshot_checks[0].state = CheckState::Failure;
+        let git = FakeGit::new(true);
+        assert_eq!(
+            run_with(PromoterEvent::Generate, &git, &failed, &failed).unwrap(),
+            PromoterOutcome::Existing(PrNumber(742))
+        );
+        assert!(git.calls.borrow().is_empty());
+        assert!(failed.writes.borrow().is_empty());
+
+        let mut pending = FakeGithub::dequeue_ready();
+        pending.snapshot_checks[0].state = CheckState::Pending;
+        let git = FakeGit::new(true);
+        assert_eq!(
+            run_with(PromoterEvent::Generate, &git, &pending, &pending).unwrap(),
+            PromoterOutcome::Existing(PrNumber(742))
+        );
+        assert!(git.calls.borrow().is_empty());
+        assert_eq!(*pending.writes.borrow(), ["arm"]);
+        assert!(pending.pulls.borrow()[0].auto_merge_armed);
+    }
+
+    #[test]
+    fn incomplete_conflict_proof_preserves_the_immutable_attempt() {
+        for (base, ancestor, conflicts) in [
+            ("other-main", true, true),
+            ("main-head", false, true),
+            ("main-head", true, false),
+        ] {
+            let mut github = conflicted_github();
+            github.snapshot_base = base.into();
+            let mut git = FakeGit::connected(true, &github);
+            git.ancestor = ancestor;
+            git.conflicts = conflicts;
+
+            assert_eq!(
+                run_with(PromoterEvent::Generate, &git, &github, &github).unwrap(),
+                PromoterOutcome::Existing(PrNumber(742))
+            );
+            assert!(!git.calls.borrow().contains(&"delete"));
+            assert!(github.writes.borrow().is_empty());
+            assert!(github.pulls.borrow()[0].is_open);
+        }
+    }
+
+    #[test]
+    fn interrupted_retirement_closes_then_regenerates() {
+        let github = conflicted_github();
+        github.remote_head.borrow_mut().take();
+        let git = FakeGit::connected(true, &github);
+
+        assert_eq!(
+            run_with(PromoterEvent::Generate, &git, &github, &github).unwrap(),
+            PromoterOutcome::Replaced {
+                stale: PrNumber(742),
+                successor: PrNumber(743),
+            }
+        );
+        assert_eq!(github.trace.borrow()[0], "close");
+        assert!(!github.pulls.borrow()[0].is_open);
+        assert!(github.pulls.borrow()[1].auto_merge_armed);
+    }
+
+    #[test]
+    fn incomplete_publication_is_lease_deleted_then_regenerated() {
+        let github = FakeGithub::empty();
+        github.remote_head.borrow_mut().replace("orphan".into());
+        let git = FakeGit::connected(true, &github);
+
+        assert_eq!(
+            run_with(PromoterEvent::Generate, &git, &github, &github).unwrap(),
+            PromoterOutcome::Created(PrNumber(742))
+        );
+        assert_eq!(github.trace.borrow()[0..2], ["delete", "prepare"]);
+        assert_eq!(
+            github.remote_head.borrow().as_deref(),
+            Some("promoted-head")
+        );
+    }
+
+    #[test]
+    fn changed_ref_and_failed_cleanup_postconditions_fail_without_successor_writes() {
+        let changed = conflicted_github();
+        changed
+            .remote_head
+            .borrow_mut()
+            .replace("different-head".into());
+        let git = FakeGit::connected(true, &changed);
+        assert!(run_with(PromoterEvent::Generate, &git, &changed, &changed).is_err());
+        assert!(git.calls.borrow().is_empty());
+        assert!(changed.writes.borrow().is_empty());
+
+        let orphan = FakeGithub::empty();
+        orphan.remote_head.borrow_mut().replace("orphan".into());
+        let mut git = FakeGit::connected(true, &orphan);
+        git.delete_updates = false;
+        assert!(run_with(PromoterEvent::Generate, &git, &orphan, &orphan).is_err());
+        assert_eq!(*git.calls.borrow(), ["delete"]);
+        assert!(orphan.writes.borrow().is_empty());
+
+        let mut unclosed = conflicted_github();
+        unclosed.remote_head.borrow_mut().take();
+        unclosed.close_updates = false;
+        let git = FakeGit::connected(true, &unclosed);
+        assert!(run_with(PromoterEvent::Generate, &git, &unclosed, &unclosed).is_err());
+        assert_eq!(*unclosed.writes.borrow(), ["close"]);
+        assert!(git.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn ambiguous_close_uses_postcondition_and_duplicate_run_converges() {
+        let mut github = conflicted_github();
+        github.remote_head.borrow_mut().take();
+        github.close_fails = true;
+        let git = FakeGit::connected(true, &github);
+
+        assert!(matches!(
+            run_with(PromoterEvent::Generate, &git, &github, &github).unwrap(),
+            PromoterOutcome::Replaced { .. }
+        ));
+        let writes = github.writes.borrow().len();
+        github.snapshot_mergeable = Mergeable::Mergeable;
+        github.snapshot_status = MergeStateStatus::Clean;
+
+        assert_eq!(
+            run_with(PromoterEvent::Generate, &git, &github, &github).unwrap(),
+            PromoterOutcome::Existing(PrNumber(743))
+        );
+        assert_eq!(github.writes.borrow().len(), writes);
+    }
+
+    #[test]
+    fn ambiguous_push_and_arm_use_exact_postconditions() {
+        let mut github = FakeGithub::empty();
+        github.arm_fails = true;
+        let mut git = FakeGit::connected(true, &github);
+        git.fail_on = Some("push");
+
+        assert_eq!(
+            run_with(PromoterEvent::Generate, &git, &github, &github).unwrap(),
+            PromoterOutcome::Created(PrNumber(742))
+        );
+        assert_eq!(*github.writes.borrow(), ["create", "arm"]);
+        assert_eq!(
+            github.remote_head.borrow().as_deref(),
+            Some("promoted-head")
+        );
+        assert!(github.pulls.borrow()[0].auto_merge_armed);
+    }
+
+    #[test]
+    fn direct_queue_snapshot_stays_existing_without_local_promotion() {
+        let github = FakeGithub::dequeue_ready();
+        github.pulls.borrow_mut()[0].in_merge_queue = true;
+        let git = FakeGit::new(true);
+        assert_eq!(
+            run_with(PromoterEvent::Generate, &git, &github, &github).unwrap(),
+            PromoterOutcome::Existing(PrNumber(742))
+        );
+        assert!(git.calls.borrow().is_empty());
+        assert!(github.writes.borrow().is_empty());
     }
 
     #[test]
     fn existing_singleton_freezes_its_head_and_skips_commit_or_remote_writes() {
         let git = FakeGit::new(true);
         let github = FakeGithub::dequeue_ready();
+        github.pulls.borrow_mut()[0].auto_merge_armed = true;
 
         let outcome = run_with(PromoterEvent::Generate, &git, &github, &github).unwrap();
 
         assert_eq!(outcome, PromoterOutcome::Existing(PrNumber(742)));
-        assert_eq!(*git.calls.borrow(), ["prepare", "promote", "diff"]);
+        assert!(git.calls.borrow().is_empty());
         assert!(github.writes.borrow().is_empty());
         assert_eq!(github.pulls.borrow()[0].head_sha, "event-head");
     }
@@ -1138,20 +1681,23 @@ mod tests {
     #[test]
     fn unmarked_occupant_fails_before_commit_or_remote_writes() {
         let git = FakeGit::new(true);
-        let mut github = FakeGithub::empty();
-        github.remote_head = Some("occupied-head".into());
+        let github = FakeGithub::empty();
+        github
+            .remote_head
+            .borrow_mut()
+            .replace("occupied-head".into());
         let mut occupant = promoter_pr("occupied-head");
         occupant.body = TITLE.into();
         github.pulls.borrow_mut().push(occupant);
-        let remote_head = github.remote_head.clone();
+        let remote_head = github.remote_head.borrow().clone();
         let pulls = github.pulls.borrow().clone();
 
         let error = run_with(PromoterEvent::Generate, &git, &github, &github).unwrap_err();
 
-        assert!(error.to_string().contains("lacks the durable marker"));
-        assert_eq!(*git.calls.borrow(), ["prepare", "promote", "diff"]);
+        assert!(error.to_string().contains("different identity"));
+        assert!(git.calls.borrow().is_empty());
         assert!(github.writes.borrow().is_empty());
-        assert_eq!(github.remote_head, remote_head);
+        assert_eq!(*github.remote_head.borrow(), remote_head);
         assert_eq!(*github.pulls.borrow(), pulls);
     }
 
@@ -1171,7 +1717,7 @@ mod tests {
             error.to_string(),
             "multiple open pull requests occupy the ADR promoter branch"
         );
-        assert_eq!(*git.calls.borrow(), ["prepare", "promote", "diff"]);
+        assert!(git.calls.borrow().is_empty());
         assert!(github.writes.borrow().is_empty());
         assert_eq!(*github.pulls.borrow(), pulls);
     }
@@ -1239,9 +1785,9 @@ mod tests {
 
     #[test]
     fn remote_head_must_equal_generated_commit_before_pr_creation_or_arm() {
-        let git = FakeGit::new(true);
-        let mut github = FakeGithub::empty();
-        github.remote_head = Some("different".into());
+        let github = FakeGithub::empty();
+        let mut git = FakeGit::connected(true, &github);
+        git.push_head = "different".into();
 
         assert!(run_with(PromoterEvent::Generate, &git, &github, &github).is_err());
         assert_eq!(
@@ -1255,8 +1801,8 @@ mod tests {
 
     #[test]
     fn new_promotion_arms_and_verifies_auto_merge_on_the_exact_head() {
-        let git = FakeGit::new(true);
         let github = FakeGithub::empty();
+        let git = FakeGit::connected(true, &github);
 
         let outcome = run_with(PromoterEvent::Generate, &git, &github, &github).unwrap();
 
@@ -1269,9 +1815,9 @@ mod tests {
 
     #[test]
     fn new_promotion_accepts_direct_queue_membership_on_the_exact_head() {
-        let git = FakeGit::new(true);
         let mut github = FakeGithub::empty();
         github.arm_to_queue = true;
+        let git = FakeGit::connected(true, &github);
 
         let outcome = run_with(PromoterEvent::Generate, &git, &github, &github).unwrap();
 
@@ -1284,10 +1830,10 @@ mod tests {
 
     #[test]
     fn direct_queue_membership_on_a_replaced_head_does_not_verify_creation() {
-        let git = FakeGit::new(true);
         let mut github = FakeGithub::empty();
         github.arm_to_queue = true;
         github.head_after_arm = Some("replacement-head".into());
+        let git = FakeGit::connected(true, &github);
 
         assert!(run_with(PromoterEvent::Generate, &git, &github, &github).is_err());
     }

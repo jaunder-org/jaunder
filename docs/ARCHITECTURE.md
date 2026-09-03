@@ -3265,6 +3265,35 @@ this numberless workflow; the tracked
 superseding those two requirements while preserving path-only identity and late
 allocation.
 
+### Committed direction
+
+ADR-0152's compact recovery model treats a promoter head and generated diff as
+immutable while allowing the serialized Generate controller to clean up
+incomplete controller-owned state and regenerate from fresh `main`. Generate
+first reads the open exact promoter PR and stable ref. An open exact PR with an
+absent ref is interrupted retirement: it closes and verifies that exact PR, then
+regenerates. An open PR with a different ref fails closed.
+
+With an open exact PR and exact stable ref, positive conflict evidence
+lease-deletes the exact ref, verifies absence, closes and verifies that exact
+PR, then regenerates. Evidence requires GitHub `CONFLICTING` / `DIRTY`, the
+generated head's sole parent strictly behind current `main`, and an exact-object
+local merge-tree conflict. Armed or queued promoters remain `Existing`; unarmed
+failed required checks remain visible; unarmed pending or green checks are armed
+and verified at the exact head. With no open promoter PR, a stable ref is
+incomplete publication and is lease-deleted at its exact SHA before
+regeneration; absent PR and ref generates normally. A `dequeued` event remains
+exact-head auto-merge re-arm recovery only.
+
+The controller uses an exact-SHA lease only to delete `automation/adr-promoter`;
+it never force-updates the branch. It reads exact postconditions after cleanup
+and publication steps, and creates candidates from freshly fetched `main` using
+a non-force push, exact create-or-read, and exact arm verification. The
+controller-owned stable-branch trust boundary assumes repository administrators
+do not mutate it during a run. Failure visibility is the PR, ref, check, and
+workflow state. Serialized Generate runs converge when a later run finds the
+exact armed or queued promoter.
+
 After the feature reaches `main`, branch generation derives from fresh `main`,
 runs the deterministic ADR promotion mutation, and opens a stable promoter PR.
 Main-push and manual generation events share one coalescing concurrency group;
