@@ -3267,31 +3267,32 @@ allocation.
 
 ### Committed direction
 
-The proposed
-[conflicted-promoter replacement decision](adr/drafts/replace-conflicted-promoter-attempts.md)
-keeps each promoter head and generated diff immutable while defining it as one
-replaceable attempt. Only serialized Generate events (`main` push and manual
-dispatch) may replace a positively conflicted attempt; dequeue remains
-exact-head re-arm recovery. Replacement requires both GitHub's `CONFLICTING` /
-`DIRTY` result and an exact-object local merge-tree conflict after proving the
-generated sole parent is a strict ancestor of current `main`. Pending, delayed,
-unknown, blocked, or failed checks do not authorize it.
+ADR-0152's compact recovery model treats a promoter head and generated diff as
+immutable while allowing the serialized Generate controller to clean up
+incomplete controller-owned state and regenerate from fresh `main`. Generate
+first reads the open exact promoter PR and stable ref. An open exact PR with an
+absent ref is interrupted retirement: it closes and verifies that exact PR, then
+regenerates. An open PR with a different ref fails closed.
 
-The controller first records and revalidates an App-authenticated immutable
-retirement intent. It then performs exact leased deletion of the
-controller-owned stable branch at the stale head, verifies absence, and only
-then closes the exact PR; it recreates the branch only after the close through
-the ordinary non-force push. The branch trust boundary assumes no privileged
-external mutation during a controller run. Version-selected generated provenance
-and deterministic reconstruction of its tree make interrupted replacement
-recoverable without trusting self-asserted commit metadata.
+With an open exact PR and exact stable ref, positive conflict evidence
+lease-deletes the exact ref, verifies absence, closes and verifies that exact
+PR, then regenerates. Evidence requires GitHub `CONFLICTING` / `DIRTY`, the
+generated head's sole parent strictly behind current `main`, and an exact-object
+local merge-tree conflict. Armed or queued promoters remain `Existing`; unarmed
+failed required checks remain visible; unarmed pending or green checks are armed
+and verified at the exact head. With no open promoter PR, a stable ref is
+incomplete publication and is lease-deleted at its exact SHA before
+regeneration; absent PR and ref generates normally. A `dequeued` event remains
+exact-head auto-merge re-arm recovery only.
 
-Generation always starts from fresh `main`. A generated PR that becomes stale
-before its current-base check and auto-merge arm is an incomplete publication
-artifact, not an attempt: the controller records a publication-abort intent,
-lease-deletes and closes it, then regenerates. Later Generate runs resume only
-the exact durable intent and verified postcondition; malformed, foreign, or
-ambiguous state fails closed.
+The controller uses an exact-SHA lease only to delete `automation/adr-promoter`;
+it never force-updates the branch. It reads exact postconditions after cleanup
+and publication steps, and creates candidates from freshly fetched `main` using
+a non-force push, exact create-or-read, and exact arm verification. The
+controller-owned stable-branch trust boundary assumes repository administrators
+do not mutate it during a run. Failure visibility is the PR, ref, check, and
+workflow state. Serialized Generate runs converge when a later run finds the
+exact armed or queued promoter.
 
 After the feature reaches `main`, branch generation derives from fresh `main`,
 runs the deterministic ADR promotion mutation, and opens a stable promoter PR.

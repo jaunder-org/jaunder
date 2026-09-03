@@ -56,6 +56,5 @@ jobs:
 
       - name: Run ADR promoter
         env:
-          ADR_PROMOTER_APP_CLIENT_ID: ${{ vars.ADR_PROMOTER_CLIENT_ID }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: nix develop .#ci --accept-flake-config -c cargo xtask adr promoter

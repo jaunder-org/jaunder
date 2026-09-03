@@ -215,9 +215,10 @@ create, check, or merge is failed-automation lag and requires diagnosis; it is
 not a reason to promote from the feature branch.
 
 When promoter automation fails, diagnose the visible PR, ref, check, or workflow
-state and rerun the authorized controller. Never manually close, delete, rebase,
-or promote a promoter attempt: only the controller may perform its guarded
-replacement or incomplete-publication abort.
+state and rerun the authorized controller. The controller cleans up incomplete
+controller-owned state only with an exact-SHA lease and regenerates it from
+fresh `main`; failed required checks remain visible. Never manually close,
+delete, rebase, force-update, promote, or otherwise alter a promoter attempt.
 
 ADRs are `docs/adr/NNNN-slug.md` with a canonical `# ADR-NNNN: <title>` heading
 and a single-token `- Status: <token>` line. A **numbered** ADR carries one of

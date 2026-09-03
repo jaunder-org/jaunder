@@ -61,7 +61,6 @@ pub fn green() -> Vec<CheckEntry> {
 pub fn open(checks: Vec<CheckEntry>) -> PrSnapshot {
     PrSnapshot {
         state: PrState::Open,
-        base_sha: "base".into(),
         merged_at: None,
         merge_commit: None,
         mergeable: Mergeable::Mergeable,
@@ -73,6 +72,7 @@ pub fn open(checks: Vec<CheckEntry>) -> PrSnapshot {
         },
         head_sha: "abc".into(),
         head_ref: "feature".into(),
+        base_sha: "base".into(),
         head_committed_at: "2026-07-30T13:00:00Z".into(),
         checks,
     }

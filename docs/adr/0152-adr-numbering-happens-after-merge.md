@@ -75,10 +75,17 @@ the promoter has operated in production.
 ## Decision history
 
 On 2026-09-02, [#1214](https://github.com/jaunder-org/jaunder/issues/1214)
-recorded a guarded replacement for a promoter attempt that was positively proved
-conflicted after `main` advanced; the original immutable-head decision remained
-unchanged. See the proposed
-[replacement decision](drafts/replace-conflicted-promoter-attempts.md).
+extended this workflow with Generate-only cleanup and regeneration of incomplete
+controller-owned state. An immutable attempt is replaced only when GitHub and an
+exact local merge prove it conflicts with current `main`: the controller
+lease-deletes the observed stable-ref SHA, verifies absence, closes the same PR,
+and regenerates from freshly fetched `main`. An exact promoter PR without its
+ref and a promoter ref without an open PR are resumable interrupted states; a
+changed ref fails closed. Pending or failed checks remain visible on the
+existing attempt, and dequeue recovery remains exact-head re-arm only. The PR,
+stable ref, and workflow result are the operator-visible failure record, so
+manual close, deletion, rebase, or local promotion is not part of recovery. The
+original immutable-head decision remains unchanged.
 
 ## Consequences
 
