@@ -51,6 +51,7 @@ mod steps {
     pub mod ident_gate;
     pub mod lint_suppression_check;
     pub mod nix;
+    mod process;
     pub mod proffered_secret_check;
     pub mod raw_html_door_check;
     pub mod rendered_html_compiler_boundary;

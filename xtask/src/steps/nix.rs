@@ -1,11 +1,20 @@
+use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::pin::Pin;
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::task::Poll;
 
 use anyhow::{Context, Result, bail};
+use processkit::{Outcome, StdioMode};
+use tokio::io::AsyncWrite;
 
+use super::process::Process;
 use crate::result::{CommandResult, StepResult};
 
 /// The flake checks are Linux-only (`optionalAttrs isLinux` in flake.nix);
@@ -646,38 +655,84 @@ fn report_diagnostics_copy(outcome: DiagnosticsCopy, stderr: &mut impl Write) ->
     outcome.copied
 }
 
-/// Fans every chunk to a diagnostic sink and the primary stderr sink while
-/// continuing to drain after either fails. The owner inspects the recorded
-/// failures after EOF: diagnostic failure warns; primary failure fails the step.
-struct MultiWriter<A: Write, B: Write> {
-    diagnostic: A,
-    primary: B,
-    diagnostic_failed: bool,
-    primary_failed: bool,
-}
+const DIAGNOSTIC_FAILED: u8 = 1;
+const PRIMARY_FAILED: u8 = 2;
 
-impl<A: Write, B: Write> MultiWriter<A, B> {
-    fn new(diagnostic: A, primary: B) -> Self {
-        Self {
-            diagnostic,
-            primary,
-            diagnostic_failed: false,
-            primary_failed: false,
+/// Shared result of the raw stderr tee. The sink is moved into processkit, so
+/// the synchronous owner keeps this small atomic handle for post-wait policy.
+#[derive(Clone, Default)]
+struct BuildCaptureState(Arc<AtomicU8>);
+
+impl BuildCaptureState {
+    fn record(&self, failure: u8) {
+        self.0.fetch_or(failure, Ordering::Relaxed);
+    }
+
+    fn outcome(&self) -> BuildCaptureOutcome {
+        let failures = self.0.load(Ordering::Relaxed);
+        BuildCaptureOutcome {
+            diagnostic_failed: failures & DIAGNOSTIC_FAILED != 0,
+            primary_failed: failures & PRIMARY_FAILED != 0,
         }
     }
 }
 
-impl<A: Write, B: Write> Write for MultiWriter<A, B> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.diagnostic_failed |= self.diagnostic.write_all(buf).is_err();
-        self.primary_failed |= self.primary.write_all(buf).is_err();
-        Ok(buf.len())
+/// Fans every processkit-provided byte chunk to the diagnostic sink and then
+/// the primary stderr sink. Sink failures are recorded rather than returned so
+/// processkit continues draining the child pipe and driving the other sink.
+struct BuildStderrTee<A, B> {
+    diagnostic: A,
+    primary: B,
+    state: BuildCaptureState,
+}
+
+impl<A, B> BuildStderrTee<A, B> {
+    fn new(diagnostic: A, primary: B) -> (Self, BuildCaptureState) {
+        let state = BuildCaptureState::default();
+        (
+            Self {
+                diagnostic,
+                primary,
+                state: state.clone(),
+            },
+            state,
+        )
+    }
+}
+
+impl<A: Write + Unpin, B: Write + Unpin> AsyncWrite for BuildStderrTee<A, B> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        if self.diagnostic.write_all(buf).is_err() {
+            self.state.record(DIAGNOSTIC_FAILED);
+        }
+        if self.primary.write_all(buf).is_err() {
+            self.state.record(PRIMARY_FAILED);
+        }
+        Poll::Ready(Ok(buf.len()))
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        self.diagnostic_failed |= self.diagnostic.flush().is_err();
-        self.primary_failed |= self.primary.flush().is_err();
-        Ok(())
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        if self.diagnostic.flush().is_err() {
+            self.state.record(DIAGNOSTIC_FAILED);
+        }
+        if self.primary.flush().is_err() {
+            self.state.record(PRIMARY_FAILED);
+        }
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        self.poll_flush(cx)
     }
 }
 
@@ -685,20 +740,6 @@ impl<A: Write, B: Write> Write for MultiWriter<A, B> {
 struct BuildCaptureOutcome {
     diagnostic_failed: bool,
     primary_failed: bool,
-}
-
-fn drain_build_stderr(
-    reader: &mut impl io::Read,
-    diagnostic: &mut impl Write,
-    primary: &mut impl Write,
-) -> BuildCaptureOutcome {
-    let mut sink = MultiWriter::new(diagnostic, primary);
-    let read_failed = io::copy(reader, &mut sink).is_err();
-    let _ = sink.flush();
-    BuildCaptureOutcome {
-        diagnostic_failed: sink.diagnostic_failed,
-        primary_failed: read_failed || sink.primary_failed,
-    }
 }
 
 fn report_build_diagnostic_failure(failed: bool, stderr: &mut impl Write) {
@@ -777,7 +818,7 @@ fn prepare_build_dirs_with(
 /// when the build log was captured completely.
 fn failure_detail(
     installable: &str,
-    status: &std::process::ExitStatus,
+    status: &(impl Display + ?Sized),
     excerpt_path: Option<&str>,
     log_path: Option<&str>,
 ) -> String {
@@ -795,7 +836,7 @@ fn failure_detail(
 struct FailedBuildDiagnostics<'a> {
     step_name: &'a str,
     installable: &'a str,
-    status: &'a std::process::ExitStatus,
+    status: &'a dyn Display,
     log_path: &'a str,
     capture_failed: bool,
 }
@@ -835,6 +876,63 @@ fn failed_build_after_diagnostics_with(
         reliable_log_path,
     ))
 }
+struct BuildCompletion<'a> {
+    step_name: &'a str,
+    installable: &'a str,
+    log_path: &'a str,
+    diagnostic_failed: bool,
+    capture: BuildCaptureOutcome,
+    outcome: anyhow::Result<Outcome>,
+}
+
+fn finish_build_with(
+    build: BuildCompletion<'_>,
+    write_excerpt: impl FnOnce() -> io::Result<String>,
+    rescue: impl FnOnce() -> bool,
+    stderr: &mut impl Write,
+) -> StepResult {
+    let BuildCompletion {
+        step_name,
+        installable,
+        log_path,
+        mut diagnostic_failed,
+        capture,
+        outcome,
+    } = build;
+    diagnostic_failed |= capture.diagnostic_failed;
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            report_build_diagnostic_failure(diagnostic_failed, stderr);
+            return StepResult::fail(step_name).detail(error.to_string());
+        }
+    };
+    if capture.primary_failed {
+        report_build_diagnostic_failure(diagnostic_failed, stderr);
+        return StepResult::fail(step_name).detail("failed to stream nix build stderr");
+    }
+    if outcome.code() == Some(0) {
+        report_build_diagnostic_failure(diagnostic_failed, stderr);
+        return StepResult::ok(step_name);
+    }
+    let Some(status) = build_status(outcome) else {
+        report_build_diagnostic_failure(diagnostic_failed, stderr);
+        return StepResult::fail(step_name)
+            .detail(format!("nix build {installable} ended with {outcome:?}"));
+    };
+    failed_build_after_diagnostics_with(
+        FailedBuildDiagnostics {
+            step_name,
+            installable,
+            status: &status,
+            log_path,
+            capture_failed: diagnostic_failed,
+        },
+        write_excerpt,
+        rescue,
+        stderr,
+    )
+}
 
 /// `nix build -L --keep-failed --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.<system>.<check>`,
 /// fanning the `-L` build log to both the live terminal and
@@ -860,76 +958,80 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
     let installable = format!(".#checks.{SYSTEM}.{check}");
     let log_dir = format!(".xtask/diagnostics/{check}");
     let log_path = format!("{log_dir}/build.log");
-
-    let mut child = match Command::new("nix")
-        .args([
-            "build",
-            "-L",
-            "--keep-failed",
-            "--log-lines",
-            NIX_ERROR_TAIL_LINES,
-            "--accept-flake-config",
-            "--out-link",
-            &out_link,
-            &installable,
-        ])
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
+    let diagnostic: Box<dyn Write + Send> = match File::create(&log_path) {
+        Ok(file) => Box::new(file),
+        Err(_) => {
+            diagnostic_failed = true;
+            Box::new(io::sink())
+        }
+    };
+    let (stderr_tee, capture_state) = BuildStderrTee::new(diagnostic, io::stderr());
+    let process = match Process::start(
+        processkit::Command::new("nix")
+            .args([
+                "build",
+                "-L",
+                "--keep-failed",
+                "--log-lines",
+                NIX_ERROR_TAIL_LINES,
+                "--accept-flake-config",
+                "--out-link",
+                &out_link,
+                &installable,
+            ])
+            .inherit_stdin()
+            .stdout(StdioMode::Inherit)
+            .stderr(StdioMode::Piped)
+            .stderr_raw_tee(stderr_tee),
+    ) {
+        Ok(process) => process,
         Err(error) => {
+            diagnostic_failed |= capture_state.outcome().diagnostic_failed;
             report_build_diagnostic_failure(diagnostic_failed, &mut io::stderr());
             return StepResult::fail(step_name)
                 .detail(error.to_string())
                 .with_duration(start.elapsed());
         }
     };
+    let outcome = process.wait();
+    finish_build_with(
+        BuildCompletion {
+            step_name,
+            installable: &installable,
+            log_path: &log_path,
+            diagnostic_failed,
+            capture: capture_state.outcome(),
+            outcome,
+        },
+        || write_failure_excerpt(&log_path),
+        || rescue_diagnostics(check),
+        &mut io::stderr(),
+    )
+    .with_duration(start.elapsed())
+}
 
-    let mut primary_output_failed = false;
-    if let Some(mut stderr_pipe) = child.stderr.take() {
-        let outcome = match File::create(&log_path) {
-            Ok(mut file) => drain_build_stderr(&mut stderr_pipe, &mut file, &mut io::stderr()),
-            Err(_) => {
-                diagnostic_failed = true;
-                drain_build_stderr(&mut stderr_pipe, &mut io::sink(), &mut io::stderr())
-            }
-        };
-        diagnostic_failed |= outcome.diagnostic_failed;
-        primary_output_failed |= outcome.primary_failed;
-    }
-    let status = match child.wait() {
-        Ok(status) => status,
-        Err(error) => {
-            report_build_diagnostic_failure(diagnostic_failed, &mut io::stderr());
-            return StepResult::fail(step_name)
-                .detail(error.to_string())
-                .with_duration(start.elapsed());
+enum BuildStatus {
+    Status(ExitStatus),
+    UnknownSignal,
+}
+
+impl Display for BuildStatus {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Status(status) => status.fmt(formatter),
+            Self::UnknownSignal => formatter.write_str("signal: unknown"),
         }
-    };
-    if primary_output_failed {
-        report_build_diagnostic_failure(diagnostic_failed, &mut io::stderr());
-        return StepResult::fail(step_name)
-            .detail("failed to stream nix build stderr")
-            .with_duration(start.elapsed());
     }
-    if status.success() {
-        report_build_diagnostic_failure(diagnostic_failed, &mut io::stderr());
-        StepResult::ok(step_name).with_duration(start.elapsed())
-    } else {
-        failed_build_after_diagnostics_with(
-            FailedBuildDiagnostics {
-                step_name,
-                installable: &installable,
-                status: &status,
-                log_path: &log_path,
-                capture_failed: diagnostic_failed,
-            },
-            || write_failure_excerpt(&log_path),
-            || rescue_diagnostics(check),
-            &mut io::stderr(),
-        )
-        .with_duration(start.elapsed())
+}
+
+fn build_status(outcome: Outcome) -> Option<BuildStatus> {
+    if let Some(code) = outcome.code() {
+        return Some(BuildStatus::Status(ExitStatus::from_raw(code << 8)));
     }
+    if let Some(signal) = outcome.signal() {
+        return Some(BuildStatus::Status(ExitStatus::from_raw(signal)));
+    }
+    matches!(outcome, Outcome::Signalled(None)).then_some(BuildStatus::UnknownSignal)
 }
 /// Run `nix eval --raw --accept-flake-config <installable>`, optionally in a
 /// supplied flake directory.
@@ -1022,17 +1124,24 @@ fn rescue_diagnostics(check: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
     use std::io::{self, Write};
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
 
+    use processkit::{Command, Outcome, StdioMode};
+    use tokio::io::AsyncWriteExt;
+    use tokio::runtime::Builder;
+
     use super::{
-        CommandResult, E2E_COMBOS, E2eOutcome, FailedBuildDiagnostics, StepResult,
-        build_e2e_combos, check_supporting_test_check_names, doctest_sentinel_detail,
-        drain_build_stderr, failed_build_after_diagnostics_with, failed_status_step,
+        BuildCaptureOutcome, BuildCompletion, BuildStderrTee, CommandResult, E2E_COMBOS,
+        E2eOutcome, FailedBuildDiagnostics, Process, StepResult, build_e2e_combos,
+        check_supporting_test_check_names, doctest_sentinel_detail,
+        failed_build_after_diagnostics_with, failed_status_step, finish_build_with,
         finish_e2e_combo, lift_elisp_coverage_artifacts, prepare_build_dirs_with,
         report_build_diagnostic_failure, sentinel_detail, test_check_names, validate_check_names,
     };
@@ -1322,7 +1431,7 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         assert!(!e.contains("drv> error"));
     }
 
-    fn failing_sink() -> impl Write {
+    fn failing_sink() -> impl Write + Unpin {
         struct FailingSink;
         impl Write for FailingSink {
             fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
@@ -1336,31 +1445,220 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         FailingSink
     }
 
-    #[test]
-    fn build_capture_fans_full_input_out_to_both_sinks() {
-        let input = vec![b'x'; 200_000];
-        let mut diagnostic = Vec::new();
-        let mut primary = Vec::new();
-        let mut reader: &[u8] = &input;
-        let outcome = drain_build_stderr(&mut reader, &mut diagnostic, &mut primary);
+    #[derive(Clone)]
+    struct RecordingSink(Rc<RefCell<Vec<u8>>>);
 
-        assert!(!outcome.diagnostic_failed);
-        assert!(!outcome.primary_failed);
-        assert_eq!(diagnostic, input);
-        assert_eq!(primary, input);
+    impl Write for RecordingSink {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn recording_sink() -> (RecordingSink, Rc<RefCell<Vec<u8>>>) {
+        let bytes = Rc::new(RefCell::new(Vec::new()));
+        (RecordingSink(Rc::clone(&bytes)), bytes)
+    }
+
+    fn drive_tee<A: Write + Unpin, B: Write + Unpin>(mut tee: BuildStderrTee<A, B>, input: &[u8]) {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                tee.write_all(input).await.unwrap();
+                tee.shutdown().await.unwrap();
+            });
+    }
+
+    fn run_stderr_fixture(script: &str) -> (Outcome, Vec<u8>, Vec<u8>, BuildCaptureOutcome) {
+        let directory = tempfile::tempdir().unwrap();
+        let diagnostic_path = directory.path().join("diagnostic");
+        let primary_path = directory.path().join("primary");
+        let diagnostic = std::fs::File::create(&diagnostic_path).unwrap();
+        let primary = std::fs::File::create(&primary_path).unwrap();
+        let (tee, state) = BuildStderrTee::new(diagnostic, primary);
+        let outcome = Process::start(
+            Command::new("sh")
+                .args(["-c", script])
+                .inherit_stdin()
+                .stdout(StdioMode::Inherit)
+                .stderr(StdioMode::Piped)
+                .stderr_raw_tee(tee),
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+        (
+            outcome,
+            std::fs::read(diagnostic_path).unwrap(),
+            std::fs::read(primary_path).unwrap(),
+            state.outcome(),
+        )
+    }
+
+    #[test]
+    fn processkit_tee_drains_complete_stderr_before_successful_wait_returns() {
+        let (outcome, diagnostic, primary, capture) =
+            run_stderr_fixture("printf 'first\\nlast' >&2");
+
+        assert_eq!(outcome, Outcome::Exited(0));
+        assert_eq!(diagnostic, b"first\nlast");
+        assert_eq!(primary, diagnostic);
+        assert!(!capture.diagnostic_failed);
+        assert!(!capture.primary_failed);
+    }
+
+    #[test]
+    fn processkit_tee_drains_complete_stderr_before_failed_wait_returns() {
+        let (outcome, diagnostic, primary, capture) =
+            run_stderr_fixture("printf 'failed-without-newline' >&2; exit 7");
+
+        assert_eq!(outcome, Outcome::Exited(7));
+        assert_eq!(diagnostic, b"failed-without-newline");
+        assert_eq!(primary, diagnostic);
+        assert!(!capture.diagnostic_failed);
+        assert!(!capture.primary_failed);
+    }
+
+    #[test]
+    fn processkit_reports_a_signalled_build_fixture() {
+        let (outcome, diagnostic, primary, capture) =
+            run_stderr_fixture("printf 'before-signal' >&2; kill -TERM $$");
+
+        assert_eq!(outcome, Outcome::Signalled(Some(15)));
+        assert_eq!(diagnostic, b"before-signal");
+        assert_eq!(primary, diagnostic);
+        assert!(!capture.diagnostic_failed);
+        assert!(!capture.primary_failed);
+    }
+
+    const INHERITED_STDIO_PROBE: &str = "JAUNDER_XTASK_INHERITED_STDIO_PROBE";
+
+    #[test]
+    fn inherited_stdio_child_fixture() {
+        if std::env::var_os(INHERITED_STDIO_PROBE).is_none() {
+            return;
+        }
+        let (tee, _) = BuildStderrTee::new(io::sink(), io::sink());
+        let outcome = Process::start(
+            Command::new("sh")
+                .args([
+                    "-c",
+                    "IFS= read -r value; printf 'inherited-stdout:%s' \"$value\"",
+                ])
+                .inherit_stdin()
+                .stdout(StdioMode::Inherit)
+                .stderr(StdioMode::Piped)
+                .stderr_raw_tee(tee),
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+
+        assert_eq!(outcome, Outcome::Exited(0));
+    }
+
+    #[test]
+    fn processkit_build_configuration_inherits_stdin_and_stdout() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "steps::nix::tests::inherited_stdio_child_fixture",
+                "--nocapture",
+            ])
+            .env(INHERITED_STDIO_PROBE, "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"probe-value\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("inherited-stdout:probe-value"),
+            "nested test stdout: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+
+    #[test]
+    fn build_capture_fans_arbitrary_bytes_to_both_sinks() {
+        let input = [vec![b'x'; 200_000], vec![0, 0xff, b'z']].concat();
+        let (diagnostic, diagnostic_bytes) = recording_sink();
+        let (primary, primary_bytes) = recording_sink();
+        let (tee, state) = BuildStderrTee::new(diagnostic, primary);
+
+        drive_tee(tee, &input);
+
+        assert!(!state.outcome().diagnostic_failed);
+        assert!(!state.outcome().primary_failed);
+        assert_eq!(*diagnostic_bytes.borrow(), input);
+        assert_eq!(*primary_bytes.borrow(), input);
+    }
+
+    #[test]
+    fn build_capture_writes_diagnostic_before_primary() {
+        struct OrderedSink {
+            name: &'static str,
+            writes: Rc<RefCell<Vec<&'static str>>>,
+        }
+        impl Write for OrderedSink {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.writes.borrow_mut().push(self.name);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let (tee, _) = BuildStderrTee::new(
+            OrderedSink {
+                name: "diagnostic",
+                writes: Rc::clone(&writes),
+            },
+            OrderedSink {
+                name: "primary",
+                writes: Rc::clone(&writes),
+            },
+        );
+
+        drive_tee(tee, b"one chunk");
+
+        assert_eq!(*writes.borrow(), ["diagnostic", "primary"]);
     }
 
     #[test]
     fn build_capture_diagnostic_failure_warns_once_without_changing_primary_output() {
         let input = vec![b'y'; 200_000];
-        let mut primary = Vec::new();
-        let mut reader: &[u8] = &input;
-        let outcome = drain_build_stderr(&mut reader, &mut failing_sink(), &mut primary);
+        let (primary, primary_bytes) = recording_sink();
+        let (tee, state) = BuildStderrTee::new(failing_sink(), primary);
+
+        drive_tee(tee, &input);
+
+        let outcome = state.outcome();
         let mut stderr = Vec::new();
         report_build_diagnostic_failure(outcome.diagnostic_failed, &mut stderr);
-
         assert!(!outcome.primary_failed);
-        assert_eq!(primary, input);
+        assert_eq!(*primary_bytes.borrow(), input);
         let warning = String::from_utf8(stderr).unwrap();
         assert_eq!(warning.matches("xtask.nix.build_diagnostics").count(), 1);
         assert_eq!(warning.lines().count(), 1);
@@ -1368,37 +1666,169 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
     }
 
     #[test]
-    fn build_capture_primary_failure_is_not_silenced() {
+    fn build_capture_primary_failure_does_not_stop_diagnostic_output() {
         let input = b"complete build output";
-        let mut diagnostic = Vec::new();
-        let mut reader: &[u8] = input;
-        let outcome = drain_build_stderr(&mut reader, &mut diagnostic, &mut failing_sink());
+        let (diagnostic, diagnostic_bytes) = recording_sink();
+        let (tee, state) = BuildStderrTee::new(diagnostic, failing_sink());
 
-        assert!(!outcome.diagnostic_failed);
-        assert!(outcome.primary_failed);
-        assert_eq!(diagnostic, input);
+        drive_tee(tee, input);
+
+        let BuildCaptureOutcome {
+            diagnostic_failed,
+            primary_failed,
+        } = state.outcome();
+        assert!(!diagnostic_failed);
+        assert!(primary_failed);
+        assert_eq!(*diagnostic_bytes.borrow(), input);
     }
-    #[test]
-    fn build_capture_read_failure_fails_the_primary_output_contract() {
-        struct FailingReader(bool);
-        impl io::Read for FailingReader {
-            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-                if self.0 {
-                    Err(io::Error::other("sensitive read failure"))
-                } else {
-                    self.0 = true;
-                    buf[..4].copy_from_slice(b"part");
-                    Ok(4)
-                }
-            }
-        }
 
-        let mut diagnostic = Vec::new();
-        let mut primary = Vec::new();
-        let outcome = drain_build_stderr(&mut FailingReader(false), &mut diagnostic, &mut primary);
-        assert!(outcome.primary_failed);
-        assert_eq!(diagnostic, b"part");
-        assert_eq!(primary, b"part");
+    #[test]
+    fn build_completion_wait_error_wins_over_primary_failure() {
+        let excerpt_called = Cell::new(false);
+        let rescue_called = Cell::new(false);
+        let mut stderr = Vec::new();
+        let result = finish_build_with(
+            BuildCompletion {
+                step_name: "nix-check",
+                installable: ".#checks.x86_64-linux.check",
+                log_path: "build.log",
+                diagnostic_failed: false,
+                capture: BuildCaptureOutcome {
+                    diagnostic_failed: false,
+                    primary_failed: true,
+                },
+                outcome: Err(anyhow::anyhow!("wait failed")),
+            },
+            || {
+                excerpt_called.set(true);
+                Ok("excerpt.log".to_owned())
+            },
+            || {
+                rescue_called.set(true);
+                false
+            },
+            &mut stderr,
+        );
+
+        assert_eq!(result.detail.as_deref(), Some("wait failed"));
+        assert!(!excerpt_called.get());
+        assert!(!rescue_called.get());
+    }
+
+    #[test]
+    fn build_completion_primary_failure_wins_over_child_failure() {
+        let excerpt_called = Cell::new(false);
+        let rescue_called = Cell::new(false);
+        let mut stderr = Vec::new();
+        let result = finish_build_with(
+            BuildCompletion {
+                step_name: "nix-check",
+                installable: ".#checks.x86_64-linux.check",
+                log_path: "build.log",
+                diagnostic_failed: false,
+                capture: BuildCaptureOutcome {
+                    diagnostic_failed: false,
+                    primary_failed: true,
+                },
+                outcome: Ok(Outcome::Exited(7)),
+            },
+            || {
+                excerpt_called.set(true);
+                Ok("excerpt.log".to_owned())
+            },
+            || {
+                rescue_called.set(true);
+                false
+            },
+            &mut stderr,
+        );
+
+        assert_eq!(
+            result.detail.as_deref(),
+            Some("failed to stream nix build stderr")
+        );
+        assert!(!excerpt_called.get());
+        assert!(!rescue_called.get());
+    }
+
+    #[test]
+    fn build_completion_signalled_child_runs_failure_diagnostics() {
+        let excerpt_called = Cell::new(false);
+        let rescue_called = Cell::new(false);
+        let mut stderr = Vec::new();
+        let result = finish_build_with(
+            BuildCompletion {
+                step_name: "nix-check",
+                installable: ".#checks.x86_64-linux.check",
+                log_path: "build.log",
+                diagnostic_failed: false,
+                capture: BuildCaptureOutcome::default(),
+                outcome: Ok(Outcome::Signalled(Some(15))),
+            },
+            || {
+                excerpt_called.set(true);
+                Ok("excerpt.log".to_owned())
+            },
+            || {
+                rescue_called.set(true);
+                false
+            },
+            &mut stderr,
+        );
+
+        assert!(result.detail.unwrap().contains("signal: 15"));
+        assert!(excerpt_called.get());
+        assert!(rescue_called.get());
+    }
+
+    #[test]
+    fn build_completion_unknown_signal_runs_failure_diagnostics() {
+        let excerpt_called = Cell::new(false);
+        let rescue_called = Cell::new(false);
+        let mut stderr = Vec::new();
+        let result = finish_build_with(
+            BuildCompletion {
+                step_name: "nix-check",
+                installable: ".#checks.x86_64-linux.check",
+                log_path: "build.log",
+                diagnostic_failed: false,
+                capture: BuildCaptureOutcome::default(),
+                outcome: Ok(Outcome::Signalled(None)),
+            },
+            || {
+                excerpt_called.set(true);
+                Ok("excerpt.log".to_owned())
+            },
+            || {
+                rescue_called.set(true);
+                false
+            },
+            &mut stderr,
+        );
+
+        assert!(result.detail.unwrap().contains("signal: unknown"));
+        assert!(excerpt_called.get());
+        assert!(rescue_called.get());
+    }
+
+    #[test]
+    fn build_completion_success_skips_failure_diagnostics() {
+        let mut stderr = Vec::new();
+        let result = finish_build_with(
+            BuildCompletion {
+                step_name: "nix-check",
+                installable: ".#checks.x86_64-linux.check",
+                log_path: "build.log",
+                diagnostic_failed: false,
+                capture: BuildCaptureOutcome::default(),
+                outcome: Ok(Outcome::Exited(0)),
+            },
+            || panic!("successful build must not write an excerpt"),
+            || panic!("successful build must not rescue diagnostics"),
+            &mut stderr,
+        );
+
+        assert!(result.ok);
     }
 
     #[test]
