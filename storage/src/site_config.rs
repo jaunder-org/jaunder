@@ -21,6 +21,7 @@ use common::smtp_sender::SmtpSender;
 use common::smtp_tls_mode::SmtpTlsMode;
 use common::smtp_username::SmtpUsername;
 use common::tagged_url::{BaseUrl, HubUrl};
+use common::theme::Theme;
 use common::visibility::DefaultAudience;
 use sqlx::{Database, Encode, Executor, Pool, Result, Type};
 
@@ -149,6 +150,23 @@ pub trait SiteConfigStorage: Send + Sync {
             policy.as_ref(),
         )
         .await
+    }
+
+    /// Returns the site-wide presentation theme, defaulting to [`Theme::Studio`] when
+    /// the value is absent or no longer parses. Database read failures propagate.
+    async fn get_theme(&self) -> Result<Theme> {
+        Ok(self
+            .get_raw(SiteConfigKey::SiteTheme)
+            .await?
+            .as_deref()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_default())
+    }
+
+    /// Stores the site-wide presentation theme.
+    async fn set_theme(&self, transaction: &mut WriteTransaction, theme: Theme) -> Result<()> {
+        self.set(transaction, SiteConfigKey::SiteTheme, theme.as_ref())
+            .await
     }
 
     /// Stores the optional site base URL. `None` is represented by the existing
@@ -603,6 +621,7 @@ mod tests {
         parse_destination_path, parse_max_file_size, parse_retention_count, parse_site_title,
         parse_smtp_username, parse_url, parse_user_quota,
     };
+    use common::theme::Theme;
     use common::visibility::DefaultAudience;
     use host::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
     use host::test_support::{parse_feed_min_days, parse_feed_min_items};
@@ -1289,6 +1308,60 @@ mod tests {
             .unwrap();
         let config = storage.get_backup_config().await.unwrap();
         assert_eq!(config.destination_path, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn theme_defaults_to_studio_when_absent(#[case] backend: Backend) {
+        let env = backend.setup().pristine().await;
+        assert_eq!(
+            env.state.site_config.get_theme().await.unwrap(),
+            Theme::Studio
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn theme_round_trips_each_token(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        for theme in [Theme::Terminal, Theme::Studio, Theme::Reader] {
+            let config = std::sync::Arc::clone(&env.state.site_config);
+            confirmed(
+                env.state
+                    .write_scope
+                    .run(move |transaction| {
+                        Box::pin(async move { config.set_theme(transaction, theme).await })
+                    })
+                    .await
+                    .unwrap(),
+            );
+            assert_eq!(storage.get_theme().await.unwrap(), theme);
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn theme_defaults_to_studio_for_invalid_stored_values(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        inject_invalid_site_config(&env, SiteConfigKey::SiteTheme, "solarized")
+            .await
+            .unwrap();
+        assert_eq!(
+            env.state.site_config.get_theme().await.unwrap(),
+            Theme::Studio
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn theme_propagates_database_errors(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.base.pool().close().await;
+        assert!(matches!(
+            env.state.site_config.get_theme().await,
+            Err(sqlx::Error::PoolClosed)
+        ));
     }
 
     #[apply(backends)]

@@ -6,6 +6,7 @@ use crate::posts::models::PostFormat;
 use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
 use common::ids::UserId;
+use common::theme::Theme;
 use sqlx::{Database, Encode, Executor, Pool, Result, Type};
 
 use host::config_key::UserConfigKey;
@@ -88,6 +89,53 @@ pub async fn set_default_post_format(
             UserConfigKey::DefaultPostFormat,
             format.as_ref(),
         )
+        .await
+}
+
+/// Returns a user's optional public presentation theme override.
+///
+/// An absent or unparseable stored value means the user inherits the site theme.
+/// Database read failures propagate.
+///
+/// # Errors
+///
+/// Returns a database error when the configuration row cannot be read.
+pub async fn get_theme_override(
+    config: &dyn UserConfigStorage,
+    user_id: UserId,
+) -> Result<Option<Theme>> {
+    let raw = UserConfigStorage::get(config, user_id, UserConfigKey::Theme).await?;
+    Ok(raw.as_deref().and_then(|value| value.parse().ok()))
+}
+
+/// Stores a user's public presentation theme override.
+///
+/// # Errors
+///
+/// Returns a database error when the override cannot be stored.
+pub async fn set_theme_override(
+    config: &dyn UserConfigStorage,
+    transaction: &mut WriteTransaction,
+    user_id: UserId,
+    theme: Theme,
+) -> Result<()> {
+    config
+        .set(transaction, user_id, UserConfigKey::Theme, theme.as_ref())
+        .await
+}
+
+/// Deletes a user's public presentation theme override, restoring site-theme inheritance.
+///
+/// # Errors
+///
+/// Returns a database error when the override cannot be deleted.
+pub async fn delete_theme_override(
+    config: &dyn UserConfigStorage,
+    transaction: &mut WriteTransaction,
+    user_id: UserId,
+) -> Result<()> {
+    config
+        .delete(transaction, user_id, UserConfigKey::Theme)
         .await
 }
 
@@ -219,6 +267,7 @@ mod tests {
     use super::*;
     use crate::test_support::{Backend, SeedUser, backends};
     use common::MutationOutcome;
+    use common::theme::Theme;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -344,5 +393,108 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, PostFormat::Markdown);
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn theme_override_is_none_when_absent(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        assert_eq!(
+            get_theme_override(env.state.user_config.as_ref(), user_id)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn theme_override_round_trips_and_delete_restores_inheritance(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let config = std::sync::Arc::clone(&env.state.user_config);
+        for theme in [Theme::Terminal, Theme::Studio, Theme::Reader] {
+            let config_for_write = std::sync::Arc::clone(&config);
+            assert!(matches!(
+                env.state
+                    .write_scope
+                    .run(move |transaction| {
+                        Box::pin(async move {
+                            set_theme_override(
+                                config_for_write.as_ref(),
+                                transaction,
+                                user_id,
+                                theme,
+                            )
+                            .await
+                        })
+                    })
+                    .await
+                    .unwrap(),
+                MutationOutcome::Confirmed(())
+            ));
+            assert_eq!(
+                get_theme_override(config.as_ref(), user_id).await.unwrap(),
+                Some(theme)
+            );
+        }
+
+        let config_for_delete = std::sync::Arc::clone(&config);
+        assert!(matches!(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        delete_theme_override(config_for_delete.as_ref(), transaction, user_id)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+            MutationOutcome::Confirmed(())
+        ));
+        assert_eq!(
+            get_theme_override(config.as_ref(), user_id).await.unwrap(),
+            None
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn invalid_theme_override_is_none(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let config = std::sync::Arc::clone(&env.state.user_config);
+        let config_for_write = std::sync::Arc::clone(&config);
+        assert!(matches!(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        config_for_write
+                            .set(transaction, user_id, UserConfigKey::Theme, "solarized")
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+            MutationOutcome::Confirmed(())
+        ));
+        assert_eq!(
+            get_theme_override(config.as_ref(), user_id).await.unwrap(),
+            None
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn theme_override_propagates_database_errors(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        env.base.pool().close().await;
+        assert!(matches!(
+            get_theme_override(env.state.user_config.as_ref(), user_id).await,
+            Err(sqlx::Error::PoolClosed)
+        ));
     }
 }
