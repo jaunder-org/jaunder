@@ -13,7 +13,6 @@
 
 mod backend;
 mod feeds;
-mod invites;
 mod mail;
 mod media;
 mod post_service;
@@ -31,7 +30,6 @@ pub use backend::{
 };
 
 pub use feeds::fp;
-pub use invites::parse_invite_code;
 pub use mail::noop_mailer;
 pub(crate) use media::RawMediaFilename;
 pub use media::{

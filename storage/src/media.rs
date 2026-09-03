@@ -6,12 +6,11 @@ use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaRef, Medi
 use common::pagination::{PageOffset, RowLimit};
 use common::tagged_url::MediaSourceUrl;
 use common::time::UtcInstant;
-use sqlx::{Database, Encode, Executor, FromRow, Pool, Result, Type};
+use sqlx::{Database, Decode, Encode, Executor, FromRow, Pool, Result, Row, Type};
 
 use crate::InstanceId;
 use crate::WriteTransaction;
 use crate::backend::Backend;
-use crate::helpers;
 use crate::posts::MediaReferenceEvidence;
 use crate::sql::QueryStorageExt;
 use thiserror::Error;
@@ -43,6 +42,43 @@ pub struct MediaRecord {
     pub source_url: Option<MediaSourceUrl>,
     /// When the record was created.
     pub created_at: UtcInstant,
+}
+
+/// Decodes the media projection directly into its storage record.
+impl<'r, R> sqlx::FromRow<'r, R> for MediaRecord
+where
+    R: Row,
+    &'r str: sqlx::ColumnIndex<R>,
+    UserId: Decode<'r, R::Database> + Type<R::Database>,
+    ContentHash: Decode<'r, R::Database> + Type<R::Database>,
+    Filename: Decode<'r, R::Database> + Type<R::Database>,
+    MediaSource: Decode<'r, R::Database> + Type<R::Database>,
+    ContentType: Decode<'r, R::Database> + Type<R::Database>,
+    ByteSize: Decode<'r, R::Database> + Type<R::Database>,
+    Option<MediaSourceUrl>: Decode<'r, R::Database> + Type<R::Database>,
+    UtcInstant: Decode<'r, R::Database> + Type<R::Database>,
+{
+    fn from_row(row: &'r R) -> Result<Self> {
+        let user_id = row.try_get::<UserId, _>("user_id")?;
+        let sha256 = row.try_get::<ContentHash, _>("sha256")?;
+        let filename = row.try_get::<Filename, _>("filename")?;
+        let source = row.try_get::<MediaSource, _>("source")?;
+        let content_type = row.try_get::<ContentType, _>("content_type")?;
+        let size_bytes = row.try_get::<ByteSize, _>("size_bytes")?;
+        let source_url = row.try_get::<Option<MediaSourceUrl>, _>("source_url")?;
+        let created_at = row.try_get::<UtcInstant, _>("created_at")?;
+
+        Ok(Self {
+            user_id,
+            sha256,
+            filename,
+            source,
+            content_type,
+            size_bytes,
+            source_url,
+            created_at,
+        })
+    }
 }
 
 /// Errors that can occur when creating a media record.
@@ -254,12 +290,11 @@ impl<DB: Database> MediaStore<DB> {
 impl<DB> MediaStorage for MediaStore<DB>
 where
     DB: MediaDialect,
-    helpers::MediaRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    MediaRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: Encode<'q, DB> + Type<DB>,
     for<'q> &'q str: Encode<'q, DB> + Type<DB>,
     // `ContentHash`/`Filename` bind and decode as themselves via the ADR-0071 sqlx
-    // bridge (the `sha256`/`filename` columns in `MediaRow` decode into their
-    // newtypes, and the write/lookup binds encode `&ContentHash`/`&Filename`).
+    // bridge. The write/lookup binds encode `&ContentHash`/`&Filename`.
     String: Type<DB>,
     for<'q> String: Encode<'q, DB>,
     // `source_url` binds as `Option<MediaSourceUrl>` (#675). The newtype's own `Type`/`Encode`
@@ -341,7 +376,7 @@ where
         filename: &Filename,
         source: &MediaSource,
     ) -> Result<Option<MediaRecord>> {
-        let row = sqlx::query_as::<_, helpers::MediaRow>(
+        sqlx::query_as::<_, MediaRecord>(
             "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
              FROM media
              WHERE user_id = $1 AND sha256 = $2 AND filename = $3 AND source = $4",
@@ -351,9 +386,7 @@ where
         .bind_storage(filename)
         .bind_storage(*source)
         .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(row.map(helpers::media_record_from_row))
+        .await
     }
 
     #[tracing::instrument(
@@ -368,11 +401,9 @@ where
         limit: RowLimit,
         offset: PageOffset,
     ) -> Result<Vec<MediaRecord>> {
-        // Fetch raw rows (not `query_as::<MediaRow>`) so each row decodes
-        // independently: the `sha256`/`filename` columns decode into their newtypes
-        // *inside* `MediaRow::from_row` (#438), so a single corrupt row would fail a
-        // whole `query_as` `fetch_all`. Decoding per row (as the feed-event claim
-        // mapper does) lets us skip the bad one and keep the rest.
+        // Fetch raw rows so each row decodes independently: a corrupt domain
+        // column must not fail the whole `fetch_all`. Decoding per row (as the
+        // feed-event claim mapper does) lets us skip the bad one and keep the rest.
         let rows = if let Some(src) = source {
             sqlx::query(
                 "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
@@ -407,13 +438,11 @@ where
         // (docs/adr/0122-one-bad-row-must-not-stop-the-scan.md).
         Ok(rows
             .iter()
-            .filter_map(|row| {
-                match helpers::MediaRow::from_row(row).map(helpers::media_record_from_row) {
-                    Ok(record) => Some(record),
-                    Err(error) => {
-                        tracing::warn!(%error, "skipping undecodable media row in list_media");
-                        None
-                    }
+            .filter_map(|row| match MediaRecord::from_row(row) {
+                Ok(record) => Some(record),
+                Err(error) => {
+                    tracing::warn!(%error, "skipping undecodable media row in list_media");
+                    None
                 }
             })
             .collect())
@@ -530,7 +559,7 @@ where
         sha256: &ContentHash,
         source: &MediaSource,
     ) -> Result<Option<MediaRecord>> {
-        let row = sqlx::query_as::<_, helpers::MediaRow>(
+        sqlx::query_as::<_, MediaRecord>(
             "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
              FROM media
              WHERE sha256 = $1 AND source = $2
@@ -539,8 +568,7 @@ where
         .bind_storage(sha256)
         .bind_storage(*source)
         .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.map(helpers::media_record_from_row))
+        .await
     }
 }
 
@@ -1049,8 +1077,8 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         // A negative `size_bytes` bypasses `ByteSize` validation — only reachable via DB
-        // tampering. On read, `media_record_from_row` wraps the column through the validating
-        // `ByteSize::try_from`, which rejects it as a column-decode error.
+        // tampering. On read, `MediaRecord::from_row` decodes the column through the
+        // validating `ByteSize` bridge, which rejects it as a column-decode error.
         env.base
             .pool()
             .execute(&format!(

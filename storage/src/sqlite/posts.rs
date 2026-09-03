@@ -4,7 +4,7 @@ use sqlx::{Pool, QueryBuilder, Sqlite};
 use crate::helpers;
 use crate::posts::{
     self, MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill,
-    PostPublicationClear, PostTagDiff, PostTagRow,
+    PostPublicationClear, PostTag, PostTagDiff,
 };
 use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use crate::{
@@ -254,11 +254,10 @@ impl PostDialect for Sqlite {
         if let Some(error) = posts::update_expectation_error(post_id, &existing, &tags, input) {
             return Err(error);
         }
-        let tag_rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
+        let existing_tags = sqlx::query_as::<_, PostTag>(posts::SELECT_POST_TAGS)
             .bind_storage(post_id)
             .fetch_all(&mut *conn)
             .await?;
-        let existing_tags = posts::post_tags_from_rows(tag_rows);
         let tag_diff = posts::post_tag_diff(&existing_tags, &input.tags);
         let existing_audiences = sqlx::query_as::<
             _,
@@ -351,11 +350,10 @@ impl PostDialect for Sqlite {
             Some((owner, None)) if owner != user_id => return Err(TaggingError::Unauthorized),
             Some(_) => {}
         }
-        let rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
+        let existing = sqlx::query_as::<_, PostTag>(posts::SELECT_POST_TAGS)
             .bind_storage(post_id)
             .fetch_all(&mut *connection)
             .await?;
-        let existing = posts::post_tags_from_rows(rows);
         let diff = posts::post_tag_diff(&existing, desired);
         if diff.to_add.is_empty() && diff.to_remove.is_empty() {
             return Ok(());

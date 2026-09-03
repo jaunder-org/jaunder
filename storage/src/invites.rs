@@ -9,11 +9,12 @@ use host::{
     metrics,
     retention::Domain,
 };
-use sqlx::{Database, Pool};
+use sqlx::{Database, Decode, Pool, Row, Type};
 
 use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::helpers::{self, InviteTokenStateRow, TokenState};
+use crate::role_instant::impl_role_instant;
 use crate::sql::{QueryStorageExt, RowCount};
 use common::ids::UserId;
 use common::pagination::RowLimit;
@@ -33,6 +34,18 @@ impl CorruptInviteCode {
     }
 }
 
+/// The `invites.created_at` storage timestamp role, distinct from `expires_at`
+/// so mappings cannot transpose silently (#751).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+pub(crate) struct InviteCreatedAt(UtcInstant);
+impl_role_instant!(InviteCreatedAt, UtcInstant);
+
+/// The `invites.expires_at` storage timestamp role, distinct from `created_at`
+/// so mappings cannot transpose silently (#751).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+pub(crate) struct InviteExpiresAt(UtcInstant);
+impl_role_instant!(InviteExpiresAt, UtcInstant);
+
 /// An invite code record returned by [`InviteStorage`] queries.
 #[derive(Clone, Debug)]
 pub struct InviteRecord {
@@ -46,6 +59,36 @@ pub struct InviteRecord {
     pub used_at: Option<UtcInstant>,
     /// ID of the user who was created using this code.
     pub used_by: Option<UserId>,
+}
+
+/// Decodes the invite listing projection directly into its storage record.
+impl<'r, R> sqlx::FromRow<'r, R> for InviteRecord
+where
+    R: Row,
+    &'r str: sqlx::ColumnIndex<R>,
+    InviteCode: Decode<'r, R::Database> + Type<R::Database>,
+    InviteCreatedAt: Decode<'r, R::Database> + Type<R::Database>,
+    InviteExpiresAt: Decode<'r, R::Database> + Type<R::Database>,
+    Option<UtcInstant>: Decode<'r, R::Database> + Type<R::Database>,
+    Option<UserId>: Decode<'r, R::Database> + Type<R::Database>,
+{
+    fn from_row(row: &'r R) -> sqlx::Result<Self> {
+        let code = row.try_get::<InviteCode, _>("code")?;
+        let created_at = row.try_get::<InviteCreatedAt, _>("created_at")?;
+        let expires_at = row.try_get::<InviteExpiresAt, _>("expires_at")?;
+        let used_at = row.try_get::<Option<UtcInstant>, _>("used_at")?;
+        let used_by = row.try_get::<Option<UserId>, _>("used_by")?;
+        let created_at = created_at.value();
+        let expires_at = expires_at.value();
+
+        Ok(Self {
+            code,
+            created_at,
+            expires_at,
+            used_at,
+            used_by,
+        })
+    }
 }
 
 /// Errors returned while checking or conditionally claiming an invite.
@@ -126,7 +169,7 @@ impl<DB: Database> InviteStore<DB> {
 impl<DB> InviteStorage for InviteStore<DB>
 where
     DB: Backend,
-    helpers::InviteRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    InviteRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     InviteTokenStateRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
@@ -217,19 +260,11 @@ where
     }
 
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>> {
-        let rows = sqlx::query_as::<_, helpers::InviteRow>(
+        sqlx::query_as::<_, InviteRecord>(
             "SELECT code, created_at, expires_at, used_at, used_by FROM invites",
         )
         .fetch_all(&self.pool)
-        .await?;
-
-        // A corrupt/migrated `code` column is rejected as a decode error by the
-        // `query_as` above (the sqlx bridge validates through `FromStr`), so building
-        // the records here is infallible.
-        Ok(rows
-            .into_iter()
-            .map(helpers::invite_record_from_row)
-            .collect())
+        .await
     }
 
     async fn prune_invites(&self, now: UtcInstant) -> sqlx::Result<u64> {

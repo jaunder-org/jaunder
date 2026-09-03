@@ -4,7 +4,7 @@ use crate::WriteTransaction;
 use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
 
-use sqlx::{Database, Decode, Encode, Error, Executor, Pool, Result, Type};
+use sqlx::{Database, Decode, Encode, Error, Executor, Pool, Result, Row, Type};
 use tracing::Instrument;
 
 use crate::backend::Backend;
@@ -17,7 +17,7 @@ use common::username::Username;
 use host::password::Password;
 use host::stored_password_hash::StoredPasswordHash;
 
-use crate::helpers::{self, UserRow};
+use crate::helpers;
 
 /// Whether a user has site-wide administrative privileges.
 ///
@@ -84,6 +84,47 @@ pub struct UserRecord {
     pub email_verified: EmailVerified,
     /// Whether the user has site-wide administrative privileges.
     pub is_operator: OperatorStatus,
+}
+
+/// Decodes the password-free retrieval projection directly into its storage record.
+impl<'r, R> sqlx::FromRow<'r, R> for UserRecord
+where
+    R: Row,
+    &'r str: sqlx::ColumnIndex<R>,
+    UserId: Decode<'r, R::Database> + Type<R::Database>,
+    Username: Decode<'r, R::Database> + Type<R::Database>,
+    Option<DisplayName>: Decode<'r, R::Database> + Type<R::Database>,
+    Option<Bio>: Decode<'r, R::Database> + Type<R::Database>,
+    UtcInstant: Decode<'r, R::Database> + Type<R::Database>,
+    Option<UtcInstant>: Decode<'r, R::Database> + Type<R::Database>,
+    Option<Email>: Decode<'r, R::Database> + Type<R::Database>,
+    EmailVerified: Decode<'r, R::Database> + Type<R::Database>,
+    OperatorStatus: Decode<'r, R::Database> + Type<R::Database>,
+{
+    fn from_row(row: &'r R) -> Result<Self> {
+        let user_id = row.try_get::<UserId, _>("user_id")?;
+        let username = row.try_get::<Username, _>("username")?;
+        let display_name = row.try_get::<Option<DisplayName>, _>("display_name")?;
+        let bio = row.try_get::<Option<Bio>, _>("bio")?;
+        let created_at = row.try_get::<UtcInstant, _>("created_at")?;
+        let last_authenticated_at =
+            row.try_get::<Option<UtcInstant>, _>("last_authenticated_at")?;
+        let email = row.try_get::<Option<Email>, _>("email")?;
+        let email_verified = row.try_get::<EmailVerified, _>("email_verified")?;
+        let is_operator = row.try_get::<OperatorStatus, _>("is_operator")?;
+
+        Ok(Self {
+            user_id,
+            username,
+            display_name,
+            bio,
+            created_at,
+            last_authenticated_at,
+            email,
+            email_verified,
+            is_operator,
+        })
+    }
 }
 /// An Argon2-hashed password ready for a capability-guarded user mutation.
 ///
@@ -414,7 +455,7 @@ impl<DB: Database> UserStore<DB> {
 impl<DB> UserStorage for UserStore<DB>
 where
     DB: Backend,
-    UserRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    UserRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     (
         UserId,
         Username,
@@ -528,27 +569,25 @@ where
     }
 
     async fn get_user(&self, user_id: UserId) -> Result<Option<UserRecord>> {
-        let row = sqlx::query_as::<_, UserRow>(
+        sqlx::query_as::<_, UserRecord>(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
                     email, email_verified, is_operator
              FROM users WHERE user_id = $1",
         )
         .bind_storage(user_id)
         .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.map(helpers::user_record_from_row))
+        .await
     }
 
     async fn get_user_by_username(&self, username: &Username) -> Result<Option<UserRecord>> {
-        let row = sqlx::query_as::<_, UserRow>(
+        sqlx::query_as::<_, UserRecord>(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
                     email, email_verified, is_operator
              FROM users WHERE username = $1",
         )
         .bind_storage(username)
         .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.map(helpers::user_record_from_row))
+        .await
     }
 
     async fn update_profile<'a>(

@@ -4,7 +4,7 @@ use sqlx::{Pool, Postgres, QueryBuilder};
 use crate::helpers;
 use crate::posts::{
     self, MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill,
-    PostPublicationClear, PostTag, PostTagDiff, PostTagRow,
+    PostPublicationClear, PostTag, PostTagDiff,
 };
 use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use crate::{
@@ -170,11 +170,10 @@ async fn load_post_update_relations(
     post_id: PostId,
     input: &UpdatePostInput,
 ) -> sqlx::Result<PostUpdateRelations> {
-    let tag_rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
+    let existing_tags = sqlx::query_as::<_, PostTag>(posts::SELECT_POST_TAGS)
         .bind_storage(post_id)
         .fetch_all(&mut *tx)
         .await?;
-    let existing_tags = posts::post_tags_from_rows(tag_rows);
     let existing_audiences = sqlx::query_as::<
         _,
         (
@@ -445,11 +444,10 @@ impl PostDialect for Postgres {
             Some((owner, None)) if owner != user_id => return Err(TaggingError::Unauthorized),
             Some(_) => {}
         }
-        let rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
+        let existing = sqlx::query_as::<_, PostTag>(posts::SELECT_POST_TAGS)
             .bind_storage(post_id)
             .fetch_all(&mut *connection)
             .await?;
-        let existing = posts::post_tags_from_rows(rows);
         let diff = posts::post_tag_diff(&existing, desired);
         if diff.to_add.is_empty() && diff.to_remove.is_empty() {
             return Ok(());
