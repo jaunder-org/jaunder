@@ -8,13 +8,14 @@ use crate::posts::cursors::PostRevisionCursor;
 use crate::posts::errors::{CreatePostError, UpdatePostError};
 use crate::posts::media;
 use crate::posts::models::{
-    CreatePostInput, PostLifecycle, PostRevisionMetadata, PostRevisionPage, PublishUpdate,
-    RenderedHtml, UpdatePostInput,
+    CreatePostInput, PostLifecycle, PostMutation, PostRevisionMetadata, PostRevisionPage,
+    PublishUpdate, RenderedHtml, UpdatePostInput,
 };
 use crate::posts::store::PostDialect;
 use crate::posts::tags;
 use crate::posts::visibility;
-use crate::sql::{QueryStorageExt, RowCount};
+use crate::sql::{Exists, QueryStorageExt, RowCount};
+use crate::write_scope::WriteTransaction;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, PostId, RevisionId, UserId};
 use common::pagination::{PageSize, RowLimit};
@@ -31,6 +32,110 @@ const IDEMPOTENCY_REPLAY_WINDOW_HOURS: i64 = 1;
 
 pub(crate) fn idempotency_replay_cutoff(now: UtcInstant) -> UtcInstant {
     UtcInstant::from(now.value() - Duration::hours(IDEMPOTENCY_REPLAY_WINDOW_HOURS))
+}
+
+/// Persistence operation for a post's publication/deletion lifecycle.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PostLifecycleChange {
+    Publish,
+    SoftDelete,
+    Unpublish,
+}
+
+impl PostLifecycleChange {
+    fn changes(self, published_at: Option<UtcInstant>) -> bool {
+        match self {
+            Self::Publish => published_at.is_none(),
+            Self::SoftDelete => true,
+            Self::Unpublish => published_at.is_some(),
+        }
+    }
+}
+
+pub(crate) async fn lifecycle_post<DB>(
+    transaction: &mut WriteTransaction,
+    post_id: PostId,
+    user_id: UserId,
+    change: PostLifecycleChange,
+    now: UtcInstant,
+) -> Result<Option<PostMutation>>
+where
+    DB: PostDialect,
+    (UserId, Option<UtcInstant>, Option<UtcInstant>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (Exists,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
+    for<'q> PostId: Encode<'q, DB> + Type<DB>,
+    for<'q> RevisionId: Decode<'q, DB> + Type<DB>,
+    for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
+    usize: sqlx::ColumnIndex<DB::Row>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    let connection = DB::write_connection(transaction)?;
+    let state = sqlx::query_as::<_, (UserId, Option<UtcInstant>, Option<UtcInstant>)>(
+        DB::LIFECYCLE_STATE_SQL,
+    )
+    .bind_storage(post_id)
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some((owner, deleted_at, published_at)) = state else {
+        return Ok(None);
+    };
+    if owner != user_id || deleted_at.is_some() {
+        return Ok(None);
+    }
+
+    let previous = DB::fetch_lifecycle_post(connection, post_id).await?;
+    let previous_has_public_audience = sqlx::query_scalar::<_, Exists>(
+        "SELECT EXISTS(
+            SELECT 1 FROM post_audiences pa
+            JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
+            WHERE pa.post_id = $1 AND tk.name = 'public'
+        )",
+    )
+    .bind_storage(post_id)
+    .fetch_one(&mut *connection)
+    .await?
+    .into_bool();
+    let changed = change.changes(published_at);
+    if changed {
+        DB::lock_lifecycle_media_references(connection, post_id).await?;
+        capture_complete_post_revision::<DB>(connection, post_id, now).await?;
+        match change {
+            PostLifecycleChange::Publish => {
+                sqlx::query(
+                    "UPDATE posts SET published_at = $1, updated_at = $1 WHERE post_id = $2",
+                )
+                .bind_storage(now)
+                .bind_storage(post_id)
+                .execute(&mut *connection)
+                .await?;
+            }
+            PostLifecycleChange::SoftDelete => {
+                sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
+                    .bind_storage(now)
+                    .bind_storage(post_id)
+                    .execute(&mut *connection)
+                    .await?;
+            }
+            PostLifecycleChange::Unpublish => {
+                sqlx::query(
+                    "UPDATE posts SET published_at = NULL, updated_at = $1 WHERE post_id = $2",
+                )
+                .bind_storage(now)
+                .bind_storage(post_id)
+                .execute(&mut *connection)
+                .await?;
+            }
+        }
+    }
+    let record = DB::fetch_lifecycle_post(connection, post_id).await?;
+    Ok(Some(PostMutation {
+        record,
+        previous,
+        previous_has_public_audience,
+        changed,
+    }))
 }
 
 /// `PostgreSQL`'s signed advisory-lock key for one user/idempotency-key pair.

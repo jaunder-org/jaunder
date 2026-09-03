@@ -51,7 +51,6 @@ use host::{
     retention::Domain,
 };
 
-
 // ---------------------------------------------------------------------------
 // Cursor + effectful post orchestration
 //
@@ -493,21 +492,18 @@ pub trait PostStorage: Send + Sync {
 }
 /// Backend-specific divergence for [`PostStore`].
 ///
-/// Two consts capture SQL-fragment divergence shared by many methods:
+/// SQL fragments and transaction hooks isolate the backend differences:
 /// [`TAGS_SUBQUERY`][PostDialect::TAGS_SUBQUERY] (`SQLite` `json_group_array`
-/// vs Postgres `json_agg`/`::text`) and
+/// vs Postgres `json_agg`/`::text`),
 /// [`PERMALINK_DATE_CLAUSE`][PostDialect::PERMALINK_DATE_CLAUSE] (`SQLite`
 /// `date(COALESCE(...))` vs Postgres
-/// `date(COALESCE(...) AT TIME ZONE 'UTC') = $3::date`).
+/// `date(COALESCE(...) AT TIME ZONE 'UTC') = $3::date`), and lifecycle row
+/// locking/media serialization. Shared lifecycle policy and portable SQL stay
+/// on this module rather than being copied into both dialects.
 ///
-/// The two transaction-bearing mutations are monomorphised per backend:
-/// [`update_post`][PostDialect::update_post] (Postgres locks the row with
-/// `FOR UPDATE`) and [`set_post_tags`][PostDialect::set_post_tags], which
-/// diverges twice over — the transaction shape (`SQLite` drives a manual
-/// `BEGIN IMMEDIATE`, Postgres locks the post row with `FOR UPDATE`; ADR-0021).
-/// [`unpublish_post`][PostDialect::unpublish_post] is likewise dialect-specific
-/// only for its complete `UPDATE ... RETURNING` JSON tag aggregate. Everything
-/// else is shared on [`PostStore`]. See ADR-0019.
+/// The transaction-bearing update and tag mutations remain monomorphised per
+/// backend because their transaction/locking shapes diverge (ADR-0019,
+/// ADR-0021). Everything else is shared on [`PostStore`].
 #[async_trait]
 pub trait PostDialect: Backend {
     /// Correlated JSON tag-aggregation subquery (on `p.post_id`) spelled in
@@ -532,6 +528,27 @@ pub trait PostDialect: Backend {
     /// Inserts one `post_audiences` row, resolving the target-kind name to its
     /// `kind_id` via a subquery. Bind order: `post_id, audience_id, kind_name`.
     const INSERT_POST_AUDIENCE: &'static str;
+
+    /// Loads the lifecycle state under this backend's writer discipline.
+    ///
+    /// `PostgreSQL` locks the row explicitly; `SQLite`'s write scope already holds
+    /// its `BEGIN IMMEDIATE` writer lock.
+    const LIFECYCLE_STATE_SQL: &'static str;
+
+    /// Returns the complete post projection used as lifecycle mutation evidence.
+    async fn fetch_lifecycle_post(
+        conn: &mut Self::Connection,
+        post_id: PostId,
+    ) -> Result<PostRecord>;
+
+    /// Serializes lifecycle revision capture with media deletion/reclamation.
+    ///
+    /// `SQLite`'s writer lock is sufficient. `PostgreSQL` locks the current media
+    /// identities before revision rows copy those references.
+    async fn lock_lifecycle_media_references(
+        conn: &mut Self::Connection,
+        post_id: PostId,
+    ) -> Result<()>;
 
     /// Acquires the backend's transaction-scoped media locks in the stable order
     /// represented by `media`. `SQLite` already holds its single writer lock.
