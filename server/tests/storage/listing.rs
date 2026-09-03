@@ -7,11 +7,12 @@ use common::{
     },
     time::UtcInstant,
     username::Username,
-    visibility::{AudienceTarget, ViewerIdentity, local_subscriber_identity},
+    visibility::{AudienceTarget, ViewerIdentity},
 };
 use std::sync::Arc;
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, backends, confirmed_for as confirmed, fp,
+    seed_local_subscription,
 };
 use storage::{
     AppState, FeedCacheRow, GoLivePost, ListByTagError, PostBookkeepingExpectation, PostCursor,
@@ -765,21 +766,7 @@ async fn list_published_in_window_resolves_viewers_before_ranking(#[case] backen
         .expect("tag hybrid-window fixture");
     }
 
-    let local = super::fixtures::local_channel_id(backend, &env).await;
-    let subscriber = local_subscriber_identity(local, bob.user_id);
-    let subscriptions = Arc::clone(&state.subscriptions);
-    let outcome = state
-        .write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                subscriptions
-                    .subscribe(transaction, alice.user_id, &subscriber)
-                    .await
-            })
-        })
-        .await
-        .expect("subscribe viewer");
-    confirmed(outcome, "subscriber fixture");
+    seed_local_subscription(state, alice.user_id, bob.user_id).await;
 
     let surfaces = [
         FeedSurface::Site,

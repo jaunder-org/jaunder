@@ -5,7 +5,6 @@ use chrono::Datelike;
 use common::ids::{AudienceId, PostId, SubscriptionId, UserId};
 use common::seed::{AuthoredPost, Page, RenderedPost};
 use common::test_support::{parse_audience_name, parse_post_body};
-use common::visibility::{SubscriberIdentity, local_subscriber_identity};
 use server_fn::ServerFn;
 use storage::PostFormat;
 use web::posts::{EditPostPreview, PostInputs, SavedPost};
@@ -19,7 +18,7 @@ use crate::helpers::{
 };
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, SeededPost, TestEnv, backends, backends_matrix,
-    confirmed_for as confirmed,
+    confirmed_for as confirmed, seed_local_subscription,
 };
 
 use super::fixtures::{
@@ -62,26 +61,6 @@ async fn add_member_confirmed(
         .await
         .expect("audience membership fixture setup should succeed");
     confirmed(outcome, "audience membership fixture setup");
-}
-
-async fn subscribe_confirmed(
-    state: &Arc<storage::AppState>,
-    author: UserId,
-    subscriber: SubscriberIdentity,
-) -> SubscriptionId {
-    let subscriptions = Arc::clone(&state.subscriptions);
-    let outcome = state
-        .write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                subscriptions
-                    .subscribe(transaction, author, &subscriber)
-                    .await
-            })
-        })
-        .await
-        .expect("subscription fixture setup should succeed");
-    confirmed(outcome, "subscription fixture setup")
 }
 
 async fn get_post_preview_form(
@@ -399,13 +378,11 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     let subscriber = SeedUser::new().seed(&state).await.user_id;
     let stranger = SeedUser::new().seed(&state).await.user_id;
 
-    let local = state.subscriptions.local_channel_id().await.unwrap();
-    // A named audience containing the subscriber's subscription. `subscribe` is
-    // idempotent, so this both establishes the active subscription and yields
-    // the subscription id for audience membership.
+    // A named audience containing the subscriber's subscription. The local
+    // subscription fixture establishes the active subscription and yields the
+    // subscription id for audience membership.
     let friends = create_audience_confirmed(&state, author, parse_audience_name("Friends")).await;
-    let sub_id =
-        subscribe_confirmed(&state, author, local_subscriber_identity(local, subscriber)).await;
+    let sub_id = seed_local_subscription(&state, author, subscriber).await;
     add_member_confirmed(&state, author, friends, sub_id).await;
 
     let public = create_targeted_post(&state, author, vec![AudienceTarget::Public]).await;
@@ -534,13 +511,7 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
     let author = SeedUser::new().seed(&state).await;
     let subscriber = SeedUser::new().seed(&state).await.user_id;
 
-    let local = state.subscriptions.local_channel_id().await.unwrap();
-    subscribe_confirmed(
-        &state,
-        author.user_id,
-        local_subscriber_identity(local, subscriber),
-    )
-    .await;
+    seed_local_subscription(&state, author.user_id, subscriber).await;
 
     let seeded =
         create_targeted_post(&state, author.user_id, vec![AudienceTarget::Subscribers]).await;

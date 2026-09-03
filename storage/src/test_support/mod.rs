@@ -18,6 +18,7 @@ mod media;
 mod post_service;
 mod postgres;
 mod posts;
+mod subscriptions;
 mod users;
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -47,4 +48,5 @@ pub(crate) use postgres::{TemplateDatabaseLockKey, TemplateDatabaseName};
 pub use posts::{
     SeedPost, SeedRawPost, SeededPost, UpdateRawPost, create_posts_confirmed, seed_posts,
 };
+pub use subscriptions::seed_local_subscription;
 pub use users::{SeedUser, SeededUser, seed_users};

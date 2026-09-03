@@ -8,12 +8,12 @@ use common::test_support::{
 };
 use common::time::UtcInstant;
 use common::username::Username;
-use common::visibility::{AudienceTarget, ViewerIdentity, local_subscriber_identity};
+use common::visibility::{AudienceTarget, ViewerIdentity};
 use host::config_key::UserConfigKey;
 use host::password::Password;
 use jaunder::cli::StorageArgs;
 use std::sync::Arc;
-use storage::test_support::{SeedRawPost, confirmed_for, fp};
+use storage::test_support::{SeedRawPost, confirmed_for, fp, seed_local_subscription};
 use storage::{
     AppState, MediaRecord, OperatorStatus, StorageRuntimeConfig, open_existing_database,
 };
@@ -135,27 +135,7 @@ async fn seed_named_audience_post(
         .await
         .expect("create viewer");
     let viewer = confirmed_for(outcome, "backup fixture viewer");
-    let local = state
-        .subscriptions
-        .local_channel_id()
-        .await
-        .expect("local channel");
-    let subscriber = local_subscriber_identity(local, viewer);
-    let subscriptions = Arc::clone(&state.subscriptions);
-    let subscription = confirmed_for(
-        state
-            .write_scope
-            .run(move |transaction| {
-                Box::pin(async move {
-                    subscriptions
-                        .subscribe(transaction, author, &subscriber)
-                        .await
-                })
-            })
-            .await
-            .expect("subscribe viewer"),
-        "backup fixture subscription",
-    );
+    let subscription = seed_local_subscription(state, author, viewer).await;
     let audience_name = parse_audience_name("friends");
     let audiences = Arc::clone(&state.audiences);
     let audience = confirmed_for(

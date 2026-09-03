@@ -2,15 +2,15 @@ use std::sync::Arc;
 
 use common::MutationOutcome;
 use common::test_support::parse_audience_name;
-use common::visibility::{SubscriberIdentity, local_subscriber_identity};
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{
-    Backend, SeedUser, TestEnv, backends, confirmed_for as confirmed, seed_users,
+    Backend, SeedUser, TestEnv, backends, confirmed_for as confirmed, seed_local_subscription,
+    seed_users,
 };
 use storage::{AppState, AudienceError, WriteScopeError};
 
-use super::fixtures::{local_channel_id, open_pool};
+use super::fixtures::open_pool;
 
 #[apply(backends)]
 #[tokio::test]
@@ -72,8 +72,7 @@ async fn audience_membership_round_trip(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let [author, bob] = seed_users(state).await;
-    let local = local_channel_id(backend, &env).await;
-    let sub = subscribe_confirmed(state, author, local_subscriber_identity(local, bob)).await;
+    let sub = seed_local_subscription(state, author, bob).await;
     let audience = create_audience_confirmed(state, author, parse_audience_name("Friends")).await;
 
     assert!(
@@ -113,8 +112,7 @@ async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let [alice, bob] = seed_users(state).await;
-    let local = local_channel_id(backend, &env).await;
-    let bob_sub = subscribe_confirmed(state, bob, local_subscriber_identity(local, alice)).await;
+    let bob_sub = seed_local_subscription(state, bob, alice).await;
     let alice_audience =
         create_audience_confirmed(state, alice, parse_audience_name("Friends")).await;
 
@@ -138,8 +136,7 @@ async fn audience_members_are_author_scoped(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let [alice, bob] = seed_users(state).await;
-    let local = local_channel_id(backend, &env).await;
-    let alice_sub = subscribe_confirmed(state, alice, local_subscriber_identity(local, bob)).await;
+    let alice_sub = seed_local_subscription(state, alice, bob).await;
     let alice_audience =
         create_audience_confirmed(state, alice, parse_audience_name("Friends")).await;
     add_member_confirmed(state, alice, alice_audience, alice_sub).await;
@@ -169,8 +166,7 @@ async fn audience_delete_cascades_memberships(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let [alice, bob] = seed_users(state).await;
-    let local = local_channel_id(backend, &env).await;
-    let sub = subscribe_confirmed(state, alice, local_subscriber_identity(local, bob)).await;
+    let sub = seed_local_subscription(state, alice, bob).await;
     let audience = create_audience_confirmed(state, alice, parse_audience_name("Friends")).await;
     add_member_confirmed(state, alice, audience, sub).await;
 
@@ -318,26 +314,6 @@ async fn remove_member_confirmed(
         .await
         .expect("audience membership removal should succeed");
     confirmed(outcome, "audience membership removal");
-}
-
-async fn subscribe_confirmed(
-    state: &AppState,
-    author: common::ids::UserId,
-    subscriber: SubscriberIdentity,
-) -> common::ids::SubscriptionId {
-    let subscriptions = Arc::clone(&state.subscriptions);
-    let outcome = state
-        .write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                subscriptions
-                    .subscribe(transaction, author, &subscriber)
-                    .await
-            })
-        })
-        .await
-        .expect("subscription fixture setup should succeed");
-    confirmed(outcome, "subscription fixture setup")
 }
 
 async fn raw_scalar_i64(backend: Backend, env: &TestEnv, sql: &str) -> i64 {
