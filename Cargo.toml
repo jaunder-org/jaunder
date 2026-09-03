@@ -121,7 +121,7 @@ syn = "2"
 quote = "1"
 proc-macro2 = "1"
 
-# Jaunder #813 / docs/adr/drafts/temporary-atom-namespace-fork.md pin the
+# Jaunder #813 / docs/adr/0172-temporary-atom-namespace-fork.md pin the
 # upstream AtomPub namespace fix until upstream releases the same complete
 # namespace-aware API and behavior; use an exact rev so Cargo and Nix consume
 # reviewed source rather than a moving branch.

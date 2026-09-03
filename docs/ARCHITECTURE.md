@@ -792,7 +792,7 @@ Atom document I/O remains upstream's, not ours
 ([ADR-0089](adr/0089-upstream-atom-document-io.md)): parsing is
 `Entry::from_str` at the host call site and serialization is `Entry::write_to` /
 `Feed::write_to`. The
-[proposed temporary Atom namespace-fork decision](adr/drafts/temporary-atom-namespace-fork.md)
+[proposed temporary Atom namespace-fork decision](adr/0172-temporary-atom-namespace-fork.md)
 qualifies ADR-0089's registry-only state without rewriting the accepted ADR.
 `jaunder-org/atom` supplies the complete breaking `atom_syndication` 0.13.0
 model at exact revision `921118c311d2117956d86e25052918e7c549ef00` until
