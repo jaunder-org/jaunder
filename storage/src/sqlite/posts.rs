@@ -256,12 +256,13 @@ impl PostDialect for Sqlite {
         .bind_storage(post_id)
         .fetch_all(&mut *conn)
         .await?;
+        let desired_tags = input.tags.as_deref().unwrap_or(&tags);
         if let Some(error) = lifecycle::update_expectation_error(post_id, &existing, &tags, input) {
             return Err(error);
         }
         let previous = fetch_post(conn, post_id).await?;
         let existing_tags = previous.tags.clone();
-        let tag_diff = tags::post_tag_diff(&existing_tags, &input.tags);
+        let tag_diff = tags::post_tag_diff(&existing_tags, desired_tags);
         let existing_audiences = sqlx::query_as::<
             _,
             (

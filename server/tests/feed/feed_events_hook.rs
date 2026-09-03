@@ -1,13 +1,21 @@
-use axum::http::StatusCode;
-use common::test_support::{parse_post_body, parse_tag_label};
+use axum::{
+    body::Body,
+    http::{Method, StatusCode},
+};
+use common::{
+    test_support::{parse_post_body, parse_tag_label},
+    visibility::DefaultAudience,
+};
 use server_fn::ServerFn;
 use storage::PostFormat;
 
 use rstest::*;
 use rstest_reuse::*;
+use tower::ServiceExt;
 
 use crate::helpers::{
-    confirmed_mutation, create_post_json, create_user_and_session, post_form, update_post_json,
+    atompub, atompub_post_xml, atompub_put_xml, confirmed_mutation, create_post_json,
+    create_user_and_session, make_app, post_form, update_post_json,
 };
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 use web::posts::{PostInputs, SavedPost};
@@ -32,6 +40,55 @@ async fn claim_pending(state: &std::sync::Arc<storage::AppState>) -> Vec<storage
 
 fn confirmed_post_id(response: &str) -> i64 {
     i64::from(confirmed_mutation::<SavedPost>(response).post_id)
+}
+
+async fn use_public_default(state: &std::sync::Arc<storage::AppState>) {
+    let site_config = std::sync::Arc::clone(&state.site_config);
+    storage::test_support::confirmed(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    site_config
+                        .set_default_audience(transaction, &DefaultAudience::Public)
+                        .await
+                })
+            })
+            .await
+            .expect("set Public default audience"),
+    );
+}
+
+fn assert_public_atom_paths(
+    events: Vec<storage::FeedEventRecord>,
+    username: &common::username::Username,
+) {
+    let tag = "rust".parse().expect("valid Tag");
+    let mut expected = host::feed::affected_feed_urls(username, std::iter::once(&tag))
+        .into_iter()
+        .map(|path| path.to_string())
+        .collect::<Vec<_>>();
+    let mut actual = events
+        .into_iter()
+        .map(|event| event.feed_path.to_string())
+        .collect::<Vec<_>>();
+    expected.sort_unstable();
+    actual.sort_unstable();
+    assert_eq!(actual, expected);
+}
+
+fn atom_entry(title: &str, draft: bool) -> String {
+    let draft = if draft { "yes" } else { "no" };
+    format!(
+        r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom"
+       xmlns:app="http://www.w3.org/2007/app">
+  <title>{title}</title>
+  <content type="text">body</content>
+  <category term="rust"/>
+  <app:control><app:draft>{draft}</app:draft></app:control>
+</entry>"#
+    )
 }
 
 // Creating a published post enqueues the Site and User feeds (3 formats each =
@@ -262,4 +319,102 @@ async fn delete_draft_post_enqueues_nothing(#[case] backend: Backend) {
         0,
         "Expected 0 feed events from deleting draft post"
     );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn atompub_publication_transitions_enqueue_expected_feeds(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    use_public_default(&state).await;
+    let session = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+
+    let response = app
+        .clone()
+        .oneshot(atompub_post_xml(
+            &session,
+            "posts",
+            &atom_entry("Published", false),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let post_id = response
+        .headers()
+        .get(axum::http::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|location| location.rsplit('/').next())
+        .and_then(|id| id.parse::<i64>().ok())
+        .expect("Location should end in the Post id");
+    assert_public_atom_paths(claim_pending(&state).await, &session.username);
+
+    let suffix = format!("posts/{post_id}");
+    let response = app
+        .clone()
+        .oneshot(atompub_put_xml(
+            &session,
+            &suffix,
+            &atom_entry("Draft", true),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_public_atom_paths(claim_pending(&state).await, &session.username);
+
+    let response = app
+        .oneshot(atompub_put_xml(
+            &session,
+            &suffix,
+            &atom_entry("Republished", false),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_public_atom_paths(claim_pending(&state).await, &session.username);
+}
+
+#[apply(backends_matrix)]
+#[case::published(false, 12)]
+#[case::draft(true, 0)]
+#[tokio::test]
+async fn atompub_delete_enqueues_only_for_public_posts(
+    backend: Backend,
+    #[case] draft: bool,
+    #[case] expected_rows: usize,
+) {
+    let TestEnv { state, base } = backend.setup().await;
+    use_public_default(&state).await;
+    let session = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+
+    let response = app
+        .clone()
+        .oneshot(atompub_post_xml(
+            &session,
+            "posts",
+            &atom_entry("Delete", draft),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let post_id = response
+        .headers()
+        .get(axum::http::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|location| location.rsplit('/').next())
+        .and_then(|id| id.parse::<i64>().ok())
+        .expect("Location should end in the Post id");
+    let _creation_events = claim_pending(&state).await;
+
+    let request = atompub(&session, Method::DELETE, &format!("posts/{post_id}"))
+        .body(Body::empty())
+        .expect("DELETE request");
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let events = claim_pending(&state).await;
+    if expected_rows == 0 {
+        assert!(events.is_empty());
+    } else {
+        assert_public_atom_paths(events, &session.username);
+    }
 }

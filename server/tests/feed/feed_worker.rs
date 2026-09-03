@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use crate::helpers::CapturingWebSubClient;
 use chrono::Utc;
-use common::{feed::FeedFormat, ids::FeedEventId, test_support::parse_etag, time::UtcInstant};
+use common::{
+    feed::FeedFormat, ids::FeedEventId, test_support::parse_etag, time::UtcInstant,
+    visibility::AudienceTarget,
+};
 use host::{
     config_key::SiteConfigKey,
     feed::{FeedPath, SyndicationFeedRepresentation},
@@ -337,6 +340,58 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
     );
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn startup_catchup_ignores_nonpublic_posts(#[case] backend: Backend) {
+    use chrono::{Duration, TimeZone};
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let worker = make_worker(&state, Arc::new(CapturingWebSubClient::default()));
+    let user = SeedUser::new().seed(&state).await;
+    let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
+    upsert_cache(
+        &state,
+        FeedCacheRow::new(
+            fp("/feed.atom"),
+            SyndicationFeedRepresentation::try_from_stored(
+                FeedFormat::Atom,
+                FeedFormat::Atom.content_type(),
+                "stale".to_string(),
+            )
+            .expect("matching stored representation metadata"),
+            parse_etag("\"etag\""),
+            UtcInstant::from(t0),
+            UtcInstant::from(t0),
+        )
+        .expect("matching cache row formats"),
+    )
+    .await;
+    let go_live = t0 + Duration::hours(1);
+    SeedRawPost::new(user.user_id)
+        .published_at(UtcInstant::from(go_live))
+        .audiences(vec![AudienceTarget::Private])
+        .seed(&state)
+        .await;
+
+    worker
+        .go_live_pass(UtcInstant::from(go_live + Duration::hours(1)))
+        .await
+        .expect("go-live pass");
+
+    let feed_events = Arc::clone(&state.feed_events);
+    let pending = event_write(&state, move |transaction| {
+        Box::pin(async move {
+            feed_events
+                .claim_pending_batch(transaction, 100, chrono::Duration::minutes(5))
+                .await
+        })
+    })
+    .await;
+    assert!(
+        pending.is_empty(),
+        "restart catch-up must ignore non-Public Posts: {pending:?}"
+    );
+}
+
 /// Steady state: once seeded, each pass enqueues the author's feed surfaces for
 /// every post that crossed into "live" within the `(last_tick, now]` window.
 #[apply(backends)]
@@ -359,6 +414,13 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
     let go_live = t0 + Duration::minutes(30);
     SeedRawPost::new(user.user_id)
         .published_at(common::time::UtcInstant::from(go_live))
+        .seed(&state)
+        .await;
+
+    let private_user = SeedUser::new().seed(&state).await;
+    SeedRawPost::new(private_user.user_id)
+        .published_at(common::time::UtcInstant::from(go_live))
+        .audiences(vec![AudienceTarget::Private])
         .seed(&state)
         .await;
 
@@ -385,6 +447,11 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
     assert!(
         urls.iter().any(|u| u.as_ref() == "/feed.atom"),
         "the site feed must be enqueued on go-live: {urls:?}"
+    );
+    assert!(
+        urls.iter()
+            .all(|url| !url.contains(&*private_user.username)),
+        "the non-Public author's feeds must not be enqueued: {urls:?}"
     );
 }
 

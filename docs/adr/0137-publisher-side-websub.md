@@ -77,8 +77,6 @@ Hub enablement starts from current regenerated state; it does not replay every
 historical change. Hub removal stops remote publishing immediately while still
 refreshing documents so discovery is removed.
 
-Current production behavior deviates from this decision:
-[AtomPub feed invalidation and non-atomic web enqueue](https://github.com/jaunder-org/jaunder/issues/1051)
-leave protocol parity and transactional outbox incomplete.
-[Hub configuration, configuration snapshots, failure classification, `Retry-After`, retry budgets, and terminal recovery](https://github.com/jaunder-org/jaunder/issues/1052)
-remain incomplete. These deviations are implementation debt, not policy.
+Current production behavior still deviates from the decision in
+[hub configuration, configuration snapshots, failure classification, `Retry-After`, retry budgets, and terminal recovery](https://github.com/jaunder-org/jaunder/issues/1052).
+That deviation is implementation debt, not policy.

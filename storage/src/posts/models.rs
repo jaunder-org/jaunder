@@ -425,7 +425,8 @@ pub struct UpdatePostInput {
     /// empty vec produce no rows (the post is private).
     pub audiences: Vec<AudienceTarget>,
     /// Tags replacing the current set inside this content mutation transaction.
-    pub tags: Vec<TagLabel>,
+    /// `None` preserves the currently locked tag set; `Some` replaces it.
+    pub tags: Option<Vec<TagLabel>>,
     /// The single request clock used when publishing a previously-draft post now.
     pub request_clock: UtcInstant,
     /// Non-authoritative Org bookkeeping to compare under the owner lock.

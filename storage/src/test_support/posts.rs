@@ -511,7 +511,7 @@ impl UpdateRawPost {
             publish: self.publish,
             summary: self.summary,
             audiences: self.audiences,
-            tags: self.tags,
+            tags: Some(self.tags),
             request_clock: self.request_clock,
             expectations: PostBookkeepingExpectation::default(),
         }

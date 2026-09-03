@@ -388,12 +388,23 @@ impl PostDialect for Postgres {
             return Err(error);
         }
         let relations = load_post_update_relations(connection, post_id, input).await?;
+        let preserved_tags;
+        let desired_tags = if let Some(tags) = input.tags.as_deref() {
+            tags
+        } else {
+            preserved_tags = relations
+                .existing_tags
+                .iter()
+                .map(|tag| tag.tag_display.clone())
+                .collect::<Vec<_>>();
+            &preserved_tags
+        };
         let previous = fetch_post(connection, post_id).await?;
         let previous_has_public_audience = relations
             .existing_audiences
             .iter()
             .any(|(kind, _)| matches!(kind, common::visibility::TargetKind::Public));
-        let tag_diff = tags::post_tag_diff(&relations.existing_tags, &input.tags);
+        let tag_diff = tags::post_tag_diff(&relations.existing_tags, desired_tags);
         let mut locked_media = media::media_lock_set(input.rendered.media());
         let old_media_set: std::collections::BTreeSet<_> =
             relations.old_media.iter().cloned().collect();

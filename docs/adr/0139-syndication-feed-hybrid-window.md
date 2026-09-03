@@ -59,9 +59,8 @@ The regeneration-snapshot rule avoids a new per-feed timer or periodic sweep.
 Readers may see an item older than the configured interval until the next feed
 event; the cache is never described as continuously age-exact.
 
-Current production behavior already implements the union, defaults, inclusive
-fixed-duration cutoff, and deterministic prefix selection.
-[SQL ranks before anonymous/Public eligibility](https://github.com/jaunder-org/jaunder/issues/1051),
-so private rows can crowd out the count floor.
+Current production behavior implements the union, defaults, inclusive
+fixed-duration cutoff, deterministic prefix selection, and anonymous/Public
+eligibility before ranking.
 [Setting activation, arithmetic, and corrupted reads](https://github.com/jaunder-org/jaunder/issues/1053)
 remain implementation debt.

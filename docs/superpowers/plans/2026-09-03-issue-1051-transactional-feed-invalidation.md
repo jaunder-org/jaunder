@@ -56,7 +56,7 @@ Out:
     transitions, semantic no-op, repeated lifecycle, reverse rescheduling, Tag
     union/deduplication, and rollback on injected event insertion failure.
 
-- [ ] Task 3: Converge Web and AtomPub on the shared mutation services
+- [x] Task 3: Converge Web and AtomPub on the shared mutation services
   - Dependency: Task 2's service operations and error contracts are stable.
   - Contract: `web/src/posts/api.rs` and `server/src/atompub/posts.rs` retain
     transport authorization, conditional-request, response, and metrics policy;

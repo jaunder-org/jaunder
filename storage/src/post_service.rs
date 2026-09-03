@@ -346,8 +346,8 @@ pub struct PostUpdate<'a> {
     pub summary: Option<PostSummary>,
     /// Audience targeting for the post (replaces its existing rows). An empty
     pub audiences: Vec<AudienceTarget>,
-    /// Tags replacing the current set within the update transaction.
-    pub tags: Vec<common::tag::TagLabel>,
+    /// Tags replacing the current set, or `None` to preserve the locked state.
+    pub tags: Option<Vec<common::tag::TagLabel>>,
     /// The request clock reused if this update publishes a draft without a date.
     pub request_clock: UtcInstant,
     /// Non-authoritative Org bookkeeping expected to match the locked row.
@@ -1314,7 +1314,7 @@ mod tests {
             publish,
             summary: None,
             audiences,
-            tags: vec![parse_tag_label("rust")],
+            tags: Some(vec![parse_tag_label("rust")]),
             request_clock: now,
             expectations: PostBookkeepingExpectation::default(),
         };
@@ -1363,6 +1363,62 @@ mod tests {
     #[cfg(feature = "test-utils")]
     #[apply(backends)]
     #[tokio::test]
+    async fn update_preserves_tags_without_a_transport_preread(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await;
+        let post = crate::test_support::SeedRawPost::new(user.user_id)
+            .tags(["rust"])
+            .seed(&env.state)
+            .await;
+
+        confirmed(
+            perform_post_update(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&env.state.posts),
+                Arc::clone(&env.state.feed_events),
+                PostUpdate {
+                    post_id: post.post_id,
+                    editor_user_id: user.user_id,
+                    body: parse_post_body("Changed body."),
+                    title: None,
+                    format: PostFormat::Markdown,
+                    slug_override: None,
+                    publish: PublishUpdate::Publish { at: None },
+                    summary: None,
+                    audiences: vec![AudienceTarget::Public],
+                    tags: None,
+                    request_clock: UtcInstant::now(),
+                    expectations: PostBookkeepingExpectation::default(),
+                },
+            )
+            .await
+            .expect("update without replacement tags succeeds"),
+        );
+
+        let record = env
+            .state
+            .posts
+            .get_post_by_id(
+                post.post_id,
+                &common::visibility::ViewerIdentity::local(user.user_id),
+            )
+            .await
+            .expect("post loads")
+            .expect("post remains");
+        assert_eq!(
+            record
+                .tags
+                .into_iter()
+                .map(|tag| tag.tag_slug)
+                .collect::<Vec<_>>(),
+            vec![parse_tag("rust")]
+        );
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[apply(backends)]
+    #[tokio::test]
     async fn feed_enqueue_failure_rolls_back_update_after_enqueuing_old_and_new_tag_feeds(
         #[case] backend: Backend,
     ) {
@@ -1397,7 +1453,7 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
-                tags: vec![parse_tag_label("shared"), parse_tag_label("new")],
+                tags: Some(vec![parse_tag_label("shared"), parse_tag_label("new")]),
                 request_clock: UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1853,7 +1909,7 @@ mod tests {
             publish: PublishUpdate::Publish { at: None },
             summary: None,
             audiences: vec![AudienceTarget::Public],
-            tags: Vec::new(),
+            tags: Some(Vec::new()),
             request_clock: UtcInstant::now(),
             expectations: PostBookkeepingExpectation {
                 slug: Some(expected_slug),
@@ -1914,7 +1970,7 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
-                tags: Vec::new(),
+                tags: Some(Vec::new()),
                 request_clock: clock,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1960,7 +2016,7 @@ mod tests {
             publish: PublishUpdate::Unpublish,
             summary: None,
             audiences: vec![AudienceTarget::Public],
-            tags: Vec::new(),
+            tags: Some(Vec::new()),
             request_clock: UtcInstant::now(),
             expectations,
         };
@@ -2213,7 +2269,7 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
-                tags: Vec::new(),
+                tags: Some(Vec::new()),
                 request_clock: UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -2336,7 +2392,7 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
-                tags: Vec::new(),
+                tags: Some(Vec::new()),
                 request_clock: UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },
