@@ -8,8 +8,7 @@ use axum::{
 };
 use base64::Engine as _;
 use common::client_telemetry::{
-    CLIENT_TELEMETRY_VERSION, ClientErrorContext, ClientErrorKind, ClientSourceKind,
-    ClientTelemetryEvent,
+    ClientErrorContext, ClientErrorKind, ClientSourceKind, ClientTelemetryEvent, WIRE_VERSION,
 };
 use opentelemetry_sdk::metrics::{
     InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
@@ -156,7 +155,7 @@ fn request(
 
 fn event() -> ClientTelemetryEvent {
     ClientTelemetryEvent {
-        version: CLIENT_TELEMETRY_VERSION,
+        version: WIRE_VERSION,
         kind: ClientErrorKind::Storage,
         context: ClientErrorContext::ThemeStorageRead,
         source_kind: ClientSourceKind::StorageUnavailable,

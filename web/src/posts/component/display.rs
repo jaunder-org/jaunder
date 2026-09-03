@@ -50,19 +50,19 @@ pub fn PostDisplay<'a>(
         // not the component" (ADR-0041 §4). The projector only ever renders this
         // anonymous view, so this is the only path that must coincide.
         None => {
-            let inner = posts::render::render_post_inner(&view);
+            let inner = posts::render::post_inner(&view);
             inner
                 .inject_into(leptos::html::article().class("j-post"))
                 .into_any()
         }
         // Authored layout (own posts, with the action column). The content column is
-        // the SAME `render_post_content` the anonymous arm wraps, injected via
+        // the SAME `post_content` the anonymous arm wraps, injected via
         // `inner_html` so it coincides with the projector's paint (#181); only the
         // reactive action column (`children`, carrying edit/delete handlers that
         // `inner_html` can't) overlays it as a sibling — hand-rebuilt reactive
         // markup here would diverge from the projector and reintroduce the flash.
         Some(children) => {
-            let inner_content = posts::render::render_post_content(&view);
+            let inner_content = posts::render::post_content(&view);
             view! {
                 <article class="j-post">
                     <Avatar name=&post.username size=38 />

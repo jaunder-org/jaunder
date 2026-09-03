@@ -200,7 +200,7 @@ pub(super) fn extract_media_refs_with(html: &str, pairs: &[(&str, &str)]) -> Vec
 
 /// A rendered post body and the media it references — derived together, never separately.
 ///
-/// The reference set is private and [`render_with_media`] is the only constructor, so a
+/// The reference set is private and [`with_media`] is the only constructor, so a
 /// value whose set disagrees with its HTML is unrepresentable rather than merely
 /// discouraged (spec D1). Everything downstream only *carries* the pair: a post
 /// create/update input on its way to storage cannot substitute a set of its own, correct
@@ -212,10 +212,10 @@ pub(super) fn extract_media_refs_with(html: &str, pairs: &[(&str, &str)]) -> Vec
 /// ```
 /// # use common::post_body::PostBody;
 /// # use common::render::PostFormat;
-/// # use host::render::{RenderOutput, render, render_with_media};
+/// # use host::render::{RenderOutput, render, with_media};
 /// # let body: PostBody = "hello".parse().unwrap();
 /// let other: PostBody = "different".parse().unwrap();
-/// let out = render_with_media(&body, &PostFormat::Markdown);
+/// let out = with_media(&body, &PostFormat::Markdown);
 /// assert!(out.media().is_empty());
 /// let _direct = render(&body, &PostFormat::Markdown); // `render` resolves
 /// let _other = render(&other, &PostFormat::Markdown); // the last negative's fixture
@@ -224,7 +224,7 @@ pub(super) fn extract_media_refs_with(html: &str, pairs: &[(&str, &str)]) -> Vec
 /// ```compile_fail
 /// # use common::post_body::PostBody;
 /// # use common::render::PostFormat;
-/// # use host::render::{RenderOutput, render, render_with_media};
+/// # use host::render::{RenderOutput, render, with_media};
 /// # let body: PostBody = "hello".parse().unwrap();
 /// let html = render(&body, &PostFormat::Markdown);
 /// let _ = RenderOutput { html, media: vec![] }; // private field
@@ -234,10 +234,10 @@ pub(super) fn extract_media_refs_with(html: &str, pairs: &[(&str, &str)]) -> Vec
 /// ```compile_fail
 /// # use common::post_body::PostBody;
 /// # use common::render::PostFormat;
-/// # use host::render::{RenderOutput, render, render_with_media};
+/// # use host::render::{RenderOutput, render, with_media};
 /// # let body: PostBody = "hello".parse().unwrap();
 /// # let other: PostBody = "different".parse().unwrap();
-/// let mut out = render_with_media(&body, &PostFormat::Markdown);
+/// let mut out = with_media(&body, &PostFormat::Markdown);
 /// out.html = render(&other, &PostFormat::Markdown); // private field
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -253,7 +253,7 @@ pub struct RenderOutput {
 
 /// Renders a body and derives its media references from its sanitized HTML.
 #[must_use]
-pub fn render_with_media(body: &PostBody, format: &PostFormat) -> RenderOutput {
+pub fn with_media(body: &PostBody, format: &PostFormat) -> RenderOutput {
     let html = render(body, format);
     let media = extract_media_refs(html.as_ref());
     RenderOutput { html, media }
@@ -735,7 +735,7 @@ mod tests {
     #[test]
     fn render_output_derives_its_media_from_its_html() {
         let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("photo.jpg")));
-        let out = render_with_media(&body, &PostFormat::Markdown);
+        let out = with_media(&body, &PostFormat::Markdown);
         assert_eq!(
             out.media(),
             extract_media_refs(out.html().as_ref()).as_slice()
@@ -745,7 +745,7 @@ mod tests {
 
     #[test]
     fn render_output_media_is_empty_for_a_body_referencing_nothing() {
-        let out = render_with_media(&parse_post_body("plain text"), &PostFormat::Markdown);
+        let out = with_media(&parse_post_body("plain text"), &PostFormat::Markdown);
         assert!(out.media().is_empty());
     }
 

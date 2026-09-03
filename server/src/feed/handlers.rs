@@ -53,7 +53,7 @@ async fn serve(
             // Cache miss: build the feed inline rather than 404. The background
             // worker only refreshes feeds that have pending events, so a cold or
             // evicted cache entry has no other path back to being populated.
-            match regenerate::regenerate_feed(
+            match regenerate::feed(
                 site_config.as_ref(),
                 posts.as_ref(),
                 Arc::clone(&feed_cache),

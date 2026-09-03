@@ -312,8 +312,7 @@ async fn delete_media_member_force_bypasses_owner_retained_file(#[case] backend:
         .map(parse_content_hash)
         .expect("member URL includes the content hash");
     let filename = parse_filename("pic.png");
-    let media_url =
-        common::media::media_url(&common::media::MediaSource::Upload, &sha256, &filename);
+    let media_url = common::media::url(&common::media::MediaSource::Upload, &sha256, &filename);
     SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("![referenced]({media_url})")))
         .seed(&state)
@@ -349,7 +348,7 @@ async fn delete_media_member_returns_409_for_another_owners_retained_reference(
         .nth(1)
         .map(parse_content_hash)
         .expect("member URL includes the content hash");
-    let media_url = common::media::media_url(
+    let media_url = common::media::url(
         &common::media::MediaSource::Upload,
         &sha256,
         &parse_filename("retained.png"),
@@ -398,7 +397,7 @@ async fn delete_media_member_force_bypasses_owner_reference_ownership_evidence(
         .map(parse_content_hash)
         .expect("member URL includes the content hash");
     let exact_filename = parse_filename("exact-origin.png");
-    let exact_media_url = common::media::media_url(
+    let exact_media_url = common::media::url(
         &common::media::MediaSource::Upload,
         &exact_hash,
         &exact_filename,
@@ -432,7 +431,7 @@ async fn delete_media_member_force_bypasses_owner_reference_ownership_evidence(
         .map(parse_content_hash)
         .expect("member URL includes the content hash");
     let foreign_filename = parse_filename("foreign-origin.png");
-    let foreign_media_url = common::media::media_url(
+    let foreign_media_url = common::media::url(
         &common::media::MediaSource::Upload,
         &foreign_hash,
         &foreign_filename,
@@ -470,7 +469,7 @@ async fn delete_media_member_force_bypasses_owner_reference_ownership_evidence(
         .nth(1)
         .map(parse_content_hash)
         .expect("member URL includes the content hash");
-    let unknown_media_url = common::media::media_url(
+    let unknown_media_url = common::media::url(
         &common::media::MediaSource::Upload,
         &unknown_hash,
         &parse_filename("unknown-origin.png"),

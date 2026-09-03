@@ -41,7 +41,7 @@ pub enum RegenerateError {
 /// [`RegenerateError::CacheCommitIndeterminate`] if the cache write may have
 /// committed but its acknowledgement was lost, or [`RegenerateError::BadUrl`] for
 /// the defensive, never-hit parse guard.
-pub async fn regenerate_feed(
+pub async fn feed(
     site_config: &dyn SiteConfigStorage,
     posts: &dyn PostStorage,
     feed_cache: Arc<dyn FeedCacheStorage>,
@@ -300,7 +300,7 @@ mod tests {
             .parse::<FeedPath>()
             .expect("valid feed path");
 
-        let row = regenerate_feed(
+        let row = feed(
             &site_config,
             &posts,
             feed_cache,
@@ -349,7 +349,7 @@ mod tests {
         let feed_cache: Arc<dyn FeedCacheStorage> = Arc::new(feed_cache);
         let feed_path = "/feed.rss".parse::<FeedPath>().expect("valid feed path");
 
-        let err = regenerate_feed(
+        let err = feed(
             &site_config,
             &posts,
             feed_cache,

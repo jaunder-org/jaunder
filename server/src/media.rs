@@ -271,7 +271,7 @@ fn resolve_media_path(
     storage_path: &std::path::Path,
     address: ServeAddress,
 ) -> (MediaSource, ContentHash, Filename, PathBuf) {
-    let file_path = storage_path.join("media").join(media::media_path(
+    let file_path = storage_path.join("media").join(media::path(
         &address.source,
         &address.hash,
         &address.filename,

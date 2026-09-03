@@ -7,7 +7,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Wire version accepted by the client-telemetry intake.
-pub const CLIENT_TELEMETRY_VERSION: u8 = 1;
+pub const WIRE_VERSION: u8 = 1;
 
 /// Broad class of an unexpected browser failure.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -64,7 +64,7 @@ where
     D: Deserializer<'de>,
 {
     let version = u8::deserialize(deserializer)?;
-    if version == CLIENT_TELEMETRY_VERSION {
+    if version == WIRE_VERSION {
         Ok(version)
     } else {
         Err(serde::de::Error::custom(
@@ -116,7 +116,7 @@ mod tests {
 
     fn event() -> ClientTelemetryEvent {
         ClientTelemetryEvent {
-            version: CLIENT_TELEMETRY_VERSION,
+            version: WIRE_VERSION,
             kind: ClientErrorKind::Internal,
             context: ClientErrorContext::MediaFormData,
             source_kind: ClientSourceKind::FormDataAppend,
@@ -216,7 +216,7 @@ mod tests {
             for (context, _) in CONTEXTS {
                 for (source_kind, _) in SOURCES {
                     let encoded = serde_json::to_vec(&ClientTelemetryEvent {
-                        version: CLIENT_TELEMETRY_VERSION,
+                        version: WIRE_VERSION,
                         kind,
                         context,
                         source_kind,

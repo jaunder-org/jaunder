@@ -498,7 +498,7 @@ impl MediaManager {
                 "storage.media.quota_temp_cleanup",
             );
         }
-        let relative_path = media::media_path(
+        let relative_path = media::path(
             &MediaSource::Upload,
             &metadata.sha256_hex,
             &metadata.filename,
@@ -540,7 +540,7 @@ impl MediaManager {
         } else {
             UploadOutcome::Stored
         });
-        let url = media::media_url(
+        let url = media::url(
             &MediaSource::Upload,
             &metadata.sha256_hex,
             &metadata.filename,
@@ -752,7 +752,7 @@ impl MediaManager {
     /// Removes a confirmed-reclaimable canonical media file after its database
     /// scope has completed.
     async fn remove_media_file(storage_path: &Path, media: &MediaRef) -> anyhow::Result<()> {
-        let file_path = storage_path.join("media").join(media::media_path(
+        let file_path = storage_path.join("media").join(media::path(
             &media.source,
             &media.sha256,
             &media.filename,
@@ -1095,11 +1095,8 @@ mod tests {
     }
 
     fn stored_path(root: &Path, media: &MediaRef) -> PathBuf {
-        root.join("media").join(media::media_path(
-            &media.source,
-            &media.sha256,
-            &media.filename,
-        ))
+        root.join("media")
+            .join(media::path(&media.source, &media.sha256, &media.filename))
     }
 
     // guard:no-backend — filesystem-only temporary upload cleanup.
@@ -1565,7 +1562,7 @@ mod tests {
         };
         let tmp_path = temp.path().join("upload.tmp");
         fs::write(&tmp_path, b"png-ish").await.unwrap();
-        let target_path = temp.path().join("media").join(media::media_path(
+        let target_path = temp.path().join("media").join(media::path(
             &MediaSource::Upload,
             &metadata.sha256_hex,
             &metadata.filename,
@@ -1775,7 +1772,7 @@ mod tests {
         };
         let tmp_path = temp.path().join("upload.tmp");
         fs::write(&tmp_path, b"png-ish").await.unwrap();
-        let target_path = temp.path().join("media").join(media::media_path(
+        let target_path = temp.path().join("media").join(media::path(
             &MediaSource::Upload,
             &metadata.sha256_hex,
             &metadata.filename,
@@ -2174,7 +2171,7 @@ mod tests {
         assert_eq!(resp.value().content_type, "image/png");
         assert_eq!(
             resp.value().url,
-            media::media_url(&MediaSource::Upload, &expected, &filename)
+            media::url(&MediaSource::Upload, &expected, &filename)
         );
     }
 

@@ -51,7 +51,7 @@ pub(crate) async fn open_sqlite_database_with_pool(
         .await?;
 
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
-    let instance_id = instance_identity::ensure_instance_identity(&pool).await?;
+    let instance_id = instance_identity::ensure(&pool).await?;
     posts::backfill_post_media_references(&pool).await?;
     Ok((make_app_state(pool.clone()), pool, instance_id))
 }

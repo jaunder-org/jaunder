@@ -56,9 +56,8 @@ both dimensions:
   worker's go-live pass dedupes its fan-out and enqueues it in bounded chunks
   (`ENQUEUE_CHUNK` URLs per transaction — a post-outage catch-up becomes many
   bounded holds, never one unbounded one), and the web request-path fan-out
-  (`web::feed_events::enqueue_feed_events`) issues one call per mutation — both
-  pinned by mock-counted tests (`times(1)` on `enqueue_many`, `times(0)` on
-  `enqueue`).
+  issues one `FeedEventStorage::enqueue_many` call per mutation — both pinned by
+  mock-counted tests (`times(1)` on `enqueue_many`, `times(0)` on `enqueue`).
 - The remaining known per-row write loops are tracked for the same treatment:
   per-tag writes (#771). Related occupancy pressure: session-touch write
   amplification (#770) and the regeneration N+1 read (#772).

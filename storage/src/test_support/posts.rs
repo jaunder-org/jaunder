@@ -17,7 +17,7 @@ use common::tag::TagLabel;
 use common::test_support::{parse_post_body, parse_post_title, parse_slug, parse_tag_label};
 use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
-use host::render::render_with_media;
+use host::render::with_media;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -308,7 +308,7 @@ impl SeedRawPost {
             .slug
             .unwrap_or_else(|| parse_slug(&format!("post-{n}")));
         let title = parse_post_title(&format!("Post {n}"));
-        let rendered = render_with_media(&self.body, &self.format);
+        let rendered = with_media(&self.body, &self.format);
         CreatePostInput {
             user_id: self.user_id,
             title: Some(title),
@@ -393,7 +393,7 @@ impl SeedRawPost {
 /// no default could be right.
 ///
 /// `rendered` has no setter: [`build`][Self::build] derives it from `body`/`format` with the
-/// production [`host::render::render_with_media`], exactly as `SeedRawPost` does, so no call
+/// production [`host::render::with_media`], exactly as `SeedRawPost` does, so no call
 /// site re-spells the render and no input can carry a reference set that disagrees with its HTML
 /// (#711).
 ///
@@ -497,7 +497,7 @@ impl UpdateRawPost {
     /// Resolve into the [`UpdatePostInput`] to hand `update_post`, rendering `body` here.
     #[must_use]
     pub fn build(self) -> UpdatePostInput {
-        let rendered = render_with_media(&self.body, &self.format);
+        let rendered = with_media(&self.body, &self.format);
         UpdatePostInput {
             title: self.title,
             slug: self.slug,

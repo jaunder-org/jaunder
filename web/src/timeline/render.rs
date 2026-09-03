@@ -10,7 +10,7 @@ use crate::html::Markup;
 /// button (which replaces it on boot) doesn't reflow. Rendered only when there is
 /// a next page, matching the reactive `has_more` guard.
 #[must_use]
-pub(crate) fn render_load_more(has_more: bool) -> Markup {
+pub(crate) fn load_more(has_more: bool) -> Markup {
     Markup::new(html! {
         @if has_more {
             button { "Load more" }
@@ -20,15 +20,15 @@ pub(crate) fn render_load_more(has_more: bool) -> Markup {
 
 #[cfg(test)]
 mod tests {
-    use super::render_load_more;
+    use super::load_more;
 
     #[test]
     fn load_more_placeholder_renders_when_more_rows_exist() {
-        assert_eq!(render_load_more(true), "<button>Load more</button>");
+        assert_eq!(load_more(true), "<button>Load more</button>");
     }
 
     #[test]
     fn load_more_placeholder_renders_empty_without_next_page() {
-        assert_eq!(render_load_more(false), "");
+        assert_eq!(load_more(false), "");
     }
 }

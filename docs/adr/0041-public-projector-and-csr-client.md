@@ -27,12 +27,12 @@ reverse-engineer. Everything lands behind the existing `csr` cargo feature; the
    compile under `ssr`/`hydrate`/`csr`.
 
 2. **Coincidence is by construction, not by parallel markup.**
-   `render_body(&seed)` returns an HTML `String`; the projector embeds it and
-   the CSR public-page component renders it via `inner_html=render_body(&seed)`.
-   Both sides emit identical bytes because they call the identical fn — there is
-   no `view!`-macro twin to keep in sync. Sharing a _reactive component_
-   rendered to string is the prohibited trap door back to isomorphic SSR
-   (ADR-0040).
+   `render::body(&seed)` returns an HTML `String`; the projector embeds it and
+   the CSR public-page component renders it via
+   `inner_html=render::body(&seed)`. Both sides emit identical bytes because
+   they call the identical fn — there is no `view!`-macro twin to keep in sync.
+   Sharing a _reactive component_ rendered to string is the prohibited trap door
+   back to isomorphic SSR (ADR-0040).
 
 3. **The seed contract is `PageSeed`** — a serde enum (one variant per public
    page kind, carrying the route context the bare `TimelinePage` lacks)
@@ -58,7 +58,7 @@ reverse-engineer. Everything lands behind the existing `csr` cargo feature; the
 - The projector is a thin axum handler with no `reactive_graph` on the path —
   same posture as the existing feed handlers, which it structurally resembles.
 - The public first paint is flash-free: the CSR mount replaces `#app` with
-  content its own `render_body` reproduces from the same seed.
+  content its own `render::body` reproduces from the same seed.
 - The `#[server]` fns stay the data API for client-side navigation and the
   authed cockpit; only the anonymous first-paint fetch is duplicated into the
   projector via the shared `fetch_*` seam.

@@ -199,7 +199,7 @@ async fn existing_export_tables(connection: &mut PgConnection) -> Result<Vec<Str
                 .map(CatalogTableName::into_inner)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(backup::backup_table_set(names))
+    Ok(backup::table_set(names))
 }
 
 async fn import_table(

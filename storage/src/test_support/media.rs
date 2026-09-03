@@ -11,7 +11,7 @@ use crate::{AppState, DbConnectOptions, StorageRuntimeConfig, resolved_postgres_
 use common::ids::PostId;
 use common::media::{
     Filename, MediaRef, MediaReferenceForm, MediaReferenceKind, MediaSource, detect_content_type,
-    media_url,
+    url,
 };
 use common::test_support::{parse_byte_size, parse_content_hash};
 use common::time::UtcInstant;
@@ -138,12 +138,12 @@ pub fn media_ref_for(name: &str) -> MediaRef {
 }
 
 /// The canonical serve URL for `name` under the shared test digest — the single place
-/// a test spells a media URL, composed by the production [`media_url`] rather than by
+/// a test spells a media URL, composed by the production [`url`] rather than by
 /// re-writing the layout.
 #[must_use]
 pub fn media_url_for(name: &str) -> String {
     let media = media_ref_for(name);
-    media_url(&media.source, &media.sha256, &media.filename).to_string()
+    url(&media.source, &media.sha256, &media.filename).to_string()
 }
 
 /// Seeds a `media` row owned by `user_id` for the fixture entry called `name`, and

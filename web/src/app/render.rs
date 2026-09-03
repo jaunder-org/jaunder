@@ -13,7 +13,7 @@
 //!
 //! Ungated and host-compiled, so these twins stay host-tested and
 //! coverage-measured; the `#[cfg(test)] mod tests` below are the coincidence
-//! tests. Leaf primitives it composes (`render_body`, `render_sidebar`) live in
+//! tests. Leaf primitives it composes (`posts::render::body`, `render_sidebar`) live in
 //! their own modules and are called cross-module.
 
 use common::seed::PageSeed;
@@ -199,7 +199,7 @@ pub fn render_shell(seed: &PageSeed) -> Markup {
             div class="j-shell" {
                 aside class="j-sidebar" { (crate::sidebar::render_sidebar("")) }
                 div class="j-main-region" {
-                    main class="j-main" { (crate::posts::render::render_body(seed)) }
+                    main class="j-main" { (crate::posts::render::body(seed)) }
                 }
             }
         }

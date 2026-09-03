@@ -897,7 +897,7 @@ mod tests {
         .into_iter()
         .map(CatalogTableName::into_inner)
         .collect::<Vec<String>>();
-        let tables = super::super::backup_table_set(names);
+        let tables = super::super::table_set(names);
         let mut columns = BTreeSet::new();
         for table in tables {
             let pragma = format!(

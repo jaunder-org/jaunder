@@ -29,7 +29,7 @@ pub(crate) async fn open_postgres_database_with_pool(
     let options = resolved_postgres_options(options, runtime);
     let pool = PgPool::connect_with(options).await?;
     sqlx::migrate!("./migrations/postgres").run(&pool).await?;
-    let instance_id = instance_identity::ensure_instance_identity(&pool).await?;
+    let instance_id = instance_identity::ensure(&pool).await?;
     posts::backfill_post_media_references(&pool).await?;
     Ok((make_app_state(pool.clone()), pool, instance_id))
 }
