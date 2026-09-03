@@ -5,21 +5,16 @@ use std::{fmt, io, str::FromStr};
 use serde::{Deserialize, Serialize};
 
 use crate::role_instant::impl_role_instant;
-use crate::{
-    EmailVerified, InviteRecord, MediaRecord, OperatorStatus, PostTag, SessionRecord, UserRecord,
-};
+use crate::{EmailVerified, OperatorStatus, PostTag, SessionRecord, UserRecord};
 use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::ids::{PostId, TagId, UserId};
-use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaSource};
 use common::session_label::SessionLabel;
 use common::tag::{Tag, TagLabel};
-use common::tagged_url::MediaSourceUrl;
 use common::time::UtcInstant;
 use common::token::TokenHash;
 use common::username::Username;
-use host::invite::InviteCode;
 use host::password;
 use host::stored_password_hash::StoredPasswordHash;
 
@@ -34,18 +29,6 @@ impl_role_instant!(SessionCreatedAt, UtcInstant);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
 pub(crate) struct SessionLastUsedAt(UtcInstant);
 impl_role_instant!(SessionLastUsedAt, UtcInstant);
-
-/// The `invites.created_at` storage timestamp role, distinct from `expires_at`
-/// so mappings cannot transpose silently (#751).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-pub(crate) struct InviteCreatedAt(UtcInstant);
-impl_role_instant!(InviteCreatedAt, UtcInstant);
-
-/// The `invites.expires_at` storage timestamp role, distinct from `created_at`
-/// so mappings cannot transpose silently (#751).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-pub(crate) struct InviteExpiresAt(UtcInstant);
-impl_role_instant!(InviteExpiresAt, UtcInstant);
 
 /// A session label retained exactly until the repair-on-read display policy.
 #[derive(Debug, macros::SqlxBridge)]
@@ -89,15 +72,8 @@ where
 // UserRecord helpers
 // ---------------------------------------------------------------------------
 
-/// The parts a [`UserRecord`] is assembled from.
-///
-/// **Named fields, not a tuple.** `email_verified` and `is_operator` have
-/// distinct domain types, so swapping them fails at compile time at the one
-/// place the mapping happens ([`user_record_from_row`]).
-///
-/// Not a decode target and deliberately **not** `#[derive(FromRow)]` — [`UserRow`] is the
-/// type rows decode into, and it stays a tuple alias precisely so the gate keeps policing
-/// its elements.
+/// Password-bearing authentication projections use these named fields to avoid
+/// transposing the distinct `email_verified` and `is_operator` domain types.
 pub(crate) struct UserRecordParts {
     pub(crate) user_id: UserId,
     pub(crate) username: Username,
@@ -179,39 +155,6 @@ fn build_session_record(
 }
 
 // ---------------------------------------------------------------------------
-// InviteRecord helpers
-// ---------------------------------------------------------------------------
-
-struct InviteRecordParts {
-    code: InviteCode,
-    created_at: InviteCreatedAt,
-    expires_at: InviteExpiresAt,
-    used_at: Option<UtcInstant>,
-    used_by: Option<UserId>,
-}
-
-fn build_invite_record(
-    InviteRecordParts {
-        code,
-        created_at,
-        expires_at,
-        used_at,
-        used_by,
-    }: InviteRecordParts,
-) -> InviteRecord {
-    // The `code` column decodes straight into `InviteCode` via the sqlx bridge (#438),
-    // `used_by` through the id bridge (#686), and the created/expires pair through
-    // distinct role wrappers (#751), so corrupt/migrated values are rejected before
-    // we ever get here and timestamp swaps fail at the row-to-parts seam.
-    InviteRecord {
-        code,
-        created_at: created_at.value(),
-        expires_at: expires_at.value(),
-        used_at,
-        used_by,
-    }
-}
-// ---------------------------------------------------------------------------
 // Post tag JSON helper
 // ---------------------------------------------------------------------------
 
@@ -267,54 +210,6 @@ struct PostTagJson {
     tag_display: TagLabel,
 }
 
-// ---------------------------------------------------------------------------
-// Row types and conversions
-// ---------------------------------------------------------------------------
-
-pub(crate) type UserRow = (
-    UserId,
-    Username,
-    Option<DisplayName>,
-    Option<Bio>,
-    UtcInstant,
-    Option<UtcInstant>,
-    Option<Email>,
-    EmailVerified,
-    OperatorStatus,
-);
-
-/// The single positional→named boundary for a decoded user row.
-///
-/// [`UserRow`] is a tuple because that is what `query_as` decodes into; this is the one
-/// place its order is interpreted. Concentrating that here is the point of
-/// [`UserRecordParts`] having named fields: a mis-ordered pair is visible in one
-/// reviewable mapping rather than implied at every call site.
-pub(crate) fn user_record_from_row(row: UserRow) -> UserRecord {
-    let (
-        user_id,
-        username,
-        display_name,
-        bio,
-        created_at,
-        last_authenticated_at,
-        email,
-        email_verified,
-        is_operator,
-    ) = row;
-
-    build_user_record(UserRecordParts {
-        user_id,
-        username,
-        display_name,
-        bio,
-        created_at,
-        last_authenticated_at,
-        email,
-        email_verified,
-        is_operator,
-    })
-}
-
 #[derive(sqlx::FromRow)]
 pub struct SessionRow {
     token_hash: TokenHash,
@@ -347,25 +242,6 @@ pub(crate) fn session_record_from_row(row: SessionRow) -> SessionRecord {
     })
 }
 
-#[derive(sqlx::FromRow)]
-pub(crate) struct InviteRow {
-    code: InviteCode,
-    created_at: InviteCreatedAt,
-    expires_at: InviteExpiresAt,
-    used_at: Option<UtcInstant>,
-    used_by: Option<UserId>,
-}
-
-pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
-    build_invite_record(InviteRecordParts {
-        code: row.code,
-        created_at: row.created_at,
-        expires_at: row.expires_at,
-        used_at: row.used_at,
-        used_by: row.used_by,
-    })
-}
-
 pub(crate) type InviteTokenStateRow = (Option<UtcInstant>, UtcInstant);
 
 pub(crate) fn classify_invite_token_state(
@@ -377,37 +253,6 @@ pub(crate) fn classify_invite_token_state(
         Some((Some(_), _)) => TokenState::AlreadyUsed,
         Some((None, expires_at)) if expires_at <= now => TokenState::Expired,
         Some((None, _)) => TokenState::Claimable,
-    }
-}
-
-pub(crate) type MediaRow = (
-    UserId,
-    ContentHash,
-    Filename,
-    MediaSource,
-    ContentType,
-    ByteSize,
-    Option<MediaSourceUrl>,
-    UtcInstant,
-);
-
-pub(crate) fn media_record_from_row(row: MediaRow) -> MediaRecord {
-    let (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at) = row;
-    // Every column arrives as its domain type — `sha256`/`filename` through the validating
-    // string bridge (#438), `source` through its `MediaSource` text-enum bridge (#607),
-    // `source_url` as a `MediaSourceUrl` (#675), `user_id` through the id bridge and
-    // `size_bytes` through the *bound-checking* numeric bridge (#686), whose `Decode`
-    // re-runs `ByteSize`'s `min` so a negative stored value is still rejected as a
-    // column-decode error. Nothing is left to convert, so this build step is infallible.
-    MediaRecord {
-        user_id,
-        sha256,
-        filename,
-        source,
-        content_type,
-        size_bytes,
-        source_url,
-        created_at,
     }
 }
 
@@ -699,11 +544,11 @@ pub(crate) mod swallowed_test {
 mod tests {
     use super::*;
     use crate::sql::QueryStorageExt;
-    use crate::test_support::{Backend, backends, parse_invite_code};
+    use crate::test_support::{Backend, backends};
 
     use common::test_support::{
-        parse_bio, parse_byte_size, parse_content_hash, parse_content_type, parse_display_name,
-        parse_email, parse_filename, parse_session_label, parse_token_hash, parse_username,
+        parse_bio, parse_display_name, parse_email, parse_session_label, parse_token_hash,
+        parse_username,
     };
     use common::time::UtcInstant;
     use rstest::*;
@@ -767,26 +612,6 @@ mod tests {
         });
         assert_eq!(record.token_hash, "hash");
         assert_eq!(record.username, "alice");
-    }
-
-    #[test]
-    fn test_build_invite_record() {
-        let created_at = UtcInstant::now();
-        let expires_at = UtcInstant::from(created_at.value() + chrono::Duration::days(7));
-        let used_at = UtcInstant::from(created_at.value() + chrono::Duration::hours(1));
-        let record = build_invite_record(InviteRecordParts {
-            code: parse_invite_code("invite-code"),
-            created_at: created_at.into(),
-            expires_at: expires_at.into(),
-            used_at: Some(used_at),
-            used_by: Some(UserId::from(7)),
-        });
-
-        assert_eq!(record.code.as_ref(), "invite-code");
-        assert_eq!(record.created_at, created_at);
-        assert_eq!(record.expires_at, expires_at);
-        assert_eq!(record.used_at, Some(used_at));
-        assert_eq!(record.used_by, Some(UserId::from(7)));
     }
 
     #[test]
@@ -938,36 +763,8 @@ mod tests {
     // a malformed stored value is a `ColumnDecode` error at the query boundary,
     // covered by `users.rs`'s / `sessions.rs`'s decode-error tests.
 
-    /// A canonical 64-char lowercase-hex content hash for row fixtures.
-    const ROW_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-
-    // `media_record_from_row` has nothing to hand-parse: `sha256`/`filename`/`source`
-    // decode straight into `ContentHash`/`Filename`/`MediaSource` via the sqlx bridge
-    // (#438, #607), so a malformed stored value is a `ColumnDecode` error at the query
-    // boundary (covered by `media.rs`'s decode-error tests) — a `MediaRow` cannot even
-    // hold an invalid value.
-
     #[test]
-    fn media_record_from_row_accepts_valid_source() {
-        let row: MediaRow = (
-            UserId::from(1),
-            parse_content_hash(ROW_HASH),
-            parse_filename("file.png"),
-            MediaSource::Upload,
-            parse_content_type("image/png"),
-            parse_byte_size("42"),
-            None,
-            UtcInstant::now(),
-        );
-        let record = media_record_from_row(row);
-        assert_eq!(record.user_id, UserId::from(1));
-        assert_eq!(record.source, MediaSource::Upload);
-        assert_eq!(record.sha256, ROW_HASH);
-        assert_eq!(record.filename, "file.png");
-    }
-
-    #[test]
-    fn session_and_invite_row_helpers_round_trip() {
+    fn session_row_helper_round_trips() {
         let now = UtcInstant::now();
         let last_used_at = UtcInstant::from(now.value() + chrono::Duration::seconds(5));
         let session = SessionRow {
@@ -982,37 +779,6 @@ mod tests {
         assert_eq!(session_record.user_id, UserId::from(1));
         assert_eq!(session_record.created_at, now);
         assert_eq!(session_record.last_used_at, last_used_at);
-
-        let expires_at = UtcInstant::from(now.value() + chrono::Duration::days(7));
-        let invite = InviteRow {
-            code: parse_invite_code("code"),
-            created_at: now.into(),
-            expires_at: expires_at.into(),
-            used_at: None,
-            used_by: None,
-        };
-        let invite_record = invite_record_from_row(invite);
-        assert_eq!(invite_record.code.as_ref(), "code");
-        assert_eq!(invite_record.created_at, now);
-        assert_eq!(invite_record.expires_at, expires_at);
-    }
-
-    #[test]
-    fn user_row_helper_delegates_to_build_user_record() {
-        let now = UtcInstant::now();
-        let row: UserRow = (
-            UserId::from(1),
-            parse_username("alice"),
-            None,
-            None,
-            now,
-            None,
-            None,
-            EmailVerified::UNVERIFIED,
-            OperatorStatus::STANDARD,
-        );
-        let record = user_record_from_row(row);
-        assert_eq!(record.user_id, UserId::from(1));
     }
 
     #[test]
@@ -1044,7 +810,6 @@ mod tests {
     #[test]
     fn invite_token_state_classifier_preserves_roles_and_exact_expiry() {
         let now: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-        let created_at: UtcInstant = "2099-01-01T03:04:05.123456Z".parse().unwrap();
         let expired_at: UtcInstant = "2099-01-02T03:04:05.123455Z".parse().unwrap();
         let claimable_at: UtcInstant = "2099-01-02T03:04:05.123457Z".parse().unwrap();
         let used_at: UtcInstant = "2099-01-02T03:04:05.123454Z".parse().unwrap();
@@ -1066,16 +831,6 @@ mod tests {
             classify_invite_token_state(Some((None, claimable_at)), now),
             TokenState::Claimable
         );
-        let parts = InviteRecordParts {
-            code: parse_invite_code("role-ordering"),
-            created_at: InviteCreatedAt::from(created_at),
-            expires_at: InviteExpiresAt::from(claimable_at),
-            used_at: None,
-            used_by: None,
-        };
-        let record = build_invite_record(parts);
-        assert_eq!(record.created_at, created_at);
-        assert_eq!(record.expires_at, claimable_at);
     }
 
     #[test]
@@ -1157,50 +912,5 @@ mod tests {
         // PHC format: $argon2id$v=19$<params>$<salt>$<hash>
         let params = |h: &str| h.split('$').nth(3).map(str::to_owned);
         assert_eq!(params(dummy_password_hash().as_ref()), params(&real));
-    }
-
-    #[test]
-    fn user_record_from_row_maps_some_fields() {
-        let now = UtcInstant::now();
-        let row: UserRow = (
-            UserId::from(1),
-            parse_username("alice"),
-            Some(parse_display_name("Alice")),
-            Some(parse_bio("Bio")),
-            now,
-            Some(now),
-            Some(parse_email("alice@example.com")),
-            EmailVerified::VERIFIED,
-            OperatorStatus::STANDARD,
-        );
-        let record = user_record_from_row(row);
-        assert_eq!(record.user_id, UserId::from(1));
-        assert_eq!(record.username, "alice");
-        assert_eq!(record.display_name, Some(parse_display_name("Alice")));
-        assert_eq!(record.bio, Some(parse_bio("Bio")));
-        assert_eq!(record.created_at, now);
-        assert_eq!(record.last_authenticated_at, Some(now));
-        assert_eq!(record.email.unwrap(), "alice@example.com");
-        assert_eq!(record.email_verified, EmailVerified::VERIFIED);
-    }
-
-    #[test]
-    fn invite_record_from_row_maps_some_fields() {
-        let now = UtcInstant::now();
-        let expires_at = UtcInstant::from(now.value() + chrono::Duration::days(7));
-        let used_at = UtcInstant::from(now.value() + chrono::Duration::hours(1));
-        let row = InviteRow {
-            code: parse_invite_code("code"),
-            created_at: now.into(),
-            expires_at: expires_at.into(),
-            used_at: Some(used_at),
-            used_by: Some(UserId::from(1)),
-        };
-        let record = invite_record_from_row(row);
-        assert_eq!(record.code.as_ref(), "code");
-        assert_eq!(record.created_at, now);
-        assert_eq!(record.expires_at, expires_at);
-        assert_eq!(record.used_at, Some(used_at));
-        assert_eq!(record.used_by, Some(UserId::from(1)));
     }
 }

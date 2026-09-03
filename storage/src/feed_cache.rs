@@ -141,7 +141,7 @@ pub trait FeedCacheStorage: Send + Sync {
 }
 
 #[derive(Debug, sqlx::FromRow)]
-struct FeedCacheRowRecord {
+struct StoredFeedCacheRow {
     feed_url: FeedPath,
     body: StoredFeedBody,
     etag: ETag,
@@ -161,7 +161,7 @@ struct FeedCacheRowParts {
 
 // `FeedPath` and `ContentType` decode through validating sqlx bridges (#438).
 // This mapper establishes the remaining semantic agreement before exposing a row.
-fn row_from_record(row: FeedCacheRowRecord) -> Result<FeedCacheRow, FeedCacheError> {
+fn row_from_stored(row: StoredFeedCacheRow) -> Result<FeedCacheRow, FeedCacheError> {
     let parts = FeedCacheRowParts {
         feed_path: row.feed_url,
         body: row.body.into_inner(),
@@ -212,7 +212,7 @@ impl<DB: Database> FeedCacheStore<DB> {
 impl<DB> FeedCacheStorage for FeedCacheStore<DB>
 where
     DB: Backend,
-    FeedCacheRowRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
+    StoredFeedCacheRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `FeedPath` binds and decodes as itself via the ADR-0071 sqlx bridge (the
     // `feed_url` column decodes into `FeedPath`, and the binds encode `&FeedPath`).
@@ -229,14 +229,14 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn get(&self, feed_path: &FeedPath) -> Result<Option<FeedCacheRow>, FeedCacheError> {
-        let row = sqlx::query_as::<_, FeedCacheRowRecord>(
+        let row = sqlx::query_as::<_, StoredFeedCacheRow>(
             "SELECT feed_url, body, etag, content_type, updated_at, generated_at \
              FROM feed_cache WHERE feed_url = $1",
         )
         .bind_storage(feed_path)
         .fetch_optional(&self.pool)
         .await?;
-        row.map(row_from_record).transpose()
+        row.map(row_from_stored).transpose()
     }
 
     #[tracing::instrument(

@@ -548,6 +548,21 @@ pub struct TagRecord {
     pub tag_slug: Tag,
 }
 
+impl<'r, R> sqlx::FromRow<'r, R> for TagRecord
+where
+    R: Row,
+    &'r str: sqlx::ColumnIndex<R>,
+    TagId: Decode<'r, R::Database> + Type<R::Database>,
+    Tag: Decode<'r, R::Database> + Type<R::Database>,
+{
+    fn from_row(row: &'r R) -> Result<Self> {
+        let tag_id = row.try_get::<TagId, _>("tag_id")?;
+        let tag_slug = row.try_get::<Tag, _>("tag_slug")?;
+
+        Ok(Self { tag_id, tag_slug })
+    }
+}
+
 /// A post-tag association returned by [`PostStorage`] tag queries.
 #[derive(Clone, Debug)]
 pub struct PostTag {
@@ -556,6 +571,30 @@ pub struct PostTag {
     pub tag_slug: Tag,
     /// The original case-sensitive display name of the tag.
     pub tag_display: TagLabel,
+}
+
+impl<'r, R> sqlx::FromRow<'r, R> for PostTag
+where
+    R: Row,
+    &'r str: sqlx::ColumnIndex<R>,
+    PostId: Decode<'r, R::Database> + Type<R::Database>,
+    TagId: Decode<'r, R::Database> + Type<R::Database>,
+    Tag: Decode<'r, R::Database> + Type<R::Database>,
+    TagLabel: Decode<'r, R::Database> + Type<R::Database>,
+{
+    fn from_row(row: &'r R) -> Result<Self> {
+        let post_id = row.try_get::<PostId, _>("post_id")?;
+        let tag_id = row.try_get::<TagId, _>("tag_id")?;
+        let tag_slug = row.try_get::<Tag, _>("tag_slug")?;
+        let tag_display = row.try_get::<TagLabel, _>("tag_display")?;
+
+        Ok(Self {
+            post_id,
+            tag_id,
+            tag_slug,
+            tag_display,
+        })
+    }
 }
 
 /// A post that crossed into "live" within a time window, carrying exactly the
@@ -641,25 +680,6 @@ pub(crate) struct PostBookkeepingRow {
     pub rendered_html: RenderedHtml,
     pub summary: Option<PostSummary>,
     pub published_at: Option<UtcInstant>,
-}
-pub(crate) type TagListRow = (TagId, Tag);
-pub(crate) type PostTagRow = (PostId, TagId, Tag, TagLabel);
-
-/// Maps [`SELECT_POST_TAGS`] rows to [`PostTag`].
-///
-/// The row tuple's first two positions are `post_id` and `tag_id` — adjacent ids
-/// of the same width. Typing them rather than `i64` is what stops a swapped
-/// destructuring from compiling (ADR-0063 §2); the SELECT's column order is the
-/// only thing that pairs them otherwise.
-pub(crate) fn post_tags_from_rows(rows: Vec<PostTagRow>) -> Vec<PostTag> {
-    rows.into_iter()
-        .map(|(post_id, tag_id, tag_slug, tag_display)| PostTag {
-            post_id,
-            tag_id,
-            tag_slug,
-            tag_display,
-        })
-        .collect()
 }
 
 /// The slug-level difference between a post's existing tags and a desired set
@@ -1925,8 +1945,8 @@ where
     PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (Exists,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    PostTagRow: for<'r> sqlx::FromRow<'r, DB::Row>,
-    TagListRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    PostTag: for<'r> sqlx::FromRow<'r, DB::Row>,
+    TagRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     (TargetKind, Option<AudienceId>): for<'r> sqlx::FromRow<'r, DB::Row>,
     (UtcInstant,): for<'r> sqlx::FromRow<'r, DB::Row>,
     RevisionDetailRow: DecodeRawRow<DB>,
@@ -1959,8 +1979,6 @@ where
     // Every post-media column decodes as its domain type through ADR-0071's
     // bridge; this tuple keeps the reference form typed at the SQL boundary.
     (
-        PostId,
-        MediaSource,
         ContentHash,
         Filename,
         MediaReferenceKind,
@@ -3188,9 +3206,11 @@ where
             .as_deref()
             .map(TagSlugPrefixPattern::from_normalized_prefix);
 
-        let rows = match pattern {
-            Some(ref like) => {
-                sqlx::query_as::<_, TagListRow>(
+        // `tag_slug` decodes straight into `Tag` via the sqlx bridge (#438), so a
+        // malformed stored value is rejected as a column-decode error above.
+        match &pattern {
+            Some(like) => {
+                sqlx::query_as::<_, TagRecord>(
                     "SELECT tag_id, tag_slug FROM tags
                      WHERE tag_slug LIKE $1
                      ORDER BY tag_slug
@@ -3199,26 +3219,19 @@ where
                 .bind_storage(like)
                 .bind_storage(limit)
                 .fetch_all(&self.pool)
-                .await?
+                .await
             }
             None => {
-                sqlx::query_as::<_, TagListRow>(
+                sqlx::query_as::<_, TagRecord>(
                     "SELECT tag_id, tag_slug FROM tags
                      ORDER BY tag_slug
                      LIMIT $1",
                 )
                 .bind_storage(limit)
                 .fetch_all(&self.pool)
-                .await?
+                .await
             }
-        };
-
-        // `tag_slug` decodes straight into `Tag` via the sqlx bridge (#438), so a
-        // malformed stored value is rejected as a column-decode error above.
-        Ok(rows
-            .into_iter()
-            .map(|(tag_id, tag_slug)| TagRecord { tag_id, tag_slug })
-            .collect())
+        }
     }
 
     #[tracing::instrument(
