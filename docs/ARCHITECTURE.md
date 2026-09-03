@@ -136,26 +136,26 @@ explicitly re-exports the public post-storage surface, while `store.rs` owns
 `PostStorage`, `PostStore`, and the generic implementation; focused leaves own
 the post records, cursors, tags, media, visibility, lifecycle, errors, and
 syndication reads. The crate also hosts orchestration that is persistence work
-rather than a trait — `post_service.rs` (post create/update over `PostStorage`,
-shared by the web and AtomPub front-ends) and `media_manager.rs`
-(content-addressed upload, relocated from `server` in #517). The trait bodies
-are implemented once by a generic `XStore<DB>` bounded on public
-`Backend: sqlx::Database` (`storage/src/backend.rs`, implemented for `Sqlite`
-and `Postgres`). `Backend` carries the `db.system` span constant and adapts
-sealed `WriteTransaction` capability to the concrete connection. Crate-private
-`AppStateBackend: Backend`, implemented only for those two backends, converts a
-pool into a backend-erased `WriteScope` exclusively for generic `AppState`
-composition. Downstream code can run the factory-minted scope but cannot name
-that trait or construct one from a pool, preserving ADR-0164's
-downstream-construction invariant without changing ADR-0019's public marker
-surface. Backend-specific SQL is isolated in per-trait `XDialect` impls under
-`storage/src/{sqlite,postgres}/*.rs`. Traits with no divergence need no dialect
-at all. Neither `Backend` nor `AppStateBackend` carries sqlx bind/executor
-bounds — each store impl restates exactly the subset it uses
-([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)). Span names are
-backend-agnostic (`storage.posts.*`) with `db.system` distinguishing the
-backend. Pure-SQL helpers shared by both dialects live in `storage/src/sql.rs`
-and `storage/src/helpers.rs`.
+rather than a trait — `post_service.rs` (create, update, publish, unpublish, and
+soft-delete operations shared by Web and AtomPub, including same-`WriteScope`
+public-feed invalidation) and `media_manager.rs` (content-addressed upload,
+relocated from `server` in #517). The trait bodies are implemented once by a
+generic `XStore<DB>` bounded on public `Backend: sqlx::Database`
+(`storage/src/backend.rs`, implemented for `Sqlite` and `Postgres`). `Backend`
+carries the `db.system` span constant and adapts sealed `WriteTransaction`
+capability to the concrete connection. Crate-private `AppStateBackend: Backend`,
+implemented only for those two backends, converts a pool into a backend-erased
+`WriteScope` exclusively for generic `AppState` composition. Downstream code can
+run the factory-minted scope but cannot name that trait or construct one from a
+pool, preserving ADR-0164's downstream-construction invariant without changing
+ADR-0019's public marker surface. Backend-specific SQL is isolated in per-trait
+`XDialect` impls under `storage/src/{sqlite,postgres}/*.rs`. Traits with no
+divergence need no dialect at all. Neither `Backend` nor `AppStateBackend`
+carries sqlx bind/executor bounds — each store impl restates exactly the subset
+it uses ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)). Span
+names are backend-agnostic (`storage.posts.*`) with `db.system` distinguishing
+the backend. Pure-SQL helpers shared by both dialects live in
+`storage/src/sql.rs` and `storage/src/helpers.rs`.
 
 Backup is the deliberate exception to the dedup: `storage/src/sqlite/backup.rs`
 and `storage/src/postgres/backup.rs` are kept as separate implementations
@@ -242,10 +242,11 @@ client-validation mapping
   per-row write loops (a fan-out issues **one** batched storage call), and no
   CPU-heavy or foreign-I/O work between a write transaction's first write and
   its commit. `FeedEventStorage::enqueue_many`
-  (`storage/src/feed_events.rs:260`) is the reference implementation — one
-  write-first transaction around the single-row INSERT — and the feed worker
-  calls it in `ENQUEUE_CHUNK`-bounded batches (`server/src/feed/worker.rs:108`)
-  so batch size is capped by construction
+  (`storage/src/feed_events.rs:260`) is the reference implementation: one
+  batched insert in its caller-owned transaction. Post mutation services call it
+  inside the mutation's existing `WriteScope`; the feed worker calls it in
+  `ENQUEUE_CHUNK`-bounded transactions (`server/src/feed/worker.rs:108`), so
+  batch size is capped by construction
   ([ADR-0092](adr/0092-sqlite-bounded-write-lock-occupancy.md)). ADR-0022's
   Argon2-inside-the-claim-window is the one documented exception.
 - **Slug-ordered tag locks.** A transaction that will touch several `tags` rows
@@ -459,10 +460,12 @@ The deep normalization interface is `common::org::normalize_org`: it owns the
 Org element boundary, typed metadata parsing, field/lifecycle precedence, date
 conversion, and canonical stripping, and returns effective metadata plus
 non-authoritative bookkeeping. Web and AtomPub adapters map their wire presence
-into that interface; `perform_post_creation`/`perform_post_update` then persist
-its canonical result, with module-qualified host free-function ETag construction
-and SQLite/PostgreSQL checking final slug/format/time inside the write
-transaction before commit or revision creation.
+into that interface. Storage-owned `perform_post_creation`,
+`perform_post_update`, `publish_post`, `unpublish_post`, and `soft_delete_post`
+then persist the canonical transition and its earned public-feed events in one
+`WriteScope`; module-qualified host free functions construct ETags, and
+SQLite/PostgreSQL check final slug/format/time inside the write transaction
+before commit or revision creation.
 
 **`RenderedHtml` guarantees "contains no active markup", through a common-owned,
 host-only sanitization boundary**
@@ -572,12 +575,13 @@ slug editable on a later update, and scheduling or publishing freezes it again
 **Visibility starts with active/not-deleted eligibility, then applies two
 orthogonal predicates on the same reads.** _Time_: an active Post is draft
 (`published_at` NULL), scheduled (future), or live (past); every public read
-gates `published_at <= now` with `now` an explicit parameter, the feed worker's
-`go_live_pass` (`server/src/feed/worker.rs`) makes future-dated go-live
-restart-durable for cached feeds, and the posts storage contract carries publish
-as an explicit `PublishUpdate { Unpublish, Publish { at } }` to each dialect's
-SQL-binding boundary, so scheduling, backdating, and pullback to draft
-round-trip ([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
+gates `published_at <= now` with `now` an explicit parameter. The feed worker's
+steady-state and feed-relative restart passes admit only non-deleted Posts with
+a Public audience whose publication time became due, using their current author
+and Tags. The posts storage contract carries publish as an explicit
+`PublishUpdate { Unpublish, Publish { at } }` to each dialect's SQL-binding
+boundary, so scheduling, backdating, and pullback to draft round-trip
+([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
 _Audience_: posts target audiences
 (`AudienceTarget::{Public, Private, Subscribers, Named}`) stored as
 `post_audiences` rows; a viewer is a `ViewerIdentity` (channel identity or
@@ -711,23 +715,21 @@ post's `rendered_html` — Atom `type="html"` and the RSS/JSON Feed equivalents
 `common::feed` grammar is exactly `FeedFormat`, `FeedSurface`, and
 `canonicalize`; the remaining Syndication Feed types and qualified rendering
 operations live in `host`. `server/src/feed/handlers.rs` serves the cached
-bytes, and `regenerate::feed` rebuilds them. Scheduled posts reach feeds via
-`FeedWorker::go_live_pass` (`server/src/feed/worker.rs:84`), which enqueues
-regeneration for feeds whose posts crossed their publish time
+bytes, and `regenerate::feed` rebuilds them. Scheduled posts reach feeds through
+`FeedWorker::go_live_pass` (`server/src/feed/worker.rs:84`): both the
+steady-state `(last_tick, now]` pass and feed-relative restart catch-up enqueue
+only non-deleted Public Posts after their publication time becomes due
 ([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
 
-**Accepted membership target.** Cached membership is to apply anonymous/Public
-eligibility before ranking, then select the union of the first `feeds.min_items`
-Posts and all Posts at or newer than the inclusive `feeds.min_days` cutoff,
-ordered by `published_at DESC, post_id DESC`. Defaults are 20 Posts and 30 fixed
-24-hour UTC days. The window is exact when regenerated, not continuously as time
-passes. A successful setting mutation is to durably invalidate all cached feeds
-before returning; checked overlarge ages mean all history, while corrupt stored
-values are errors
+**Accepted membership.** Cached membership applies anonymous/Public eligibility
+before ranking, then selects the union of the first `feeds.min_items` Posts and
+all Posts at or newer than the inclusive `feeds.min_days` cutoff, ordered by
+`published_at DESC, post_id DESC`. Defaults are 20 Posts and 30 fixed 24-hour
+UTC days. The window is exact when regenerated, not continuously as time passes.
+A successful setting mutation is to durably invalidate all cached feeds before
+returning; checked overlarge ages mean all history, while corrupt stored values
+are errors
 ([Syndication Feed hybrid-window decision](adr/0139-syndication-feed-hybrid-window.md)).
-The union and defaults ship today, but
-[SQL ranks before visibility](https://github.com/jaunder-org/jaunder/issues/1051),
-so private rows can crowd out the count floor.
 [Setting activation, arithmetic, and corrupted values](https://github.com/jaunder-org/jaunder/issues/1053)
 remain implementation debt.
 
@@ -849,8 +851,11 @@ separately inspectable and redrivable
 **Current publisher behavior.** Production pings through
 `WebSubClient::send_publish(&HubUrl, &FeedUrl)`
 (`server/src/websub/contract.rs:45`) and reports `Success`, `Exhausted`,
-`Failed`, or `NoHub`.
-[AtomPub does not enqueue, web enqueue is not atomic, and triggers are coarse](https://github.com/jaunder-org/jaunder/issues/1051).
+`Failed`, or `NoHub`. Web and AtomPub mutations converge on storage-owned
+create, update, publish, unpublish, and soft-delete services. Those services
+classify the locked old and new anonymous/Public projection, derive the union of
+affected Site, User, Site Tag, and User Tag paths in every format, and insert
+feed events in the Post mutation's `WriteScope` transaction.
 [Configuration changes do not invalidate caches, worker/regenerator snapshots can differ, configuration access errors can collapse to `NoHub`, HTTP failures retry alike, `Retry-After` is ignored, budgets are shared, and terminal rows lack redrive](https://github.com/jaunder-org/jaunder/issues/1052).
 
 The

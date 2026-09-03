@@ -1394,7 +1394,17 @@ mod tests {
             .state
             .write_scope
             .run(move |transaction| {
-                Box::pin(async move { posts.soft_delete_post(transaction, post_id, owner).await })
+                Box::pin(async move {
+                    posts
+                        .soft_delete_post(
+                            transaction,
+                            post_id,
+                            owner,
+                            common::time::UtcInstant::now(),
+                        )
+                        .await
+                        .map(|_| ())
+                })
             })
             .await
             .expect("deletion captures the prior media subject");

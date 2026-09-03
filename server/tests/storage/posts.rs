@@ -65,7 +65,12 @@ macro_rules! soft_delete_post {
             .run(move |transaction| {
                 Box::pin(async move {
                     posts
-                        .soft_delete_post(transaction, $post_id, $user_id)
+                        .soft_delete_post(
+                            transaction,
+                            $post_id,
+                            $user_id,
+                            common::time::UtcInstant::now(),
+                        )
                         .await
                 })
             })
@@ -148,7 +153,7 @@ async fn post_update_writes_revision_and_updates_record(#[case] backend: Backend
         .format(PostFormat::Org)
         .unpublish()
         .build();
-    let record = confirmed(update_post!(state, post_id, user_id, update_input).unwrap());
+    let record = confirmed(update_post!(state, post_id, user_id, update_input).unwrap()).record;
 
     assert_eq!(record.title.as_deref(), Some("Updated Title"));
     assert_eq!(record.format, PostFormat::Org);
@@ -219,8 +224,7 @@ fn update_input<'a>(
         publish,
         summary: None,
         audiences: vec![AudienceTarget::Public],
-        tags: vec![],
-        previous_tag_slugs: vec![],
+        tags: Some(vec![]),
         request_clock: common::time::UtcInstant::now(),
         expectations: PostBookkeepingExpectation::default(),
     }
@@ -684,7 +688,8 @@ async fn post_revisions_created(#[case] backend: Backend) {
                 .build()
         )
         .expect("update_post failed"),
-    );
+    )
+    .record;
 
     assert_eq!(result.title.as_deref(), Some("Updated"));
     assert_eq!(result.body, "Updated content");
@@ -1290,8 +1295,7 @@ async fn perform_post_update_markdown_renders_and_updates(#[case] backend: Backe
                 publish: PublishUpdate::Unpublish,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
-                tags: vec![],
-                previous_tag_slugs: vec![],
+                tags: Some(vec![]),
                 request_clock: common::time::UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1339,8 +1343,7 @@ async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
                 publish: PublishUpdate::Unpublish,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
-                tags: vec![],
-                previous_tag_slugs: vec![],
+                tags: Some(vec![]),
                 request_clock: common::time::UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },

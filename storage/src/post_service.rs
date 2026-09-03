@@ -11,8 +11,8 @@ use thiserror::Error;
 
 use crate::{
     CreatePostError, CreatePostInput, FeedEventStorage, MediaContentLocks,
-    PostBookkeepingExpectation, PostFormat, PostRecord, PostStorage, PublishUpdate,
-    UpdatePostError, UpdatePostInput, WriteScope, WriteScopeError,
+    PostBookkeepingExpectation, PostFormat, PostMutation, PostRecord, PostStorage, PublishUpdate,
+    UpdatePostError, UpdatePostInput, WriteScope, WriteScopeError, WriteTransaction,
 };
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, UserId};
@@ -74,6 +74,61 @@ fn map_post_update_scope_error(error: WriteScopeError<UpdatePostError>) -> Perfo
     }
 }
 
+fn is_currently_public(record: &PostRecord, has_public_audience: bool, now: UtcInstant) -> bool {
+    has_public_audience
+        && record.deleted_at.is_none()
+        && record
+            .published_at
+            .is_some_and(|published_at| published_at <= now)
+}
+
+fn affected_post_feed_paths(
+    previous: Option<(&PostRecord, bool)>,
+    current: (&PostRecord, bool),
+    now: UtcInstant,
+) -> Vec<host::feed::FeedPath> {
+    let previous_is_public =
+        previous.is_some_and(|(record, has_public)| is_currently_public(record, has_public, now));
+    let current_is_public = is_currently_public(current.0, current.1, now);
+    if !previous_is_public && !current_is_public {
+        return Vec::new();
+    }
+    let record = current.0;
+    let mut tags = HashSet::new();
+    let tag_slugs = previous
+        .into_iter()
+        .flat_map(|(record, _)| record.tags.iter())
+        .chain(current.0.tags.iter())
+        .map(|tag| &tag.tag_slug)
+        .filter(|tag| tags.insert(*tag));
+    feed::affected_feed_urls(&record.author_username, tag_slugs)
+}
+
+async fn enqueue_lifecycle_feed_paths(
+    transaction: &mut WriteTransaction,
+    feed_events: &Arc<dyn FeedEventStorage>,
+    mutation: &PostMutation,
+    now: UtcInstant,
+) -> Result<(), UpdatePostError> {
+    if !mutation.changed {
+        return Ok(());
+    }
+    let feed_paths = affected_post_feed_paths(
+        Some((&mutation.previous, mutation.previous_has_public_audience)),
+        (&mutation.record, mutation.previous_has_public_audience),
+        now,
+    );
+    if !feed_paths.is_empty() {
+        feed_events
+            .enqueue_many(transaction, &feed_paths)
+            .await
+            .map_err(|error| match error {
+                crate::FeedEventError::Db(error) => UpdatePostError::Internal(error),
+            })?;
+    }
+    Ok(())
+}
+
 /// Renders `body` according to `format` and creates the post through one caller-owned
 /// write scope.
 ///
@@ -107,16 +162,25 @@ pub async fn create_rendered_post(
             let feed_events = Arc::clone(&feed_events);
             Box::pin(async move {
                 let created = storage.create_post(transaction, &input, now).await?;
-                let feed_paths = feed::affected_feed_urls(
-                    &created.record.author_username,
-                    created.record.tags.iter().map(|tag| &tag.tag_slug),
+                let feed_paths = affected_post_feed_paths(
+                    None,
+                    (
+                        &created.record,
+                        input
+                            .audiences
+                            .iter()
+                            .any(|audience| matches!(audience, AudienceTarget::Public)),
+                    ),
+                    now,
                 );
-                feed_events
-                    .enqueue_many(transaction, &feed_paths)
-                    .await
-                    .map_err(|error| match error {
-                        crate::FeedEventError::Db(error) => CreatePostError::Internal(error),
-                    })?;
+                if !feed_paths.is_empty() {
+                    feed_events
+                        .enqueue_many(transaction, &feed_paths)
+                        .await
+                        .map_err(|error| match error {
+                            crate::FeedEventError::Db(error) => CreatePostError::Internal(error),
+                        })?;
+                }
                 Ok(created)
             })
         })
@@ -282,13 +346,9 @@ pub struct PostUpdate<'a> {
     /// Optional summary/excerpt.
     pub summary: Option<PostSummary>,
     /// Audience targeting for the post (replaces its existing rows). An empty
-    /// vec (or `[Private]`) makes the post author-only.
     pub audiences: Vec<AudienceTarget>,
-    /// Tags replacing the current set within the update transaction.
-    pub tags: Vec<common::tag::TagLabel>,
-    /// Tag slugs attached to the post before this update. Their feeds must be
-    /// regenerated too when the replacement removes them.
-    pub previous_tag_slugs: Vec<common::tag::Tag>,
+    /// Tags replacing the current set, or `None` to preserve the locked state.
+    pub tags: Option<Vec<common::tag::TagLabel>>,
     /// The request clock reused if this update publishes a draft without a date.
     pub request_clock: UtcInstant,
     /// Non-authoritative Org bookkeeping expected to match the locked row.
@@ -322,7 +382,6 @@ pub async fn perform_post_update(
         summary,
         audiences,
         tags,
-        previous_tag_slugs,
         request_clock,
         expectations,
     } = input;
@@ -343,7 +402,6 @@ pub async fn perform_post_update(
     };
 
     let rendered = host::render::with_media(&body, &format);
-    let updated_tag_slugs: Vec<_> = tags.iter().map(common::tag::TagLabel::slug).collect();
     let input = UpdatePostInput {
         title,
         slug,
@@ -372,24 +430,124 @@ pub async fn perform_post_update(
             let storage = Arc::clone(&storage);
             let feed_events = Arc::clone(&feed_events);
             Box::pin(async move {
-                let record = storage
+                let mutation = storage
                     .update_post(transaction, post_id, editor_user_id, &input)
                     .await?;
-                let mut tag_slugs = HashSet::new();
-                let feed_paths = feed::affected_feed_urls(
-                    &record.author_username,
-                    previous_tag_slugs
+                if mutation.changed {
+                    let current_has_public_audience = input
+                        .audiences
                         .iter()
-                        .chain(updated_tag_slugs.iter())
-                        .filter(|tag| tag_slugs.insert(*tag)),
-                );
-                feed_events
-                    .enqueue_many(transaction, &feed_paths)
-                    .await
-                    .map_err(|error| match error {
-                        crate::FeedEventError::Db(error) => UpdatePostError::Internal(error),
-                    })?;
-                Ok::<PostRecord, UpdatePostError>(record)
+                        .any(|audience| matches!(audience, AudienceTarget::Public));
+                    let feed_paths = affected_post_feed_paths(
+                        Some((&mutation.previous, mutation.previous_has_public_audience)),
+                        (&mutation.record, current_has_public_audience),
+                        input.request_clock,
+                    );
+                    if !feed_paths.is_empty() {
+                        feed_events
+                            .enqueue_many(transaction, &feed_paths)
+                            .await
+                            .map_err(|error| match error {
+                                crate::FeedEventError::Db(error) => {
+                                    UpdatePostError::Internal(error)
+                                }
+                            })?;
+                    }
+                }
+                Ok::<PostRecord, UpdatePostError>(mutation.record)
+            })
+        })
+        .await
+        .map_err(map_post_update_scope_error)
+}
+
+/// Publishes an owned Post and atomically queues only its earned public feed
+/// invalidation paths.
+///
+/// # Errors
+///
+/// Returns the underlying ownership, liveness, storage, or feed-event enqueue
+/// failure as [`PerformUpdateError`].
+pub async fn publish_post(
+    write_scope: &WriteScope,
+    storage: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    post_id: PostId,
+    user_id: UserId,
+    now: UtcInstant,
+) -> Result<MutationOutcome<PostRecord>, PerformUpdateError> {
+    write_scope
+        .run(move |transaction| {
+            let storage = Arc::clone(&storage);
+            let feed_events = Arc::clone(&feed_events);
+            Box::pin(async move {
+                let mutation = storage
+                    .publish_post(transaction, post_id, user_id, now)
+                    .await?;
+                enqueue_lifecycle_feed_paths(transaction, &feed_events, &mutation, now).await?;
+                Ok::<PostRecord, UpdatePostError>(mutation.record)
+            })
+        })
+        .await
+        .map_err(map_post_update_scope_error)
+}
+
+/// Reverts an owned Post to draft status and atomically queues only its earned
+/// public feed invalidation paths.
+///
+/// # Errors
+///
+/// Returns the underlying ownership, liveness, storage, or feed-event enqueue
+/// failure as [`PerformUpdateError`].
+pub async fn unpublish_post(
+    write_scope: &WriteScope,
+    storage: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    post_id: PostId,
+    user_id: UserId,
+    now: UtcInstant,
+) -> Result<MutationOutcome<PostRecord>, PerformUpdateError> {
+    write_scope
+        .run(move |transaction| {
+            let storage = Arc::clone(&storage);
+            let feed_events = Arc::clone(&feed_events);
+            Box::pin(async move {
+                let mutation = storage
+                    .unpublish_post(transaction, post_id, user_id, now)
+                    .await?;
+                enqueue_lifecycle_feed_paths(transaction, &feed_events, &mutation, now).await?;
+                Ok::<PostRecord, UpdatePostError>(mutation.record)
+            })
+        })
+        .await
+        .map_err(map_post_update_scope_error)
+}
+
+/// Soft-deletes an owned Post and atomically queues only its earned public feed
+/// invalidation paths.
+///
+/// # Errors
+///
+/// Returns the underlying ownership, liveness, storage, or feed-event enqueue
+/// failure as [`PerformUpdateError`].
+pub async fn soft_delete_post(
+    write_scope: &WriteScope,
+    storage: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    post_id: PostId,
+    user_id: UserId,
+    now: UtcInstant,
+) -> Result<MutationOutcome<()>, PerformUpdateError> {
+    write_scope
+        .run(move |transaction| {
+            let storage = Arc::clone(&storage);
+            let feed_events = Arc::clone(&feed_events);
+            Box::pin(async move {
+                let mutation = storage
+                    .soft_delete_post(transaction, post_id, user_id, now)
+                    .await?;
+                enqueue_lifecycle_feed_paths(transaction, &feed_events, &mutation, now).await?;
+                Ok::<(), UpdatePostError>(())
             })
         })
         .await
@@ -643,8 +801,8 @@ mod tests {
     #[cfg(feature = "test-utils")]
     use crate::test_support::mock_write_scope;
     use crate::test_support::{
-        Backend, SeedUser, backends, confirmed, fetch_post_media, media_ref_for, media_url_for,
-        seed_media,
+        Backend, SeedPost, SeedUser, backends, confirmed, fetch_post_media, media_ref_for,
+        media_url_for, seed_media,
     };
     #[cfg(feature = "test-utils")]
     use crate::{MockFeedEventStorage, MockPostStorage};
@@ -654,6 +812,7 @@ mod tests {
     use common::test_support::{parse_post_body, parse_post_title, parse_row_limit, parse_slug};
     #[cfg(feature = "test-utils")]
     use common::test_support::{parse_tag, parse_tag_label};
+    #[cfg(feature = "test-utils")]
     use sqlx::Error as SqlxError;
 
     use rstest::*;
@@ -914,19 +1073,21 @@ mod tests {
             .expect_enqueue_many()
             .returning(|_, _| Err(crate::FeedEventError::Db(sqlx::Error::RowNotFound)));
         let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
+        let now = UtcInstant::now();
 
-        let error = perform_post_creation(
+        let error = perform_post_creation_at(
             &env.state.write_scope,
             &env.media_content_locks(),
             Arc::clone(&env.state.posts),
             feed_events,
+            now,
             PostCreation {
                 user_id: seeded_user.user_id,
                 body: parse_post_body("Post must not survive a failed feed enqueue."),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
-                published_at: None,
+                published_at: Some(now),
                 max_attempts: 1,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
@@ -952,12 +1113,318 @@ mod tests {
     #[cfg(feature = "test-utils")]
     #[apply(backends)]
     #[tokio::test]
+    async fn lifecycle_services_enqueue_only_changed_public_transitions(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await;
+        let post = SeedPost::new(user.user_id).seed(&env.state).await;
+        let mut feed_events = MockFeedEventStorage::new();
+        feed_events
+            .expect_enqueue_many()
+            .times(3)
+            .returning(|_, _| Ok(()));
+        let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
+        let storage: Arc<dyn PostStorage> = Arc::clone(&env.state.posts) as Arc<dyn PostStorage>;
+        let now = UtcInstant::now();
+
+        confirmed(
+            unpublish_post(
+                &env.state.write_scope,
+                Arc::clone(&storage),
+                Arc::clone(&feed_events),
+                post.post_id,
+                user.user_id,
+                now,
+            )
+            .await
+            .expect("public unpublish succeeds"),
+        );
+        confirmed(
+            unpublish_post(
+                &env.state.write_scope,
+                Arc::clone(&storage),
+                Arc::clone(&feed_events),
+                post.post_id,
+                user.user_id,
+                now,
+            )
+            .await
+            .expect("repeated unpublish is a no-op"),
+        );
+        confirmed(
+            publish_post(
+                &env.state.write_scope,
+                Arc::clone(&storage),
+                Arc::clone(&feed_events),
+                post.post_id,
+                user.user_id,
+                now,
+            )
+            .await
+            .expect("public publish succeeds"),
+        );
+        confirmed(
+            publish_post(
+                &env.state.write_scope,
+                Arc::clone(&storage),
+                Arc::clone(&feed_events),
+                post.post_id,
+                user.user_id,
+                now,
+            )
+            .await
+            .expect("repeated publish is a no-op"),
+        );
+        confirmed(
+            soft_delete_post(
+                &env.state.write_scope,
+                storage,
+                feed_events,
+                post.post_id,
+                user.user_id,
+                now,
+            )
+            .await
+            .expect("public delete succeeds"),
+        );
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[apply(backends)]
+    #[tokio::test]
+    async fn lifecycle_services_skip_nonpublic_transitions(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await;
+        let post = SeedPost::new(user.user_id)
+            .audiences(vec![AudienceTarget::Subscribers])
+            .seed(&env.state)
+            .await;
+        let mut feed_events = MockFeedEventStorage::new();
+        feed_events.expect_enqueue_many().times(0);
+        let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
+        let storage: Arc<dyn PostStorage> = Arc::clone(&env.state.posts) as Arc<dyn PostStorage>;
+        let now = UtcInstant::now();
+
+        confirmed(
+            unpublish_post(
+                &env.state.write_scope,
+                Arc::clone(&storage),
+                Arc::clone(&feed_events),
+                post.post_id,
+                user.user_id,
+                now,
+            )
+            .await
+            .expect("non-public unpublish succeeds"),
+        );
+        confirmed(
+            publish_post(
+                &env.state.write_scope,
+                Arc::clone(&storage),
+                Arc::clone(&feed_events),
+                post.post_id,
+                user.user_id,
+                now,
+            )
+            .await
+            .expect("non-public publish succeeds"),
+        );
+        confirmed(
+            soft_delete_post(
+                &env.state.write_scope,
+                storage,
+                feed_events,
+                post.post_id,
+                user.user_id,
+                now,
+            )
+            .await
+            .expect("non-public delete succeeds"),
+        );
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[apply(backends)]
+    #[tokio::test]
+    async fn lifecycle_enqueue_failure_rolls_back_the_post_transition(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await;
+        let post = SeedPost::new(user.user_id).seed(&env.state).await;
+        let mut feed_events = MockFeedEventStorage::new();
+        feed_events
+            .expect_enqueue_many()
+            .times(1)
+            .returning(|_, _| Err(crate::FeedEventError::Db(sqlx::Error::RowNotFound)));
+        let error = unpublish_post(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts) as Arc<dyn PostStorage>,
+            Arc::new(feed_events),
+            post.post_id,
+            user.user_id,
+            UtcInstant::now(),
+        )
+        .await
+        .expect_err("feed enqueue fails after lifecycle mutation");
+        assert!(matches!(error, PerformUpdateError::Storage(_)));
+        let retained = env
+            .state
+            .posts
+            .get_post_by_id(
+                post.post_id,
+                &common::visibility::ViewerIdentity::local(user.user_id),
+            )
+            .await
+            .expect("post loads")
+            .expect("post remains after rollback");
+        assert!(
+            retained.published_at.is_some(),
+            "failed enqueue rolls back the unpublish"
+        );
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[apply(backends)]
+    #[tokio::test]
+    async fn update_enqueues_only_changes_touching_the_current_public_projection(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await;
+        let now: UtcInstant = "2042-07-01T12:00:00Z".parse().unwrap();
+        let future = UtcInstant::from(now.value() + Duration::hours(1));
+        let later_future = UtcInstant::from(now.value() + Duration::hours(2));
+        let post = crate::test_support::SeedRawPost::new(user.user_id)
+            .published_at(UtcInstant::from(now.value() - Duration::hours(1)))
+            .audiences(vec![AudienceTarget::Public])
+            .tags(["rust"])
+            .seed(&env.state)
+            .await;
+        let mut feed_events = MockFeedEventStorage::new();
+        feed_events
+            .expect_enqueue_many()
+            .times(3)
+            .withf(|_, paths| paths.len() == 12)
+            .returning(|_, _| Ok(()));
+        let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
+        let update = |body: &str, publish, audiences| PostUpdate {
+            post_id: post.post_id,
+            editor_user_id: user.user_id,
+            body: parse_post_body(body),
+            title: None,
+            format: PostFormat::Markdown,
+            slug_override: None,
+            publish,
+            summary: None,
+            audiences,
+            tags: Some(vec![parse_tag_label("rust")]),
+            request_clock: now,
+            expectations: PostBookkeepingExpectation::default(),
+        };
+
+        for input in [
+            update("Private.", PublishUpdate::Publish { at: None }, vec![]),
+            update(
+                "Public again.",
+                PublishUpdate::Publish { at: None },
+                vec![AudienceTarget::Public],
+            ),
+            update(
+                "Scheduled.",
+                PublishUpdate::Publish { at: Some(future) },
+                vec![AudienceTarget::Public],
+            ),
+            update(
+                "Still scheduled.",
+                PublishUpdate::Publish {
+                    at: Some(later_future),
+                },
+                vec![AudienceTarget::Public],
+            ),
+            update(
+                "Still scheduled.",
+                PublishUpdate::Publish {
+                    at: Some(later_future),
+                },
+                vec![AudienceTarget::Public],
+            ),
+        ] {
+            confirmed(
+                perform_post_update(
+                    &env.state.write_scope,
+                    &env.media_content_locks(),
+                    Arc::clone(&env.state.posts),
+                    Arc::clone(&feed_events),
+                    input,
+                )
+                .await
+                .expect("projection transition update succeeds"),
+            );
+        }
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[apply(backends)]
+    #[tokio::test]
+    async fn update_preserves_tags_without_a_transport_preread(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await;
+        let post = crate::test_support::SeedRawPost::new(user.user_id)
+            .tags(["rust"])
+            .seed(&env.state)
+            .await;
+
+        confirmed(
+            perform_post_update(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&env.state.posts),
+                Arc::clone(&env.state.feed_events),
+                PostUpdate {
+                    post_id: post.post_id,
+                    editor_user_id: user.user_id,
+                    body: parse_post_body("Changed body."),
+                    title: None,
+                    format: PostFormat::Markdown,
+                    slug_override: None,
+                    publish: PublishUpdate::Publish { at: None },
+                    summary: None,
+                    audiences: vec![AudienceTarget::Public],
+                    tags: None,
+                    request_clock: UtcInstant::now(),
+                    expectations: PostBookkeepingExpectation::default(),
+                },
+            )
+            .await
+            .expect("update without replacement tags succeeds"),
+        );
+
+        let record = env
+            .state
+            .posts
+            .get_post_by_id(
+                post.post_id,
+                &common::visibility::ViewerIdentity::local(user.user_id),
+            )
+            .await
+            .expect("post loads")
+            .expect("post remains");
+        assert_eq!(
+            record
+                .tags
+                .into_iter()
+                .map(|tag| tag.tag_slug)
+                .collect::<Vec<_>>(),
+            vec![parse_tag("rust")]
+        );
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[apply(backends)]
+    #[tokio::test]
     async fn feed_enqueue_failure_rolls_back_update_after_enqueuing_old_and_new_tag_feeds(
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
         let seeded_user = SeedUser::new().seed(&env.state).await;
-        let previous_tag_slugs = vec![parse_tag("old"), parse_tag("shared")];
         let expected_tag_slugs = [parse_tag("old"), parse_tag("shared"), parse_tag("new")];
         let expected_feed_paths =
             feed::affected_feed_urls(&seeded_user.username, expected_tag_slugs.iter());
@@ -987,8 +1454,7 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
-                tags: vec![parse_tag_label("shared"), parse_tag_label("new")],
-                previous_tag_slugs,
+                tags: Some(vec![parse_tag_label("shared"), parse_tag_label("new")]),
                 request_clock: UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1444,8 +1910,7 @@ mod tests {
             publish: PublishUpdate::Publish { at: None },
             summary: None,
             audiences: vec![AudienceTarget::Public],
-            tags: Vec::new(),
-            previous_tag_slugs: vec![],
+            tags: Some(Vec::new()),
             request_clock: UtcInstant::now(),
             expectations: PostBookkeepingExpectation {
                 slug: Some(expected_slug),
@@ -1506,8 +1971,7 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
-                tags: Vec::new(),
-                previous_tag_slugs: vec![],
+                tags: Some(Vec::new()),
                 request_clock: clock,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1553,8 +2017,7 @@ mod tests {
             publish: PublishUpdate::Unpublish,
             summary: None,
             audiences: vec![AudienceTarget::Public],
-            tags: Vec::new(),
-            previous_tag_slugs: vec![],
+            tags: Some(Vec::new()),
             request_clock: UtcInstant::now(),
             expectations,
         };
@@ -1807,8 +2270,7 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
-                tags: Vec::new(),
-                previous_tag_slugs: vec![],
+                tags: Some(Vec::new()),
                 request_clock: UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1931,8 +2393,7 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
-                tags: Vec::new(),
-                previous_tag_slugs: vec![],
+                tags: Some(Vec::new()),
                 request_clock: UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },

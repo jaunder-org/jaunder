@@ -336,6 +336,22 @@ pub struct CreatedPost {
     pub idempotency_key_expired: bool,
 }
 
+/// The old/new state evidence a Post mutation supplies to its owning service.
+///
+/// Both projections are observed while the backend's mutation lock is held, so
+/// callers never need a stale pre-transaction read to decide feed work.
+#[derive(Clone, Debug)]
+pub struct PostMutation {
+    /// Post state after the requested mutation.
+    pub record: PostRecord,
+    /// Post state captured under the mutation lock before any write.
+    pub previous: PostRecord,
+    /// Whether the locked prior state had a Public audience.
+    pub previous_has_public_audience: bool,
+    /// Whether the request changed durable Post state.
+    pub changed: bool,
+}
+
 /// Input for creating a new post.
 #[derive(Clone)]
 pub struct CreatePostInput {
@@ -409,7 +425,8 @@ pub struct UpdatePostInput {
     /// empty vec produce no rows (the post is private).
     pub audiences: Vec<AudienceTarget>,
     /// Tags replacing the current set inside this content mutation transaction.
-    pub tags: Vec<TagLabel>,
+    /// `None` preserves the currently locked tag set; `Some` replaces it.
+    pub tags: Option<Vec<TagLabel>>,
     /// The single request clock used when publishing a previously-draft post now.
     pub request_clock: UtcInstant,
     /// Non-authoritative Org bookkeeping to compare under the owner lock.

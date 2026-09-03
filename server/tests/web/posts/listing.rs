@@ -219,7 +219,12 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
         .run(move |transaction| {
             Box::pin(async move {
                 posts
-                    .soft_delete_post(transaction, deleted_id, author.user_id)
+                    .soft_delete_post(
+                        transaction,
+                        deleted_id,
+                        author.user_id,
+                        common::time::UtcInstant::now(),
+                    )
                     .await
             })
         })
@@ -553,7 +558,12 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
         .run(move |transaction| {
             Box::pin(async move {
                 posts
-                    .soft_delete_post(transaction, deleted.post_id, author.user_id)
+                    .soft_delete_post(
+                        transaction,
+                        deleted.post_id,
+                        author.user_id,
+                        common::time::UtcInstant::now(),
+                    )
                     .await
             })
         })

@@ -301,7 +301,12 @@ async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend
         .run(move |transaction| {
             Box::pin(async move {
                 posts
-                    .soft_delete_post(transaction, created.post_id, session.user_id)
+                    .soft_delete_post(
+                        transaction,
+                        created.post_id,
+                        session.user_id,
+                        common::time::UtcInstant::now(),
+                    )
                     .await
             })
         })
@@ -417,7 +422,12 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] bac
         .run(move |transaction| {
             Box::pin(async move {
                 posts
-                    .soft_delete_post(transaction, created.post_id, session.user_id)
+                    .soft_delete_post(
+                        transaction,
+                        created.post_id,
+                        session.user_id,
+                        common::time::UtcInstant::now(),
+                    )
                     .await
             })
         })

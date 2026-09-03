@@ -20,8 +20,8 @@ use crate::posts::media::{
 };
 use crate::posts::models::{
     CreatePostInput, CreatedPost, CurrentPostRevisionSummary, PermalinkDate, PermalinkDateText,
-    PostRecord, PostRevisionDetail, PostRevisionPage, PostRevisionRecord, PostRevisionTag,
-    UpdatePostInput,
+    PostMutation, PostRecord, PostRevisionDetail, PostRevisionPage, PostRevisionRecord,
+    PostRevisionTag, UpdatePostInput,
 };
 use crate::posts::syndication::{self, GoLivePost};
 use crate::posts::tags;
@@ -235,10 +235,11 @@ pub trait PostStorage: Send + Sync {
         post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
-    ) -> Result<PostRecord, UpdatePostError>;
+    ) -> Result<PostMutation, UpdatePostError>;
 
-    /// Publishes a draft through the owner-checked revision transaction. A
-    /// post that is already published is returned unchanged.
+    /// Publishes a draft through the owner-checked revision transaction,
+    /// returning locked old/new mutation evidence. A post that is already
+    /// published is returned unchanged.
     ///
     /// # Errors
     ///
@@ -250,9 +251,11 @@ pub trait PostStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<PostRecord, UpdatePostError>;
+        now: UtcInstant,
+    ) -> Result<PostMutation, UpdatePostError>;
 
-    /// Marks an owned live post as deleted through the revision transaction.
+    /// Marks an owned live post as deleted through the revision transaction,
+    /// returning locked old/new mutation evidence.
     ///
     /// # Errors
     ///
@@ -264,10 +267,11 @@ pub trait PostStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<(), UpdatePostError>;
+        now: UtcInstant,
+    ) -> Result<PostMutation, UpdatePostError>;
 
-    /// Reverts a live post owned by `user_id` to draft status, returning the row
-    /// written by the guarded mutation.
+    /// Reverts a live post owned by `user_id` to draft status, returning locked
+    /// old/new mutation evidence.
     ///
     /// # Errors
     ///
@@ -279,7 +283,8 @@ pub trait PostStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<PostRecord, UpdatePostError>;
+        now: UtcInstant,
+    ) -> Result<PostMutation, UpdatePostError>;
 
     /// Lists published posts for a specific user, ordered by creation date,
     /// applying the viewer-resolution filter. See ADR-0020.
@@ -487,21 +492,18 @@ pub trait PostStorage: Send + Sync {
 }
 /// Backend-specific divergence for [`PostStore`].
 ///
-/// Two consts capture SQL-fragment divergence shared by many methods:
+/// SQL fragments and transaction hooks isolate the backend differences:
 /// [`TAGS_SUBQUERY`][PostDialect::TAGS_SUBQUERY] (`SQLite` `json_group_array`
-/// vs Postgres `json_agg`/`::text`) and
+/// vs Postgres `json_agg`/`::text`),
 /// [`PERMALINK_DATE_CLAUSE`][PostDialect::PERMALINK_DATE_CLAUSE] (`SQLite`
 /// `date(COALESCE(...))` vs Postgres
-/// `date(COALESCE(...) AT TIME ZONE 'UTC') = $3::date`).
+/// `date(COALESCE(...) AT TIME ZONE 'UTC') = $3::date`), and lifecycle row
+/// locking/media serialization. Shared lifecycle policy and portable SQL stay
+/// on this module rather than being copied into both dialects.
 ///
-/// The two transaction-bearing mutations are monomorphised per backend:
-/// [`update_post`][PostDialect::update_post] (Postgres locks the row with
-/// `FOR UPDATE`) and [`set_post_tags`][PostDialect::set_post_tags], which
-/// diverges twice over — the transaction shape (`SQLite` drives a manual
-/// `BEGIN IMMEDIATE`, Postgres locks the post row with `FOR UPDATE`; ADR-0021).
-/// [`unpublish_post`][PostDialect::unpublish_post] is likewise dialect-specific
-/// only for its complete `UPDATE ... RETURNING` JSON tag aggregate. Everything
-/// else is shared on [`PostStore`]. See ADR-0019.
+/// The transaction-bearing update and tag mutations remain monomorphised per
+/// backend because their transaction/locking shapes diverge (ADR-0019,
+/// ADR-0021). Everything else is shared on [`PostStore`].
 #[async_trait]
 pub trait PostDialect: Backend {
     /// Correlated JSON tag-aggregation subquery (on `p.post_id`) spelled in
@@ -527,6 +529,27 @@ pub trait PostDialect: Backend {
     /// `kind_id` via a subquery. Bind order: `post_id, audience_id, kind_name`.
     const INSERT_POST_AUDIENCE: &'static str;
 
+    /// Loads the lifecycle state under this backend's writer discipline.
+    ///
+    /// `PostgreSQL` locks the row explicitly; `SQLite`'s write scope already holds
+    /// its `BEGIN IMMEDIATE` writer lock.
+    const LIFECYCLE_STATE_SQL: &'static str;
+
+    /// Returns the complete post projection used as lifecycle mutation evidence.
+    async fn fetch_lifecycle_post(
+        conn: &mut Self::Connection,
+        post_id: PostId,
+    ) -> Result<PostRecord>;
+
+    /// Serializes lifecycle revision capture with media deletion/reclamation.
+    ///
+    /// `SQLite`'s writer lock is sufficient. `PostgreSQL` locks the current media
+    /// identities before revision rows copy those references.
+    async fn lock_lifecycle_media_references(
+        conn: &mut Self::Connection,
+        post_id: PostId,
+    ) -> Result<()>;
+
     /// Acquires the backend's transaction-scoped media locks in the stable order
     /// represented by `media`. `SQLite` already holds its single writer lock.
     async fn lock_media_references(
@@ -548,37 +571,41 @@ pub trait PostDialect: Backend {
     /// Deletes every `post_media` row for a post. Bind order: `post_id`.
     const DELETE_POST_MEDIA: &'static str;
 
-    /// Updates a post and records a revision, returning the updated record.
+    /// Updates a post and records a revision, returning locked old/new mutation
+    /// evidence for its owning transaction.
     async fn update_post(
         transaction: &mut WriteTransaction,
         post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
-    ) -> Result<PostRecord, UpdatePostError>;
+    ) -> Result<PostMutation, UpdatePostError>;
 
-    /// Publishes a live owner's post through the backend's lifecycle revision
-    /// transaction. A matching current state is returned unchanged.
+    /// Publishes a live owner's post, returning locked old/new mutation evidence.
+    /// A matching current state is returned unchanged.
     async fn publish_post(
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<Option<PostRecord>, sqlx::Error>;
+        now: UtcInstant,
+    ) -> Result<Option<PostMutation>, sqlx::Error>;
 
-    /// Soft-deletes a live owner's row under the backend's lifecycle revision
-    /// transaction. Returns false when ownership or liveness did not match.
+    /// Soft-deletes a live owner's row, returning locked old/new mutation
+    /// evidence. `None` means ownership or liveness did not match.
     async fn soft_delete_post(
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<bool, sqlx::Error>;
+        now: UtcInstant,
+    ) -> Result<Option<PostMutation>, sqlx::Error>;
 
-    /// Reverts a live owner's publication state under the backend's lifecycle
-    /// transaction. A draft is returned unchanged.
+    /// Reverts a live owner's publication state, returning locked old/new
+    /// mutation evidence. A draft is returned unchanged.
     async fn unpublish_post(
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<Option<PostRecord>, sqlx::Error>;
+        now: UtcInstant,
+    ) -> Result<Option<PostMutation>, sqlx::Error>;
 
     /// Reconcile an active owner's post tags to `desired` in one transaction.
     /// Monomorphised because the **serialization** differs: `SQLite` opens
@@ -1277,7 +1304,7 @@ where
         post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
-    ) -> Result<PostRecord, UpdatePostError> {
+    ) -> Result<PostMutation, UpdatePostError> {
         DB::update_post(transaction, post_id, editor_user_id, input).await
     }
 
@@ -1291,9 +1318,10 @@ where
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<PostRecord, UpdatePostError> {
-        if let Some(row) = DB::publish_post(transaction, post_id, user_id).await? {
-            return Ok(row);
+        now: UtcInstant,
+    ) -> Result<PostMutation, UpdatePostError> {
+        if let Some(mutation) = DB::publish_post(transaction, post_id, user_id, now).await? {
+            return Ok(mutation);
         }
         let connection = DB::write_connection(transaction)?;
         let live = sqlx::query_scalar::<_, PostId>(
@@ -1319,9 +1347,10 @@ where
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<(), UpdatePostError> {
-        if DB::soft_delete_post(transaction, post_id, user_id).await? {
-            return Ok(());
+        now: UtcInstant,
+    ) -> Result<PostMutation, UpdatePostError> {
+        if let Some(mutation) = DB::soft_delete_post(transaction, post_id, user_id, now).await? {
+            return Ok(mutation);
         }
         let connection = DB::write_connection(transaction)?;
         let live = sqlx::query_scalar::<_, PostId>(
@@ -1347,9 +1376,10 @@ where
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<PostRecord, UpdatePostError> {
-        if let Some(row) = DB::unpublish_post(transaction, post_id, user_id).await? {
-            return Ok(row);
+        now: UtcInstant,
+    ) -> Result<PostMutation, UpdatePostError> {
+        if let Some(mutation) = DB::unpublish_post(transaction, post_id, user_id, now).await? {
+            return Ok(mutation);
         }
         let connection = DB::write_connection(transaction)?;
         let live = sqlx::query_scalar::<_, PostId>(
@@ -2048,6 +2078,7 @@ mod tests {
                     posts
                         .update_post(transaction, post_id, editor_user_id, &input)
                         .await
+                        .map(|mutation| mutation.record)
                 })
             })
             .await
@@ -2098,7 +2129,12 @@ mod tests {
         let write_scope = state.write_scope.clone();
         write_scope
             .run(move |transaction| {
-                Box::pin(async move { posts.publish_post(transaction, post_id, user_id).await })
+                Box::pin(async move {
+                    posts
+                        .publish_post(transaction, post_id, user_id, UtcInstant::now())
+                        .await
+                        .map(|mutation| mutation.record)
+                })
             })
             .await
     }
@@ -2125,7 +2161,12 @@ mod tests {
         let write_scope = state.write_scope.clone();
         write_scope
             .run(move |transaction| {
-                Box::pin(async move { posts.unpublish_post(transaction, post_id, user_id).await })
+                Box::pin(async move {
+                    posts
+                        .unpublish_post(transaction, post_id, user_id, UtcInstant::now())
+                        .await
+                        .map(|mutation| mutation.record)
+                })
             })
             .await
     }
@@ -2152,7 +2193,12 @@ mod tests {
         let write_scope = state.write_scope.clone();
         write_scope
             .run(move |transaction| {
-                Box::pin(async move { posts.soft_delete_post(transaction, post_id, user_id).await })
+                Box::pin(async move {
+                    posts
+                        .soft_delete_post(transaction, post_id, user_id, UtcInstant::now())
+                        .await
+                        .map(|_| ())
+                })
             })
             .await
     }

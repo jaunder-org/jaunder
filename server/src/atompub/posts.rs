@@ -1,6 +1,6 @@
 //! `AtomPub` posts collection read/delete/create/update handlers.
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::sync::Arc;
 
 use axum::Extension;
 use axum::extract::rejection::ExtensionRejection;
@@ -18,18 +18,18 @@ use common::pagination::PageSize;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::tag::{Tag, TagLabel};
+use common::tag::TagLabel;
 use common::tagged_url::{self, BaseUrl, EditUriUrl, FeedUrl, PaginationUrl};
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use host::atompub::{self, CollectionFeedTitle, Entry, FeedMeta};
+use host::etag;
 use host::metrics::{self, IdempotencyEvent};
-use host::{etag, feed};
 use storage::{
-    AudienceStorage, CollectionCursor, FeedEventError, FeedEventStorage, InvalidAudienceTargets,
-    MediaContentLocks, PerformCreationError, PostCreation, PostRecord, PostStorage, PublishUpdate,
-    SiteConfigStorage, UserConfigStorage, WriteScope, WriteScopeError,
+    AudienceStorage, CollectionCursor, FeedEventStorage, InvalidAudienceTargets, MediaContentLocks,
+    PerformCreationError, PostCreation, PostRecord, PostStorage, PublishUpdate, SiteConfigStorage,
+    UserConfigStorage, WriteScope,
 };
 use web::auth;
 
@@ -421,23 +421,6 @@ pub async fn member_get(
         .into_response())
 }
 
-fn member_delete_update_error(error: storage::UpdatePostError) -> HandlerError {
-    HandlerError::from(storage::PerformUpdateError::from(error))
-}
-
-fn member_delete_feed_event_error(error: FeedEventError) -> HandlerError {
-    match error {
-        FeedEventError::Db(error) => HandlerError::from(error),
-    }
-}
-
-fn member_delete_write_scope_error(error: WriteScopeError<HandlerError>) -> HandlerError {
-    match error {
-        WriteScopeError::Operation(error) => error,
-        WriteScopeError::Begin(error) => HandlerError::from(error),
-    }
-}
-
 /// `DELETE /atompub/{username}/posts/{post_id}` — soft-deletes a post.
 ///
 /// # Errors
@@ -456,30 +439,21 @@ pub async fn member_delete(
     headers: HeaderMap,
 ) -> Result<Response, HandlerError> {
     let posts = services.posts();
-    let feed_events = Arc::clone(&feed_events);
     let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
 
     // Conditional delete: honour `If-Match` against the content ETag, as `member_put` does.
     if !if_match_satisfied(&headers, &etag_for(&post)) {
         return Err(HandlerError::PreconditionFailed);
     }
-    let tag_slugs: BTreeSet<Tag> = post.tags.iter().map(|tag| tag.tag_slug.clone()).collect();
-    let feed_paths = feed::affected_feed_urls(&post.author_username, &tag_slugs);
-    let outcome = write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                posts
-                    .soft_delete_post(transaction, post.post_id, auth_user.user_id)
-                    .await
-                    .map_err(member_delete_update_error)?;
-                feed_events
-                    .enqueue_many(transaction, &feed_paths)
-                    .await
-                    .map_err(member_delete_feed_event_error)
-            })
-        })
-        .await
-        .map_err(member_delete_write_scope_error)?;
+    let outcome = storage::soft_delete_post(
+        &write_scope,
+        posts,
+        feed_events,
+        post.post_id,
+        auth_user.user_id,
+        UtcInstant::now(),
+    )
+    .await?;
     if let Err(status) = super::mutation::confirmed_or_accepted(outcome) {
         return Ok(status.into_response());
     }
@@ -643,11 +617,6 @@ pub async fn member_put(
     let user_config = services.user_config();
     let site_config = services.site_config();
     let current = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
-    let previous_tag_slugs = current
-        .tags
-        .iter()
-        .map(|tag| tag.tag_slug.clone())
-        .collect();
 
     if !if_match_satisfied(&headers, &etag_for(&current)) {
         return Err(HandlerError::PreconditionFailed);
@@ -696,8 +665,7 @@ pub async fn member_put(
             expectations,
             summary,
             audiences,
-            tags: categories,
-            previous_tag_slugs,
+            tags: Some(categories),
         },
     )
     .await?;
@@ -726,82 +694,13 @@ pub async fn member_put(
 #[cfg(test)]
 mod etag_tests {
     use super::*;
-    use axum::response::IntoResponse;
     use chrono::{TimeZone, Utc};
     use common::ids::{TagId, UserId};
     use common::tag::{Tag, TagLabel};
     use common::test_support::{
         parse_post_body, parse_post_summary, parse_post_title, parse_utc_instant,
     };
-    use std::error::Error;
     use storage::{MockAudienceStorage, PostFormat, PostTag, PublishUpdate};
-
-    #[test]
-    fn member_delete_update_storage_error_is_internal_with_sqlx_source() {
-        let error =
-            member_delete_update_error(storage::UpdatePostError::Internal(sqlx::Error::PoolClosed));
-
-        let HandlerError::Internal(source) = &error else {
-            unreachable!("storage update errors must map to HandlerError::Internal");
-        };
-        let update = source
-            .downcast_ref::<storage::PerformUpdateError>()
-            .expect("internal source should retain the update error");
-        assert!(matches!(
-            update
-                .source()
-                .and_then(|source| source.downcast_ref::<sqlx::Error>()),
-            Some(sqlx::Error::PoolClosed)
-        ));
-        assert_eq!(
-            error.into_response().status(),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-    }
-
-    #[test]
-    fn member_delete_feed_event_db_error_is_internal_with_sqlx_source() {
-        let error = member_delete_feed_event_error(FeedEventError::Db(sqlx::Error::RowNotFound));
-
-        let HandlerError::Internal(source) = &error else {
-            unreachable!("feed event database errors must map to HandlerError::Internal");
-        };
-        assert!(matches!(
-            source.downcast_ref::<sqlx::Error>(),
-            Some(sqlx::Error::RowNotFound)
-        ));
-        assert_eq!(
-            error.into_response().status(),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-    }
-
-    #[test]
-    fn member_delete_write_scope_operation_preserves_handler_error() {
-        let error =
-            member_delete_write_scope_error(WriteScopeError::Operation(HandlerError::NotFound));
-
-        assert!(matches!(&error, HandlerError::NotFound));
-        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
-    }
-
-    #[test]
-    fn member_delete_write_scope_begin_is_internal_with_sqlx_source() {
-        let error =
-            member_delete_write_scope_error(WriteScopeError::Begin(sqlx::Error::PoolTimedOut));
-
-        let HandlerError::Internal(source) = &error else {
-            unreachable!("write scope begin errors must map to HandlerError::Internal");
-        };
-        assert!(matches!(
-            source.downcast_ref::<sqlx::Error>(),
-            Some(sqlx::Error::PoolTimedOut)
-        ));
-        assert_eq!(
-            error.into_response().status(),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-    }
 
     fn mk_tag(post_id: PostId, tag_id: TagId, slug: Tag, display: TagLabel) -> PostTag {
         PostTag {

@@ -103,8 +103,7 @@ pub async fn update_post_body_via_service(
             request_clock: UtcInstant::now(),
             expectations: PostBookkeepingExpectation::default(),
             audiences: vec![AudienceTarget::Public],
-            tags: Vec::new(),
-            previous_tag_slugs: vec![],
+            tags: Some(Vec::new()),
         },
     )
     .await

@@ -1,11 +1,13 @@
 use chrono::{Datelike, Utc};
 use common::{
-    ids::{PostId, UserId},
+    ids::{AudienceId, PostId, UserId},
     tag::{Tag, TagLabel},
-    test_support::{parse_etag, parse_post_body, parse_row_limit, permalink_date},
+    test_support::{
+        parse_audience_name, parse_etag, parse_post_body, parse_row_limit, permalink_date,
+    },
     time::UtcInstant,
     username::Username,
-    visibility::{AudienceTarget, ViewerIdentity},
+    visibility::{AudienceTarget, ViewerIdentity, local_subscriber_identity},
 };
 use std::sync::Arc;
 use storage::test_support::{
@@ -26,7 +28,16 @@ async fn soft_delete_post_confirmed(state: &AppState, post_id: PostId, user_id: 
     let outcome = state
         .write_scope
         .run(move |transaction| {
-            Box::pin(async move { posts.soft_delete_post(transaction, post_id, user_id).await })
+            Box::pin(async move {
+                posts
+                    .soft_delete_post(
+                        transaction,
+                        post_id,
+                        user_id,
+                        common::time::UtcInstant::now(),
+                    )
+                    .await
+            })
         })
         .await
         .expect("soft_delete_post failed");
@@ -41,6 +52,19 @@ async fn upsert_cache_confirmed(state: &AppState, row: FeedCacheRow) {
         .await
         .expect("seed cached feed");
     confirmed(outcome, "feed-cache fixture");
+}
+
+async fn create_named_audience(state: &AppState, author: UserId, name: &str) -> AudienceId {
+    let name = parse_audience_name(name);
+    let audiences = Arc::clone(&state.audiences);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { audiences.create_audience(transaction, author, &name).await })
+        })
+        .await
+        .expect("create named audience");
+    confirmed(outcome, "named audience fixture")
 }
 
 async fn anon_user_by_tag(
@@ -698,6 +722,131 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
 
 #[apply(backends)]
 #[tokio::test]
+async fn list_published_in_window_resolves_viewers_before_ranking(#[case] backend: Backend) {
+    use chrono::Duration;
+    use common::feed::FeedSurface;
+    use host::{
+        feed::HybridWindow,
+        test_support::{parse_feed_min_days, parse_feed_min_items},
+    };
+
+    let env = backend.setup().await;
+    let state = &env.state;
+    let alice = SeedUser::new().seed(state).await;
+    let bob = SeedUser::new().seed(state).await;
+    let now = Utc::now();
+    let public = SeedRawPost::new(alice.user_id)
+        .published_at(UtcInstant::from(now - Duration::days(90)))
+        .audiences(vec![AudienceTarget::Public])
+        .seed(state)
+        .await
+        .post_id;
+    let subscribers = SeedRawPost::new(alice.user_id)
+        .published_at(UtcInstant::from(now - Duration::days(91)))
+        .audiences(vec![AudienceTarget::Subscribers])
+        .seed(state)
+        .await
+        .post_id;
+    let private = SeedRawPost::new(alice.user_id)
+        .published_at(UtcInstant::from(now - Duration::days(1)))
+        .audiences(vec![])
+        .seed(state)
+        .await
+        .post_id;
+    for post_id in [public, subscribers, private] {
+        storage::test_support::set_post_tags_confirmed(
+            &state.write_scope,
+            Arc::clone(&state.posts),
+            post_id,
+            alice.user_id,
+            &["rust".parse::<TagLabel>().unwrap()],
+        )
+        .await
+        .expect("tag hybrid-window fixture");
+    }
+
+    let local = super::fixtures::local_channel_id(backend, &env).await;
+    let subscriber = local_subscriber_identity(local, bob.user_id);
+    let subscriptions = Arc::clone(&state.subscriptions);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                subscriptions
+                    .subscribe(transaction, alice.user_id, &subscriber)
+                    .await
+            })
+        })
+        .await
+        .expect("subscribe viewer");
+    confirmed(outcome, "subscriber fixture");
+
+    let surfaces = [
+        FeedSurface::Site,
+        FeedSurface::User {
+            username: alice.username.clone(),
+        },
+        FeedSurface::SiteTag {
+            tag: "rust".parse().unwrap(),
+        },
+        FeedSurface::UserTag {
+            username: alice.username.clone(),
+            tag: "rust".parse().unwrap(),
+        },
+    ];
+    let anonymous_window = HybridWindow {
+        min_items: parse_feed_min_items("1"),
+        min_days: parse_feed_min_days("30"),
+    };
+    let authenticated_window = HybridWindow {
+        min_items: parse_feed_min_items("2"),
+        min_days: parse_feed_min_days("30"),
+    };
+    let authenticated = ViewerIdentity::local(bob.user_id);
+
+    for surface in surfaces {
+        let anonymous = state
+            .posts
+            .list_published_in_window(
+                &surface,
+                &anonymous_window,
+                UtcInstant::from(now),
+                &ViewerIdentity::Anonymous,
+            )
+            .await
+            .expect("list anonymous hybrid window");
+        assert_eq!(
+            anonymous
+                .iter()
+                .map(|post| post.post_id)
+                .collect::<Vec<_>>(),
+            vec![public],
+            "{surface:?}: the older Public post still satisfies the count floor"
+        );
+
+        let visible_to_subscriber = state
+            .posts
+            .list_published_in_window(
+                &surface,
+                &authenticated_window,
+                UtcInstant::from(now),
+                &authenticated,
+            )
+            .await
+            .expect("list authenticated hybrid window");
+        assert_eq!(
+            visible_to_subscriber
+                .iter()
+                .map(|post| post.post_id)
+                .collect::<Vec<_>>(),
+            vec![public, subscribers],
+            "{surface:?}: the newer Private post cannot consume either visible count slot"
+        );
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn list_published_by_user_returns_only_user_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
@@ -875,6 +1024,35 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
     )
     .await;
 
+    // These posts are live in the time window, but only Public Posts may enqueue
+    // the public Syndication Feed surfaces.
+    SeedRawPost::new(alice.user_id)
+        .slug("private-in-window")
+        .published_at(UtcInstant::from(after + Duration::minutes(35)))
+        .audiences(vec![])
+        .seed(state)
+        .await;
+    SeedRawPost::new(alice.user_id)
+        .slug("subscribers-in-window")
+        .published_at(UtcInstant::from(after + Duration::minutes(40)))
+        .audiences(vec![AudienceTarget::Subscribers])
+        .seed(state)
+        .await;
+    let named = create_named_audience(state, alice.user_id, "go-live-private").await;
+    SeedRawPost::new(alice.user_id)
+        .slug("named-in-window")
+        .published_at(UtcInstant::from(after + Duration::minutes(45)))
+        .audiences(vec![AudienceTarget::Named(named)])
+        .seed(state)
+        .await;
+    let deleted = SeedRawPost::new(alice.user_id)
+        .slug("deleted-in-window")
+        .published_at(UtcInstant::from(after + Duration::minutes(50)))
+        .seed(state)
+        .await
+        .post_id;
+    soft_delete_post_confirmed(state, deleted, alice.user_id).await;
+
     let live: Vec<GoLivePost> = state
         .posts
         .list_posts_gone_live_between(
@@ -941,6 +1119,36 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     .await
     .unwrap();
 
+    // A stale feed with only non-Public or Deleted Posts must remain quiet: a
+    // restart catch-up pass materializes public projections, not every live row.
+    let bob = SeedUser::new().seed(state).await;
+    SeedRawPost::new(bob.user_id)
+        .slug("private-live")
+        .published_at(UtcInstant::from(now - Duration::minutes(30)))
+        .audiences(vec![])
+        .seed(state)
+        .await;
+    SeedRawPost::new(bob.user_id)
+        .slug("subscribers-live")
+        .published_at(UtcInstant::from(now - Duration::minutes(25)))
+        .audiences(vec![AudienceTarget::Subscribers])
+        .seed(state)
+        .await;
+    let named = create_named_audience(state, bob.user_id, "catch-up-private").await;
+    SeedRawPost::new(bob.user_id)
+        .slug("named-live")
+        .published_at(UtcInstant::from(now - Duration::minutes(20)))
+        .audiences(vec![AudienceTarget::Named(named)])
+        .seed(state)
+        .await;
+    let deleted = SeedRawPost::new(bob.user_id)
+        .slug("deleted-live")
+        .published_at(UtcInstant::from(now - Duration::minutes(15)))
+        .seed(state)
+        .await
+        .post_id;
+    soft_delete_post_confirmed(state, deleted, bob.user_id).await;
+
     let mk_row = |feed_url: &str, generated_at: UtcInstant| {
         FeedCacheRow::new(
             fp(feed_url),
@@ -973,6 +1181,8 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     upsert_cache_confirmed(state, mk_row("/feed.atom", UtcInstant::from(t0))).await;
     upsert_cache_confirmed(state, mk_row(&site_tag_url, UtcInstant::from(t0))).await;
     upsert_cache_confirmed(state, mk_row(&user_tag_url, UtcInstant::from(t0))).await;
+    let bob_feed_url = format!("/~{}/feed.atom", bob.username);
+    upsert_cache_confirmed(state, mk_row(&bob_feed_url, UtcInstant::from(t0))).await;
     // Fresh (generated after the newest live post) => must NOT be returned.
     upsert_cache_confirmed(state, mk_row("/~alice/feed.atom", UtcInstant::from(now))).await;
 
@@ -996,6 +1206,10 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     assert!(
         !stale.iter().any(|u| u.as_ref() == "/~alice/feed.atom"),
         "a feed newer than its surface's newest post is not stale: {stale:?}"
+    );
+    assert!(
+        !stale.iter().any(|url| url.as_ref() == bob_feed_url),
+        "non-Public and Deleted Posts do not make a cached feed stale: {stale:?}"
     );
 }
 

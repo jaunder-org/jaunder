@@ -45,20 +45,14 @@ use common::visibility::{self, AudienceTarget};
 #[cfg(feature = "server")]
 use {
     super::server,
-    crate::{
-        auth,
-        error::{InternalError, from_write_scope_error},
-        viewer,
+    crate::{auth, error::InternalError, viewer},
+    common::org::{
+        self, OrgNormalization, OrgOperation, OrgStructuredMetadata, Presence, PublicationState,
     },
-    common::{
-        org::{
-            self, OrgNormalization, OrgOperation, OrgStructuredMetadata, Presence, PublicationState,
-        },
-        tag::{self, Tag},
-    },
-    host::{feed, metrics},
+    common::tag,
+    host::metrics,
     leptos::prelude::*,
-    std::{collections::BTreeSet, sync::Arc},
+    std::sync::Arc,
     storage::{
         self, AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MediaContentLocks,
         PerformUpdateError, PostBookkeepingExpectation, PostCreation, PostLifecycle, PostRecord,
@@ -685,23 +679,6 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
     let auth = auth::require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
-    let old = posts
-        .get_post_by_id(post_id, &viewer::viewer_identity().await?)
-        .await?;
-    let old_tags: Vec<TagLabel> = old
-        .as_ref()
-        .map(|post| {
-            post.tags
-                .iter()
-                .map(|tag| tag.tag_display.clone())
-                .collect()
-        })
-        .unwrap_or_default();
-    let old_tag_slugs: Vec<Tag> = old
-        .as_ref()
-        .map(|post| post.tags.iter().map(|tag| tag.tag_slug.clone()).collect())
-        .unwrap_or_default();
-
     // Validate tags up-front so a malformed input rejects before any post
     // mutation lands. `None` preserves the current update surface behavior.
     let structured_tags = tags.map(tag::parse_and_validate_tags).transpose()?;
@@ -769,7 +746,6 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
             structured_tags,
         )
     };
-    let new_tags = new_tags.unwrap_or(old_tags);
 
     let write_scope = expect_context::<WriteScope>();
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
@@ -790,7 +766,6 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
             summary,
             audiences,
             tags: new_tags,
-            previous_tag_slugs: old_tag_slugs,
             request_clock,
             expectations,
         },
@@ -940,33 +915,22 @@ pub async fn publish(post_id: PostId) -> WebResult<MutationOutcome<SavedPost>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
     let write_scope = expect_context::<WriteScope>();
-    let outcome = write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                let updated = posts
-                    .publish_post(transaction, post_id, auth.user_id)
-                    .await
-                    .map_err(|error| InternalError::from(PerformUpdateError::from(error)))?;
-                if updated.published_at.is_none() {
-                    return Err(InternalError::not_found("Post"));
-                }
-                let tag_slugs: BTreeSet<Tag> = updated
-                    .tags
-                    .iter()
-                    .map(|tag| tag.tag_slug.clone())
-                    .collect();
-                feed_events
-                    .enqueue_many(
-                        transaction,
-                        &feed::affected_feed_urls(&updated.author_username, &tag_slugs),
-                    )
-                    .await
-                    .map_err(InternalError::storage)?;
-                Ok(updated)
-            })
-        })
-        .await
-        .map_err(from_write_scope_error)?;
+    let outcome = storage::publish_post(
+        &write_scope,
+        posts,
+        feed_events,
+        post_id,
+        auth.user_id,
+        UtcInstant::now(),
+    )
+    .await
+    .map_err(InternalError::from)?;
+    if matches!(
+        &outcome,
+        MutationOutcome::Confirmed(updated) if updated.published_at.is_none()
+    ) {
+        return Err(InternalError::not_found("Post"));
+    }
     let outcome = outcome.map(|updated| SavedPost {
         post_id: updated.post_id,
         slug: updated.slug.clone(),
@@ -984,41 +948,18 @@ pub async fn publish(post_id: PostId) -> WebResult<MutationOutcome<SavedPost>> {
 pub async fn delete(post_id: PostId) -> WebResult<MutationOutcome<()>> {
     let auth = auth::require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
-    let existing = posts
-        .get_post_by_id(post_id, &viewer::viewer_identity().await?)
-        .await?
-        .ok_or_else(|| InternalError::not_found("Post"))?;
-    if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
-        return Err(InternalError::not_found("Post"));
-    }
-    let feed_paths = existing.published_at.map(|_| {
-        let tag_slugs: BTreeSet<Tag> = existing
-            .tags
-            .iter()
-            .map(|tag| tag.tag_slug.clone())
-            .collect();
-        feed::affected_feed_urls(&existing.author_username, &tag_slugs)
-    });
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
     let write_scope = expect_context::<WriteScope>();
-    let outcome = write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                posts
-                    .soft_delete_post(transaction, post_id, auth.user_id)
-                    .await
-                    .map_err(|error| InternalError::from(PerformUpdateError::from(error)))?;
-                if let Some(feed_paths) = feed_paths {
-                    feed_events
-                        .enqueue_many(transaction, &feed_paths)
-                        .await
-                        .map_err(InternalError::storage)?;
-                }
-                Ok(())
-            })
-        })
-        .await
-        .map_err(from_write_scope_error)?;
+    let outcome = storage::soft_delete_post(
+        &write_scope,
+        posts,
+        feed_events,
+        post_id,
+        auth.user_id,
+        UtcInstant::now(),
+    )
+    .await
+    .map_err(InternalError::from)?;
     if matches!(outcome, MutationOutcome::Confirmed(())) {
         metrics::post(metrics::PostEvent::Deleted);
     }
@@ -1032,30 +973,16 @@ pub async fn unpublish(post_id: PostId) -> WebResult<MutationOutcome<SavedPost>>
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
     let write_scope = expect_context::<WriteScope>();
-    let outcome = write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                let updated = posts
-                    .unpublish_post(transaction, post_id, auth.user_id)
-                    .await
-                    .map_err(|error| InternalError::from(PerformUpdateError::from(error)))?;
-                let tag_slugs: BTreeSet<Tag> = updated
-                    .tags
-                    .iter()
-                    .map(|tag| tag.tag_slug.clone())
-                    .collect();
-                feed_events
-                    .enqueue_many(
-                        transaction,
-                        &feed::affected_feed_urls(&updated.author_username, &tag_slugs),
-                    )
-                    .await
-                    .map_err(InternalError::storage)?;
-                Ok(updated)
-            })
-        })
-        .await
-        .map_err(from_write_scope_error)?;
+    let outcome = storage::unpublish_post(
+        &write_scope,
+        posts,
+        feed_events,
+        post_id,
+        auth.user_id,
+        UtcInstant::now(),
+    )
+    .await
+    .map_err(InternalError::from)?;
     Ok(outcome.map(|updated| SavedPost {
         post_id: updated.post_id,
         slug: updated.slug.clone(),
@@ -1355,7 +1282,8 @@ mod server_tests {
     use storage::{
         AudienceStorage, CreatedPost, CurrentPostRevisionSummary, FeedEventStorage,
         MediaContentLocks, MockAudienceStorage, MockFeedEventStorage, MockPostStorage, PostFormat,
-        PostRecord, PostRevisionMetadata, PostRevisionPage, PostStorage, UpdatePostError,
+        PostMutation, PostRecord, PostRevisionMetadata, PostRevisionPage, PostStorage,
+        UpdatePostError,
         test_support::{fixture_media_content_locks, mock_write_scope},
     };
     fn owned_post(user_id: UserId) -> PostRecord {
@@ -1378,6 +1306,16 @@ mod server_tests {
         }
     }
 
+    fn unchanged_mutation(user_id: UserId) -> PostMutation {
+        let record = owned_post(user_id);
+        PostMutation {
+            previous: record.clone(),
+            record,
+            previous_has_public_audience: false,
+            changed: false,
+        }
+    }
+
     /// Wires an authenticated owner (user 1) whose post store answers
     /// `publish_post` with `outcome`. Returns the owner, which the caller must keep
     /// alive across the `.await`.
@@ -1388,7 +1326,14 @@ mod server_tests {
         let mut posts = MockPostStorage::new();
         posts
             .expect_publish_post()
-            .returning(move |_transaction, _id, _user| outcome());
+            .returning(move |_transaction, _id, _user, _now| {
+                outcome().map(|record| PostMutation {
+                    previous: record.clone(),
+                    record,
+                    previous_has_public_audience: false,
+                    changed: true,
+                })
+            });
         provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
         provide_context(mock_write_scope());
         let mut events = MockFeedEventStorage::new();
@@ -1713,10 +1658,17 @@ mod server_tests {
         posts
             .expect_unpublish_post()
             .times(1)
-            .withf(|_transaction, post_id, user_id| {
+            .withf(|_transaction, post_id, user_id, _now| {
                 *post_id == PostId::from(1) && *user_id == UserId::from(1)
             })
-            .returning(move |_transaction, _post_id, _user_id| Ok(returned.clone()));
+            .returning(move |_transaction, _post_id, _user_id, _now| {
+                Ok(PostMutation {
+                    previous: returned.clone(),
+                    record: returned.clone(),
+                    previous_has_public_audience: true,
+                    changed: true,
+                })
+            });
         let owner = mutation_owner(posts);
 
         let saved = unpublish(PostId::from(1)).await;
@@ -1913,7 +1865,7 @@ mod server_tests {
         let mut posts = MockPostStorage::new();
         posts
             .expect_unpublish_post()
-            .returning(|_transaction, _post_id, _user_id| Err(UpdatePostError::Unauthorized));
+            .returning(|_transaction, _post_id, _user_id, _now| Err(UpdatePostError::Unauthorized));
         let owner = mutation_owner(posts);
 
         let result = unpublish(PostId::from(1)).await;
@@ -1966,12 +1918,11 @@ mod server_tests {
     async fn update_writes_every_tag_in_one_batched_call() {
         let mut posts = MockPostStorage::new();
         posts
-            .expect_get_post_by_id()
-            .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
-        posts
             .expect_update_post()
-            .withf(|_transaction, _id, _user, input| input.tags.len() == 2)
-            .returning(|_transaction, _id, _user, _input| Ok(owned_post(UserId::from(1))));
+            .withf(|_transaction, _id, _user, input| {
+                input.tags.as_ref().is_some_and(|tags| tags.len() == 2)
+            })
+            .returning(|_transaction, _id, _user, _input| Ok(unchanged_mutation(UserId::from(1))));
         let owner = mutation_owner(posts);
         let result = update(
             PostId::from(1),
@@ -1984,16 +1935,12 @@ mod server_tests {
 
     // guard:no-backend — mock store
     #[tokio::test]
-    async fn update_with_tags_unset_preserves_current_tags_atomically() {
-        // `tags: None` preserves the current tags in the single update input.
+    async fn update_with_tags_unset_defers_preservation_to_storage() {
         let mut posts = MockPostStorage::new();
         posts
-            .expect_get_post_by_id()
-            .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
-        posts
             .expect_update_post()
-            .withf(|_transaction, _id, _user, input| input.tags.is_empty())
-            .returning(|_transaction, _id, _user, _input| Ok(owned_post(UserId::from(1))));
+            .withf(|_transaction, _id, _user, input| input.tags.is_none())
+            .returning(|_transaction, _id, _user, _input| Ok(unchanged_mutation(UserId::from(1))));
 
         let owner = mutation_owner(posts);
         let result = update(PostId::from(1), post_inputs(None)).await;
@@ -2008,15 +1955,12 @@ mod server_tests {
 
         let mut posts = MockPostStorage::new();
         posts
-            .expect_get_post_by_id()
-            .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
-        posts
             .expect_update_post()
             .withf(|_transaction, _id, _user, input| {
                 input.summary.as_deref() == Some("structured summary")
                     && input.audiences == [AudienceTarget::Subscribers]
             })
-            .returning(|_transaction, _id, _user, _input| Ok(owned_post(UserId::from(1))));
+            .returning(|_transaction, _id, _user, _input| Ok(unchanged_mutation(UserId::from(1))));
         let owner = mutation_owner(posts);
         let result = update(
             PostId::from(1),
@@ -2043,9 +1987,6 @@ mod server_tests {
     #[tokio::test]
     async fn update_projects_stale_org_sync_to_conflict() {
         let mut posts = MockPostStorage::new();
-        posts
-            .expect_get_post_by_id()
-            .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
         posts
             .expect_update_post()
             .returning(|_transaction, _id, _user, _input| Err(UpdatePostError::StaleContent));
