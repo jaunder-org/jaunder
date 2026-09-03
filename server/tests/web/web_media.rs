@@ -27,7 +27,7 @@ use common::test_support::{
     parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_post_body,
 };
 use storage::test_support::{
-    Backend, SeedRawPost, TestEnv, backends, backends_matrix, noop_mailer,
+    Backend, SeedRawPost, TestEnv, backends, backends_matrix, noop_mailer, seed_media,
 };
 
 async fn create_media(state: &storage::AppState, record: &MediaRecord) {
@@ -213,19 +213,7 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
-    let record = MediaRecord {
-        user_id: session.user_id,
-        sha256: parse_content_hash(
-            "aabbccdd11223344000000000000000000000000000000000000000000000000",
-        ),
-        filename: parse_filename("photo.jpg"),
-        source: MediaSource::Upload,
-        content_type: parse_content_type("image/jpeg"),
-        size_bytes: parse_byte_size("1024"),
-        source_url: None,
-        created_at: UtcInstant::now(),
-    };
-    create_media(&state, &record).await;
+    seed_media(&state, session.user_id, "photo.jpg").await;
 
     let cookie = session.cookie();
 
@@ -254,19 +242,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
-    let record = MediaRecord {
-        user_id: session.user_id,
-        sha256: parse_content_hash(
-            "ff00ee11dd22cc33000000000000000000000000000000000000000000000000",
-        ),
-        filename: parse_filename("clip.mp4"),
-        source: MediaSource::Upload,
-        content_type: parse_content_type("video/mp4"),
-        size_bytes: parse_byte_size("512"),
-        source_url: None,
-        created_at: UtcInstant::now(),
-    };
-    create_media(&state, &record).await;
+    seed_media(&state, session.user_id, "clip.mp4").await;
 
     let cookie = session.cookie();
 
@@ -292,20 +268,7 @@ async fn delete_nested_request_maps_identity_without_force(#[case] backend: Back
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
-    // Insert a media record directly so delete has something to act on.
-    let record = MediaRecord {
-        user_id: session.user_id,
-        sha256: parse_content_hash(
-            "deadbeef01234567000000000000000000000000000000000000000000000000",
-        ),
-        filename: parse_filename("test.png"),
-        source: MediaSource::Upload,
-        content_type: parse_content_type("image/png"),
-        size_bytes: parse_byte_size("42"),
-        source_url: None,
-        created_at: UtcInstant::now(),
-    };
-    create_media(&state, &record).await;
+    let media = seed_media(&state, session.user_id, "test.png").await;
 
     let cookie = session.cookie();
 
@@ -313,9 +276,9 @@ async fn delete_nested_request_maps_identity_without_force(#[case] backend: Back
         &state,
         &web::media::Delete {
             request: web::media::DeleteMediaRequest {
-                sha256: record.sha256.clone(),
-                filename: record.filename.clone(),
-                source: record.source,
+                sha256: media.sha256.clone(),
+                filename: media.filename.clone(),
+                source: media.source,
                 force: None,
             },
         },
@@ -338,24 +301,8 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
     let session = create_user_and_session(&state).await;
     let user_id = session.user_id;
 
-    let media_url = common::media::url(
-        &MediaSource::Upload,
-        &parse_content_hash("deadbeef99999999000000000000000000000000000000000000000000000000"),
-        &parse_filename("inline.png"),
-    );
-    let record = MediaRecord {
-        user_id,
-        sha256: parse_content_hash(
-            "deadbeef99999999000000000000000000000000000000000000000000000000",
-        ),
-        filename: parse_filename("inline.png"),
-        source: MediaSource::Upload,
-        content_type: parse_content_type("image/png"),
-        size_bytes: parse_byte_size("42"),
-        source_url: None,
-        created_at: UtcInstant::now(),
-    };
-    create_media(&state, &record).await;
+    let media = seed_media(&state, user_id, "inline.png").await;
+    let media_url = common::media::url(&media.source, &media.sha256, &media.filename);
 
     let post = SeedRawPost::new(user_id)
         .body(parse_post_body(&format!("![inline]({media_url})")))
@@ -368,9 +315,9 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
         &state,
         &web::media::Delete {
             request: web::media::DeleteMediaRequest {
-                sha256: record.sha256.clone(),
-                filename: record.filename.clone(),
-                source: record.source,
+                sha256: media.sha256.clone(),
+                filename: media.filename.clone(),
+                source: media.source,
                 force: None,
             },
         },
