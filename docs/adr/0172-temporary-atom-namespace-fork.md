@@ -1,13 +1,13 @@
-# ADR-DRAFT: Temporary Atom namespace-aware fork
+# ADR-0172: Temporary Atom namespace-aware fork
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-01
 - Issue: [#813](https://github.com/jaunder-org/jaunder/issues/813)
 
 ## Context
 
-[ADR-0089](../0089-upstream-atom-document-io.md) delegated every Atom document
-to upstream `atom_syndication` and retired ADR-0043's quick-xml advisory bridge.
+[ADR-0089](0089-upstream-atom-document-io.md) delegated every Atom document to
+upstream `atom_syndication` and retired ADR-0043's quick-xml advisory bridge.
 That delegation exposed an upstream model defect: an element-scoped namespace
 declaration on an extension is parsed as an ordinary local-name attribute and is
 then serialized without its `xmlns:` declaration, leaving the element prefix
@@ -23,7 +23,7 @@ rebinding across Entry, Feed, and Source.
 
 This is not a return to ADR-0043's superseded two-crate quick-xml advisory
 bridge. It is a new, temporary, atom-only decision that qualifies
-[ADR-0089](../0089-upstream-atom-document-io.md): upstream continues to own Atom
+[ADR-0089](0089-upstream-atom-document-io.md): upstream continues to own Atom
 document serialization, but Jaunder needs an upstream-compatible model that can
 represent the XML it delegates to it.
 
