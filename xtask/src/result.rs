@@ -12,6 +12,34 @@ pub enum Mode {
     Check,
 }
 
+/// The outcome of observing the selected Nix outputs across a successful build.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NixRealization {
+    Reused,
+    Realized,
+    Unknown,
+}
+
+impl NixRealization {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reused => "reused",
+            Self::Realized => "realized",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Machine-readable identity and realization evidence for one Nix-backed step.
+#[derive(Debug, Serialize)]
+pub struct NixReport {
+    pub installable: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub derivation: Option<String>,
+    pub realization: NixRealization,
+}
+
 #[derive(Debug, Serialize)]
 pub struct StepResult {
     pub name: String,
@@ -20,6 +48,8 @@ pub struct StepResult {
     pub duration_ms: u128,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nix: Option<NixReport>,
 }
 
 impl StepResult {
@@ -30,6 +60,7 @@ impl StepResult {
             skipped: false,
             duration_ms: 0,
             detail: None,
+            nix: None,
         }
     }
     pub fn fail(name: &str) -> Self {
@@ -39,6 +70,7 @@ impl StepResult {
             skipped: false,
             duration_ms: 0,
             detail: None,
+            nix: None,
         }
     }
     pub fn skip(name: &str) -> Self {
@@ -48,6 +80,7 @@ impl StepResult {
             skipped: true,
             duration_ms: 0,
             detail: None,
+            nix: None,
         }
     }
 
@@ -56,6 +89,12 @@ impl StepResult {
     }
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
+        self
+    }
+
+    /// Attach the host-side Nix evidence for this step to the result envelope.
+    pub fn nix(mut self, nix: NixReport) -> Self {
+        self.nix = Some(nix);
         self
     }
 
@@ -183,22 +222,37 @@ impl CommandResult {
             String::new()
         }
     }
+    fn human_step_line(step: &StepResult) -> String {
+        let mark = if step.skipped {
+            "skip"
+        } else if step.ok {
+            " ok "
+        } else {
+            "FAIL"
+        };
+        let duration = Self::human_step_duration(step);
+        let detail = step
+            .detail
+            .as_deref()
+            .map(|detail| format!(" — {detail}"))
+            .unwrap_or_default();
+        let nix = step
+            .nix
+            .as_ref()
+            .map(|nix| match &nix.derivation {
+                Some(derivation) => {
+                    format!(" [nix: {} {derivation}]", nix.realization.as_str())
+                }
+                None => format!(" [nix: {}]", nix.realization.as_str()),
+            })
+            .unwrap_or_default();
+
+        format!("[{mark}] {}{duration}{detail}{nix}", step.name)
+    }
+
     fn print_human(&self) {
-        for s in &self.steps {
-            let mark = if s.skipped {
-                "skip"
-            } else if s.ok {
-                " ok "
-            } else {
-                "FAIL"
-            };
-            let duration = Self::human_step_duration(s);
-            let detail = s
-                .detail
-                .as_deref()
-                .map(|d| format!(" — {d}"))
-                .unwrap_or_default();
-            println!("[{mark}] {}{duration}{detail}", s.name);
+        for step in &self.steps {
+            println!("{}", Self::human_step_line(step));
         }
         // Informational payload: the audit subcommand's whole point is this table,
         // not the pass/fail line, so render it inline when present.
@@ -250,8 +304,39 @@ mod tests {
         assert_eq!(v["steps"][0]["name"], "clippy");
         assert_eq!(v["steps"][0]["duration_ms"], 0);
         assert_eq!(v["steps"][0]["detail"], "0 warnings");
+        assert!(v["steps"][0].get("nix").is_none());
         assert_eq!(v["steps"][1]["ok"], false);
         assert_eq!(v["steps"][1]["duration_ms"], 0);
+    }
+
+    #[test]
+    fn nix_report_serializes_closed_realization_and_optional_derivation() {
+        for (realization, spelling) in [
+            (NixRealization::Reused, "reused"),
+            (NixRealization::Realized, "realized"),
+            (NixRealization::Unknown, "unknown"),
+        ] {
+            let step = StepResult::ok("nix-check").nix(NixReport {
+                installable: ".#checks.x86_64-linux.xtask".into(),
+                derivation: Some("/nix/store/abc-xtask.drv".into()),
+                realization,
+            });
+            let value = serde_json::to_value(step).unwrap();
+
+            assert_eq!(value["nix"]["installable"], ".#checks.x86_64-linux.xtask");
+            assert_eq!(value["nix"]["derivation"], "/nix/store/abc-xtask.drv");
+            assert_eq!(value["nix"]["realization"], spelling);
+        }
+
+        let step = StepResult::ok("nix-check").nix(NixReport {
+            installable: ".#site".into(),
+            derivation: None,
+            realization: NixRealization::Unknown,
+        });
+        let value = serde_json::to_value(step).unwrap();
+
+        assert_eq!(value["nix"]["installable"], ".#site");
+        assert!(value["nix"].get("derivation").is_none());
     }
 
     #[test]
@@ -350,6 +435,39 @@ mod tests {
         assert_eq!(
             CommandResult::human_step_duration(&StepResult::fail("failed")),
             " (0 ms)"
+        );
+    }
+
+    #[test]
+    fn human_step_line_appends_concise_nix_state_and_derivation() {
+        for (realization, spelling) in [
+            (NixRealization::Reused, "reused"),
+            (NixRealization::Realized, "realized"),
+            (NixRealization::Unknown, "unknown"),
+        ] {
+            let line =
+                CommandResult::human_step_line(&StepResult::ok("nix-check").nix(NixReport {
+                    installable: ".#checks.x86_64-linux.xtask".into(),
+                    derivation: Some("/nix/store/abc-xtask.drv".into()),
+                    realization,
+                }));
+
+            assert_eq!(
+                line,
+                format!("[ ok ] nix-check [nix: {spelling} /nix/store/abc-xtask.drv]")
+            );
+        }
+    }
+
+    #[test]
+    fn human_step_line_preserves_legacy_non_nix_output() {
+        let step = StepResult::ok("clippy")
+            .with_duration(Duration::from_millis(SLOW_STEP_MS as u64))
+            .detail("0 warnings");
+
+        assert_eq!(
+            CommandResult::human_step_line(&step),
+            format!("[ ok ] clippy ({} ms) — 0 warnings", SLOW_STEP_MS)
         );
     }
     #[test]
