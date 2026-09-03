@@ -1,7 +1,7 @@
 //! The `doctest-fences` gate: the half of the doctest population that lives
 //! outside every Nix check (#763).
 //!
-//! `xtask/` is excluded from the flake `src` filter (`flake.nix`'s `cleanSourceWith`
+//! `xtask/` is excluded from the flake `src` filter (`nix/packages.nix`'s `cleanSourceWith`
 //! drops `/xtask/`) and `tools/` is a separate virtual workspace, so the `doctests`
 //! derivation's `cargo test --workspace --doc` reaches neither. This step runs each
 //! one's doctests directly and reconciles them against the same scanner.

@@ -19,7 +19,7 @@ on:
 #
 # These jobs must also stay x86_64 on a full VM. The static lane's combined Emacs
 # coverage producer and the browser E2E checks build NixOS test machines hardcoded
-# to `x86_64-linux` (flake.nix `interactiveTestingVmSystem` /
+# to `x86_64-linux` (`nix/nixos.nix`'s `interactiveTestingVmSystem` /
 # `postgresTestingVmSystem`), and the jaunder-org cachix cache is populated for that
 # system only — an arm64 runner would emulate the VM and rebuild the world cold. They
 # also need a privileged, long-lived environment for the nix daemon and test VMs,

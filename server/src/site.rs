@@ -18,8 +18,8 @@
 //! [`content_type_for`], [`not_modified`], [`build_response`]) that
 //! are unit-tested without a live embed. The `Site` lookup itself is exercised
 //! end-to-end by [`serve_site`]'s integration tests: the Nix coverage build
-//! stages the real bundle (`flake.nix` sets `JAUNDER_CSR_BUNDLE_DIR`), so a
-//! populated [`Site`] is measured under instrumentation.
+//! stages the real bundle (`nix/checks.nix` sets `JAUNDER_CSR_BUNDLE_DIR`), so
+//! a populated [`Site`] is measured under instrumentation.
 
 use std::borrow::Cow;
 
@@ -514,8 +514,8 @@ mod tests {
     #[tokio::test]
     async fn serve_site_serves_embedded_wasm_negotiated_brotli_and_conditional() {
         // Exercises the live-embed found branch end-to-end. The Nix coverage
-        // build stages the real bundle (JAUNDER_CSR_BUNDLE_DIR, flake.nix), so
-        // `Site` is populated and this measures the branch. A bare local
+        // build stages the real bundle (JAUNDER_CSR_BUNDLE_DIR, nix/checks.nix),
+        // so `Site` is populated and this measures the branch. A bare local
         // `cargo test` without `cargo xtask build-csr` has an empty `Site`: the
         // request falls through to the SPA shell, so the asset-specific
         // assertions are guarded rather than false-failing. `serve_site` still

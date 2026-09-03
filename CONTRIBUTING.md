@@ -21,8 +21,9 @@ crate map, each crate's responsibility, and the sibling trees outside the root
 workspace (`xtask/`, `tools/`, `elisp/`, `end2end/`). The remaining top-level
 entries are:
 
-- `flake.nix`: development environment, the hermetic Nix checks, and the
-  PostgreSQL and interactive testing VMs
+- `flake.nix`: assembly of the public Nix flake outputs
+- `nix/`: concern-owned packages, checks, development shells, NixOS modules, and
+  testing VMs
 - `docs/`: guides, ADRs (`docs/adr/`), and the frozen `docs/archive/`
 - `.githooks/`: the `pre-commit`/`pre-push` hooks (see Git hooks below)
 - `.github/`: CI workflows
@@ -1193,7 +1194,7 @@ with libtest's normal in-process parallelism.
 
 #### `e2eSalt` — the measurement cache-buster (#792)
 
-A literal near the top of `flake.nix`'s e2e section, for **performance
+A literal near the top of `nix/checks.nix`'s e2e section, for **performance
 measurement runs**, not for normal development. It is committed empty, which is
 a byte-exact no-op, and the `e2e-scaffold` static check fails the gate if it is
 left set.
@@ -1211,14 +1212,16 @@ e2eSalt = "run3";   # any distinct string; the value itself is never read
 The salt rides the combo's extra-env string into the VM test script, so it
 changes every e2e derivation hash — all four gate checks and all four
 single-worker packages. It does **not** change `packages.x86_64-linux.jaunder`:
-`flake.nix` sits outside the crane source filter, so a salted run re-runs the VM
-suite without rebuilding the Rust workspace.
+`nix/checks.nix` sits outside the crane source filter owned by
+`nix/packages.nix`, so a salted run re-runs the VM suite without rebuilding the
+Rust workspace.
 
 **Revert it before committing.** Nothing fails if you don't, which is precisely
 the problem: a committed salt costs every CI e2e job its cache, and the only
 symptom is "CI got slow". Note this repo's worktrees may auto-stage edits, so
-revert with `git checkout HEAD -- flake.nix` **and**
-`git reset HEAD -- flake.nix`, then confirm with `git diff HEAD -- flake.nix`.
+revert with `git checkout HEAD -- nix/checks.nix` **and**
+`git reset HEAD -- nix/checks.nix`, then confirm with
+`git diff HEAD -- nix/checks.nix`.
 
 For how to run a measurement with it — matched arms, interleaving, what to
 record — see the worked example in `docs/observability.md` §"#792 — the per-test

@@ -1588,8 +1588,8 @@ spans
 E2E tracing is layered ([ADR-0011](adr/0011-unified-observability.md)): an
 automatic `e2e.test` span per test plus opt-in `e2e.flow.*` semantic-phase spans
 (`end2end/tests/perf.ts`). Trace context flows via `JAUNDER_E2E_TRACEPARENT`
-(`flake.nix` → `end2end/tests/otel.ts`), so browser-side and backend spans share
-one trace.
+(`nix/checks.nix` → `end2end/tests/otel.ts`), so browser-side and backend spans
+share one trace.
 
 **Capture and attribution are two separate things**
 ([ADR-0096](adr/0096-e2e-trace-capture-vs-attribution.md)). Client-side perf
@@ -1913,17 +1913,17 @@ it disables the dev-only auto-initialization of a missing database on `serve`
 
 **What the flake ships.** `flake.nix` exports `packages.jaunder` (the deployable
 server binary), `packages.site`, and `nixosModules.jaunder`
-(`flake.nix:247-249`, `1059-1062`). `packages.site` is **no longer a deployment
-artifact** — the binary embeds the bundle — and is retained only so
-`cargo xtask audit-wasm` can build `.#site` and inspect the bundle for size
-analysis (`flake.nix:464-473`,
+(`nix/packages.nix:407-420`, `nix/nixos.nix:223-225`). `packages.site` is **no
+longer a deployment artifact** — the binary embeds the bundle — and is retained
+only so `cargo xtask audit-wasm` can build `.#site` and inspect the bundle for
+size analysis (`nix/packages.nix:296-305`,
 [declarative NixOS deployment and package outputs](adr/0142-declarative-nixos-deployment-package-outputs.md)).
-The `services.jaunder` module (`flake.nix:44-118`) creates a dedicated `jaunder`
-user/group, runs under systemd from `StateDirectory=jaunder` with
+The `services.jaunder` module (`nix/nixos.nix:36-94`) creates a dedicated
+`jaunder` user/group, runs under systemd from `StateDirectory=jaunder` with
 `WorkingDirectory=%S/jaunder`, passes `bind` and `db` through unconditionally
-and `JAUNDER_ENV=prod` only when `prod` is set (`flake.nix:95-101`), runs
+and `JAUNDER_ENV=prod` only when `prod` is set (`nix/nixos.nix:72-82`), runs
 `jaunder init --db "$JAUNDER_DB" --skip-if-exists` in `preStart`
-(`flake.nix:105`), and starts `jaunder serve`. It has no module option for
+(`nix/nixos.nix:81-89`), and starts `jaunder serve`. It has no module option for
 PostgreSQL password injection; operators supply `JAUNDER_DB_PASSWORD[_FILE]`
 through the service manager when needed. There is no site symlink; the module
 comment names #237 as the reason. Two `nixosConfigurations` test VMs
@@ -2522,8 +2522,8 @@ class at `storage/src/postgres/backup.rs:28`).
 
 Each browser e2e check is a NixOS-test VM running Playwright against a real
 served instance, one derivation per `{backend}×{browser}` combo (`mkE2eCombo`,
-`flake.nix:969`). CI runs `cargo xtask validate --no-e2e` in the static job,
-where the authoritative Emacs coverage verdict is decided, plus a
+`nix/checks.nix:413-443`). CI runs `cargo xtask validate --no-e2e` in the static
+job, where the authoritative Emacs coverage verdict is decided, plus a
 `{sqlite,postgres}×{chromium,firefox}` matrix — each job
 `cargo xtask e2e <backend> <browser>` — aggregated by an `e2e-gate` that depends
 only on that browser matrix. Branch protection therefore needs two stable names
@@ -2571,8 +2571,8 @@ serial `*-admin` projects that run after the main projects — today that is
 (`end2end/playwright.config.ts:72-105`).
 
 The config also carries a `webkit` project, but the gate never runs it: both
-`flake.nix:963-966` and the CI matrix enumerate chromium and firefox only. The
-visual prerequisite runs inside those same four
+`nix/checks.nix:390-411` and the CI matrix enumerate chromium and firefox only.
+The visual prerequisite runs inside those same four
 `{sqlite,postgres}×{chromium,firefox}` derivations and CI jobs; it adds no
 workflow lane or backend-specific baseline. Timeout budgets are stated for
 Chromium and scaled per browser
@@ -2614,10 +2614,10 @@ Diagnostics are captured before the check is allowed to fail
 ([ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md)):
 `trace: "retain-on-failure"` and `screenshot: "only-on-failure"`
 (`end2end/playwright.config.ts:62-63`), and the shared `e2eRunAndCapture` helper
-(`flake.nix:650`) runs Playwright capturing its exit, streams the line-reporter
-output into `build.log`, copies every artifact out of the VM unconditionally,
-and only then asserts the exit. On a failed build xtask rescues the bundle from
-the `--keep-failed` outPath into `.xtask/diagnostics/<check>/`
+(`nix/checks.nix:116-185`) runs Playwright capturing its exit, streams the
+line-reporter output into `build.log`, copies every artifact out of the VM
+unconditionally, and only then asserts the exit. On a failed build xtask rescues
+the bundle from the `--keep-failed` outPath into `.xtask/diagnostics/<check>/`
 (`xtask/src/steps/nix.rs:421`), best-effort so a copy failure can never fail a
 gate.
 
@@ -2645,7 +2645,7 @@ rather than failing the check, with the JSON report still recording it
 `validate` (Check), each as a `devtool check` step in the `static-checks`
 derivation ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
 `xtask/src/steps/static_checks.rs:17-18`); one `emacsForCi` toolchain
-(`flake.nix:563`) serves both.
+(`nix/packages.nix:372-404`) serves both.
 
 The [Elisp stateless coverage gate](adr/0162-elisp-stateless-coverage-gate.md)
 runs the pure and live ERT observations in one hermetic NixOS producer and, for
@@ -2819,8 +2819,8 @@ the same host steps (`run_host_gate` in `xtask/src/lib.rs`):
 
 **Two different things are called `static-checks`, and conflating them is
 easy.** The host _step_ above runs the listed sub-steps through host-local
-lanes. The Nix `static-checks` derivation (`static-checks` in `flake.nix`) runs
-the shared `devtool check --all --sandbox-cargo` definitions hermetically with
+lanes. The Nix `static-checks` derivation (`nix/checks.nix:590-642`) runs the
+shared `devtool check --all --sandbox-cargo` definitions hermetically with
 workspace-specific offline Cargo homes, including `ast-grep-tests` for committed
 rule fixtures and the `no-full-reload` repository scan
 ([proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
@@ -2937,7 +2937,7 @@ stateful ratchet that re-anchored a committed baseline by text identity
 ([ADR-0030](adr/0030-coverage-reanchor-text-identity.md), superseded). The Nix
 `coverage` derivation produces the instrumented report, running the whole suite
 under an ephemeral PostgreSQL via `devtool pg` so `storage/src/postgres/*` is
-instrumented rather than skipped (`flake.nix:1288-1293`). The host-side gate
+instrumented rather than skipped (`nix/checks.nix:643-729`). The host-side gate
 (`xtask/src/coverage/`) then applies:
 
 - **One structural exemption**: a literal `unreachable!("msg")` with a non-empty
@@ -3110,15 +3110,16 @@ host-side subcommands are therefore chartered, not drift.
 
 **xtask is host-only — an enforced invariant.** Nix derivations never invoke
 xtask; the flow is strictly one-directional (host `cargo xtask` → `nix build`).
-The flake's source filters exclude `xtask/` (`!hasInfix "/xtask/" path` in
-`flake.nix`), so an accidental `cargo xtask` inside a derivation fails loudly
-rather than running a stale copy, and frequently-edited gate logic never busts
-the coverage/e2e cache ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
-xtask is also excluded from the root cargo workspace (`exclude = ["xtask"]`,
-with its own `[workspace]` in `xtask/Cargo.toml`), and `tools/` is a second
-standalone workspace (`coverage`, `devtool`, `doctests` — `tools/Cargo.toml:3`);
-explicit `xtask-tests` and `tools-test` steps compensate for the unit suites the
-application coverage/Nix test gates do not execute
+The application source filter excludes `xtask/` (`!hasInfix "/xtask/" path` in
+`nix/packages.nix:22-41`), so an accidental `cargo xtask` inside a derivation
+fails loudly rather than running a stale copy, and frequently-edited gate logic
+never busts the coverage/e2e cache
+([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)). xtask is also excluded from
+the root cargo workspace (`exclude = ["xtask"]`, with its own `[workspace]` in
+`xtask/Cargo.toml`), and `tools/` is a second standalone workspace (`coverage`,
+`devtool`, `doctests` — `tools/Cargo.toml:3`); explicit `xtask-tests` and
+`tools-test` steps compensate for the unit suites the application coverage/Nix
+test gates do not execute
 ([Cargo workspace execution boundaries](adr/0141-cargo-workspace-execution-boundaries.md)).
 [#1061](https://github.com/jaunder-org/jaunder/issues/1061) tracks the stale
 `host_tests` source comment that overstated the related `tools/` Nix-exclusion
@@ -3164,25 +3165,25 @@ grammar cannot re-parse addresses its `Address` type accepts, so
 The earlier `atom_syndication`/`rss` fork apparatus was removed under
 [ADR-0089](adr/0089-upstream-atom-document-io.md): no fork entries in
 `[patch.crates-io]`, no `flake = false` fork inputs, and no
-`overrideVendorGitCheckout` in `flake.nix` remain.
+`overrideVendorGitCheckout` in `nix/packages.nix:47-63` remain.
 
 **A pinned formatter.** The devShell's `leptosfmt` is not a released version:
-the flake overrides `pkgs.leptosfmt` to a post-fix upstream rev
-(`flake.nix:413-421`, [ADR-0118](adr/0118-leptosfmt-pinned-past-release.md)),
-because 0.1.33 mangles a generic component tag that has to wrap and upstream's
-fix merged three days after that release, with nothing shipped since. The
-override swaps `src` wholesale rather than patching (the fix also moves a
-submodule pointer, which a patch cannot do), restates `fetchSubmodules`, and
-overrides `cargoDeps` with Crane's `static.crates.io` vendor output. A shared
-adapter serves this override and the separately pinned `wasm-bindgen-cli`: it
-flattens Crane's registry-hash directory and adds the `Cargo.lock` that
-`buildRustPackage` expects. This avoids nixpkgs' crates.io-API vendor path,
-which returns 403 in clean CI. The override deliberately keeps nixpkgs'
-`version` string, since upstream never bumped it and `versionCheckHook` reads
-it. The consequence is that the pinned binary is indistinguishable from the
-stock one by `--version`: only behaviour tells them apart, which is one more
-reason to invoke the devShell's binary rather than re-resolving one. Remove the
-override once a release later than 0.1.33 exists.
+the Nix package layer overrides `pkgs.leptosfmt` to a post-fix upstream rev
+(`nix/packages.nix:270-294`,
+[ADR-0118](adr/0118-leptosfmt-pinned-past-release.md)), because 0.1.33 mangles a
+generic component tag that has to wrap and upstream's fix merged three days
+after that release, with nothing shipped since. The override swaps `src`
+wholesale rather than patching (the fix also moves a submodule pointer, which a
+patch cannot do), restates `fetchSubmodules`, and overrides `cargoDeps` with
+Crane's `static.crates.io` vendor output. A shared adapter serves this override
+and the separately pinned `wasm-bindgen-cli`: it flattens Crane's registry-hash
+directory and adds the `Cargo.lock` that `buildRustPackage` expects. This avoids
+nixpkgs' crates.io-API vendor path, which returns 403 in clean CI. The override
+deliberately keeps nixpkgs' `version` string, since upstream never bumped it and
+`versionCheckHook` reads it. The consequence is that the pinned binary is
+indistinguishable from the stock one by `--version`: only behaviour tells them
+apart, which is one more reason to invoke the devShell's binary rather than
+re-resolving one. Remove the override once a release later than 0.1.33 exists.
 
 **Rust edition and exception-free unsafe code.** Every package in the root,
 `tools/`, and `xtask/` workspaces uses edition 2024

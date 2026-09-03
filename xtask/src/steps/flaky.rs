@@ -1,7 +1,7 @@
 //! Surface Playwright "flaky" tests — failed on the first attempt, passed on a
 //! retry — from a combo's JSON report into the `e2e` command's result envelope.
 //!
-//! With `JAUNDER_E2E_RETRIES=1` (set by the warm gate in `flake.nix`) a
+//! With `JAUNDER_E2E_RETRIES=1` (set by the warm gate in `nix/checks.nix`) a
 //! fail-then-pass exits 0 and the combo check goes green, so the flake would be
 //! invisible without this. `nix::e2e_combo` has already lifted the report out of
 //! the VM to
