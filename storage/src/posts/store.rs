@@ -1981,6 +1981,7 @@ where
     }
 }
 
+
 /// Database-provided physical identity retained only by the no-write regression.
 #[cfg(test)]
 #[derive(Debug, macros::SqlxBridge)]

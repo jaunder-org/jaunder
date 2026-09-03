@@ -12,6 +12,14 @@ use common::time::UtcInstant;
 use common::username::Username;
 use host::feed::{FeedMinItems, FeedPath};
 
+/// Resolves whether a Post participates in the anonymous/Public projection used
+/// by Syndication Feed due-time discovery.
+const PUBLIC_AUDIENCE_PREDICATE: &str = "EXISTS (
+    SELECT 1 FROM post_audiences pa
+    JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
+    WHERE pa.post_id = p.post_id AND tk.name = 'public'
+)";
+
 /// A post that crossed into "live" within a time window, carrying exactly the
 /// data the feed worker needs to compute its affected feed URLs (the author's
 /// username and the post's tag slugs).
@@ -59,8 +67,8 @@ where
     match surface {
         FeedSurface::Site => {
             // Binds: $1 now, $2 min_items, $3 cutoff, then the variant-sized
-            // resolution fragment from $4. `window_sql` places it last, so
-            // nothing binds after it and the returned `next` is discarded.
+            // resolution fragment from $4. It filters the ranked CTE and still
+            // uses the last placeholders, so the returned `next` is discarded.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 4);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
@@ -71,7 +79,7 @@ where
         }
         FeedSurface::User { username } => {
             // Binds: $1 now, $2 username, $3 min_items, $4 cutoff, then the
-            // variant-sized resolution fragment last, from $5.
+            // variant-sized ranked-CTE resolution fragment from $5.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
@@ -83,7 +91,7 @@ where
         }
         FeedSurface::SiteTag { tag } => {
             // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, then the
-            // variant-sized resolution fragment last, from $5.
+            // variant-sized ranked-CTE resolution fragment from $5.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
@@ -95,7 +103,7 @@ where
         }
         FeedSurface::UserTag { username, tag } => {
             // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff, then
-            // the variant-sized resolution fragment last, from $6.
+            // the variant-sized ranked-CTE resolution fragment from $6.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 6);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
@@ -128,7 +136,8 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
      WHERE p.published_at IS NOT NULL
        AND p.deleted_at IS NULL
        AND p.published_at <= $1
- )
+       AND {resolution}
+)
  SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
         {tags} AS tags
@@ -136,7 +145,6 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
  WHERE (r.rn <= $2 OR r.published_at >= $3)
-   AND {resolution}
  ORDER BY p.published_at DESC, p.post_id DESC"
         ),
         FeedSurface::User { .. } => format!(
@@ -149,7 +157,8 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
        AND p.deleted_at IS NULL
        AND p.published_at <= $1
        AND u.username = $2
- )
+       AND {resolution}
+)
  SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
         {tags} AS tags
@@ -157,7 +166,6 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
  WHERE (r.rn <= $3 OR r.published_at >= $4)
-   AND {resolution}
  ORDER BY p.published_at DESC, p.post_id DESC"
         ),
         FeedSurface::SiteTag { .. } => format!(
@@ -171,7 +179,8 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
        AND p.deleted_at IS NULL
        AND p.published_at <= $1
        AND t.tag_slug = $2
- )
+       AND {resolution}
+)
  SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
         {tags} AS tags
@@ -179,7 +188,6 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
  WHERE (r.rn <= $3 OR r.published_at >= $4)
-   AND {resolution}
  ORDER BY p.published_at DESC, p.post_id DESC"
         ),
         FeedSurface::UserTag { .. } => format!(
@@ -195,7 +203,8 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
        AND p.published_at <= $1
        AND u.username = $2
        AND t.tag_slug = $3
- )
+       AND {resolution}
+)
  SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
         p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
         {tags} AS tags
@@ -203,7 +212,6 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
  WHERE (r.rn <= $4 OR r.published_at >= $5)
-   AND {resolution}
  ORDER BY p.published_at DESC, p.post_id DESC"
         ),
     }
@@ -224,10 +232,10 @@ where
 {
     // `published_at > $1 AND published_at <= $2` selects exactly the posts
     // that crossed into "live" within the half-open window `(after, upto]`.
+    // Only current Public projections earn Syndication Feed regeneration.
     // The standard post projection (incl. the JSON tag subquery) is reused so the row
     // decodes directly into `PostRecord`; we then keep only the username + tag slugs
-    // the feed fan-out needs. No viewer filter: go-live regeneration is independent of
-    // any reader's audience.
+    // the feed fan-out needs.
     let tags = DB::TAGS_SUBQUERY;
     let sql = format!(
         "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -238,6 +246,7 @@ where
              WHERE p.published_at > $1
                AND p.published_at <= $2
                AND p.deleted_at IS NULL
+               AND {PUBLIC_AUDIENCE_PREDICATE}
              ORDER BY p.published_at ASC, p.post_id ASC"
     );
     let rows = sqlx::query_as::<_, PostRecord>(&sql)
@@ -317,12 +326,13 @@ where
     Ok(needing)
 }
 
-/// The most recent `published_at` of a *live* post (`published_at <= now`, not
-/// deleted) on `surface`, or `None` when the surface has no live post. Each
-/// surface variant adds exactly the joins/predicates that define its post set,
-/// mirroring the window query's surface filters. Used by
-/// [`crate::posts::store::PostStorage::feed_urls_needing_catchup`] to detect a cached feed that is
-/// stale relative to a go-live the worker may have missed while down.
+/// The most recent `published_at` of a current Public, live post
+/// (`published_at <= now`, not deleted) on `surface`, or `None` when the surface
+/// has no such post. Each surface variant adds exactly the joins/predicates that
+/// define its post set, mirroring the window query's surface filters. Used by
+/// [`crate::posts::store::PostStorage::feed_urls_needing_catchup`] to detect a
+/// cached feed that is stale relative to a go-live the worker may have missed
+/// while down.
 async fn max_published_at_for_surface<DB>(
     pool: &Pool<DB>,
     surface: &common::feed::FeedSurface,
@@ -343,53 +353,57 @@ where
     use common::feed::FeedSurface;
     let row: Option<(UtcInstant,)> = match surface {
         FeedSurface::Site => {
-            sqlx::query_as(
+            sqlx::query_as(&format!(
                 "SELECT p.published_at FROM posts p
                  WHERE p.published_at IS NOT NULL AND p.published_at <= $1
                    AND p.deleted_at IS NULL
-                 ORDER BY p.published_at DESC LIMIT 1",
-            )
+                   AND {PUBLIC_AUDIENCE_PREDICATE}
+                 ORDER BY p.published_at DESC LIMIT 1"
+            ))
             .bind_storage(now)
             .fetch_optional(pool)
             .await?
         }
         FeedSurface::User { username } => {
-            sqlx::query_as(
+            sqlx::query_as(&format!(
                 "SELECT p.published_at FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.published_at IS NOT NULL AND p.published_at <= $1
                    AND p.deleted_at IS NULL AND u.username = $2
-                 ORDER BY p.published_at DESC LIMIT 1",
-            )
+                   AND {PUBLIC_AUDIENCE_PREDICATE}
+                 ORDER BY p.published_at DESC LIMIT 1"
+            ))
             .bind_storage(now)
             .bind_storage(username)
             .fetch_optional(pool)
             .await?
         }
         FeedSurface::SiteTag { tag } => {
-            sqlx::query_as(
+            sqlx::query_as(&format!(
                 "SELECT p.published_at FROM posts p
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
                  WHERE p.published_at IS NOT NULL AND p.published_at <= $1
                    AND p.deleted_at IS NULL AND t.tag_slug = $2
-                 ORDER BY p.published_at DESC LIMIT 1",
-            )
+                   AND {PUBLIC_AUDIENCE_PREDICATE}
+                 ORDER BY p.published_at DESC LIMIT 1"
+            ))
             .bind_storage(now)
             .bind_storage(tag)
             .fetch_optional(pool)
             .await?
         }
         FeedSurface::UserTag { username, tag } => {
-            sqlx::query_as(
+            sqlx::query_as(&format!(
                 "SELECT p.published_at FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
                  WHERE p.published_at IS NOT NULL AND p.published_at <= $1
                    AND p.deleted_at IS NULL AND u.username = $2 AND t.tag_slug = $3
-                 ORDER BY p.published_at DESC LIMIT 1",
-            )
+                   AND {PUBLIC_AUDIENCE_PREDICATE}
+                 ORDER BY p.published_at DESC LIMIT 1"
+            ))
             .bind_storage(now)
             .bind_storage(username)
             .bind_storage(tag)
