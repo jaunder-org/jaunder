@@ -128,16 +128,16 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
      WHERE p.published_at IS NOT NULL
        AND p.deleted_at IS NULL
        AND p.published_at <= $1
-)
-SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-       p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-       {tags} AS tags
-FROM ranked r
-JOIN posts p ON p.post_id = r.post_id
-JOIN users u ON p.user_id = u.user_id
-WHERE (r.rn <= $2 OR r.published_at >= $3)
-  AND {resolution}
-ORDER BY p.published_at DESC, p.post_id DESC"
+ )
+ SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+        {tags} AS tags
+ FROM ranked r
+ JOIN posts p ON p.post_id = r.post_id
+ JOIN users u ON p.user_id = u.user_id
+ WHERE (r.rn <= $2 OR r.published_at >= $3)
+   AND {resolution}
+ ORDER BY p.published_at DESC, p.post_id DESC"
         ),
         FeedSurface::User { .. } => format!(
             "WITH ranked AS (
@@ -149,16 +149,16 @@ ORDER BY p.published_at DESC, p.post_id DESC"
        AND p.deleted_at IS NULL
        AND p.published_at <= $1
        AND u.username = $2
-)
-SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-       p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-       {tags} AS tags
-FROM ranked r
-JOIN posts p ON p.post_id = r.post_id
-JOIN users u ON p.user_id = u.user_id
-WHERE (r.rn <= $3 OR r.published_at >= $4)
-  AND {resolution}
-ORDER BY p.published_at DESC, p.post_id DESC"
+ )
+ SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+        {tags} AS tags
+ FROM ranked r
+ JOIN posts p ON p.post_id = r.post_id
+ JOIN users u ON p.user_id = u.user_id
+ WHERE (r.rn <= $3 OR r.published_at >= $4)
+   AND {resolution}
+ ORDER BY p.published_at DESC, p.post_id DESC"
         ),
         FeedSurface::SiteTag { .. } => format!(
             "WITH ranked AS (
@@ -171,16 +171,16 @@ ORDER BY p.published_at DESC, p.post_id DESC"
        AND p.deleted_at IS NULL
        AND p.published_at <= $1
        AND t.tag_slug = $2
-)
-SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-       p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-       {tags} AS tags
-FROM ranked r
-JOIN posts p ON p.post_id = r.post_id
-JOIN users u ON p.user_id = u.user_id
-WHERE (r.rn <= $3 OR r.published_at >= $4)
-  AND {resolution}
-ORDER BY p.published_at DESC, p.post_id DESC"
+ )
+ SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+        {tags} AS tags
+ FROM ranked r
+ JOIN posts p ON p.post_id = r.post_id
+ JOIN users u ON p.user_id = u.user_id
+ WHERE (r.rn <= $3 OR r.published_at >= $4)
+   AND {resolution}
+ ORDER BY p.published_at DESC, p.post_id DESC"
         ),
         FeedSurface::UserTag { .. } => format!(
             "WITH ranked AS (
@@ -195,16 +195,16 @@ ORDER BY p.published_at DESC, p.post_id DESC"
        AND p.published_at <= $1
        AND u.username = $2
        AND t.tag_slug = $3
-)
-SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-       p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-       {tags} AS tags
-FROM ranked r
-JOIN posts p ON p.post_id = r.post_id
-JOIN users u ON p.user_id = u.user_id
-WHERE (r.rn <= $4 OR r.published_at >= $5)
-  AND {resolution}
-ORDER BY p.published_at DESC, p.post_id DESC"
+ )
+ SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+        {tags} AS tags
+ FROM ranked r
+ JOIN posts p ON p.post_id = r.post_id
+ JOIN users u ON p.user_id = u.user_id
+ WHERE (r.rn <= $4 OR r.published_at >= $5)
+   AND {resolution}
+ ORDER BY p.published_at DESC, p.post_id DESC"
         ),
     }
 }
@@ -231,14 +231,14 @@ where
     let tags = DB::TAGS_SUBQUERY;
     let sql = format!(
         "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                {tags} AS tags
-         FROM posts p
-         JOIN users u ON p.user_id = u.user_id
-         WHERE p.published_at > $1
-           AND p.published_at <= $2
-           AND p.deleted_at IS NULL
-         ORDER BY p.published_at ASC, p.post_id ASC"
+                    p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+                    {tags} AS tags
+             FROM posts p
+             JOIN users u ON p.user_id = u.user_id
+             WHERE p.published_at > $1
+               AND p.published_at <= $2
+               AND p.deleted_at IS NULL
+             ORDER BY p.published_at ASC, p.post_id ASC"
     );
     let rows = sqlx::query_as::<_, PostRecord>(&sql)
         .bind_storage(after)

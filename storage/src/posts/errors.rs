@@ -98,7 +98,7 @@ pub enum ListByTagError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ListByTagError, TaggingError};
+    use super::{ListByTagError, TaggingError, UpdatePostError};
 
     #[test]
     fn tagging_error_display_post_not_found() {
@@ -128,5 +128,48 @@ mod tests {
         let err = ListByTagError::TagNotFound;
         let debug_str = format!("{err:?}");
         assert!(debug_str.contains("TagNotFound"));
+    }
+
+    // Not-found/unauthorized mask as a 404; internal is a masked storage failure.
+    #[test]
+    fn from_update_post_error_maps_variants() {
+        use host::error::{ErrorKind, InternalError};
+
+        let not_found: InternalError = UpdatePostError::NotFound.into();
+        assert_eq!(not_found.kind(), ErrorKind::NotFound);
+        assert_eq!(not_found.public_message(), "Post not found");
+
+        let unauthorized: InternalError = UpdatePostError::Unauthorized.into();
+        assert_eq!(unauthorized.kind(), ErrorKind::NotFound);
+        assert_eq!(unauthorized.public_message(), "Post not found");
+
+        let internal: InternalError = UpdatePostError::Internal(sqlx::Error::PoolClosed).into();
+        assert_eq!(internal.kind(), ErrorKind::Storage);
+        assert_eq!(internal.public_message(), "storage operation failed");
+
+        for error in [
+            UpdatePostError::BookkeepingMismatch,
+            UpdatePostError::StaleContent,
+        ] {
+            let expected_operator_message = error.to_string();
+            let internal: InternalError = error.into();
+            assert_eq!(internal.kind(), ErrorKind::Validation);
+            assert_eq!(internal.public_message(), expected_operator_message);
+            assert_eq!(internal.operator_message(), expected_operator_message);
+        }
+    }
+
+    // The `set_post_tags` lift masks as a server error
+    // (`"server operation failed"`, kind `Internal`) while the typed
+    // `TaggingError` is preserved on the operator side rather than stringified.
+    #[test]
+    fn from_tagging_error_maps_to_server() {
+        use host::error::{ErrorKind, InternalError};
+
+        let error: InternalError = TaggingError::PostNotFound.into();
+        assert_eq!(error.kind(), ErrorKind::Internal);
+        assert_eq!(error.public_message(), "server operation failed");
+        // The typed source is preserved (not flattened to the wire message).
+        assert!(error.operator_message().contains("post not found"));
     }
 }

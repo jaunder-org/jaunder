@@ -124,7 +124,10 @@ pub fn wire_scheduled_cursor(cursor: &ScheduledPostCursor) -> PageCursor {
 
 #[cfg(test)]
 mod tests {
-    use super::to_scheduled_post_cursor;
+    use super::{
+        PostCursor, ScheduledPostCursor, keyset_cursor, scheduled_keyset_cursor,
+        to_scheduled_post_cursor, wire_cursor, wire_scheduled_cursor,
+    };
     use crate::posts::models::{PostFormat, PostRecord};
     use common::ids::{PostId, UserId};
     use common::test_support::{
@@ -155,6 +158,36 @@ mod tests {
         assert_eq!(
             err.operator_message(),
             "scheduled listing row missing published_at"
+        );
+    }
+
+    #[test]
+    fn post_cursor_round_trips_through_wire_cursor() {
+        let cursor = PostCursor {
+            created_at: "2026-04-12T08:30:00.123456Z".parse().unwrap(),
+            post_id: PostId::from(42),
+        };
+
+        assert_eq!(
+            keyset_cursor(Some(wire_cursor(&cursor)))
+                .unwrap()
+                .created_at,
+            cursor.created_at
+        );
+    }
+
+    #[test]
+    fn scheduled_cursor_round_trips_through_wire_cursor() {
+        let cursor = ScheduledPostCursor {
+            published_at: "2026-04-12T08:30:00.123456Z".parse().unwrap(),
+            post_id: PostId::from(42),
+        };
+
+        assert_eq!(
+            scheduled_keyset_cursor(Some(wire_scheduled_cursor(&cursor)))
+                .unwrap()
+                .published_at,
+            cursor.published_at
         );
     }
 }

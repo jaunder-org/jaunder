@@ -24,9 +24,9 @@ pub use media::{
 pub use models::PermalinkDate;
 pub use models::{
     CreatePostInput, CreatedPost, CurrentPostRevisionSummary, InvalidPostFormat,
-    PostBookkeepingExpectation, PostFormat, PostLifecycle, PostMutation, PostRecord,
-    PostRevisionDetail, PostRevisionMetadata, PostRevisionPage, PostRevisionRecord,
-    PostRevisionTag, PublishUpdate, RenderedHtml, UpdatePostInput,
+    PostBookkeepingExpectation, PostFormat, PostLifecycle, PostRecord, PostRevisionDetail,
+    PostRevisionMetadata, PostRevisionPage, PostRevisionRecord, PostRevisionTag, PublishUpdate,
+    RenderedHtml, UpdatePostInput,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use store::MockPostStorage;

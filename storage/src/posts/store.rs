@@ -2011,9 +2011,6 @@ pub(crate) struct CorruptPostFormat(String);
 mod tests {
     use super::*;
     use crate::feed_cache::FeedCacheRow;
-    use crate::posts::cursors::{
-        keyset_cursor, scheduled_keyset_cursor, wire_cursor, wire_scheduled_cursor,
-    };
     use crate::posts::models::{PostBookkeepingExpectation, RenderedHtml};
     use crate::test_support::{
         Backend, CloseablePool, MEDIA_TEST_SHA256, SeedRawPost, SeedUser, TestEnv, UpdateRawPost,
@@ -4588,81 +4585,6 @@ mod tests {
                 .any(|p| p.post_id == post2_id && p.published_at.is_some())
         );
         assert!(!results.iter().any(|p| p.post_id == post3_id));
-    }
-
-    // Not-found/unauthorized mask as a 404; internal is a masked storage failure.
-    #[test]
-    fn from_update_post_error_maps_variants() {
-        use host::error::{ErrorKind, InternalError};
-
-        let not_found: InternalError = UpdatePostError::NotFound.into();
-        assert_eq!(not_found.kind(), ErrorKind::NotFound);
-        assert_eq!(not_found.public_message(), "Post not found");
-
-        let unauthorized: InternalError = UpdatePostError::Unauthorized.into();
-        assert_eq!(unauthorized.kind(), ErrorKind::NotFound);
-        assert_eq!(unauthorized.public_message(), "Post not found");
-
-        let internal: InternalError = UpdatePostError::Internal(sqlx::Error::PoolClosed).into();
-        assert_eq!(internal.kind(), ErrorKind::Storage);
-        assert_eq!(internal.public_message(), "storage operation failed");
-
-        for error in [
-            UpdatePostError::BookkeepingMismatch,
-            UpdatePostError::StaleContent,
-        ] {
-            let expected_operator_message = error.to_string();
-            let internal: InternalError = error.into();
-            assert_eq!(internal.kind(), ErrorKind::Validation);
-            assert_eq!(internal.public_message(), expected_operator_message);
-            assert_eq!(internal.operator_message(), expected_operator_message);
-        }
-    }
-
-    // The `set_post_tags` lift masks as a server error
-    // (`"server operation failed"`, kind `Internal`) while the typed
-    // `TaggingError` is preserved on the operator side rather than stringified.
-    #[test]
-    fn from_tagging_error_maps_to_server() {
-        use host::error::{ErrorKind, InternalError};
-
-        let error: InternalError = TaggingError::PostNotFound.into();
-        assert_eq!(error.kind(), ErrorKind::Internal);
-        assert_eq!(error.public_message(), "server operation failed");
-        // The typed source is preserved (not flattened to the wire message).
-        assert!(error.operator_message().contains("post not found"));
-    }
-
-    // -- Cursor + effectful helper tests (Cluster C push-down, #334) --
-
-    #[test]
-    fn post_cursor_round_trips_through_wire_cursor() {
-        let cursor = PostCursor {
-            created_at: "2026-04-12T08:30:00.123456Z".parse().unwrap(),
-            post_id: PostId::from(42),
-        };
-
-        assert_eq!(
-            keyset_cursor(Some(wire_cursor(&cursor)))
-                .unwrap()
-                .created_at,
-            cursor.created_at
-        );
-    }
-
-    #[test]
-    fn scheduled_cursor_round_trips_through_wire_cursor() {
-        let cursor = ScheduledPostCursor {
-            published_at: "2026-04-12T08:30:00.123456Z".parse().unwrap(),
-            post_id: PostId::from(42),
-        };
-
-        assert_eq!(
-            scheduled_keyset_cursor(Some(wire_scheduled_cursor(&cursor)))
-                .unwrap()
-                .published_at,
-            cursor.published_at
-        );
     }
 
     #[test]
