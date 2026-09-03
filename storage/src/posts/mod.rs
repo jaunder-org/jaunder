@@ -2,10 +2,12 @@
 
 pub(crate) mod cursors;
 pub(crate) mod errors;
+pub(crate) mod lifecycle;
 pub(crate) mod media;
 pub(crate) mod models;
 pub(crate) mod store;
 pub(crate) mod tags;
+pub(crate) mod visibility;
 
 pub use cursors::{
     CollectionCursor, PostCursor, PostRevisionCursor, ScheduledPostCursor, keyset_cursor,

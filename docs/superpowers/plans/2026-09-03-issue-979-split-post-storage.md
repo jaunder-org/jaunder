@@ -41,7 +41,7 @@ Out:
     visibility.
   - Verification: run the generic dual-backend tag and media-reference tests,
     including unchanged-set, lock-order, backfill, and ownership cases.
-- [ ] Task 3: Extract visibility and lifecycle policy
+- [x] Task 3: Extract visibility and lifecycle policy
   - Contract: `visibility.rs` owns resolution SQL/binds and audience helpers;
     `lifecycle.rs` owns bookkeeping expectations, revision decoding/capture, and
     shared mutation support. Move each concern and all its consumers atomically

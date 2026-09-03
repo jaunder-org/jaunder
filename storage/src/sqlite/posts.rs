@@ -3,10 +3,11 @@ use sqlx::{Pool, QueryBuilder, Sqlite};
 
 use crate::helpers;
 use crate::posts::{
+    lifecycle::{self, PostBookkeepingRow},
     media::{self, MediaReferenceEvidence, PostMediaReferenceBackfill},
     models::PostPublicationClear,
-    store::{self, PostBookkeepingRow},
     tags::{self, PostTag, PostTagDiff},
+    visibility,
 };
 use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use crate::{
@@ -35,7 +36,7 @@ async fn apply_lifecycle_change(
     delete: bool,
 ) -> sqlx::Result<()> {
     let now = UtcInstant::now();
-    store::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
+    lifecycle::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
     if delete {
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
             .bind_storage(now)
@@ -133,7 +134,7 @@ async fn apply_post_update(
     tag_diff: PostTagDiff<'_>,
 ) -> Result<PostRecord, UpdatePostError> {
     let now = input.request_clock;
-    store::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
+    lifecycle::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
     let publication_clear = PostPublicationClear::for_update(input.publish);
     let explicit_published_at = match input.publish {
         PublishUpdate::Unpublish => None,
@@ -152,7 +153,7 @@ async fn apply_post_update(
     .bind_storage(input.rendered.html()).bind_storage(publication_clear).bind_storage(explicit_published_at)
     .bind_storage(explicit_published_at).bind_storage(now).bind_storage(now).bind_storage(input.summary.as_ref()).bind_storage(post_id)
     .fetch_one(&mut *conn).await?;
-    store::replace_post_audiences::<Sqlite>(&mut *conn, post_id, &input.audiences).await?;
+    visibility::replace_post_audiences::<Sqlite>(&mut *conn, post_id, &input.audiences).await?;
     for label in tag_diff.to_add {
         let tag_id = sqlx::query_scalar::<_, TagId>(tags::UPSERT_TAG_RETURNING_ID)
             .bind_storage(label.slug())
@@ -253,7 +254,7 @@ impl PostDialect for Sqlite {
         .bind_storage(post_id)
         .fetch_all(&mut *conn)
         .await?;
-        if let Some(error) = store::update_expectation_error(post_id, &existing, &tags, input) {
+        if let Some(error) = lifecycle::update_expectation_error(post_id, &existing, &tags, input) {
             return Err(error);
         }
         let existing_tags = sqlx::query_as::<_, PostTag>(tags::SELECT_POST_TAGS)
@@ -297,10 +298,10 @@ impl PostDialect for Sqlite {
                 )
             })
             .collect();
-        if store::update_scalar_is_noop(&existing, input)
+        if lifecycle::update_scalar_is_noop(&existing, input)
             && tag_diff.to_add.is_empty()
             && tag_diff.to_remove.is_empty()
-            && store::audiences_are_equal(&existing_audiences, &input.audiences)
+            && visibility::audiences_are_equal(&existing_audiences, &input.audiences)
             && old_media_set == desired_media_set
         {
             return fetch_post(conn, post_id).await;
@@ -360,7 +361,7 @@ impl PostDialect for Sqlite {
         if diff.to_add.is_empty() && diff.to_remove.is_empty() {
             return Ok(());
         }
-        store::capture_complete_post_revision::<Sqlite>(
+        lifecycle::capture_complete_post_revision::<Sqlite>(
             &mut *connection,
             post_id,
             UtcInstant::now(),

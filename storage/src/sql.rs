@@ -11,9 +11,9 @@ use crate::helpers::{SerializedPostTags, SessionCreatedAt, SessionLastUsedAt, St
 use crate::invites::{InviteCreatedAt, InviteExpiresAt};
 use crate::media::MediaDeleteMode;
 use crate::posts::{
+    lifecycle::IdempotencyAdvisoryLockKey,
     media::{MediaAdvisoryLockKey, MediaReferenceSnapshotLimit, PersistedMediaSubjectKind},
     models::{PermalinkDateText, PostPublicationClear},
-    store::IdempotencyAdvisoryLockKey,
     tags::TagSlugPrefixPattern,
 };
 use crate::subscriptions::SubscriptionStatusName;

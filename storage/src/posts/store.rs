@@ -3,8 +3,6 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use chrono::Duration;
-use sha2::{Digest, Sha256};
 use sqlx::{Database, Decode, Encode, Executor, Pool, Result, Row, Type};
 
 use crate::InstanceId;
@@ -13,6 +11,8 @@ use crate::posts::cursors::{
     CollectionCursor, PostCursor, PostRevisionCursor, ScheduledPostCursor,
 };
 use crate::posts::errors::{CreatePostError, ListByTagError, TaggingError, UpdatePostError};
+use crate::posts::lifecycle;
+use crate::posts::lifecycle::{DecodeRawRow, RevisionDetailRow, RevisionMetadataRow};
 use crate::posts::media;
 use crate::posts::media::{
     MediaReferenceEvidence, MediaReferenceSnapshot, PersistedMediaReference, PersistedMediaSubject,
@@ -20,11 +20,12 @@ use crate::posts::media::{
 };
 use crate::posts::models::{
     CreatePostInput, CreatedPost, CurrentPostRevisionSummary, PermalinkDate, PermalinkDateText,
-    PostLifecycle, PostRecord, PostRevisionDetail, PostRevisionMetadata, PostRevisionPage,
-    PostRevisionRecord, PostRevisionTag, PublishUpdate, RenderedHtml, UpdatePostInput,
+    PostRecord, PostRevisionDetail, PostRevisionPage, PostRevisionRecord, PostRevisionTag,
+    UpdatePostInput,
 };
 use crate::posts::tags;
 use crate::posts::tags::{PostTag, TagRecord};
+use crate::posts::visibility;
 use crate::sql::{Exists, QueryStorageExt, RowCount};
 use crate::write_scope::WriteTransaction;
 use common::idempotency_key::IdempotencyKey;
@@ -33,7 +34,6 @@ use common::media::{
     ContentHash, Filename, MediaRef, MediaReferenceForm, MediaReferenceKind, MediaSource,
 };
 use common::pagination::{PageSize, RowLimit};
-use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::render::PostFormat;
@@ -41,10 +41,10 @@ use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::time::UtcInstant;
 use common::username::Username;
-use common::visibility::{self, AudienceTarget, SubscriberRef, TargetKind, ViewerIdentity};
+use common::visibility::{AudienceTarget, SubscriberRef, TargetKind, ViewerIdentity};
+
 use host::{
     error::{InternalError, InternalResult},
-    etag,
     feed::{FeedMinItems, FeedPath},
     metrics,
     retention::Domain,
@@ -57,37 +57,6 @@ use host::{
 pub struct GoLivePost {
     pub username: Username,
     pub tag_slugs: Vec<Tag>,
-}
-
-const IDEMPOTENCY_REPLAY_WINDOW_HOURS: i64 = 1;
-
-fn idempotency_replay_cutoff(now: UtcInstant) -> UtcInstant {
-    UtcInstant::from(now.value() - Duration::hours(IDEMPOTENCY_REPLAY_WINDOW_HOURS))
-}
-
-/// Captures every scalar field belonging to a complete immutable prior Post
-/// state. Child snapshot writes intentionally remain with Task 2's transaction.
-/// Bind order: `captured_at, post_id`.
-pub(crate) const INSERT_COMPLETE_POST_REVISION: &str = "INSERT INTO post_revisions
-     (post_id, user_id, title, slug, body, format, rendered_html, summary,
-      created_at, updated_at, published_at, deleted_at, captured_at)
-     SELECT post_id, user_id, title, slug, body, format, rendered_html, summary,
-            created_at, updated_at, published_at, deleted_at, $1
-     FROM posts WHERE post_id = $2
-     RETURNING revision_id";
-
-/// The locked pre-write columns needed for final-state and content expectations.
-#[derive(sqlx::FromRow)]
-pub(crate) struct PostBookkeepingRow {
-    pub user_id: UserId,
-    pub deleted_at: Option<UtcInstant>,
-    pub title: Option<PostTitle>,
-    pub slug: Slug,
-    pub body: PostBody,
-    pub format: PostFormat,
-    pub rendered_html: RenderedHtml,
-    pub summary: Option<PostSummary>,
-    pub published_at: Option<UtcInstant>,
 }
 
 // ---------------------------------------------------------------------------
@@ -655,103 +624,6 @@ pub trait PostDialect: Backend {
     ) -> Result<Vec<PostId>>;
 }
 
-/// This is decoded explicitly rather than through a positional `SQLx` tuple so
-/// persisted values always cross the storage boundary as domain types.
-struct RevisionDetailRow {
-    revision_id: RevisionId,
-    post_id: PostId,
-    user_id: UserId,
-    title: Option<PostTitle>,
-    slug: Slug,
-    body: PostBody,
-    format: PostFormat,
-    rendered_html: RenderedHtml,
-    summary: Option<PostSummary>,
-    created_at: UtcInstant,
-    updated_at: UtcInstant,
-    published_at: Option<UtcInstant>,
-    deleted_at: Option<UtcInstant>,
-    captured_at: UtcInstant,
-}
-
-/// The typed columns required to render one immutable revision in a history list.
-struct RevisionMetadataRow {
-    revision_id: RevisionId,
-    post_id: PostId,
-    title: Option<PostTitle>,
-    slug: Slug,
-    captured_at: UtcInstant,
-    deleted_at: Option<UtcInstant>,
-    published_at: Option<UtcInstant>,
-    current_deleted_at: Option<UtcInstant>,
-}
-
-/// Decodes a raw SQL row into a storage-internal typed projection.
-trait DecodeRawRow<DB: Database>: Sized {
-    fn decode(row: DB::Row) -> Result<Self>;
-}
-
-impl<DB> DecodeRawRow<DB> for RevisionDetailRow
-where
-    DB: Database,
-    for<'r> RevisionId: Decode<'r, DB> + Type<DB>,
-    for<'r> PostId: Decode<'r, DB> + Type<DB>,
-    for<'r> UserId: Decode<'r, DB> + Type<DB>,
-    for<'r> Option<PostTitle>: Decode<'r, DB> + Type<DB>,
-    for<'r> Slug: Decode<'r, DB> + Type<DB>,
-    for<'r> PostBody: Decode<'r, DB> + Type<DB>,
-    for<'r> PostFormat: Decode<'r, DB> + Type<DB>,
-    for<'r> RenderedHtml: Decode<'r, DB> + Type<DB>,
-    for<'r> Option<PostSummary>: Decode<'r, DB> + Type<DB>,
-    for<'r> UtcInstant: Decode<'r, DB> + Type<DB>,
-    for<'r> Option<UtcInstant>: Decode<'r, DB> + Type<DB>,
-    for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
-{
-    fn decode(row: DB::Row) -> Result<Self> {
-        Ok(Self {
-            revision_id: row.try_get::<RevisionId, _>("revision_id")?,
-            post_id: row.try_get::<PostId, _>("post_id")?,
-            user_id: row.try_get::<UserId, _>("user_id")?,
-            title: row.try_get::<Option<PostTitle>, _>("title")?,
-            slug: row.try_get::<Slug, _>("slug")?,
-            body: row.try_get::<PostBody, _>("body")?,
-            format: row.try_get::<PostFormat, _>("format")?,
-            rendered_html: row.try_get::<RenderedHtml, _>("rendered_html")?,
-            summary: row.try_get::<Option<PostSummary>, _>("summary")?,
-            created_at: row.try_get::<UtcInstant, _>("created_at")?,
-            updated_at: row.try_get::<UtcInstant, _>("updated_at")?,
-            published_at: row.try_get::<Option<UtcInstant>, _>("published_at")?,
-            deleted_at: row.try_get::<Option<UtcInstant>, _>("deleted_at")?,
-            captured_at: row.try_get::<UtcInstant, _>("captured_at")?,
-        })
-    }
-}
-
-impl<DB> DecodeRawRow<DB> for RevisionMetadataRow
-where
-    DB: Database,
-    for<'r> RevisionId: Decode<'r, DB> + Type<DB>,
-    for<'r> PostId: Decode<'r, DB> + Type<DB>,
-    for<'r> Option<PostTitle>: Decode<'r, DB> + Type<DB>,
-    for<'r> Slug: Decode<'r, DB> + Type<DB>,
-    for<'r> UtcInstant: Decode<'r, DB> + Type<DB>,
-    for<'r> Option<UtcInstant>: Decode<'r, DB> + Type<DB>,
-    for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
-{
-    fn decode(row: DB::Row) -> Result<Self> {
-        Ok(Self {
-            revision_id: row.try_get::<RevisionId, _>("revision_id")?,
-            post_id: row.try_get::<PostId, _>("post_id")?,
-            title: row.try_get::<Option<PostTitle>, _>("title")?,
-            slug: row.try_get::<Slug, _>("slug")?,
-            captured_at: row.try_get::<UtcInstant, _>("captured_at")?,
-            deleted_at: row.try_get::<Option<UtcInstant>, _>("deleted_at")?,
-            published_at: row.try_get::<Option<UtcInstant>, _>("published_at")?,
-            current_deleted_at: row.try_get::<Option<UtcInstant>, _>("current_deleted_at")?,
-        })
-    }
-}
-
 /// Generic [`PostStorage`] backed by any [`PostDialect`] database.
 ///
 /// Every read and the non-transactional shared mutations live here, splicing
@@ -883,7 +755,7 @@ where
     ) -> Result<CreatedPost, CreatePostError> {
         let connection = DB::write_connection(transaction)?;
         let (post_id, idempotency_key_expired) =
-            write_post_in_tx::<DB>(connection, input, now).await?;
+            lifecycle::write_post_in_tx::<DB>(connection, input, now).await?;
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format,
                     p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
@@ -925,7 +797,8 @@ where
         DB::lock_media_references(connection, &media).await?;
         let mut ids = Vec::with_capacity(inputs.len());
         for input in inputs {
-            let (post_id, _) = write_post_in_tx::<DB>(connection, input, UtcInstant::now()).await?;
+            let (post_id, _) =
+                lifecycle::write_post_in_tx::<DB>(connection, input, UtcInstant::now()).await?;
             ids.push(post_id);
         }
         Ok(ids)
@@ -942,7 +815,7 @@ where
         key: &IdempotencyKey,
         now: UtcInstant,
     ) -> Result<Option<PostId>, sqlx::Error> {
-        let cutoff = idempotency_replay_cutoff(now);
+        let cutoff = lifecycle::idempotency_replay_cutoff(now);
         sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM idempotency_keys
              WHERE user_id = $1 AND key = $2 AND created_at > $3",
@@ -961,7 +834,7 @@ where
     )]
     async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, sqlx::Error> {
         const BATCH_SIZE: RowLimit = RowLimit::at_most(100);
-        let cutoff = idempotency_replay_cutoff(now);
+        let cutoff = lifecycle::idempotency_replay_cutoff(now);
         let mut deleted = 0;
 
         loop {
@@ -1000,7 +873,7 @@ where
         post_id: PostId,
         viewer: &ViewerIdentity,
     ) -> Result<Option<PostRecord>> {
-        let (resolution, binds, _) = resolution_where(viewer, 2);
+        let (resolution, binds, _) = visibility::resolution_where(viewer, 2);
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                     p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -1022,10 +895,15 @@ where
         cursor: Option<PostRevisionCursor>,
         page_size: PageSize,
     ) -> Result<PostRevisionPage> {
-        let rows =
-            revision_metadata_rows(&self.pool, user_id, None, cursor, page_size.fetch_limit())
-                .await?;
-        Ok(revision_page(rows, page_size))
+        let rows = lifecycle::revision_metadata_rows(
+            &self.pool,
+            user_id,
+            None,
+            cursor,
+            page_size.fetch_limit(),
+        )
+        .await?;
+        Ok(lifecycle::revision_page(rows, page_size))
     }
 
     #[tracing::instrument(name = "storage.posts.list_post_revision_history", skip(self))]
@@ -1046,7 +924,7 @@ where
         let Some(_) = owned else {
             return Ok(None);
         };
-        let rows = revision_metadata_rows(
+        let rows = lifecycle::revision_metadata_rows(
             &self.pool,
             user_id,
             Some(post_id),
@@ -1054,7 +932,7 @@ where
             page_size.fetch_limit(),
         )
         .await?;
-        Ok(Some(revision_page(rows, page_size)))
+        Ok(Some(lifecycle::revision_page(rows, page_size)))
     }
 
     #[tracing::instrument(name = "storage.posts.get_current_revision_summary", skip(self))]
@@ -1092,7 +970,7 @@ where
                     updated_at,
                     published_at,
                     deleted_at,
-                    lifecycle: post_lifecycle(deleted_at, published_at, now),
+                    lifecycle: lifecycle::post_lifecycle(deleted_at, published_at, now),
                 }
             },
         ))
@@ -1116,9 +994,9 @@ where
         .bind_storage(user_id)
         .fetch_optional(&self.pool)
         .await?
-        .map(RevisionDetailRow::decode)
+        .map(lifecycle::RevisionDetailRow::decode)
         .transpose()?;
-        let Some(RevisionDetailRow {
+        let Some(lifecycle::RevisionDetailRow {
             revision_id,
             post_id,
             user_id,
@@ -1191,7 +1069,9 @@ where
                     .collect(),
                 audiences: audiences
                     .into_iter()
-                    .filter_map(|(kind, audience_id)| audience_target_from_row(kind, audience_id))
+                    .filter_map(|(kind, audience_id)| {
+                        visibility::audience_target_from_row(kind, audience_id)
+                    })
                     .collect(),
                 media: media
                     .into_iter()
@@ -1226,7 +1106,9 @@ where
         .await?;
         Ok(rows
             .into_iter()
-            .filter_map(|(kind, audience_id)| audience_target_from_row(kind, audience_id))
+            .filter_map(|(kind, audience_id)| {
+                visibility::audience_target_from_row(kind, audience_id)
+            })
             .collect())
     }
 
@@ -1329,7 +1211,7 @@ where
         now: UtcInstant,
     ) -> Result<Option<PostRecord>> {
         let date_text = PermalinkDateText::from(date);
-        let (resolution, binds, _) = resolution_where(viewer, 5);
+        let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
         // `published_at <= $4` hides scheduled (future-dated) posts until due.
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -1509,7 +1391,7 @@ where
             // Binds: $1 username, $2/$3 cursor, $4 post_id, $5 now, then the
             // resolution fragment from $6 — 3 or 5 placeholders depending on the
             // viewer variant — and the limit at the returned `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 6);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 6);
             // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -1540,7 +1422,7 @@ where
         } else {
             // Binds: $1 username, $2 now, then the variant-sized resolution
             // fragment from $3 and the limit at the returned `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 3);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 3);
             // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -1584,7 +1466,7 @@ where
         let rows = if let Some(cursor) = cursor {
             // Binds: $1/$2 cursor, $3 post_id, $4 now, then the variant-sized
             // resolution fragment from $5 and the limit at `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 5);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 5);
             // `published_at <= $4` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -1613,7 +1495,7 @@ where
         } else {
             // Binds: $1 now, then the variant-sized resolution fragment from $2
             // and the limit at the returned `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 2);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 2);
             // `published_at <= $1` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -1858,7 +1740,7 @@ where
             // Binds: $1 tag, $2/$3 cursor, $4 post_id, $5 now, then the
             // variant-sized resolution fragment from $6 and the limit at
             // the returned `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 6);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 6);
             // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -1891,7 +1773,7 @@ where
         } else {
             // Binds: $1 tag, $2 now, then the variant-sized resolution fragment
             // from $3 and the limit at the returned `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 3);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 3);
             // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -1951,7 +1833,7 @@ where
             // Binds: $1 user_id, $2 tag, $3/$4 cursor, $5 post_id, $6 now, then
             // the variant-sized resolution fragment from $7 and the limit at
             // the returned `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 7);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 7);
             // `published_at <= $6` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -1986,7 +1868,7 @@ where
         } else {
             // Binds: $1 user_id, $2 tag, $3 now, then the variant-sized
             // resolution fragment from $4 and the limit at `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 4);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 4);
             // `published_at <= $3` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -2181,654 +2063,6 @@ where
         Ok(needing)
     }
 }
-/// Derives the stable lifecycle label from a state snapshot and an explicit
-/// clock. Revision callers pass `captured_at`; current-summary callers pass
-/// their request clock.
-fn post_lifecycle(
-    deleted_at: Option<UtcInstant>,
-    published_at: Option<UtcInstant>,
-    now: UtcInstant,
-) -> PostLifecycle {
-    if deleted_at.is_some() {
-        PostLifecycle::Deleted
-    } else if published_at.is_none() {
-        PostLifecycle::Draft
-    } else if published_at.is_some_and(|published_at| published_at > now) {
-        PostLifecycle::Scheduled
-    } else {
-        PostLifecycle::Published
-    }
-}
-
-fn revision_page(
-    mut revisions: Vec<PostRevisionMetadata>,
-    page_size: PageSize,
-) -> PostRevisionPage {
-    let has_more = page_size.has_more(revisions.len());
-    revisions.truncate(page_size.page_len());
-    let next_cursor = has_more
-        .then(|| {
-            revisions.last().map(|revision| PostRevisionCursor {
-                revision_id: revision.revision_id,
-            })
-        })
-        .flatten();
-    PostRevisionPage {
-        revisions,
-        next_cursor,
-    }
-}
-
-async fn revision_metadata_rows<DB>(
-    pool: &Pool<DB>,
-    user_id: UserId,
-    post_id: Option<PostId>,
-    cursor: Option<PostRevisionCursor>,
-    limit: RowLimit,
-) -> Result<Vec<PostRevisionMetadata>>
-where
-    DB: Database,
-    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> UserId: Encode<'q, DB> + Type<DB>,
-    for<'q> PostId: Encode<'q, DB> + Type<DB>,
-    for<'q> RevisionId: Encode<'q, DB> + Type<DB>,
-    for<'q> RowLimit: Encode<'q, DB> + Type<DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-    RevisionMetadataRow: DecodeRawRow<DB>,
-{
-    let sql = if post_id.is_some() {
-        "SELECT r.revision_id, r.post_id, r.title, r.slug, r.captured_at,
-                r.deleted_at, r.published_at, p.deleted_at AS current_deleted_at
-         FROM post_revisions r
-         JOIN posts p ON p.post_id = r.post_id
-         WHERE r.user_id = $1 AND r.post_id = $2 AND r.revision_id < $3
-         ORDER BY r.revision_id DESC LIMIT $4"
-    } else {
-        "SELECT r.revision_id, r.post_id, r.title, r.slug, r.captured_at,
-                r.deleted_at, r.published_at, p.deleted_at AS current_deleted_at
-         FROM post_revisions r
-         JOIN posts p ON p.post_id = r.post_id
-         WHERE r.user_id = $1 AND r.revision_id < $2
-         ORDER BY r.revision_id DESC LIMIT $3"
-    };
-    let after = cursor.map_or(RevisionId::from(i64::MAX), |cursor| cursor.revision_id);
-    let rows = if let Some(post_id) = post_id {
-        sqlx::query(sql)
-            .bind_storage(user_id)
-            .bind_storage(post_id)
-            .bind_storage(after)
-            .bind_storage(limit)
-            .fetch_all(pool)
-            .await?
-    } else {
-        sqlx::query(sql)
-            .bind_storage(user_id)
-            .bind_storage(after)
-            .bind_storage(limit)
-            .fetch_all(pool)
-            .await?
-    };
-    Ok(rows
-        .into_iter()
-        .map(RevisionMetadataRow::decode)
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .map(|row| PostRevisionMetadata {
-            revision_id: row.revision_id,
-            post_id: row.post_id,
-            title: row.title,
-            slug: row.slug,
-            captured_at: row.captured_at,
-            snapshot_lifecycle: post_lifecycle(row.deleted_at, row.published_at, row.captured_at),
-            current_deleted: row.current_deleted_at.is_some(),
-        })
-        .collect())
-}
-
-/// The viewer-resolution binds folded into a read query's `WHERE`, in the exact
-/// left-to-right order their placeholders appear in [`resolution_where`]'s
-/// fragment. `subref` (and, where it is bound at all, `channel`) repeats —
-/// subscribers branch, then named branch — because each occurrence gets its own
-/// placeholder; see [`resolution_where`].
-///
-/// The enum mirrors [`ViewerIdentity`] rather than carrying three independent
-/// `Option`s, because **bind arity is per-variant**: a `Local` viewer's channel
-/// is resolved in SQL and so is not bound at all. Recovering that from three
-/// `Option`s would mean reading `(Some, None, Some)` as "local" — an implicit
-/// encoding of exactly the fact the variant already states.
-enum ResolutionBinds {
-    /// No viewer: all five placeholders bind SQL NULL, which makes every
-    /// comparison *unknown* rather than true — see [`resolution_where`] for why
-    /// that is what "this branch cannot match" means here.
-    Anonymous,
-    /// A local viewer: three binds — `author_id, subref, subref`. The channel is
-    /// the seeded `local` row, resolved by subquery instead of bound.
-    Local {
-        /// `p.user_id = $author_id` — the author branch fires for this and only
-        /// this variant.
-        user_id: UserId,
-        /// `s.subscriber_ref` for the subscribers/named branches: the viewer's
-        /// user id in decimal, the form `subscribe_to` stores.
-        subref: SubscriberRef,
-    },
-    /// A non-local viewer: five binds — `NULL, channel, subref, channel, subref`.
-    /// The author placeholder binds NULL, so the author branch cannot fire (#6).
-    Remote {
-        /// `s.channel_id` for the subscribers/named `EXISTS` branches.
-        channel: ChannelId,
-        /// `s.subscriber_ref` for the subscribers/named branches.
-        subref: SubscriberRef,
-    },
-}
-
-/// The viewer-resolution predicate and its binds, for folding into a read
-/// query's `WHERE`. A post is returned to `viewer` only if the viewer is the
-/// author OR some targeted audience admits them. See ADR-0020, Task 13.
-///
-/// The fragment is emitted in full for every viewer; `Anonymous` is handled by
-/// binding NULL for all three values, so it reduces to "public posts only"
-/// without a second query shape. A NULL comparison is *unknown*, never true:
-/// `p.user_id = NULL` cannot admit a post, and the `EXISTS` subqueries match no
-/// row, so `EXISTS` is false. The fragment contains no `NOT`, and the caller
-/// `AND`s it into a `WHERE`, where unknown filters the row out exactly as false
-/// would — so NULL kills every non-`public` branch.
-///
-/// NULL binds make the unreachable branches follow from SQL comparison
-/// semantics rather than from reserving sentinel IDs or subscriber references.
-/// The predicate therefore stays correct independently of which concrete
-/// values the live schema permits.
-///
-/// `start` is the next free `$n` index, and **the placeholder count is
-/// per-variant**, so callers must thread the returned `next` rather than assume
-/// `start + 5`:
-///
-/// - `Local` uses THREE (`$start`..`$start+2`): `author, subref, subref`. Its
-///   channel is not a bind — a local viewer's channel is always the seeded
-///   `local` row, so both subscription branches resolve it inline with an
-///   uncorrelated subquery (`channels.name` is `NOT NULL UNIQUE`, so it yields at
-///   most one row).
-/// - `Anonymous` and `Remote` use FIVE (`$start`..`$start+4`):
-///   `author, channel, subref, channel, subref`.
-///
-/// Either way the `channel`/`subref` pair appears once in the subscribers branch
-/// and again in the named branch, and each bound occurrence gets its own number
-/// so the binds are positional on both backends (`SQLite` accepts `$n` and binds
-/// by position; see ADR-0019) — which is why the returned [`ResolutionBinds`]
-/// carries `subref` once but the caller binds it **twice**. Returns
-/// `(sql, binds, next)` where `next` is the first free index after the fragment.
-fn resolution_where(viewer: &ViewerIdentity, start: usize) -> (String, ResolutionBinds, usize) {
-    /// The seeded `local` channel, resolved in SQL rather than bound — see the
-    /// doc above and ADR-0020.
-    const LOCAL_CHANNEL: &str = "(SELECT channel_id FROM channels WHERE name = 'local')";
-
-    let binds = match viewer {
-        ViewerIdentity::Anonymous => ResolutionBinds::Anonymous,
-        // Only a local viewer can be the author. Its channel is not carried at
-        // all, because it can only ever be the `local` row, which the SQL
-        // resolves for itself.
-        ViewerIdentity::Local { user_id } => ResolutionBinds::Local {
-            user_id: *user_id,
-            subref: visibility::local_subscriber_ref(*user_id),
-        },
-        // A remote viewer is never the author, whatever its ref parses as: the
-        // author bind stays NULL, so `p.user_id = NULL` is unknown and admits
-        // nothing (#6). It can still be admitted by a subscription branch.
-        ViewerIdentity::Remote {
-            channel_id,
-            subscriber_ref,
-        } => ResolutionBinds::Remote {
-            channel: *channel_id,
-            subref: subscriber_ref.clone(),
-        },
-    };
-    let author = start;
-    // The channel slots are *expressions*, not necessarily placeholders, and the
-    // ref slots renumber accordingly — hence the per-variant `next`.
-    let (sub_channel, sub_refnum, named_channel, named_refnum, next) = match binds {
-        ResolutionBinds::Local { .. } => (
-            LOCAL_CHANNEL.to_owned(),
-            format!("${}", start + 1),
-            LOCAL_CHANNEL.to_owned(),
-            format!("${}", start + 2),
-            start + 3,
-        ),
-        ResolutionBinds::Anonymous | ResolutionBinds::Remote { .. } => (
-            format!("${}", start + 1),
-            format!("${}", start + 2),
-            format!("${}", start + 3),
-            format!("${}", start + 4),
-            start + 5,
-        ),
-    };
-    let sql = format!(
-        "( p.user_id = ${author}
-  OR EXISTS (
-    SELECT 1 FROM post_audiences pa
-    JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
-    WHERE pa.post_id = p.post_id AND (
-         tk.name = 'public'
-      OR (tk.name = 'subscribers' AND EXISTS (
-            SELECT 1 FROM subscriptions s JOIN subscription_statuses st ON st.status_id = s.status_id
-            WHERE s.author_user_id = p.user_id AND s.channel_id = {sub_channel}
-              AND s.subscriber_ref = {sub_refnum} AND st.name = 'active'))
-      OR (tk.name = 'named' AND EXISTS (
-            SELECT 1 FROM audience_members am
-            JOIN subscriptions s ON s.subscription_id = am.subscription_id
-            JOIN subscription_statuses st ON st.status_id = s.status_id
-            WHERE am.audience_id = pa.audience_id AND s.channel_id = {named_channel}
-              AND s.subscriber_ref = {named_refnum} AND st.name = 'active'))
-  ))
-)"
-    );
-    (sql, binds, next)
-}
-
-impl ResolutionBinds {
-    /// Binds this variant's resolution placeholders onto `query` in the exact
-    /// fragment order — `author_id, channel, subref, channel, subref`, minus the
-    /// two channel binds for [`ResolutionBinds::Local`], whose channel is
-    /// resolved in SQL. The caller must have already bound everything to the left
-    /// of the fragment, and must bind the query's trailing binds (e.g. `LIMIT`)
-    /// afterward, at the index [`resolution_where`] returned.
-    fn bind_onto<'q, DB>(
-        &'q self,
-        query: sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments<'q>>,
-    ) -> sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments<'q>>
-    where
-        DB: Database,
-        i64: Encode<'q, DB> + Type<DB>,
-        &'q str: Encode<'q, DB> + Type<DB>,
-        &'q SubscriberRef: Encode<'q, DB> + Type<DB>,
-        Option<&'q SubscriberRef>: Encode<'q, DB> + Type<DB>,
-        // sqlx implements `Encode for Option<T>` per concrete database (the
-        // `impl_encode_for_option!` macro), not blanket over a generic `DB`, so
-        // each NULL-able bind's type has to be restated here — and, per ADR-0019,
-        // again on every caller.
-        Option<UserId>: Encode<'q, DB> + Type<DB>,
-        Option<ChannelId>: Encode<'q, DB> + Type<DB>,
-        Option<&'q str>: Encode<'q, DB> + Type<DB>,
-    {
-        match self {
-            Self::Anonymous => query
-                .bind_storage(None::<UserId>)
-                .bind_storage(None::<ChannelId>)
-                .bind_storage(None::<&SubscriberRef>)
-                .bind_storage(None::<ChannelId>)
-                .bind_storage(None::<&SubscriberRef>),
-            Self::Local { user_id, subref } => query
-                .bind_storage(Some(*user_id))
-                .bind_storage(Some(subref))
-                .bind_storage(Some(subref)),
-            Self::Remote { channel, subref } => query
-                .bind_storage(None::<UserId>)
-                .bind_storage(Some(*channel))
-                .bind_storage(Some(subref))
-                .bind_storage(Some(*channel))
-                .bind_storage(Some(subref)),
-        }
-    }
-}
-
-/// Maps an [`AudienceTarget`] to its `post_audiences` row shape:
-/// `(target kind, audience_id)`. `Private` produces no row.
-fn audience_target_row(target: &AudienceTarget) -> Option<(TargetKind, Option<AudienceId>)> {
-    match target {
-        AudienceTarget::Public => Some((TargetKind::Public, None)),
-        AudienceTarget::Subscribers => Some((TargetKind::Subscribers, None)),
-        AudienceTarget::Named(id) => Some((TargetKind::Named, Some(*id))),
-        AudienceTarget::Private => None,
-    }
-}
-
-/// Maps a `post_audiences` row `(target_kind name, audience_id)` back to its
-/// [`AudienceTarget`] — the inverse of [`audience_target_row`], used by
-/// [`PostStorage::get_post_audiences`].
-///
-/// `public` → [`AudienceTarget::Public`], `subscribers` →
-/// [`AudienceTarget::Subscribers`], `named` (with an id) →
-/// [`AudienceTarget::Named`].
-///
-/// **Returns `Option`, for one reason only.** A `named` row whose `audience_id` is
-/// NULL has no target to build, so it is dropped — asserted below. An unrecognised
-/// kind name never reaches this function: the column decodes as `TargetKind`
-/// (#728), so it is a `ColumnDecode` error at the query boundary rather than a
-/// silent drop here.
-fn audience_target_from_row(
-    kind: TargetKind,
-    audience_id: Option<AudienceId>,
-) -> Option<AudienceTarget> {
-    match kind {
-        TargetKind::Public => Some(AudienceTarget::Public),
-        TargetKind::Subscribers => Some(AudienceTarget::Subscribers),
-        TargetKind::Named => audience_id.map(AudienceTarget::Named),
-    }
-}
-
-fn create_expectations_match(input: &CreatePostInput) -> bool {
-    let expected = &input.expectations;
-    expected
-        .slug
-        .as_ref()
-        .is_none_or(|slug| slug == &input.slug)
-        && expected.format.is_none_or(|format| format == input.format)
-        && expected
-            .published_at
-            .is_none_or(|published_at| published_at == input.published_at)
-}
-
-/// `PostgreSQL`'s signed advisory-lock key for one user/idempotency-key pair.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, macros::SqlxBridge)]
-pub(crate) struct IdempotencyAdvisoryLockKey(i64);
-
-/// Derives the `PostgreSQL` advisory-lock key for one user's `Idempotency Key`.
-///
-/// A collision only serializes unrelated creates; it cannot change behavior.
-#[must_use]
-pub(crate) fn idempotency_advisory_lock_key(
-    user_id: UserId,
-    key: &IdempotencyKey,
-) -> IdempotencyAdvisoryLockKey {
-    let mut digest = Sha256::new();
-    digest.update(i64::from(user_id).to_be_bytes());
-    digest.update(key.as_ref().as_bytes());
-    let digest: [u8; 32] = digest.finalize().into();
-    IdempotencyAdvisoryLockKey(i64::from_be_bytes([
-        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
-    ]))
-}
-
-pub(crate) fn update_scalar_is_noop(
-    existing: &PostBookkeepingRow,
-    input: &UpdatePostInput,
-) -> bool {
-    let published_at = match input.publish {
-        PublishUpdate::Unpublish => None,
-        PublishUpdate::Publish { at: Some(at) } => Some(at),
-        PublishUpdate::Publish { at: None } => existing.published_at.or(Some(input.request_clock)),
-    };
-    existing.title == input.title
-        && (existing.published_at.is_some() || existing.slug == input.slug)
-        && existing.body == input.body
-        && existing.format == input.format
-        && existing.rendered_html.as_ref() == input.rendered.html().as_ref()
-        && existing.summary == input.summary
-        && existing.published_at == published_at
-}
-/// Compares audience collections as normalized relation rows, ignoring caller
-/// order, duplicate selections, and `Private`'s deliberate absence of a row.
-pub(crate) fn audiences_are_equal(
-    existing: &[(TargetKind, Option<AudienceId>)],
-    desired: &[AudienceTarget],
-) -> bool {
-    let mut normalized = Vec::new();
-    for target in desired {
-        if let Some(row) = audience_target_row(target)
-            && !normalized.contains(&row)
-        {
-            normalized.push(row);
-        }
-    }
-    existing.len() == normalized.len() && existing.iter().all(|row| normalized.contains(row))
-}
-
-pub(crate) fn update_expectation_error(
-    post_id: PostId,
-    existing: &PostBookkeepingRow,
-    tags: &[TagLabel],
-    input: &UpdatePostInput,
-) -> Option<UpdatePostError> {
-    let expected = &input.expectations;
-    if expected
-        .post_id
-        .is_some_and(|expected_id| expected_id != post_id)
-    {
-        return Some(UpdatePostError::BookkeepingMismatch);
-    }
-    let final_slug = if existing.published_at.is_some() {
-        &existing.slug
-    } else {
-        &input.slug
-    };
-    let final_published_at = match input.publish {
-        PublishUpdate::Unpublish => None,
-        PublishUpdate::Publish { at: Some(at) } => Some(at),
-        PublishUpdate::Publish { at: None } => existing.published_at.or(Some(input.request_clock)),
-    };
-    if expected
-        .slug
-        .as_ref()
-        .is_some_and(|slug| slug != final_slug)
-        || expected.format.is_some_and(|format| format != input.format)
-        || expected
-            .published_at
-            .is_some_and(|published_at| published_at != final_published_at)
-    {
-        return Some(UpdatePostError::BookkeepingMismatch);
-    }
-
-    let current_etag = etag::post_content_etag(
-        existing.title.as_ref(),
-        &existing.body,
-        &existing.format,
-        existing.summary.as_ref(),
-        tags.iter(),
-        existing.published_at.is_none(),
-    );
-    expected
-        .content_etag
-        .as_ref()
-        .is_some_and(|etag| etag != &current_etag)
-        .then_some(UpdatePostError::StaleContent)
-}
-
-/// Writes one post row and its audience rows onto a caller-supplied transaction
-/// connection, so it joins whatever transaction is open.
-///
-/// This is the single place that knows the post `INSERT` and the
-/// unique-violation → [`CreatePostError::SlugConflict`] mapping: both
-/// `create_post` (write one) and `create_posts` (write many in one transaction)
-/// are pure transaction orchestration over it, so the row-write logic lives once
-/// rather than being duplicated per arity.
-pub(crate) async fn write_post_in_tx<DB>(
-    conn: &mut DB::Connection,
-    input: &CreatePostInput,
-    now: UtcInstant,
-) -> Result<(PostId, bool), CreatePostError>
-where
-    DB: PostDialect,
-    for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
-    for<'q> RowCount: Decode<'q, DB> + Type<DB>,
-    for<'q> Option<AudienceId>: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<&'q str>: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<String>: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q IdempotencyKey: Encode<'q, DB> + Type<DB>,
-    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<UtcInstant>: Encode<'q, DB> + Type<DB>,
-    // `Slug`/`PostBody` bind as themselves and `PostTitle` as `Option<&PostTitle>`
-    // via the ADR-0071 sqlx bridge (the `Option<&…>` pair covers the nullable
-    // `title` bind).
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-    for<'q> Option<&'q PostTitle>: Encode<'q, DB> + Type<DB>,
-    // `summary` binds as `Option<&PostSummary>` via the ADR-0071 sqlx bridge on
-    // the create paths, mirroring the `Option<&PostTitle>` bound above.
-    for<'q> Option<&'q PostSummary>: Encode<'q, DB> + Type<DB>,
-    (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    usize: sqlx::ColumnIndex<DB::Row>,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    DB::lock_media_references(conn, &media::media_lock_set(input.rendered.media())).await?;
-
-    let idempotency_key_expired = if let Some(key) = input.idempotency_key.as_ref() {
-        let cutoff = idempotency_replay_cutoff(now);
-        if let Some(post_id) =
-            DB::lock_live_idempotency_mapping(conn, input.user_id, key, cutoff).await?
-        {
-            return Err(CreatePostError::IdempotencyConflict(post_id));
-        }
-        sqlx::query_scalar::<_, RowCount>(
-            "DELETE FROM idempotency_keys
-             WHERE user_id = $1 AND key = $2 AND created_at <= $3
-             RETURNING CAST(1 AS BIGINT)",
-        )
-        .bind_storage(input.user_id)
-        .bind_storage(key)
-        .bind_storage(cutoff)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(CreatePostError::Internal)?
-        .is_some()
-    } else {
-        false
-    };
-
-    let post_id = sqlx::query_scalar::<_, PostId>(
-        "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         RETURNING post_id",
-    )
-    .bind_storage(input.user_id)
-    // `Option::as_ref` → `Option<&PostTitle>` (a typed newtype bind, not an
-    // `AsRef<str>` strip); the sqlx bridge encodes `Option<&PostTitle>`.
-    .bind_storage(input.title.as_ref())
-    .bind_storage(&input.slug)
-    .bind_storage(&input.body)
-    .bind_storage(input.format)
-    .bind_storage(input.rendered.html())
-    .bind_storage(now)
-    .bind_storage(now)
-    .bind_storage(input.published_at)
-    // `Option::as_ref` → `Option<&PostSummary>` (a typed newtype bind via the
-    // ADR-0071 sqlx bridge, not an `AsRef<str>` strip); the `sqlx-newtype-bind`
-    // gate forbids stripping to `&str` here.
-    .bind_storage(input.summary.as_ref())
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(|e| match e {
-        sqlx::Error::Database(db) if db.is_unique_violation() => CreatePostError::SlugConflict,
-        e => CreatePostError::Internal(e),
-    })?;
-
-    if !create_expectations_match(input) {
-        return Err(CreatePostError::BookkeepingMismatch);
-    }
-
-    replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
-    media::replace_post_media::<DB>(conn, post_id, input.rendered.media()).await?;
-    tags::insert_post_tags::<DB>(conn, post_id, &input.tags).await?;
-
-    if let Some(key) = input.idempotency_key.as_ref() {
-        sqlx::query(
-            "INSERT INTO idempotency_keys (user_id, key, post_id, created_at)
-             VALUES ($1, $2, $3, $4)",
-        )
-        .bind_storage(input.user_id)
-        .bind_storage(key)
-        .bind_storage(post_id)
-        .bind_storage(now)
-        .execute(&mut *conn)
-        .await
-        .map_err(CreatePostError::Internal)?;
-    }
-
-    Ok((post_id, idempotency_key_expired))
-}
-
-/// Replaces a post's `post_audiences` rows to exactly match `audiences`.
-///
-/// Deletes every existing row for `post_id`, then inserts one row per targeting
-/// entry (`Public`/`Subscribers` carry a NULL `audience_id`; `Named(id)` carries
-/// the id; `Private` and an empty vec leave the post with no rows). Runs on the
-/// caller's executor so it shares the create/update transaction. See ADR-0020.
-pub(crate) async fn replace_post_audiences<DB>(
-    conn: &mut DB::Connection,
-    post_id: PostId,
-    audiences: &[AudienceTarget],
-) -> Result<()>
-where
-    DB: PostDialect,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<AudienceId>: Encode<'q, DB> + Type<DB>,
-    for<'q> TargetKind: Encode<'q, DB> + Type<DB>,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    sqlx::query(DB::DELETE_POST_AUDIENCES)
-        .bind_storage(post_id)
-        .execute(&mut *conn)
-        .await?;
-    for target in audiences {
-        if let Some((kind, audience_id)) = audience_target_row(target) {
-            sqlx::query(DB::INSERT_POST_AUDIENCE)
-                .bind_storage(post_id)
-                .bind_storage(audience_id)
-                .bind_storage(kind)
-                .execute(&mut *conn)
-                .await?;
-        }
-    }
-    Ok(())
-}
-/// Captures the locked current state and every normalized child before mutation.
-///
-/// The copies are SQL-to-SQL rather than reconstructed from an application read:
-/// this preserves the exact current media spelling and keeps immutable history
-/// independent of later tag/audience lookup changes.
-pub(crate) async fn capture_complete_post_revision<DB>(
-    conn: &mut DB::Connection,
-    post_id: PostId,
-    captured_at: UtcInstant,
-) -> Result<RevisionId>
-where
-    DB: Database,
-    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
-    for<'q> PostId: Encode<'q, DB> + Type<DB>,
-    for<'q> RevisionId: Decode<'q, DB> + Type<DB>,
-    for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
-    usize: sqlx::ColumnIndex<DB::Row>,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    let revision_id = sqlx::query_scalar::<_, RevisionId>(INSERT_COMPLETE_POST_REVISION)
-        .bind_storage(captured_at)
-        .bind_storage(post_id)
-        .fetch_one(&mut *conn)
-        .await?;
-    sqlx::query(
-        "INSERT INTO post_revision_tags (revision_id, tag_slug, tag_display)
-         SELECT $1, t.tag_slug, pt.tag_display
-         FROM post_tags pt JOIN tags t ON t.tag_id = pt.tag_id
-         WHERE pt.post_id = $2",
-    )
-    .bind_storage(revision_id)
-    .bind_storage(post_id)
-    .execute(&mut *conn)
-    .await?;
-    sqlx::query(
-        "INSERT INTO post_revision_audiences (revision_id, target_kind, audience_id)
-         SELECT $1, tk.name, pa.audience_id
-         FROM post_audiences pa JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
-         WHERE pa.post_id = $2",
-    )
-    .bind_storage(revision_id)
-    .bind_storage(post_id)
-    .execute(&mut *conn)
-    .await?;
-    sqlx::query(
-        "INSERT INTO post_media
-             (post_id, subject_kind, revision_id, source, sha256, filename, reference_kind, reference_form)
-         SELECT post_id, 'revision', $1, source, sha256, filename, reference_kind, reference_form
-         FROM post_media
-         WHERE post_id = $2 AND subject_kind = 'current' AND revision_id = 0",
-    )
-    .bind_storage(revision_id)
-    .bind_storage(post_id)
-    .execute(&mut *conn)
-    .await?;
-    Ok(revision_id)
-}
 
 /// Runs the hybrid-window query for `surface`, returning [`PostRecord`]s.
 ///
@@ -2870,7 +2104,7 @@ where
             // Binds: $1 now, $2 min_items, $3 cutoff, then the variant-sized
             // resolution fragment from $4. `window_sql` places it last, so
             // nothing binds after it and the returned `next` is discarded.
-            let (resolution, binds, _) = resolution_where(viewer, 4);
+            let (resolution, binds, _) = visibility::resolution_where(viewer, 4);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
                 .bind_storage(now)
@@ -2881,7 +2115,7 @@ where
         FeedSurface::User { username } => {
             // Binds: $1 now, $2 username, $3 min_items, $4 cutoff, then the
             // variant-sized resolution fragment last, from $5.
-            let (resolution, binds, _) = resolution_where(viewer, 5);
+            let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
                 .bind_storage(now)
@@ -2893,7 +2127,7 @@ where
         FeedSurface::SiteTag { tag } => {
             // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, then the
             // variant-sized resolution fragment last, from $5.
-            let (resolution, binds, _) = resolution_where(viewer, 5);
+            let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
                 .bind_storage(now)
@@ -2905,7 +2139,7 @@ where
         FeedSurface::UserTag { username, tag } => {
             // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff, then
             // the variant-sized resolution fragment last, from $6.
-            let (resolution, binds, _) = resolution_where(viewer, 6);
+            let (resolution, binds, _) = visibility::resolution_where(viewer, 6);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
                 .bind_storage(now)
@@ -3136,6 +2370,7 @@ mod tests {
         wire_scheduled_cursor,
     };
     use crate::posts::models::PostBookkeepingExpectation;
+    use crate::posts::models::{PublishUpdate, RenderedHtml};
     use crate::test_support::{
         Backend, CloseablePool, MEDIA_TEST_SHA256, SeedRawPost, SeedUser, TestEnv, UpdateRawPost,
         backends, create_draft_via_service, create_post_via_service, create_posts_confirmed,
@@ -3144,6 +2379,8 @@ mod tests {
     };
 
     use chrono::Utc;
+    use common::post_body::PostBody;
+    use common::render::PostFormat;
     use common::test_support::{
         parse_etag, parse_post_body, parse_post_summary, parse_post_title, parse_row_limit,
         parse_slug, parse_tag_label, parse_username, parse_utc_instant,
@@ -3573,58 +2810,6 @@ mod tests {
         assert_eq!(reverse_ids.len(), 2);
     }
 
-    /// A local viewer's channel is not a bind: both subscription branches resolve
-    /// the seeded `local` row inline, so the fragment spends three placeholders
-    /// (author, ref, ref) and `next` is `start + 3` — the property every call site
-    /// depends on by threading the returned index rather than assuming `+5` (#6).
-    #[test]
-    fn resolution_where_resolves_the_local_channel_in_sql_for_a_local_viewer() {
-        let viewer = ViewerIdentity::Local {
-            user_id: UserId::from(7),
-        };
-        let (sql, binds, next) = resolution_where(&viewer, 2);
-        assert!(matches!(binds, ResolutionBinds::Local { .. }));
-        assert_eq!(next, 5, "three placeholders consumed from $2: {sql}");
-        assert_eq!(
-            sql.matches("(SELECT channel_id FROM channels WHERE name = 'local')")
-                .count(),
-            2,
-            "both the subscribers and named branches resolve the channel: {sql}"
-        );
-        assert!(sql.contains("p.user_id = $2"), "{sql}");
-        assert!(sql.contains("s.subscriber_ref = $3"), "{sql}");
-        assert!(sql.contains("s.subscriber_ref = $4"), "{sql}");
-        assert!(
-            !sql.contains("$5"),
-            "no fourth placeholder is emitted: {sql}"
-        );
-        assert!(
-            !sql.contains("99"),
-            "the carried channel id is ignored: {sql}"
-        );
-    }
-
-    /// The counterpart: `Anonymous` and `Remote` keep the five-placeholder shape,
-    /// binding the channel rather than resolving it.
-    #[rstest]
-    #[case::anonymous(ViewerIdentity::Anonymous)]
-    #[case::remote(ViewerIdentity::Remote {
-        channel_id: ChannelId::from(2),
-        subscriber_ref: "7".parse().unwrap(),
-    })]
-    fn resolution_where_binds_the_channel_for_a_non_local_viewer(#[case] viewer: ViewerIdentity) {
-        let (sql, _binds, next) = resolution_where(&viewer, 2);
-        assert_eq!(next, 7, "five placeholders consumed from $2: {sql}");
-        assert!(
-            !sql.contains("name = 'local'"),
-            "a non-local viewer never resolves the local channel: {sql}"
-        );
-        assert!(sql.contains("s.channel_id = $3"), "{sql}");
-        assert!(sql.contains("s.subscriber_ref = $4"), "{sql}");
-        assert!(sql.contains("s.channel_id = $5"), "{sql}");
-        assert!(sql.contains("s.subscriber_ref = $6"), "{sql}");
-    }
-
     /// Physical row identity for the post's `post_tags` rows: `ctid` on Postgres,
     /// `rowid` on `SQLite`. Column values cannot serve — a DELETE+INSERT
     /// reproduces `tag_id`/`tag_display` exactly, which is exactly what the
@@ -3851,7 +3036,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             prior_audiences
                 .iter()
-                .filter_map(audience_target_row)
+                .filter_map(visibility::audience_target_row)
                 .map(|(kind, audience_id)| {
                     (
                         kind.as_ref().to_owned(),
@@ -4661,30 +3846,6 @@ mod tests {
                     .expect("valid current media form"),
             )]
         );
-    }
-
-    #[test]
-    fn audience_target_from_row_maps_every_kind() {
-        // Each lookup-table kind maps to its target; `named` carries the id.
-        assert_eq!(
-            audience_target_from_row(TargetKind::Public, None),
-            Some(AudienceTarget::Public)
-        );
-        assert_eq!(
-            audience_target_from_row(TargetKind::Subscribers, None),
-            Some(AudienceTarget::Subscribers)
-        );
-        assert_eq!(
-            audience_target_from_row(TargetKind::Named, Some(AudienceId::from(7))),
-            Some(AudienceTarget::Named(AudienceId::from(7)))
-        );
-        // A `named` row missing its id is dropped — the only reason this returns
-        // `Option`.
-        assert_eq!(audience_target_from_row(TargetKind::Named, None), None);
-        // An unrecognised kind name is not expressible here: the parameter is a
-        // `TargetKind`, so a bad name cannot get this far.
-        // `get_post_audiences_rejects_an_unknown_target_kind` covers it at the
-        // boundary where it surfaces.
     }
 
     #[apply(backends)]
