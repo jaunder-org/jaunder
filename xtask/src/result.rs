@@ -102,6 +102,42 @@ impl StepResult {
         self.duration_ms = duration.as_millis();
         self
     }
+
+    fn human_duration(&self) -> String {
+        if !self.ok || self.duration_ms >= SLOW_STEP_MS {
+            format!(" ({} ms)", self.duration_ms)
+        } else {
+            String::new()
+        }
+    }
+
+    fn human_line(&self) -> String {
+        let mark = if self.skipped {
+            "skip"
+        } else if self.ok {
+            " ok "
+        } else {
+            "FAIL"
+        };
+        let duration = self.human_duration();
+        let detail = self
+            .detail
+            .as_deref()
+            .map(|detail| format!(" — {detail}"))
+            .unwrap_or_default();
+        let nix = self
+            .nix
+            .as_ref()
+            .map(|nix| match &nix.derivation {
+                Some(derivation) => {
+                    format!(" [nix: {} {derivation}]", nix.realization.as_str())
+                }
+                None => format!(" [nix: {}]", nix.realization.as_str()),
+            })
+            .unwrap_or_default();
+
+        format!("[{mark}] {}{duration}{detail}{nix}", self.name)
+    }
 }
 
 #[derive(Serialize)]
@@ -215,44 +251,9 @@ impl CommandResult {
         Ok(())
     }
 
-    fn human_step_duration(step: &StepResult) -> String {
-        if !step.ok || step.duration_ms >= SLOW_STEP_MS {
-            format!(" ({} ms)", step.duration_ms)
-        } else {
-            String::new()
-        }
-    }
-    fn human_step_line(step: &StepResult) -> String {
-        let mark = if step.skipped {
-            "skip"
-        } else if step.ok {
-            " ok "
-        } else {
-            "FAIL"
-        };
-        let duration = Self::human_step_duration(step);
-        let detail = step
-            .detail
-            .as_deref()
-            .map(|detail| format!(" — {detail}"))
-            .unwrap_or_default();
-        let nix = step
-            .nix
-            .as_ref()
-            .map(|nix| match &nix.derivation {
-                Some(derivation) => {
-                    format!(" [nix: {} {derivation}]", nix.realization.as_str())
-                }
-                None => format!(" [nix: {}]", nix.realization.as_str()),
-            })
-            .unwrap_or_default();
-
-        format!("[{mark}] {}{duration}{detail}{nix}", step.name)
-    }
-
     fn print_human(&self) {
         for step in &self.steps {
-            println!("{}", Self::human_step_line(step));
+            println!("{}", step.human_line());
         }
         // Informational payload: the audit subcommand's whole point is this table,
         // not the pass/fail line, so render it inline when present.
@@ -422,20 +423,14 @@ mod tests {
 
     #[test]
     fn human_step_duration_renders_failed_or_slow_steps_only() {
+        assert_eq!(StepResult::ok("fast").human_duration(), "");
         assert_eq!(
-            CommandResult::human_step_duration(&StepResult::ok("fast")),
-            ""
-        );
-        assert_eq!(
-            CommandResult::human_step_duration(
-                &StepResult::ok("slow").with_duration(Duration::from_millis(SLOW_STEP_MS as u64))
-            ),
+            StepResult::ok("slow")
+                .with_duration(Duration::from_millis(SLOW_STEP_MS as u64))
+                .human_duration(),
             format!(" ({} ms)", SLOW_STEP_MS)
         );
-        assert_eq!(
-            CommandResult::human_step_duration(&StepResult::fail("failed")),
-            " (0 ms)"
-        );
+        assert_eq!(StepResult::fail("failed").human_duration(), " (0 ms)");
     }
 
     #[test]
@@ -445,12 +440,13 @@ mod tests {
             (NixRealization::Realized, "realized"),
             (NixRealization::Unknown, "unknown"),
         ] {
-            let line =
-                CommandResult::human_step_line(&StepResult::ok("nix-check").nix(NixReport {
+            let line = StepResult::ok("nix-check")
+                .nix(NixReport {
                     installable: ".#checks.x86_64-linux.xtask".into(),
                     derivation: Some("/nix/store/abc-xtask.drv".into()),
                     realization,
-                }));
+                })
+                .human_line();
 
             assert_eq!(
                 line,
@@ -466,7 +462,7 @@ mod tests {
             .detail("0 warnings");
 
         assert_eq!(
-            CommandResult::human_step_line(&step),
+            step.human_line(),
             format!("[ ok ] clippy ({} ms) — 0 warnings", SLOW_STEP_MS)
         );
     }

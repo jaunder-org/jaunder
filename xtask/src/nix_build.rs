@@ -7,7 +7,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-use crate::result::NixRealization;
+use crate::result::{NixRealization, NixReport};
 
 /// The stdout and exit status returned by an injected Nix command.
 pub(crate) struct NixCommandOutput {
@@ -45,6 +45,23 @@ pub(crate) struct NixBuildObservation {
     pub(crate) derivation: Option<String>,
     selection: Option<NixSelection>,
     selected_outputs: Option<Vec<bool>>,
+}
+
+impl NixBuildObservation {
+    /// Complete a successful gate-owned build observation with its post-build
+    /// counterpart and turn both snapshots into one result-envelope report.
+    pub(crate) fn finish(self, installable: &str) -> NixReport {
+        self.finish_with(installable, observe)
+    }
+
+    fn finish_with(
+        self,
+        installable: &str,
+        observe: impl FnOnce(&str) -> NixBuildObservation,
+    ) -> NixReport {
+        let after = observe(installable);
+        report(installable, &self, &after)
+    }
 }
 
 /// Run the non-realizing Nix observation commands for an installable.
@@ -179,12 +196,12 @@ fn parse_path_info(document: &str, selected: &[String]) -> Option<Vec<bool>> {
 
 /// Turn paired observations into the structured evidence carried by a successful
 /// gate-owned build step.
-pub(crate) fn report(
+fn report(
     installable: &str,
     before: &NixBuildObservation,
     after: &NixBuildObservation,
-) -> crate::result::NixReport {
-    crate::result::NixReport {
+) -> NixReport {
+    NixReport {
         installable: installable.to_owned(),
         derivation: before
             .derivation
@@ -470,20 +487,26 @@ mod tests {
     }
 
     #[test]
-    fn report_prefers_pre_build_derivation_and_falls_back_to_post_build_identity() {
+    fn finish_prefers_pre_build_derivation_and_falls_back_to_post_build_identity() {
         let before = observation_from(
             Ok(NixCommandOutput::success(dry_run(&format!(
                 r#"{{"out":"{OUT}"}}"#
             )))),
             Ok(NixCommandOutput::success(path_info(r#""bbb-site":{}"#))),
         );
-        let after = indeterminate_observation();
-        let reused = report(INSTALLABLE, &before, &after);
+        let reused = before.finish_with(INSTALLABLE, |_| indeterminate_observation());
         assert_eq!(reused.derivation.as_deref(), Some(DERIVATION));
         assert_eq!(reused.realization, NixRealization::Reused);
 
         let unavailable = indeterminate_observation();
-        let fallback = report(INSTALLABLE, &unavailable, &before);
+        let fallback = unavailable.finish_with(INSTALLABLE, |_| {
+            observation_from(
+                Ok(NixCommandOutput::success(dry_run(&format!(
+                    r#"{{"out":"{OUT}"}}"#
+                )))),
+                Ok(NixCommandOutput::success(path_info(r#""bbb-site":{}"#))),
+            )
+        });
         assert_eq!(fallback.derivation.as_deref(), Some(DERIVATION));
         assert_eq!(fallback.realization, NixRealization::Unknown);
     }

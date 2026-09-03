@@ -509,20 +509,22 @@ The clone starts from committed `HEAD`, so it does not carry the original
 checkout's uncommitted or untracked work. Do not use a checkout with work you
 need to retain: neither `git restore` below nor an accidental reset is a
 recovery mechanism for unrelated work. Start with the clean disposable tree,
-make the results directory (which is under the ignored `.xtask/` state), and run
-this exact gate for the warm baseline and every sample:
+make the results directory (which is under the ignored `.xtask/` state), run
+this exact gate once to warm its outputs, then run it a second time and save
+only that second sidecar as the warm baseline:
 
 ```bash
 mkdir -p .xtask/measurements
+cargo xtask validate --no-e2e --allow-dirty
 cargo xtask validate --no-e2e --allow-dirty
 cp .xtask/last-result.json .xtask/measurements/warm-baseline.json
 ```
 
 `--allow-dirty` keeps each deliberately uncommitted sample in the disposable
 tree; it does not skip, weaken, or reorder any `validate --no-e2e` gate step.
-Run the baseline once before changing a file. Then, one at a time, append the
-listed measurement-only marker, run the same command, copy the sidecar before
-the next run, and restore **only** that named file before proceeding:
+With the outputs warmed, one at a time append the listed measurement-only
+marker, run the same command, copy the sidecar before the next run, and restore
+**only** that named file before proceeding:
 
 ```bash
 # Docs-only

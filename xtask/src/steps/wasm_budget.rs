@@ -3,25 +3,27 @@
 //! Reads the same measurement `audit-wasm` produces for the shipped artifact, so
 //! the gate and the tool can never disagree about what the bundle weighs.
 
+use anyhow::Result;
+
+use crate::audit_wasm::{self, AuditReport};
+use crate::nix_build;
 use crate::result::{CommandResult, NixReport, StepResult};
+use crate::wasm_budget;
 
 const SITE_INSTALLABLE: &str = ".#site";
 
 pub fn run(result: &mut CommandResult) {
-    let before = crate::nix_build::observe(SITE_INSTALLABLE);
+    let before = nix_build::observe(SITE_INSTALLABLE);
     run_with(
         result,
-        || crate::audit_wasm::run(None),
-        || {
-            let after = crate::nix_build::observe(SITE_INSTALLABLE);
-            crate::nix_build::report(SITE_INSTALLABLE, &before, &after)
-        },
+        || audit_wasm::run(None),
+        || before.finish(SITE_INSTALLABLE),
     );
 }
 
 pub(crate) fn run_with(
     result: &mut CommandResult,
-    audit: impl FnOnce() -> anyhow::Result<crate::audit_wasm::AuditReport>,
+    audit: impl FnOnce() -> Result<AuditReport>,
     nix_report: impl FnOnce() -> NixReport,
 ) {
     let report = match audit() {
@@ -43,12 +45,11 @@ pub(crate) fn run_with(
 
     match raw_bytes {
         Some(raw_bytes) => {
-            let verdict =
-                crate::wasm_budget::check(raw_bytes, crate::wasm_budget::WASM_RAW_CEILING_BYTES);
+            let verdict = wasm_budget::check(raw_bytes, wasm_budget::WASM_RAW_CEILING_BYTES);
             if verdict.over {
                 result.push(
                     StepResult::fail("wasm-budget")
-                        .detail(crate::wasm_budget::failure_message(&verdict))
+                        .detail(wasm_budget::failure_message(&verdict))
                         .nix(nix),
                 );
             } else {
@@ -56,7 +57,7 @@ pub(crate) fn run_with(
                 // headroom budget's known weakness is that the win can erode
                 // quietly inside the headroom; naming the drift is what makes that
                 // erosion visible before it reaches the ceiling.
-                let achieved = crate::wasm_budget::WASM_RAW_ACHIEVED_BYTES;
+                let achieved = wasm_budget::WASM_RAW_ACHIEVED_BYTES;
                 let drift = if verdict.actual >= achieved {
                     format!("+{}", verdict.actual - achieved)
                 } else {
@@ -83,7 +84,7 @@ pub(crate) fn run_with(
 #[cfg(test)]
 mod tests {
     use super::{SITE_INSTALLABLE, run_with};
-    use crate::audit_wasm::{ArtifactMetrics, AuditReport};
+    use crate::audit_wasm::{self, ArtifactMetrics, AuditReport};
     use crate::result::{CommandResult, NixRealization, NixReport};
 
     fn report_with_wasm(raw_bytes: u64) -> AuditReport {
@@ -151,7 +152,7 @@ mod tests {
     #[test]
     fn explicit_audit_path_is_not_a_gate_step() {
         assert_eq!(
-            crate::audit_wasm::resolve_site_path(Some("/nix/store/prebuilt-site")).unwrap(),
+            audit_wasm::resolve_site_path(Some("/nix/store/prebuilt-site")).unwrap(),
             "/nix/store/prebuilt-site"
         );
     }

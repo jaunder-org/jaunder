@@ -15,7 +15,8 @@ use processkit::{Outcome, StdioMode};
 use tokio::io::AsyncWrite;
 
 use super::process::Process;
-use crate::result::{CommandResult, StepResult};
+use crate::nix_build;
+use crate::result::{CommandResult, NixReport, StepResult};
 
 /// The flake checks are Linux-only (`optionalAttrs isLinux` in flake.nix);
 /// the project's CI host is x86_64-linux.
@@ -889,7 +890,7 @@ fn finish_build_with(
     build: BuildCompletion<'_>,
     write_excerpt: impl FnOnce() -> io::Result<String>,
     rescue: impl FnOnce() -> bool,
-    nix_report: impl FnOnce() -> crate::result::NixReport,
+    nix_report: impl FnOnce() -> NixReport,
     stderr: &mut impl Write,
 ) -> StepResult {
     let BuildCompletion {
@@ -958,7 +959,7 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
     let out_link = format!(".xtask/gcroots/{check}");
     let installable = format!(".#checks.{SYSTEM}.{check}");
     let log_dir = format!(".xtask/diagnostics/{check}");
-    let before = crate::nix_build::observe(&installable);
+    let before = nix_build::observe(&installable);
     let log_path = format!("{log_dir}/build.log");
     let diagnostic: Box<dyn Write + Send> = match File::create(&log_path) {
         Ok(file) => Box::new(file),
@@ -1007,10 +1008,7 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
         },
         || write_failure_excerpt(&log_path),
         || rescue_diagnostics(check),
-        || {
-            let after = crate::nix_build::observe(&installable);
-            crate::nix_build::report(&installable, &before, &after)
-        },
+        || before.finish(&installable),
         &mut io::stderr(),
     )
     .with_duration(start.elapsed())
@@ -1152,13 +1150,14 @@ mod tests {
         report_build_diagnostic_failure, sentinel_detail, test_check_names, validate_check_names,
     };
     use crate::audit_wasm::{ArtifactMetrics, AuditReport};
+    use crate::result::{NixRealization, NixReport};
     use crate::steps::wasm_budget;
     use coverage::status::{CoverageStatus, StatusCategory};
     use doctests::check::{Kind, Violation};
     use doctests::status::DoctestStatus;
 
-    fn injected_nix_report(realization: crate::result::NixRealization) -> crate::result::NixReport {
-        crate::result::NixReport {
+    fn injected_nix_report(realization: NixRealization) -> NixReport {
+        NixReport {
             installable: ".#checks.x86_64-linux.check".to_owned(),
             derivation: Some("/nix/store/check.drv".to_owned()),
             realization,
@@ -1849,13 +1848,13 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             },
             || panic!("successful build must not write an excerpt"),
             || panic!("successful build must not rescue diagnostics"),
-            || injected_nix_report(crate::result::NixRealization::Unknown),
+            || injected_nix_report(NixRealization::Unknown),
             &mut stderr,
         );
 
         assert_eq!(
             result.nix.expect("successful build report").realization,
-            crate::result::NixRealization::Unknown
+            NixRealization::Unknown
         );
         assert!(result.ok);
     }
@@ -1863,9 +1862,9 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
     #[test]
     fn successful_flake_checks_attach_each_realization_from_the_injected_seam() {
         for realization in [
-            crate::result::NixRealization::Reused,
-            crate::result::NixRealization::Realized,
-            crate::result::NixRealization::Unknown,
+            NixRealization::Reused,
+            NixRealization::Realized,
+            NixRealization::Unknown,
         ] {
             let mut stderr = Vec::new();
             let step = finish_build_with(
@@ -1903,7 +1902,7 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             },
             || panic!("successful build must not write an excerpt"),
             || panic!("successful build must not rescue diagnostics"),
-            || injected_nix_report(crate::result::NixRealization::Reused),
+            || injected_nix_report(NixRealization::Reused),
             &mut stderr,
         );
         let mut result = CommandResult::new("validate");
@@ -1920,10 +1919,10 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
                     }],
                 })
             },
-            || crate::result::NixReport {
+            || NixReport {
                 installable: ".#site".to_owned(),
                 derivation: Some("/nix/store/site.drv".to_owned()),
-                realization: crate::result::NixRealization::Reused,
+                realization: NixRealization::Reused,
             },
         );
 

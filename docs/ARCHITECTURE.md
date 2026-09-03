@@ -2777,19 +2777,20 @@ shrink it. Only the Nix path establishes the pinned sandbox/offline verdict.
 The hermetic layer has two gate-owned Nix-build paths. `steps::nix::build_check`
 builds flake checks as
 `nix build -L --keep-failed --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.x86_64-linux.<check>`;
+those flake-check out-links retain their selected outputs as GC roots.
 `steps::wasm_budget::run` separately builds `.#site` for the `wasm-budget`
-verdict. Their out-links retain their selected outputs as GC roots. On every
-successful build, both paths attach host-observed Nix evidence to their
-`StepResult`: the installable, the evaluated `.drv` path when available, and the
-conservative local-store realization (`reused`, `realized`, or `unknown`). That
-evidence says whether the installable's selected outputs were already locally
-valid or became valid during the gate; it does not attribute an output to local
-compilation or substitution. `wasm-tests` returns the browser test verdict
-directly. Rust coverage and doctests use producer/consumer pairs —
-`nix-coverage` + `nix-coverage-gate`, `nix-doctests` + `nix-doctests-gate` —
-whose producers cannot fail; xtask reads each verdict from the sandbox's
-`status.json` (`steps::nix::coverage` and `steps::nix::doctests`). The Elisp
-producer instead returns the fixed
+verdict through the existing no-link output-path helper
+(`nix_build::build_out_path`). On every successful build, both paths attach
+host-observed Nix evidence to their `StepResult`: the installable, the evaluated
+`.drv` path when available, and the conservative local-store realization
+(`reused`, `realized`, or `unknown`). That evidence says whether the
+installable's selected outputs were already locally valid or became valid during
+the gate; it does not attribute an output to local compilation or substitution.
+`wasm-tests` returns the browser test verdict directly. Rust coverage and
+doctests use producer/consumer pairs — `nix-coverage` + `nix-coverage-gate`,
+`nix-doctests` + `nix-doctests-gate` — whose producers cannot fail; xtask reads
+each verdict from the sandbox's `status.json` (`steps::nix::coverage` and
+`steps::nix::doctests`). The Elisp producer instead returns the fixed
 `elisp-coverage/{lcov.info,summary.txt,status.json}` set for every controlled
 outcome; xtask lifts it and its host consumer reconciles current source, census,
 LCOV, and strict same-line `;; cov:ignore: <reason>` markers. Uncontrolled Nix
