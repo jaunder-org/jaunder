@@ -4,7 +4,12 @@
 // lint-suppression:allow approved in #294; existing expectation documents intentional test-scaffolding or naming exception
 #![expect(clippy::expect_used)]
 
-use crate::media::{ByteSize, ContentHash, ContentType, Filename, MaxFileSize, UserQuota};
+use crate::media::{
+    filename::Filename,
+    hash::ContentHash,
+    mime::ContentType,
+    values::{ByteSize, MaxFileSize, UserQuota},
+};
 
 /// The content hash every media fixture is stored under: a realistic lowercase
 /// SHA-256 hex digest (the digest of the empty input), so the value is a real digest

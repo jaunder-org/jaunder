@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::root_relative_url::RootRelativeUrl;
 
-use super::{ContentHash, ContentType, Filename};
+use super::{filename::Filename, hash::ContentHash, mime::ContentType};
 
 /// The maximum accepted upload size, in bytes (site config `media.max_file_size_bytes`).
 /// A positive `i64` — a zero/negative limit is nonsensical — enforced by the

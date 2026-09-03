@@ -32,7 +32,7 @@ Out:
     recognition. `filename.rs` alone owns encoding/intake policy.
   - Verification: the focused `common` unit and doctest surface passes with all
     existing cases moved beside their owning implementation.
-- [ ] Task 2: Migrate owner paths and prove repository-facing compatibility
+- [x] Task 2: Migrate owner paths and prove repository-facing compatibility
   - Contract: common-internal callers and `common::test_support` import their
     crate-private leaf owners; cross-crate callers retain `common::media::*`.
     Compare the pre-split public declarations against explicit re-exports and

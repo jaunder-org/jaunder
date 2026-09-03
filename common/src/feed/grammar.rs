@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{media::ContentType, tag::Tag, username::Username};
+use crate::{media::mime::ContentType, tag::Tag, username::Username};
 
 /// The public representation format of a Syndication Feed.
 #[macros::text_enum(

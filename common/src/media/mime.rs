@@ -4,7 +4,7 @@ use std::str::FromStr;
 use macros::StrNewtype;
 use thiserror::Error;
 
-use super::Filename;
+use super::filename::Filename;
 
 /// A media `Content-Type` header value — a `type/subtype` media type with optional
 /// `;`-separated parameters (e.g. `image/png`, `text/html; charset=utf-8`). Introducing

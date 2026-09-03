@@ -54,12 +54,12 @@
 //! back to `application/octet-stream`), and [`should_inline`] decides whether a
 //! type is served inline or as an attachment (the `Content-Disposition`).
 
-mod filename;
-mod hash;
-mod mime;
-mod references;
-mod storage;
-mod values;
+pub(crate) mod filename;
+pub(crate) mod hash;
+pub(crate) mod mime;
+pub(crate) mod references;
+pub(crate) mod storage;
+pub(crate) mod values;
 
 pub use filename::{Filename, InvalidFilename, MAX_FILENAME_ENCODED_BYTES, sanitize_filename};
 pub use hash::{ContentHash, InvalidContentHash, is_valid_content_hash};

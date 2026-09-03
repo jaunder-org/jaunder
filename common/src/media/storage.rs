@@ -1,6 +1,6 @@
 use crate::root_relative_url::RootRelativeUrl;
 
-use super::{ContentHash, Filename};
+use super::{filename::Filename, hash::ContentHash};
 
 /// Source of a media record — the provenance segment of the storage layout
 /// (`upload` vs a remote `cached` file). A closed string enum (`#[text_enum]`,

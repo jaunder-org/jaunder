@@ -526,21 +526,23 @@ atomic revision/mutation discipline; rendering remains the sole reference
 constructor.
 
 **Media is content-addressed, and the layout is spelled once.**
-`common::media::path` (`common/src/media.rs:630`) is the single definition of
-`<source>/<p1>/<p2>/<sha256>/<filename>`, and `common::media::url` (`:648`) is
-that path under the `/media/` prefix, returning `RootRelativeUrl` infallibly
+`common::media::path` (storage-owned in `common/src/media/storage.rs`) is the
+single definition of `<source>/<p1>/<p2>/<sha256>/<filename>`, and
+`common::media::url` (the same owner) is that path under the `/media/` prefix,
+returning `RootRelativeUrl` infallibly
 ([ADR-0080](adr/0080-media-path-naming-correspondence.md)). The filename segment
 is percent-encoded with `NON_ALPHANUMERIC` minus the RFC 3986 unreserved marks
-`-._~` (`MEDIA_SEGMENT_ENCODE_SET`, `common/src/media.rs:582`), so ordinary
-names stay byte-identical and only `?`, `#`, space and friends encode — the
-class of bug where a URL validates cleanly but addresses a different file. **The
-encoded form is canonical**
+`-._~` (`MEDIA_SEGMENT_ENCODE_SET`, filename-owned in
+`common/src/media/filename.rs`), so ordinary names stay byte-identical and only
+`?`, `#`, space and friends encode — the class of bug where a URL validates
+cleanly but addresses a different file. **The encoded form is canonical**
 ([ADR-0084](adr/0084-media-filename-encoded-canonical.md)): a `Filename` _is_
 the encoded segment, so the database column, the on-disk name and the URL
 segment are the same bytes and nothing encodes at a call site;
 `Filename::from_str` enforces `s == encode(decode(s))` plus the safe-leaf oracle
-run on the _decoded_ form (`common/src/media.rs:303`), and `Filename::decoded()`
-(`:376`) is the single explicit opt-out, for display. Byte equality is what lets
+run on the _decoded_ form (both filename-owned in
+`common/src/media/filename.rs`), and `Filename::decoded()` is the single
+explicit opt-out, for display. Byte equality is what lets
 [ADR-0090](adr/0090-media-references-extracted-at-render.md)'s comparison
 against names extracted from rendered HTML avoid a transform at a comparison
 point, and it is what makes
@@ -2218,9 +2220,10 @@ than a derive because a derive cannot add attributes to its item, and it must be
 the item's first attribute, since an attribute macro sees only what is written
 below it. Fourteen enums adopt it, eight of them with `sqlx`: `PostFormat`
 (`common/src/render.rs:26`), `TargetKind` and `DefaultAudience`
-(`common/src/visibility.rs:43,180`), `MediaSource` (`common/src/media.rs:601`),
-`SmtpTlsMode` (`common/src/smtp_tls_mode.rs:18`), the host-owned `UserConfigKey`
-and `SiteConfigKey` (`host/src/config_key.rs:206,91`), and host-owned
+(`common/src/visibility.rs:43,180`), `MediaSource`
+(`common/src/media/storage.rs`), `SmtpTlsMode`
+(`common/src/smtp_tls_mode.rs:18`), the host-owned `UserConfigKey` and
+`SiteConfigKey` (`host/src/config_key.rs:206,91`), and host-owned
 `FeedEventStatus`.
 
 The attribute owns the _convention_; `strum` owns the _engine_ — token mapping,

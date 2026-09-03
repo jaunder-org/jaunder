@@ -4,8 +4,11 @@ use macros::StrNewtype;
 use thiserror::Error;
 use url::Url;
 
-use super::storage::parse_stored_media_path;
-use super::{ContentHash, Filename, MediaRef, MediaSource};
+use super::{
+    filename::Filename,
+    hash::ContentHash,
+    storage::{MediaRef, MediaSource, parse_stored_media_path},
+};
 
 /// A closed classification of the URL form that named a media entry.
 ///
