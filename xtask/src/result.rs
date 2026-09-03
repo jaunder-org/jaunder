@@ -13,7 +13,7 @@ pub enum Mode {
 }
 
 /// The outcome of observing the selected Nix outputs across a successful build.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NixRealization {
     Reused,

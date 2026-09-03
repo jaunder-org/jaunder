@@ -29,7 +29,7 @@ Out:
   - Verification: serialization and human-rendering tests prove all states,
     optional identity, concise output, and no raw metadata/log dump.
 
-- [ ] Task 2: Observe selected Nix outputs without realizing them
+- [x] Task 2: Observe selected Nix outputs without realizing them
   - Contract: the shared host-side Nix-build module parses
     `nix build --dry-run --json --no-link` stdout for the selected output paths
     and derivation, and probes those paths through offline
@@ -40,7 +40,7 @@ Out:
     null/missing/malformed JSON, unavailable commands, probe failures, and the
     before/after realization classifier.
 
-- [ ] Task 3: Attach observations to every gate-owned Nix build
+- [x] Task 3: Attach observations to every gate-owned Nix build
   - Contract: `steps::nix` flake checks and the separate `wasm-budget` `.#site`
     build take a pre-build observation, retain their existing build execution
     and failure behavior, and attach a finalized Nix report after success. Other
