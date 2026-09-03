@@ -792,4 +792,61 @@ mod tests {
             InvalidFilename::NotCanonical
         ));
     }
+    #[test]
+    fn a_literal_percent_round_trips() {
+        // The case that exposes a double-encode or double-decode.
+        let f = Filename::sanitized("50%.jpg").expect("valid leaf");
+        assert_eq!(f, "50%25.jpg");
+        assert_eq!(f.decoded(), "50%.jpg");
+        assert!(
+            f.as_ref().parse::<Filename>().is_ok(),
+            "a canonical value must re-parse"
+        );
+    }
+    #[test]
+    fn decoded_segment_re_encodes_the_decoded_segment() {
+        // The serve door: axum hands us the decoded name; the stored form must come back.
+        assert_eq!(
+            Filename::from_decoded_segment("my photo.jpg").expect("a safe decoded leaf"),
+            "my%20photo.jpg"
+        );
+    }
+    #[test]
+    fn decoded_segment_output_always_satisfies_filename() {
+        for raw in [
+            "photo.jpg",
+            "my photo.jpg",
+            "50%.jpg",
+            "résumé.pdf",
+            ".hiddenfile",
+        ] {
+            let f = Filename::from_decoded_segment(raw).expect("a safe decoded leaf");
+            assert!(
+                f.as_ref().parse::<Filename>().is_ok(),
+                "must re-parse: {raw:?}"
+            );
+        }
+    }
+    #[test]
+    fn from_str_rejects_an_over_long_canonical_name() {
+        // At `FromStr` the value is already encoded, so the bound is a plain byte count.
+        let over = "a".repeat(MAX_FILENAME_ENCODED_BYTES + 1);
+        assert!(matches!(
+            over.parse::<Filename>().expect_err("over budget"),
+            InvalidFilename::TooLong { .. }
+        ));
+    }
+    #[test]
+    fn decoded_segment_rejects_a_name_whose_encoded_form_exceeds_the_budget() {
+        // #708's original case, relocated: the decoded-segment door receives the decoded
+        // name, so this is where "100 chars, 200 raw bytes, 600 encoded" is still the
+        // hazard a char-count bound would miss.
+        let raw = "ä".repeat(100);
+        let err =
+            Filename::from_decoded_segment(&raw).expect_err("an over-budget name must be rejected");
+        assert!(matches!(err, InvalidFilename::TooLong { .. }), "{err}");
+        let msg = err.to_string();
+        assert!(msg.contains("percent-encoded"), "{msg}");
+        assert!(msg.contains("255"), "{msg}");
+    }
 }

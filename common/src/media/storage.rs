@@ -127,12 +127,15 @@ mod tests {
     use crate::test_support::{MEDIA_TEST_SHA256, parse_content_hash};
     use sha2::{Digest, Sha256};
 
-    use super::super::{InvalidFilename, MAX_FILENAME_ENCODED_BYTES};
     use super::*;
 
     /// A validated filename built through the same intake door as uploaded names.
     fn filename(name: &str) -> Filename {
         Filename::sanitized(name).expect("a media test name is a valid leaf")
+    }
+    /// The canonical `Filename` for a raw (undecoded) name, via the decoded-segment door.
+    fn canonical(raw: &str) -> Filename {
+        Filename::from_decoded_segment(raw).expect("a legal filename")
     }
 
     /// The canonical hash and a [`Filename`], the two typed arguments every layout test
@@ -234,18 +237,6 @@ mod tests {
     }
 
     #[test]
-    fn a_literal_percent_round_trips() {
-        // The case that exposes a double-encode or double-decode.
-        let f = Filename::sanitized("50%.jpg").expect("valid leaf");
-        assert_eq!(f, "50%25.jpg");
-        assert_eq!(f.decoded(), "50%.jpg");
-        assert!(
-            f.as_ref().parse::<Filename>().is_ok(),
-            "a canonical value must re-parse"
-        );
-    }
-
-    #[test]
     fn a_user_typed_escape_does_not_materialize_a_separator() {
         // `a%2Fb.jpg` typed literally must store double-encoded, so no `/` appears in
         // any derived path segment — the traversal this arrangement must never permit.
@@ -256,56 +247,6 @@ mod tests {
         let path = path(&MediaSource::Upload, &hash, &f);
         let segment = path.rsplit('/').next().expect("a trailing segment");
         assert_eq!(segment, "a%252Fb.jpg");
-    }
-
-    #[test]
-    fn decoded_segment_re_encodes_the_decoded_segment() {
-        // The serve door: axum hands us the decoded name; the stored form must come back.
-        assert_eq!(
-            Filename::from_decoded_segment("my photo.jpg").expect("a safe decoded leaf"),
-            "my%20photo.jpg"
-        );
-    }
-
-    #[test]
-    fn decoded_segment_output_always_satisfies_filename() {
-        for raw in [
-            "photo.jpg",
-            "my photo.jpg",
-            "50%.jpg",
-            "résumé.pdf",
-            ".hiddenfile",
-        ] {
-            let f = Filename::from_decoded_segment(raw).expect("a safe decoded leaf");
-            assert!(
-                f.as_ref().parse::<Filename>().is_ok(),
-                "must re-parse: {raw:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn from_str_rejects_an_over_long_canonical_name() {
-        // At `FromStr` the value is already encoded, so the bound is a plain byte count.
-        let over = "a".repeat(MAX_FILENAME_ENCODED_BYTES + 1);
-        assert!(matches!(
-            over.parse::<Filename>().expect_err("over budget"),
-            InvalidFilename::TooLong { .. }
-        ));
-    }
-
-    #[test]
-    fn decoded_segment_rejects_a_name_whose_encoded_form_exceeds_the_budget() {
-        // #708's original case, relocated: the decoded-segment door receives the decoded
-        // name, so this is where "100 chars, 200 raw bytes, 600 encoded" is still the
-        // hazard a char-count bound would miss.
-        let raw = "ä".repeat(100);
-        let err =
-            Filename::from_decoded_segment(&raw).expect_err("an over-budget name must be rejected");
-        assert!(matches!(err, InvalidFilename::TooLong { .. }), "{err}");
-        let msg = err.to_string();
-        assert!(msg.contains("percent-encoded"), "{msg}");
-        assert!(msg.contains("255"), "{msg}");
     }
 
     #[test]
@@ -341,6 +282,58 @@ mod tests {
             serde_json::from_str::<MediaSource>("\"upload\"").unwrap(),
             MediaSource::Upload
         );
+    }
+    #[test]
+    fn media_refs_order_by_source_then_hash_then_filename() {
+        // The ordering exists so a set of references serializes one way for one body:
+        // extraction collects into a `BTreeSet`, so this is what makes the written rows
+        // deterministic rather than hash-order.
+        let hash: ContentHash = MEDIA_TEST_SHA256.parse().unwrap();
+        let make = |source, name| MediaRef {
+            source,
+            sha256: hash.clone(),
+            filename: canonical(name),
+        };
+
+        // Same hash: the filename breaks the tie.
+        assert!(
+            make(MediaSource::Upload, "a.jpg") < make(MediaSource::Upload, "b.jpg"),
+            "filename orders last"
+        );
+        // The source dominates the filename. Which source sorts first is the *derived*
+        // order — by variant declaration, so `Upload` before `Cached` — not the
+        // lexicographic order of their tokens, which would put `cached` first. Nothing
+        // depends on the direction; the ordering exists only so one body yields one
+        // byte-identical set of rows.
+        assert!(
+            make(MediaSource::Upload, "z.jpg") < make(MediaSource::Cached, "a.jpg"),
+            "source orders first"
+        );
+
+        let mut sorted = [
+            make(MediaSource::Cached, "z.jpg"),
+            make(MediaSource::Upload, "b.jpg"),
+            make(MediaSource::Upload, "a.jpg"),
+        ];
+        sorted.sort();
+        let names: Vec<&str> = sorted.iter().map(|r| r.filename.as_ref()).collect();
+        // Both `Upload`s first (source dominates), `a` before `b` within them, and the
+        // `Cached` one last regardless of its filename sorting first.
+        assert_eq!(names, ["a.jpg", "b.jpg", "z.jpg"]);
+    }
+    #[test]
+    fn media_refs_deduplicate_in_a_btree_set() {
+        // A post embedding the same image twice must yield one row, without needing
+        // dialect-divergent conflict handling at the insert.
+        let hash: ContentHash = MEDIA_TEST_SHA256.parse().unwrap();
+        let one = MediaRef {
+            source: MediaSource::Upload,
+            sha256: hash,
+            filename: canonical("photo.jpg"),
+        };
+        let set: std::collections::BTreeSet<MediaRef> =
+            [one.clone(), one.clone(), one].into_iter().collect();
+        assert_eq!(set.len(), 1);
     }
 
     // -----------------------------------------------------------------------

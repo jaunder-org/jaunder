@@ -7,7 +7,7 @@ use url::Url;
 use super::{
     filename::Filename,
     hash::ContentHash,
-    storage::{MediaRef, MediaSource, parse_stored_media_path},
+    storage::{self, MediaRef, MediaSource},
 };
 
 /// A closed classification of the URL form that named a media entry.
@@ -182,7 +182,7 @@ fn has_leading_url_scheme(input: &str) -> bool {
 }
 
 fn parse_media_path(path: &str) -> Option<MediaRef> {
-    parse_stored_media_path(path).or_else(|| parse_atompub_media_path(path))
+    storage::parse_stored_media_path(path).or_else(|| parse_atompub_media_path(path))
 }
 
 fn parse_atompub_media_path(path: &str) -> Option<MediaRef> {
@@ -398,60 +398,6 @@ mod tests {
             None,
             "the AtomPub filename is the final path segment"
         );
-    }
-
-    #[test]
-    fn media_refs_order_by_source_then_hash_then_filename() {
-        // The ordering exists so a set of references serializes one way for one body:
-        // extraction collects into a `BTreeSet`, so this is what makes the written rows
-        // deterministic rather than hash-order.
-        let hash: ContentHash = MEDIA_TEST_SHA256.parse().unwrap();
-        let make = |source, name| MediaRef {
-            source,
-            sha256: hash.clone(),
-            filename: canonical(name),
-        };
-
-        // Same hash: the filename breaks the tie.
-        assert!(
-            make(MediaSource::Upload, "a.jpg") < make(MediaSource::Upload, "b.jpg"),
-            "filename orders last"
-        );
-        // The source dominates the filename. Which source sorts first is the *derived*
-        // order — by variant declaration, so `Upload` before `Cached` — not the
-        // lexicographic order of their tokens, which would put `cached` first. Nothing
-        // depends on the direction; the ordering exists only so one body yields one
-        // byte-identical set of rows.
-        assert!(
-            make(MediaSource::Upload, "z.jpg") < make(MediaSource::Cached, "a.jpg"),
-            "source orders first"
-        );
-
-        let mut sorted = [
-            make(MediaSource::Cached, "z.jpg"),
-            make(MediaSource::Upload, "b.jpg"),
-            make(MediaSource::Upload, "a.jpg"),
-        ];
-        sorted.sort();
-        let names: Vec<&str> = sorted.iter().map(|r| r.filename.as_ref()).collect();
-        // Both `Upload`s first (source dominates), `a` before `b` within them, and the
-        // `Cached` one last regardless of its filename sorting first.
-        assert_eq!(names, ["a.jpg", "b.jpg", "z.jpg"]);
-    }
-
-    #[test]
-    fn media_refs_deduplicate_in_a_btree_set() {
-        // A post embedding the same image twice must yield one row, without needing
-        // dialect-divergent conflict handling at the insert.
-        let hash: ContentHash = MEDIA_TEST_SHA256.parse().unwrap();
-        let one = MediaRef {
-            source: MediaSource::Upload,
-            sha256: hash,
-            filename: canonical("photo.jpg"),
-        };
-        let set: std::collections::BTreeSet<MediaRef> =
-            [one.clone(), one.clone(), one].into_iter().collect();
-        assert_eq!(set.len(), 1);
     }
 
     #[test]
