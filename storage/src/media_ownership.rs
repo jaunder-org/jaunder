@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use common::tagged_url::BaseUrl;
 
-use crate::{InstanceId, MediaReferenceEvidence, PersistedMediaReference, ProvenForeignReference};
+use crate::InstanceId;
+use crate::posts::store::{
+    MediaReferenceEvidence, PersistedMediaReference, ProvenForeignReference,
+};
 
 /// Resolver-only capability for recording an exact foreign result.
 ///

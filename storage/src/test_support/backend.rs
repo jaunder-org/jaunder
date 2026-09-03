@@ -2,7 +2,7 @@
 //! pool/transaction primitives. Postgres clone URL lifecycle lives in [`super::postgres`];
 //! this leaf selects and wires that lifecycle into a uniform harness surface.
 use super::postgres::{PG_URL_FILE, PostgresDbGuard, PostgresTestConfig, template_postgres_url};
-use crate::posts::{INSERT_POST_TAG, UPSERT_TAG_RETURNING_ID};
+use crate::posts::store::{INSERT_POST_TAG, UPSERT_TAG_RETURNING_ID};
 use crate::sql::QueryStorageExt;
 use crate::{
     AppState, DbConnectOptions, PostStorage, StorageRuntimeConfig, TaggingError, WriteScope,
@@ -281,7 +281,7 @@ impl CloseablePool {
             }
             CloseablePool::Postgres(pool) => {
                 let mut tx = pool.begin().await?;
-                let key = crate::posts::media_advisory_lock_key(media);
+                let key = crate::posts::store::media_advisory_lock_key(media);
                 sqlx::query("SELECT pg_advisory_xact_lock($1)")
                     .bind_storage(key)
                     .execute(&mut *tx)

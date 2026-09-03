@@ -11,7 +11,7 @@ use sqlx::{Database, Decode, Encode, Executor, FromRow, Pool, Result, Row, Type}
 use crate::InstanceId;
 use crate::WriteTransaction;
 use crate::backend::Backend;
-use crate::posts::MediaReferenceEvidence;
+use crate::posts::store::MediaReferenceEvidence;
 use crate::sql::QueryStorageExt;
 use thiserror::Error;
 
@@ -575,12 +575,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::posts::store::{
+        PersistedMediaReference, PersistedMediaSubject, ProvenForeignReference,
+    };
     use crate::test_support::{
         Backend, MEDIA_TEST_SHA256, SeedUser, TestEnv, backends, confirmed,
         create_post_via_service, media_ref_for, media_row_exists, media_url_for, seed_media,
         seed_users,
     };
-    use crate::{PersistedMediaReference, PersistedMediaSubject, ProvenForeignReference};
     use common::media::{MediaReferenceForm, MediaReferenceKind};
     use common::test_support::{
         parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_page_offset,
