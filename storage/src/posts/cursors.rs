@@ -121,3 +121,40 @@ pub fn wire_scheduled_cursor(cursor: &ScheduledPostCursor) -> PageCursor {
         post_id: cursor.post_id,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::to_scheduled_post_cursor;
+    use crate::posts::models::{PostFormat, PostRecord};
+    use common::ids::{PostId, UserId};
+    use common::test_support::{
+        parse_post_body, parse_post_title, parse_slug, parse_username, rendered_html,
+    };
+    use common::time::UtcInstant;
+
+    #[test]
+    fn scheduled_cursor_rejects_row_without_publish_time() {
+        let post = PostRecord {
+            post_id: PostId::from(1),
+            user_id: UserId::from(1),
+            author_username: parse_username("author"),
+            title: Some(parse_post_title("My Title")),
+            slug: parse_slug("hello-world"),
+            body: parse_post_body("My body"),
+            format: PostFormat::Markdown,
+            rendered_html: rendered_html("<p>My body</p>"),
+            created_at: UtcInstant::now(),
+            updated_at: UtcInstant::now(),
+            published_at: None,
+            deleted_at: None,
+            summary: None,
+            tags: vec![],
+        };
+
+        let err = to_scheduled_post_cursor(&post).unwrap_err();
+        assert_eq!(
+            err.operator_message(),
+            "scheduled listing row missing published_at"
+        );
+    }
+}

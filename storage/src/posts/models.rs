@@ -336,6 +336,22 @@ pub struct CreatedPost {
     pub idempotency_key_expired: bool,
 }
 
+/// The old/new state evidence a Post mutation supplies to its owning service.
+///
+/// Both projections are observed while the backend's mutation lock is held, so
+/// callers never need a stale pre-transaction read to decide feed work.
+#[derive(Clone, Debug)]
+pub struct PostMutation {
+    /// Post state after the requested mutation.
+    pub record: PostRecord,
+    /// Post state captured under the mutation lock before any write.
+    pub previous: PostRecord,
+    /// Whether the locked prior state had a Public audience.
+    pub previous_has_public_audience: bool,
+    /// Whether the request changed durable Post state.
+    pub changed: bool,
+}
+
 /// Input for creating a new post.
 #[derive(Clone)]
 pub struct CreatePostInput {
@@ -414,4 +430,92 @@ pub struct UpdatePostInput {
     pub request_clock: UtcInstant,
     /// Non-authoritative Org bookkeeping to compare under the owner lock.
     pub expectations: PostBookkeepingExpectation,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PostRecord, PublishUpdate};
+    use chrono::{TimeZone, Utc};
+    use common::ids::{PostId, UserId};
+    use common::org::PublicationState;
+    use common::render::PostFormat;
+    use common::test_support::{
+        parse_post_body, parse_post_title, parse_slug, parse_username, parse_utc_instant,
+        rendered_html,
+    };
+    use common::time::UtcInstant;
+
+    #[test]
+    fn publication_state_projects_publish_update() {
+        let at = parse_utc_instant("2026-11-01T05:30:00Z");
+
+        for (state, expected) in [
+            (PublicationState::Draft, PublishUpdate::Unpublish),
+            (
+                PublicationState::Scheduled(at),
+                PublishUpdate::Publish { at: Some(at) },
+            ),
+            (
+                PublicationState::Published(at),
+                PublishUpdate::Publish { at: Some(at) },
+            ),
+        ] {
+            assert_eq!(PublishUpdate::from(state), expected);
+        }
+    }
+
+    #[test]
+    fn fallback_summary_label_uses_the_first_non_blank_body_line() {
+        let post = PostRecord {
+            post_id: PostId::from(1),
+            user_id: UserId::from(1),
+            author_username: parse_username("author"),
+            title: Some(parse_post_title("My Title")),
+            slug: parse_slug("my-slug"),
+            body: parse_post_body(
+                "\n\n   The first non-empty line of the body is here. \n\n Another line.",
+            ),
+            format: PostFormat::Markdown,
+            rendered_html: rendered_html("<p>The first non-empty line of the body is here.</p>"),
+            created_at: UtcInstant::now(),
+            updated_at: UtcInstant::now(),
+            published_at: None,
+            deleted_at: None,
+            summary: None,
+            tags: vec![],
+        };
+
+        assert_eq!(
+            post.fallback_summary_label(),
+            "The first non-empty line of the body is here."
+        );
+
+        // A `PostBody` always has a non-blank line (#811), so the body rung always
+        // answers and `fallback_summary_label` needs no title/slug fallbacks — they
+        // would be dead compensation.
+    }
+
+    #[test]
+    fn permalink_formats_username_date_and_slug() {
+        let post = PostRecord {
+            post_id: PostId::from(1),
+            user_id: UserId::from(1),
+            author_username: parse_username("author"),
+            title: Some(parse_post_title("My Title")),
+            slug: parse_slug("hello-world"),
+            body: parse_post_body("My body"),
+            format: PostFormat::Markdown,
+            rendered_html: rendered_html("<p>My body</p>"),
+            created_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
+            updated_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
+            published_at: Some(UtcInstant::from(
+                Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
+            )),
+            deleted_at: None,
+            summary: None,
+            tags: vec![],
+        };
+
+        assert_eq!(post.permalink().as_ref(), "/~author/2026/04/12/hello-world");
+    }
 }

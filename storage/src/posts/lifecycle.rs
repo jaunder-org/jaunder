@@ -533,3 +533,34 @@ where
     .await?;
     Ok(revision_id)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::posts::models::PostBookkeepingExpectation;
+    use crate::posts::models::PostFormat;
+    use common::ids::PostId;
+    use common::test_support::{parse_etag, parse_slug};
+
+    #[test]
+    fn org_bookkeeping_conversion_preserves_each_persistence_expectation() {
+        let published_at = "2026-08-26T12:00:00Z".parse().unwrap();
+        let bookkeeping = common::org::OrgBookkeeping {
+            slug: Some(parse_slug("expected-slug")),
+            format: Some(PostFormat::Org),
+            post_id: Some(PostId::from(7)),
+            synced: Some(parse_etag("\"sha256-current\"")),
+            synced_at: None,
+            date_utc: Some(published_at),
+        };
+
+        let expectations: PostBookkeepingExpectation = bookkeeping.into();
+        assert_eq!(expectations.slug, Some(parse_slug("expected-slug")));
+        assert_eq!(expectations.format, Some(PostFormat::Org));
+        assert_eq!(expectations.published_at, Some(Some(published_at)));
+        assert_eq!(expectations.post_id, Some(PostId::from(7)));
+        assert_eq!(
+            expectations.content_etag,
+            Some(parse_etag("\"sha256-current\""))
+        );
+    }
+}

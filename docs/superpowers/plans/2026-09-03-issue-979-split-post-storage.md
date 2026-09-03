@@ -59,7 +59,7 @@ Out:
     tests in place.
   - Verification: run dual-backend publication-window/go-live/catch-up tests and
     the PostgreSQL lock test; preserve every pre-existing test case.
-- [ ] Task 5: Complete architecture projection and ownership audit
+- [x] Task 5: Complete architecture projection and ownership audit
   - Contract: verify every internal post import names its final owner, retain
     only explicit public re-exports, and update only stale post-storage
     locations/layout prose in `docs/ARCHITECTURE.md`.

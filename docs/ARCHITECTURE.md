@@ -127,23 +127,26 @@ migrations, same behavior — is the accepted cost of the pluggable strategy
 
 ### Crate layout and the generic store pattern
 
-The `storage` crate is organized by domain: each trait-home root module
-(`users.rs`, `posts.rs`, `sessions.rs`, `invites.rs`, `media.rs`,
-`subscriptions.rs`, `audiences.rs`, `site_config.rs`, `user_config.rs`,
-`email.rs`, `password.rs`, `feed_cache.rs`, `feed_events.rs`) holds one
-object-safe `XStorage` trait plus its record and input structs (e.g.
-`PostRecord`, `PostCursor`). The crate also hosts orchestration that is
-persistence work rather than a trait — `post_service.rs` (post create/update
-over `PostStorage`, shared by the web and AtomPub front-ends) and
-`media_manager.rs` (content-addressed upload, relocated from `server` in #517).
-The trait bodies are implemented once by a generic `XStore<DB>` bounded on
-public `Backend: sqlx::Database` (`storage/src/backend.rs`, implemented for
-`Sqlite` and `Postgres`). `Backend` carries the `db.system` span constant and
-adapts sealed `WriteTransaction` capability to the concrete connection.
-Crate-private `AppStateBackend: Backend`, implemented only for those two
-backends, converts a pool into a backend-erased `WriteScope` exclusively for
-generic `AppState` composition. Downstream code can run the factory-minted scope
-but cannot name that trait or construct one from a pool, preserving ADR-0164's
+The `storage` crate is organized by domain: trait-home modules (`users.rs`,
+`sessions.rs`, `invites.rs`, `media.rs`, `subscriptions.rs`, `audiences.rs`,
+`site_config.rs`, `user_config.rs`, `email.rs`, `password.rs`, `feed_cache.rs`,
+`feed_events.rs`) hold one object-safe `XStorage` trait plus its record and
+input structs. `posts/` is split by concern: its assembly-only `mod.rs`
+explicitly re-exports the public post-storage surface, while `store.rs` owns
+`PostStorage`, `PostStore`, and the generic implementation; focused leaves own
+the post records, cursors, tags, media, visibility, lifecycle, errors, and
+syndication reads. The crate also hosts orchestration that is persistence work
+rather than a trait — `post_service.rs` (post create/update over `PostStorage`,
+shared by the web and AtomPub front-ends) and `media_manager.rs`
+(content-addressed upload, relocated from `server` in #517). The trait bodies
+are implemented once by a generic `XStore<DB>` bounded on public
+`Backend: sqlx::Database` (`storage/src/backend.rs`, implemented for `Sqlite`
+and `Postgres`). `Backend` carries the `db.system` span constant and adapts
+sealed `WriteTransaction` capability to the concrete connection. Crate-private
+`AppStateBackend: Backend`, implemented only for those two backends, converts a
+pool into a backend-erased `WriteScope` exclusively for generic `AppState`
+composition. Downstream code can run the factory-minted scope but cannot name
+that trait or construct one from a pool, preserving ADR-0164's
 downstream-construction invariant without changing ADR-0019's public marker
 surface. Backend-specific SQL is isolated in per-trait `XDialect` impls under
 `storage/src/{sqlite,postgres}/*.rs`. Traits with no divergence need no dialect
@@ -222,9 +225,10 @@ client-validation mapping
 ### Query and transaction discipline
 
 - **Cursor pagination.** Timeline and collection listings paginate by keyset
-  cursor, never offset: `PostCursor`/`CollectionCursor` (`storage/src/posts.rs`)
-  round-trip through an opaque wire pair, giving fixed-cost queries that are
-  stable under concurrent inserts ([ADR-0004](adr/0004-pagination-strategy.md)).
+  cursor, never offset: `PostCursor`/`CollectionCursor`
+  (`storage/src/posts/cursors.rs`) round-trip through an opaque wire pair,
+  giving fixed-cost queries that are stable under concurrent inserts
+  ([ADR-0004](adr/0004-pagination-strategy.md)).
 - **SQLite transactions.** SQLite dialect code avoids read-then-write deferred
   transactions (the shared→reserved lock upgrade that yields unretryable
   `SQLITE_BUSY` under WAL concurrency). Audited application mutations receive
@@ -247,7 +251,7 @@ client-validation mapping
 - **Slug-ordered tag locks.** A transaction that will touch several `tags` rows
   sorts them by slug before acquiring any lock, so every transaction takes the
   row locks in one global order and concurrent `set_post_tags` reconciles cannot
-  deadlock on Postgres (`storage/src/posts.rs:397`). The sort is `sort_by_key`,
+  deadlock on Postgres (`storage/src/posts/tags.rs`). The sort is `sort_by_key`,
   not `sort_unstable_by_key`, because a desired set may carry two labels sharing
   a slug and the first occurrence's casing must win. SQLite is unaffected
   (`BEGIN IMMEDIATE` locks database-wide); the rule is shared so the backends
@@ -256,7 +260,7 @@ client-validation mapping
   connection on its own OS thread, so a call parked in the busy handler blocks
   that thread, not the async runtime. Lock-contention tests therefore stay on
   the current-thread flavor `#[tokio::test]` defaults to
-  (`storage/src/posts.rs:2903`); moving sqlx to an in-runtime SQLite driver
+  (`storage/src/posts/store.rs`); moving sqlx to an in-runtime SQLite driver
   would turn those blocks into hangs
   ([ADR-0126](adr/0126-sqlx-sqlite-busy-handler-threading.md)).
 - **Cost ordering.** When an operation is gated on a high-entropy secret (invite
@@ -410,8 +414,8 @@ module-qualified `host::render` free function derives the stored
 surfaces — Syndication Feeds emit HTML, the AtomPub Collection native source —
 detailed in the Protocols section
 ([ADR-0015](adr/0015-atompub-serialization-surfaces.md)).
-`storage/src/posts.rs:42::PostRecord` carries both plus title, `Slug`, summary,
-tags, and `created_at`/`updated_at`/`published_at`/`deleted_at`.
+`storage/src/posts/models.rs::PostRecord` carries both plus title, `Slug`,
+summary, tags, and `created_at`/`updated_at`/`published_at`/`deleted_at`.
 
 `PostRecord.summary` is optional authored Post content. In contrast,
 `summary_label` is disposable presentation metadata for a titleless unpublished
@@ -624,8 +628,7 @@ govern consumed content rather than these local rows.
 
 Cross-cutting values are validated newtypes whose `FromStr` is the single
 chokepoint: `Username`, `Slug`, and `Tag` live in `common`; `Password` lives in
-`host`. Tagging is keyed on the `Tag` slug (`PostTag`, `post_tag_diff` in
-`storage/src/posts.rs`).
+host`. Tagging is keyed on the `Tag` slug (`PostTag`, `post_tag_diff`in`storage/src/posts/tags.rs`).
 
 **Post-shaped wire types are named for the content weight they carry**, not for
 the transaction that produced them
@@ -641,8 +644,8 @@ code converts between them.
 
 **Timelines paginate by keyset cursor, not offset**
 ([ADR-0004](adr/0004-pagination-strategy.md)). `PostCursor`
-(`storage/src/posts.rs:187` — `created_at` + `post_id`, for stable ordering) and
-`CollectionCursor` (`:197`, `updated_at` + `post_id`, for the editor-facing
+(`storage/src/posts/cursors.rs` — `created_at` + `post_id`, for stable ordering)
+and `CollectionCursor` (`updated_at` + `post_id`, for the editor-facing
 collection) are the storage-side cursors; the wire carries an opaque
 `PageCursor`, and a listing returns `next_cursor` exactly when another page
 exists (`web/src/posts/api.rs:117,425`). `PageSize`
@@ -2280,7 +2283,7 @@ can fail it — and on a bulk read **one bad row must not stop the scan**
 ([ADR-0122](adr/0122-one-bad-row-must-not-stop-the-scan.md)). Scans and lists
 decode per row and skip the failures (`list_media` fetches raw rows rather than
 `query_as` for exactly this reason, `storage/src/media.rs:275-325`;
-`feed_urls_needing_catchup` at `storage/src/posts.rs:1918-1937`), so a single
+`feed_urls_needing_catchup` at `storage/src/posts/syndication.rs`), so a single
 unusable row costs only itself instead of 500-ing a media list or wedging the
 feed worker's `last_tick` forever. Three guardrails bound it: direct single-row
 lookups (`get_media`, `find_by_hash`) stay strict; the feed-event claim's
@@ -2353,8 +2356,8 @@ Expected failures are typed, not collapsed into an opaque carrier: discrete
 `thiserror` variants in `storage`/`common` enums — `UserAuthError`
 (`storage/src/users.rs:60`), `PerformCreationError`
 (`storage/src/post_service.rs:292`), `UpdatePostError`
-(`storage/src/posts.rs:158`), `MailError` (`common/src/mailer.rs:45`), and some
-two dozen more — so matching on `NotFound` versus `Unauthorized` versus
+(`storage/src/posts/errors.rs`), `MailError` (`common/src/mailer.rs:45`), and
+some two dozen more — so matching on `NotFound` versus `Unauthorized` versus
 `SlugConflict` remains possible
 ([ADR-0017](adr/0017-error-handling-and-the-public-boundary.md) §1).
 

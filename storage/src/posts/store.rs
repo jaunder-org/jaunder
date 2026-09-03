@@ -2012,11 +2012,9 @@ mod tests {
     use super::*;
     use crate::feed_cache::FeedCacheRow;
     use crate::posts::cursors::{
-        keyset_cursor, scheduled_keyset_cursor, to_scheduled_post_cursor, wire_cursor,
-        wire_scheduled_cursor,
+        keyset_cursor, scheduled_keyset_cursor, wire_cursor, wire_scheduled_cursor,
     };
-    use crate::posts::models::PostBookkeepingExpectation;
-    use crate::posts::models::{PublishUpdate, RenderedHtml};
+    use crate::posts::models::{PostBookkeepingExpectation, RenderedHtml};
     use crate::test_support::{
         Backend, CloseablePool, MEDIA_TEST_SHA256, SeedRawPost, SeedUser, TestEnv, UpdateRawPost,
         backends, create_draft_via_service, create_post_via_service, create_posts_confirmed,
@@ -2029,7 +2027,7 @@ mod tests {
     use common::render::PostFormat;
     use common::test_support::{
         parse_etag, parse_post_body, parse_post_summary, parse_post_title, parse_row_limit,
-        parse_slug, parse_tag_label, parse_username, parse_utc_instant,
+        parse_slug, parse_tag_label, parse_utc_instant,
     };
     use common::time::UtcInstant;
     use host::feed::SyndicationFeedRepresentation;
@@ -2038,27 +2036,6 @@ mod tests {
     use sqlx::Row;
     use std::{sync::Arc, time::Duration};
     use tokio::sync::Barrier;
-
-    #[test]
-    fn publication_state_projects_publish_update() {
-        use common::org::PublicationState;
-
-        let at = parse_utc_instant("2026-11-01T05:30:00Z");
-
-        for (state, expected) in [
-            (PublicationState::Draft, PublishUpdate::Unpublish),
-            (
-                PublicationState::Scheduled(at),
-                PublishUpdate::Publish { at: Some(at) },
-            ),
-            (
-                PublicationState::Published(at),
-                PublishUpdate::Publish { at: Some(at) },
-            ),
-        ] {
-            assert_eq!(PublishUpdate::from(state), expected);
-        }
-    }
 
     async fn update_post_scoped(
         state: &Arc<crate::AppState>,
@@ -2292,28 +2269,6 @@ mod tests {
             .expect("owner can decode a draft record");
         assert_eq!(draft.published_at, None);
         assert_eq!(draft.deleted_at, None);
-    }
-    #[test]
-    fn org_bookkeeping_conversion_preserves_each_persistence_expectation() {
-        let published_at = "2026-08-26T12:00:00Z".parse().unwrap();
-        let bookkeeping = common::org::OrgBookkeeping {
-            slug: Some(parse_slug("expected-slug")),
-            format: Some(PostFormat::Org),
-            post_id: Some(PostId::from(7)),
-            synced: Some(parse_etag("\"sha256-current\"")),
-            synced_at: None,
-            date_utc: Some(published_at),
-        };
-
-        let expectations: PostBookkeepingExpectation = bookkeeping.into();
-        assert_eq!(expectations.slug, Some(parse_slug("expected-slug")));
-        assert_eq!(expectations.format, Some(PostFormat::Org));
-        assert_eq!(expectations.published_at, Some(Some(published_at)));
-        assert_eq!(expectations.post_id, Some(PostId::from(7)));
-        assert_eq!(
-            expectations.content_etag,
-            Some(parse_etag("\"sha256-current\""))
-        );
     }
 
     /// Two independent edits whose old/new media sets are reversed must complete:
@@ -3616,119 +3571,6 @@ mod tests {
                 .await
                 .expect("count rolled-back revisions"),
             1
-        );
-    }
-    #[test]
-    fn tagging_error_display_post_not_found() {
-        let err = TaggingError::PostNotFound;
-        assert_eq!(err.to_string(), "post not found");
-    }
-
-    #[test]
-    fn tagging_error_debug() {
-        let err = TaggingError::PostNotFound;
-        let debug_str = format!("{err:?}");
-        assert!(debug_str.contains("PostNotFound"));
-
-        let err2 = TaggingError::Internal(sqlx::Error::RowNotFound);
-        let debug_str2 = format!("{err2:?}");
-        assert!(debug_str2.contains("Internal"));
-    }
-
-    #[test]
-    fn list_by_tag_error_display_tag_not_found() {
-        let err = ListByTagError::TagNotFound;
-        assert_eq!(err.to_string(), "tag not found");
-    }
-
-    #[test]
-    fn list_by_tag_error_debug() {
-        let err = ListByTagError::TagNotFound;
-        let debug_str = format!("{err:?}");
-        assert!(debug_str.contains("TagNotFound"));
-    }
-
-    #[test]
-    fn fallback_summary_label_uses_the_first_non_blank_body_line() {
-        let post = PostRecord {
-            post_id: PostId::from(1),
-            user_id: UserId::from(1),
-            author_username: parse_username("author"),
-            title: Some(parse_post_title("My Title")),
-            slug: parse_slug("my-slug"),
-            body: parse_post_body(
-                "\n\n   The first non-empty line of the body is here. \n\n Another line.",
-            ),
-            format: PostFormat::Markdown,
-            rendered_html: common::test_support::rendered_html(
-                "<p>The first non-empty line of the body is here.</p>",
-            ),
-            created_at: UtcInstant::now(),
-            updated_at: UtcInstant::now(),
-            published_at: None,
-            deleted_at: None,
-            summary: None,
-            tags: vec![],
-        };
-
-        assert_eq!(
-            post.fallback_summary_label(),
-            "The first non-empty line of the body is here."
-        );
-
-        // A `PostBody` always has a non-blank line (#811), so the body rung always
-        // answers and `fallback_summary_label` needs no title/slug fallbacks — they
-        // would be dead compensation.
-    }
-
-    #[test]
-    fn permalink_formats_username_date_and_slug() {
-        use chrono::TimeZone;
-        let post = PostRecord {
-            post_id: PostId::from(1),
-            user_id: UserId::from(1),
-            author_username: parse_username("author"),
-            title: Some(parse_post_title("My Title")),
-            slug: parse_slug("hello-world"),
-            body: parse_post_body("My body"),
-            format: PostFormat::Markdown,
-            rendered_html: common::test_support::rendered_html("<p>My body</p>"),
-            created_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
-            updated_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
-            published_at: Some(UtcInstant::from(
-                Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
-            )),
-            deleted_at: None,
-            summary: None,
-            tags: vec![],
-        };
-
-        assert_eq!(post.permalink().as_ref(), "/~author/2026/04/12/hello-world");
-    }
-
-    #[test]
-    fn scheduled_cursor_rejects_row_without_publish_time() {
-        let post = PostRecord {
-            post_id: PostId::from(1),
-            user_id: UserId::from(1),
-            author_username: parse_username("author"),
-            title: Some(parse_post_title("My Title")),
-            slug: parse_slug("hello-world"),
-            body: parse_post_body("My body"),
-            format: PostFormat::Markdown,
-            rendered_html: common::test_support::rendered_html("<p>My body</p>"),
-            created_at: UtcInstant::now(),
-            updated_at: UtcInstant::now(),
-            published_at: None,
-            deleted_at: None,
-            summary: None,
-            tags: vec![],
-        };
-
-        let err = to_scheduled_post_cursor(&post).unwrap_err();
-        assert_eq!(
-            err.operator_message(),
-            "scheduled listing row missing published_at"
         );
     }
 

@@ -95,3 +95,38 @@ pub enum ListByTagError {
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ListByTagError, TaggingError};
+
+    #[test]
+    fn tagging_error_display_post_not_found() {
+        let err = TaggingError::PostNotFound;
+        assert_eq!(err.to_string(), "post not found");
+    }
+
+    #[test]
+    fn tagging_error_debug() {
+        let err = TaggingError::PostNotFound;
+        let debug_str = format!("{err:?}");
+        assert!(debug_str.contains("PostNotFound"));
+
+        let err2 = TaggingError::Internal(sqlx::Error::RowNotFound);
+        let debug_str2 = format!("{err2:?}");
+        assert!(debug_str2.contains("Internal"));
+    }
+
+    #[test]
+    fn list_by_tag_error_display_tag_not_found() {
+        let err = ListByTagError::TagNotFound;
+        assert_eq!(err.to_string(), "tag not found");
+    }
+
+    #[test]
+    fn list_by_tag_error_debug() {
+        let err = ListByTagError::TagNotFound;
+        let debug_str = format!("{err:?}");
+        assert!(debug_str.contains("TagNotFound"));
+    }
+}
