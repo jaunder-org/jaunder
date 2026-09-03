@@ -49,7 +49,7 @@ Out:
     `PostDialect` seam, `PostStore<DB>`, and indivisible generic trait impl.
   - Verification: run dual-backend visibility, audience, revision, publication,
     update, deletion, and no-op mutation contracts.
-- [ ] Task 4: Extract syndication reads and finish test homing
+- [x] Task 4: Extract syndication reads and finish test homing
   - Contract: `syndication.rs` owns hybrid-window, go-live, and catch-up query
     helpers while generic trait methods stay in `store.rs`; move its definitions
     and consumers atomically to the final owner paths, and move only pure tests

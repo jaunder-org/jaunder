@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use sqlx::{Database, Decode, Encode, Executor, Pool, Result, Row, Type};
+use sqlx::{Database, Decode, Encode, Executor, Pool, Result, Type};
 
 use crate::InstanceId;
 use crate::backend::Backend;
@@ -23,6 +23,7 @@ use crate::posts::models::{
     PostRecord, PostRevisionDetail, PostRevisionPage, PostRevisionRecord, PostRevisionTag,
     UpdatePostInput,
 };
+use crate::posts::syndication::{self, GoLivePost};
 use crate::posts::tags;
 use crate::posts::tags::{PostTag, TagRecord};
 use crate::posts::visibility;
@@ -45,19 +46,10 @@ use common::visibility::{AudienceTarget, SubscriberRef, TargetKind, ViewerIdenti
 
 use host::{
     error::{InternalError, InternalResult},
-    feed::{FeedMinItems, FeedPath},
+    feed::FeedPath,
     metrics,
     retention::Domain,
 };
-
-/// A post that crossed into "live" within a time window, carrying exactly the
-/// data the feed worker needs to compute its affected feed URLs (the author's
-/// username and the post's tag slugs).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GoLivePost {
-    pub username: Username,
-    pub tag_slugs: Vec<Tag>,
-}
 
 // ---------------------------------------------------------------------------
 // Cursor + effectful post orchestration
@@ -1959,12 +1951,8 @@ where
         now: UtcInstant,
         viewer: &ViewerIdentity,
     ) -> Result<Vec<PostRecord>> {
-        // ROW_NUMBER() identifies the top `min_items` posts; OR-combining with
-        // `published_at >= cutoff` produces the hybrid-window union in a single
-        // query. Only the JSON tag aggregation differs per backend, so the SQL
-        // is shared via `DB::TAGS_SUBQUERY`.
         let cutoff = UtcInstant::from(window.cutoff_date(now.value()));
-        let rows = list_published_in_window_rows::<DB>(
+        syndication::list_published_in_window_rows::<DB>(
             &self.pool,
             surface,
             now,
@@ -1972,8 +1960,7 @@ where
             window.min_items,
             viewer,
         )
-        .await?;
-        Ok(rows)
+        .await
     }
 
     #[tracing::instrument(
@@ -1986,353 +1973,12 @@ where
         after: UtcInstant,
         upto: UtcInstant,
     ) -> Result<Vec<GoLivePost>> {
-        // `published_at > $1 AND published_at <= $2` selects exactly the posts
-        // that crossed into "live" within the half-open window `(after, upto]`.
-        // The standard post projection (incl. the JSON tag subquery) is reused so the row
-        // decodes directly into `PostRecord`; we then keep only the username + tag slugs
-        // the feed fan-out needs. No viewer filter: go-live regeneration is independent of
-        // any reader's audience.
-        let tags = DB::TAGS_SUBQUERY;
-        let sql = format!(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                    p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                    {tags} AS tags
-             FROM posts p
-             JOIN users u ON p.user_id = u.user_id
-             WHERE p.published_at > $1
-               AND p.published_at <= $2
-               AND p.deleted_at IS NULL
-             ORDER BY p.published_at ASC, p.post_id ASC"
-        );
-        let rows = sqlx::query_as::<_, PostRecord>(&sql)
-            .bind_storage(after)
-            .bind_storage(upto)
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(rows
-            .into_iter()
-            .map(|rec| GoLivePost {
-                username: rec.author_username,
-                tag_slugs: rec.tags.into_iter().map(|t| t.tag_slug).collect(),
-            })
-            .collect())
+        syndication::list_posts_gone_live_between::<DB>(&self.pool, after, upto).await
     }
 
     async fn feed_urls_needing_catchup(&self, now: UtcInstant) -> Result<Vec<FeedPath>> {
-        // Cached feeds live in the same database, so they are enumerated here
-        // and, for each, the newest live post on that surface is compared
-        // against the feed's own `generated_at`. Feed count is small, so a
-        // per-feed check is simpler than a set-based join.
-        //
-        // Rows are read one at a time rather than via `query_as` so a single bad
-        // `feed_url` cannot fail the whole scan — see the skip below.
-        let rows = sqlx::query("SELECT feed_url, generated_at FROM feed_cache")
-            .fetch_all(&self.pool)
-            .await?;
-        let mut needing = Vec::new();
-        let mut decode_reported = false;
-        for row in rows {
-            let generated_at: UtcInstant = row.try_get("generated_at")?;
-            let feed_path = match row.try_get::<FeedPath, _>("feed_url") {
-                Ok(path) => path,
-                Err(error) => {
-                    if !decode_reported {
-                        host::error::report_swallowed(
-                            host::error::ErrorKind::Storage,
-                            host::error::ErrorClass::Bug,
-                            "storage.feed_cache.decode_feed_path",
-                            host::error::SwallowedSource::Error(&error),
-                        );
-                        decode_reported = true;
-                    }
-                    continue;
-                }
-            };
-            // `parts` is an expected defensive grammar mismatch. Construction
-            // currently guarantees it cannot occur, but it carries no failure
-            // source and therefore remains ordinary non-reporting control flow.
-            let Some((surface, _)) = feed_path.parts() else {
-                continue;
-            };
-            if let Some(max) = max_published_at_for_surface::<DB>(&self.pool, &surface, now).await?
-                && max > generated_at
-            {
-                needing.push(feed_path);
-            }
-        }
-        Ok(needing)
+        syndication::feed_urls_needing_catchup::<DB>(&self.pool, now).await
     }
-}
-
-/// Runs the hybrid-window query for `surface`, returning [`PostRecord`]s.
-///
-/// Shared across backends: the four `FeedSurface` variants differ only in the
-/// ranked-CTE source/predicate and bind list, and the JSON tag aggregation is
-/// supplied by [`PostDialect::TAGS_SUBQUERY`].
-async fn list_published_in_window_rows<DB>(
-    pool: &Pool<DB>,
-    surface: &common::feed::FeedSurface,
-    now: UtcInstant,
-    cutoff: UtcInstant,
-    min_items: FeedMinItems,
-    viewer: &ViewerIdentity,
-) -> Result<Vec<PostRecord>>
-where
-    DB: PostDialect,
-    PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> FeedMinItems: Encode<'q, DB> + Type<DB>,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
-    // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
-    for<'q> Option<UserId>: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<ChannelId>: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q SubscriberRef: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<&'q SubscriberRef>: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<&'q str>: Encode<'q, DB> + Type<DB>,
-    // `Username`/`Tag` bind as themselves via the ADR-0071 sqlx bridge, for the
-    // surface `username`/`tag` binds.
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    use common::feed::FeedSurface;
-    let tags = DB::TAGS_SUBQUERY;
-    match surface {
-        FeedSurface::Site => {
-            // Binds: $1 now, $2 min_items, $3 cutoff, then the variant-sized
-            // resolution fragment from $4. `window_sql` places it last, so
-            // nothing binds after it and the returned `next` is discarded.
-            let (resolution, binds, _) = visibility::resolution_where(viewer, 4);
-            let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind_storage(now)
-                .bind_storage(min_items)
-                .bind_storage(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
-        }
-        FeedSurface::User { username } => {
-            // Binds: $1 now, $2 username, $3 min_items, $4 cutoff, then the
-            // variant-sized resolution fragment last, from $5.
-            let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
-            let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind_storage(now)
-                .bind_storage(username)
-                .bind_storage(min_items)
-                .bind_storage(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
-        }
-        FeedSurface::SiteTag { tag } => {
-            // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, then the
-            // variant-sized resolution fragment last, from $5.
-            let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
-            let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind_storage(now)
-                .bind_storage(tag)
-                .bind_storage(min_items)
-                .bind_storage(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
-        }
-        FeedSurface::UserTag { username, tag } => {
-            // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff, then
-            // the variant-sized resolution fragment last, from $6.
-            let (resolution, binds, _) = visibility::resolution_where(viewer, 6);
-            let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind_storage(now)
-                .bind_storage(username)
-                .bind_storage(tag)
-                .bind_storage(min_items)
-                .bind_storage(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
-        }
-    }
-}
-
-/// Assembles the hybrid-window SQL for `surface`.
-///
-/// Pure string construction with no DB generics: the four near-identical
-/// templates — differing only in the ranked-CTE source/predicate and bind
-/// placeholders — live here, while [`list_published_in_window_rows`] keeps the
-/// generic `where`-clause, per-surface bind list, and execution. `tags` supplies
-/// the JSON tag aggregation ([`PostDialect::TAGS_SUBQUERY`]) and `resolution` the
-/// audience-resolution predicate.
-fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str) -> String {
-    use common::feed::FeedSurface;
-    match surface {
-        FeedSurface::Site => format!(
-            "WITH ranked AS (
-     SELECT p.post_id, p.published_at,
-            ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
-     FROM posts p
-     WHERE p.published_at IS NOT NULL
-       AND p.deleted_at IS NULL
-       AND p.published_at <= $1
- )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-        {tags} AS tags
- FROM ranked r
- JOIN posts p ON p.post_id = r.post_id
- JOIN users u ON p.user_id = u.user_id
- WHERE (r.rn <= $2 OR r.published_at >= $3)
-   AND {resolution}
- ORDER BY p.published_at DESC, p.post_id DESC"
-        ),
-        FeedSurface::User { .. } => format!(
-            "WITH ranked AS (
-     SELECT p.post_id, p.published_at,
-            ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
-     FROM posts p
-     JOIN users u ON p.user_id = u.user_id
-     WHERE p.published_at IS NOT NULL
-       AND p.deleted_at IS NULL
-       AND p.published_at <= $1
-       AND u.username = $2
- )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-        {tags} AS tags
- FROM ranked r
- JOIN posts p ON p.post_id = r.post_id
- JOIN users u ON p.user_id = u.user_id
- WHERE (r.rn <= $3 OR r.published_at >= $4)
-   AND {resolution}
- ORDER BY p.published_at DESC, p.post_id DESC"
-        ),
-        FeedSurface::SiteTag { .. } => format!(
-            "WITH ranked AS (
-     SELECT p.post_id, p.published_at,
-            ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
-     FROM posts p
-     JOIN post_tags pt ON p.post_id = pt.post_id
-     JOIN tags t ON pt.tag_id = t.tag_id
-     WHERE p.published_at IS NOT NULL
-       AND p.deleted_at IS NULL
-       AND p.published_at <= $1
-       AND t.tag_slug = $2
- )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-        {tags} AS tags
- FROM ranked r
- JOIN posts p ON p.post_id = r.post_id
- JOIN users u ON p.user_id = u.user_id
- WHERE (r.rn <= $3 OR r.published_at >= $4)
-   AND {resolution}
- ORDER BY p.published_at DESC, p.post_id DESC"
-        ),
-        FeedSurface::UserTag { .. } => format!(
-            "WITH ranked AS (
-     SELECT p.post_id, p.published_at,
-            ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
-     FROM posts p
-     JOIN users u ON p.user_id = u.user_id
-     JOIN post_tags pt ON p.post_id = pt.post_id
-     JOIN tags t ON pt.tag_id = t.tag_id
-     WHERE p.published_at IS NOT NULL
-       AND p.deleted_at IS NULL
-       AND p.published_at <= $1
-       AND u.username = $2
-       AND t.tag_slug = $3
- )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-        {tags} AS tags
- FROM ranked r
- JOIN posts p ON p.post_id = r.post_id
- JOIN users u ON p.user_id = u.user_id
- WHERE (r.rn <= $4 OR r.published_at >= $5)
-   AND {resolution}
- ORDER BY p.published_at DESC, p.post_id DESC"
-        ),
-    }
-}
-
-/// The most recent `published_at` of a *live* post (`published_at <= now`, not
-/// deleted) on `surface`, or `None` when the surface has no live post. Each
-/// surface variant adds exactly the joins/predicates that define its post set,
-/// mirroring the window query's surface filters. Used by
-/// [`PostStorage::feed_urls_needing_catchup`] to detect a cached feed that is
-/// stale relative to a go-live the worker may have missed while down.
-async fn max_published_at_for_surface<DB>(
-    pool: &Pool<DB>,
-    surface: &common::feed::FeedSurface,
-    now: UtcInstant,
-) -> Result<Option<UtcInstant>>
-where
-    DB: PostDialect,
-    (UtcInstant,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
-    // `Username`/`Tag` bind as themselves via the ADR-0071 sqlx bridge, for the
-    // surface `username`/`tag` binds.
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    use common::feed::FeedSurface;
-    let row: Option<(UtcInstant,)> = match surface {
-        FeedSurface::Site => {
-            sqlx::query_as(
-                "SELECT p.published_at FROM posts p
-                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
-                   AND p.deleted_at IS NULL
-                 ORDER BY p.published_at DESC LIMIT 1",
-            )
-            .bind_storage(now)
-            .fetch_optional(pool)
-            .await?
-        }
-        FeedSurface::User { username } => {
-            sqlx::query_as(
-                "SELECT p.published_at FROM posts p
-                 JOIN users u ON p.user_id = u.user_id
-                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
-                   AND p.deleted_at IS NULL AND u.username = $2
-                 ORDER BY p.published_at DESC LIMIT 1",
-            )
-            .bind_storage(now)
-            .bind_storage(username)
-            .fetch_optional(pool)
-            .await?
-        }
-        FeedSurface::SiteTag { tag } => {
-            sqlx::query_as(
-                "SELECT p.published_at FROM posts p
-                 JOIN post_tags pt ON p.post_id = pt.post_id
-                 JOIN tags t ON pt.tag_id = t.tag_id
-                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
-                   AND p.deleted_at IS NULL AND t.tag_slug = $2
-                 ORDER BY p.published_at DESC LIMIT 1",
-            )
-            .bind_storage(now)
-            .bind_storage(tag)
-            .fetch_optional(pool)
-            .await?
-        }
-        FeedSurface::UserTag { username, tag } => {
-            sqlx::query_as(
-                "SELECT p.published_at FROM posts p
-                 JOIN users u ON p.user_id = u.user_id
-                 JOIN post_tags pt ON p.post_id = pt.post_id
-                 JOIN tags t ON pt.tag_id = t.tag_id
-                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
-                   AND p.deleted_at IS NULL AND u.username = $2 AND t.tag_slug = $3
-                 ORDER BY p.published_at DESC LIMIT 1",
-            )
-            .bind_storage(now)
-            .bind_storage(username)
-            .bind_storage(tag)
-            .fetch_optional(pool)
-            .await?
-        }
-    };
-    Ok(row.map(|(published_at,)| published_at))
 }
 
 /// Database-provided physical identity retained only by the no-write regression.
@@ -3356,70 +3002,6 @@ mod tests {
         .await
         .expect("subsequent writer succeeds");
         assert_eq!(slugs_of(&*env.state.posts, post).await, vec!["committed"]);
-    }
-
-    /// A tag mutation captures a complete revision, including current media. On
-    /// `PostgreSQL` copy must wait for the ordinary media lock rather than
-    /// racing a guarded delete or reclaim (ADR-0154).
-    // guard:low-level-db — exercises a held PostgreSQL advisory lock directly
-    #[tokio::test]
-    async fn postgres_tag_revision_capture_waits_for_current_media_lock() {
-        let env = Backend::Postgres.setup().await;
-        let user = SeedUser::new().seed(&env.state).await.user_id;
-        let media = media_ref_for("tag-revision-lock.jpg");
-        let post = create_post_via_service(
-            &env.state,
-            user,
-            parse_post_body(&format!(
-                "<img src=\"{}\">",
-                media_url_for("tag-revision-lock.jpg")
-            )),
-        )
-        .await;
-        let held = env
-            .base
-            .pool()
-            .lock_media_reference_for_write(&media)
-            .await
-            .expect("take the current media lock");
-        let posts = Arc::clone(&env.state.posts);
-        let write_scope = env.state.write_scope.clone();
-        let mut tag_update = tokio::spawn(async move {
-            set_post_tags_confirmed(
-                &write_scope,
-                posts,
-                post,
-                user,
-                &[parse_tag_label("locked")],
-            )
-            .await
-        });
-
-        assert!(
-            tokio::time::timeout(Duration::from_millis(300), &mut tag_update)
-                .await
-                .is_err(),
-            "tag revision capture completed while its current media lock was held"
-        );
-
-        held.rollback()
-            .await
-            .expect("release the current media lock");
-        tag_update
-            .await
-            .expect("tag update task panicked")
-            .expect("tag update failed after lock release");
-        assert_eq!(
-            env.base
-                .pool()
-                .scalar_i64(&format!(
-                    "SELECT COUNT(*) FROM post_revisions WHERE post_id = {post}"
-                ))
-                .await
-                .expect("count captured revisions"),
-            1,
-            "the deferred tag mutation captures exactly one prior-state revision"
-        );
     }
 
     /// #883: the upsert returns the tag id on its **conflict** path, not just when
