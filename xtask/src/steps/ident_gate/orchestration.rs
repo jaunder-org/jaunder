@@ -1,9 +1,9 @@
 use crate::result::CommandResult;
 use crate::steps::scan::run_source_scan;
 
-use super::marker_policy::{Why, classify};
-use super::resolution::owner_aliases;
-use super::traversal::{MentionContext, scan};
+use super::marker_policy::{self, Why};
+use super::resolution;
+use super::traversal::{self, MentionContext};
 
 fn mention_where(context: &MentionContext) -> String {
     match context {
@@ -77,11 +77,11 @@ impl Gate {
         // concerned, so a rename it declares is honored and one it does not is not.
         let aliases = self
             .owner
-            .map(|ty| owner_aliases(&[(String::new(), source.to_string())], ty));
+            .map(|ty| resolution::owner_aliases(&[(String::new(), source.to_string())], ty));
         let owner = self.owner.zip(aliases.as_ref());
-        let c = classify(
+        let c = marker_policy::classify(
             source,
-            &scan(source, self.population, owner)?,
+            &traversal::scan(source, self.population, owner)?,
             &self.marker_token(),
         );
         let mut out: Vec<(usize, String)> = c
@@ -114,18 +114,18 @@ impl Gate {
         let token = self.marker_token();
         // Harvested once, across every scanned file, before any classification: a
         // renaming re-export in one module decides membership in another (#790, D2).
-        let aliases = self.owner.map(|ty| owner_aliases(scanned, ty));
+        let aliases = self.owner.map(|ty| resolution::owner_aliases(scanned, ty));
         let owner = self.owner.zip(aliases.as_ref());
         let mut lines = Vec::new();
         let mut census = Vec::new();
         for (path, source) in scanned {
-            match scan(source, self.population, owner) {
+            match traversal::scan(source, self.population, owner) {
                 Err(msg) => lines.push(format!(
                     "{path}: {msg} — an unparsed file is invisible to this gate, which is exactly \
                      the blind spot it exists to close. Fix the file or the parser; do not skip it."
                 )),
                 Ok(found) => {
-                    let c = classify(source, &found, &token);
+                    let c = marker_policy::classify(source, &found, &token);
                     for u in c.unexempt {
                         let where_ = mention_where(&u.context);
                         lines.push(match u.why {
