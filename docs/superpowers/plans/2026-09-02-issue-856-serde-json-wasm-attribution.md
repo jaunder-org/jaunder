@@ -42,7 +42,7 @@ Out:
     projector, route-matching, content-weight, escaping, cacheability, and
     first-paint contracts under their existing focused tests.
 
-- [ ] Task 3: Certify any eligible candidate in browsers
+- [x] Task 3: Certify any eligible candidate in browsers
   - Contract: conditional on Task 2 retaining a candidate. Before final capture,
     commit the final run count—at least three runs per arm, raised if the dry
     run requires it—and the spec's run-level noise-floor prediction to
@@ -53,8 +53,10 @@ Out:
     cold and warm populations; Chromium regresses beyond neither floor.
     `wasmInitMs` and exclusive boot total are reported but do not decide. Revert
     and record a candidate that misses the rule.
+  - Resolution: not run because Task 2 rejected the only candidate before size
+    eligibility; browser capture would not certify any production change.
 
-- [ ] Task 4: Publish the verdict and clean the branch
+- [x] Task 4: Publish the verdict and clean the branch
   - Contract: `docs/observability.md` contains the complete evidence chain and
     corpus location. The delivered tree contains no removal arm, temporary
     build/config flag, trace-only instrument, or other experiment scaffold.

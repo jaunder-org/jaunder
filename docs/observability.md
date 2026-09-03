@@ -1245,9 +1245,12 @@ behavior-preserving change.
 
 ### Reproducible arms and isolation
 
-Baseline was committed `HEAD` `e7921dd395a3ff4a07d4754c8ecbcb585548cba0`. Both
-arms used the same checkout and Nix inputs/toolchain, and each realized both
-outputs with:
+Baseline executable source was `origin/main`
+`292bcf9709c98377265f89b662ff94fd3b30551b`. The builds were invoked from
+docs-only descendant `e7921dd395a3ff4a07d4754c8ecbcb585548cba0`; its only
+changes were the approved spec and outline, which are outside the filtered Nix
+application source. Both arms used the same checkout and Nix inputs/toolchain,
+and each realized both outputs with:
 
 ```bash
 devtool run -- nix build --print-out-paths --no-link .#csrWasm
@@ -1292,6 +1295,17 @@ devtool run -- cargo xtask --json audit-wasm --site-path /nix/store/f2v981alflm0
 devtool run -- cargo xtask --json audit-wasm --breakdown --wasm /nix/store/dp193qij40j1334wzgvqi5d12imk15p6-jaunder-0.1.0/lib/csr.wasm
 devtool run -- cargo xtask --json audit-wasm --site-path /nix/store/dc3gd62jfw7cnhcvgz14k8dminwpqxmh-jaunder-site
 ```
+
+The local machine-readable measurement corpus is the corresponding
+`.xtask/run/<id>.out` set: baseline builds `1788398497099-3559793` and
+`1788398499341-3560201`, audits `1788398582353-3574624` and
+`1788398605268-3580518`, hashes `1788398586001-3575209`, and dependency tree
+`1788398588566-3575653`; removal builds `1788398622672-3584409` and
+`1788398625869-3585692`, audits `1788398734117-3617018` and
+`1788398737590-3617466`, hashes `1788398742087-3618158`, and dependency tree
+`1788398744540-3618493`. Source restoration is `1788398819989-3650980`. The
+tables below retain the reviewable result even after those local build artifacts
+are collected.
 
 | measure                                             |      baseline |       removal | baseline − removal |
 | --------------------------------------------------- | ------------: | ------------: | -----------------: |
@@ -1377,6 +1391,9 @@ devtool run -- cargo xtask test-local -- -p web app::seed
 # post-revert existing decoder proof — passed: 3 tests
 devtool run -- cargo xtask test-local -- -p web app::seed
 ```
+
+The failing candidate run is `.xtask/run/1788399665612-3849471`; the final
+post-cleanup three-test proof is `.xtask/run/1788400099395-3889404`.
 
 The candidate stopped before size eligibility, so no candidate `csrWasm`/`site`
 outputs, artifact identities, SHA-256 hashes, attribution rows, shipped raw-WASM
