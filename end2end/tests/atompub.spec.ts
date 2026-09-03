@@ -154,7 +154,9 @@ Org body</content>
   const createdEtag = created.headers()["etag"];
   const memberUrl = onServer(created.headers()["location"]);
   const createdId = memberUrl.match(/\/posts\/(\d+)$/)?.[1];
-  const createdSlug = createdBody.match(/<j:slug>([^<]+)<\/j:slug>/)?.[1];
+  const createdSlug = createdBody.match(
+    /<j:slug(?:\s[^>]*)?>([^<]+)<\/j:slug>/,
+  )?.[1];
   expect(createdEtag).toBeTruthy();
   expect(createdId).toBeTruthy();
   expect(createdSlug).toBeTruthy();
@@ -216,7 +218,9 @@ Edited Org body</content>
   const editedEtag = edited.headers()["etag"];
   expect(editedEtag).toBeTruthy();
   expect(editedBody).toContain("<title>Atom edited</title>");
-  expect(editedBody).toContain(`<j:slug>${editedSlug}</j:slug>`);
+  expect(editedBody.match(/<j:slug(?:\s[^>]*)?>([^<]+)<\/j:slug>/)?.[1]).toBe(
+    editedSlug,
+  );
   expect(editedBody).toContain('term="atom-category"');
   expect(editedBody).toContain("<summary>Atom summary</summary>");
   expect(editedBody).toContain("#+UNKNOWN: preserved");

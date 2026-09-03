@@ -25,6 +25,7 @@ pub fn entry_to_xml(entry: &Entry) -> Result<String, AtomPubError> {
 mod tests {
     use super::super::foreign_markers::is_draft;
     use super::*;
+    use atom_syndication::extension::ExtensionContent;
     use atom_syndication::{Category, Content, Link, Text};
 
     /// The `(type, value)` of an entry's `<content>`. Every caller supplies one, so
@@ -100,7 +101,7 @@ mod tests {
     #[test]
     fn a_prefixed_atom_title_does_not_populate_the_title() {
         // Accepted narrowing (ADR-0089): upstream matches qualified names, so a
-        // prefixed child lands in the extension map instead of the title.
+        // prefixed child is retained as a foreign extension rather than the title.
         let xml = r#"<entry xmlns:atom="http://www.w3.org/2005/Atom">
   <atom:title>T</atom:title>
 </entry>"#;
@@ -143,6 +144,32 @@ mod tests {
     #[test]
     fn document_without_entry_is_an_error() {
         assert!("<?xml version=\"1.0\"?><other/>".parse::<Entry>().is_err());
+    }
+
+    #[test]
+    fn standalone_entry_preserves_nested_rebound_extension_names() {
+        // The inner declaration rebinds `x`; equality and explicit names prove
+        // serialization keeps URI identity rather than treating prefixes as names.
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>T</title>
+  <x:outer xmlns:x="urn:outer"><x:inner xmlns:x="urn:inner">value</x:inner></x:outer>
+</entry>"#;
+        let entry = xml.parse::<Entry>().expect("parse");
+        let original = entry.extensions().to_vec();
+        let reparsed = entry_to_xml(&entry)
+            .expect("serialize")
+            .parse::<Entry>()
+            .expect("reparse");
+
+        assert_eq!(reparsed.extensions(), original.as_slice());
+        let outer = &reparsed.extensions()[0];
+        assert_eq!(outer.name.namespace_uri.as_deref(), Some("urn:outer"));
+        assert_eq!(outer.name.local_name, "outer");
+        let ExtensionContent::Element(inner) = &outer.content[0] else {
+            unreachable!("nested extension was parsed as text")
+        };
+        assert_eq!(inner.name.namespace_uri.as_deref(), Some("urn:inner"));
+        assert_eq!(inner.name.local_name, "inner");
     }
 
     fn sample_entry() -> Entry {

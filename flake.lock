@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "atom-fork": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1788380401,
+        "narHash": "sha256-8Wm2KmUHotc/2Jbwyk5Tc1r0HxEneTkt+gO+mTp89KM=",
+        "owner": "jaunder-org",
+        "repo": "atom",
+        "rev": "921118c311d2117956d86e25052918e7c549ef00",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jaunder-org",
+        "repo": "atom",
+        "rev": "921118c311d2117956d86e25052918e7c549ef00",
+        "type": "github"
+      }
+    },
     "crane": {
       "locked": {
         "lastModified": 1787326676,
@@ -72,6 +89,7 @@
     },
     "root": {
       "inputs": {
+        "atom-fork": "atom-fork",
         "crane": "crane",
         "fenix": "fenix",
         "flake-utils": "flake-utils",
