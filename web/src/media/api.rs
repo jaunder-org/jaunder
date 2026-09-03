@@ -96,7 +96,7 @@ pub async fn list_mine(
     Ok(records
         .into_iter()
         .map(|r| {
-            let url = common::media::media_url(&r.source, &r.sha256, &r.filename);
+            let url = common::media::url(&r.source, &r.sha256, &r.filename);
             Item {
                 sha256: r.sha256,
                 filename: r.filename,

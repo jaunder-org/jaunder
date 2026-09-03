@@ -44,7 +44,7 @@ impl FromStr for InstanceId {
 }
 /// Atomically creates the database identity if absent, then validates and
 /// returns the sole persisted identity.
-pub(crate) async fn ensure_instance_identity<DB>(pool: &Pool<DB>) -> Result<InstanceId>
+pub(crate) async fn ensure<DB>(pool: &Pool<DB>) -> Result<InstanceId>
 where
     DB: Database,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
@@ -106,10 +106,8 @@ mod tests {
             .await
             .expect("seed malformed persisted identity");
 
-        let error = crate::with_closeable_pool!(env.base.pool(), pool, {
-            ensure_instance_identity(pool).await
-        })
-        .expect_err("opening must reject malformed persisted identity");
+        let error = crate::with_closeable_pool!(env.base.pool(), pool, { ensure(pool).await })
+            .expect_err("opening must reject malformed persisted identity");
 
         let sqlx::Error::ColumnDecode { source, .. } = error else {
             panic!("malformed identity must be a typed column-decode failure");

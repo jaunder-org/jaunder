@@ -338,7 +338,7 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
     let session = create_user_and_session(&state).await;
     let user_id = session.user_id;
 
-    let media_url = common::media::media_url(
+    let media_url = common::media::url(
         &MediaSource::Upload,
         &parse_content_hash("deadbeef99999999000000000000000000000000000000000000000000000000"),
         &parse_filename("inline.png"),
@@ -407,7 +407,7 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
         created_at: UtcInstant::now(),
     };
     create_media(&state, &media).await;
-    let media_url = common::media::media_url(&media.source, &sha256, &filename);
+    let media_url = common::media::url(&media.source, &sha256, &filename);
     let foreign_form: MediaReferenceForm = format!("https://foreign.example{media_url}")
         .parse()
         .expect("valid media reference form");
@@ -512,7 +512,7 @@ async fn delete_refusal_reports_the_reference_snapshot_despite_a_concurrent_post
         created_at: UtcInstant::now(),
     };
     create_media(&state, &media).await;
-    let media_url = common::media::media_url(&media.source, &sha256, &filename);
+    let media_url = common::media::url(&media.source, &sha256, &filename);
     let original = SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("<img src=\"{media_url}\">")))
         .seed(&state)
@@ -564,7 +564,7 @@ async fn delete_nested_request_force_can_break_owner_retained_history(#[case] ba
     let sha256 =
         parse_content_hash("feedface99999999000000000000000000000000000000000000000000000000");
     let filename = parse_filename("forced.png");
-    let media_url = common::media::media_url(&MediaSource::Upload, &sha256, &filename);
+    let media_url = common::media::url(&MediaSource::Upload, &sha256, &filename);
     let record = MediaRecord {
         user_id,
         sha256: sha256.clone(),

@@ -30,11 +30,11 @@ type CollectionPostExtensions = (
 
 /// Builds the media-link entry for a stored media record.
 fn media_link_entry(record: &MediaRecord, base: &BaseUrl, username: &Username) -> MediaLinkEntry {
-    let binary_path = media::media_url(&MediaSource::Upload, &record.sha256, &record.filename);
+    let binary_path = media::url(&MediaSource::Upload, &record.sha256, &record.filename);
     let binary: EditMediaUriUrl = tagged_url::compose(base, &binary_path);
     // The member URL is a *different* layout from the serve path (it is the AtomPub
     // collection's, not the content-addressed store's), so it is built here rather than by
-    // `media_path`. The filename needs no encoding at either site (#720): a `Filename`
+    // `media::path`. The filename needs no encoding at either site (#720): a `Filename`
     // *is* the canonical percent-encoded segment, so this interpolates it verbatim and the
     // two layouts cannot spell one file differently. This URL is also the entry's
     // `atom:id`, so a malformed spelling would be the entry's permanent identity.

@@ -16,7 +16,7 @@ use super::{BackupMode, error::BackupError};
 pub(crate) const TABLES_EXCLUDED_FROM_BACKUP: &[&str] = &["_sqlx_migrations", "feed_cache"];
 
 /// The set of tables to back up, derived from the live schema.
-pub(crate) fn backup_table_set(live: impl IntoIterator<Item = String>) -> Vec<String> {
+pub(crate) fn table_set(live: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut tables: Vec<String> = live
         .into_iter()
         .filter(|table| {
@@ -242,7 +242,7 @@ mod tests {
         .into_iter()
         .map(str::to_owned);
         assert_eq!(
-            backup_table_set(live),
+            table_set(live),
             vec![
                 "channels".to_owned(),
                 "posts".to_owned(),

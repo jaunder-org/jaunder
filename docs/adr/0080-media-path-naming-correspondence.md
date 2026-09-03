@@ -28,34 +28,34 @@ surfaced while adopting `RootRelativeUrl` for the serve URL:
    the AtomPub media member URL, which is an entry's permanent `atom:id`.
 
 Compounding it, the layout was spelled in **two** independent places:
-`media_path` for writes, and a hand-rolled `.join()` chain in the serve route
+`media::path` for writes, and a hand-rolled `.join()` chain in the serve route
 for reads. Nothing made them agree, so any change to one silently broke the
 other.
 
 ## Decision
 
-**The filename segment is percent-encoded, and `media_path` is the single
+**The filename segment is percent-encoded, and `media::path` is the single
 definition of the layout.**
 
 - The encode set is `NON_ALPHANUMERIC` minus the RFC 3986 **unreserved** marks
   `-._~`, defined once as a private const in `common::media` and reached only
-  through `media_path`/`media_url`/`encode_filename_segment`. The bare set is
+  through `media::path`/`media::url`/`encode_filename_segment`. The bare set is
   wrong here even though `content_disposition` correctly uses it for an RFC 5987
   header: it encodes `.`, `-` and `_`, so `my-photo.jpg` would become
   `my%2Dphoto%2Ejpg`. Keeping the four unreserved marks means **ordinary names
   are byte-identical** and only troublesome characters encode.
-- **The encoding lives in `media_path`, not only in `media_url`**, so the
+- **The encoding lives in `media::path`, not only in `media::url`**, so the
   on-disk path and the URL path are the same bytes. Every consumer of the
   _storage_ layout — the upload write, the serve read, the AtomPub entry's
-  content link — calls `media_path` or `media_url`; the serve route no longer
+  content link — calls `media::path` or `media::url`; the serve route no longer
   re-derives it.
 - The AtomPub **media member** URL
   (`/atompub/{username}/media/{sha}/{filename}`) is a different layout — the
   collection's, not the content-addressed store's — so it is built at its own
   call site. It shares only `encode_filename_segment`, which is public for
   exactly that reason. This is the one place a filename becomes a path segment
-  outside `media_path`, and it is typed `RootRelativeUrl` too, so the two cannot
-  drift in kind.
+  outside `media::path`, and it is typed `RootRelativeUrl` too, so the two
+  cannot drift in kind.
   - **Amended by `docs/adr/0084-media-filename-encoded-canonical.md` (#720):**
     as of #720 a `Filename` _was_ the canonical percent-encoded segment, so
     neither site encoded — both interpolated — and `encode_filename_segment` was
@@ -69,7 +69,7 @@ definition of the layout.**
     reason is #711's post→media reference table, whose comparison against names
     extracted from rendered HTML becomes byte equality instead of a transform at
     a comparison point.
-- `media_url` returns `RootRelativeUrl` **infallibly**. Every segment is a hex
+- `media::url` returns `RootRelativeUrl` **infallibly**. Every segment is a hex
   digest, a bounded enum token, or percent-encoded, so the parse cannot fail;
   the `unreachable!` arm follows `AbsoluteUrl::compose`. **No trusted-minting
   door is added** — the encoding provides by construction the validity a raw
@@ -112,18 +112,18 @@ business.
 
 **What this commits us to:**
 
-- A new consumer of the media layout **must** call `media_path`/`media_url`.
+- A new consumer of the media layout **must** call `media::path`/`media::url`.
   Re-deriving the layout reintroduces the read/write divergence this closes; the
   doc comments on both functions say so.
 - The serve route's re-encode is **not** redundant. axum's `Path` extractor
   percent-_decodes_ path parameters before the handler sees them, so the handler
-  holds the raw name and `media_path` re-encodes it to recover the stored
+  holds the raw name and `media::path` re-encodes it to recover the stored
   spelling. It reads like something to simplify away, and doing so breaks
   serving for any name needing encoding.
   - **Relocated by `docs/adr/0084-media-filename-encoded-canonical.md` (#720,
     #1149):** the re-encode still exists and is still not redundant, but it now
     lives in `common::media`'s decoded-segment door into `Filename` rather than
-    in `media_path`, which only interpolates. There is no un-decoded extractor
+    in `media::path`, which only interpolates. There is no un-decoded extractor
     to avoid it with — `RawPathParams` is "raw" only in the sense of
     _undeserialized_; its values are `PercentDecodedStr` too.
 - **The effective filename-length ceiling is lower, so `Filename` is now bounded

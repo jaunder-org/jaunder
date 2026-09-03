@@ -42,8 +42,8 @@ derivation recomputes the encoding.
 
 **The percent-encoded form is canonical.** It is what `media.filename` holds,
 what the file is named on disk, and what the URL segment contains — byte for
-byte. `media_path`, `media_url`, and the AtomPub media member URL stop encoding
-and simply interpolate. Decoding happens only for display.
+byte. `media::path`, `media::url`, and the AtomPub media member URL stop
+encoding and simply interpolate. Decoding happens only for display.
 
 **One type, distinguished on the provenance axis.** `Filename` remains a single
 type, now meaning "the canonical, percent-encoded safe leaf". Its ADR-0063
@@ -131,7 +131,7 @@ for no gain.
 - **Amends [ADR-0080](0080-media-path-naming-correspondence.md)** on two points.
   Its "the database `filename` column keeps the raw name" decision is reversed —
   that is this ADR's central subject. The rest of ADR-0080 stands unchanged: one
-  layout, `media_path` as its single definition, and the encode set as
+  layout, `media::path` as its single definition, and the encode set as
   `NON_ALPHANUMERIC` minus the unreserved marks `-._~`.
 
 - **ADR-0080's encode-set coupling note is narrowed, not removed.** Because

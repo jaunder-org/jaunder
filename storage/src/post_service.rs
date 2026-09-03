@@ -153,7 +153,7 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
         idempotency_key,
         expectations,
     } = content;
-    let rendered = host::render::render_with_media(&body, &format);
+    let rendered = host::render::with_media(&body, &format);
     CreatePostInput {
         user_id,
         title,
@@ -342,7 +342,7 @@ pub async fn perform_post_update(
         None => derived_slug,
     };
 
-    let rendered = host::render::render_with_media(&body, &format);
+    let rendered = host::render::with_media(&body, &format);
     let updated_tag_slugs: Vec<_> = tags.iter().map(common::tag::TagLabel::slug).collect();
     let input = UpdatePostInput {
         title,

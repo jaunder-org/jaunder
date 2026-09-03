@@ -57,7 +57,7 @@ where
         source_kind: ClientSourceKind,
     ) {
         let event = ClientTelemetryEvent {
-            version: client_telemetry::CLIENT_TELEMETRY_VERSION,
+            version: client_telemetry::WIRE_VERSION,
             kind,
             context,
             source_kind,
@@ -182,7 +182,7 @@ mod tests {
         assert_eq!(
             transport.sent_events(),
             vec![ClientTelemetryEvent {
-                version: client_telemetry::CLIENT_TELEMETRY_VERSION,
+                version: client_telemetry::WIRE_VERSION,
                 kind: ClientErrorKind::Storage,
                 context: ClientErrorContext::ThemeStorageRead,
                 source_kind: ClientSourceKind::StorageUnavailable,

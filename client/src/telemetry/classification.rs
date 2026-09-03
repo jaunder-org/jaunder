@@ -130,7 +130,7 @@ pub const fn event(
     source_kind: ClientSourceKind,
 ) -> ClientTelemetryEvent {
     ClientTelemetryEvent {
-        version: client_telemetry::CLIENT_TELEMETRY_VERSION,
+        version: client_telemetry::WIRE_VERSION,
         kind: error_kind(source_kind),
         context,
         source_kind,

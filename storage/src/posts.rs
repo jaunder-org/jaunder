@@ -7717,7 +7717,7 @@ mod tests {
                 slug: parse_slug("no-title"),
                 body: untitled_body.clone(),
                 format: PostFormat::Markdown,
-                rendered: host::render::render_with_media(&untitled_body, &PostFormat::Markdown),
+                rendered: host::render::with_media(&untitled_body, &PostFormat::Markdown),
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],

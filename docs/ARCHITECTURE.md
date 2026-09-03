@@ -518,13 +518,13 @@ HTML, and the rows land in the Post's own transaction. Publication uses the same
 atomic revision/mutation discipline; rendering remains the sole reference
 constructor.
 
-**Media is content-addressed, and the layout is spelled once.** `media_path`
-(`common/src/media.rs:671`) is the single definition of
-`<source>/<p1>/<p2>/<sha256>/<filename>`, and `media_url` (`:689`) is that path
-under the `/media/` prefix, returning `RootRelativeUrl` infallibly
+**Media is content-addressed, and the layout is spelled once.**
+`common::media::path` (`common/src/media.rs:630`) is the single definition of
+`<source>/<p1>/<p2>/<sha256>/<filename>`, and `common::media::url` (`:648`) is
+that path under the `/media/` prefix, returning `RootRelativeUrl` infallibly
 ([ADR-0080](adr/0080-media-path-naming-correspondence.md)). The filename segment
 is percent-encoded with `NON_ALPHANUMERIC` minus the RFC 3986 unreserved marks
-`-._~` (`MEDIA_SEGMENT_ENCODE_SET`, `common/src/media.rs:623`), so ordinary
+`-._~` (`MEDIA_SEGMENT_ENCODE_SET`, `common/src/media.rs:582`), so ordinary
 names stay byte-identical and only `?`, `#`, space and friends encode — the
 class of bug where a URL validates cleanly but addresses a different file. **The
 encoded form is canonical**
@@ -708,7 +708,7 @@ post's `rendered_html` — Atom `type="html"` and the RSS/JSON Feed equivalents
 `common::feed` grammar is exactly `FeedFormat`, `FeedSurface`, and
 `canonicalize`; the remaining Syndication Feed types and qualified rendering
 operations live in `host`. `server/src/feed/handlers.rs` serves the cached
-bytes, and `regenerate_feed` rebuilds them. Scheduled posts reach feeds via
+bytes, and `regenerate::feed` rebuilds them. Scheduled posts reach feeds via
 `FeedWorker::go_live_pass` (`server/src/feed/worker.rs:84`), which enqueues
 regeneration for feeds whose posts crossed their publish time
 ([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).

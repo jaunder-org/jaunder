@@ -7,17 +7,17 @@
 //! # Storage layout
 //!
 //! A stored object is addressed by its `SHA-256` content hash and laid out as
-//! `<source>/<p1>/<p2>/<sha256>/<filename>` (see [`media_path`]), served under
-//! `/media/` (see [`media_url`]). `p1`/`p2` are the first two byte-pairs of the
+//! `<source>/<p1>/<p2>/<sha256>/<filename>` (see [`path`]), served under
+//! `/media/` (see [`url`]). `p1`/`p2` are the first two byte-pairs of the
 //! hex digest — a two-level fan-out that keeps any single directory small.
 //! `source` distinguishes provenance (e.g. `upload` vs a remote cache).
 //!
 //! The `<filename>` segment is **percent-encoded**, so the URL path and the on-disk path are
 //! byte-identical: paste the tail of a serve URL and you have the path to the file. Both come
-//! from [`media_path`], which is the only place the layout is spelled — so a new consumer must
+//! from [`path`], which is the only place the layout is spelled — so a new consumer must
 //! call it rather than re-deriving, or the two spellings drift apart (#675).
 //!
-//! That encoding is not something [`media_path`] *does* — a [`Filename`] already **is**
+//! That encoding is not something [`path`] *does* — a [`Filename`] already **is**
 //! the canonical encoded segment (#720). The database column, the on-disk name and the URL
 //! all hold the same bytes, and display is the one place anything is transformed
 //! ([`Filename::decoded`]).
@@ -44,7 +44,7 @@
 //! stored spelling. An externally
 //! supplied hash must be parsed into a [`ContentHash`]
 //! (via [`is_valid_content_hash`], its `FromStr`'s validating engine) before it
-//! reaches [`media_path`]: the type is what guarantees the `sha256[..2]`/`[2..4]`
+//! reaches [`path`]: the type is what guarantees the `sha256[..2]`/`[2..4]`
 //! slicing — unguarded, and panicking on a short or non-`UTF-8`-boundary value —
 //! only ever sees a canonical 64-hex string.
 //!
@@ -428,7 +428,7 @@ impl Filename {
     /// undone. The **display view**, and the only place a `Filename` is transformed on
     /// the way out (#720).
     ///
-    /// Every other consumer — [`media_path`], the URL builders, the `sqlx` bind, a
+    /// Every other consumer — [`path`], the URL builders, the `sqlx` bind, a
     /// reference comparison — wants the stored bytes and gets them from the ADR-0063
     /// trailer (`Display`, `Deref<str>`, `AsRef<str>`) with no call. That asymmetry is
     /// deliberate: a missed decode here is cosmetic, whereas a missed *encode* on a path
@@ -538,7 +538,7 @@ pub fn sanitize_filename(name: &str) -> String {
 ///
 /// Callers that accept a hash from an untrusted source (e.g. a URL path
 /// segment) must check this before slicing or joining it into a path:
-/// [`media_path`] slices `sha256[..2]`/`[2..4]` unguarded, which panics on a
+/// [`path`] slices `sha256[..2]`/`[2..4]` unguarded, which panics on a
 /// shorter string or one whose byte index 2 is not a UTF-8 char boundary.
 #[must_use]
 pub fn is_valid_content_hash(hash: &str) -> bool {
@@ -627,7 +627,7 @@ fn encoded_len(s: &str) -> usize {
 /// index through `Deref<Target = str>`. [`MediaSource`] and [`Filename`] are typed rather
 /// than `&str` because two adjacent string parameters are silently transposable.
 #[must_use]
-pub fn media_path(source: &MediaSource, sha256: &ContentHash, filename: &Filename) -> String {
+pub fn path(source: &MediaSource, sha256: &ContentHash, filename: &Filename) -> String {
     let p1 = &sha256[..2];
     let p2 = &sha256[2..4];
     let source = source.as_ref();
@@ -635,22 +635,18 @@ pub fn media_path(source: &MediaSource, sha256: &ContentHash, filename: &Filenam
 }
 
 /// Returns `"/media/<source>/<2-hex-p1>/<2-hex-p2>/<full-sha256>/<filename>"` — the
-/// [`media_path`] layout under the serve prefix.
+/// [`path`] layout under the serve prefix.
 ///
 /// The filename segment is already percent-encoded — a [`Filename`] *is* the canonical
 /// segment (#720) — so this URL's tail **is** the path to the file on disk, byte for byte,
-/// with nothing transformed on the way. Do not re-derive either one; see [`media_path`] for
+/// with nothing transformed on the way. Do not re-derive either one; see [`path`] for
 /// why the two must not drift.
 ///
 /// Infallible by construction, so it returns the newtype rather than a `Result`: see the
 /// body for why the parse cannot fail.
 #[must_use]
-pub fn media_url(
-    source: &MediaSource,
-    sha256: &ContentHash,
-    filename: &Filename,
-) -> RootRelativeUrl {
-    let path = format!("/media/{}", media_path(source, sha256, filename));
+pub fn url(source: &MediaSource, sha256: &ContentHash, filename: &Filename) -> RootRelativeUrl {
+    let path = format!("/media/{}", path(source, sha256, filename));
     let Ok(url) = path.parse() else {
         // Unreachable: the string always starts with a single `/media/`, and the only
         // caller-influenced segment is a `Filename`, whose invariant is that it is already
@@ -658,7 +654,7 @@ pub fn media_url(
         // encodes here any more; the guarantee comes from the type, not from a transform.)
         // The hash and source segments are a hex digest and a bounded enum token. Same
         // shape as `tagged_url::compose`, and the reason no trusted door is needed here.
-        unreachable!("media_url builds a valid root-relative path");
+        unreachable!("media::url builds a valid root-relative path");
     };
     url
 }
@@ -1086,7 +1082,7 @@ pub struct ByteSize(i64);
 /// which is a
 /// [`RootRelativeUrl`][crate::root_relative_url::RootRelativeUrl] because being *derived*
 /// is not a reason to leave it stringly (ADR-0063 §5), and because the derivation is only
-/// well-formed thanks to [`media_path`]'s encoding, which the type is what pins.
+/// well-formed thanks to [`path`]'s encoding, which the type is what pins.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadedMedia {
     pub sha256: ContentHash,
@@ -1238,35 +1234,35 @@ mod tests {
     }
 
     #[test]
-    fn media_path_computation() {
+    fn path_computation() {
         let (hash, filename) = layout_args("photo.jpg");
-        let path = media_path(&MediaSource::Upload, &hash, &filename);
+        let path = path(&MediaSource::Upload, &hash, &filename);
         assert_eq!(path, format!("upload/e3/b0/{MEDIA_TEST_SHA256}/photo.jpg"));
     }
 
     #[test]
-    fn media_url_computation() {
+    fn url_computation() {
         let (hash, filename) = layout_args("photo.jpg");
-        let url = media_url(&MediaSource::Upload, &hash, &filename);
+        let url = url(&MediaSource::Upload, &hash, &filename);
         assert_eq!(
             url,
             format!("/media/upload/e3/b0/{MEDIA_TEST_SHA256}/photo.jpg").as_str()
         );
     }
 
-    /// What `media_url` adds over [`media_path`] is the **type**: the exact encoding of each
-    /// name is pinned once, by `media_path`'s own tests. So these assert only that a
+    /// What [`url`] adds over [`path`] is the **type**: the exact encoding of each
+    /// name is pinned once, by `path`'s own tests. So these assert only that a
     /// `RootRelativeUrl` exists at all for names that could not be one, and that no URL
     /// delimiter survives into it.
     #[test]
-    fn media_url_is_representable_for_names_the_newtype_would_otherwise_reject() {
+    fn url_is_representable_for_names_the_newtype_would_otherwise_reject() {
         // A space makes the value unrepresentable — `RootRelativeUrl` rejects whitespace —
         // which is what blocked typing the serve URL in the first place. `?`/`#` are the
         // failure the newtype *cannot* catch: it accepts a query, so an unencoded
         // `what?.png` would validate while addressing a different file.
         for raw in ["a b.txt", "what?.png", "a#b.png"] {
             let (hash, filename) = layout_args(raw);
-            let url = media_url(&MediaSource::Upload, &hash, &filename);
+            let url = url(&MediaSource::Upload, &hash, &filename);
             assert!(
                 !url.contains(' ') && !url.contains('?') && !url.contains('#'),
                 "{raw} must not carry whitespace or a URL delimiter: {url}"
@@ -1276,12 +1272,12 @@ mod tests {
     }
 
     #[test]
-    fn media_path_leaves_ordinary_names_byte_identical() {
+    fn path_leaves_ordinary_names_byte_identical() {
         // Pins `MEDIA_SEGMENT_ENCODE_SET`'s unreserved-mark carve-out. With bare NON_ALPHANUMERIC
         // these become `my%2Dphoto%2Ejpg` and every file on disk is unreadable.
         for name in ["photo.jpg", "my-photo_2.png", "a~b.txt", "IMG1234.JPEG"] {
             let (hash, filename) = layout_args(name);
-            let path = media_path(&MediaSource::Upload, &hash, &filename);
+            let path = path(&MediaSource::Upload, &hash, &filename);
             assert_eq!(
                 path,
                 format!("upload/e3/b0/{MEDIA_TEST_SHA256}/{name}"),
@@ -1291,8 +1287,8 @@ mod tests {
     }
 
     #[test]
-    fn media_path_interpolates_the_already_encoded_name() {
-        // Encoding happens once, at intake (#720) — `media_path` only interpolates. So
+    fn path_interpolates_the_already_encoded_name() {
+        // Encoding happens once, at intake (#720) — `path` only interpolates. So
         // this pins two things at once: that the intake door produces the right
         // spelling for each hazard, and that the path is byte-identical to it. A space
         // makes the URL unrepresentable as `RootRelativeUrl`; `?`/`#` are worse — they
@@ -1306,7 +1302,7 @@ mod tests {
             ("café.png", "caf%C3%A9.png"),
         ] {
             let (hash, filename) = layout_args(raw);
-            let path = media_path(&MediaSource::Upload, &hash, &filename);
+            let path = path(&MediaSource::Upload, &hash, &filename);
             assert_eq!(filename, encoded, "{raw} must be stored as {encoded}");
             assert_eq!(
                 path,
@@ -1893,10 +1889,10 @@ mod tests {
     }
 
     #[test]
-    fn media_path_interpolates_without_encoding() {
+    fn path_interpolates_without_encoding() {
         let f = Filename::sanitized("my photo.jpg").expect("valid leaf");
         let hash = ContentHash::from_digest(Sha256::digest(b"x").into());
-        let path = media_path(&MediaSource::Upload, &hash, &f);
+        let path = path(&MediaSource::Upload, &hash, &f);
         assert!(path.ends_with("/my%20photo.jpg"), "{path}");
         // The stored value IS the path segment — byte identity, not a derivation.
         assert!(path.ends_with(&format!("/{f}")), "{path}");
@@ -1922,7 +1918,7 @@ mod tests {
         assert_eq!(f, "a%252Fb.jpg");
         assert_eq!(f.decoded(), "a%2Fb.jpg");
         let hash = ContentHash::from_digest(Sha256::digest(b"x").into());
-        let path = media_path(&MediaSource::Upload, &hash, &f);
+        let path = path(&MediaSource::Upload, &hash, &f);
         let segment = path.rsplit('/').next().expect("a trailing segment");
         assert_eq!(segment, "a%252Fb.jpg");
     }
@@ -2013,7 +2009,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // parse_media_url — the inverse of `media_url` (#711)
+    // parse_media_url — the inverse of `url` (#711)
     // -----------------------------------------------------------------------
 
     /// The canonical `Filename` for a raw (undecoded) name, via the decoded-segment door.
@@ -2042,7 +2038,7 @@ mod tests {
             for raw in ["photo.jpg", "my photo.jpg", "ünïcode nàme.png", "100%.jpg"] {
                 let filename = canonical(raw);
                 let hash: ContentHash = MEDIA_TEST_SHA256.parse().unwrap();
-                let url = media_url(&source, &hash, &filename);
+                let url = url(&source, &hash, &filename);
                 let reference = parse_media_url(&url).expect("relative media URL parses");
                 assert_eq!(
                     reference.media(),

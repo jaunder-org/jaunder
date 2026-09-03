@@ -284,7 +284,7 @@ impl FeedWorker {
         let ids: Vec<FeedEventId> = recs.iter().map(|r| r.id).collect();
         let started = Instant::now();
 
-        match regenerate::regenerate_feed(
+        match regenerate::feed(
             self.site_config(),
             self.posts(),
             Arc::clone(&self.feed_cache),
@@ -1369,7 +1369,7 @@ mod tests {
     #[tokio::test]
     async fn continuation_reporting_tick_regeneration_exhaustion_survives_status_write_failure() {
         // A FeedPath is always parseable, so regen can only fail on a storage
-        // error: make the first read inside regenerate_feed fail. The record's
+        // error: make the first read inside `regenerate::feed` fail. The record's
         // high attempt count pushes the next attempt past the backoff table, so
         // the tick marks the events exhausted (terminal failure).
         let mut site_config = storage::MockSiteConfigStorage::new();
@@ -1423,7 +1423,7 @@ mod tests {
     async fn tick_reschedules_on_regen_failure_within_backoff() {
         // A bad-URL trigger is unrepresentable (a `FeedPath` is always valid), so
         // the failure is a valid path plus a forced storage error inside
-        // regenerate_feed. attempts = 0 keeps the next attempt inside the backoff
+        // `regenerate::feed`. attempts = 0 keeps the next attempt inside the backoff
         // table, so the batch is rescheduled (mark_failed), the cache is never
         // written, and no hub ping is attempted.
         let mut site_config = storage::MockSiteConfigStorage::new();

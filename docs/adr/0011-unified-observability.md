@@ -282,7 +282,7 @@ Everything else was skipped: secrets, `Email`, `Bio`, `DisplayName`,
 Note the test is **not** newtype-ness. `Filename` and `AudienceName` are
 newtypes that validate a value's _shape_ while carrying arbitrary user text;
 `u32` is a primitive that bounds its contents completely. `Filename` in
-particular was skipped despite appearing in `media_url()` — a media item's URL
+particular was skipped despite appearing in `media::url()` — a media item's URL
 is only discoverable once a published post references it, so an
 uploaded-but-unreferenced file's name is published nowhere, and `media::delete`
 would otherwise record something like `mri-results-2026.pdf`.
