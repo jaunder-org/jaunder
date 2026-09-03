@@ -1236,11 +1236,12 @@ where a panicking tokio task would kill the process. Recorded in the root
 
 ## #856 — direct projector-seed `serde_json` WASM attribution (2026-09-02)
 
-**Verdict: material data gate passed; no production candidate was pursued in
-this task.** The pre-bindgen code-section contrast is **33,128 bytes**, which is
-**7,528 bytes above** the inclusive `25 * 1,024 = 25,600`-byte threshold. This
-certifies that direct `PageSeed` decoding is a material size lever; it does not
-claim a boot-time saving, and it is not itself a behavior-preserving change.
+**Verdict: material data gate passed; `serde-json-wasm` 1.0.1 was rejected at
+the compatibility gate.** The pre-bindgen code-section contrast is **33,128
+bytes**, which is **7,528 bytes above** the inclusive `25 * 1,024 = 25,600`-byte
+threshold. This certifies that direct `PageSeed` decoding is a material size
+lever; it does not claim a boot-time saving, and it is not itself a
+behavior-preserving change.
 
 ### Reproducible arms and isolation
 
@@ -1328,6 +1329,62 @@ Both produced the same `serde_json v1.0.149` reachability: direct paths through
 direct decoder; it neither removes the dependency nor warrants changing
 `server_fn`, browser transport, or telemetry. Retained transitive `serde_json`
 is an expected result of the narrow contrast.
+
+### Task 2 — compatibility candidate and negative result
+
+The smallest candidate replaced **only** `decode_projector_seed`'s
+`serde_json::from_str` call with `serde_json_wasm::from_str`, using
+`serde-json-wasm` **1.0.1**. That is the first patched release for
+RUSTSEC-2024-0012 (the recursion-limit stack-overflow advisory). The temporary
+dependency declaration added `serde-json-wasm = "1.0.1"` to
+`[workspace.dependencies]`, made `web` consume it as a production dependency,
+and moved `web`'s direct `serde_json` declaration to `[dev-dependencies]`;
+`Cargo.lock` added `serde-json-wasm 1.0.1` with registry checksum
+`f05da0d153dd4595bdffd5099dc0e9ce425b205ee648eb93437ff7302af8c9a5`. No
+`PageSeed` wire type, `server_fn`, telemetry, or `/pkg` behavior changed.
+
+The candidate's temporary decoder-boundary suite differentially compared
+`decode_projector_seed` to `serde_json::from_str::<PageSeed>` for every
+server-shaped `PageSeed` variant: `SiteTimeline`, `Profile`, `SiteTag`,
+`UserTag`, and `Permalink`. It exercised `i64::MIN`/`i64::MAX` `PostId`s,
+escaped solidus/quote/backslash/Unicode in custom newtypes and rendered HTML,
+optional and null fields, ignored and duplicate fields, wrong shapes, trailing
+data, malformed unknown-field content, and unknown-field nesting at depths 127,
+128, and 129. The malformed unknown-field case exposed an incompatible parser
+behavior:
+
+```text
+serde_json: Err(Error("expected ident", line: 1, column: 75))
+serde-json-wasm 1.0.1: Ok(Some(SiteTimeline(Page { posts: [], next_cursor: None, has_more: false })))
+input: {"SiteTimeline":{"posts":[],"next_cursor":null,"has_more":false,"future":not-json}}
+```
+
+`serde-json-wasm`'s ignored-field path chomps an unknown scalar through the next
+structural delimiter instead of validating it. A wrapper that restores full JSON
+validity would need to parse ignored content and is not the smallest parser
+substitution tested here; accepting malformed seed JSON would weaken the
+existing invalid-seed classification. The candidate is therefore incompatible.
+The full differential suite was temporary experiment machinery and was removed
+with the rejected candidate; `web/src/app/seed.rs` remains exactly at its
+pre-candidate decoder and three existing tests.
+
+Commands and outcomes:
+
+```bash
+# candidate compatibility proof — failed as required by the differential test
+devtool run -- cargo xtask test-local -- -p web app::seed
+
+# post-revert existing decoder proof — passed: 3 tests
+devtool run -- cargo xtask test-local -- -p web app::seed
+```
+
+The candidate stopped before size eligibility, so no candidate `csrWasm`/`site`
+outputs, artifact identities, SHA-256 hashes, attribution rows, shipped raw-WASM
+bytes, or `cargo xtask check --no-test` result exist. In particular, the
+baseline **2,456,853-byte** shipped raw WASM remains the comparison reference,
+not a candidate measurement. The candidate manifests and lockfile entry were
+removed; `web/src/app/seed.rs` was restored exactly to its pre-candidate state.
+No browser capture was run.
 
 ## #864 — firefox's wasm initialization floor (pre-registration, 2026-08-22)
 

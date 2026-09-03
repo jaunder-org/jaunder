@@ -31,7 +31,7 @@ Out:
     applies the inclusive `25 * 1,024`-byte threshold. Independently inspect the
     arm diff and artifact identities before accepting the contrast.
 
-- [ ] Task 2: Resolve the data gate
+- [x] Task 2: Resolve the data gate
   - Contract: below threshold, write the negative verdict and proceed directly
     to cleanup. At or above threshold, attempt the smallest behavior-preserving,
     JSON-compatible candidate; it is eligible for browser capture only if
