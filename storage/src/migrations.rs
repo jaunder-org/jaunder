@@ -94,12 +94,12 @@ mod tests {
         async fn backfill_post_media_references(&self) {
             match &self.pool {
                 CloseablePool::Sqlite(pool) => {
-                    crate::posts::store::backfill_post_media_references(pool)
+                    crate::posts::media::backfill_post_media_references(pool)
                         .await
                         .expect("startup backfill succeeds");
                 }
                 CloseablePool::Postgres(pool) => {
-                    crate::posts::store::backfill_post_media_references(pool)
+                    crate::posts::media::backfill_post_media_references(pool)
                         .await
                         .expect("startup backfill succeeds");
                 }

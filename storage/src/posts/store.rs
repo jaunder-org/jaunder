@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use chrono::Duration;
 use sha2::{Digest, Sha256};
-use sqlx::{Database, Decode, Encode, Executor, Pool, QueryBuilder, Result, Row, Type};
+use sqlx::{Database, Decode, Encode, Executor, Pool, Result, Row, Type};
 
 use crate::InstanceId;
 use crate::backend::Backend;
@@ -13,18 +13,24 @@ use crate::posts::cursors::{
     CollectionCursor, PostCursor, PostRevisionCursor, ScheduledPostCursor,
 };
 use crate::posts::errors::{CreatePostError, ListByTagError, TaggingError, UpdatePostError};
+use crate::posts::media;
+use crate::posts::media::{
+    MediaReferenceEvidence, MediaReferenceSnapshot, PersistedMediaReference, PersistedMediaSubject,
+    PostMediaReferenceBackfill,
+};
 use crate::posts::models::{
     CreatePostInput, CreatedPost, CurrentPostRevisionSummary, PermalinkDate, PermalinkDateText,
     PostLifecycle, PostRecord, PostRevisionDetail, PostRevisionMetadata, PostRevisionPage,
     PostRevisionRecord, PostRevisionTag, PublishUpdate, RenderedHtml, UpdatePostInput,
 };
-use crate::sql::{Exists, QueryBuilderStorageExt, QueryStorageExt, RowCount};
+use crate::posts::tags;
+use crate::posts::tags::{PostTag, TagRecord};
+use crate::sql::{Exists, QueryStorageExt, RowCount};
 use crate::write_scope::WriteTransaction;
 use common::idempotency_key::IdempotencyKey;
-use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
+use common::ids::{AudienceId, ChannelId, PostId, RevisionId, UserId};
 use common::media::{
-    self, ContentHash, Filename, MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind,
-    MediaSource,
+    ContentHash, Filename, MediaRef, MediaReferenceForm, MediaReferenceKind, MediaSource,
 };
 use common::pagination::{PageSize, RowLimit};
 use common::post_body::PostBody;
@@ -41,67 +47,8 @@ use host::{
     etag,
     feed::{FeedMinItems, FeedPath},
     metrics,
-    render::{self},
     retention::Domain,
 };
-
-const TAG_EXISTS_SQL: &str = "SELECT EXISTS(SELECT 1 FROM tags WHERE tag_slug = $1)";
-
-/// A tag record returned by [`PostStorage`] tag queries.
-#[derive(Clone, Debug)]
-pub struct TagRecord {
-    pub tag_id: TagId,
-    pub tag_slug: Tag,
-}
-
-impl<'r, R> sqlx::FromRow<'r, R> for TagRecord
-where
-    R: Row,
-    &'r str: sqlx::ColumnIndex<R>,
-    TagId: Decode<'r, R::Database> + Type<R::Database>,
-    Tag: Decode<'r, R::Database> + Type<R::Database>,
-{
-    fn from_row(row: &'r R) -> Result<Self> {
-        let tag_id = row.try_get::<TagId, _>("tag_id")?;
-        let tag_slug = row.try_get::<Tag, _>("tag_slug")?;
-
-        Ok(Self { tag_id, tag_slug })
-    }
-}
-
-/// A post-tag association returned by [`PostStorage`] tag queries.
-#[derive(Clone, Debug)]
-pub struct PostTag {
-    pub post_id: PostId,
-    pub tag_id: TagId,
-    pub tag_slug: Tag,
-    /// The original case-sensitive display name of the tag.
-    pub tag_display: TagLabel,
-}
-
-impl<'r, R> sqlx::FromRow<'r, R> for PostTag
-where
-    R: Row,
-    &'r str: sqlx::ColumnIndex<R>,
-    PostId: Decode<'r, R::Database> + Type<R::Database>,
-    TagId: Decode<'r, R::Database> + Type<R::Database>,
-    Tag: Decode<'r, R::Database> + Type<R::Database>,
-    TagLabel: Decode<'r, R::Database> + Type<R::Database>,
-{
-    fn from_row(row: &'r R) -> Result<Self> {
-        let post_id = row.try_get::<PostId, _>("post_id")?;
-        let tag_id = row.try_get::<TagId, _>("tag_id")?;
-        let tag_slug = row.try_get::<Tag, _>("tag_slug")?;
-        let tag_display = row.try_get::<TagLabel, _>("tag_display")?;
-
-        Ok(Self {
-            post_id,
-            tag_id,
-            tag_slug,
-            tag_display,
-        })
-    }
-}
 
 /// A post that crossed into "live" within a time window, carrying exactly the
 /// data the feed worker needs to compute its affected feed URLs (the author's
@@ -112,326 +59,11 @@ pub struct GoLivePost {
     pub tag_slugs: Vec<Tag>,
 }
 
-/// Exact retained state that names a media reference.
-///
-/// A revision identity is part of the persisted key: treating it as merely
-/// another copy of a Post's current references would let current-row evidence
-/// authorize deletion while a concurrent historical row remains protected.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PersistedMediaSubject {
-    /// The current durable Post state.
-    Current,
-    /// One immutable prior state of the Post.
-    Revision(RevisionId),
-}
-
-/// The exact stored discriminator for a retained media reference subject.
-#[macros::text_enum(
-    sqlx,
-    error = InvalidPersistedMediaSubjectKind,
-    message = "invalid persisted media subject kind"
-)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[strum(serialize_all = "snake_case")]
-pub(crate) enum PersistedMediaSubjectKind {
-    Current,
-    Revision,
-}
-
-impl PersistedMediaSubject {
-    #[must_use]
-    pub(crate) const fn kind(self) -> PersistedMediaSubjectKind {
-        match self {
-            Self::Current => PersistedMediaSubjectKind::Current,
-            Self::Revision(_) => PersistedMediaSubjectKind::Revision,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn revision_id(self) -> RevisionId {
-        match self {
-            Self::Current => RevisionId::from(0),
-            Self::Revision(revision_id) => revision_id,
-        }
-    }
-}
-
-/// The exact persisted spelling of one media reference in one retained Post subject.
-///
-/// This is deliberately the database key, rather than a lossy media identity:
-/// foreign ownership evidence must not authorize a similarly named row.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PersistedMediaReference {
-    post_id: PostId,
-    subject: PersistedMediaSubject,
-    owner_id: Option<UserId>,
-    media: MediaRef,
-    kind: MediaReferenceKind,
-    reference_form: MediaReferenceForm,
-}
-
-impl PersistedMediaReference {
-    /// Constructs an exact reference for the current Post subject.
-    #[must_use]
-    pub fn new(
-        post_id: PostId,
-        media: MediaRef,
-        kind: MediaReferenceKind,
-        reference_form: MediaReferenceForm,
-    ) -> Self {
-        Self::for_subject(
-            post_id,
-            PersistedMediaSubject::Current,
-            media,
-            kind,
-            reference_form,
-        )
-    }
-
-    /// Constructs an exact reference for either retained subject.
-    #[must_use]
-    pub fn for_subject(
-        post_id: PostId,
-        subject: PersistedMediaSubject,
-        media: MediaRef,
-        kind: MediaReferenceKind,
-        reference_form: MediaReferenceForm,
-    ) -> Self {
-        Self {
-            post_id,
-            subject,
-            owner_id: None,
-            media,
-            kind,
-            reference_form,
-        }
-    }
-
-    #[must_use]
-    pub fn post_id(&self) -> PostId {
-        self.post_id
-    }
-
-    #[must_use]
-    pub fn subject(&self) -> PersistedMediaSubject {
-        self.subject
-    }
-
-    #[must_use]
-    pub fn owner_id(&self) -> Option<UserId> {
-        self.owner_id
-    }
-
-    pub(crate) fn with_owner(mut self, owner_id: UserId) -> Self {
-        self.owner_id = Some(owner_id);
-        self
-    }
-
-    #[must_use]
-    pub fn media(&self) -> &MediaRef {
-        &self.media
-    }
-
-    #[must_use]
-    pub fn kind(&self) -> MediaReferenceKind {
-        self.kind
-    }
-
-    #[must_use]
-    pub fn reference_form(&self) -> &MediaReferenceForm {
-        &self.reference_form
-    }
-}
-
-/// Maximum exact-reference rows examined for one live ownership decision.
-///
-/// The sentinel-bearing snapshot prevents a media deletion from materializing
-/// unbounded author-controlled rows. Rows beyond this limit receive no foreign
-/// evidence and therefore remain conservatively live.
-pub const MAX_MEDIA_REFERENCE_SNAPSHOT: usize = 128;
-
-/// The sentinel-bearing maximum row count passed to the media-reference snapshot query.
-#[derive(Clone, Copy, Debug, macros::SqlxBridge)]
-pub(crate) struct MediaReferenceSnapshotLimit(i64);
-
-pub(crate) const MEDIA_REFERENCE_SNAPSHOT_QUERY_LIMIT: MediaReferenceSnapshotLimit =
-    MediaReferenceSnapshotLimit(129);
-
-/// A bounded exact-reference snapshot for one media identity.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MediaReferenceSnapshot {
-    references: Vec<PersistedMediaReference>,
-    has_unexamined_references: bool,
-}
-
-impl MediaReferenceSnapshot {
-    #[must_use]
-    pub fn new(references: Vec<PersistedMediaReference>, has_unexamined_references: bool) -> Self {
-        debug_assert!(references.len() <= MAX_MEDIA_REFERENCE_SNAPSHOT);
-        Self {
-            references,
-            has_unexamined_references,
-        }
-    }
-
-    #[must_use]
-    pub fn references(&self) -> &[PersistedMediaReference] {
-        &self.references
-    }
-
-    #[must_use]
-    pub fn has_unexamined_references(&self) -> bool {
-        self.has_unexamined_references
-    }
-}
-
-/// A foreign instance's signed/verified ownership assertion for one exact row.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ProvenForeignReference {
-    reference: PersistedMediaReference,
-    expected_instance_id: InstanceId,
-}
-
-impl ProvenForeignReference {
-    #[must_use]
-    pub(crate) fn new(
-        reference: PersistedMediaReference,
-        expected_instance_id: InstanceId,
-    ) -> Self {
-        Self {
-            reference,
-            expected_instance_id,
-        }
-    }
-
-    #[must_use]
-    pub fn reference(&self) -> &PersistedMediaReference {
-        &self.reference
-    }
-
-    #[must_use]
-    pub fn expected_instance_id(&self) -> &InstanceId {
-        &self.expected_instance_id
-    }
-}
-
-/// Completed, network-free foreign ownership evidence for one storage decision.
-#[derive(Clone, Debug)]
-pub struct MediaReferenceEvidence {
-    expected_instance_id: InstanceId,
-    pub(crate) references: BTreeSet<ProvenForeignReference>,
-}
-
-impl MediaReferenceEvidence {
-    #[must_use]
-    pub fn new(expected_instance_id: InstanceId) -> Self {
-        Self {
-            expected_instance_id,
-            references: BTreeSet::new(),
-        }
-    }
-
-    /// Adds a proof only when it is for this snapshot's expected instance.
-    pub fn insert(&mut self, proof: ProvenForeignReference) -> bool {
-        if proof.expected_instance_id != self.expected_instance_id {
-            return false;
-        }
-        self.references.insert(proof)
-    }
-
-    #[must_use]
-    pub fn expected_instance_id(&self) -> &InstanceId {
-        &self.expected_instance_id
-    }
-
-    #[must_use]
-    pub fn references(&self) -> &BTreeSet<ProvenForeignReference> {
-        &self.references
-    }
-
-    #[must_use]
-    pub fn proves_foreign(&self, reference: &PersistedMediaReference) -> bool {
-        self.references
-            .iter()
-            .any(|proof| proof.reference() == reference)
-    }
-}
-
-/// A rendered-HTML snapshot and the references derived from it before a backfill write.
-///
-/// This keeps HTML extraction out of the backend's writer lock. The dialect re-reads the
-/// snapshot while holding its write discipline before it installs these rows.
-#[derive(Debug)]
-pub struct PostMediaReferenceBackfill {
-    pub(crate) post_id: PostId,
-    pub(crate) rendered_html: String,
-    pub(crate) references: Vec<MediaReference>,
-}
-/// The escaped `LIKE` pattern for a normalized tag-slug prefix lookup.
-#[derive(Debug, macros::SqlxBridge)]
-pub(crate) struct TagSlugPrefixPattern(String);
-impl TagSlugPrefixPattern {
-    fn from_normalized_prefix(prefix: &str) -> Self {
-        Self(format!("{prefix}%"))
-    }
-}
-
 const IDEMPOTENCY_REPLAY_WINDOW_HOURS: i64 = 1;
 
 fn idempotency_replay_cutoff(now: UtcInstant) -> UtcInstant {
     UtcInstant::from(now.value() - Duration::hours(IDEMPOTENCY_REPLAY_WINDOW_HOURS))
 }
-
-/// The post's existing tags, read inside `set_post_tags`' transaction. The SQL is
-/// identical on both dialects, so it is shared here rather than duplicated per
-/// ADR-0019; only the surrounding transaction shape diverges. `ORDER BY` is not
-/// needed for the diff (which is set-based) but keeps the read deterministic,
-/// matching [`PostRecord::tags`] (#772).
-pub(crate) const SELECT_POST_TAGS: &str = "SELECT pt.post_id, pt.tag_id, t.tag_slug, pt.tag_display
-     FROM post_tags pt
-     JOIN tags t ON pt.tag_id = t.tag_id
-     WHERE pt.post_id = $1
-     ORDER BY t.tag_slug";
-
-/// Get-or-create a tag by slug, returning its id in **one** statement.
-///
-/// The no-op `DO UPDATE` is load-bearing: `DO NOTHING` emits no row for
-/// `RETURNING` on the conflict path, which would force a second `SELECT` and
-/// open a window in which a concurrently deleted tag yields `RowNotFound`
-/// (#883). Rewriting `tag_slug` to the value it already holds makes the id come
-/// back on both the insert and the conflict path. #343 landed the same shape
-/// for `subscriptions`; both dialects run it.
-///
-/// Shared rather than per-dialect: `SQLite` accepts `$n` placeholders and
-/// `ON CONFLICT … DO UPDATE … RETURNING`.
-///
-/// **Takes a row lock on the tag until commit**, which is why
-/// [`post_tag_diff`] hands additions back in slug order.
-///
-/// Bind order: `tag_slug`.
-pub(crate) const UPSERT_TAG_RETURNING_ID: &str = "INSERT INTO tags (tag_slug) VALUES ($1)
-     ON CONFLICT (tag_slug) DO UPDATE SET tag_slug = excluded.tag_slug
-     RETURNING tag_id";
-
-/// Attaches a tag to a post, tolerating the row already being there.
-///
-/// `DO NOTHING`, not `DO UPDATE`: `desired` may carry two labels sharing a slug
-/// ([`post_tag_diff`] does not dedupe) and the first occurrence's casing must
-/// win, so the existing row is left exactly as it is. Nothing reads a value
-/// back, so there is no reason to force a row out of the conflict path here.
-///
-/// Bind order: `post_id, tag_id, tag_display`.
-pub(crate) const INSERT_POST_TAG: &str = "INSERT INTO post_tags
-     (post_id, tag_id, tag_display) VALUES ($1, $2, $3)
-     ON CONFLICT (post_id, tag_id) DO NOTHING";
-
-/// Drops one tag from a post, by slug, inside `set_post_tags`' transaction. The
-/// SQL is identical on both dialects, so it is shared here per ADR-0019.
-///
-/// `rows_affected` is deliberately never checked by callers: the slug came from
-/// the tags read in the same transaction, so "no row deleted" is not an error.
-pub(crate) const DELETE_POST_TAG_BY_SLUG: &str = "DELETE FROM post_tags
-     WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)";
 
 /// Captures every scalar field belonging to a complete immutable prior Post
 /// state. Child snapshot writes intentionally remain with Task 2's transaction.
@@ -456,66 +88,6 @@ pub(crate) struct PostBookkeepingRow {
     pub rendered_html: RenderedHtml,
     pub summary: Option<PostSummary>,
     pub published_at: Option<UtcInstant>,
-}
-
-/// The slug-level difference between a post's existing tags and a desired set
-/// of display tokens, as computed by [`post_tag_diff`].
-///
-/// Borrows from both inputs. Applied by `set_post_tags` inside its transaction;
-/// no caller performs the writes itself (#771).
-pub(crate) struct PostTagDiff<'a> {
-    /// Labels to add (their slug is not already present on the post).
-    ///
-    /// **Slug-ordered, contractually.** [`UPSERT_TAG_RETURNING_ID`] locks each
-    /// `tags` row until commit, so applying these in a caller-supplied order lets
-    /// two concurrent reconciles deadlock on Postgres (#876). The order is stable,
-    /// so two labels sharing a slug keep their input order and the first
-    /// occurrence's casing wins. Do not re-sort or re-shuffle at the call site.
-    pub to_add: Vec<&'a TagLabel>,
-    /// Existing tags to remove (their slug is not in the desired set).
-    pub to_remove: Vec<&'a Tag>,
-}
-
-/// Diffs a post's `existing` tags against a `desired` set of [`TagLabel`]s.
-///
-/// Tagging is keyed on slug, so a desired label is "to add" only when no
-/// existing tag shares its slug, and an existing tag is "to remove" only when
-/// no desired label maps to its slug. Each `desired` label is already valid (its
-/// `FromStr` ran at the boundary), so nothing is skipped here. Re-applying an
-/// existing tag with different display casing is a no-op (the existing row's
-/// casing is preserved by storage).
-///
-/// This is the pure core of `set_post_tags`, which applies the result inside its
-/// own transaction on both dialects (#771).
-#[must_use]
-pub(crate) fn post_tag_diff<'a>(
-    existing: &'a [PostTag],
-    desired: &'a [TagLabel],
-) -> PostTagDiff<'a> {
-    use std::collections::HashSet;
-
-    let existing_slugs: HashSet<Tag> = existing.iter().map(|t| t.tag_slug.clone()).collect();
-    let desired_slugs: HashSet<Tag> = desired.iter().map(TagLabel::slug).collect();
-
-    let mut to_add: Vec<&'a TagLabel> = desired
-        .iter()
-        .filter(|label| !existing_slugs.contains(&label.slug()))
-        .collect();
-    // Slug order, so every transaction takes `tags` row locks in the same order —
-    // caller-supplied order can deadlock concurrent reconciles on Postgres (#876,
-    // docs/adr/0125-slug-ordered-tag-lock-acquisition.md).
-    //
-    // `sort_by_key`, not `sort_unstable_by_key`: `desired` may carry two labels
-    // sharing a slug and the FIRST occurrence's casing must still win, which
-    // `set_post_tags_is_idempotent_and_absorbs_duplicate_slugs` asserts.
-    to_add.sort_by_key(|label| label.slug());
-    let to_remove = existing
-        .iter()
-        .filter(|tag| !desired_slugs.contains(&tag.tag_slug))
-        .map(|tag| &tag.tag_slug)
-        .collect();
-
-    PostTagDiff { to_add, to_remove }
 }
 
 // ---------------------------------------------------------------------------
@@ -1083,162 +655,6 @@ pub trait PostDialect: Backend {
     ) -> Result<Vec<PostId>>;
 }
 
-/// Appends a dynamic evidence relation for one ownership decision.
-///
-/// Every row includes the complete persisted key and the instance identity it
-/// was proved against.  The matching predicate below deliberately compares all
-/// of them: a foreign proof must not exempt a newly inserted spelling, a
-/// differently keyed media entry, or evidence collected for another instance.
-pub(crate) fn push_media_reference_evidence_cte<'a, DB>(
-    query: &mut QueryBuilder<'a, DB>,
-    evidence: &'a MediaReferenceEvidence,
-) where
-    DB: Database,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-    for<'q> &'q InstanceId: Encode<'q, DB> + Type<DB>,
-{
-    query.push(
-        "WITH foreign_evidence \
-         (post_id, subject_kind, revision_id, source, sha256, filename, reference_kind, reference_form, expected_instance_id) AS (",
-    );
-    if evidence.references.is_empty() {
-        // Explicit types keep the empty CTE valid on Postgres while SQLite accepts
-        // the same portable spelling.
-        query.push(
-            "SELECT CAST(NULL AS BIGINT), CAST(NULL AS TEXT), CAST(NULL AS BIGINT), \
-             CAST(NULL AS TEXT), CAST(NULL AS TEXT), CAST(NULL AS TEXT), CAST(NULL AS TEXT), \
-             CAST(NULL AS TEXT), CAST(NULL AS TEXT) WHERE FALSE",
-        );
-    } else {
-        query.push("VALUES ");
-        for (index, proof) in evidence.references.iter().enumerate() {
-            if index > 0 {
-                query.push(", ");
-            }
-            let reference = proof.reference();
-            query
-                .push("(")
-                .push_storage_bind(reference.post_id())
-                .push(", ")
-                .push_storage_bind(reference.subject().kind())
-                .push(", ")
-                .push_storage_bind(reference.subject().revision_id())
-                .push(", ")
-                .push_storage_bind(reference.media().source)
-                .push(", ")
-                .push_storage_bind(reference.media().sha256.clone())
-                .push(", ")
-                .push_storage_bind(reference.media().filename.clone())
-                .push(", ")
-                .push_storage_bind(reference.kind())
-                .push(", ")
-                .push_storage_bind(reference.reference_form().clone())
-                .push(", ")
-                .push_storage_bind(proof.expected_instance_id())
-                .push(")");
-        }
-    }
-    query.push(") ");
-}
-
-/// Appends the sole rule for a persisted reference to remain live: it is not an
-/// exact foreign proof made for the current instance identity.
-pub(crate) fn push_live_media_reference_predicate<'a, DB>(
-    query: &mut QueryBuilder<'a, DB>,
-    current_instance_id: &'a InstanceId,
-) where
-    DB: Database,
-    for<'q> &'q InstanceId: Encode<'q, DB> + Type<DB>,
-{
-    query.push(
-        " AND NOT EXISTS (\
-           SELECT 1 FROM foreign_evidence evidence \
-           WHERE evidence.post_id = pm.post_id \
-             AND evidence.subject_kind = pm.subject_kind \
-             AND evidence.revision_id = pm.revision_id \
-             AND evidence.source = pm.source \
-             AND evidence.sha256 = pm.sha256 \
-             AND evidence.filename = pm.filename \
-             AND evidence.reference_kind = pm.reference_kind \
-             AND evidence.reference_form = pm.reference_form \
-             AND evidence.expected_instance_id = ",
-    );
-    query.push_storage_bind(current_instance_id);
-    query.push(")");
-}
-
-/// Appends the owner-scoped reference lookup and its binds.
-pub(crate) fn push_owner_media_reference_from_where<DB>(
-    query: &mut QueryBuilder<'_, DB>,
-    user_id: UserId,
-    media: &MediaRef,
-) where
-    DB: Database,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-{
-    query
-        .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE p.user_id = ")
-        .push_storage_bind(user_id)
-        .push(" AND pm.source = ")
-        .push_storage_bind(media.source)
-        .push(" AND pm.sha256 = ")
-        .push_storage_bind(media.sha256.clone())
-        .push(" AND pm.filename = ")
-        .push_storage_bind(media.filename.clone());
-}
-pub(crate) fn push_any_media_reference_from_where<DB>(
-    query: &mut QueryBuilder<'_, DB>,
-    media: &MediaRef,
-) where
-    DB: Database,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-{
-    query
-        .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE pm.source = ")
-        .push_storage_bind(media.source)
-        .push(" AND pm.sha256 = ")
-        .push_storage_bind(media.sha256.clone())
-        .push(" AND pm.filename = ")
-        .push_storage_bind(media.filename.clone());
-}
-
-/// Appends a non-owner reference lookup for the global accounting safeguard.
-///
-/// Web force may break the request owner's retained reconstruction, but it
-/// never deletes the only accounting row while another owner's retained subject
-/// still names the entry.
-pub(crate) fn push_other_owner_media_reference_from_where<DB>(
-    query: &mut QueryBuilder<'_, DB>,
-    user_id: UserId,
-    media: &MediaRef,
-) where
-    DB: Database,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-{
-    query
-        .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE p.user_id <> ")
-        .push_storage_bind(user_id)
-        .push(" AND pm.source = ")
-        .push_storage_bind(media.source)
-        .push(" AND pm.sha256 = ")
-        .push_storage_bind(media.sha256.clone())
-        .push(" AND pm.filename = ")
-        .push_storage_bind(media.filename.clone());
-}
-
-/// The typed columns that make up one immutable revision snapshot.
-///
 /// This is decoded explicitly rather than through a positional `SQLx` tuple so
 /// persisted values always cross the storage boundary as domain types.
 struct RevisionDetailRow {
@@ -1780,7 +1196,7 @@ where
                 media: media
                     .into_iter()
                     .map(|(_, _, _, _, form)| {
-                        let Some(reference) = media::parse_media_url(form.as_ref()) else {
+                        let Some(reference) = common::media::parse_media_url(form.as_ref()) else {
                             unreachable!("MediaReferenceForm decodes only exact parser output");
                         };
                         reference
@@ -1841,11 +1257,11 @@ where
         .bind_storage(media.source)
         .bind_storage(&media.sha256)
         .bind_storage(&media.filename)
-        .bind_storage(MEDIA_REFERENCE_SNAPSHOT_QUERY_LIMIT)
+        .bind_storage(media::MEDIA_REFERENCE_SNAPSHOT_QUERY_LIMIT)
         .fetch_all(&self.pool)
         .await?;
-        let has_unexamined_references = rows.len() > MAX_MEDIA_REFERENCE_SNAPSHOT;
-        rows.truncate(MAX_MEDIA_REFERENCE_SNAPSHOT);
+        let has_unexamined_references = rows.len() > media::MAX_MEDIA_REFERENCE_SNAPSHOT;
+        rows.truncate(media::MAX_MEDIA_REFERENCE_SNAPSHOT);
         Ok(MediaReferenceSnapshot::new(
             rows.into_iter()
                 .map(
@@ -2427,7 +1843,7 @@ where
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        let tag_exists = sqlx::query_scalar::<_, Exists>(TAG_EXISTS_SQL)
+        let tag_exists = sqlx::query_scalar::<_, Exists>(tags::TAG_EXISTS_SQL)
             .bind_storage(tag_slug)
             .fetch_one(&self.pool)
             .await?
@@ -2520,7 +1936,7 @@ where
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        let tag_exists = sqlx::query_scalar::<_, Exists>(TAG_EXISTS_SQL)
+        let tag_exists = sqlx::query_scalar::<_, Exists>(tags::TAG_EXISTS_SQL)
             .bind_storage(tag_slug)
             .fetch_one(&self.pool)
             .await?
@@ -2619,7 +2035,7 @@ where
             .map(str::to_ascii_lowercase);
         let pattern = normalized
             .as_deref()
-            .map(TagSlugPrefixPattern::from_normalized_prefix);
+            .map(tags::TagSlugPrefixPattern::from_normalized_prefix);
 
         // `tag_slug` decodes straight into `Tag` via the sqlx bridge (#438), so a
         // malformed stored value is rejected as a column-decode error above.
@@ -3121,55 +2537,6 @@ pub(crate) fn idempotency_advisory_lock_key(
     ]))
 }
 
-/// `PostgreSQL`'s signed advisory-lock key for one exact media identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, macros::SqlxBridge)]
-pub(crate) struct MediaAdvisoryLockKey(i64);
-
-/// Maps every distinct media identity to the signed 64-bit advisory-lock key
-/// derived from the first eight bytes of SHA-256 over an unambiguous encoding.
-///
-/// The resulting vector is sorted and deduplicated before a backend acquires
-/// locks, preventing opposite-order updates from deadlocking.
-#[must_use]
-pub(crate) fn media_advisory_lock_key(media: &MediaRef) -> MediaAdvisoryLockKey {
-    let mut digest = Sha256::new();
-    digest.update(media.source.to_string().as_bytes());
-    digest.update([0]);
-    digest.update(media.sha256.to_string().as_bytes());
-    digest.update([0]);
-    digest.update(media.filename.to_string().as_bytes());
-    let digest: [u8; 32] = digest.finalize().into();
-    MediaAdvisoryLockKey(i64::from_be_bytes([
-        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
-    ]))
-}
-
-/// Maps every distinct media identity to a signed 64-bit advisory-lock key.
-#[must_use]
-pub(crate) fn media_advisory_lock_keys(
-    media: impl IntoIterator<Item = MediaRef>,
-) -> Vec<MediaAdvisoryLockKey> {
-    media
-        .into_iter()
-        .map(|media| media_advisory_lock_key(&media))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-/// Whether the requested scalar state would leave the locked Post unchanged.
-///
-/// Returns media identities once, in canonical order, for a write-side lock.
-pub(crate) fn media_lock_set(references: &[MediaReference]) -> BTreeSet<MediaRef> {
-    references
-        .iter()
-        .map(MediaReference::media)
-        .cloned()
-        .collect()
-}
-/// The caller additionally compares normalized children under the same lock;
-/// keeping the scalar rule here makes the two dialects suppress timestamp-only
-/// writes identically.
 pub(crate) fn update_scalar_is_noop(
     existing: &PostBookkeepingRow,
     input: &UpdatePostInput,
@@ -3292,7 +2659,7 @@ where
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
-    DB::lock_media_references(conn, &media_lock_set(input.rendered.media())).await?;
+    DB::lock_media_references(conn, &media::media_lock_set(input.rendered.media())).await?;
 
     let idempotency_key_expired = if let Some(key) = input.idempotency_key.as_ref() {
         let cutoff = idempotency_replay_cutoff(now);
@@ -3349,8 +2716,8 @@ where
     }
 
     replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
-    replace_post_media::<DB>(conn, post_id, input.rendered.media()).await?;
-    insert_post_tags::<DB>(conn, post_id, &input.tags).await?;
+    media::replace_post_media::<DB>(conn, post_id, input.rendered.media()).await?;
+    tags::insert_post_tags::<DB>(conn, post_id, &input.tags).await?;
 
     if let Some(key) = input.idempotency_key.as_ref() {
         sqlx::query(
@@ -3401,44 +2768,6 @@ where
                 .execute(&mut *conn)
                 .await?;
         }
-    }
-    Ok(())
-}
-/// Attaches the requested tags to a newly-created Post in canonical slug order.
-///
-/// Creation has no old child state to reconcile, but tag upserts still lock rows
-/// on `PostgreSQL`. Sorting stably makes overlapping creates acquire those locks
-/// in the same order while retaining the first spelling for duplicate slugs.
-pub(crate) async fn insert_post_tags<DB>(
-    conn: &mut DB::Connection,
-    post_id: PostId,
-    desired: &[TagLabel],
-) -> Result<()>
-where
-    DB: Database,
-    for<'q> PostId: Encode<'q, DB> + Type<DB>,
-    for<'q> Tag: Encode<'q, DB> + Type<DB>,
-    for<'q> TagLabel: Encode<'q, DB> + Type<DB>,
-    for<'q> TagId: Decode<'q, DB> + Type<DB>,
-    for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
-    usize: sqlx::ColumnIndex<DB::Row>,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    let mut ordered = desired.to_vec();
-    ordered.sort_by_key(TagLabel::slug);
-    for label in ordered {
-        let slug = label.slug();
-        let tag_id = sqlx::query_scalar::<_, TagId>(UPSERT_TAG_RETURNING_ID)
-            .bind_storage(&slug)
-            .fetch_one(&mut *conn)
-            .await?;
-        sqlx::query(INSERT_POST_TAG)
-            .bind_storage(post_id)
-            .bind_storage(tag_id)
-            .bind_storage(&label)
-            .execute(&mut *conn)
-            .await?;
     }
     Ok(())
 }
@@ -3499,121 +2828,6 @@ where
     .execute(&mut *conn)
     .await?;
     Ok(revision_id)
-}
-
-/// Re-derives exact reference rows copied by migration 0027 before the application state
-/// becomes available. Derivation deliberately occurs before the backend acquires its write lock;
-/// the atomic write phase validates each authoritative HTML snapshot and retries if one changed.
-pub(crate) async fn backfill_post_media_references<DB>(pool: &Pool<DB>) -> Result<()>
-where
-    DB: PostDialect,
-    (PostId, RenderedHtml): for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    let posts: Vec<(PostId, RenderedHtml)> = sqlx::query_as(
-        "SELECT p.post_id, p.rendered_html
-         FROM posts p
-         WHERE EXISTS (
-             SELECT 1 FROM post_media pm
-             WHERE pm.post_id = p.post_id AND pm.reference_kind = 'legacy'
-         )
-         ORDER BY p.post_id",
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let candidates: Vec<PostMediaReferenceBackfill> = posts
-        .into_iter()
-        .map(|(post_id, rendered_html)| PostMediaReferenceBackfill {
-            references: render::extract_media_refs(rendered_html.as_ref()),
-            post_id,
-            rendered_html: rendered_html.to_string(),
-        })
-        .collect();
-    if candidates.is_empty() {
-        return Ok(());
-    }
-    DB::apply_post_media_reference_backfill(pool, &candidates).await
-}
-
-/// Replaces the current subject's `post_media` rows to exactly match `media`.
-///
-/// Historical subjects are deliberately outside this delete: revisions retain the
-/// exact references captured before a meaningful mutation.
-pub(crate) async fn replace_post_media<DB>(
-    conn: &mut DB::Connection,
-    post_id: PostId,
-    media: &[MediaReference],
-) -> Result<()>
-where
-    DB: PostDialect,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    let rows = media_reference_rows([(post_id, media)]);
-    sqlx::query(DB::DELETE_POST_MEDIA)
-        .bind_storage(post_id)
-        .execute(&mut *conn)
-        .await?;
-    DB::insert_post_media_rows(conn, rows).await
-}
-
-/// Installs all rows from a validated startup-backfill snapshot in two set-based writes.
-pub(crate) async fn replace_legacy_post_media<DB>(
-    conn: &mut DB::Connection,
-    candidates: &[PostMediaReferenceBackfill],
-) -> Result<()>
-where
-    DB: PostDialect,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    sqlx::query(
-        "DELETE FROM post_media
-         WHERE subject_kind = 'current' AND revision_id = 0
-           AND post_id IN (
-             SELECT post_id FROM post_media
-             WHERE subject_kind = 'current' AND revision_id = 0 AND reference_kind = 'legacy'
-           )",
-    )
-    .execute(&mut *conn)
-    .await?;
-    DB::insert_post_media_rows(
-        conn,
-        media_reference_rows(
-            candidates
-                .iter()
-                .map(|candidate| (candidate.post_id, candidate.references.as_slice())),
-        ),
-    )
-    .await
-}
-
-fn media_reference_rows<'a>(
-    references: impl IntoIterator<Item = (PostId, &'a [MediaReference])>,
-) -> BTreeSet<(PostId, MediaRef, MediaReferenceKind, MediaReferenceForm)> {
-    references
-        .into_iter()
-        .flat_map(|(post_id, references)| {
-            references.iter().map(move |reference| {
-                (
-                    post_id,
-                    reference.media().clone(),
-                    reference.kind(),
-                    reference.reference_form().clone(),
-                )
-            })
-        })
-        .collect()
 }
 
 /// Runs the hybrid-window query for `surface`, returning [`PostRecord`]s.
@@ -3932,7 +3146,7 @@ mod tests {
     use chrono::Utc;
     use common::test_support::{
         parse_etag, parse_post_body, parse_post_summary, parse_post_title, parse_row_limit,
-        parse_slug, parse_tag, parse_tag_label, parse_username, parse_utc_instant,
+        parse_slug, parse_tag_label, parse_username, parse_utc_instant,
     };
     use common::time::UtcInstant;
     use host::feed::SyndicationFeedRepresentation;
@@ -4216,68 +3430,6 @@ mod tests {
         assert_eq!(
             expectations.content_etag,
             Some(parse_etag("\"sha256-current\""))
-        );
-    }
-
-    #[test]
-    fn media_advisory_lock_keys_are_sorted_and_deduplicated() {
-        let first = media_ref_for("first.jpg");
-        let second = media_ref_for("second.jpg");
-        let forward = media_advisory_lock_keys([first.clone(), second.clone()]);
-        let reverse_with_duplicate =
-            media_advisory_lock_keys([second.clone(), first.clone(), second]);
-
-        assert_eq!(
-            forward, reverse_with_duplicate,
-            "opposite-order updates acquire precisely the same lock sequence"
-        );
-        assert_eq!(forward.len(), 2, "one lock per distinct media identity");
-        assert!(
-            forward.windows(2).all(|pair| pair[0] < pair[1]),
-            "advisory lock keys are strictly ascending"
-        );
-    }
-
-    #[test]
-    fn foreign_evidence_rejects_another_instance_and_encodes_multiple_proofs() {
-        let expected: InstanceId = "123e4567-e89b-12d3-a456-426614174000"
-            .parse()
-            .expect("canonical instance ID");
-        let other: InstanceId = "123e4567-e89b-12d3-a456-426614174001"
-            .parse()
-            .expect("canonical instance ID");
-        let parsed = common::media::parse_media_url(&media_url_for("evidence.jpg"))
-            .expect("media form parses");
-        let first = PersistedMediaReference::new(
-            PostId::from(1),
-            parsed.media().clone(),
-            parsed.kind(),
-            parsed.reference_form().clone(),
-        );
-        let second = PersistedMediaReference::new(
-            PostId::from(2),
-            parsed.media().clone(),
-            parsed.kind(),
-            parsed.reference_form().clone(),
-        );
-        let mut evidence = MediaReferenceEvidence::new(expected.clone());
-        assert!(!evidence.insert(ProvenForeignReference::new(first, other)));
-        assert!(evidence.insert(ProvenForeignReference::new(second, expected.clone())));
-        assert!(evidence.insert(ProvenForeignReference::new(
-            PersistedMediaReference::new(
-                PostId::from(1),
-                parsed.media().clone(),
-                parsed.kind(),
-                parsed.reference_form().clone(),
-            ),
-            expected,
-        )));
-
-        let mut query = QueryBuilder::<sqlx::Sqlite>::new("");
-        push_media_reference_evidence_cte(&mut query, &evidence);
-        assert!(
-            query.sql().contains("), ("),
-            "multiple proofs must be separate CTE rows"
         );
     }
 
@@ -5723,65 +4875,6 @@ mod tests {
             1
         );
     }
-
-    fn post_tag(slug: &str, display: &str) -> PostTag {
-        PostTag {
-            post_id: PostId::from(1),
-            tag_id: TagId::from(0),
-            tag_slug: parse_tag(slug),
-            tag_display: parse_tag_label(display),
-        }
-    }
-
-    #[test]
-    fn post_tag_diff_adds_removes_keeps() {
-        let existing = vec![post_tag("rust", "Rust"), post_tag("leptos", "Leptos")];
-        let desired: Vec<TagLabel> = vec![
-            // Same slug as an existing tag (different casing): kept, not re-added.
-            parse_tag_label("Rust"),
-            // New slug: added.
-            parse_tag_label("wasm"),
-        ];
-
-        let diff = post_tag_diff(&existing, &desired);
-
-        let added: Vec<String> = diff.to_add.iter().map(ToString::to_string).collect();
-        assert_eq!(added, vec!["wasm".to_string()]);
-        let removed: Vec<String> = diff.to_remove.iter().map(ToString::to_string).collect();
-        assert_eq!(removed, vec!["leptos".to_string()]);
-    }
-
-    /// `to_add` comes back slug-ordered so concurrent reconciles take `tags` row locks
-    /// in a consistent order (#876) — and the sort is **stable**, so two labels sharing
-    /// a slug keep their input order and the first occurrence's casing survives to the
-    /// insert.
-    #[test]
-    fn post_tag_diff_orders_additions_by_slug_stably() {
-        let existing: Vec<PostTag> = vec![];
-        // Deliberately unordered, with a duplicate slug in the middle: if the sort were
-        // unstable, "NIX" could overtake "Nix" and the wrong casing would be stored.
-        let desired: Vec<TagLabel> = vec![
-            parse_tag_label("wasm"),
-            parse_tag_label("Nix"),
-            parse_tag_label("NIX"),
-            parse_tag_label("actix"),
-        ];
-
-        let diff = post_tag_diff(&existing, &desired);
-
-        let added: Vec<String> = diff.to_add.iter().map(ToString::to_string).collect();
-        assert_eq!(
-            added,
-            vec![
-                "actix".to_string(),
-                "Nix".to_string(),
-                "NIX".to_string(),
-                "wasm".to_string(),
-            ],
-            "additions are slug-ordered, and the duplicate slug keeps its input order"
-        );
-    }
-
     #[test]
     fn tagging_error_display_post_not_found() {
         let err = TaggingError::PostNotFound;
@@ -6626,14 +5719,17 @@ mod tests {
             "<img src=\"{}\">",
             media_url_for("bounded-snapshot.jpg")
         ));
-        let inputs: Vec<CreatePostInput> = (0..=MAX_MEDIA_REFERENCE_SNAPSHOT)
+        let inputs: Vec<CreatePostInput> = (0..=media::MAX_MEDIA_REFERENCE_SNAPSHOT)
             .map(|_| SeedRawPost::new(user).body(body.clone()).build())
             .collect();
         create_posts_confirmed(&env.state, inputs).await;
 
         let snapshot = env.state.posts.list_media_references(&media).await.unwrap();
 
-        assert_eq!(snapshot.references().len(), MAX_MEDIA_REFERENCE_SNAPSHOT);
+        assert_eq!(
+            snapshot.references().len(),
+            media::MAX_MEDIA_REFERENCE_SNAPSHOT
+        );
         assert!(
             snapshot.has_unexamined_references(),
             "the extra row is a fail-closed sentinel, not an unbounded allocation"

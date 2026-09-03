@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use common::tagged_url::BaseUrl;
 
 use crate::InstanceId;
-use crate::posts::store::{
+use crate::posts::media::{
     MediaReferenceEvidence, PersistedMediaReference, ProvenForeignReference,
 };
 

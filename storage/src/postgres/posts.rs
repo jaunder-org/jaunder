@@ -3,11 +3,10 @@ use sqlx::{Pool, Postgres, QueryBuilder};
 
 use crate::helpers;
 use crate::posts::{
+    media::{self, MediaReferenceEvidence, PostMediaReferenceBackfill},
     models::PostPublicationClear,
-    store::{
-        self, MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill, PostTag,
-        PostTagDiff,
-    },
+    store::{self, PostBookkeepingRow},
+    tags::{self, PostTag, PostTagDiff},
 };
 use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use crate::{
@@ -173,7 +172,7 @@ async fn load_post_update_relations(
     post_id: PostId,
     input: &UpdatePostInput,
 ) -> sqlx::Result<PostUpdateRelations> {
-    let existing_tags = sqlx::query_as::<_, PostTag>(store::SELECT_POST_TAGS)
+    let existing_tags = sqlx::query_as::<_, PostTag>(tags::SELECT_POST_TAGS)
         .bind_storage(post_id)
         .fetch_all(&mut *tx)
         .await?;
@@ -262,11 +261,11 @@ async fn apply_post_update(
     .await?;
     store::replace_post_audiences::<Postgres>(tx, post_id, &input.audiences).await?;
     for label in tag_diff.to_add {
-        let tag_id = sqlx::query_scalar::<_, TagId>(store::UPSERT_TAG_RETURNING_ID)
+        let tag_id = sqlx::query_scalar::<_, TagId>(tags::UPSERT_TAG_RETURNING_ID)
             .bind_storage(label.slug())
             .fetch_one(&mut *tx)
             .await?;
-        sqlx::query(store::INSERT_POST_TAG)
+        sqlx::query(tags::INSERT_POST_TAG)
             .bind_storage(post_id)
             .bind_storage(tag_id)
             .bind_storage(label)
@@ -274,13 +273,13 @@ async fn apply_post_update(
             .await?;
     }
     for slug in tag_diff.to_remove {
-        sqlx::query(store::DELETE_POST_TAG_BY_SLUG)
+        sqlx::query(tags::DELETE_POST_TAG_BY_SLUG)
             .bind_storage(post_id)
             .bind_storage(slug)
             .execute(&mut *tx)
             .await?;
     }
-    store::replace_post_media::<Postgres>(tx, post_id, input.rendered.media()).await?;
+    media::replace_post_media::<Postgres>(tx, post_id, input.rendered.media()).await?;
     Ok(row)
 }
 
@@ -306,7 +305,7 @@ impl PostDialect for Postgres {
         conn: &mut <Self as sqlx::Database>::Connection,
         media: &std::collections::BTreeSet<common::media::MediaRef>,
     ) -> sqlx::Result<()> {
-        for key in store::media_advisory_lock_keys(media.iter().cloned()) {
+        for key in media::media_advisory_lock_keys(media.iter().cloned()) {
             sqlx::query("SELECT pg_advisory_xact_lock($1)")
                 .bind_storage(key)
                 .execute(&mut *conn)
@@ -368,8 +367,8 @@ impl PostDialect for Postgres {
             return Err(error);
         }
         let relations = load_post_update_relations(connection, post_id, input).await?;
-        let tag_diff = store::post_tag_diff(&relations.existing_tags, &input.tags);
-        let mut locked_media = store::media_lock_set(input.rendered.media());
+        let tag_diff = tags::post_tag_diff(&relations.existing_tags, &input.tags);
+        let mut locked_media = media::media_lock_set(input.rendered.media());
         let old_media_set: std::collections::BTreeSet<_> =
             relations.old_media.iter().cloned().collect();
         locked_media.extend(
@@ -447,11 +446,11 @@ impl PostDialect for Postgres {
             Some((owner, None)) if owner != user_id => return Err(TaggingError::Unauthorized),
             Some(_) => {}
         }
-        let existing = sqlx::query_as::<_, PostTag>(store::SELECT_POST_TAGS)
+        let existing = sqlx::query_as::<_, PostTag>(tags::SELECT_POST_TAGS)
             .bind_storage(post_id)
             .fetch_all(&mut *connection)
             .await?;
-        let diff = store::post_tag_diff(&existing, desired);
+        let diff = tags::post_tag_diff(&existing, desired);
         if diff.to_add.is_empty() && diff.to_remove.is_empty() {
             return Ok(());
         }
@@ -464,11 +463,11 @@ impl PostDialect for Postgres {
         )
         .await?;
         for label in diff.to_add {
-            let tag_id = sqlx::query_scalar::<_, TagId>(store::UPSERT_TAG_RETURNING_ID)
+            let tag_id = sqlx::query_scalar::<_, TagId>(tags::UPSERT_TAG_RETURNING_ID)
                 .bind_storage(label.slug())
                 .fetch_one(&mut *connection)
                 .await?;
-            sqlx::query(store::INSERT_POST_TAG)
+            sqlx::query(tags::INSERT_POST_TAG)
                 .bind_storage(post_id)
                 .bind_storage(tag_id)
                 .bind_storage(label)
@@ -476,7 +475,7 @@ impl PostDialect for Postgres {
                 .await?;
         }
         for slug in diff.to_remove {
-            sqlx::query(store::DELETE_POST_TAG_BY_SLUG)
+            sqlx::query(tags::DELETE_POST_TAG_BY_SLUG)
                 .bind_storage(post_id)
                 .bind_storage(slug)
                 .execute(&mut *connection)
@@ -521,7 +520,7 @@ impl PostDialect for Postgres {
                 "storage.postgres.post_media_reference_backfill.rollback",
             );
         }
-        store::replace_legacy_post_media::<Postgres>(&mut tx, candidates).await?;
+        media::replace_legacy_post_media::<Postgres>(&mut tx, candidates).await?;
         tx.commit().await
     }
 
@@ -561,10 +560,10 @@ impl PostDialect for Postgres {
         evidence: &MediaReferenceEvidence,
     ) -> sqlx::Result<Vec<PostId>> {
         let mut query = QueryBuilder::<Postgres>::new(String::new());
-        store::push_media_reference_evidence_cte(&mut query, evidence);
+        media::push_media_reference_evidence_cte(&mut query, evidence);
         query.push("SELECT DISTINCT pm.post_id");
-        store::push_owner_media_reference_from_where(&mut query, user_id, media);
-        store::push_live_media_reference_predicate(&mut query, current_instance_id);
+        media::push_owner_media_reference_from_where(&mut query, user_id, media);
+        media::push_live_media_reference_predicate(&mut query, current_instance_id);
         query.push(" ORDER BY pm.post_id");
         query.build_query_scalar::<PostId>().fetch_all(pool).await
     }

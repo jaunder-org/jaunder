@@ -4,7 +4,7 @@ use sqlx::{Decode, Result, Row, Type};
 
 use crate::helpers::SerializedPostTags;
 use crate::posts::cursors::PostRevisionCursor;
-use crate::posts::store::PostTag;
+use crate::posts::tags::PostTag;
 use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, RevisionId, UserId};

@@ -11,7 +11,7 @@ use sqlx::{Database, Decode, Encode, Executor, FromRow, Pool, Result, Row, Type}
 use crate::InstanceId;
 use crate::WriteTransaction;
 use crate::backend::Backend;
-use crate::posts::store::MediaReferenceEvidence;
+use crate::posts::media::MediaReferenceEvidence;
 use crate::sql::QueryStorageExt;
 use thiserror::Error;
 
@@ -575,7 +575,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::posts::store::{
+    use crate::posts::media::{
         PersistedMediaReference, PersistedMediaSubject, ProvenForeignReference,
     };
     use crate::test_support::{

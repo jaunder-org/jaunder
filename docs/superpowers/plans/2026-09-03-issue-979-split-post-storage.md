@@ -33,7 +33,7 @@ Out:
   - Verification: run the pure model, error, and cursor unit-test subset plus
     `devtool run -- cargo xtask test-local -- -p storage` to prove the relocated
     generic store across both backends before its gated commit.
-- [ ] Task 2: Extract tag and media ownership concerns
+- [x] Task 2: Extract tag and media ownership concerns
   - Contract: `tags.rs` owns tag rows, constants, diffing, and shared writes;
     `media.rs` owns persisted-reference evidence, bounds, backfill inputs, and
     shared query helpers. Migrate backend, SQL, migration, media, and

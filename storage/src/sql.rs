@@ -11,11 +11,10 @@ use crate::helpers::{SerializedPostTags, SessionCreatedAt, SessionLastUsedAt, St
 use crate::invites::{InviteCreatedAt, InviteExpiresAt};
 use crate::media::MediaDeleteMode;
 use crate::posts::{
+    media::{MediaAdvisoryLockKey, MediaReferenceSnapshotLimit, PersistedMediaSubjectKind},
     models::{PermalinkDateText, PostPublicationClear},
-    store::{
-        IdempotencyAdvisoryLockKey, MediaAdvisoryLockKey, MediaReferenceSnapshotLimit,
-        PersistedMediaSubjectKind, TagSlugPrefixPattern,
-    },
+    store::IdempotencyAdvisoryLockKey,
+    tags::TagSlugPrefixPattern,
 };
 use crate::subscriptions::SubscriptionStatusName;
 use crate::user_config::StoredUserConfigValue;

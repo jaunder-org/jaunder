@@ -2,8 +2,10 @@
 
 pub(crate) mod cursors;
 pub(crate) mod errors;
+pub(crate) mod media;
 pub(crate) mod models;
 pub(crate) mod store;
+pub(crate) mod tags;
 
 pub use cursors::{
     CollectionCursor, PostCursor, PostRevisionCursor, ScheduledPostCursor, keyset_cursor,
@@ -11,6 +13,11 @@ pub use cursors::{
     wire_scheduled_cursor,
 };
 pub use errors::{CreatePostError, ListByTagError, TaggingError, UpdatePostError};
+pub use media::{
+    MAX_MEDIA_REFERENCE_SNAPSHOT, MediaReferenceEvidence, MediaReferenceSnapshot,
+    PersistedMediaReference, PersistedMediaSubject, PostMediaReferenceBackfill,
+    ProvenForeignReference,
+};
 pub use models::PermalinkDate;
 pub use models::{
     CreatePostInput, CreatedPost, CurrentPostRevisionSummary, InvalidPostFormat,
@@ -21,8 +28,6 @@ pub use models::{
 #[cfg(any(test, feature = "test-utils"))]
 pub use store::MockPostStorage;
 pub use store::{
-    GoLivePost, MAX_MEDIA_REFERENCE_SNAPSHOT, MediaReferenceEvidence, MediaReferenceSnapshot,
-    PersistedMediaReference, PersistedMediaSubject, PostDialect, PostMediaReferenceBackfill,
-    PostStorage, PostStore, PostTag, ProvenForeignReference, TagRecord, fetch_post_record,
-    list_by_tag_rows,
+    GoLivePost, PostDialect, PostStorage, PostStore, fetch_post_record, list_by_tag_rows,
 };
+pub use tags::{PostTag, TagRecord};
