@@ -5,8 +5,9 @@ use sqlx::postgres::PgConnectOptions;
 use std::sync::Arc;
 
 use crate::backup::CatalogTableName;
+use crate::posts::media;
 use crate::sql::Exists;
-use crate::{instance_identity, make_app_state, posts};
+use crate::{instance_identity, make_app_state};
 
 /// Resolve final Postgres options from the application connection snapshot.
 #[must_use]
@@ -30,7 +31,7 @@ pub(crate) async fn open_postgres_database_with_pool(
     let pool = PgPool::connect_with(options).await?;
     sqlx::migrate!("./migrations/postgres").run(&pool).await?;
     let instance_id = instance_identity::ensure(&pool).await?;
-    posts::backfill_post_media_references(&pool).await?;
+    media::backfill_post_media_references(&pool).await?;
     Ok((make_app_state(pool.clone()), pool, instance_id))
 }
 

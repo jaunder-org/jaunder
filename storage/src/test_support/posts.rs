@@ -2,10 +2,14 @@
 //! and production-rendered seed records; service-path fixtures live in [`super::post_service`].
 
 use super::{confirmed_for, fixture_media_content_locks};
+use crate::AppState;
 use crate::posts::{
-    CreatePostError, CreatePostInput, PostBookkeepingExpectation, PublishUpdate, UpdatePostInput,
+    errors::CreatePostError,
+    models::{
+        CreatePostInput, PostBookkeepingExpectation, PostFormat, PostRecord, PublishUpdate,
+        UpdatePostInput,
+    },
 };
-use crate::{AppState, PostFormat, PostRecord};
 
 use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
@@ -517,8 +521,7 @@ impl UpdateRawPost {
 #[cfg(test)]
 mod tests {
     use super::{SeedPost, SeedRawPost};
-    use crate::PostFormat;
-    use crate::posts::CreatePostError;
+    use crate::posts::{errors::CreatePostError, models::PostFormat};
     use crate::test_support::{Backend, SeedUser, backends};
 
     use common::post_summary::PostSummary;

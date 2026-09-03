@@ -24,10 +24,13 @@ use common::time::UtcInstant;
 use host::metrics::{self, UploadOutcome};
 
 use crate::media_ownership::resolve_media_reference_ownership;
+use crate::posts::media::{
+    MediaReferenceEvidence, MediaReferenceSnapshot, PersistedMediaReference,
+};
 use crate::{
-    CreateMediaError, MediaContentLocks, MediaDeleteMode, MediaRecord, MediaReferenceEvidence,
-    MediaReferenceOwnershipResolver, MediaReferenceSnapshot, MediaStorage, PersistedMediaReference,
-    PostStorage, SiteConfigStorage, TryDeleteOutcome, WriteScope, WriteScopeError,
+    CreateMediaError, MediaContentLocks, MediaDeleteMode, MediaRecord,
+    MediaReferenceOwnershipResolver, MediaStorage, PostStorage, SiteConfigStorage,
+    TryDeleteOutcome, WriteScope, WriteScopeError,
 };
 use common::MutationOutcome;
 
@@ -830,13 +833,13 @@ mod tests {
 
     use super::*;
 
+    use crate::posts::media::{
+        MediaReferenceSnapshot, PersistedMediaReference, ProvenForeignReference,
+    };
     use crate::test_support::{
         Backend, SeedUser, backends, create_post_via_service, media_row_exists, media_url_for,
     };
-    use crate::{
-        ForeignEvidenceSink, MediaReferenceOwnershipResolver, MediaReferenceSnapshot,
-        PersistedMediaReference, ProvenForeignReference,
-    };
+    use crate::{ForeignEvidenceSink, MediaReferenceOwnershipResolver};
     use common::ids::PostId;
     use common::media::{MediaRef, UserQuota};
     use common::test_support::{

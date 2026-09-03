@@ -2,7 +2,7 @@
 
 use crate::WriteTransaction;
 use crate::backend::Backend;
-use crate::posts::PostFormat;
+use crate::posts::models::PostFormat;
 use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
 use common::ids::UserId;

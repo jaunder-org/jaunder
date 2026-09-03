@@ -4,8 +4,9 @@ use std::{fmt, io, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
+use crate::posts::tags::PostTag;
 use crate::role_instant::impl_role_instant;
-use crate::{EmailVerified, OperatorStatus, PostTag, SessionRecord, UserRecord};
+use crate::{EmailVerified, OperatorStatus, SessionRecord, UserRecord};
 use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;

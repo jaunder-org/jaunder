@@ -5,7 +5,7 @@ use sqlx::{Pool, QueryBuilder, Sqlite};
 
 use crate::InstanceId;
 use crate::media::{MediaDeleteMode, MediaDialect, MediaStore};
-use crate::posts::{self, MediaReferenceEvidence};
+use crate::posts::media::{self, MediaReferenceEvidence};
 use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 
 /// SQLite-backed media storage.
@@ -52,7 +52,7 @@ impl MediaDialect for Sqlite {
     ) -> sqlx::Result<bool> {
         Self::lock_media_reference(conn, media).await?;
         let mut query = QueryBuilder::<Sqlite>::new(String::new());
-        posts::push_media_reference_evidence_cte(&mut query, evidence);
+        media::push_media_reference_evidence_cte(&mut query, evidence);
         query.push("DELETE FROM media WHERE user_id = ");
         query
             .push_storage_bind(user_id)
@@ -65,11 +65,11 @@ impl MediaDialect for Sqlite {
             .push(" AND (")
             .push_storage_bind(mode);
         query.push(" OR NOT EXISTS (SELECT 1");
-        posts::push_owner_media_reference_from_where(&mut query, user_id, media);
-        posts::push_live_media_reference_predicate(&mut query, current_instance_id);
+        media::push_owner_media_reference_from_where(&mut query, user_id, media);
+        media::push_live_media_reference_predicate(&mut query, current_instance_id);
         query.push(")) AND (NOT EXISTS (SELECT 1");
-        posts::push_other_owner_media_reference_from_where(&mut query, user_id, media);
-        posts::push_live_media_reference_predicate(&mut query, current_instance_id);
+        media::push_other_owner_media_reference_from_where(&mut query, user_id, media);
+        media::push_live_media_reference_predicate(&mut query, current_instance_id);
         query.push(") OR EXISTS (SELECT 1 FROM media m2 WHERE m2.source = ");
         query
             .push_storage_bind(media.source)
@@ -98,7 +98,7 @@ impl MediaDialect for Sqlite {
         // serializes Post writers until its callback has completed the unlink.
         Self::lock_media_reference(conn, media).await?;
         let mut query = QueryBuilder::<Sqlite>::new(String::new());
-        posts::push_media_reference_evidence_cte(&mut query, evidence);
+        media::push_media_reference_evidence_cte(&mut query, evidence);
         query.push("SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM media WHERE source = ");
         query
             .push_storage_bind(media.source)
@@ -107,8 +107,8 @@ impl MediaDialect for Sqlite {
             .push(" AND filename = ")
             .push_storage_bind(media.filename.clone());
         query.push(") AND NOT EXISTS (SELECT 1");
-        posts::push_any_media_reference_from_where(&mut query, media);
-        posts::push_live_media_reference_predicate(&mut query, current_instance_id);
+        media::push_any_media_reference_from_where(&mut query, media);
+        media::push_live_media_reference_predicate(&mut query, current_instance_id);
         query.push(")");
         Ok(query
             .build_query_scalar::<i32>()

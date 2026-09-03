@@ -6,6 +6,7 @@ mod tests {
     use std::borrow::Cow;
 
     use crate::DbConnectOptions;
+    use crate::posts::media;
     use crate::test_support::{
         Backend, CloseablePool, PostgresDbGuard, PostgresTestConfig, backends, sqlite_url,
         unique_postgres_url,
@@ -93,12 +94,16 @@ mod tests {
 
         async fn backfill_post_media_references(&self) {
             match &self.pool {
-                CloseablePool::Sqlite(pool) => crate::posts::backfill_post_media_references(pool)
-                    .await
-                    .expect("startup backfill succeeds"),
-                CloseablePool::Postgres(pool) => crate::posts::backfill_post_media_references(pool)
-                    .await
-                    .expect("startup backfill succeeds"),
+                CloseablePool::Sqlite(pool) => {
+                    media::backfill_post_media_references(pool)
+                        .await
+                        .expect("startup backfill succeeds");
+                }
+                CloseablePool::Postgres(pool) => {
+                    media::backfill_post_media_references(pool)
+                        .await
+                        .expect("startup backfill succeeds");
+                }
             }
         }
 

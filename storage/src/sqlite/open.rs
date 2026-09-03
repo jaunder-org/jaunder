@@ -8,8 +8,9 @@ use sqlx::{
 
 use crate::backup::CatalogTableName;
 use crate::db::StorageRuntimeConfig;
+use crate::posts::media;
 use crate::sql::Exists;
-use crate::{AppState, instance_identity, make_app_state, posts};
+use crate::{AppState, instance_identity, make_app_state};
 
 /// Resolves application `SQLite` options from the runtime connection snapshot.
 #[must_use]
@@ -52,7 +53,7 @@ pub(crate) async fn open_sqlite_database_with_pool(
 
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     let instance_id = instance_identity::ensure(&pool).await?;
-    posts::backfill_post_media_references(&pool).await?;
+    media::backfill_post_media_references(&pool).await?;
     Ok((make_app_state(pool.clone()), pool, instance_id))
 }
 

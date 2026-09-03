@@ -11,8 +11,10 @@ use crate::helpers::{SerializedPostTags, SessionCreatedAt, SessionLastUsedAt, St
 use crate::invites::{InviteCreatedAt, InviteExpiresAt};
 use crate::media::MediaDeleteMode;
 use crate::posts::{
-    IdempotencyAdvisoryLockKey, MediaAdvisoryLockKey, MediaReferenceSnapshotLimit,
-    PermalinkDateText, PersistedMediaSubjectKind, PostPublicationClear, TagSlugPrefixPattern,
+    lifecycle::IdempotencyAdvisoryLockKey,
+    media::{MediaAdvisoryLockKey, MediaReferenceSnapshotLimit, PersistedMediaSubjectKind},
+    models::{PermalinkDateText, PostPublicationClear},
+    tags::TagSlugPrefixPattern,
 };
 use crate::subscriptions::SubscriptionStatusName;
 use crate::user_config::StoredUserConfigValue;
@@ -267,7 +269,7 @@ use crate::email::CorruptEmailAddress;
 #[cfg(test)]
 use crate::invites::CorruptInviteCode;
 #[cfg(test)]
-use crate::posts::{CorruptPostFormat, CorruptPostSlug, CorruptTagSlug};
+use crate::posts::store::{CorruptPostFormat, CorruptPostSlug, CorruptTagSlug};
 #[cfg(test)]
 use crate::sessions::CorruptSessionTokenHash;
 #[cfg(any(test, feature = "test-support"))]

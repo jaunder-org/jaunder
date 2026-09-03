@@ -1,782 +1,55 @@
-//! Content storage for posts, revisions, and tagging.
+//! Generic storage implementation for posts.
 
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use chrono::Duration;
-use sha2::{Digest, Sha256};
-use sqlx::{Database, Decode, Encode, Executor, Pool, QueryBuilder, Result, Row, Type};
-use thiserror::Error;
+use sqlx::{Database, Decode, Encode, Executor, Pool, Result, Type};
 
 use crate::InstanceId;
 use crate::backend::Backend;
-use crate::helpers::SerializedPostTags;
-use crate::sql::{Exists, QueryBuilderStorageExt, QueryStorageExt, RowCount};
-use crate::write_scope::WriteTransaction;
-use common::etag::ETag;
-use common::idempotency_key::IdempotencyKey;
-use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
-use common::media::{
-    self, ContentHash, Filename, MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind,
-    MediaSource,
+use crate::posts::cursors::{
+    CollectionCursor, PostCursor, PostRevisionCursor, ScheduledPostCursor,
 };
-use common::org::PublicationState;
+use crate::posts::errors::{CreatePostError, ListByTagError, TaggingError, UpdatePostError};
+use crate::posts::lifecycle;
+use crate::posts::lifecycle::{DecodeRawRow, RevisionDetailRow, RevisionMetadataRow};
+use crate::posts::media;
+use crate::posts::media::{
+    MediaReferenceEvidence, MediaReferenceSnapshot, PersistedMediaReference, PersistedMediaSubject,
+    PostMediaReferenceBackfill,
+};
+use crate::posts::models::{
+    CreatePostInput, CreatedPost, CurrentPostRevisionSummary, PermalinkDate, PermalinkDateText,
+    PostRecord, PostRevisionDetail, PostRevisionPage, PostRevisionRecord, PostRevisionTag,
+    UpdatePostInput,
+};
+use crate::posts::syndication::{self, GoLivePost};
+use crate::posts::tags;
+use crate::posts::tags::{PostTag, TagRecord};
+use crate::posts::visibility;
+use crate::sql::{Exists, QueryStorageExt, RowCount};
+use crate::write_scope::WriteTransaction;
+use common::idempotency_key::IdempotencyKey;
+use common::ids::{AudienceId, ChannelId, PostId, RevisionId, UserId};
+use common::media::{
+    ContentHash, Filename, MediaRef, MediaReferenceForm, MediaReferenceKind, MediaSource,
+};
 use common::pagination::{PageSize, RowLimit};
-use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-pub use common::render::{InvalidPostFormat, PostFormat, RenderedHtml};
-use common::root_relative_url::RootRelativeUrl;
-use common::seed::PageCursor;
+use common::render::PostFormat;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::time::UtcInstant;
 use common::username::Username;
-use common::visibility::{self, AudienceTarget, SubscriberRef, TargetKind, ViewerIdentity};
+use common::visibility::{AudienceTarget, SubscriberRef, TargetKind, ViewerIdentity};
+
 use host::{
     error::{InternalError, InternalResult},
-    etag,
-    feed::{FeedMinItems, FeedPath},
+    feed::FeedPath,
     metrics,
-    render::{self, RenderOutput},
     retention::Domain,
 };
-const TAG_EXISTS_SQL: &str = "SELECT EXISTS(SELECT 1 FROM tags WHERE tag_slug = $1)";
-/// The `published_at`-clear flag in an update-post statement.
-///
-/// This is deliberately a persistence role: [`PublishUpdate`] remains the
-/// application-level publication instruction, while the SQL `CASE` needs only
-/// its clear-column fact.
-#[derive(Clone, Copy, Debug, macros::SqlxBridge)]
-pub(crate) struct PostPublicationClear(bool);
-
-impl PostPublicationClear {
-    #[must_use]
-    pub(crate) const fn for_update(update: PublishUpdate) -> Self {
-        Self(matches!(update, PublishUpdate::Unpublish))
-    }
-}
-
-/// ISO calendar text used by the permalink-date SQL comparison.
-#[derive(Debug, macros::SqlxBridge)]
-pub(crate) struct PermalinkDateText(String);
-
-impl From<PermalinkDate> for PermalinkDateText {
-    fn from(date: PermalinkDate) -> Self {
-        Self(date.to_string())
-    }
-}
-
-/// The escaped `LIKE` pattern for a normalized tag-slug prefix lookup.
-#[derive(Debug, macros::SqlxBridge)]
-pub(crate) struct TagSlugPrefixPattern(String);
-impl TagSlugPrefixPattern {
-    fn from_normalized_prefix(prefix: &str) -> Self {
-        Self(format!("{prefix}%"))
-    }
-}
-
-/// The validated calendar date of a public permalink lookup key. Re-exported from
-/// `common::time` so storage callers and the trait method name the domain type
-/// directly (an impossible date is unrepresentable by construction — #583).
-pub use common::time::PermalinkDate;
-
-/// A post record returned by [`PostStorage`] queries.
-///
-/// `tags` is populated by the same query that loads the rest of the row via
-/// a JSON-aggregating subquery, so post and tag state are always read from
-/// the same statement-level snapshot. `author_username` is sourced from the
-/// `users` table in the same query (via JOIN or correlated subquery), so
-/// callers never need a second roundtrip to look up the post's author.
-#[derive(Clone, Debug)]
-pub struct PostRecord {
-    /// Unique internal identifier.
-    pub post_id: PostId,
-    /// ID of the user who owns the post.
-    pub user_id: UserId,
-    /// Username of the author
-    pub author_username: Username,
-    /// Optional title.
-    pub title: Option<PostTitle>,
-    /// Unique slug (per user, per day).
-    pub slug: Slug,
-    /// Raw source body (Markdown or Org).
-    pub body: PostBody,
-    /// Format of the `body`.
-    pub format: PostFormat,
-    /// HTML produced by `render()` from the `body`, sanitized at that mint point —
-    /// safe to emit unescaped (#445).
-    pub rendered_html: RenderedHtml,
-    /// When the post was first created.
-    pub created_at: UtcInstant,
-    /// When the post was last updated.
-    pub updated_at: UtcInstant,
-    /// When the post was published (None if it is a draft).
-    pub published_at: Option<UtcInstant>,
-    /// When the post was soft-deleted (None if active).
-    pub deleted_at: Option<UtcInstant>,
-    /// Optional summary/excerpt of the post.
-    pub summary: Option<PostSummary>,
-    /// The post's tags, ordered by `tag_slug` ascending (byte order).
-    ///
-    /// Populated by the same query that loaded the rest of the row — every post
-    /// SELECT projects [`PostDialect::TAGS_SUBQUERY`] — so reading tags off a
-    /// `PostRecord` costs no extra round-trip. The ordering is pinned in that
-    /// subquery on both backends (#772); do not rely on insertion order.
-    pub tags: Vec<PostTag>,
-}
-
-impl PostRecord {
-    /// Returns the canonical permalink for this post as a [`RootRelativeUrl`].
-    /// Uses the publication timestamp if published; otherwise falls back to the creation timestamp.
-    #[must_use]
-    pub fn permalink(&self) -> RootRelativeUrl {
-        use chrono::Datelike;
-        let timestamp = self.published_at.unwrap_or(self.created_at).value();
-        let Ok(url) = format!(
-            "/~{}/{:04}/{:02}/{:02}/{}",
-            self.author_username,
-            timestamp.year(),
-            timestamp.month(),
-            timestamp.day(),
-            self.slug.as_ref()
-        )
-        .parse::<RootRelativeUrl>() else {
-            unreachable!("permalink() builds a valid root-relative path");
-        };
-        url
-    }
-
-    /// Generates a fallback summary from the post's first non-blank body line.
-    ///
-    /// This label is disposable presentation metadata for an unpublished row, not authored Post
-    /// content or historical state; it is derived from the canonical [`PostBody`]. Recomputing it
-    /// at read time is deliberate: the bounded draft query already loads the body, while storing
-    /// it would need freshness maintenance across body writes and direct backup restores.
-    ///
-    /// No title/slug fallbacks: [`PostBody`]'s invariant is *exactly* the condition
-    /// [`PostSummary::from_body_line`] relies on — at least one line non-empty after
-    /// trimming — so the body always answers (#811, #830, #858).
-    #[must_use]
-    pub fn fallback_summary_label(&self) -> PostSummary {
-        PostSummary::from_body_line(&self.body)
-    }
-}
-
-/// Decodes the shared post projection directly into its public storage record.
-///
-/// Every column except the JSON aggregate arrives as its domain type through its `SQLx`
-/// bridge. `tags` remains an aggregate boundary: its text is parsed after the post id is
-/// available to attach to each decoded tag.
-impl<'r, R> sqlx::FromRow<'r, R> for PostRecord
-where
-    R: Row,
-    &'r str: sqlx::ColumnIndex<R>,
-    PostId: Decode<'r, R::Database> + Type<R::Database>,
-    UserId: Decode<'r, R::Database> + Type<R::Database>,
-    Username: Decode<'r, R::Database> + Type<R::Database>,
-    PostTitle: Decode<'r, R::Database> + Type<R::Database>,
-    Slug: Decode<'r, R::Database> + Type<R::Database>,
-    PostBody: Decode<'r, R::Database> + Type<R::Database>,
-    PostFormat: Decode<'r, R::Database> + Type<R::Database>,
-    RenderedHtml: Decode<'r, R::Database> + Type<R::Database>,
-    UtcInstant: Decode<'r, R::Database> + Type<R::Database>,
-    PostSummary: Decode<'r, R::Database> + Type<R::Database>,
-    SerializedPostTags: Decode<'r, R::Database> + Type<R::Database>,
-{
-    fn from_row(row: &'r R) -> Result<Self> {
-        let post_id = row.try_get::<PostId, _>("post_id")?;
-        let user_id = row.try_get::<UserId, _>("user_id")?;
-        let author_username = row.try_get::<Username, _>("username")?;
-        let title = row.try_get::<Option<PostTitle>, _>("title")?;
-        let slug = row.try_get::<Slug, _>("slug")?;
-        let body = row.try_get::<PostBody, _>("body")?;
-        let format = row.try_get::<PostFormat, _>("format")?;
-        let rendered_html = row.try_get::<RenderedHtml, _>("rendered_html")?;
-        let created_at = row.try_get::<UtcInstant, _>("created_at")?;
-        let updated_at = row.try_get::<UtcInstant, _>("updated_at")?;
-        let published_at = row.try_get::<Option<UtcInstant>, _>("published_at")?;
-        let deleted_at = row.try_get::<Option<UtcInstant>, _>("deleted_at")?;
-        let summary = row.try_get::<Option<PostSummary>, _>("summary")?;
-        let tags_json = row.try_get::<SerializedPostTags, _>("tags")?;
-        let tags = tags_json.into_tags(post_id);
-
-        Ok(Self {
-            post_id,
-            user_id,
-            author_username,
-            title,
-            slug,
-            body,
-            format,
-            rendered_html,
-            created_at,
-            updated_at,
-            published_at,
-            deleted_at,
-            summary,
-            tags,
-        })
-    }
-}
-
-/// An immutable complete prior-state snapshot of a Post.
-///
-/// This read model intentionally has no mutators: product storage creates it as
-/// part of a top-level Post mutation, while backup/restore is the only other
-/// legitimate whole-store writer (ADR-0136).
-#[derive(Clone, Debug)]
-pub struct PostRevisionRecord {
-    /// Unique identifier for this snapshot.
-    pub revision_id: RevisionId,
-    /// Durable identity of the Post whose prior state was captured.
-    pub post_id: PostId,
-    /// Owner copied from the Post at capture time.
-    pub user_id: UserId,
-    /// Authored title at capture time.
-    pub title: Option<PostTitle>,
-    /// Authored permalink slug at capture time.
-    pub slug: Slug,
-    /// Authored source at capture time.
-    pub body: PostBody,
-    /// Interpretation of the authored source at capture time.
-    pub format: PostFormat,
-    /// Sanitized rendered representation produced from the captured source.
-    pub rendered_html: RenderedHtml,
-    /// Optional authored summary at capture time.
-    pub summary: Option<PostSummary>,
-    /// Original Post creation time, not the capture time.
-    pub created_at: UtcInstant,
-    /// Prior Post modification time.
-    pub updated_at: UtcInstant,
-    /// Prior publication time, if the captured state was published or scheduled.
-    pub published_at: Option<UtcInstant>,
-    /// Prior deletion tombstone time, if the captured state was Deleted.
-    pub deleted_at: Option<UtcInstant>,
-    /// Time this immutable snapshot was captured.
-    pub captured_at: UtcInstant,
-    /// Normalized tag state at capture time.
-    pub tags: Vec<PostRevisionTag>,
-    /// Audience state at capture time.
-    pub audiences: Vec<AudienceTarget>,
-    /// Exact rendered-media references at capture time.
-    pub media: Vec<MediaReference>,
-}
-
-/// One normalized tag value belonging to an immutable Post Revision.
-#[derive(Clone, Debug)]
-pub struct PostRevisionTag {
-    /// Normalized slug copied at capture time rather than linked to mutable tags.
-    pub tag: Tag,
-    /// Display spelling captured with the revision.
-    pub display: TagLabel,
-}
-
-/// Lifecycle derived from a Post state at the supplied clock, never persisted as
-/// a separate mutable flag.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PostLifecycle {
-    Draft,
-    Scheduled,
-    Published,
-    Deleted,
-}
-
-/// One immutable revision row in a history list.
-#[derive(Clone, Debug)]
-pub struct PostRevisionMetadata {
-    pub revision_id: RevisionId,
-    pub post_id: PostId,
-    pub title: Option<PostTitle>,
-    pub slug: Slug,
-    pub captured_at: UtcInstant,
-    /// Lifecycle derived against `captured_at`, so it remains stable.
-    pub snapshot_lifecycle: PostLifecycle,
-    /// Whether the current durable Post is now Deleted.
-    pub current_deleted: bool,
-}
-
-/// The non-revision current state heading a per-Post history page.
-#[derive(Clone, Debug)]
-pub struct CurrentPostRevisionSummary {
-    pub post_id: PostId,
-    pub title: Option<PostTitle>,
-    pub slug: Slug,
-    pub format: PostFormat,
-    pub created_at: UtcInstant,
-    pub updated_at: UtcInstant,
-    pub published_at: Option<UtcInstant>,
-    pub deleted_at: Option<UtcInstant>,
-    /// Lifecycle derived at request time.
-    pub lifecycle: PostLifecycle,
-}
-
-/// Immutable-ID cursor for newest-first revision history pagination.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PostRevisionCursor {
-    pub revision_id: RevisionId,
-}
-
-/// One owner-only history page.
-#[derive(Clone, Debug)]
-pub struct PostRevisionPage {
-    pub revisions: Vec<PostRevisionMetadata>,
-    pub next_cursor: Option<PostRevisionCursor>,
-}
-
-/// An owner-only revision detail with its current Post context where applicable.
-#[derive(Clone, Debug)]
-pub struct PostRevisionDetail {
-    pub revision: PostRevisionRecord,
-}
-
-/// Non-authoritative metadata an Org ingress expects the stored post to match.
-///
-/// Storage evaluates this inside the write transaction: create compares after its
-/// successful unique-index insert, while update compares the locked pre-write row
-/// and its tag projection before creating a revision.
-#[derive(Clone, Debug, Default)]
-pub struct PostBookkeepingExpectation {
-    /// Final collision-resolved slug.
-    pub slug: Option<Slug>,
-    /// Final stored markup format.
-    pub format: Option<PostFormat>,
-    /// Final stored publication instant; `Some(None)` expects a draft.
-    pub published_at: Option<Option<UtcInstant>>,
-    /// Target identity for an update.
-    pub post_id: Option<PostId>,
-    /// Current pre-write content validator for an update.
-    pub content_etag: Option<ETag>,
-}
-
-/// Converts normalized Org bookkeeping into the persistence checks that must run
-/// inside the post write transaction.
-impl From<common::org::OrgBookkeeping> for PostBookkeepingExpectation {
-    fn from(bookkeeping: common::org::OrgBookkeeping) -> Self {
-        Self {
-            slug: bookkeeping.slug,
-            format: bookkeeping.format,
-            published_at: bookkeeping.date_utc.map(Some),
-            post_id: bookkeeping.post_id,
-            content_etag: bookkeeping.synced,
-        }
-    }
-}
-
-/// Errors that can occur when creating a post.
-#[derive(Debug, Error)]
-pub enum CreatePostError {
-    /// A post with the same slug already exists for this user on this day.
-    #[error("slug already taken for this user on this date")]
-    SlugConflict,
-    /// A non-authoritative bookkeeping property disagreed with the final row.
-    #[error("post bookkeeping does not match the stored post")]
-    BookkeepingMismatch,
-    /// The `(user_id, key)` pair already maps to the returned Post. The mapping
-    /// was selected under the same transaction that rejected this duplicate.
-    #[error("idempotency key already used for this user")]
-    IdempotencyConflict(PostId),
-    /// An unexpected database error occurred.
-    #[error(transparent)]
-    Internal(#[from] sqlx::Error),
-}
-/// The result of a successful post creation before its enclosing transaction
-/// has committed.
-pub struct CreatedPost {
-    pub record: PostRecord,
-    /// Whether the transaction retired an expired mapping before replacing it.
-    pub idempotency_key_expired: bool,
-}
-
-const IDEMPOTENCY_REPLAY_WINDOW_HOURS: i64 = 1;
-
-fn idempotency_replay_cutoff(now: UtcInstant) -> UtcInstant {
-    UtcInstant::from(now.value() - Duration::hours(IDEMPOTENCY_REPLAY_WINDOW_HOURS))
-}
-
-/// Errors that can occur when updating a post.
-#[derive(Debug, Error)]
-pub enum UpdatePostError {
-    /// The requested post does not exist.
-    #[error("post not found")]
-    NotFound,
-    /// The user is not authorized to edit this post.
-    #[error("not authorized")]
-    Unauthorized,
-    /// A non-authoritative target/final-state property disagreed with the locked row.
-    #[error("post bookkeeping does not match the stored post")]
-    BookkeepingMismatch,
-    /// The non-authoritative current-content validator is stale.
-    #[error("post content has changed")]
-    StaleContent,
-    /// An unexpected database error occurred.
-    #[error(transparent)]
-    Internal(#[from] sqlx::Error),
-}
-
-impl From<UpdatePostError> for host::error::InternalError {
-    /// Reproduces the former inline `web::posts::mod` mapper
-    /// `(kind, class, public_message)`: not-found/unauthorized mask as a 404;
-    /// an internal failure is a masked storage error.
-    fn from(error: UpdatePostError) -> Self {
-        use host::error::InternalError;
-        match error {
-            UpdatePostError::NotFound | UpdatePostError::Unauthorized => {
-                InternalError::not_found("Post")
-            }
-            UpdatePostError::BookkeepingMismatch | UpdatePostError::StaleContent => {
-                InternalError::validation_source(error.to_string(), error)
-            }
-            UpdatePostError::Internal(e) => InternalError::storage(e),
-        }
-    }
-}
-
-/// Cursor for keyset pagination of post listings.
-#[derive(Debug)]
-pub struct PostCursor {
-    /// Creation timestamp of the last item in the previous page.
-    pub created_at: UtcInstant,
-    /// ID of the last item in the previous page (used for stable ordering).
-    pub post_id: PostId,
-}
-
-/// Cursor for keyset pagination of the scheduled-post listing
-/// (ordered by `published_at ASC, post_id ASC`).
-#[derive(Debug)]
-pub struct ScheduledPostCursor {
-    /// Publication timestamp of the last item in the previous page.
-    pub published_at: UtcInstant,
-    /// ID of the last item in the previous page (used for stable ordering).
-    pub post_id: PostId,
-}
-
-/// Cursor for keyset pagination of the editor-facing per-user collection
-/// (ordered by `updated_at DESC, post_id DESC`).
-#[derive(Clone, Copy, Debug)]
-pub struct CollectionCursor {
-    /// Update timestamp of the last item in the previous page.
-    pub updated_at: UtcInstant,
-    /// ID of the last item in the previous page (used for stable ordering).
-    pub post_id: PostId,
-}
-
-/// Input for creating a new post.
-#[derive(Clone)]
-pub struct CreatePostInput {
-    pub user_id: UserId,
-    pub title: Option<PostTitle>,
-    pub slug: Slug,
-    pub body: PostBody,
-    pub format: PostFormat,
-    /// The rendered body together with the media it references — see [`RenderOutput`],
-    /// whose only constructor is rendering, so this input cannot carry a reference set
-    /// that disagrees with its HTML (#711).
-    pub rendered: RenderOutput,
-    /// If Some, the post is created in a published state.
-    pub published_at: Option<UtcInstant>,
-    /// Optional summary/excerpt of the post.
-    pub summary: Option<PostSummary>,
-    /// Audience targeting for the post. Each entry becomes a `post_audiences`
-    /// row; `Private` and an empty vec produce no rows (the post is private).
-    pub audiences: Vec<AudienceTarget>,
-    /// Tags attached atomically with the new post. Creation has no prior state,
-    /// so this never creates a revision.
-    pub tags: Vec<TagLabel>,
-    /// Non-authoritative Org bookkeeping to compare after the successful row insert.
-    pub expectations: PostBookkeepingExpectation,
-    /// If `Some`, atomically replay its live `(user_id, key)` mapping or
-    /// register the key against the new post. A replay returns
-    /// [`CreatePostError::IdempotencyConflict`] carrying the selected Post.
-    pub idempotency_key: Option<IdempotencyKey>,
-}
-
-/// What an update does to a Post's publication state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PublishUpdate {
-    /// Clear `published_at` back to NULL (draft / unschedule).
-    Unpublish,
-    /// Publish. `at = Some(t)` sets `published_at = t` (future = scheduled,
-    /// past = backdated-live). `at = None` keeps an existing timestamp or
-    /// stamps `now` for a previously-unpublished Post.
-    Publish { at: Option<UtcInstant> },
-}
-
-impl From<PublicationState> for PublishUpdate {
-    fn from(state: PublicationState) -> Self {
-        match state {
-            PublicationState::Draft => Self::Unpublish,
-            PublicationState::Scheduled(at) | PublicationState::Published(at) => {
-                Self::Publish { at: Some(at) }
-            }
-        }
-    }
-}
-
-/// Input for updating an existing post.
-#[derive(Clone)]
-pub struct UpdatePostInput {
-    pub title: Option<PostTitle>,
-    /// The new slug. Note: Slugs are typically immutable once published.
-    pub slug: Slug,
-    pub body: PostBody,
-    pub format: PostFormat,
-    /// The rendered body together with the media it references — see [`RenderOutput`].
-    /// An edit can remove a reference, so the set must always be the one this HTML
-    /// implies; deriving it is the only way to build one (#711).
-    pub rendered: RenderOutput,
-    /// What this update does to the Post's publication state.
-    pub publish: PublishUpdate,
-    /// Optional summary/excerpt of the post.
-    pub summary: Option<PostSummary>,
-    /// Audience targeting for the post. On update the existing
-    /// `post_audiences` rows are replaced to match this vec; `Private` and an
-    /// empty vec produce no rows (the post is private).
-    pub audiences: Vec<AudienceTarget>,
-    /// Tags replacing the current set inside this content mutation transaction.
-    pub tags: Vec<TagLabel>,
-    /// The single request clock used when publishing a previously-draft post now.
-    pub request_clock: UtcInstant,
-    /// Non-authoritative Org bookkeeping to compare under the owner lock.
-    pub expectations: PostBookkeepingExpectation,
-}
-
-/// A tag record returned by [`PostStorage`] tag queries.
-#[derive(Clone, Debug)]
-pub struct TagRecord {
-    pub tag_id: TagId,
-    pub tag_slug: Tag,
-}
-
-impl<'r, R> sqlx::FromRow<'r, R> for TagRecord
-where
-    R: Row,
-    &'r str: sqlx::ColumnIndex<R>,
-    TagId: Decode<'r, R::Database> + Type<R::Database>,
-    Tag: Decode<'r, R::Database> + Type<R::Database>,
-{
-    fn from_row(row: &'r R) -> Result<Self> {
-        let tag_id = row.try_get::<TagId, _>("tag_id")?;
-        let tag_slug = row.try_get::<Tag, _>("tag_slug")?;
-
-        Ok(Self { tag_id, tag_slug })
-    }
-}
-
-/// A post-tag association returned by [`PostStorage`] tag queries.
-#[derive(Clone, Debug)]
-pub struct PostTag {
-    pub post_id: PostId,
-    pub tag_id: TagId,
-    pub tag_slug: Tag,
-    /// The original case-sensitive display name of the tag.
-    pub tag_display: TagLabel,
-}
-
-impl<'r, R> sqlx::FromRow<'r, R> for PostTag
-where
-    R: Row,
-    &'r str: sqlx::ColumnIndex<R>,
-    PostId: Decode<'r, R::Database> + Type<R::Database>,
-    TagId: Decode<'r, R::Database> + Type<R::Database>,
-    Tag: Decode<'r, R::Database> + Type<R::Database>,
-    TagLabel: Decode<'r, R::Database> + Type<R::Database>,
-{
-    fn from_row(row: &'r R) -> Result<Self> {
-        let post_id = row.try_get::<PostId, _>("post_id")?;
-        let tag_id = row.try_get::<TagId, _>("tag_id")?;
-        let tag_slug = row.try_get::<Tag, _>("tag_slug")?;
-        let tag_display = row.try_get::<TagLabel, _>("tag_display")?;
-
-        Ok(Self {
-            post_id,
-            tag_id,
-            tag_slug,
-            tag_display,
-        })
-    }
-}
-
-/// A post that crossed into "live" within a time window, carrying exactly the
-/// data the feed worker needs to compute its affected feed URLs (the author's
-/// username and the post's tag slugs).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GoLivePost {
-    pub username: Username,
-    pub tag_slugs: Vec<Tag>,
-}
-
-/// The post's existing tags, read inside `set_post_tags`' transaction. The SQL is
-/// identical on both dialects, so it is shared here rather than duplicated per
-/// ADR-0019; only the surrounding transaction shape diverges. `ORDER BY` is not
-/// needed for the diff (which is set-based) but keeps the read deterministic,
-/// matching [`PostRecord::tags`] (#772).
-pub(crate) const SELECT_POST_TAGS: &str = "SELECT pt.post_id, pt.tag_id, t.tag_slug, pt.tag_display
-     FROM post_tags pt
-     JOIN tags t ON pt.tag_id = t.tag_id
-     WHERE pt.post_id = $1
-     ORDER BY t.tag_slug";
-
-/// Get-or-create a tag by slug, returning its id in **one** statement.
-///
-/// The no-op `DO UPDATE` is load-bearing: `DO NOTHING` emits no row for
-/// `RETURNING` on the conflict path, which would force a second `SELECT` and
-/// open a window in which a concurrently deleted tag yields `RowNotFound`
-/// (#883). Rewriting `tag_slug` to the value it already holds makes the id come
-/// back on both the insert and the conflict path. #343 landed the same shape
-/// for `subscriptions`; both dialects run it.
-///
-/// Shared rather than per-dialect: `SQLite` accepts `$n` placeholders and
-/// `ON CONFLICT … DO UPDATE … RETURNING`.
-///
-/// **Takes a row lock on the tag until commit**, which is why
-/// [`post_tag_diff`] hands additions back in slug order.
-///
-/// Bind order: `tag_slug`.
-pub(crate) const UPSERT_TAG_RETURNING_ID: &str = "INSERT INTO tags (tag_slug) VALUES ($1)
-     ON CONFLICT (tag_slug) DO UPDATE SET tag_slug = excluded.tag_slug
-     RETURNING tag_id";
-
-/// Attaches a tag to a post, tolerating the row already being there.
-///
-/// `DO NOTHING`, not `DO UPDATE`: `desired` may carry two labels sharing a slug
-/// ([`post_tag_diff`] does not dedupe) and the first occurrence's casing must
-/// win, so the existing row is left exactly as it is. Nothing reads a value
-/// back, so there is no reason to force a row out of the conflict path here.
-///
-/// Bind order: `post_id, tag_id, tag_display`.
-pub(crate) const INSERT_POST_TAG: &str = "INSERT INTO post_tags
-     (post_id, tag_id, tag_display) VALUES ($1, $2, $3)
-     ON CONFLICT (post_id, tag_id) DO NOTHING";
-
-/// Drops one tag from a post, by slug, inside `set_post_tags`' transaction. The
-/// SQL is identical on both dialects, so it is shared here per ADR-0019.
-///
-/// `rows_affected` is deliberately never checked by callers: the slug came from
-/// the tags read in the same transaction, so "no row deleted" is not an error.
-pub(crate) const DELETE_POST_TAG_BY_SLUG: &str = "DELETE FROM post_tags
-     WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)";
-
-/// Captures every scalar field belonging to a complete immutable prior Post
-/// state. Child snapshot writes intentionally remain with Task 2's transaction.
-/// Bind order: `captured_at, post_id`.
-pub(crate) const INSERT_COMPLETE_POST_REVISION: &str = "INSERT INTO post_revisions
-     (post_id, user_id, title, slug, body, format, rendered_html, summary,
-      created_at, updated_at, published_at, deleted_at, captured_at)
-     SELECT post_id, user_id, title, slug, body, format, rendered_html, summary,
-            created_at, updated_at, published_at, deleted_at, $1
-     FROM posts WHERE post_id = $2
-     RETURNING revision_id";
-
-/// The locked pre-write columns needed for final-state and content expectations.
-#[derive(sqlx::FromRow)]
-pub(crate) struct PostBookkeepingRow {
-    pub user_id: UserId,
-    pub deleted_at: Option<UtcInstant>,
-    pub title: Option<PostTitle>,
-    pub slug: Slug,
-    pub body: PostBody,
-    pub format: PostFormat,
-    pub rendered_html: RenderedHtml,
-    pub summary: Option<PostSummary>,
-    pub published_at: Option<UtcInstant>,
-}
-
-/// The slug-level difference between a post's existing tags and a desired set
-/// of display tokens, as computed by [`post_tag_diff`].
-///
-/// Borrows from both inputs. Applied by `set_post_tags` inside its transaction;
-/// no caller performs the writes itself (#771).
-pub(crate) struct PostTagDiff<'a> {
-    /// Labels to add (their slug is not already present on the post).
-    ///
-    /// **Slug-ordered, contractually.** [`UPSERT_TAG_RETURNING_ID`] locks each
-    /// `tags` row until commit, so applying these in a caller-supplied order lets
-    /// two concurrent reconciles deadlock on Postgres (#876). The order is stable,
-    /// so two labels sharing a slug keep their input order and the first
-    /// occurrence's casing wins. Do not re-sort or re-shuffle at the call site.
-    pub to_add: Vec<&'a TagLabel>,
-    /// Existing tags to remove (their slug is not in the desired set).
-    pub to_remove: Vec<&'a Tag>,
-}
-
-/// Diffs a post's `existing` tags against a `desired` set of [`TagLabel`]s.
-///
-/// Tagging is keyed on slug, so a desired label is "to add" only when no
-/// existing tag shares its slug, and an existing tag is "to remove" only when
-/// no desired label maps to its slug. Each `desired` label is already valid (its
-/// `FromStr` ran at the boundary), so nothing is skipped here. Re-applying an
-/// existing tag with different display casing is a no-op (the existing row's
-/// casing is preserved by storage).
-///
-/// This is the pure core of `set_post_tags`, which applies the result inside its
-/// own transaction on both dialects (#771).
-#[must_use]
-pub(crate) fn post_tag_diff<'a>(
-    existing: &'a [PostTag],
-    desired: &'a [TagLabel],
-) -> PostTagDiff<'a> {
-    use std::collections::HashSet;
-
-    let existing_slugs: HashSet<Tag> = existing.iter().map(|t| t.tag_slug.clone()).collect();
-    let desired_slugs: HashSet<Tag> = desired.iter().map(TagLabel::slug).collect();
-
-    let mut to_add: Vec<&'a TagLabel> = desired
-        .iter()
-        .filter(|label| !existing_slugs.contains(&label.slug()))
-        .collect();
-    // Slug order, so every transaction takes `tags` row locks in the same order —
-    // caller-supplied order can deadlock concurrent reconciles on Postgres (#876,
-    // docs/adr/0125-slug-ordered-tag-lock-acquisition.md).
-    //
-    // `sort_by_key`, not `sort_unstable_by_key`: `desired` may carry two labels
-    // sharing a slug and the FIRST occurrence's casing must still win, which
-    // `set_post_tags_is_idempotent_and_absorbs_duplicate_slugs` asserts.
-    to_add.sort_by_key(|label| label.slug());
-    let to_remove = existing
-        .iter()
-        .filter(|tag| !desired_slugs.contains(&tag.tag_slug))
-        .map(|tag| &tag.tag_slug)
-        .collect();
-
-    PostTagDiff { to_add, to_remove }
-}
-
-/// Errors that can occur when tagging a post.
-#[derive(Debug, Error)]
-pub enum TaggingError {
-    /// The target post is absent from the active owner surface.
-    #[error("post not found")]
-    PostNotFound,
-    /// The post belongs to another owner.
-    #[error("not authorized to tag this post")]
-    Unauthorized,
-    /// An unexpected database error occurred.
-    #[error(transparent)]
-    Internal(#[from] sqlx::Error),
-}
-
-impl From<TaggingError> for host::error::InternalError {
-    /// Preserves the current wire class of the `set_post_tags` lift:
-    /// the former `web` sites used `InternalError::server_message(e.to_string())`
-    /// (kind `Internal`, public `"server operation failed"`). Routing through
-    /// `server` keeps that projection while carrying the typed `TaggingError`
-    /// as the operator-side source instead of stringifying it (A19).
-    fn from(error: TaggingError) -> Self {
-        host::error::InternalError::server(error)
-    }
-}
-
-/// Errors that can occur when listing posts by tag.
-#[derive(Debug, Error)]
-pub enum ListByTagError {
-    /// The specified tag does not exist.
-    #[error("tag not found")]
-    TagNotFound,
-    /// An unexpected database error occurred.
-    #[error(transparent)]
-    Internal(#[from] sqlx::Error),
-}
 
 // ---------------------------------------------------------------------------
 // Cursor + effectful post orchestration
@@ -787,86 +60,6 @@ pub enum ListByTagError {
 // `host` floor cannot name — so they home here in `storage`, returning
 // `host::error::InternalError` where fallible.
 // ---------------------------------------------------------------------------
-
-/// Projects a [`PostRecord`] onto the keyset [`PostCursor`] that paginates the
-/// listing after it.
-#[must_use]
-pub fn to_post_cursor(post: &PostRecord) -> PostCursor {
-    PostCursor {
-        created_at: post.created_at,
-        post_id: post.post_id,
-    }
-}
-
-/// Projects a wire [`PageCursor`] onto the storage-side [`PostCursor`].
-///
-/// Infallible by construction, not by omission: the boundary parse ADR-0063 §4
-/// asks for has already happened one layer out, at the `#[server]` argument —
-/// `PageCursor` bundles the keyset components, so arg-decode rejects a half
-/// cursor before any handler body runs. Nothing is left here to reject, which is
-/// the whole point of taking the pair as one type rather than two `Option`s.
-#[must_use]
-pub fn keyset_cursor(cursor: Option<PageCursor>) -> Option<PostCursor> {
-    cursor.map(|c| PostCursor {
-        created_at: c.created_at,
-        post_id: c.post_id,
-    })
-}
-
-/// Projects the storage-side [`PostCursor`] back onto the wire [`PageCursor`] a
-/// page hands the client as its `next_cursor` — the inverse of
-/// [`keyset_cursor`], and kept beside it so the round trip reads as one pair.
-#[must_use]
-pub fn wire_cursor(cursor: &PostCursor) -> PageCursor {
-    PageCursor {
-        created_at: cursor.created_at,
-        post_id: cursor.post_id,
-    }
-}
-
-/// Projects a wire [`PageCursor`] onto the storage-side scheduled-post cursor.
-///
-/// The existing wire cursor shape is reused for author-only post lists; on the
-/// scheduled surface its timestamp component carries the `published_at` key, not
-/// the creation timestamp.
-#[must_use]
-pub fn scheduled_keyset_cursor(cursor: Option<PageCursor>) -> Option<ScheduledPostCursor> {
-    cursor.map(|c| ScheduledPostCursor {
-        published_at: c.created_at,
-        post_id: c.post_id,
-    })
-}
-
-/// Projects a scheduled row onto the keyset cursor that paginates after it.
-///
-/// The storage query that feeds this helper selects only `published_at IS NOT
-/// NULL` rows. Returning a typed error instead of silently dropping the cursor
-/// keeps a broken query projection from turning pagination into a duplicate page.
-///
-/// # Errors
-///
-/// Returns an internal error if a row from the scheduled-post listing lacks
-/// `published_at`, which would make the next-page cursor undefined.
-pub fn to_scheduled_post_cursor(post: &PostRecord) -> InternalResult<ScheduledPostCursor> {
-    let Some(published_at) = post.published_at else {
-        return Err(InternalError::server_message(
-            "scheduled listing row missing published_at",
-        ));
-    };
-    Ok(ScheduledPostCursor {
-        published_at,
-        post_id: post.post_id,
-    })
-}
-
-/// Projects the storage-side scheduled cursor back onto the shared wire cursor.
-#[must_use]
-pub fn wire_scheduled_cursor(cursor: &ScheduledPostCursor) -> PageCursor {
-    PageCursor {
-        created_at: cursor.published_at,
-        post_id: cursor.post_id,
-    }
-}
 
 /// The shared public-permalink lookup used by both the `get_post` server fn and
 /// the non-reactive public projector.
@@ -911,251 +104,6 @@ pub fn list_by_tag_rows(
         Ok(rows) => Ok(rows),
         Err(ListByTagError::TagNotFound) => Ok(Vec::new()),
         Err(ListByTagError::Internal(e)) => Err(InternalError::storage(e)),
-    }
-}
-
-/// Exact retained state that names a media reference.
-///
-/// A revision identity is part of the persisted key: treating it as merely
-/// another copy of a Post's current references would let current-row evidence
-/// authorize deletion while a concurrent historical row remains protected.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PersistedMediaSubject {
-    /// The current durable Post state.
-    Current,
-    /// One immutable prior state of the Post.
-    Revision(RevisionId),
-}
-
-/// The exact stored discriminator for a retained media reference subject.
-#[macros::text_enum(
-    sqlx,
-    error = InvalidPersistedMediaSubjectKind,
-    message = "invalid persisted media subject kind"
-)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[strum(serialize_all = "snake_case")]
-pub(crate) enum PersistedMediaSubjectKind {
-    Current,
-    Revision,
-}
-
-impl PersistedMediaSubject {
-    #[must_use]
-    pub(crate) const fn kind(self) -> PersistedMediaSubjectKind {
-        match self {
-            Self::Current => PersistedMediaSubjectKind::Current,
-            Self::Revision(_) => PersistedMediaSubjectKind::Revision,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn revision_id(self) -> RevisionId {
-        match self {
-            Self::Current => RevisionId::from(0),
-            Self::Revision(revision_id) => revision_id,
-        }
-    }
-}
-
-/// The exact persisted spelling of one media reference in one retained Post subject.
-///
-/// This is deliberately the database key, rather than a lossy media identity:
-/// foreign ownership evidence must not authorize a similarly named row.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PersistedMediaReference {
-    post_id: PostId,
-    subject: PersistedMediaSubject,
-    owner_id: Option<UserId>,
-    media: MediaRef,
-    kind: MediaReferenceKind,
-    reference_form: MediaReferenceForm,
-}
-
-impl PersistedMediaReference {
-    /// Constructs an exact reference for the current Post subject.
-    #[must_use]
-    pub fn new(
-        post_id: PostId,
-        media: MediaRef,
-        kind: MediaReferenceKind,
-        reference_form: MediaReferenceForm,
-    ) -> Self {
-        Self::for_subject(
-            post_id,
-            PersistedMediaSubject::Current,
-            media,
-            kind,
-            reference_form,
-        )
-    }
-
-    /// Constructs an exact reference for either retained subject.
-    #[must_use]
-    pub fn for_subject(
-        post_id: PostId,
-        subject: PersistedMediaSubject,
-        media: MediaRef,
-        kind: MediaReferenceKind,
-        reference_form: MediaReferenceForm,
-    ) -> Self {
-        Self {
-            post_id,
-            subject,
-            owner_id: None,
-            media,
-            kind,
-            reference_form,
-        }
-    }
-
-    #[must_use]
-    pub fn post_id(&self) -> PostId {
-        self.post_id
-    }
-
-    #[must_use]
-    pub fn subject(&self) -> PersistedMediaSubject {
-        self.subject
-    }
-
-    #[must_use]
-    pub fn owner_id(&self) -> Option<UserId> {
-        self.owner_id
-    }
-
-    pub(crate) fn with_owner(mut self, owner_id: UserId) -> Self {
-        self.owner_id = Some(owner_id);
-        self
-    }
-
-    #[must_use]
-    pub fn media(&self) -> &MediaRef {
-        &self.media
-    }
-
-    #[must_use]
-    pub fn kind(&self) -> MediaReferenceKind {
-        self.kind
-    }
-
-    #[must_use]
-    pub fn reference_form(&self) -> &MediaReferenceForm {
-        &self.reference_form
-    }
-}
-
-/// Maximum exact-reference rows examined for one live ownership decision.
-///
-/// The sentinel-bearing snapshot prevents a media deletion from materializing
-/// unbounded author-controlled rows. Rows beyond this limit receive no foreign
-/// evidence and therefore remain conservatively live.
-pub const MAX_MEDIA_REFERENCE_SNAPSHOT: usize = 128;
-
-/// The sentinel-bearing maximum row count passed to the media-reference snapshot query.
-#[derive(Clone, Copy, Debug, macros::SqlxBridge)]
-pub(crate) struct MediaReferenceSnapshotLimit(i64);
-
-const MEDIA_REFERENCE_SNAPSHOT_QUERY_LIMIT: MediaReferenceSnapshotLimit =
-    MediaReferenceSnapshotLimit(129);
-
-/// A bounded exact-reference snapshot for one media identity.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MediaReferenceSnapshot {
-    references: Vec<PersistedMediaReference>,
-    has_unexamined_references: bool,
-}
-
-impl MediaReferenceSnapshot {
-    #[must_use]
-    pub fn new(references: Vec<PersistedMediaReference>, has_unexamined_references: bool) -> Self {
-        debug_assert!(references.len() <= MAX_MEDIA_REFERENCE_SNAPSHOT);
-        Self {
-            references,
-            has_unexamined_references,
-        }
-    }
-
-    #[must_use]
-    pub fn references(&self) -> &[PersistedMediaReference] {
-        &self.references
-    }
-
-    #[must_use]
-    pub fn has_unexamined_references(&self) -> bool {
-        self.has_unexamined_references
-    }
-}
-
-/// A foreign instance's signed/verified ownership assertion for one exact row.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ProvenForeignReference {
-    reference: PersistedMediaReference,
-    expected_instance_id: InstanceId,
-}
-
-impl ProvenForeignReference {
-    #[must_use]
-    pub(crate) fn new(
-        reference: PersistedMediaReference,
-        expected_instance_id: InstanceId,
-    ) -> Self {
-        Self {
-            reference,
-            expected_instance_id,
-        }
-    }
-
-    #[must_use]
-    pub fn reference(&self) -> &PersistedMediaReference {
-        &self.reference
-    }
-
-    #[must_use]
-    pub fn expected_instance_id(&self) -> &InstanceId {
-        &self.expected_instance_id
-    }
-}
-
-/// Completed, network-free foreign ownership evidence for one storage decision.
-#[derive(Clone, Debug)]
-pub struct MediaReferenceEvidence {
-    expected_instance_id: InstanceId,
-    references: BTreeSet<ProvenForeignReference>,
-}
-
-impl MediaReferenceEvidence {
-    #[must_use]
-    pub fn new(expected_instance_id: InstanceId) -> Self {
-        Self {
-            expected_instance_id,
-            references: BTreeSet::new(),
-        }
-    }
-
-    /// Adds a proof only when it is for this snapshot's expected instance.
-    pub fn insert(&mut self, proof: ProvenForeignReference) -> bool {
-        if proof.expected_instance_id != self.expected_instance_id {
-            return false;
-        }
-        self.references.insert(proof)
-    }
-
-    #[must_use]
-    pub fn expected_instance_id(&self) -> &InstanceId {
-        &self.expected_instance_id
-    }
-
-    #[must_use]
-    pub fn references(&self) -> &BTreeSet<ProvenForeignReference> {
-        &self.references
-    }
-
-    #[must_use]
-    pub fn proves_foreign(&self, reference: &PersistedMediaReference) -> bool {
-        self.references
-            .iter()
-            .any(|proof| proof.reference() == reference)
     }
 }
 
@@ -1668,259 +616,6 @@ pub trait PostDialect: Backend {
     ) -> Result<Vec<PostId>>;
 }
 
-/// Appends a dynamic evidence relation for one ownership decision.
-///
-/// Every row includes the complete persisted key and the instance identity it
-/// was proved against.  The matching predicate below deliberately compares all
-/// of them: a foreign proof must not exempt a newly inserted spelling, a
-/// differently keyed media entry, or evidence collected for another instance.
-pub(crate) fn push_media_reference_evidence_cte<'a, DB>(
-    query: &mut QueryBuilder<'a, DB>,
-    evidence: &'a MediaReferenceEvidence,
-) where
-    DB: Database,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-    for<'q> &'q InstanceId: Encode<'q, DB> + Type<DB>,
-{
-    query.push(
-        "WITH foreign_evidence \
-         (post_id, subject_kind, revision_id, source, sha256, filename, reference_kind, reference_form, expected_instance_id) AS (",
-    );
-    if evidence.references.is_empty() {
-        // Explicit types keep the empty CTE valid on Postgres while SQLite accepts
-        // the same portable spelling.
-        query.push(
-            "SELECT CAST(NULL AS BIGINT), CAST(NULL AS TEXT), CAST(NULL AS BIGINT), \
-             CAST(NULL AS TEXT), CAST(NULL AS TEXT), CAST(NULL AS TEXT), CAST(NULL AS TEXT), \
-             CAST(NULL AS TEXT), CAST(NULL AS TEXT) WHERE FALSE",
-        );
-    } else {
-        query.push("VALUES ");
-        for (index, proof) in evidence.references.iter().enumerate() {
-            if index > 0 {
-                query.push(", ");
-            }
-            let reference = proof.reference();
-            query
-                .push("(")
-                .push_storage_bind(reference.post_id())
-                .push(", ")
-                .push_storage_bind(reference.subject().kind())
-                .push(", ")
-                .push_storage_bind(reference.subject().revision_id())
-                .push(", ")
-                .push_storage_bind(reference.media().source)
-                .push(", ")
-                .push_storage_bind(reference.media().sha256.clone())
-                .push(", ")
-                .push_storage_bind(reference.media().filename.clone())
-                .push(", ")
-                .push_storage_bind(reference.kind())
-                .push(", ")
-                .push_storage_bind(reference.reference_form().clone())
-                .push(", ")
-                .push_storage_bind(proof.expected_instance_id())
-                .push(")");
-        }
-    }
-    query.push(") ");
-}
-
-/// Appends the sole rule for a persisted reference to remain live: it is not an
-/// exact foreign proof made for the current instance identity.
-pub(crate) fn push_live_media_reference_predicate<'a, DB>(
-    query: &mut QueryBuilder<'a, DB>,
-    current_instance_id: &'a InstanceId,
-) where
-    DB: Database,
-    for<'q> &'q InstanceId: Encode<'q, DB> + Type<DB>,
-{
-    query.push(
-        " AND NOT EXISTS (\
-           SELECT 1 FROM foreign_evidence evidence \
-           WHERE evidence.post_id = pm.post_id \
-             AND evidence.subject_kind = pm.subject_kind \
-             AND evidence.revision_id = pm.revision_id \
-             AND evidence.source = pm.source \
-             AND evidence.sha256 = pm.sha256 \
-             AND evidence.filename = pm.filename \
-             AND evidence.reference_kind = pm.reference_kind \
-             AND evidence.reference_form = pm.reference_form \
-             AND evidence.expected_instance_id = ",
-    );
-    query.push_storage_bind(current_instance_id);
-    query.push(")");
-}
-
-/// Appends the owner-scoped reference lookup and its binds.
-pub(crate) fn push_owner_media_reference_from_where<DB>(
-    query: &mut QueryBuilder<'_, DB>,
-    user_id: UserId,
-    media: &MediaRef,
-) where
-    DB: Database,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-{
-    query
-        .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE p.user_id = ")
-        .push_storage_bind(user_id)
-        .push(" AND pm.source = ")
-        .push_storage_bind(media.source)
-        .push(" AND pm.sha256 = ")
-        .push_storage_bind(media.sha256.clone())
-        .push(" AND pm.filename = ")
-        .push_storage_bind(media.filename.clone());
-}
-pub(crate) fn push_any_media_reference_from_where<DB>(
-    query: &mut QueryBuilder<'_, DB>,
-    media: &MediaRef,
-) where
-    DB: Database,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-{
-    query
-        .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE pm.source = ")
-        .push_storage_bind(media.source)
-        .push(" AND pm.sha256 = ")
-        .push_storage_bind(media.sha256.clone())
-        .push(" AND pm.filename = ")
-        .push_storage_bind(media.filename.clone());
-}
-
-/// Appends a non-owner reference lookup for the global accounting safeguard.
-///
-/// Web force may break the request owner's retained reconstruction, but it
-/// never deletes the only accounting row while another owner's retained subject
-/// still names the entry.
-pub(crate) fn push_other_owner_media_reference_from_where<DB>(
-    query: &mut QueryBuilder<'_, DB>,
-    user_id: UserId,
-    media: &MediaRef,
-) where
-    DB: Database,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-{
-    query
-        .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE p.user_id <> ")
-        .push_storage_bind(user_id)
-        .push(" AND pm.source = ")
-        .push_storage_bind(media.source)
-        .push(" AND pm.sha256 = ")
-        .push_storage_bind(media.sha256.clone())
-        .push(" AND pm.filename = ")
-        .push_storage_bind(media.filename.clone());
-}
-
-/// The typed columns that make up one immutable revision snapshot.
-///
-/// This is decoded explicitly rather than through a positional `SQLx` tuple so
-/// persisted values always cross the storage boundary as domain types.
-struct RevisionDetailRow {
-    revision_id: RevisionId,
-    post_id: PostId,
-    user_id: UserId,
-    title: Option<PostTitle>,
-    slug: Slug,
-    body: PostBody,
-    format: PostFormat,
-    rendered_html: RenderedHtml,
-    summary: Option<PostSummary>,
-    created_at: UtcInstant,
-    updated_at: UtcInstant,
-    published_at: Option<UtcInstant>,
-    deleted_at: Option<UtcInstant>,
-    captured_at: UtcInstant,
-}
-
-/// The typed columns required to render one immutable revision in a history list.
-struct RevisionMetadataRow {
-    revision_id: RevisionId,
-    post_id: PostId,
-    title: Option<PostTitle>,
-    slug: Slug,
-    captured_at: UtcInstant,
-    deleted_at: Option<UtcInstant>,
-    published_at: Option<UtcInstant>,
-    current_deleted_at: Option<UtcInstant>,
-}
-
-/// Decodes a raw SQL row into a storage-internal typed projection.
-trait DecodeRawRow<DB: Database>: Sized {
-    fn decode(row: DB::Row) -> Result<Self>;
-}
-
-impl<DB> DecodeRawRow<DB> for RevisionDetailRow
-where
-    DB: Database,
-    for<'r> RevisionId: Decode<'r, DB> + Type<DB>,
-    for<'r> PostId: Decode<'r, DB> + Type<DB>,
-    for<'r> UserId: Decode<'r, DB> + Type<DB>,
-    for<'r> Option<PostTitle>: Decode<'r, DB> + Type<DB>,
-    for<'r> Slug: Decode<'r, DB> + Type<DB>,
-    for<'r> PostBody: Decode<'r, DB> + Type<DB>,
-    for<'r> PostFormat: Decode<'r, DB> + Type<DB>,
-    for<'r> RenderedHtml: Decode<'r, DB> + Type<DB>,
-    for<'r> Option<PostSummary>: Decode<'r, DB> + Type<DB>,
-    for<'r> UtcInstant: Decode<'r, DB> + Type<DB>,
-    for<'r> Option<UtcInstant>: Decode<'r, DB> + Type<DB>,
-    for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
-{
-    fn decode(row: DB::Row) -> Result<Self> {
-        Ok(Self {
-            revision_id: row.try_get::<RevisionId, _>("revision_id")?,
-            post_id: row.try_get::<PostId, _>("post_id")?,
-            user_id: row.try_get::<UserId, _>("user_id")?,
-            title: row.try_get::<Option<PostTitle>, _>("title")?,
-            slug: row.try_get::<Slug, _>("slug")?,
-            body: row.try_get::<PostBody, _>("body")?,
-            format: row.try_get::<PostFormat, _>("format")?,
-            rendered_html: row.try_get::<RenderedHtml, _>("rendered_html")?,
-            summary: row.try_get::<Option<PostSummary>, _>("summary")?,
-            created_at: row.try_get::<UtcInstant, _>("created_at")?,
-            updated_at: row.try_get::<UtcInstant, _>("updated_at")?,
-            published_at: row.try_get::<Option<UtcInstant>, _>("published_at")?,
-            deleted_at: row.try_get::<Option<UtcInstant>, _>("deleted_at")?,
-            captured_at: row.try_get::<UtcInstant, _>("captured_at")?,
-        })
-    }
-}
-
-impl<DB> DecodeRawRow<DB> for RevisionMetadataRow
-where
-    DB: Database,
-    for<'r> RevisionId: Decode<'r, DB> + Type<DB>,
-    for<'r> PostId: Decode<'r, DB> + Type<DB>,
-    for<'r> Option<PostTitle>: Decode<'r, DB> + Type<DB>,
-    for<'r> Slug: Decode<'r, DB> + Type<DB>,
-    for<'r> UtcInstant: Decode<'r, DB> + Type<DB>,
-    for<'r> Option<UtcInstant>: Decode<'r, DB> + Type<DB>,
-    for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
-{
-    fn decode(row: DB::Row) -> Result<Self> {
-        Ok(Self {
-            revision_id: row.try_get::<RevisionId, _>("revision_id")?,
-            post_id: row.try_get::<PostId, _>("post_id")?,
-            title: row.try_get::<Option<PostTitle>, _>("title")?,
-            slug: row.try_get::<Slug, _>("slug")?,
-            captured_at: row.try_get::<UtcInstant, _>("captured_at")?,
-            deleted_at: row.try_get::<Option<UtcInstant>, _>("deleted_at")?,
-            published_at: row.try_get::<Option<UtcInstant>, _>("published_at")?,
-            current_deleted_at: row.try_get::<Option<UtcInstant>, _>("current_deleted_at")?,
-        })
-    }
-}
-
 /// Generic [`PostStorage`] backed by any [`PostDialect`] database.
 ///
 /// Every read and the non-transactional shared mutations live here, splicing
@@ -2052,7 +747,7 @@ where
     ) -> Result<CreatedPost, CreatePostError> {
         let connection = DB::write_connection(transaction)?;
         let (post_id, idempotency_key_expired) =
-            write_post_in_tx::<DB>(connection, input, now).await?;
+            lifecycle::write_post_in_tx::<DB>(connection, input, now).await?;
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format,
                     p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
@@ -2094,7 +789,8 @@ where
         DB::lock_media_references(connection, &media).await?;
         let mut ids = Vec::with_capacity(inputs.len());
         for input in inputs {
-            let (post_id, _) = write_post_in_tx::<DB>(connection, input, UtcInstant::now()).await?;
+            let (post_id, _) =
+                lifecycle::write_post_in_tx::<DB>(connection, input, UtcInstant::now()).await?;
             ids.push(post_id);
         }
         Ok(ids)
@@ -2111,7 +807,7 @@ where
         key: &IdempotencyKey,
         now: UtcInstant,
     ) -> Result<Option<PostId>, sqlx::Error> {
-        let cutoff = idempotency_replay_cutoff(now);
+        let cutoff = lifecycle::idempotency_replay_cutoff(now);
         sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM idempotency_keys
              WHERE user_id = $1 AND key = $2 AND created_at > $3",
@@ -2130,7 +826,7 @@ where
     )]
     async fn prune_expired_idempotency_keys(&self, now: UtcInstant) -> Result<u64, sqlx::Error> {
         const BATCH_SIZE: RowLimit = RowLimit::at_most(100);
-        let cutoff = idempotency_replay_cutoff(now);
+        let cutoff = lifecycle::idempotency_replay_cutoff(now);
         let mut deleted = 0;
 
         loop {
@@ -2169,7 +865,7 @@ where
         post_id: PostId,
         viewer: &ViewerIdentity,
     ) -> Result<Option<PostRecord>> {
-        let (resolution, binds, _) = resolution_where(viewer, 2);
+        let (resolution, binds, _) = visibility::resolution_where(viewer, 2);
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
                     p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
@@ -2191,10 +887,15 @@ where
         cursor: Option<PostRevisionCursor>,
         page_size: PageSize,
     ) -> Result<PostRevisionPage> {
-        let rows =
-            revision_metadata_rows(&self.pool, user_id, None, cursor, page_size.fetch_limit())
-                .await?;
-        Ok(revision_page(rows, page_size))
+        let rows = lifecycle::revision_metadata_rows(
+            &self.pool,
+            user_id,
+            None,
+            cursor,
+            page_size.fetch_limit(),
+        )
+        .await?;
+        Ok(lifecycle::revision_page(rows, page_size))
     }
 
     #[tracing::instrument(name = "storage.posts.list_post_revision_history", skip(self))]
@@ -2215,7 +916,7 @@ where
         let Some(_) = owned else {
             return Ok(None);
         };
-        let rows = revision_metadata_rows(
+        let rows = lifecycle::revision_metadata_rows(
             &self.pool,
             user_id,
             Some(post_id),
@@ -2223,7 +924,7 @@ where
             page_size.fetch_limit(),
         )
         .await?;
-        Ok(Some(revision_page(rows, page_size)))
+        Ok(Some(lifecycle::revision_page(rows, page_size)))
     }
 
     #[tracing::instrument(name = "storage.posts.get_current_revision_summary", skip(self))]
@@ -2261,7 +962,7 @@ where
                     updated_at,
                     published_at,
                     deleted_at,
-                    lifecycle: post_lifecycle(deleted_at, published_at, now),
+                    lifecycle: lifecycle::post_lifecycle(deleted_at, published_at, now),
                 }
             },
         ))
@@ -2285,9 +986,9 @@ where
         .bind_storage(user_id)
         .fetch_optional(&self.pool)
         .await?
-        .map(RevisionDetailRow::decode)
+        .map(lifecycle::RevisionDetailRow::decode)
         .transpose()?;
-        let Some(RevisionDetailRow {
+        let Some(lifecycle::RevisionDetailRow {
             revision_id,
             post_id,
             user_id,
@@ -2360,12 +1061,14 @@ where
                     .collect(),
                 audiences: audiences
                     .into_iter()
-                    .filter_map(|(kind, audience_id)| audience_target_from_row(kind, audience_id))
+                    .filter_map(|(kind, audience_id)| {
+                        visibility::audience_target_from_row(kind, audience_id)
+                    })
                     .collect(),
                 media: media
                     .into_iter()
                     .map(|(_, _, _, _, form)| {
-                        let Some(reference) = media::parse_media_url(form.as_ref()) else {
+                        let Some(reference) = common::media::parse_media_url(form.as_ref()) else {
                             unreachable!("MediaReferenceForm decodes only exact parser output");
                         };
                         reference
@@ -2395,7 +1098,9 @@ where
         .await?;
         Ok(rows
             .into_iter()
-            .filter_map(|(kind, audience_id)| audience_target_from_row(kind, audience_id))
+            .filter_map(|(kind, audience_id)| {
+                visibility::audience_target_from_row(kind, audience_id)
+            })
             .collect())
     }
 
@@ -2426,11 +1131,11 @@ where
         .bind_storage(media.source)
         .bind_storage(&media.sha256)
         .bind_storage(&media.filename)
-        .bind_storage(MEDIA_REFERENCE_SNAPSHOT_QUERY_LIMIT)
+        .bind_storage(media::MEDIA_REFERENCE_SNAPSHOT_QUERY_LIMIT)
         .fetch_all(&self.pool)
         .await?;
-        let has_unexamined_references = rows.len() > MAX_MEDIA_REFERENCE_SNAPSHOT;
-        rows.truncate(MAX_MEDIA_REFERENCE_SNAPSHOT);
+        let has_unexamined_references = rows.len() > media::MAX_MEDIA_REFERENCE_SNAPSHOT;
+        rows.truncate(media::MAX_MEDIA_REFERENCE_SNAPSHOT);
         Ok(MediaReferenceSnapshot::new(
             rows.into_iter()
                 .map(
@@ -2498,7 +1203,7 @@ where
         now: UtcInstant,
     ) -> Result<Option<PostRecord>> {
         let date_text = PermalinkDateText::from(date);
-        let (resolution, binds, _) = resolution_where(viewer, 5);
+        let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
         // `published_at <= $4` hides scheduled (future-dated) posts until due.
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -2678,7 +1383,7 @@ where
             // Binds: $1 username, $2/$3 cursor, $4 post_id, $5 now, then the
             // resolution fragment from $6 — 3 or 5 placeholders depending on the
             // viewer variant — and the limit at the returned `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 6);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 6);
             // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -2709,7 +1414,7 @@ where
         } else {
             // Binds: $1 username, $2 now, then the variant-sized resolution
             // fragment from $3 and the limit at the returned `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 3);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 3);
             // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -2753,7 +1458,7 @@ where
         let rows = if let Some(cursor) = cursor {
             // Binds: $1/$2 cursor, $3 post_id, $4 now, then the variant-sized
             // resolution fragment from $5 and the limit at `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 5);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 5);
             // `published_at <= $4` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -2782,7 +1487,7 @@ where
         } else {
             // Binds: $1 now, then the variant-sized resolution fragment from $2
             // and the limit at the returned `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 2);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 2);
             // `published_at <= $1` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -3012,7 +1717,7 @@ where
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        let tag_exists = sqlx::query_scalar::<_, Exists>(TAG_EXISTS_SQL)
+        let tag_exists = sqlx::query_scalar::<_, Exists>(tags::TAG_EXISTS_SQL)
             .bind_storage(tag_slug)
             .fetch_one(&self.pool)
             .await?
@@ -3027,7 +1732,7 @@ where
             // Binds: $1 tag, $2/$3 cursor, $4 post_id, $5 now, then the
             // variant-sized resolution fragment from $6 and the limit at
             // the returned `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 6);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 6);
             // `published_at <= $5` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -3060,7 +1765,7 @@ where
         } else {
             // Binds: $1 tag, $2 now, then the variant-sized resolution fragment
             // from $3 and the limit at the returned `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 3);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 3);
             // `published_at <= $2` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -3105,7 +1810,7 @@ where
         viewer: &ViewerIdentity,
         now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        let tag_exists = sqlx::query_scalar::<_, Exists>(TAG_EXISTS_SQL)
+        let tag_exists = sqlx::query_scalar::<_, Exists>(tags::TAG_EXISTS_SQL)
             .bind_storage(tag_slug)
             .fetch_one(&self.pool)
             .await?
@@ -3120,7 +1825,7 @@ where
             // Binds: $1 user_id, $2 tag, $3/$4 cursor, $5 post_id, $6 now, then
             // the variant-sized resolution fragment from $7 and the limit at
             // the returned `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 7);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 7);
             // `published_at <= $6` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -3155,7 +1860,7 @@ where
         } else {
             // Binds: $1 user_id, $2 tag, $3 now, then the variant-sized
             // resolution fragment from $4 and the limit at `limit_idx`.
-            let (resolution, binds, limit_idx) = resolution_where(viewer, 4);
+            let (resolution, binds, limit_idx) = visibility::resolution_where(viewer, 4);
             // `published_at <= $3` hides scheduled (future-dated) posts.
             let sql = format!(
                 "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -3204,7 +1909,7 @@ where
             .map(str::to_ascii_lowercase);
         let pattern = normalized
             .as_deref()
-            .map(TagSlugPrefixPattern::from_normalized_prefix);
+            .map(tags::TagSlugPrefixPattern::from_normalized_prefix);
 
         // `tag_slug` decodes straight into `Tag` via the sqlx bridge (#438), so a
         // malformed stored value is rejected as a column-decode error above.
@@ -3246,12 +1951,8 @@ where
         now: UtcInstant,
         viewer: &ViewerIdentity,
     ) -> Result<Vec<PostRecord>> {
-        // ROW_NUMBER() identifies the top `min_items` posts; OR-combining with
-        // `published_at >= cutoff` produces the hybrid-window union in a single
-        // query. Only the JSON tag aggregation differs per backend, so the SQL
-        // is shared via `DB::TAGS_SUBQUERY`.
         let cutoff = UtcInstant::from(window.cutoff_date(now.value()));
-        let rows = list_published_in_window_rows::<DB>(
+        syndication::list_published_in_window_rows::<DB>(
             &self.pool,
             surface,
             now,
@@ -3259,8 +1960,7 @@ where
             window.min_items,
             viewer,
         )
-        .await?;
-        Ok(rows)
+        .await
     }
 
     #[tracing::instrument(
@@ -3273,1214 +1973,12 @@ where
         after: UtcInstant,
         upto: UtcInstant,
     ) -> Result<Vec<GoLivePost>> {
-        // `published_at > $1 AND published_at <= $2` selects exactly the posts
-        // that crossed into "live" within the half-open window `(after, upto]`.
-        // The standard post projection (incl. the JSON tag subquery) is reused so the row
-        // decodes directly into `PostRecord`; we then keep only the username + tag slugs
-        // the feed fan-out needs. No viewer filter: go-live regeneration is independent of
-        // any reader's audience.
-        let tags = DB::TAGS_SUBQUERY;
-        let sql = format!(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                    p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                    {tags} AS tags
-             FROM posts p
-             JOIN users u ON p.user_id = u.user_id
-             WHERE p.published_at > $1
-               AND p.published_at <= $2
-               AND p.deleted_at IS NULL
-             ORDER BY p.published_at ASC, p.post_id ASC"
-        );
-        let rows = sqlx::query_as::<_, PostRecord>(&sql)
-            .bind_storage(after)
-            .bind_storage(upto)
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(rows
-            .into_iter()
-            .map(|rec| GoLivePost {
-                username: rec.author_username,
-                tag_slugs: rec.tags.into_iter().map(|t| t.tag_slug).collect(),
-            })
-            .collect())
+        syndication::list_posts_gone_live_between::<DB>(&self.pool, after, upto).await
     }
 
     async fn feed_urls_needing_catchup(&self, now: UtcInstant) -> Result<Vec<FeedPath>> {
-        // Cached feeds live in the same database, so they are enumerated here
-        // and, for each, the newest live post on that surface is compared
-        // against the feed's own `generated_at`. Feed count is small, so a
-        // per-feed check is simpler than a set-based join.
-        //
-        // Rows are read one at a time rather than via `query_as` so a single bad
-        // `feed_url` cannot fail the whole scan — see the skip below.
-        let rows = sqlx::query("SELECT feed_url, generated_at FROM feed_cache")
-            .fetch_all(&self.pool)
-            .await?;
-        let mut needing = Vec::new();
-        let mut decode_reported = false;
-        for row in rows {
-            let generated_at: UtcInstant = row.try_get("generated_at")?;
-            let feed_path = match row.try_get::<FeedPath, _>("feed_url") {
-                Ok(path) => path,
-                Err(error) => {
-                    if !decode_reported {
-                        host::error::report_swallowed(
-                            host::error::ErrorKind::Storage,
-                            host::error::ErrorClass::Bug,
-                            "storage.feed_cache.decode_feed_path",
-                            host::error::SwallowedSource::Error(&error),
-                        );
-                        decode_reported = true;
-                    }
-                    continue;
-                }
-            };
-            // `parts` is an expected defensive grammar mismatch. Construction
-            // currently guarantees it cannot occur, but it carries no failure
-            // source and therefore remains ordinary non-reporting control flow.
-            let Some((surface, _)) = feed_path.parts() else {
-                continue;
-            };
-            if let Some(max) = max_published_at_for_surface::<DB>(&self.pool, &surface, now).await?
-                && max > generated_at
-            {
-                needing.push(feed_path);
-            }
-        }
-        Ok(needing)
+        syndication::feed_urls_needing_catchup::<DB>(&self.pool, now).await
     }
-}
-/// Derives the stable lifecycle label from a state snapshot and an explicit
-/// clock. Revision callers pass `captured_at`; current-summary callers pass
-/// their request clock.
-fn post_lifecycle(
-    deleted_at: Option<UtcInstant>,
-    published_at: Option<UtcInstant>,
-    now: UtcInstant,
-) -> PostLifecycle {
-    if deleted_at.is_some() {
-        PostLifecycle::Deleted
-    } else if published_at.is_none() {
-        PostLifecycle::Draft
-    } else if published_at.is_some_and(|published_at| published_at > now) {
-        PostLifecycle::Scheduled
-    } else {
-        PostLifecycle::Published
-    }
-}
-
-fn revision_page(
-    mut revisions: Vec<PostRevisionMetadata>,
-    page_size: PageSize,
-) -> PostRevisionPage {
-    let has_more = page_size.has_more(revisions.len());
-    revisions.truncate(page_size.page_len());
-    let next_cursor = has_more
-        .then(|| {
-            revisions.last().map(|revision| PostRevisionCursor {
-                revision_id: revision.revision_id,
-            })
-        })
-        .flatten();
-    PostRevisionPage {
-        revisions,
-        next_cursor,
-    }
-}
-
-async fn revision_metadata_rows<DB>(
-    pool: &Pool<DB>,
-    user_id: UserId,
-    post_id: Option<PostId>,
-    cursor: Option<PostRevisionCursor>,
-    limit: RowLimit,
-) -> Result<Vec<PostRevisionMetadata>>
-where
-    DB: Database,
-    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> UserId: Encode<'q, DB> + Type<DB>,
-    for<'q> PostId: Encode<'q, DB> + Type<DB>,
-    for<'q> RevisionId: Encode<'q, DB> + Type<DB>,
-    for<'q> RowLimit: Encode<'q, DB> + Type<DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-    RevisionMetadataRow: DecodeRawRow<DB>,
-{
-    let sql = if post_id.is_some() {
-        "SELECT r.revision_id, r.post_id, r.title, r.slug, r.captured_at,
-                r.deleted_at, r.published_at, p.deleted_at AS current_deleted_at
-         FROM post_revisions r
-         JOIN posts p ON p.post_id = r.post_id
-         WHERE r.user_id = $1 AND r.post_id = $2 AND r.revision_id < $3
-         ORDER BY r.revision_id DESC LIMIT $4"
-    } else {
-        "SELECT r.revision_id, r.post_id, r.title, r.slug, r.captured_at,
-                r.deleted_at, r.published_at, p.deleted_at AS current_deleted_at
-         FROM post_revisions r
-         JOIN posts p ON p.post_id = r.post_id
-         WHERE r.user_id = $1 AND r.revision_id < $2
-         ORDER BY r.revision_id DESC LIMIT $3"
-    };
-    let after = cursor.map_or(RevisionId::from(i64::MAX), |cursor| cursor.revision_id);
-    let rows = if let Some(post_id) = post_id {
-        sqlx::query(sql)
-            .bind_storage(user_id)
-            .bind_storage(post_id)
-            .bind_storage(after)
-            .bind_storage(limit)
-            .fetch_all(pool)
-            .await?
-    } else {
-        sqlx::query(sql)
-            .bind_storage(user_id)
-            .bind_storage(after)
-            .bind_storage(limit)
-            .fetch_all(pool)
-            .await?
-    };
-    Ok(rows
-        .into_iter()
-        .map(RevisionMetadataRow::decode)
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .map(|row| PostRevisionMetadata {
-            revision_id: row.revision_id,
-            post_id: row.post_id,
-            title: row.title,
-            slug: row.slug,
-            captured_at: row.captured_at,
-            snapshot_lifecycle: post_lifecycle(row.deleted_at, row.published_at, row.captured_at),
-            current_deleted: row.current_deleted_at.is_some(),
-        })
-        .collect())
-}
-
-/// The viewer-resolution binds folded into a read query's `WHERE`, in the exact
-/// left-to-right order their placeholders appear in [`resolution_where`]'s
-/// fragment. `subref` (and, where it is bound at all, `channel`) repeats —
-/// subscribers branch, then named branch — because each occurrence gets its own
-/// placeholder; see [`resolution_where`].
-///
-/// The enum mirrors [`ViewerIdentity`] rather than carrying three independent
-/// `Option`s, because **bind arity is per-variant**: a `Local` viewer's channel
-/// is resolved in SQL and so is not bound at all. Recovering that from three
-/// `Option`s would mean reading `(Some, None, Some)` as "local" — an implicit
-/// encoding of exactly the fact the variant already states.
-enum ResolutionBinds {
-    /// No viewer: all five placeholders bind SQL NULL, which makes every
-    /// comparison *unknown* rather than true — see [`resolution_where`] for why
-    /// that is what "this branch cannot match" means here.
-    Anonymous,
-    /// A local viewer: three binds — `author_id, subref, subref`. The channel is
-    /// the seeded `local` row, resolved by subquery instead of bound.
-    Local {
-        /// `p.user_id = $author_id` — the author branch fires for this and only
-        /// this variant.
-        user_id: UserId,
-        /// `s.subscriber_ref` for the subscribers/named branches: the viewer's
-        /// user id in decimal, the form `subscribe_to` stores.
-        subref: SubscriberRef,
-    },
-    /// A non-local viewer: five binds — `NULL, channel, subref, channel, subref`.
-    /// The author placeholder binds NULL, so the author branch cannot fire (#6).
-    Remote {
-        /// `s.channel_id` for the subscribers/named `EXISTS` branches.
-        channel: ChannelId,
-        /// `s.subscriber_ref` for the subscribers/named branches.
-        subref: SubscriberRef,
-    },
-}
-
-/// The viewer-resolution predicate and its binds, for folding into a read
-/// query's `WHERE`. A post is returned to `viewer` only if the viewer is the
-/// author OR some targeted audience admits them. See ADR-0020, Task 13.
-///
-/// The fragment is emitted in full for every viewer; `Anonymous` is handled by
-/// binding NULL for all three values, so it reduces to "public posts only"
-/// without a second query shape. A NULL comparison is *unknown*, never true:
-/// `p.user_id = NULL` cannot admit a post, and the `EXISTS` subqueries match no
-/// row, so `EXISTS` is false. The fragment contains no `NOT`, and the caller
-/// `AND`s it into a `WHERE`, where unknown filters the row out exactly as false
-/// would — so NULL kills every non-`public` branch.
-///
-/// NULL binds make the unreachable branches follow from SQL comparison
-/// semantics rather than from reserving sentinel IDs or subscriber references.
-/// The predicate therefore stays correct independently of which concrete
-/// values the live schema permits.
-///
-/// `start` is the next free `$n` index, and **the placeholder count is
-/// per-variant**, so callers must thread the returned `next` rather than assume
-/// `start + 5`:
-///
-/// - `Local` uses THREE (`$start`..`$start+2`): `author, subref, subref`. Its
-///   channel is not a bind — a local viewer's channel is always the seeded
-///   `local` row, so both subscription branches resolve it inline with an
-///   uncorrelated subquery (`channels.name` is `NOT NULL UNIQUE`, so it yields at
-///   most one row).
-/// - `Anonymous` and `Remote` use FIVE (`$start`..`$start+4`):
-///   `author, channel, subref, channel, subref`.
-///
-/// Either way the `channel`/`subref` pair appears once in the subscribers branch
-/// and again in the named branch, and each bound occurrence gets its own number
-/// so the binds are positional on both backends (`SQLite` accepts `$n` and binds
-/// by position; see ADR-0019) — which is why the returned [`ResolutionBinds`]
-/// carries `subref` once but the caller binds it **twice**. Returns
-/// `(sql, binds, next)` where `next` is the first free index after the fragment.
-fn resolution_where(viewer: &ViewerIdentity, start: usize) -> (String, ResolutionBinds, usize) {
-    /// The seeded `local` channel, resolved in SQL rather than bound — see the
-    /// doc above and ADR-0020.
-    const LOCAL_CHANNEL: &str = "(SELECT channel_id FROM channels WHERE name = 'local')";
-
-    let binds = match viewer {
-        ViewerIdentity::Anonymous => ResolutionBinds::Anonymous,
-        // Only a local viewer can be the author. Its channel is not carried at
-        // all, because it can only ever be the `local` row, which the SQL
-        // resolves for itself.
-        ViewerIdentity::Local { user_id } => ResolutionBinds::Local {
-            user_id: *user_id,
-            subref: visibility::local_subscriber_ref(*user_id),
-        },
-        // A remote viewer is never the author, whatever its ref parses as: the
-        // author bind stays NULL, so `p.user_id = NULL` is unknown and admits
-        // nothing (#6). It can still be admitted by a subscription branch.
-        ViewerIdentity::Remote {
-            channel_id,
-            subscriber_ref,
-        } => ResolutionBinds::Remote {
-            channel: *channel_id,
-            subref: subscriber_ref.clone(),
-        },
-    };
-    let author = start;
-    // The channel slots are *expressions*, not necessarily placeholders, and the
-    // ref slots renumber accordingly — hence the per-variant `next`.
-    let (sub_channel, sub_refnum, named_channel, named_refnum, next) = match binds {
-        ResolutionBinds::Local { .. } => (
-            LOCAL_CHANNEL.to_owned(),
-            format!("${}", start + 1),
-            LOCAL_CHANNEL.to_owned(),
-            format!("${}", start + 2),
-            start + 3,
-        ),
-        ResolutionBinds::Anonymous | ResolutionBinds::Remote { .. } => (
-            format!("${}", start + 1),
-            format!("${}", start + 2),
-            format!("${}", start + 3),
-            format!("${}", start + 4),
-            start + 5,
-        ),
-    };
-    let sql = format!(
-        "( p.user_id = ${author}
-  OR EXISTS (
-    SELECT 1 FROM post_audiences pa
-    JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
-    WHERE pa.post_id = p.post_id AND (
-         tk.name = 'public'
-      OR (tk.name = 'subscribers' AND EXISTS (
-            SELECT 1 FROM subscriptions s JOIN subscription_statuses st ON st.status_id = s.status_id
-            WHERE s.author_user_id = p.user_id AND s.channel_id = {sub_channel}
-              AND s.subscriber_ref = {sub_refnum} AND st.name = 'active'))
-      OR (tk.name = 'named' AND EXISTS (
-            SELECT 1 FROM audience_members am
-            JOIN subscriptions s ON s.subscription_id = am.subscription_id
-            JOIN subscription_statuses st ON st.status_id = s.status_id
-            WHERE am.audience_id = pa.audience_id AND s.channel_id = {named_channel}
-              AND s.subscriber_ref = {named_refnum} AND st.name = 'active'))
-  ))
-)"
-    );
-    (sql, binds, next)
-}
-
-impl ResolutionBinds {
-    /// Binds this variant's resolution placeholders onto `query` in the exact
-    /// fragment order — `author_id, channel, subref, channel, subref`, minus the
-    /// two channel binds for [`ResolutionBinds::Local`], whose channel is
-    /// resolved in SQL. The caller must have already bound everything to the left
-    /// of the fragment, and must bind the query's trailing binds (e.g. `LIMIT`)
-    /// afterward, at the index [`resolution_where`] returned.
-    fn bind_onto<'q, DB>(
-        &'q self,
-        query: sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments<'q>>,
-    ) -> sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments<'q>>
-    where
-        DB: Database,
-        i64: Encode<'q, DB> + Type<DB>,
-        &'q str: Encode<'q, DB> + Type<DB>,
-        &'q SubscriberRef: Encode<'q, DB> + Type<DB>,
-        Option<&'q SubscriberRef>: Encode<'q, DB> + Type<DB>,
-        // sqlx implements `Encode for Option<T>` per concrete database (the
-        // `impl_encode_for_option!` macro), not blanket over a generic `DB`, so
-        // each NULL-able bind's type has to be restated here — and, per ADR-0019,
-        // again on every caller.
-        Option<UserId>: Encode<'q, DB> + Type<DB>,
-        Option<ChannelId>: Encode<'q, DB> + Type<DB>,
-        Option<&'q str>: Encode<'q, DB> + Type<DB>,
-    {
-        match self {
-            Self::Anonymous => query
-                .bind_storage(None::<UserId>)
-                .bind_storage(None::<ChannelId>)
-                .bind_storage(None::<&SubscriberRef>)
-                .bind_storage(None::<ChannelId>)
-                .bind_storage(None::<&SubscriberRef>),
-            Self::Local { user_id, subref } => query
-                .bind_storage(Some(*user_id))
-                .bind_storage(Some(subref))
-                .bind_storage(Some(subref)),
-            Self::Remote { channel, subref } => query
-                .bind_storage(None::<UserId>)
-                .bind_storage(Some(*channel))
-                .bind_storage(Some(subref))
-                .bind_storage(Some(*channel))
-                .bind_storage(Some(subref)),
-        }
-    }
-}
-
-/// Maps an [`AudienceTarget`] to its `post_audiences` row shape:
-/// `(target kind, audience_id)`. `Private` produces no row.
-fn audience_target_row(target: &AudienceTarget) -> Option<(TargetKind, Option<AudienceId>)> {
-    match target {
-        AudienceTarget::Public => Some((TargetKind::Public, None)),
-        AudienceTarget::Subscribers => Some((TargetKind::Subscribers, None)),
-        AudienceTarget::Named(id) => Some((TargetKind::Named, Some(*id))),
-        AudienceTarget::Private => None,
-    }
-}
-
-/// Maps a `post_audiences` row `(target_kind name, audience_id)` back to its
-/// [`AudienceTarget`] — the inverse of [`audience_target_row`], used by
-/// [`PostStorage::get_post_audiences`].
-///
-/// `public` → [`AudienceTarget::Public`], `subscribers` →
-/// [`AudienceTarget::Subscribers`], `named` (with an id) →
-/// [`AudienceTarget::Named`].
-///
-/// **Returns `Option`, for one reason only.** A `named` row whose `audience_id` is
-/// NULL has no target to build, so it is dropped — asserted below. An unrecognised
-/// kind name never reaches this function: the column decodes as `TargetKind`
-/// (#728), so it is a `ColumnDecode` error at the query boundary rather than a
-/// silent drop here.
-fn audience_target_from_row(
-    kind: TargetKind,
-    audience_id: Option<AudienceId>,
-) -> Option<AudienceTarget> {
-    match kind {
-        TargetKind::Public => Some(AudienceTarget::Public),
-        TargetKind::Subscribers => Some(AudienceTarget::Subscribers),
-        TargetKind::Named => audience_id.map(AudienceTarget::Named),
-    }
-}
-
-fn create_expectations_match(input: &CreatePostInput) -> bool {
-    let expected = &input.expectations;
-    expected
-        .slug
-        .as_ref()
-        .is_none_or(|slug| slug == &input.slug)
-        && expected.format.is_none_or(|format| format == input.format)
-        && expected
-            .published_at
-            .is_none_or(|published_at| published_at == input.published_at)
-}
-
-/// `PostgreSQL`'s signed advisory-lock key for one user/idempotency-key pair.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, macros::SqlxBridge)]
-pub(crate) struct IdempotencyAdvisoryLockKey(i64);
-
-/// Derives the `PostgreSQL` advisory-lock key for one user's `Idempotency Key`.
-///
-/// A collision only serializes unrelated creates; it cannot change behavior.
-#[must_use]
-pub(crate) fn idempotency_advisory_lock_key(
-    user_id: UserId,
-    key: &IdempotencyKey,
-) -> IdempotencyAdvisoryLockKey {
-    let mut digest = Sha256::new();
-    digest.update(i64::from(user_id).to_be_bytes());
-    digest.update(key.as_ref().as_bytes());
-    let digest: [u8; 32] = digest.finalize().into();
-    IdempotencyAdvisoryLockKey(i64::from_be_bytes([
-        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
-    ]))
-}
-
-/// `PostgreSQL`'s signed advisory-lock key for one exact media identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, macros::SqlxBridge)]
-pub(crate) struct MediaAdvisoryLockKey(i64);
-
-/// Maps every distinct media identity to the signed 64-bit advisory-lock key
-/// derived from the first eight bytes of SHA-256 over an unambiguous encoding.
-///
-/// The resulting vector is sorted and deduplicated before a backend acquires
-/// locks, preventing opposite-order updates from deadlocking.
-#[must_use]
-pub(crate) fn media_advisory_lock_key(media: &MediaRef) -> MediaAdvisoryLockKey {
-    let mut digest = Sha256::new();
-    digest.update(media.source.to_string().as_bytes());
-    digest.update([0]);
-    digest.update(media.sha256.to_string().as_bytes());
-    digest.update([0]);
-    digest.update(media.filename.to_string().as_bytes());
-    let digest: [u8; 32] = digest.finalize().into();
-    MediaAdvisoryLockKey(i64::from_be_bytes([
-        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
-    ]))
-}
-
-/// Maps every distinct media identity to a signed 64-bit advisory-lock key.
-#[must_use]
-pub(crate) fn media_advisory_lock_keys(
-    media: impl IntoIterator<Item = MediaRef>,
-) -> Vec<MediaAdvisoryLockKey> {
-    media
-        .into_iter()
-        .map(|media| media_advisory_lock_key(&media))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-/// Whether the requested scalar state would leave the locked Post unchanged.
-///
-/// Returns media identities once, in canonical order, for a write-side lock.
-pub(crate) fn media_lock_set(references: &[MediaReference]) -> BTreeSet<MediaRef> {
-    references
-        .iter()
-        .map(MediaReference::media)
-        .cloned()
-        .collect()
-}
-/// The caller additionally compares normalized children under the same lock;
-/// keeping the scalar rule here makes the two dialects suppress timestamp-only
-/// writes identically.
-pub(crate) fn update_scalar_is_noop(
-    existing: &PostBookkeepingRow,
-    input: &UpdatePostInput,
-) -> bool {
-    let published_at = match input.publish {
-        PublishUpdate::Unpublish => None,
-        PublishUpdate::Publish { at: Some(at) } => Some(at),
-        PublishUpdate::Publish { at: None } => existing.published_at.or(Some(input.request_clock)),
-    };
-    existing.title == input.title
-        && (existing.published_at.is_some() || existing.slug == input.slug)
-        && existing.body == input.body
-        && existing.format == input.format
-        && existing.rendered_html.as_ref() == input.rendered.html().as_ref()
-        && existing.summary == input.summary
-        && existing.published_at == published_at
-}
-/// Compares audience collections as normalized relation rows, ignoring caller
-/// order, duplicate selections, and `Private`'s deliberate absence of a row.
-pub(crate) fn audiences_are_equal(
-    existing: &[(TargetKind, Option<AudienceId>)],
-    desired: &[AudienceTarget],
-) -> bool {
-    let mut normalized = Vec::new();
-    for target in desired {
-        if let Some(row) = audience_target_row(target)
-            && !normalized.contains(&row)
-        {
-            normalized.push(row);
-        }
-    }
-    existing.len() == normalized.len() && existing.iter().all(|row| normalized.contains(row))
-}
-
-pub(crate) fn update_expectation_error(
-    post_id: PostId,
-    existing: &PostBookkeepingRow,
-    tags: &[TagLabel],
-    input: &UpdatePostInput,
-) -> Option<UpdatePostError> {
-    let expected = &input.expectations;
-    if expected
-        .post_id
-        .is_some_and(|expected_id| expected_id != post_id)
-    {
-        return Some(UpdatePostError::BookkeepingMismatch);
-    }
-    let final_slug = if existing.published_at.is_some() {
-        &existing.slug
-    } else {
-        &input.slug
-    };
-    let final_published_at = match input.publish {
-        PublishUpdate::Unpublish => None,
-        PublishUpdate::Publish { at: Some(at) } => Some(at),
-        PublishUpdate::Publish { at: None } => existing.published_at.or(Some(input.request_clock)),
-    };
-    if expected
-        .slug
-        .as_ref()
-        .is_some_and(|slug| slug != final_slug)
-        || expected.format.is_some_and(|format| format != input.format)
-        || expected
-            .published_at
-            .is_some_and(|published_at| published_at != final_published_at)
-    {
-        return Some(UpdatePostError::BookkeepingMismatch);
-    }
-
-    let current_etag = etag::post_content_etag(
-        existing.title.as_ref(),
-        &existing.body,
-        &existing.format,
-        existing.summary.as_ref(),
-        tags.iter(),
-        existing.published_at.is_none(),
-    );
-    expected
-        .content_etag
-        .as_ref()
-        .is_some_and(|etag| etag != &current_etag)
-        .then_some(UpdatePostError::StaleContent)
-}
-
-/// Writes one post row and its audience rows onto a caller-supplied transaction
-/// connection, so it joins whatever transaction is open.
-///
-/// This is the single place that knows the post `INSERT` and the
-/// unique-violation → [`CreatePostError::SlugConflict`] mapping: both
-/// `create_post` (write one) and `create_posts` (write many in one transaction)
-/// are pure transaction orchestration over it, so the row-write logic lives once
-/// rather than being duplicated per arity.
-pub(crate) async fn write_post_in_tx<DB>(
-    conn: &mut DB::Connection,
-    input: &CreatePostInput,
-    now: UtcInstant,
-) -> Result<(PostId, bool), CreatePostError>
-where
-    DB: PostDialect,
-    for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
-    for<'q> RowCount: Decode<'q, DB> + Type<DB>,
-    for<'q> Option<AudienceId>: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<&'q str>: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<String>: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q IdempotencyKey: Encode<'q, DB> + Type<DB>,
-    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<UtcInstant>: Encode<'q, DB> + Type<DB>,
-    // `Slug`/`PostBody` bind as themselves and `PostTitle` as `Option<&PostTitle>`
-    // via the ADR-0071 sqlx bridge (the `Option<&…>` pair covers the nullable
-    // `title` bind).
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-    for<'q> Option<&'q PostTitle>: Encode<'q, DB> + Type<DB>,
-    // `summary` binds as `Option<&PostSummary>` via the ADR-0071 sqlx bridge on
-    // the create paths, mirroring the `Option<&PostTitle>` bound above.
-    for<'q> Option<&'q PostSummary>: Encode<'q, DB> + Type<DB>,
-    (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    usize: sqlx::ColumnIndex<DB::Row>,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    DB::lock_media_references(conn, &media_lock_set(input.rendered.media())).await?;
-
-    let idempotency_key_expired = if let Some(key) = input.idempotency_key.as_ref() {
-        let cutoff = idempotency_replay_cutoff(now);
-        if let Some(post_id) =
-            DB::lock_live_idempotency_mapping(conn, input.user_id, key, cutoff).await?
-        {
-            return Err(CreatePostError::IdempotencyConflict(post_id));
-        }
-        sqlx::query_scalar::<_, RowCount>(
-            "DELETE FROM idempotency_keys
-             WHERE user_id = $1 AND key = $2 AND created_at <= $3
-             RETURNING CAST(1 AS BIGINT)",
-        )
-        .bind_storage(input.user_id)
-        .bind_storage(key)
-        .bind_storage(cutoff)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(CreatePostError::Internal)?
-        .is_some()
-    } else {
-        false
-    };
-
-    let post_id = sqlx::query_scalar::<_, PostId>(
-        "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         RETURNING post_id",
-    )
-    .bind_storage(input.user_id)
-    // `Option::as_ref` → `Option<&PostTitle>` (a typed newtype bind, not an
-    // `AsRef<str>` strip); the sqlx bridge encodes `Option<&PostTitle>`.
-    .bind_storage(input.title.as_ref())
-    .bind_storage(&input.slug)
-    .bind_storage(&input.body)
-    .bind_storage(input.format)
-    .bind_storage(input.rendered.html())
-    .bind_storage(now)
-    .bind_storage(now)
-    .bind_storage(input.published_at)
-    // `Option::as_ref` → `Option<&PostSummary>` (a typed newtype bind via the
-    // ADR-0071 sqlx bridge, not an `AsRef<str>` strip); the `sqlx-newtype-bind`
-    // gate forbids stripping to `&str` here.
-    .bind_storage(input.summary.as_ref())
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(|e| match e {
-        sqlx::Error::Database(db) if db.is_unique_violation() => CreatePostError::SlugConflict,
-        e => CreatePostError::Internal(e),
-    })?;
-
-    if !create_expectations_match(input) {
-        return Err(CreatePostError::BookkeepingMismatch);
-    }
-
-    replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
-    replace_post_media::<DB>(conn, post_id, input.rendered.media()).await?;
-    insert_post_tags::<DB>(conn, post_id, &input.tags).await?;
-
-    if let Some(key) = input.idempotency_key.as_ref() {
-        sqlx::query(
-            "INSERT INTO idempotency_keys (user_id, key, post_id, created_at)
-             VALUES ($1, $2, $3, $4)",
-        )
-        .bind_storage(input.user_id)
-        .bind_storage(key)
-        .bind_storage(post_id)
-        .bind_storage(now)
-        .execute(&mut *conn)
-        .await
-        .map_err(CreatePostError::Internal)?;
-    }
-
-    Ok((post_id, idempotency_key_expired))
-}
-
-/// Replaces a post's `post_audiences` rows to exactly match `audiences`.
-///
-/// Deletes every existing row for `post_id`, then inserts one row per targeting
-/// entry (`Public`/`Subscribers` carry a NULL `audience_id`; `Named(id)` carries
-/// the id; `Private` and an empty vec leave the post with no rows). Runs on the
-/// caller's executor so it shares the create/update transaction. See ADR-0020.
-pub(crate) async fn replace_post_audiences<DB>(
-    conn: &mut DB::Connection,
-    post_id: PostId,
-    audiences: &[AudienceTarget],
-) -> Result<()>
-where
-    DB: PostDialect,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<AudienceId>: Encode<'q, DB> + Type<DB>,
-    for<'q> TargetKind: Encode<'q, DB> + Type<DB>,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    sqlx::query(DB::DELETE_POST_AUDIENCES)
-        .bind_storage(post_id)
-        .execute(&mut *conn)
-        .await?;
-    for target in audiences {
-        if let Some((kind, audience_id)) = audience_target_row(target) {
-            sqlx::query(DB::INSERT_POST_AUDIENCE)
-                .bind_storage(post_id)
-                .bind_storage(audience_id)
-                .bind_storage(kind)
-                .execute(&mut *conn)
-                .await?;
-        }
-    }
-    Ok(())
-}
-/// Attaches the requested tags to a newly-created Post in canonical slug order.
-///
-/// Creation has no old child state to reconcile, but tag upserts still lock rows
-/// on `PostgreSQL`. Sorting stably makes overlapping creates acquire those locks
-/// in the same order while retaining the first spelling for duplicate slugs.
-pub(crate) async fn insert_post_tags<DB>(
-    conn: &mut DB::Connection,
-    post_id: PostId,
-    desired: &[TagLabel],
-) -> Result<()>
-where
-    DB: Database,
-    for<'q> PostId: Encode<'q, DB> + Type<DB>,
-    for<'q> Tag: Encode<'q, DB> + Type<DB>,
-    for<'q> TagLabel: Encode<'q, DB> + Type<DB>,
-    for<'q> TagId: Decode<'q, DB> + Type<DB>,
-    for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
-    usize: sqlx::ColumnIndex<DB::Row>,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    let mut ordered = desired.to_vec();
-    ordered.sort_by_key(TagLabel::slug);
-    for label in ordered {
-        let slug = label.slug();
-        let tag_id = sqlx::query_scalar::<_, TagId>(UPSERT_TAG_RETURNING_ID)
-            .bind_storage(&slug)
-            .fetch_one(&mut *conn)
-            .await?;
-        sqlx::query(INSERT_POST_TAG)
-            .bind_storage(post_id)
-            .bind_storage(tag_id)
-            .bind_storage(&label)
-            .execute(&mut *conn)
-            .await?;
-    }
-    Ok(())
-}
-/// Captures the locked current state and every normalized child before mutation.
-///
-/// The copies are SQL-to-SQL rather than reconstructed from an application read:
-/// this preserves the exact current media spelling and keeps immutable history
-/// independent of later tag/audience lookup changes.
-pub(crate) async fn capture_complete_post_revision<DB>(
-    conn: &mut DB::Connection,
-    post_id: PostId,
-    captured_at: UtcInstant,
-) -> Result<RevisionId>
-where
-    DB: Database,
-    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
-    for<'q> PostId: Encode<'q, DB> + Type<DB>,
-    for<'q> RevisionId: Decode<'q, DB> + Type<DB>,
-    for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
-    usize: sqlx::ColumnIndex<DB::Row>,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    let revision_id = sqlx::query_scalar::<_, RevisionId>(INSERT_COMPLETE_POST_REVISION)
-        .bind_storage(captured_at)
-        .bind_storage(post_id)
-        .fetch_one(&mut *conn)
-        .await?;
-    sqlx::query(
-        "INSERT INTO post_revision_tags (revision_id, tag_slug, tag_display)
-         SELECT $1, t.tag_slug, pt.tag_display
-         FROM post_tags pt JOIN tags t ON t.tag_id = pt.tag_id
-         WHERE pt.post_id = $2",
-    )
-    .bind_storage(revision_id)
-    .bind_storage(post_id)
-    .execute(&mut *conn)
-    .await?;
-    sqlx::query(
-        "INSERT INTO post_revision_audiences (revision_id, target_kind, audience_id)
-         SELECT $1, tk.name, pa.audience_id
-         FROM post_audiences pa JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
-         WHERE pa.post_id = $2",
-    )
-    .bind_storage(revision_id)
-    .bind_storage(post_id)
-    .execute(&mut *conn)
-    .await?;
-    sqlx::query(
-        "INSERT INTO post_media
-             (post_id, subject_kind, revision_id, source, sha256, filename, reference_kind, reference_form)
-         SELECT post_id, 'revision', $1, source, sha256, filename, reference_kind, reference_form
-         FROM post_media
-         WHERE post_id = $2 AND subject_kind = 'current' AND revision_id = 0",
-    )
-    .bind_storage(revision_id)
-    .bind_storage(post_id)
-    .execute(&mut *conn)
-    .await?;
-    Ok(revision_id)
-}
-
-/// A rendered-HTML snapshot and the references derived from it before a backfill write.
-///
-/// This keeps HTML extraction out of the backend's writer lock. The dialect re-reads the
-/// snapshot while holding its write discipline before it installs these rows.
-#[derive(Debug)]
-pub struct PostMediaReferenceBackfill {
-    pub(crate) post_id: PostId,
-    pub(crate) rendered_html: String,
-    pub(crate) references: Vec<MediaReference>,
-}
-
-/// Re-derives exact reference rows copied by migration 0027 before the application state
-/// becomes available. Derivation deliberately occurs before the backend acquires its write lock;
-/// the atomic write phase validates each authoritative HTML snapshot and retries if one changed.
-pub(crate) async fn backfill_post_media_references<DB>(pool: &Pool<DB>) -> Result<()>
-where
-    DB: PostDialect,
-    (PostId, RenderedHtml): for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    let posts: Vec<(PostId, RenderedHtml)> = sqlx::query_as(
-        "SELECT p.post_id, p.rendered_html
-         FROM posts p
-         WHERE EXISTS (
-             SELECT 1 FROM post_media pm
-             WHERE pm.post_id = p.post_id AND pm.reference_kind = 'legacy'
-         )
-         ORDER BY p.post_id",
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let candidates: Vec<PostMediaReferenceBackfill> = posts
-        .into_iter()
-        .map(|(post_id, rendered_html)| PostMediaReferenceBackfill {
-            references: render::extract_media_refs(rendered_html.as_ref()),
-            post_id,
-            rendered_html: rendered_html.to_string(),
-        })
-        .collect();
-    if candidates.is_empty() {
-        return Ok(());
-    }
-    DB::apply_post_media_reference_backfill(pool, &candidates).await
-}
-
-/// Replaces the current subject's `post_media` rows to exactly match `media`.
-///
-/// Historical subjects are deliberately outside this delete: revisions retain the
-/// exact references captured before a meaningful mutation.
-pub(crate) async fn replace_post_media<DB>(
-    conn: &mut DB::Connection,
-    post_id: PostId,
-    media: &[MediaReference],
-) -> Result<()>
-where
-    DB: PostDialect,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    let rows = media_reference_rows([(post_id, media)]);
-    sqlx::query(DB::DELETE_POST_MEDIA)
-        .bind_storage(post_id)
-        .execute(&mut *conn)
-        .await?;
-    DB::insert_post_media_rows(conn, rows).await
-}
-
-/// Installs all rows from a validated startup-backfill snapshot in two set-based writes.
-pub(crate) async fn replace_legacy_post_media<DB>(
-    conn: &mut DB::Connection,
-    candidates: &[PostMediaReferenceBackfill],
-) -> Result<()>
-where
-    DB: PostDialect,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    sqlx::query(
-        "DELETE FROM post_media
-         WHERE subject_kind = 'current' AND revision_id = 0
-           AND post_id IN (
-             SELECT post_id FROM post_media
-             WHERE subject_kind = 'current' AND revision_id = 0 AND reference_kind = 'legacy'
-           )",
-    )
-    .execute(&mut *conn)
-    .await?;
-    DB::insert_post_media_rows(
-        conn,
-        media_reference_rows(
-            candidates
-                .iter()
-                .map(|candidate| (candidate.post_id, candidate.references.as_slice())),
-        ),
-    )
-    .await
-}
-
-fn media_reference_rows<'a>(
-    references: impl IntoIterator<Item = (PostId, &'a [MediaReference])>,
-) -> BTreeSet<(PostId, MediaRef, MediaReferenceKind, MediaReferenceForm)> {
-    references
-        .into_iter()
-        .flat_map(|(post_id, references)| {
-            references.iter().map(move |reference| {
-                (
-                    post_id,
-                    reference.media().clone(),
-                    reference.kind(),
-                    reference.reference_form().clone(),
-                )
-            })
-        })
-        .collect()
-}
-
-/// Runs the hybrid-window query for `surface`, returning [`PostRecord`]s.
-///
-/// Shared across backends: the four `FeedSurface` variants differ only in the
-/// ranked-CTE source/predicate and bind list, and the JSON tag aggregation is
-/// supplied by [`PostDialect::TAGS_SUBQUERY`].
-async fn list_published_in_window_rows<DB>(
-    pool: &Pool<DB>,
-    surface: &common::feed::FeedSurface,
-    now: UtcInstant,
-    cutoff: UtcInstant,
-    min_items: FeedMinItems,
-    viewer: &ViewerIdentity,
-) -> Result<Vec<PostRecord>>
-where
-    DB: PostDialect,
-    PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> FeedMinItems: Encode<'q, DB> + Type<DB>,
-    for<'q> i64: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
-    // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
-    for<'q> Option<UserId>: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<ChannelId>: Encode<'q, DB> + Type<DB>,
-    for<'q> &'q SubscriberRef: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<&'q SubscriberRef>: Encode<'q, DB> + Type<DB>,
-    for<'q> Option<&'q str>: Encode<'q, DB> + Type<DB>,
-    // `Username`/`Tag` bind as themselves via the ADR-0071 sqlx bridge, for the
-    // surface `username`/`tag` binds.
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    use common::feed::FeedSurface;
-    let tags = DB::TAGS_SUBQUERY;
-    match surface {
-        FeedSurface::Site => {
-            // Binds: $1 now, $2 min_items, $3 cutoff, then the variant-sized
-            // resolution fragment from $4. `window_sql` places it last, so
-            // nothing binds after it and the returned `next` is discarded.
-            let (resolution, binds, _) = resolution_where(viewer, 4);
-            let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind_storage(now)
-                .bind_storage(min_items)
-                .bind_storage(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
-        }
-        FeedSurface::User { username } => {
-            // Binds: $1 now, $2 username, $3 min_items, $4 cutoff, then the
-            // variant-sized resolution fragment last, from $5.
-            let (resolution, binds, _) = resolution_where(viewer, 5);
-            let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind_storage(now)
-                .bind_storage(username)
-                .bind_storage(min_items)
-                .bind_storage(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
-        }
-        FeedSurface::SiteTag { tag } => {
-            // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, then the
-            // variant-sized resolution fragment last, from $5.
-            let (resolution, binds, _) = resolution_where(viewer, 5);
-            let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind_storage(now)
-                .bind_storage(tag)
-                .bind_storage(min_items)
-                .bind_storage(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
-        }
-        FeedSurface::UserTag { username, tag } => {
-            // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff, then
-            // the variant-sized resolution fragment last, from $6.
-            let (resolution, binds, _) = resolution_where(viewer, 6);
-            let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
-                .bind_storage(now)
-                .bind_storage(username)
-                .bind_storage(tag)
-                .bind_storage(min_items)
-                .bind_storage(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
-        }
-    }
-}
-
-/// Assembles the hybrid-window SQL for `surface`.
-///
-/// Pure string construction with no DB generics: the four near-identical
-/// templates — differing only in the ranked-CTE source/predicate and bind
-/// placeholders — live here, while [`list_published_in_window_rows`] keeps the
-/// generic `where`-clause, per-surface bind list, and execution. `tags` supplies
-/// the JSON tag aggregation ([`PostDialect::TAGS_SUBQUERY`]) and `resolution` the
-/// audience-resolution predicate.
-fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str) -> String {
-    use common::feed::FeedSurface;
-    match surface {
-        FeedSurface::Site => format!(
-            "WITH ranked AS (
-     SELECT p.post_id, p.published_at,
-            ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
-     FROM posts p
-     WHERE p.published_at IS NOT NULL
-       AND p.deleted_at IS NULL
-       AND p.published_at <= $1
- )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-        {tags} AS tags
- FROM ranked r
- JOIN posts p ON p.post_id = r.post_id
- JOIN users u ON p.user_id = u.user_id
- WHERE (r.rn <= $2 OR r.published_at >= $3)
-   AND {resolution}
- ORDER BY p.published_at DESC, p.post_id DESC"
-        ),
-        FeedSurface::User { .. } => format!(
-            "WITH ranked AS (
-     SELECT p.post_id, p.published_at,
-            ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
-     FROM posts p
-     JOIN users u ON p.user_id = u.user_id
-     WHERE p.published_at IS NOT NULL
-       AND p.deleted_at IS NULL
-       AND p.published_at <= $1
-       AND u.username = $2
- )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-        {tags} AS tags
- FROM ranked r
- JOIN posts p ON p.post_id = r.post_id
- JOIN users u ON p.user_id = u.user_id
- WHERE (r.rn <= $3 OR r.published_at >= $4)
-   AND {resolution}
- ORDER BY p.published_at DESC, p.post_id DESC"
-        ),
-        FeedSurface::SiteTag { .. } => format!(
-            "WITH ranked AS (
-     SELECT p.post_id, p.published_at,
-            ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
-     FROM posts p
-     JOIN post_tags pt ON p.post_id = pt.post_id
-     JOIN tags t ON pt.tag_id = t.tag_id
-     WHERE p.published_at IS NOT NULL
-       AND p.deleted_at IS NULL
-       AND p.published_at <= $1
-       AND t.tag_slug = $2
- )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-        {tags} AS tags
- FROM ranked r
- JOIN posts p ON p.post_id = r.post_id
- JOIN users u ON p.user_id = u.user_id
- WHERE (r.rn <= $3 OR r.published_at >= $4)
-   AND {resolution}
- ORDER BY p.published_at DESC, p.post_id DESC"
-        ),
-        FeedSurface::UserTag { .. } => format!(
-            "WITH ranked AS (
-     SELECT p.post_id, p.published_at,
-            ROW_NUMBER() OVER (ORDER BY p.published_at DESC, p.post_id DESC) AS rn
-     FROM posts p
-     JOIN users u ON p.user_id = u.user_id
-     JOIN post_tags pt ON p.post_id = pt.post_id
-     JOIN tags t ON pt.tag_id = t.tag_id
-     WHERE p.published_at IS NOT NULL
-       AND p.deleted_at IS NULL
-       AND p.published_at <= $1
-       AND u.username = $2
-       AND t.tag_slug = $3
- )
- SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-        {tags} AS tags
- FROM ranked r
- JOIN posts p ON p.post_id = r.post_id
- JOIN users u ON p.user_id = u.user_id
- WHERE (r.rn <= $4 OR r.published_at >= $5)
-   AND {resolution}
- ORDER BY p.published_at DESC, p.post_id DESC"
-        ),
-    }
-}
-
-/// The most recent `published_at` of a *live* post (`published_at <= now`, not
-/// deleted) on `surface`, or `None` when the surface has no live post. Each
-/// surface variant adds exactly the joins/predicates that define its post set,
-/// mirroring the window query's surface filters. Used by
-/// [`PostStorage::feed_urls_needing_catchup`] to detect a cached feed that is
-/// stale relative to a go-live the worker may have missed while down.
-async fn max_published_at_for_surface<DB>(
-    pool: &Pool<DB>,
-    surface: &common::feed::FeedSurface,
-    now: UtcInstant,
-) -> Result<Option<UtcInstant>>
-where
-    DB: PostDialect,
-    (UtcInstant,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
-    // `Username`/`Tag` bind as themselves via the ADR-0071 sqlx bridge, for the
-    // surface `username`/`tag` binds.
-    String: Type<DB>,
-    for<'q> String: Encode<'q, DB>,
-    for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
-{
-    use common::feed::FeedSurface;
-    let row: Option<(UtcInstant,)> = match surface {
-        FeedSurface::Site => {
-            sqlx::query_as(
-                "SELECT p.published_at FROM posts p
-                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
-                   AND p.deleted_at IS NULL
-                 ORDER BY p.published_at DESC LIMIT 1",
-            )
-            .bind_storage(now)
-            .fetch_optional(pool)
-            .await?
-        }
-        FeedSurface::User { username } => {
-            sqlx::query_as(
-                "SELECT p.published_at FROM posts p
-                 JOIN users u ON p.user_id = u.user_id
-                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
-                   AND p.deleted_at IS NULL AND u.username = $2
-                 ORDER BY p.published_at DESC LIMIT 1",
-            )
-            .bind_storage(now)
-            .bind_storage(username)
-            .fetch_optional(pool)
-            .await?
-        }
-        FeedSurface::SiteTag { tag } => {
-            sqlx::query_as(
-                "SELECT p.published_at FROM posts p
-                 JOIN post_tags pt ON p.post_id = pt.post_id
-                 JOIN tags t ON pt.tag_id = t.tag_id
-                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
-                   AND p.deleted_at IS NULL AND t.tag_slug = $2
-                 ORDER BY p.published_at DESC LIMIT 1",
-            )
-            .bind_storage(now)
-            .bind_storage(tag)
-            .fetch_optional(pool)
-            .await?
-        }
-        FeedSurface::UserTag { username, tag } => {
-            sqlx::query_as(
-                "SELECT p.published_at FROM posts p
-                 JOIN users u ON p.user_id = u.user_id
-                 JOIN post_tags pt ON p.post_id = pt.post_id
-                 JOIN tags t ON pt.tag_id = t.tag_id
-                 WHERE p.published_at IS NOT NULL AND p.published_at <= $1
-                   AND p.deleted_at IS NULL AND u.username = $2 AND t.tag_slug = $3
-                 ORDER BY p.published_at DESC LIMIT 1",
-            )
-            .bind_storage(now)
-            .bind_storage(username)
-            .bind_storage(tag)
-            .fetch_optional(pool)
-            .await?
-        }
-    };
-    Ok(row.map(|(published_at,)| published_at))
 }
 
 /// Database-provided physical identity retained only by the no-write regression.
@@ -4513,6 +2011,7 @@ pub(crate) struct CorruptPostFormat(String);
 mod tests {
     use super::*;
     use crate::feed_cache::FeedCacheRow;
+    use crate::posts::models::{PostBookkeepingExpectation, RenderedHtml};
     use crate::test_support::{
         Backend, CloseablePool, MEDIA_TEST_SHA256, SeedRawPost, SeedUser, TestEnv, UpdateRawPost,
         backends, create_draft_via_service, create_post_via_service, create_posts_confirmed,
@@ -4521,9 +2020,11 @@ mod tests {
     };
 
     use chrono::Utc;
+    use common::post_body::PostBody;
+    use common::render::PostFormat;
     use common::test_support::{
         parse_etag, parse_post_body, parse_post_summary, parse_post_title, parse_row_limit,
-        parse_slug, parse_tag, parse_tag_label, parse_username, parse_utc_instant,
+        parse_slug, parse_tag_label, parse_utc_instant,
     };
     use common::time::UtcInstant;
     use host::feed::SyndicationFeedRepresentation;
@@ -4532,27 +2033,6 @@ mod tests {
     use sqlx::Row;
     use std::{sync::Arc, time::Duration};
     use tokio::sync::Barrier;
-
-    #[test]
-    fn publication_state_projects_publish_update() {
-        use common::org::PublicationState;
-
-        let at = parse_utc_instant("2026-11-01T05:30:00Z");
-
-        for (state, expected) in [
-            (PublicationState::Draft, PublishUpdate::Unpublish),
-            (
-                PublicationState::Scheduled(at),
-                PublishUpdate::Publish { at: Some(at) },
-            ),
-            (
-                PublicationState::Published(at),
-                PublishUpdate::Publish { at: Some(at) },
-            ),
-        ] {
-            assert_eq!(PublishUpdate::from(state), expected);
-        }
-    }
 
     async fn update_post_scoped(
         state: &Arc<crate::AppState>,
@@ -4787,90 +2267,6 @@ mod tests {
         assert_eq!(draft.published_at, None);
         assert_eq!(draft.deleted_at, None);
     }
-    #[test]
-    fn org_bookkeeping_conversion_preserves_each_persistence_expectation() {
-        let published_at = "2026-08-26T12:00:00Z".parse().unwrap();
-        let bookkeeping = common::org::OrgBookkeeping {
-            slug: Some(parse_slug("expected-slug")),
-            format: Some(PostFormat::Org),
-            post_id: Some(PostId::from(7)),
-            synced: Some(parse_etag("\"sha256-current\"")),
-            synced_at: None,
-            date_utc: Some(published_at),
-        };
-
-        let expectations: PostBookkeepingExpectation = bookkeeping.into();
-        assert_eq!(expectations.slug, Some(parse_slug("expected-slug")));
-        assert_eq!(expectations.format, Some(PostFormat::Org));
-        assert_eq!(expectations.published_at, Some(Some(published_at)));
-        assert_eq!(expectations.post_id, Some(PostId::from(7)));
-        assert_eq!(
-            expectations.content_etag,
-            Some(parse_etag("\"sha256-current\""))
-        );
-    }
-
-    #[test]
-    fn media_advisory_lock_keys_are_sorted_and_deduplicated() {
-        let first = media_ref_for("first.jpg");
-        let second = media_ref_for("second.jpg");
-        let forward = media_advisory_lock_keys([first.clone(), second.clone()]);
-        let reverse_with_duplicate =
-            media_advisory_lock_keys([second.clone(), first.clone(), second]);
-
-        assert_eq!(
-            forward, reverse_with_duplicate,
-            "opposite-order updates acquire precisely the same lock sequence"
-        );
-        assert_eq!(forward.len(), 2, "one lock per distinct media identity");
-        assert!(
-            forward.windows(2).all(|pair| pair[0] < pair[1]),
-            "advisory lock keys are strictly ascending"
-        );
-    }
-
-    #[test]
-    fn foreign_evidence_rejects_another_instance_and_encodes_multiple_proofs() {
-        let expected: InstanceId = "123e4567-e89b-12d3-a456-426614174000"
-            .parse()
-            .expect("canonical instance ID");
-        let other: InstanceId = "123e4567-e89b-12d3-a456-426614174001"
-            .parse()
-            .expect("canonical instance ID");
-        let parsed = common::media::parse_media_url(&media_url_for("evidence.jpg"))
-            .expect("media form parses");
-        let first = PersistedMediaReference::new(
-            PostId::from(1),
-            parsed.media().clone(),
-            parsed.kind(),
-            parsed.reference_form().clone(),
-        );
-        let second = PersistedMediaReference::new(
-            PostId::from(2),
-            parsed.media().clone(),
-            parsed.kind(),
-            parsed.reference_form().clone(),
-        );
-        let mut evidence = MediaReferenceEvidence::new(expected.clone());
-        assert!(!evidence.insert(ProvenForeignReference::new(first, other)));
-        assert!(evidence.insert(ProvenForeignReference::new(second, expected.clone())));
-        assert!(evidence.insert(ProvenForeignReference::new(
-            PersistedMediaReference::new(
-                PostId::from(1),
-                parsed.media().clone(),
-                parsed.kind(),
-                parsed.reference_form().clone(),
-            ),
-            expected,
-        )));
-
-        let mut query = QueryBuilder::<sqlx::Sqlite>::new("");
-        push_media_reference_evidence_cte(&mut query, &evidence);
-        assert!(
-            query.sql().contains("), ("),
-            "multiple proofs must be separate CTE rows"
-        );
-    }
 
     /// Two independent edits whose old/new media sets are reversed must complete:
     /// `PostgreSQL` acquires their common advisory keys in one order, while `SQLite`
@@ -5010,58 +2406,6 @@ mod tests {
         .expect("reversed batch transactions must not deadlock");
         assert_eq!(forward_ids.len(), 2);
         assert_eq!(reverse_ids.len(), 2);
-    }
-
-    /// A local viewer's channel is not a bind: both subscription branches resolve
-    /// the seeded `local` row inline, so the fragment spends three placeholders
-    /// (author, ref, ref) and `next` is `start + 3` — the property every call site
-    /// depends on by threading the returned index rather than assuming `+5` (#6).
-    #[test]
-    fn resolution_where_resolves_the_local_channel_in_sql_for_a_local_viewer() {
-        let viewer = ViewerIdentity::Local {
-            user_id: UserId::from(7),
-        };
-        let (sql, binds, next) = resolution_where(&viewer, 2);
-        assert!(matches!(binds, ResolutionBinds::Local { .. }));
-        assert_eq!(next, 5, "three placeholders consumed from $2: {sql}");
-        assert_eq!(
-            sql.matches("(SELECT channel_id FROM channels WHERE name = 'local')")
-                .count(),
-            2,
-            "both the subscribers and named branches resolve the channel: {sql}"
-        );
-        assert!(sql.contains("p.user_id = $2"), "{sql}");
-        assert!(sql.contains("s.subscriber_ref = $3"), "{sql}");
-        assert!(sql.contains("s.subscriber_ref = $4"), "{sql}");
-        assert!(
-            !sql.contains("$5"),
-            "no fourth placeholder is emitted: {sql}"
-        );
-        assert!(
-            !sql.contains("99"),
-            "the carried channel id is ignored: {sql}"
-        );
-    }
-
-    /// The counterpart: `Anonymous` and `Remote` keep the five-placeholder shape,
-    /// binding the channel rather than resolving it.
-    #[rstest]
-    #[case::anonymous(ViewerIdentity::Anonymous)]
-    #[case::remote(ViewerIdentity::Remote {
-        channel_id: ChannelId::from(2),
-        subscriber_ref: "7".parse().unwrap(),
-    })]
-    fn resolution_where_binds_the_channel_for_a_non_local_viewer(#[case] viewer: ViewerIdentity) {
-        let (sql, _binds, next) = resolution_where(&viewer, 2);
-        assert_eq!(next, 7, "five placeholders consumed from $2: {sql}");
-        assert!(
-            !sql.contains("name = 'local'"),
-            "a non-local viewer never resolves the local channel: {sql}"
-        );
-        assert!(sql.contains("s.channel_id = $3"), "{sql}");
-        assert!(sql.contains("s.subscriber_ref = $4"), "{sql}");
-        assert!(sql.contains("s.channel_id = $5"), "{sql}");
-        assert!(sql.contains("s.subscriber_ref = $6"), "{sql}");
     }
 
     /// Physical row identity for the post's `post_tags` rows: `ctid` on Postgres,
@@ -5290,7 +2634,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             prior_audiences
                 .iter()
-                .filter_map(audience_target_row)
+                .filter_map(visibility::audience_target_row)
                 .map(|(kind, audience_id)| {
                     (
                         kind.as_ref().to_owned(),
@@ -5610,70 +2954,6 @@ mod tests {
         .await
         .expect("subsequent writer succeeds");
         assert_eq!(slugs_of(&*env.state.posts, post).await, vec!["committed"]);
-    }
-
-    /// A tag mutation captures a complete revision, including current media. On
-    /// `PostgreSQL` copy must wait for the ordinary media lock rather than
-    /// racing a guarded delete or reclaim (ADR-0154).
-    // guard:low-level-db — exercises a held PostgreSQL advisory lock directly
-    #[tokio::test]
-    async fn postgres_tag_revision_capture_waits_for_current_media_lock() {
-        let env = Backend::Postgres.setup().await;
-        let user = SeedUser::new().seed(&env.state).await.user_id;
-        let media = media_ref_for("tag-revision-lock.jpg");
-        let post = create_post_via_service(
-            &env.state,
-            user,
-            parse_post_body(&format!(
-                "<img src=\"{}\">",
-                media_url_for("tag-revision-lock.jpg")
-            )),
-        )
-        .await;
-        let held = env
-            .base
-            .pool()
-            .lock_media_reference_for_write(&media)
-            .await
-            .expect("take the current media lock");
-        let posts = Arc::clone(&env.state.posts);
-        let write_scope = env.state.write_scope.clone();
-        let mut tag_update = tokio::spawn(async move {
-            set_post_tags_confirmed(
-                &write_scope,
-                posts,
-                post,
-                user,
-                &[parse_tag_label("locked")],
-            )
-            .await
-        });
-
-        assert!(
-            tokio::time::timeout(Duration::from_millis(300), &mut tag_update)
-                .await
-                .is_err(),
-            "tag revision capture completed while its current media lock was held"
-        );
-
-        held.rollback()
-            .await
-            .expect("release the current media lock");
-        tag_update
-            .await
-            .expect("tag update task panicked")
-            .expect("tag update failed after lock release");
-        assert_eq!(
-            env.base
-                .pool()
-                .scalar_i64(&format!(
-                    "SELECT COUNT(*) FROM post_revisions WHERE post_id = {post}"
-                ))
-                .await
-                .expect("count captured revisions"),
-            1,
-            "the deferred tag mutation captures exactly one prior-state revision"
-        );
     }
 
     /// #883: the upsert returns the tag id on its **conflict** path, not just when
@@ -6102,30 +3382,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn audience_target_from_row_maps_every_kind() {
-        // Each lookup-table kind maps to its target; `named` carries the id.
-        assert_eq!(
-            audience_target_from_row(TargetKind::Public, None),
-            Some(AudienceTarget::Public)
-        );
-        assert_eq!(
-            audience_target_from_row(TargetKind::Subscribers, None),
-            Some(AudienceTarget::Subscribers)
-        );
-        assert_eq!(
-            audience_target_from_row(TargetKind::Named, Some(AudienceId::from(7))),
-            Some(AudienceTarget::Named(AudienceId::from(7)))
-        );
-        // A `named` row missing its id is dropped — the only reason this returns
-        // `Option`.
-        assert_eq!(audience_target_from_row(TargetKind::Named, None), None);
-        // An unrecognised kind name is not expressible here: the parameter is a
-        // `TargetKind`, so a bad name cannot get this far.
-        // `get_post_audiences_rejects_an_unknown_target_kind` covers it at the
-        // boundary where it surfaces.
-    }
-
     #[apply(backends)]
     #[tokio::test]
     async fn get_post_audiences_rejects_an_unknown_target_kind(#[case] backend: Backend) {
@@ -6312,178 +3568,6 @@ mod tests {
                 .await
                 .expect("count rolled-back revisions"),
             1
-        );
-    }
-
-    fn post_tag(slug: &str, display: &str) -> PostTag {
-        PostTag {
-            post_id: PostId::from(1),
-            tag_id: TagId::from(0),
-            tag_slug: parse_tag(slug),
-            tag_display: parse_tag_label(display),
-        }
-    }
-
-    #[test]
-    fn post_tag_diff_adds_removes_keeps() {
-        let existing = vec![post_tag("rust", "Rust"), post_tag("leptos", "Leptos")];
-        let desired: Vec<TagLabel> = vec![
-            // Same slug as an existing tag (different casing): kept, not re-added.
-            parse_tag_label("Rust"),
-            // New slug: added.
-            parse_tag_label("wasm"),
-        ];
-
-        let diff = post_tag_diff(&existing, &desired);
-
-        let added: Vec<String> = diff.to_add.iter().map(ToString::to_string).collect();
-        assert_eq!(added, vec!["wasm".to_string()]);
-        let removed: Vec<String> = diff.to_remove.iter().map(ToString::to_string).collect();
-        assert_eq!(removed, vec!["leptos".to_string()]);
-    }
-
-    /// `to_add` comes back slug-ordered so concurrent reconciles take `tags` row locks
-    /// in a consistent order (#876) — and the sort is **stable**, so two labels sharing
-    /// a slug keep their input order and the first occurrence's casing survives to the
-    /// insert.
-    #[test]
-    fn post_tag_diff_orders_additions_by_slug_stably() {
-        let existing: Vec<PostTag> = vec![];
-        // Deliberately unordered, with a duplicate slug in the middle: if the sort were
-        // unstable, "NIX" could overtake "Nix" and the wrong casing would be stored.
-        let desired: Vec<TagLabel> = vec![
-            parse_tag_label("wasm"),
-            parse_tag_label("Nix"),
-            parse_tag_label("NIX"),
-            parse_tag_label("actix"),
-        ];
-
-        let diff = post_tag_diff(&existing, &desired);
-
-        let added: Vec<String> = diff.to_add.iter().map(ToString::to_string).collect();
-        assert_eq!(
-            added,
-            vec![
-                "actix".to_string(),
-                "Nix".to_string(),
-                "NIX".to_string(),
-                "wasm".to_string(),
-            ],
-            "additions are slug-ordered, and the duplicate slug keeps its input order"
-        );
-    }
-
-    #[test]
-    fn tagging_error_display_post_not_found() {
-        let err = TaggingError::PostNotFound;
-        assert_eq!(err.to_string(), "post not found");
-    }
-
-    #[test]
-    fn tagging_error_debug() {
-        let err = TaggingError::PostNotFound;
-        let debug_str = format!("{err:?}");
-        assert!(debug_str.contains("PostNotFound"));
-
-        let err2 = TaggingError::Internal(sqlx::Error::RowNotFound);
-        let debug_str2 = format!("{err2:?}");
-        assert!(debug_str2.contains("Internal"));
-    }
-
-    #[test]
-    fn list_by_tag_error_display_tag_not_found() {
-        let err = ListByTagError::TagNotFound;
-        assert_eq!(err.to_string(), "tag not found");
-    }
-
-    #[test]
-    fn list_by_tag_error_debug() {
-        let err = ListByTagError::TagNotFound;
-        let debug_str = format!("{err:?}");
-        assert!(debug_str.contains("TagNotFound"));
-    }
-
-    #[test]
-    fn fallback_summary_label_uses_the_first_non_blank_body_line() {
-        let post = PostRecord {
-            post_id: PostId::from(1),
-            user_id: UserId::from(1),
-            author_username: parse_username("author"),
-            title: Some(parse_post_title("My Title")),
-            slug: parse_slug("my-slug"),
-            body: parse_post_body(
-                "\n\n   The first non-empty line of the body is here. \n\n Another line.",
-            ),
-            format: PostFormat::Markdown,
-            rendered_html: common::test_support::rendered_html(
-                "<p>The first non-empty line of the body is here.</p>",
-            ),
-            created_at: UtcInstant::now(),
-            updated_at: UtcInstant::now(),
-            published_at: None,
-            deleted_at: None,
-            summary: None,
-            tags: vec![],
-        };
-
-        assert_eq!(
-            post.fallback_summary_label(),
-            "The first non-empty line of the body is here."
-        );
-
-        // A `PostBody` always has a non-blank line (#811), so the body rung always
-        // answers and `fallback_summary_label` needs no title/slug fallbacks — they
-        // would be dead compensation.
-    }
-
-    #[test]
-    fn permalink_formats_username_date_and_slug() {
-        use chrono::TimeZone;
-        let post = PostRecord {
-            post_id: PostId::from(1),
-            user_id: UserId::from(1),
-            author_username: parse_username("author"),
-            title: Some(parse_post_title("My Title")),
-            slug: parse_slug("hello-world"),
-            body: parse_post_body("My body"),
-            format: PostFormat::Markdown,
-            rendered_html: common::test_support::rendered_html("<p>My body</p>"),
-            created_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
-            updated_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
-            published_at: Some(UtcInstant::from(
-                Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
-            )),
-            deleted_at: None,
-            summary: None,
-            tags: vec![],
-        };
-
-        assert_eq!(post.permalink().as_ref(), "/~author/2026/04/12/hello-world");
-    }
-
-    #[test]
-    fn scheduled_cursor_rejects_row_without_publish_time() {
-        let post = PostRecord {
-            post_id: PostId::from(1),
-            user_id: UserId::from(1),
-            author_username: parse_username("author"),
-            title: Some(parse_post_title("My Title")),
-            slug: parse_slug("hello-world"),
-            body: parse_post_body("My body"),
-            format: PostFormat::Markdown,
-            rendered_html: common::test_support::rendered_html("<p>My body</p>"),
-            created_at: UtcInstant::now(),
-            updated_at: UtcInstant::now(),
-            published_at: None,
-            deleted_at: None,
-            summary: None,
-            tags: vec![],
-        };
-
-        let err = to_scheduled_post_cursor(&post).unwrap_err();
-        assert_eq!(
-            err.operator_message(),
-            "scheduled listing row missing published_at"
         );
     }
 
@@ -7217,14 +4301,17 @@ mod tests {
             "<img src=\"{}\">",
             media_url_for("bounded-snapshot.jpg")
         ));
-        let inputs: Vec<CreatePostInput> = (0..=MAX_MEDIA_REFERENCE_SNAPSHOT)
+        let inputs: Vec<CreatePostInput> = (0..=media::MAX_MEDIA_REFERENCE_SNAPSHOT)
             .map(|_| SeedRawPost::new(user).body(body.clone()).build())
             .collect();
         create_posts_confirmed(&env.state, inputs).await;
 
         let snapshot = env.state.posts.list_media_references(&media).await.unwrap();
 
-        assert_eq!(snapshot.references().len(), MAX_MEDIA_REFERENCE_SNAPSHOT);
+        assert_eq!(
+            snapshot.references().len(),
+            media::MAX_MEDIA_REFERENCE_SNAPSHOT
+        );
         assert!(
             snapshot.has_unexamined_references(),
             "the extra row is a fail-closed sentinel, not an unbounded allocation"
@@ -7498,81 +4585,6 @@ mod tests {
                 .any(|p| p.post_id == post2_id && p.published_at.is_some())
         );
         assert!(!results.iter().any(|p| p.post_id == post3_id));
-    }
-
-    // Not-found/unauthorized mask as a 404; internal is a masked storage failure.
-    #[test]
-    fn from_update_post_error_maps_variants() {
-        use host::error::{ErrorKind, InternalError};
-
-        let not_found: InternalError = UpdatePostError::NotFound.into();
-        assert_eq!(not_found.kind(), ErrorKind::NotFound);
-        assert_eq!(not_found.public_message(), "Post not found");
-
-        let unauthorized: InternalError = UpdatePostError::Unauthorized.into();
-        assert_eq!(unauthorized.kind(), ErrorKind::NotFound);
-        assert_eq!(unauthorized.public_message(), "Post not found");
-
-        let internal: InternalError = UpdatePostError::Internal(sqlx::Error::PoolClosed).into();
-        assert_eq!(internal.kind(), ErrorKind::Storage);
-        assert_eq!(internal.public_message(), "storage operation failed");
-
-        for error in [
-            UpdatePostError::BookkeepingMismatch,
-            UpdatePostError::StaleContent,
-        ] {
-            let expected_operator_message = error.to_string();
-            let internal: InternalError = error.into();
-            assert_eq!(internal.kind(), ErrorKind::Validation);
-            assert_eq!(internal.public_message(), expected_operator_message);
-            assert_eq!(internal.operator_message(), expected_operator_message);
-        }
-    }
-
-    // The `set_post_tags` lift masks as a server error
-    // (`"server operation failed"`, kind `Internal`) while the typed
-    // `TaggingError` is preserved on the operator side rather than stringified.
-    #[test]
-    fn from_tagging_error_maps_to_server() {
-        use host::error::{ErrorKind, InternalError};
-
-        let error: InternalError = TaggingError::PostNotFound.into();
-        assert_eq!(error.kind(), ErrorKind::Internal);
-        assert_eq!(error.public_message(), "server operation failed");
-        // The typed source is preserved (not flattened to the wire message).
-        assert!(error.operator_message().contains("post not found"));
-    }
-
-    // -- Cursor + effectful helper tests (Cluster C push-down, #334) --
-
-    #[test]
-    fn post_cursor_round_trips_through_wire_cursor() {
-        let cursor = PostCursor {
-            created_at: "2026-04-12T08:30:00.123456Z".parse().unwrap(),
-            post_id: PostId::from(42),
-        };
-
-        assert_eq!(
-            keyset_cursor(Some(wire_cursor(&cursor)))
-                .unwrap()
-                .created_at,
-            cursor.created_at
-        );
-    }
-
-    #[test]
-    fn scheduled_cursor_round_trips_through_wire_cursor() {
-        let cursor = ScheduledPostCursor {
-            published_at: "2026-04-12T08:30:00.123456Z".parse().unwrap(),
-            post_id: PostId::from(42),
-        };
-
-        assert_eq!(
-            scheduled_keyset_cursor(Some(wire_scheduled_cursor(&cursor)))
-                .unwrap()
-                .published_at,
-            cursor.published_at
-        );
     }
 
     #[test]

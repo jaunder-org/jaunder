@@ -3,8 +3,11 @@ use sqlx::{Pool, QueryBuilder, Sqlite};
 
 use crate::helpers;
 use crate::posts::{
-    self, MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill,
-    PostPublicationClear, PostTag, PostTagDiff,
+    lifecycle::{self, PostBookkeepingRow},
+    media::{self, MediaReferenceEvidence, PostMediaReferenceBackfill},
+    models::PostPublicationClear,
+    tags::{self, PostTag, PostTagDiff},
+    visibility,
 };
 use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use crate::{
@@ -33,7 +36,7 @@ async fn apply_lifecycle_change(
     delete: bool,
 ) -> sqlx::Result<()> {
     let now = UtcInstant::now();
-    posts::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
+    lifecycle::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
     if delete {
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
             .bind_storage(now)
@@ -131,7 +134,7 @@ async fn apply_post_update(
     tag_diff: PostTagDiff<'_>,
 ) -> Result<PostRecord, UpdatePostError> {
     let now = input.request_clock;
-    posts::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
+    lifecycle::capture_complete_post_revision::<Sqlite>(conn, post_id, now).await?;
     let publication_clear = PostPublicationClear::for_update(input.publish);
     let explicit_published_at = match input.publish {
         PublishUpdate::Unpublish => None,
@@ -150,13 +153,13 @@ async fn apply_post_update(
     .bind_storage(input.rendered.html()).bind_storage(publication_clear).bind_storage(explicit_published_at)
     .bind_storage(explicit_published_at).bind_storage(now).bind_storage(now).bind_storage(input.summary.as_ref()).bind_storage(post_id)
     .fetch_one(&mut *conn).await?;
-    posts::replace_post_audiences::<Sqlite>(&mut *conn, post_id, &input.audiences).await?;
+    visibility::replace_post_audiences::<Sqlite>(&mut *conn, post_id, &input.audiences).await?;
     for label in tag_diff.to_add {
-        let tag_id = sqlx::query_scalar::<_, TagId>(posts::UPSERT_TAG_RETURNING_ID)
+        let tag_id = sqlx::query_scalar::<_, TagId>(tags::UPSERT_TAG_RETURNING_ID)
             .bind_storage(label.slug())
             .fetch_one(&mut *conn)
             .await?;
-        sqlx::query(posts::INSERT_POST_TAG)
+        sqlx::query(tags::INSERT_POST_TAG)
             .bind_storage(post_id)
             .bind_storage(tag_id)
             .bind_storage(label)
@@ -164,13 +167,13 @@ async fn apply_post_update(
             .await?;
     }
     for slug in tag_diff.to_remove {
-        sqlx::query(posts::DELETE_POST_TAG_BY_SLUG)
+        sqlx::query(tags::DELETE_POST_TAG_BY_SLUG)
             .bind_storage(post_id)
             .bind_storage(slug)
             .execute(&mut *conn)
             .await?;
     }
-    posts::replace_post_media::<Sqlite>(&mut *conn, post_id, input.rendered.media()).await?;
+    media::replace_post_media::<Sqlite>(&mut *conn, post_id, input.rendered.media()).await?;
     Ok(row)
 }
 
@@ -251,14 +254,14 @@ impl PostDialect for Sqlite {
         .bind_storage(post_id)
         .fetch_all(&mut *conn)
         .await?;
-        if let Some(error) = posts::update_expectation_error(post_id, &existing, &tags, input) {
+        if let Some(error) = lifecycle::update_expectation_error(post_id, &existing, &tags, input) {
             return Err(error);
         }
-        let existing_tags = sqlx::query_as::<_, PostTag>(posts::SELECT_POST_TAGS)
+        let existing_tags = sqlx::query_as::<_, PostTag>(tags::SELECT_POST_TAGS)
             .bind_storage(post_id)
             .fetch_all(&mut *conn)
             .await?;
-        let tag_diff = posts::post_tag_diff(&existing_tags, &input.tags);
+        let tag_diff = tags::post_tag_diff(&existing_tags, &input.tags);
         let existing_audiences = sqlx::query_as::<
             _,
             (
@@ -295,10 +298,10 @@ impl PostDialect for Sqlite {
                 )
             })
             .collect();
-        if posts::update_scalar_is_noop(&existing, input)
+        if lifecycle::update_scalar_is_noop(&existing, input)
             && tag_diff.to_add.is_empty()
             && tag_diff.to_remove.is_empty()
-            && posts::audiences_are_equal(&existing_audiences, &input.audiences)
+            && visibility::audiences_are_equal(&existing_audiences, &input.audiences)
             && old_media_set == desired_media_set
         {
             return fetch_post(conn, post_id).await;
@@ -350,26 +353,26 @@ impl PostDialect for Sqlite {
             Some((owner, None)) if owner != user_id => return Err(TaggingError::Unauthorized),
             Some(_) => {}
         }
-        let existing = sqlx::query_as::<_, PostTag>(posts::SELECT_POST_TAGS)
+        let existing = sqlx::query_as::<_, PostTag>(tags::SELECT_POST_TAGS)
             .bind_storage(post_id)
             .fetch_all(&mut *connection)
             .await?;
-        let diff = posts::post_tag_diff(&existing, desired);
+        let diff = tags::post_tag_diff(&existing, desired);
         if diff.to_add.is_empty() && diff.to_remove.is_empty() {
             return Ok(());
         }
-        posts::capture_complete_post_revision::<Sqlite>(
+        lifecycle::capture_complete_post_revision::<Sqlite>(
             &mut *connection,
             post_id,
             UtcInstant::now(),
         )
         .await?;
         for label in diff.to_add {
-            let tag_id = sqlx::query_scalar::<_, TagId>(posts::UPSERT_TAG_RETURNING_ID)
+            let tag_id = sqlx::query_scalar::<_, TagId>(tags::UPSERT_TAG_RETURNING_ID)
                 .bind_storage(label.slug())
                 .fetch_one(&mut *connection)
                 .await?;
-            sqlx::query(posts::INSERT_POST_TAG)
+            sqlx::query(tags::INSERT_POST_TAG)
                 .bind_storage(post_id)
                 .bind_storage(tag_id)
                 .bind_storage(label)
@@ -377,7 +380,7 @@ impl PostDialect for Sqlite {
                 .await?;
         }
         for slug in diff.to_remove {
-            sqlx::query(posts::DELETE_POST_TAG_BY_SLUG)
+            sqlx::query(tags::DELETE_POST_TAG_BY_SLUG)
                 .bind_storage(post_id)
                 .bind_storage(slug)
                 .execute(&mut *connection)
@@ -417,7 +420,7 @@ impl PostDialect for Sqlite {
                     "post rendered HTML changed during media-reference backfill".to_owned(),
                 ));
             }
-            posts::replace_legacy_post_media::<Sqlite>(&mut conn, candidates).await
+            media::replace_legacy_post_media::<Sqlite>(&mut conn, candidates).await
         }
         .await;
 
@@ -475,10 +478,10 @@ impl PostDialect for Sqlite {
         evidence: &MediaReferenceEvidence,
     ) -> sqlx::Result<Vec<PostId>> {
         let mut query = QueryBuilder::<Sqlite>::new(String::new());
-        posts::push_media_reference_evidence_cte(&mut query, evidence);
+        media::push_media_reference_evidence_cte(&mut query, evidence);
         query.push("SELECT DISTINCT pm.post_id");
-        posts::push_owner_media_reference_from_where(&mut query, user_id, media);
-        posts::push_live_media_reference_predicate(&mut query, current_instance_id);
+        media::push_owner_media_reference_from_where(&mut query, user_id, media);
+        media::push_live_media_reference_predicate(&mut query, current_instance_id);
         query.push(" ORDER BY pm.post_id");
         query.build_query_scalar::<PostId>().fetch_all(pool).await
     }
@@ -487,7 +490,7 @@ impl PostDialect for Sqlite {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::posts::PostMediaReferenceBackfill;
+    use crate::posts::media::PostMediaReferenceBackfill;
     use crate::test_support::{Backend, CloseablePool, SeedRawPost, SeedUser, sqlite_only};
     use rstest::*;
     use rstest_reuse::*;
