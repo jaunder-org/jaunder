@@ -2,17 +2,15 @@ use std::sync::Arc;
 
 use common::ids::PostId;
 use common::test_support::{parse_audience_name, parse_row_limit};
-use common::visibility::{
-    AudienceTarget, SubscriberIdentity, ViewerIdentity, local_subscriber_identity,
-};
+use common::visibility::{AudienceTarget, ViewerIdentity};
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{
-    Backend, SeedRawPost, backends, confirmed_for as confirmed, seed_users,
+    Backend, SeedRawPost, backends, confirmed_for as confirmed, seed_local_subscription, seed_users,
 };
-use storage::{AudienceStorage, SubscriptionStorage, WriteScope};
+use storage::{AudienceStorage, WriteScope};
 
-use super::fixtures::{channel_id_by_name, local_channel_id, raw_exec};
+use super::fixtures::{channel_id_by_name, raw_exec};
 
 // The full resolution matrix: viewers {anonymous, author A, active subscriber S,
 // named-member M (in audience G, also subscribed), non-member N (not subscribed)}
@@ -26,23 +24,9 @@ use super::fixtures::{channel_id_by_name, local_channel_id, raw_exec};
 async fn resolution_matrix(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let local = local_channel_id(backend, &env).await;
-
     let [a, s, m, n] = seed_users(state).await;
-    subscribe_confirmed(
-        &state.write_scope,
-        Arc::clone(&state.subscriptions),
-        a,
-        local_subscriber_identity(local, s),
-    )
-    .await;
-    let m_sub = subscribe_confirmed(
-        &state.write_scope,
-        Arc::clone(&state.subscriptions),
-        a,
-        local_subscriber_identity(local, m),
-    )
-    .await;
+    seed_local_subscription(state, a, s).await;
+    let m_sub = seed_local_subscription(state, a, m).await;
     let g =
         create_audience_confirmed(&state.write_scope, Arc::clone(&state.audiences), a, "G").await;
     let g2 =
@@ -171,25 +155,6 @@ async fn resolution_matrix(#[case] backend: Backend) {
             );
         }
     }
-}
-
-async fn subscribe_confirmed(
-    write_scope: &WriteScope,
-    subscriptions: Arc<dyn SubscriptionStorage>,
-    author: common::ids::UserId,
-    subscriber: SubscriberIdentity,
-) -> common::ids::SubscriptionId {
-    let outcome = write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                subscriptions
-                    .subscribe(transaction, author, &subscriber)
-                    .await
-            })
-        })
-        .await
-        .expect("subscription fixture setup should succeed");
-    confirmed(outcome, "subscription fixture setup")
 }
 
 async fn create_audience_confirmed(
