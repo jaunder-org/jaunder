@@ -75,7 +75,7 @@ async fn get_post_rejects_invalid_username(#[case] backend: Backend) {
 
     let (status, body) = get_post_form(&state, "Invalid Name", 2024, 1, 1, "missing", None).await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     assert!(body.contains("username"), "body: {body}");
 }
 
@@ -86,7 +86,7 @@ async fn get_post_rejects_invalid_slug(#[case] backend: Backend) {
 
     let (status, body) = get_post_form(&state, "author", 2024, 1, 1, "Invalid Slug", None).await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     assert!(body.contains("slug"), "body: {body}");
 }
 

@@ -440,7 +440,7 @@ async fn list_user_posts_rejects_invalid_username(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, body) = list_user_posts(&state, "Invalid Name", None, 50, None).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     assert!(body.contains("username"), "body: {body}");
 }
 

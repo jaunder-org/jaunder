@@ -819,7 +819,7 @@ async fn login_rejects_whitespace_only_label(#[case] backend: Backend) {
 
     // A whitespace-only label is rejected at the typed-wire-arg decode
     // (SessionLabel's FromStr trims, then rejects empty) — it must not fall
-    // through to the User-Agent branch. Surfaces as 500, the session-fn convention.
+    // through to the User-Agent branch and is a malformed client request.
     let (status, _, body) = post_server_fn_request_fixture_with_secure_flag::<web::auth::Login, _>(
         &state,
         &LoginDecodeFixture {
@@ -832,7 +832,7 @@ async fn login_rejects_whitespace_only_label(#[case] backend: Backend) {
     )
     .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     // Decode fails before the handler body runs, so no session is minted.
     assert!(!body.contains("\"token\""), "token minted: {body}");
 }
@@ -864,7 +864,7 @@ async fn login_rejects_overlong_label(#[case] backend: Backend) {
     )
     .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(!body.contains("\"token\""), "token minted: {body}");
 }
 
@@ -1112,7 +1112,7 @@ async fn login_nested_request_rejects_invalid_username_before_handler(#[case] ba
         )
         .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.contains("server_function"), "body: {body}");
     assert_eq!(
         state
@@ -1163,7 +1163,7 @@ async fn login_nested_request_rejects_short_password_before_handler(#[case] back
         )
         .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(set_cookie.is_none(), "decode rejection minted a session");
     assert!(body.contains("server_function"), "body: {body}");
     assert_eq!(

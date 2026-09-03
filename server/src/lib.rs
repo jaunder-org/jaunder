@@ -15,6 +15,7 @@ pub mod observability;
 pub mod projector;
 pub mod runtime_file;
 mod scheduled_worker;
+mod server_fn_response;
 pub mod site;
 mod soft_path;
 pub mod websub;
@@ -175,7 +176,7 @@ pub fn create_router_with_media_reference_ownership_resolver(
                 let mailer = server_fn_mailer.clone();
                 let media_manager = Arc::clone(&server_fn_media_manager);
                 let media_content_locks = Arc::clone(&server_fn_media_content_locks);
-                leptos_axum::handle_server_fns_with_context(
+                server_fn_response::handle_with_context(
                     move || {
                         context::provide_app_state_contexts(&state);
                         context::provide_media_content_locks_context(&media_content_locks);

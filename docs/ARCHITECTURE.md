@@ -1356,6 +1356,14 @@ that burden alone still justifies the shape. The visible message is gated on a
 `touched` flag; submit is gated disable-until-valid. Typing the arg moves
 validation into arg-**decode**, so a malformed request from a non-browser client
 fails before the fn body — the defense-in-depth path, not the user path.
+Framework `Args`, `MissingArg`, and input-side `Deserialization` failures carry
+an internal structured classification to the `/api` server-function response
+normalizer, which returns HTTP 400 and strips that classification before the
+public boundary. The public `WebError::ServerFunction` payload and message stay
+unchanged; function-body, output-serialization, and other internal failures
+remain HTTP 500. For progressive-enhancement forms the normalizer also removes
+the malformed request's framework-added redirect, while valid redirects remain
+unchanged ([ADR-0065](adr/0065-client-side-domain-validation.md)).
 
 [Cohesive request aggregates](adr/0129-request-aggregate-server-function-inputs.md)
 are the server-fn boundary rule: multiple caller-supplied values forming one

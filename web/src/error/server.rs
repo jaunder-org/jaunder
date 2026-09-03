@@ -462,11 +462,15 @@ mod tests {
             "invalid value for `schedule`: submitted-marker-846".into(),
         ));
 
-        // The outward wire error is untouched: only telemetry is sanitized.
-        assert!(matches!(error, WebError::ServerFunction { .. }));
-        assert!(
-            error.to_string().contains("submitted-marker-846"),
-            "client-facing decode message changed: {error}"
+        // The public wire error is unchanged after the server response adapter
+        // consumes the internal decode classification.
+        let body = WebError::normalize_server_fn_error_body(error.ser())
+            .expect("arg decode error carries the internal classification");
+        assert_eq!(
+            WebError::de(body),
+            WebError::server_function(
+                "error deserializing server function arguments: invalid value for `schedule`: submitted-marker-846"
+            )
         );
 
         let recorded = events.lock().expect("field recorder mutex").clone();

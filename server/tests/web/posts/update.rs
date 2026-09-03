@@ -205,11 +205,11 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
 }
 
 // Shape B — update_post rejection cluster. Identical setup (author + session +
-// a freshly created draft) and assertion structure (INTERNAL_SERVER_ERROR +
-// body substring); only the update body/format and expected message vary. The
-// initial draft body is immaterial to the assertion, so it is fixed. As on the
-// create side, a blank body is an arg-decode rejection carrying `PostBody`'s
-// message rather than the handler's (#811).
+// a freshly created draft) and assertion structure (BAD_REQUEST + body
+// substring); only the update body/format and expected message vary. The initial
+// draft body is immaterial to the assertion, so it is fixed. As on the create
+// side, a blank body is an arg-decode rejection carrying `PostBody`'s message
+// rather than the handler's (#811).
 #[apply(backends_matrix)]
 #[case::empty_post("", "markdown", "post body must contain at least one non-blank line")]
 #[case::invalid_format("body", "invalid_format", "post format must be")]
@@ -251,7 +251,7 @@ async fn update_post_rejects(
     )
     .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     assert!(body.contains(expected), "body: {body}");
 }
 

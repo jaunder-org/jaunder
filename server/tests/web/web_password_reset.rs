@@ -134,7 +134,7 @@ async fn request_password_reset_invalid_username_returns_error(#[case] backend: 
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 // M3.11.9: request_password_reset for an unknown username returns an error.
@@ -322,7 +322,7 @@ async fn confirm_nested_request_rejects_malformed_token_before_handler(#[case] b
         )
         .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
         response_body.contains("server_function"),
         "expected a server-fn decode rejection; body: {response_body}"
@@ -440,11 +440,12 @@ async fn confirm_nested_request_rejects_short_password_before_handler(#[case] ba
         )
         .await;
 
-    // A decode rejection is HTTP 500 with a body tagged `server_function` — distinct
-    // from an in-body failure, which projects to `validation`/`unauthorized`/etc.
-    // (`WebError` is externally tagged, snake_case.) This is the wire contract the
-    // decode-telemetry path in `web::error` sits behind (#822).
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    // A decode rejection is HTTP 400 with a body tagged `server_function` —
+    // distinct from an in-body failure, which projects to
+    // `validation`/`unauthorized`/etc. (`WebError` is externally tagged,
+    // snake_case.) This is the wire contract the decode-telemetry path in
+    // `web::error` sits behind (#822).
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
         response_body.contains("server_function"),
         "expected a server-fn decode rejection; body: {response_body}"
