@@ -1908,7 +1908,8 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         let mut result = CommandResult::new("validate");
         wasm_budget::run_with(
             &mut result,
-            || {
+            || Ok("/nix/store/site".to_owned()),
+            |_| {
                 Ok(AuditReport {
                     site_path: "/nix/store/site".to_owned(),
                     artifacts: vec![ArtifactMetrics {
@@ -1924,6 +1925,7 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
                 derivation: Some("/nix/store/site.drv".to_owned()),
                 realization: NixRealization::Reused,
             },
+            || Duration::from_millis(1),
         );
 
         let wasm = result.steps.last().expect("wasm-budget step");

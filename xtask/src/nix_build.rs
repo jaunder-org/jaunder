@@ -5,7 +5,7 @@
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use serde_json::Value;
+use serde_json::{self, Value};
 
 use crate::result::{NixRealization, NixReport};
 
@@ -148,7 +148,8 @@ fn parse_dry_run(document: &str) -> Option<NixSelection> {
         .values()
         .map(Value::as_str)
         .collect::<Option<Vec<_>>>()?;
-    if derivation.starts_with("/nix/store/") && !outputs.is_empty() {
+    if derivation.starts_with("/nix/store/") && derivation.ends_with(".drv") && !outputs.is_empty()
+    {
         let mut outputs = outputs.into_iter().map(str::to_owned).collect::<Vec<_>>();
         outputs.sort_unstable();
         outputs
@@ -359,6 +360,12 @@ mod tests {
         );
         assert_eq!(parse_dry_run(r#"[{"drvPath":"/nix/store/a.drv"}]"#), None);
         assert_eq!(parse_dry_run("not json"), None);
+        assert_eq!(
+            parse_dry_run(
+                r#"[{"drvPath":"/nix/store/not-a-derivation","outputs":{"out":"/nix/store/bbb"}}]"#
+            ),
+            None
+        );
     }
 
     #[test]
