@@ -51,7 +51,7 @@ Out:
     failed-build diagnostics and precedence remain unchanged, and a catalog
     assertion covers both gate-owned build paths.
 
-- [ ] Task 4: Document and verify invalidation measurements
+- [x] Task 4: Document and verify invalidation measurements
   - Contract: the contributor gate/result documentation and architecture view
     describe the new fields and a warm-baseline docs-only, web-only, and
     low-stack Rust recipe; stale touched source-line references are corrected.
