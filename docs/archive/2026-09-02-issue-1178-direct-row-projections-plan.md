@@ -1,7 +1,7 @@
 # Issue #1178 Implementation Outline
 
 Execution: `jaunder-iterate`; delegate only through `jaunder-dispatch`.
-Authoritative spec: `../specs/2026-09-02-issue-1178-direct-row-projections.md`.
+Authoritative spec: `2026-09-02-issue-1178-direct-row-projections-spec.md`.
 
 ## Trigger
 
