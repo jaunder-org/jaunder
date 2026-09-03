@@ -1,11 +1,15 @@
-use axum::Router;
-use axum::http::HeaderName;
-use opentelemetry::propagation::Extractor;
-use tower::ServiceBuilder;
-use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
-use tower_http::trace::{DefaultOnResponse, TraceLayer};
-use tracing::Level;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
+//! Scoped server diagnostics own the WARN-and-higher JSONL capture sink and its
+//! fixed stderr fallback when that sink cannot be opened or written.
+//!
+//! The panic hook is intentionally independent of tracing: it opens and appends
+//! to the diagnostic file directly, then chains to the prior hook so capture
+//! cannot deadlock on tracing state and the normal panic artifact remains.
+
+use std::fs::{File, OpenOptions};
+use std::io::{self, Result, Write};
+use std::panic::{self, PanicHookInfo};
+use std::path::{Path, PathBuf};
+use std::thread;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::Layer;
 use tracing_subscriber::registry::LookupSpan;
@@ -31,7 +35,7 @@ impl FallbackKind {
     }
 }
 
-fn write_fallback(mut writer: impl std::io::Write, kind: FallbackKind) -> std::io::Result<()> {
+fn write_fallback(mut writer: impl Write, kind: FallbackKind) -> Result<()> {
     let (context, message) = kind.parts();
     writeln!(writer, "{context}: {message}")
 }
@@ -44,9 +48,21 @@ struct TestFallbackCapture {
 
 #[cfg(test)]
 static TEST_FALLBACK_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 static TEST_FALLBACK_OUTPUT: std::sync::Mutex<Option<TestFallbackCapture>> =
     std::sync::Mutex::new(None);
+
+#[cfg(test)]
+static PROCESS_GLOBALS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(super) fn with_process_globals<R>(operation: impl FnOnce() -> R) -> R {
+    let _guard = PROCESS_GLOBALS_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    operation()
+}
 
 #[cfg(test)]
 fn capture_fallbacks<R>(operation: impl FnOnce() -> R) -> (R, String) {
@@ -85,18 +101,16 @@ fn fallback(kind: FallbackKind) {
     if captured {
         return;
     }
-    let _ = write_fallback(std::io::stderr().lock(), kind);
+    let _ = write_fallback(io::stderr().lock(), kind);
 }
 
-fn open_diag_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
+fn open_diag_file(path: &Path) -> Result<File> {
+    OpenOptions::new().create(true).append(true).open(path)
 }
+
 fn open_diag_file_with<T>(
-    path: &std::path::Path,
-    open: impl FnOnce(&std::path::Path) -> std::io::Result<T>,
+    path: &Path,
+    open: impl FnOnce(&Path) -> Result<T>,
     mut warn: impl FnMut(),
 ) -> Option<T> {
     if let Ok(value) = open(path) {
@@ -116,7 +130,7 @@ fn open_diag_file_with<T>(
 /// to the fmt/OTel sinks. As a per-layer filter it narrows only this sink, so the diag
 /// file captures `WARN+ ∩ global-filter` while the other layers keep their own levels
 /// (issue #144).
-fn diag_layer<S, W>(make_writer: W) -> impl Layer<S>
+pub(super) fn diag_layer<S, W>(make_writer: W) -> impl Layer<S>
 where
     S: tracing::Subscriber + for<'span> LookupSpan<'span>,
     W: for<'writer> fmt::MakeWriter<'writer> + 'static,
@@ -148,7 +162,7 @@ struct DiagPanicRecord<'a> {
 /// Best-effort human-readable panic payload. Panics carry either `&str` (from
 /// `panic!("literal")`) or `String` (from `panic!("{}", x)`); anything else is rare
 /// and rendered as a placeholder rather than lost.
-fn panic_payload_str(info: &std::panic::PanicHookInfo<'_>) -> String {
+fn panic_payload_str(info: &PanicHookInfo<'_>) -> String {
     let payload = info.payload();
     if let Some(message) = payload.downcast_ref::<&str>() {
         (*message).to_owned()
@@ -162,7 +176,7 @@ fn panic_payload_str(info: &std::panic::PanicHookInfo<'_>) -> String {
 impl<'a> DiagPanicRecord<'a> {
     /// Build a record from a panic. `timestamp` (RFC3339 UTC) is injected so the
     /// formatting is deterministic under test; the installed hook supplies `now`.
-    fn from_panic(info: &std::panic::PanicHookInfo<'_>, thread: &str, timestamp: &'a str) -> Self {
+    fn from_panic(info: &PanicHookInfo<'_>, thread: &str, timestamp: &'a str) -> Self {
         let location = info.location().map(ToString::to_string).unwrap_or_default();
         let payload = panic_payload_str(info);
         DiagPanicRecord {
@@ -205,31 +219,28 @@ impl<'a> DiagPanicRecord<'a> {
 /// without any shared lock. We chain to the previous hook so the default stderr →
 /// journald path still fires — the journal stays the fallback artifact and catches any
 /// panic that fires before this hook is installed (issue #144).
-type WritePanicDiagOperation = fn(&mut std::fs::File, &[u8]) -> std::io::Result<()>;
+type WritePanicDiagOperation = fn(&mut File, &[u8]) -> Result<()>;
 
-fn write_panic_diag(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
+fn write_panic_diag(file: &mut File, bytes: &[u8]) -> Result<()> {
     file.write_all(bytes)
 }
+
 fn install_diag_panic_hook_with(
-    path: Option<std::path::PathBuf>,
-    open: fn(&std::path::Path) -> std::io::Result<std::fs::File>,
+    path: Option<PathBuf>,
+    open: fn(&Path) -> Result<File>,
     write: WritePanicDiagOperation,
     warn: fn(FallbackKind),
 ) {
     let Some(path) = path else {
         return;
     };
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
+    let previous = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
         match open(&path) {
             Ok(mut file) => {
                 let timestamp =
                     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
-                let thread = std::thread::current()
-                    .name()
-                    .unwrap_or("unnamed")
-                    .to_owned();
+                let thread = thread::current().name().unwrap_or("unnamed").to_owned();
                 let line = DiagPanicRecord::from_panic(info, &thread, &timestamp).to_line();
                 if write(&mut file, line.as_bytes()).is_err() {
                     warn(FallbackKind::PanicDiagWrite);
@@ -241,149 +252,42 @@ fn install_diag_panic_hook_with(
     }));
 }
 
-fn install_diag_panic_hook(path: Option<std::path::PathBuf>) {
+pub(super) fn install_diag_panic_hook(path: Option<PathBuf>) {
     install_diag_panic_hook_with(path, open_diag_file, write_panic_diag, fallback);
 }
 
-fn init_tracing_impl(
-    telemetry: &host::telemetry::TelemetryConfig,
-    diag_path: Option<std::path::PathBuf>,
-) -> host::telemetry::TelemetryGuard {
-    // The composition root resolves capture once, then injects this leaf path into
-    // the diagnostic layer and panic hook.
-    let diag_log_layer = diag_path.as_ref().and_then(|path| {
-        open_diag_file_with(path, open_diag_file, || fallback(FallbackKind::DiagLogOpen))
-            .map(|file| diag_layer(std::sync::Arc::new(file)).boxed())
-    });
-
-    let guard = host::telemetry::init_tracing_with_layer(telemetry, diag_log_layer);
-
-    // Install the scoped-diag panic hook (a no-op when disabled). It is
-    // independent of the subscriber above and deliberately does not route
-    // through it — see `install_diag_panic_hook` for the deadlock-safety
-    // reasoning.
-    install_diag_panic_hook(diag_path);
-
-    guard
+pub(super) fn open_diag_file_or_fallback(path: &Path) -> Option<File> {
+    open_diag_file_with(path, open_diag_file, || fallback(FallbackKind::DiagLogOpen))
 }
 
-pub fn init_server_tracing(
-    telemetry: &host::telemetry::TelemetryConfig,
-    diag_path: Option<std::path::PathBuf>,
-) -> host::telemetry::TelemetryGuard {
-    init_tracing_impl(telemetry, diag_path)
-}
+#[cfg(test)]
+pub(super) fn assert_zero_error_metrics<R>(operation: impl FnOnce() -> R) -> R {
+    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 
-/// Trace context extracted from inbound request headers (W3C `traceparent`),
-/// stashed in request extensions so the request span can adopt it as parent.
-#[derive(Clone)]
-struct ExtractedTraceContext(opentelemetry::Context);
-
-struct HeaderExtractor<'a>(&'a axum::http::HeaderMap);
-
-impl Extractor for HeaderExtractor<'_> {
-    fn get(&self, key: &str) -> Option<&str> {
-        self.0.get(key).and_then(|value| value.to_str().ok())
-    }
-
-    fn keys(&self) -> Vec<&str> {
-        self.0.keys().map(axum::http::HeaderName::as_str).collect()
-    }
-}
-
-async fn extract_trace_context(
-    mut request: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let context = opentelemetry::global::get_text_map_propagator(|propagator| {
-        propagator.extract(&HeaderExtractor(request.headers()))
-    });
-    request
-        .extensions_mut()
-        .insert(ExtractedTraceContext(context));
-    next.run(request).await
-}
-
-/// Builds the per-request tracing span, adopting any extracted upstream trace
-/// context as its parent.
-fn make_request_span(request: &axum::extract::Request) -> tracing::Span {
-    let span = tracing::span!(
-        Level::INFO,
-        "request",
-        method = %request.method(),
-        uri = %request.uri(),
-        version = ?request.version(),
-        headers = ?request.headers(),
-    );
-    if let Some(parent) = request.extensions().get::<ExtractedTraceContext>() {
-        span.set_parent(parent.0.clone());
-    }
-    span
-}
-
-/// Applies the HTTP observability middleware stack — trace-context extraction,
-/// request-id set/propagate, and the per-request tracing span — to `router`.
-/// Kept here so all OTel/tower tracing construction lives with the rest of the
-/// tracing setup (§1.7).
-pub fn with_http_observability<S>(router: Router<S>) -> Router<S>
-where
-    S: Clone + Send + Sync + 'static,
-{
-    let request_id_header = HeaderName::from_static("x-request-id");
-    let layer = ServiceBuilder::new()
-        .layer(axum::middleware::from_fn(extract_trace_context))
-        .layer(SetRequestIdLayer::new(
-            request_id_header.clone(),
-            MakeRequestUuid,
-        ))
-        .layer(PropagateRequestIdLayer::new(request_id_header))
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(make_request_span)
-                .on_response(DefaultOnResponse::new().level(Level::INFO)),
-        );
-    router.layer(layer)
+    let exporter = InMemoryMetricExporter::default();
+    let reader = PeriodicReader::builder(exporter.clone()).build();
+    let provider = SdkMeterProvider::builder().with_reader(reader).build();
+    opentelemetry::global::set_meter_provider(provider.clone());
+    let result = operation();
+    provider.force_flush().expect("flush error metrics");
+    let metrics = exporter.get_finished_metrics().expect("metrics");
+    let points = metrics
+        .iter()
+        .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+        .filter(|metric| metric.name() == "jaunder.errors")
+        .count();
+    assert_eq!(points, 0, "unexpected jaunder.errors metric count");
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Body;
-    use axum::http::{HeaderMap, Request, StatusCode};
-    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
-    use std::io::Write as _;
-    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-    use tower::ServiceExt;
+    use std::sync::{Arc, Mutex};
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::prelude::*;
 
-    static PROCESS_GLOBALS_LOCK: Mutex<()> = Mutex::new(());
-
-    fn lock_process_globals() -> MutexGuard<'static, ()> {
-        PROCESS_GLOBALS_LOCK
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn with_process_globals<R>(operation: impl FnOnce() -> R) -> R {
-        let _guard = lock_process_globals();
-        operation()
-    }
-
-    fn test_telemetry() -> host::telemetry::TelemetryConfig {
-        host::telemetry::TelemetryConfig::from_raw(
-            false,
-            host::telemetry::TelemetryRawConfig {
-                log_filter: Ok(None),
-                rust_log: Ok(None),
-                log_format: Ok(None),
-                jaunder_otlp_endpoint: Ok(None),
-                otlp_endpoint: Ok(None),
-                slow_op_ms: Ok(None),
-                e2e_seed_process: Ok(None),
-            },
-        )
-    }
     /// An in-memory `MakeWriter` capturing every write into a shared buffer, so a
     /// layer's output can be asserted on. `Arc<Mutex<Vec<u8>>>` is not itself a
     /// `MakeWriter`, and `fmt::TestWriter` targets std{out,err} (uncapturable), so a
@@ -399,6 +303,7 @@ mod tests {
                 .extend_from_slice(buf);
             Ok(buf.len())
         }
+
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
@@ -406,6 +311,7 @@ mod tests {
 
     impl<'writer> fmt::MakeWriter<'writer> for Shared {
         type Writer = Shared;
+
         fn make_writer(&'writer self) -> Self::Writer {
             self.clone()
         }
@@ -418,28 +324,6 @@ mod tests {
         writer.write_all(b"captured").expect("write");
         writer.flush().expect("flush");
         assert_eq!(&*buf.lock().expect("lock"), b"captured");
-    }
-
-    fn assert_error_metric_count<R>(expected: usize, operation: impl FnOnce() -> R) -> R {
-        let exporter = InMemoryMetricExporter::default();
-        let reader = PeriodicReader::builder(exporter.clone()).build();
-        let provider = SdkMeterProvider::builder().with_reader(reader).build();
-        opentelemetry::global::set_meter_provider(provider.clone());
-        let result = operation();
-        provider.force_flush().expect("flush error metrics");
-        let metrics = exporter.get_finished_metrics().expect("metrics");
-        let points = metrics
-            .iter()
-            .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
-            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-            .filter(|metric| metric.name() == "jaunder.errors")
-            .count();
-        assert_eq!(points, expected, "unexpected jaunder.errors metric count");
-        result
-    }
-
-    fn assert_zero_error_metrics<R>(operation: impl FnOnce() -> R) -> R {
-        assert_error_metric_count(0, operation)
     }
 
     fn assert_fixed_fallback(output: &str, kind: FallbackKind) {
@@ -461,25 +345,27 @@ mod tests {
 
     #[test]
     fn diagnostic_open_failure_continues_with_one_fixed_fallback_and_zero_metrics() {
-        let _globals = lock_process_globals();
-        let mut output = Vec::new();
-        let opened = assert_zero_error_metrics(|| {
-            open_diag_file_with(
-                std::path::Path::new("injected-diag-path"),
-                |_| Err::<(), _>(std::io::Error::other("injected open failure")),
-                || {
-                    write_fallback(&mut output, FallbackKind::DiagLogOpen).expect("write fallback");
-                },
-            )
+        with_process_globals(|| {
+            let mut output = Vec::new();
+            let opened = assert_zero_error_metrics(|| {
+                open_diag_file_with(
+                    std::path::Path::new("injected-diag-path"),
+                    |_| Err::<(), _>(std::io::Error::other("injected open failure")),
+                    || {
+                        write_fallback(&mut output, FallbackKind::DiagLogOpen)
+                            .expect("write fallback");
+                    },
+                )
+            });
+            assert!(
+                opened.is_none(),
+                "startup continuation disables only diag log"
+            );
+            assert_fixed_fallback(
+                &String::from_utf8(output).expect("fallback utf8"),
+                FallbackKind::DiagLogOpen,
+            );
         });
-        assert!(
-            opened.is_none(),
-            "startup continuation disables only diag log"
-        );
-        assert_fixed_fallback(
-            &String::from_utf8(output).expect("fallback utf8"),
-            FallbackKind::DiagLogOpen,
-        );
     }
 
     #[test]
@@ -645,130 +531,5 @@ mod tests {
             assert!(result.is_err(), "panic still propagates when capture fails");
             assert_fixed_fallback(&output, FallbackKind::PanicDiagWrite);
         });
-    }
-
-    #[test]
-    fn init_tracing_impl_creates_diag_file_when_capture_is_configured() {
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let _globals = lock_process_globals();
-        let path = dir.path().join("diag.log");
-        let previous = std::panic::take_hook();
-        init_tracing_impl(&test_telemetry(), Some(path.clone()));
-        std::panic::set_hook(previous);
-        assert!(path.exists(), "diag file should be created when configured");
-    }
-
-    #[test]
-    fn init_tracing_impl_survives_unopenable_diag_path() {
-        const CHILD: &str = "JAUNDER_TEST_DIAG_OPEN_CHILD";
-        if std::env::var_os(CHILD).is_some() {
-            let diag_path =
-                host::capture::CaptureDirectory::from_raw(std::env::var_os(host::capture::DIR_ENV))
-                    .expect("prepared capture directory")
-                    .map(|directory| directory.path(host::capture::Stream::Diag));
-            assert_zero_error_metrics(|| {
-                let guard = init_tracing_impl(&test_telemetry(), diag_path);
-                drop(guard);
-            });
-            return;
-        }
-
-        let capture = tempfile::TempDir::new().expect("capture directory");
-        std::fs::create_dir(capture.path().join("diag.log")).expect("diagnostic directory");
-        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
-            .arg("--exact")
-            .arg("observability::tests::init_tracing_impl_survives_unopenable_diag_path")
-            .arg("--nocapture")
-            .env(CHILD, "1")
-            .env(host::capture::DIR_ENV, capture.path())
-            .env_remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT")
-            .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
-            .output()
-            .expect("run isolated diag-open test");
-        assert!(
-            output.status.success(),
-            "child status: {}; stdout: {}; stderr: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout), // cov:ignore
-            String::from_utf8_lossy(&output.stderr)  // cov:ignore
-        );
-        let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-        assert_eq!(
-            stderr.matches("server.observability.diag_log_open").count(),
-            1,
-            "stderr: {stderr}"
-        );
-    }
-
-    #[test]
-    fn header_extractor_reads_known_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "traceparent",
-            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-                .parse()
-                .expect("valid traceparent header"),
-        );
-
-        let extractor = HeaderExtractor(&headers);
-        assert_eq!(
-            extractor.get("traceparent"),
-            Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
-        );
-        assert!(extractor.keys().contains(&"traceparent"));
-    }
-
-    #[tokio::test]
-    async fn trace_context_middleware_inserts_extension() {
-        let app = Router::new()
-            .route(
-                "/",
-                axum::routing::get(|req: axum::extract::Request| async move {
-                    if req.extensions().get::<ExtractedTraceContext>().is_some() {
-                        StatusCode::OK
-                    } else {
-                        unreachable!("extract_trace_context always inserts ExtractedTraceContext")
-                    }
-                }),
-            )
-            .layer(axum::middleware::from_fn(extract_trace_context));
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/")
-                    .header(
-                        "traceparent",
-                        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-                    )
-                    .body(Body::empty())
-                    .expect("failed to build request"),
-            )
-            .await
-            .expect("failed to get response");
-
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[test]
-    fn make_request_span_builds_span_with_and_without_parent_context() {
-        // No extracted parent: the span is built without adopting a parent.
-        let request = Request::builder()
-            .method("GET")
-            .uri("/x")
-            .body(Body::empty())
-            .expect("request");
-        let _span = make_request_span(&request);
-
-        // Extracted parent present: exercises the `set_parent` branch.
-        let mut request = Request::builder()
-            .method("GET")
-            .uri("/x")
-            .body(Body::empty())
-            .expect("request");
-        request
-            .extensions_mut()
-            .insert(ExtractedTraceContext(opentelemetry::Context::new()));
-        let _span = make_request_span(&request);
     }
 }

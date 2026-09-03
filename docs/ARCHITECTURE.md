@@ -1462,18 +1462,18 @@ how-to lives in [observability.md](observability.md).
 ### Traces
 
 The backend emits spans via `tracing` + `tracing-opentelemetry`; shared
-host-process setup lives in `host::telemetry`
-([ADR-0011](adr/0011-unified-observability.md),
+host-process tracer/meter setup and slow-span detection live in
+`host::telemetry` ([ADR-0011](adr/0011-unified-observability.md),
 [ADR-0058](adr/0058-host-crate-layering.md)). The server, production CLI
 commands, and `test-support` all hold the same `host::telemetry` guard for
 process-wide OTLP setup and shutdown. `server::observability` owns server-scoped
 HTTP tracing and e2e diagnostics. `host::telemetry::init_tracing` installs the
-OTLP tracer only when `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` (fallback
+OTLP tracer and meter only when `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` (fallback
 `OTEL_EXPORTER_OTLP_ENDPOINT`) is set; with no endpoint every emit is a no-op,
 and exporter-setup failure is non-fatal. `with_http_observability`
-(`server/src/observability.rs`) layers the per-request tracing span onto the
-router, together with a `tower-http` `x-request-id` that it mints when absent
-and propagates onto the response. Inbound W3C `traceparent` headers are
+(`server/src/observability/http.rs`) layers the per-request tracing span onto
+the router, together with a `tower-http` `x-request-id` that it mints when
+absent and propagates onto the response. Inbound W3C `traceparent` headers are
 extracted onto the per-request span, so backend spans parent into the caller's
 trace. Span fields and metric attributes are exported, so they MUST NOT carry
 user PII or secrets — stable identifiers (`user_id`, `error.kind`) only. Branch
@@ -1644,12 +1644,11 @@ mixing them would charge harness IPC to the app's boot phases.
 
 ### Metrics
 
-An OTLP `MeterProvider` is installed next to the tracer (`build_otel_meter` in
-`server::observability`), behind the same endpoint gate
-([ADR-0011](adr/0011-unified-observability.md)). Emits go through the
-`host::metrics` facade, which lives in `host` **unconditionally** — no `metrics`
-Cargo feature — because `host` is native-only and therefore keeps
-`opentelemetry` out of the wasm closure by crate structure
+The OTLP `MeterProvider` is installed by `host::telemetry` next to the tracer,
+behind the same endpoint gate ([ADR-0011](adr/0011-unified-observability.md)).
+Emits go through the `host::metrics` facade, which lives in `host`
+**unconditionally** — no `metrics` Cargo feature — because `host` is native-only
+and therefore keeps `opentelemetry` out of the wasm closure by crate structure
 ([ADR-0058](adr/0058-host-crate-layering.md)). Helper arguments are bounded
 enums, or a `&'static str` drawn from a closed set the call site cannot widen —
 `atompub_request`'s `op` comes from a matched-route-plus-method lookup
