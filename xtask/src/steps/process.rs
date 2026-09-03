@@ -131,6 +131,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn drop_cleans_up_the_tree_without_losing_captured_output() {
         let directory = tempfile::tempdir().expect("create temporary directory");
         let pids_path = directory.path().join("pids");
@@ -166,9 +167,10 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
-            if identities.iter().all(|(pid, start_time)| {
-                !processkit::process_is_alive(*pid, *start_time).expect("check process liveness")
-            }) {
+            if identities
+                .iter()
+                .all(|(pid, start_time)| !original_process_is_running(*pid, *start_time))
+            {
                 assert_eq!(
                     fs::read(&capture_path).expect("read stderr capture"),
                     b"captured-before-drop"
@@ -178,6 +180,24 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         panic!("process tree remained alive after its owner dropped");
+    }
+
+    #[cfg(target_os = "linux")]
+    /// A killed orphan can remain as a non-running zombie until the host init
+    /// reaps it. Treat that as terminated while retaining processkit's
+    /// start-time identity check so PID reuse cannot produce a false pass.
+    fn original_process_is_running(pid: u32, start_time: Option<u64>) -> bool {
+        if !processkit::process_is_alive(pid, start_time).expect("check process identity") {
+            return false;
+        }
+        let stat_path = format!("/proc/{pid}/stat");
+        match fs::read_to_string(stat_path) {
+            Ok(stat) => stat
+                .rsplit_once(") ")
+                .is_none_or(|(_, fields)| !fields.starts_with("Z ")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => panic!("inspect process state: {error}"),
+        }
     }
 
     fn wait_for_pids(path: &std::path::Path) -> Vec<u32> {
