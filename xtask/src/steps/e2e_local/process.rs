@@ -5,69 +5,13 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::steps::process::Process;
+
 use anyhow::Context as _;
-use processkit::{Command, Outcome, RunningProcess, StdioMode};
-use tokio::runtime::{Builder, Runtime};
+use processkit::{Command, Outcome, StdioMode};
 
 const COLLECTOR_READINESS_TIMEOUT: Duration = Duration::from_secs(5);
 const PROCESS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// The synchronous xtask command owns one single-worker executor for each
-/// supervised process. Its worker keeps processkit's output pumps and lifecycle
-/// tasks live while orchestration blocks in Playwright; async details stay
-/// behind this interface.
-struct Process {
-    runtime: Runtime,
-    running: Option<RunningProcess>,
-    stopped: bool,
-}
-
-impl Process {
-    fn start(command: Command) -> anyhow::Result<Self> {
-        let runtime = Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .context("creating processkit runtime")?;
-        let running = runtime
-            .block_on(command.start())
-            .map_err(anyhow::Error::from)?;
-        Ok(Self {
-            runtime,
-            running: Some(running),
-            stopped: false,
-        })
-    }
-
-    fn wait_for_port(&mut self, endpoint: SocketAddr, within: Duration) -> anyhow::Result<()> {
-        let running = self
-            .running
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("process was already stopped"))?;
-        self.runtime
-            .block_on(running.wait_for_port(endpoint, within))
-            .map_err(anyhow::Error::from)
-    }
-    fn shutdown(&mut self, grace: Duration) -> anyhow::Result<Outcome> {
-        let running = self
-            .running
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("process was already stopped"))?;
-        let result = self
-            .runtime
-            .block_on(running.shutdown(grace))
-            .map_err(anyhow::Error::from);
-        self.stopped = result.is_ok();
-        result
-    }
-    fn is_stopped(&self) -> bool {
-        self.stopped
-            || self
-                .running
-                .as_ref()
-                .is_some_and(|running| running.pid().is_none())
-    }
-}
 
 /// The Jaunder server lifecycle. Processkit drains the raw stderr tee before
 /// shutdown resolves, so the panic verifier sees a complete server log.
@@ -86,15 +30,7 @@ impl ServerProcess {
     /// pumps; without one, a chatty server can fill stderr while xtask waits via
     /// an external HTTP probe.
     pub(super) fn wait_for_path(&mut self, path: &Path, within: Duration) -> anyhow::Result<()> {
-        let running = self
-            .0
-            .running
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("server was already stopped"))?;
-        self.0
-            .runtime
-            .block_on(running.wait_for_path(path, within))
-            .map_err(anyhow::Error::from)
+        self.0.wait_for_path(path, within)
     }
 
     pub(super) fn stop(&mut self) -> anyhow::Result<()> {
