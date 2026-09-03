@@ -1,11 +1,10 @@
 //! The embedded CSR site tree + a precompression-aware serving handler.
 //!
-//! `server/build.rs` stages the runtime site (`pkg/jaunder.{js,wasm}` plus the
-//! precompressed `.br`/`.gz` siblings and wasm-bindgen `snippets/`, plus the
-//! `public/` assets) into `$OUT_DIR/site/`; [`Site`] embeds it (#237,
-//! ADR-0003/0008). This replaces the disk `ServeDir::new(&site_root)` fallback,
-//! so a released `--release` binary serves its own client with no external
-//! files.
+//! `server/build.rs` verifies a bundle manifest, stages its rendered `index.html`
+//! and content-addressed `pkg/**` representations (plus `public/` assets) into
+//! `$OUT_DIR/site/`; [`Site`] embeds the result (#237, #869, ADR-0003).
+//! This replaces the disk `ServeDir::new(&site_root)` fallback, so a released
+//! binary serves its own client with no external files.
 //!
 //! `axum-embed`'s `ServeEmbed` does no `Accept-Encoding` negotiation, so
 //! [`serve_site`] is a small custom handler: it negotiates br/gzip/identity
@@ -21,7 +20,7 @@
 //! stages the real bundle (`nix/checks.nix` sets `JAUNDER_CSR_BUNDLE_DIR`), so
 //! a populated [`Site`] is measured under instrumentation.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use axum::body::Bytes;
 use axum::extract::Request;
@@ -122,10 +121,18 @@ fn variant_path(logical: &str, encoding: Encoding) -> String {
     }
 }
 
-/// The SPA-shell fallthrough: the embedded `index.html` boot document, served
-/// for unknown paths.
+/// Return the embedded generated shell, or the explicit local no-bundle fallback.
+#[must_use]
+pub fn shell_html() -> Arc<str> {
+    Site::get("index.html").map_or_else(
+        || Arc::from("<!doctype html><title>CSR bundle unavailable</title>"),
+        |file| Arc::from(String::from_utf8_lossy(file.data.as_ref()).into_owned()),
+    )
+}
+
+/// The embedded static shell is the bundle producer's rendered `index.html`.
 fn spa_shell() -> Response {
-    Html(web::app::SPA_SHELL).into_response()
+    Html(shell_html().to_string()).into_response()
 }
 
 /// Insert a validated `ETag` header, skipping it if the value can't be a header
@@ -148,16 +155,18 @@ fn build_response(
     sha256: [u8; 32],
     encoding: Encoding,
     if_none_match: Option<&str>,
+    immutable: bool,
 ) -> Response {
     let etag = etag::from_sha256(sha256);
     let mut headers = HeaderMap::new();
     headers.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
     insert_etag(&mut headers, etag.as_ref());
-
-    if not_modified(if_none_match, &etag) {
-        return (StatusCode::NOT_MODIFIED, headers).into_response();
+    if immutable {
+        headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
     }
-
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(&content_type_for(logical_path))
@@ -165,6 +174,9 @@ fn build_response(
     );
     if let Some(coding) = encoding.content_encoding() {
         headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static(coding));
+    }
+    if not_modified(if_none_match, &etag) {
+        return (StatusCode::NOT_MODIFIED, headers).into_response();
     }
     (StatusCode::OK, headers, body).into_response()
 }
@@ -187,10 +199,8 @@ fn build_response(
 /// **`site.bytes` is the size of the selected representation, not bytes put on the
 /// wire.** It is recorded before the conditional check, so a request answered with
 /// `304 Not Modified` still reports the full representation size while sending no
-/// body at all — in a measured run ~44% of `pkg/jaunder.wasm` requests were
-/// conditional. **Pair it with `site.status`**, which is the authoritative
-/// body-or-no-body signal and, unlike the client's `transferSize`, does not vary by
-/// browser.
+/// body at all — content-addressed manifest-role asset requests can be correlated
+/// with `site.status`, the authoritative body-or-no-body signal.
 #[tracing::instrument(
     name = "site.serve",
     skip_all,
@@ -242,7 +252,14 @@ pub async fn serve_site(req: Request) -> Response {
         };
         span.record("site.bytes", body.len());
         span.record("site.embedded", true);
-        let response = build_response(&logical, body, hash, encoding, if_none_match);
+        let response = build_response(
+            &logical,
+            body,
+            hash,
+            encoding,
+            if_none_match,
+            crate::bundle::is_manifest_asset(&logical),
+        );
         // The authoritative "did a body go over the wire" signal: `304` means none
         // did, whatever the client later reports. The browsers disagree about
         // `PerformanceResourceTiming.transferSize` on a revalidated response —
@@ -326,8 +343,14 @@ mod tests {
 
     #[test]
     fn content_type_maps_wasm_and_js() {
-        assert_eq!(content_type_for("pkg/jaunder.wasm"), "application/wasm");
-        assert_eq!(content_type_for("pkg/jaunder.js"), "text/javascript");
+        assert_eq!(
+            content_type_for("pkg/content-addressed.wasm"),
+            "application/wasm"
+        );
+        assert_eq!(
+            content_type_for("pkg/content-addressed.js"),
+            "text/javascript"
+        );
     }
 
     #[test]
@@ -369,16 +392,16 @@ mod tests {
     #[test]
     fn variant_path_appends_coding_suffix() {
         assert_eq!(
-            variant_path("pkg/jaunder.wasm", Encoding::Br),
-            "pkg/jaunder.wasm.br"
+            variant_path("pkg/content-addressed.wasm", Encoding::Br),
+            "pkg/content-addressed.wasm.br"
         );
         assert_eq!(
-            variant_path("pkg/jaunder.wasm", Encoding::Gzip),
-            "pkg/jaunder.wasm.gz"
+            variant_path("pkg/content-addressed.wasm", Encoding::Gzip),
+            "pkg/content-addressed.wasm.gz"
         );
         assert_eq!(
-            variant_path("pkg/jaunder.wasm", Encoding::Identity),
-            "pkg/jaunder.wasm"
+            variant_path("pkg/content-addressed.wasm", Encoding::Identity),
+            "pkg/content-addressed.wasm"
         );
     }
 
@@ -387,11 +410,12 @@ mod tests {
     #[tokio::test]
     async fn build_response_identity_sets_type_body_and_no_encoding() {
         let resp = build_response(
-            "pkg/jaunder.wasm",
+            "pkg/content-addressed.wasm",
             Bytes::from_static(b"WASM"),
             [1u8; 32],
             Encoding::Identity,
             None,
+            true,
         );
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
@@ -401,6 +425,10 @@ mod tests {
         assert_eq!(resp.headers().get(header::VARY).unwrap(), "Accept-Encoding");
         assert!(resp.headers().get(header::CONTENT_ENCODING).is_none());
         assert!(resp.headers().get(header::ETAG).is_some());
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=31536000, immutable"
+        );
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         assert_eq!(body.as_ref(), b"WASM");
     }
@@ -409,11 +437,12 @@ mod tests {
     async fn build_response_brotli_sets_content_encoding_and_logical_type() {
         // Content-Type is from the LOGICAL path (`.js`), not the `.br` variant.
         let resp = build_response(
-            "pkg/jaunder.js",
+            "pkg/content-addressed.js",
             Bytes::from_static(b"code"),
             [9u8; 32],
             Encoding::Br,
             None,
+            true,
         );
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.headers().get(header::CONTENT_ENCODING).unwrap(), "br");
@@ -428,15 +457,25 @@ mod tests {
         let sha = [0xabu8; 32];
         let etag = etag::from_sha256(sha);
         let resp = build_response(
-            "pkg/jaunder.wasm",
+            "pkg/content-addressed.wasm",
             Bytes::from_static(b"ignored"),
             sha,
             Encoding::Br,
             Some(etag.as_ref()),
+            true,
         );
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/wasm"
+        );
+        assert_eq!(resp.headers().get(header::CONTENT_ENCODING).unwrap(), "br");
         assert_eq!(resp.headers().get(header::ETAG).unwrap(), etag.as_ref());
         assert_eq!(resp.headers().get(header::VARY).unwrap(), "Accept-Encoding");
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=31536000, immutable"
+        );
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         assert!(body.is_empty());
     }
@@ -512,47 +551,127 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn serve_site_serves_embedded_wasm_negotiated_brotli_and_conditional() {
-        // Exercises the live-embed found branch end-to-end. The Nix coverage
-        // build stages the real bundle (JAUNDER_CSR_BUNDLE_DIR, nix/checks.nix),
-        // so `Site` is populated and this measures the branch. A bare local
-        // `cargo test` without `cargo xtask build-csr` has an empty `Site`: the
-        // request falls through to the SPA shell, so the asset-specific
-        // assertions are guarded rather than false-failing. `serve_site` still
-        // runs unconditionally, so the found branch is covered where it can be.
-        let bundle_present = Site::get("pkg/jaunder.wasm").is_some();
-
-        let req = Request::builder()
-            .uri("/pkg/jaunder.wasm")
-            .header(header::ACCEPT_ENCODING, "br")
-            .body(Body::empty())
-            .unwrap();
-        let resp = serve_site(req).await;
-
-        if bundle_present {
-            assert_eq!(resp.status(), StatusCode::OK);
+    async fn manifest_wasm_variants_keep_logical_headers_and_immutable_304s() {
+        let Some(urls) = crate::bundle::boot_urls() else {
+            return;
+        };
+        let logical = urls.wasm.trim_start_matches('/');
+        for (accept_encoding, expected_encoding) in [
+            ("identity", None),
+            ("gzip", Some("gzip")),
+            ("br", Some("br")),
+        ] {
+            let req = Request::builder()
+                .uri(urls.wasm)
+                .header(header::ACCEPT_ENCODING, accept_encoding)
+                .body(Body::empty())
+                .unwrap();
+            let response = serve_site(req).await;
+            assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(
-                resp.headers().get(header::CONTENT_TYPE).unwrap(),
+                response.headers().get(header::CONTENT_TYPE).unwrap(),
                 "application/wasm"
             );
-            assert_eq!(resp.headers().get(header::CONTENT_ENCODING).unwrap(), "br");
-            assert_eq!(resp.headers().get(header::VARY).unwrap(), "Accept-Encoding");
-            let etag = resp
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::CONTENT_ENCODING)
+                    .and_then(|value| value.to_str().ok()),
+                expected_encoding
+            );
+            assert_eq!(
+                response.headers().get(header::VARY).unwrap(),
+                "Accept-Encoding"
+            );
+            assert_eq!(
+                response.headers().get(header::CACHE_CONTROL).unwrap(),
+                "public, max-age=31536000, immutable"
+            );
+            let etag = response
                 .headers()
                 .get(header::ETAG)
                 .unwrap()
                 .to_str()
                 .unwrap()
                 .to_owned();
+            let expected = Site::get(&variant_path(
+                logical,
+                match expected_encoding {
+                    Some("br") => Encoding::Br,
+                    Some("gzip") => Encoding::Gzip,
+                    _ => Encoding::Identity,
+                },
+            ))
+            .expect("manifest representation is embedded");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(body.as_ref(), expected.data.as_ref());
 
-            // Conditional re-request with the returned ETag → 304.
-            let req2 = Request::builder()
-                .uri("/pkg/jaunder.wasm")
-                .header(header::ACCEPT_ENCODING, "br")
+            let conditional = Request::builder()
+                .uri(urls.wasm)
+                .header(header::ACCEPT_ENCODING, accept_encoding)
                 .header(header::IF_NONE_MATCH, &etag)
                 .body(Body::empty())
                 .unwrap();
-            assert_eq!(serve_site(req2).await.status(), StatusCode::NOT_MODIFIED);
+            let response = serve_site(conditional).await;
+            assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+            assert_eq!(response.headers().get(header::ETAG).unwrap(), etag.as_str());
+            assert_eq!(
+                response.headers().get(header::VARY).unwrap(),
+                "Accept-Encoding"
+            );
+            assert_eq!(
+                response.headers().get(header::CACHE_CONTROL).unwrap(),
+                "public, max-age=31536000, immutable"
+            );
+            assert_eq!(
+                response.headers().get(header::CONTENT_TYPE).unwrap(),
+                "application/wasm"
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::CONTENT_ENCODING)
+                    .and_then(|value| value.to_str().ok()),
+                expected_encoding
+            );
         }
+    }
+    #[test]
+    fn rendered_static_shell_uses_each_manifest_role_url_once_in_boot_order() {
+        let Some(urls) = crate::bundle::boot_urls() else {
+            return;
+        };
+        let shell = shell_html();
+        for url in [urls.glue, urls.wasm] {
+            assert_eq!(shell.matches(url).count(), 1, "{shell}");
+        }
+        let fetch = shell
+            .find("window.__jaunderWasmFetch = fetch")
+            .expect("early fetch");
+        let stylesheet = shell
+            .find(r#"<link rel="stylesheet" href="/style/jaunder.css" />"#)
+            .expect("stylesheet");
+        let import = shell.find("import {initMeasured}").expect("module import");
+        let mark = shell.find("performance.mark").expect("init mark");
+        let init = shell
+            .find("initMeasured(window.__jaunderWasmFetch")
+            .expect("initializer");
+        assert!(
+            fetch < stylesheet && stylesheet < import && import < mark && mark < init,
+            "{shell}"
+        );
+    }
+
+    #[test]
+    fn non_manifest_assets_remain_without_immutable_cache_control() {
+        let response = build_response(
+            "favicon.ico",
+            Bytes::from_static(b"icon"),
+            [2u8; 32],
+            Encoding::Identity,
+            None,
+            false,
+        );
+        assert!(response.headers().get(header::CACHE_CONTROL).is_none());
     }
 }

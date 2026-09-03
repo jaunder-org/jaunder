@@ -12,25 +12,34 @@ use super::Shell;
 /// Assemble a document from a server-resolved public presentation.
 #[must_use]
 pub fn document_presentation(presentation: &PublicPresentation<PageSeed>) -> String {
-    let head = app::render_head(&presentation.page).into_string();
+    document_with_urls(presentation, crate::bundle::boot_urls())
+}
+
+fn document_with_urls(
+    presentation: &PublicPresentation<PageSeed>,
+    urls: Option<crate::bundle::BootUrls>,
+) -> String {
+    // Both arrive as `Markup` (trust is type-carried across the crate boundary);
+    // this is where they exit to the untyped response body.
+    let seed = &presentation.page;
+    let early_fetch = urls.map(crate::bundle::early_wasm_fetch_script);
+    let head = app::render_head(seed, early_fetch.as_deref()).into_string();
     let body = app::render_shell(presentation).into_string();
     let blob = serde_json::to_string(presentation).unwrap_or_else(|_| "null".to_string());
+    let boot = urls.map_or_else(String::new, |urls| {
+        crate::bundle::module_init_script(urls, app::MODULE_BEFORE_INIT_MARK)
+    });
     format!(
         concat!(
-            // The pre-paint script is FIRST in <head> (#181, ADR-0044) so it runs
-            // before any paint and marks html.authed for the owner.
             "<!DOCTYPE html><html lang=\"en\"><head>{prepaint}{head}</head><body>",
             "<div id=\"app\">{body}</div>",
-            "<script type=\"application/json\" id=\"jaunder-seed\">{blob}</script>",
-            "<script type=\"module\">import {{initMeasured}} from \"{glue_url}\"; performance.mark(\"{module_before_init_mark}\"); initMeasured(window.__jaunderWasmFetch ?? \"{wasm_url}\");</script>",
+            "<script type=\"application/json\" id=\"jaunder-seed\">{blob}</script>{boot}",
             "</body></html>",
         ),
         prepaint = app::PREPAINT_SCRIPT,
         head = head,
         body = body,
-        glue_url = app::GLUE_URL,
-        module_before_init_mark = app::MODULE_BEFORE_INIT_MARK,
-        wasm_url = app::WASM_URL,
+        boot = boot,
         // A verbatim `</script` inside the JSON would close the blob script
         // early; `<\/` is an equivalent JSON escape the parser reads back as
         // `</`. This is the only HTML-in-JSON breakout to neutralize.
@@ -176,6 +185,51 @@ mod tests {
         assert_ne!(
             terminal_response.headers()[header::ETAG],
             reader_response.headers()[header::ETAG]
+        );
+    }
+
+    #[test]
+    fn projector_shell_uses_each_host_url_once_in_boot_order() {
+        use super::document_with_urls;
+
+        let urls = crate::bundle::BootUrls {
+            glue: "/pkg/glue-content-hash.js",
+            wasm: "/pkg/wasm-content-hash.wasm",
+        };
+        let doc = document_with_urls(&presentation(Theme::Studio), Some(urls));
+
+        for url in [urls.glue, urls.wasm] {
+            assert_eq!(doc.matches(url).count(), 1, "{doc}");
+        }
+        let fetch = doc
+            .find("window.__jaunderWasmFetch = fetch")
+            .expect("early fetch");
+        let stylesheet = doc
+            .find(r#"<link rel="stylesheet" href="/style/jaunder.css">"#)
+            .expect("stylesheet");
+        let import = doc.find("import {initMeasured}").expect("glue import");
+        let mark = doc.find("performance.mark").expect("init mark");
+        let init = doc
+            .find("initMeasured(window.__jaunderWasmFetch")
+            .expect("initializer");
+        assert!(
+            fetch < stylesheet && stylesheet < import && import < mark && mark < init,
+            "{doc}"
+        );
+        assert!(
+            !doc.contains("modulepreload") && !doc.contains(r#"rel="preload""#),
+            "{doc}"
+        );
+    }
+
+    #[test]
+    fn local_no_bundle_projector_omits_boot_scripts() {
+        use super::document_with_urls;
+
+        let doc = document_with_urls(&presentation(Theme::Studio), None);
+        assert!(
+            !doc.contains("initMeasured") && !doc.contains("__jaunderWasmFetch"),
+            "{doc}"
         );
     }
 }

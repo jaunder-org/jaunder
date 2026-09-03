@@ -1,6 +1,7 @@
 pub mod assets;
 pub mod atompub;
 pub mod backup;
+mod bundle;
 pub mod cli;
 pub mod client_telemetry;
 pub mod commands;
@@ -230,17 +231,13 @@ where
     //     (feed, media, atompub, style) above are untouched, so server fns remain
     //     the data API; only the page render leaves the request path. ---
     let app = {
-        // The CSR bundle + public assets are embedded (#237, ADR-0003/0008): the
-        // server owns them, the same way the SPA shell (#239) and CSS
-        // (`StaticAssets`) are embedded. `site::serve_site` negotiates the
-        // precompressed (.br/.gz) variants and falls through to the SPA shell for
-        // any path with no embedded file — exactly as the old
-        // `ServeDir(...).fallback(spa_shell)` did (the build never writes
-        // index.html to disk; the server owns it). Non-reactive HTML for the
-        // public discoverability routes (the projector, #178) sits ahead of this
-        // fallback; everything else boots the CSR client via the shell.
-        crate::projector::register(app, crate::projector::Shell(web::app::SPA_SHELL.into()))
-            .fallback(site::serve_site)
+        // The CSR bundle + public assets are embedded (#237, ADR-0003/0008).
+        // `build.rs` stages the producer-rendered shell and verified pkg inventory;
+        // `site::serve_site` negotiates precompressed variants and falls through
+        // to that static shell for paths with no embedded file. Projected public
+        // HTML sits ahead of this fallback.
+        let app = crate::projector::register(app, crate::projector::Shell(site::shell_html()));
+        app.fallback(site::serve_site)
     };
     // Raw Axum handlers receive only the storage traits they declare
     // (ADR-0016); server functions receive their separate Leptos contexts.

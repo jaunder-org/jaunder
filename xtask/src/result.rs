@@ -345,16 +345,19 @@ mod tests {
         let mut r = CommandResult::new("audit-wasm");
         r.push(StepResult::ok("audit-wasm").detail("2 artifact(s)"));
         r.audit = Some(crate::audit_wasm::AuditReport {
-            site_path: "/nix/store/x-jaunder-site".into(),
+            site_path: "/nix/store/x-jaunder-csr-wasm-bundle".into(),
             artifacts: vec![crate::audit_wasm::ArtifactMetrics {
-                path: "/nix/store/x-jaunder-site/pkg/jaunder.wasm".into(),
+                path: "/nix/store/x-jaunder-csr-wasm-bundle/pkg/wasm-digest.wasm".into(),
                 raw_bytes: 2 * 1024 * 1024,
                 gzip_bytes: 700 * 1024,
                 brotli_bytes: 600 * 1024,
             }],
         });
         let v: serde_json::Value = serde_json::to_value(&r).unwrap();
-        assert_eq!(v["audit"]["site_path"], "/nix/store/x-jaunder-site");
+        assert_eq!(
+            v["audit"]["site_path"],
+            "/nix/store/x-jaunder-csr-wasm-bundle"
+        );
         assert_eq!(v["audit"]["artifacts"][0]["raw_bytes"], 2 * 1024 * 1024);
     }
 

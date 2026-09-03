@@ -51,7 +51,8 @@ let
     || cargoWorkspaceInput path
     || builtins.any (
       member:
-      relative == "${member}/build.rs"
+      relative == "${member}/Cargo.toml"
+      || relative == "${member}/build.rs"
       || pkgs.lib.hasPrefix "${member}/src/" relative
     ) members;
   workspacePlaceholderTargets =
@@ -91,7 +92,7 @@ let
       src = craneLib.path ../.;
       filter =
         path: type:
-        cargoTargetSource [ "csr" "web" "client" "common" "macros" ] path type
+        cargoTargetSource [ "csr" "web" "client" "common" "macros" "tools/csr_bundle" ] path type
         || pkgs.lib.hasSuffix "csr/index.html" path;
     })
     [ "host" "server" "storage" "test-support" ];
@@ -261,13 +262,20 @@ let
   # The in-sandbox dev tool (tools/ workspace: devtool + its coverage and
   # doctests path-deps). The offline coverage/doctests sandboxes run it
   # from PATH (nativeBuildInputs) instead of an in-sandbox `cargo run`,
-  # whose deps would not be vendored.
+  # whose deps would not be vendored. `csr/index.html` remains the one
+  # tracked shell template; materialize the declared store input at the
+  # relative compile-time include path without widening toolsSrc to product
+  # sources or copying another tracked template.
   devtoolBin = craneLib.buildPackage (
     toolsArgs
     // {
       cargoArtifacts = toolsCargoArtifacts;
       pname = "devtool";
       cargoExtraArgs = "-p devtool";
+      preBuild = (toolsArgs.preBuild or "") + ''
+        mkdir -p ../csr
+        cp ${../csr/index.html} ../csr/index.html
+      '';
       doCheck = false;
     }
   );
@@ -380,21 +388,21 @@ let
     };
   });
 
-  # The CSR client's wasm bundle (`pkg/*`) + public assets, assembled as a
-  # tree. The server does not serve this from disk — it embeds the bundle
-  # + public assets (#237) and the SPA shell (#239) into the binary. `site`
-  # exists because `cargo xtask audit-wasm` builds `.#site` and inspects
-  # `$out/pkg/jaunder.{wasm,js}` for bundle-size analysis (ADR-0028).
+  # The CSR client's rendered shell, content-addressed `pkg/*` runtime assets,
+  # and public assets, assembled as a tree. The manifest remains build-only:
+  # server/build.rs receives the bundle root directly, while site exposes only
+  # the rendered shell and declared served assets.
   site = pkgs.runCommand "jaunder-site" { } ''
     mkdir -p $out/pkg
-    cp -r ${csrWasmBundle}/. $out/pkg/
+    cp ${csrWasmBundle}/index.html $out/
+    cp -r ${csrWasmBundle}/pkg/. $out/pkg/
     cp -r ${../public}/. $out/
   '';
 
   # --- leptos-CSR client (#177/#180) --------------------------------------
   # The client-side-render wasm binary — the only client (#180).
   # `csrWasmBundle` runs wasm-bindgen over it; `site`
-  # (above) bundles it with the public assets + the CSR SPA shell.
+  # (above) bundles it with the public assets + rendered CSR shell.
   csrWasm = craneLib.buildPackage (
     commonArgs
     // {
@@ -435,11 +443,11 @@ let
         ];
       }
       ''
-        # Post-process the crane-built csr.wasm into the served bundle
-        # (pkg/jaunder.{js,wasm}) via the shared `devtool csr-bundle` — the
-        # SAME implementation the host build (`cargo xtask build-csr`) runs, so
-        # host and Nix cannot drift (#236). devtool shells out to
-        # `wasm-bindgen` (on PATH here) and does the rename + js wasm-ref fix.
+        # Post-process the crane-built csr.wasm into a content-addressed CSR
+        # bundle via the shared `devtool csr-bundle` — the SAME implementation
+        # the host build (`cargo xtask build-csr`) runs, so host and Nix cannot
+        # drift (#236). The resulting root holds the build-only manifest,
+        # rendered shell, and served `pkg/` assets.
         devtool csr-bundle --wasm ${csrWasm}/lib/csr.wasm --out $out${pkgs.lib.optionalString (wasmExperimentArm != "") " --wasm-experiment-arm ${wasmExperimentArm}"}${pkgs.lib.optionalString (wasmShapeSection != "") " --wasm-shape-section ${wasmShapeSection} --wasm-shape-section-count ${toString wasmShapeSectionCount}"}
       '';
 
@@ -501,6 +509,7 @@ in
     # carries a name section: `wasm-opt` strips names from the shipped
     # bundle, so the shipped file cannot be attributed to crates (#836).
     inherit csrWasm;
+    csrBundle = csrWasmBundle;
     devtool = devtoolBin;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,

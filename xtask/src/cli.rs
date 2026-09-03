@@ -88,24 +88,22 @@ pub enum Command {
     Census,
     /// Measure the frontend WASM/JS bundle size — raw, gzip, and brotli.
     ///
-    /// Reports the download weight of the deterministic `nix build .#site`
-    /// output (`pkg/jaunder.wasm`, `pkg/jaunder.js`) so you can catch
-    /// bundle-size bloat before it ships and compare a change's effect on what
-    /// users download. Run it after a change you expect to move the bundle (a new
-    /// dependency, a feature touching the client), or periodically to watch the
-    /// trend.
+    /// Reports the manifest-selected identity assets from deterministic
+    /// `nix build .#csrBundle`, so bundle-size bloat is visible before it ships.
+    /// Run it after a change expected to move the bundle (a new dependency or a
+    /// client feature), or periodically to watch the trend.
     ///
-    /// The totals also back `validate`'s `wasm-budget` step, which fails when raw
-    /// `pkg/jaunder.wasm` exceeds a committed ceiling (#836) — so the gate and
-    /// this tool can never disagree about what the bundle weighs. `--breakdown`
-    /// remains manual; it is not part of `check`/`validate`.
+    /// The totals also back `validate`'s `wasm-budget` step, which fails when the
+    /// manifest-selected WASM identity artifact exceeds a committed ceiling
+    /// (#836) — so the gate and this tool cannot disagree about what the bundle
+    /// weighs. `--breakdown` remains manual; it is not part of `check`/`validate`.
     #[command(after_help = "EXAMPLES:\n  \
         cargo xtask audit-wasm\n  \
-        cargo xtask audit-wasm --site-path /nix/store/...-jaunder-site\n  \
+        cargo xtask audit-wasm --site-path /nix/store/...-jaunder-csr-wasm-bundle\n  \
         cargo xtask audit-wasm --breakdown\n  \
         cargo xtask --json audit-wasm")]
     AuditWasm {
-        /// Audit a prebuilt `.#site` store path instead of running `nix build`.
+        /// Audit a prebuilt CSR bundle root instead of running `nix build`.
         #[arg(long)]
         site_path: Option<String>,
         /// Report per-section and per-crate byte attribution instead of totals.

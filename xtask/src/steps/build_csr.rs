@@ -5,10 +5,10 @@
 //! exercise a changed bundle postprocessor. Debug is faster for the dev loop;
 //! `--release` matches CI's optimized wasm.
 //!
-//! Output lands in `target/site/pkg/` (`jaunder.{js,wasm}` + wasm-bindgen's
-//! `.d.ts`/`snippets`), where `jaunder serve` serves it from `site_root`.
+//! Output lands in `target/site/`: `manifest.json` is build-only, while
+//! `index.html` and `pkg/**` form the served bundle root.
 
-use std::path::Path;
+use std::{fs, path::Path};
 
 use xshell::{Shell, cmd};
 
@@ -47,7 +47,36 @@ pub fn run(sh: &Shell, result: &mut CommandResult, release: bool) {
     result.push(StepResult::ok("build-csr-wasm").with_duration(wasm_start.elapsed()));
 
     let wasm = format!("{root}/target/wasm32-unknown-unknown/{profile}/csr.wasm");
-    let out = format!("{root}/target/site/pkg");
+    let bundle_root = Path::new(&root).join("target/site");
+    match bundle_root.try_exists() {
+        Ok(true) => {
+            let cleanup_start = std::time::Instant::now();
+            if let Err(error) = fs::remove_dir_all(&bundle_root) {
+                result.push(
+                    StepResult::fail("build-csr-clean")
+                        .detail(format!(
+                            "removing previous CSR bundle root {}: {error}",
+                            bundle_root.display()
+                        ))
+                        .with_duration(cleanup_start.elapsed()),
+                );
+                return;
+            }
+        }
+        Ok(false) => {}
+        Err(error) => {
+            result.push(
+                StepResult::fail("build-csr-clean")
+                    .detail(format!(
+                        "checking previous CSR bundle root {}: {error}",
+                        bundle_root.display()
+                    ))
+                    .with_duration(root_start.elapsed()),
+            );
+            return;
+        }
+    }
+    let out = bundle_root.to_string_lossy().into_owned();
     let bundle_start = std::time::Instant::now();
     if cmd!(
         sh,

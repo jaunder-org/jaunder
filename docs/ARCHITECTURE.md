@@ -1297,25 +1297,31 @@ lanes, and the isolated `rendered-html-compiler-boundary` check the load-bearing
 production boundaries; test gates exercise the explicitly enabled test surfaces.
 
 `cargo xtask build-csr` compiles `csr` to wasm and hands the artifact to
-`devtool csr-bundle` (wasm-bindgen + `wasm-opt -Oz`), landing
-`jaunder.{js,wasm}` in `target/site/pkg/`
-(`xtask/src/steps/build_csr.rs:42-53`). The server compiles in the SPA shell
-(`web::app::SPA_SHELL`, itself `include_str!("csr/index.html")` —
-`web/src/app/render.rs:51`) and falls back to it for anything the projector and
-the static routes do not claim (`server/src/lib.rs:101-111`), keeping
-ADR-0003/ADR-0008's single binary intact. The bundle is fetched after the JS
-glue and is **not** preloaded: `render_head` carries no `<link rel="preload">`
-(`web/src/app/render.rs:93-95`), a measured decision under a pre-registered
-abort rule rather than an oversight ([ADR-0121](adr/0121-no-wasm-preload.md)) —
-the trial collapsed the serial pre-fetch window but bought no boot total, so it
-was reverted. The `WASM_URL` / `GLUE_URL` constants and their drift guards
-(`web/src/app/render.rs:63-65,284-298`) survive it, because a preload URL
-drifting from the `init()` target would not fail — it would silently
-double-download.
+`devtool csr-bundle` for wasm-bindgen, `wasm-opt -Oz`, and content addressing
+(`xtask/src/steps/build_csr.rs`). Devtool rewrites the acyclic runtime import
+graph dependency-first, gives every runtime asset a full SHA-256 filename, and
+emits a role-tagged manifest covering identity and compressed representations.
+That manifest is the sole asset-naming interface: it renders the static CSR
+shell, drives server staging and public-projector shell generation, and tells
+host audits which file carries the WASM role. Producers and consumers reject
+cycles, incomplete inventories, unsafe paths, and digest mismatches rather than
+guessing roles from filenames
+([content-addressed CSR bundle manifest](adr/drafts/content-addressed-csr-bundle-manifest.md)).
+Names cannot live in `web`, because compiling the final WASM name into the WASM
+would make the content hash self-referential.
 
-The wasm artifact carries a hard budget
-([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `cargo xtask validate` fails
-when the **raw** byte count of `pkg/jaunder.wasm` exceeds
+The server embeds the rendered SPA shell and falls back to it for anything the
+projector and static routes do not claim, keeping ADR-0003/ADR-0008's single
+binary intact. The bundle is fetched after the JS glue and is **not** preloaded:
+`render_head` carries no `<link rel="preload">`, a measured decision under a
+pre-registered abort rule rather than an oversight
+([ADR-0121](adr/0121-no-wasm-preload.md)). Manifest-driven shell checks preserve
+one early fetch, the fallback target, and initialization ordering without fixed
+`/pkg/jaunder.{js,wasm}` aliases.
+
+The WASM artifact carries a hard budget
+([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `cargo xtask validate` resolves
+the manifest's WASM role and fails when its **raw** byte count exceeds
 `WASM_RAW_CEILING_BYTES` (2 785 000 today, `xtask/src/wasm_budget.rs:39`). Raw,
 not compressed, because the artifact is a compiler input rather than a download;
 the ceiling keeps explicit headroom that sits below what the next weaker
@@ -1915,31 +1921,34 @@ override.
   the base stylesheets `jaunder.css` and `jaunder-themes.css`, mounted at
   `/style` by `axum_embed::ServeEmbed` (`server/src/lib.rs:54,57`), which
   supplies ETag and conditional-request handling.
-- `Site` (`server/src/site.rs:33-35`, `#[folder = "$OUT_DIR/site"]`) carries the
-  CSR client: `pkg/jaunder.{js,wasm}`, their precompressed `.br`/`.gz` siblings,
-  the wasm-bindgen `snippets/`, and the `public/` assets flattened to the site
-  root (`public/favicon.ico` → `favicon.ico`, `server/build.rs:125-127`).
-  `server/build.rs` stages that tree at compile time from
-  `JAUNDER_CSR_BUNDLE_DIR` (Nix) or `target/site/pkg` (host build).
+- `Site` (`server/src/site.rs`, `#[folder = "$OUT_DIR/site"]`) carries the CSR
+  client: full-SHA-256-named runtime assets, their precompressed `.br`/`.gz`
+  siblings, and the `public/` assets flattened to the site root
+  (`public/favicon.ico` → `favicon.ico`). `devtool csr-bundle` emits the
+  role-tagged manifest that defines the runtime inventory; `server/build.rs`
+  validates that manifest and stages the tree at compile time from
+  `JAUNDER_CSR_BUNDLE_DIR` (Nix) or `target/site/pkg` (host build). The rendered
+  SPA and public-projector shells consume the same manifest, so no source
+  literal or filename heuristic duplicates asset identity
+  ([content-addressed CSR bundle manifest](adr/drafts/content-addressed-csr-bundle-manifest.md)).
 
-Only the two base stylesheets are embedded. ADR-0003 also anticipated
+Only the two base stylesheets are embedded separately. ADR-0003 also anticipated
 **user-uploadable** stylesheets served from the storage layer; that was never
 built, and nothing in `storage/` or the config-key registry handles CSS.
 
-- The SPA shell is the compile-time constant `web::app::SPA_SHELL`
-  (`web/src/app/render.rs:51`, `include_str!` of `csr/index.html`), served as
-  the fallback for unknown paths (`server/src/site.rs:126-128`).
-
 `ServeEmbed` does no `Accept-Encoding` negotiation, so `site::serve_site` is a
-hand-written handler: it picks br/gzip/identity against the embedded variants,
-sets `Content-Type` from the logical path, and emits a per-representation `ETag`
-with `304` on `If-None-Match`. Only the data directory and the database live
-outside the binary, so **"single binary" holds without qualification.** This was
-not always true: until #237 (closed 2026-07-17) the wasm bundle was served from
-an on-disk site root by `ServeDir`. The wasm bundle's size is gated separately
-on raw bytes ([ADR-0106](adr/0106-wasm-raw-size-budget.md)). Rendering
-architecture — leptos-CSR client plus the server-side public projector — is
-owned by the web section ([ADR-0040](adr/0040-web-rendering-leptos-csr.md),
+hand-written handler: it picks Brotli, gzip, or identity bytes against the
+embedded variants and derives `Content-Type` from the logical runtime asset.
+Every manifest-backed `/pkg/` response, including `304`, carries
+`Cache-Control: public, max-age=31536000, immutable`; it also retains
+`Vary: Accept-Encoding` and a per-representation ETag. Only the data directory
+and the database live outside the binary, so **"single binary" holds without
+qualification.** This was not always true: until #237 (closed 2026-07-17) the
+WASM bundle was served from an on-disk site root by `ServeDir`. The WASM
+bundle's size is gated separately on raw bytes
+([ADR-0106](adr/0106-wasm-raw-size-budget.md)). Rendering architecture —
+leptos-CSR client plus the server-side public projector — is owned by the web
+section ([ADR-0040](adr/0040-web-rendering-leptos-csr.md),
 [ADR-0041](adr/0041-public-projector-and-csr-client.md)).
 
 **CLI surface.** The `jaunder` binary is also the operations tool
