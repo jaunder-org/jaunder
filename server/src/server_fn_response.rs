@@ -35,9 +35,7 @@ pub(crate) async fn normalize(response: impl IntoResponse) -> Response {
     let Some(length) = response.body().size_hint().exact() else {
         return response;
     };
-    let Ok(limit) = usize::try_from(length) else {
-        return response;
-    };
+    let limit = usize::try_from(length).unwrap_or(usize::MAX);
 
     let (mut parts, body) = response.into_parts();
     let Ok(body) = body::to_bytes(body, limit).await else {
@@ -55,8 +53,10 @@ pub(crate) async fn normalize(response: impl IntoResponse) -> Response {
 #[cfg(test)]
 mod tests {
     use super::normalize;
+    use std::convert::Infallible;
+
     use axum::{
-        body::{Body, to_bytes},
+        body::{Body, Bytes, to_bytes},
         http::{StatusCode, header::LOCATION},
         response::Response,
     };
@@ -91,6 +91,26 @@ mod tests {
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             assert_eq!(WebError::de(body), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn streaming_error_body_passes_through() {
+        let body = Body::from_stream(futures_util::stream::once(async {
+            Ok::<_, Infallible>(Bytes::from_static(b"streaming"))
+        }));
+        let response = Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(SERVER_FN_ERROR_HEADER, "/api/test/error")
+            .header(LOCATION, "/form")
+            .body(body)
+            .unwrap();
+
+        let response = normalize(response).await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.headers()[LOCATION], "/form");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body, "streaming");
     }
 
     #[tokio::test]
