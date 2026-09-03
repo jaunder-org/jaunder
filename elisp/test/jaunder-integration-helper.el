@@ -217,6 +217,18 @@ batch runner (via `set') and the fallback (via `cl-progv') share one derivation.
   (let ((b (jaunder-test--global-bindings state)))
     (cl-mapc #'set (car b) (cdr b))))
 
+(defmacro jaunder-test--with-temp-directory (binding &rest body)
+  "Create BINDING's temporary directory, evaluate BODY, then remove it.
+BINDING is (DIRECTORY PREFIX).  Cleanup is deliberately unguarded so errors
+from recursive deletion retain their normal `unwind-protect' precedence."
+  (declare (indent 1) (debug ((symbolp form) body)))
+  (let ((directory (car binding))
+        (prefix (cadr binding)))
+    `(let ((,directory (make-temp-file ,prefix t)))
+       (unwind-protect
+           (progn ,@body)
+         (delete-directory ,directory t)))))
+
 (defmacro jaunder-test--bind-from (state &rest body)
   "Dynamically bind the harness globals from STATE around BODY (fallback path)."
   (declare (indent 1) (debug t))
