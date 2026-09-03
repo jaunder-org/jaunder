@@ -668,6 +668,65 @@ mod tests {
         assert!(page.has_more);
     }
 
+    #[tokio::test]
+    async fn destination_fetches_receive_validated_routes_and_preserve_themes() {
+        let user_page = page(true);
+        assert_eq!(
+            user_destination(Some(alice()), |username| async move {
+                assert_eq!(username, alice());
+                Ok(PublicPresentation {
+                    theme: Theme::Terminal,
+                    page: user_page,
+                })
+            })
+            .await,
+            Ok((Theme::Terminal, page(true)))
+        );
+
+        assert_eq!(
+            tag_destination(Some(rust()), |tag| async move {
+                assert_eq!(tag, rust());
+                Ok(PublicPresentation {
+                    theme: Theme::Reader,
+                    page: page(false),
+                })
+            })
+            .await,
+            Ok((Theme::Reader, page(false)))
+        );
+
+        assert_eq!(
+            user_tag_destination(Some(alice()), Some(rust()), |username, tag| async move {
+                assert_eq!(username, alice());
+                assert_eq!(tag, rust());
+                Ok(PublicPresentation {
+                    theme: Theme::Studio,
+                    page: page(true),
+                })
+            })
+            .await,
+            Ok((Theme::Studio, page(true)))
+        );
+
+        let route =
+            PermalinkRoute::parse("alice", "2026", "01", "02", "hello").expect("valid permalink");
+        let expected_post = crate::posts::render::test_fixtures::sample_post();
+        assert_eq!(
+            permalink_destination(Some(route.clone()), |actual| async move {
+                assert_eq!(actual, route);
+                Ok(PublicPresentation {
+                    theme: Theme::Reader,
+                    page: expected_post.clone(),
+                })
+            })
+            .await,
+            Ok((
+                Theme::Reader,
+                crate::posts::render::test_fixtures::sample_post()
+            ))
+        );
+    }
+
     // --- seed adoption ---
 
     #[test]

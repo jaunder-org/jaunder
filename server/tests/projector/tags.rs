@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use axum::http::{StatusCode, header};
 use tower::ServiceExt;
 
+use common::{MutationOutcome, theme::Theme};
 use rstest::*;
 use rstest_reuse::*;
 
@@ -8,7 +11,10 @@ use crate::helpers::body_string;
 
 use storage::test_support::{Backend, TestEnv, backends};
 
-use super::fixtures::{TEST_SHELL, get, projector_app, seed_tagged_post};
+use super::fixtures::{
+    TEST_SHELL, assert_sanitized_internal_server_error, failing_site_config, get, projector_app,
+    projector_app_with_dependencies, seed_tagged_post,
+};
 
 #[apply(backends)]
 #[tokio::test]
@@ -35,10 +41,59 @@ async fn user_tag_projects_tagged_posts(#[case] backend: Backend) {
         .oneshot(get(&format!("/~{u}/tags/rust")))
         .await
         .expect("request");
+
     assert_eq!(resp.status(), StatusCode::OK, "user tag → 200");
     let html = body_string(resp).await;
     assert!(html.contains(title.as_ref()), "tagged post present: {html}");
     assert!(html.contains(r#"id="jaunder-seed""#), "data blob present");
+}
+#[apply(backends)]
+#[tokio::test]
+async fn user_tag_projects_the_authors_override_into_initial_markup(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let (username, title) = seed_tagged_post(&state).await;
+    let parsed_username = username.parse().expect("seeded username");
+    let author = state
+        .users
+        .get_user_by_username(&parsed_username)
+        .await
+        .expect("author lookup")
+        .expect("seeded author");
+    let site_config = Arc::clone(&state.site_config);
+    let user_config = Arc::clone(&state.user_config);
+    let outcome = state
+        .write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                site_config.set_theme(transaction, Theme::Terminal).await?;
+                storage::set_theme_override(
+                    user_config.as_ref(),
+                    transaction,
+                    author.user_id,
+                    Theme::Reader,
+                )
+                .await
+            })
+        })
+        .await
+        .expect("theme write");
+    assert!(matches!(outcome, MutationOutcome::Confirmed(())));
+
+    let response = projector_app(&state)
+        .oneshot(get(&format!("/~{username}/tags/rust")))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = body_string(response).await;
+    assert!(html.contains(title.as_ref()), "tagged post present: {html}");
+    assert!(
+        html.contains(r#"data-theme="reader""#),
+        "author override reaches initial markup: {html}"
+    );
+    assert!(
+        html.contains(r#""theme":"reader""#),
+        "author override reaches projector seed: {html}"
+    );
 }
 
 #[apply(backends)]
@@ -138,4 +193,31 @@ async fn site_tag_storage_failure_keeps_no_store_shell_and_reports_once(#[case] 
         .expect("read body");
     assert_eq!(body.as_ref(), TEST_SHELL.as_bytes(), "exact CSR shell body");
     assert!(event.contains("pool"), "typed storage source: {event}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn site_tag_theme_failure_keeps_500_and_reports_boundary_once(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    seed_tagged_post(&state).await;
+    let app = projector_app_with_dependencies(
+        Arc::clone(&state.posts),
+        Arc::clone(&state.users),
+        failing_site_config("injected site tag theme failure"),
+        Arc::clone(&state.user_config),
+    );
+
+    let (response, event) = crate::assert_error_signal!(
+        async { app.oneshot(get("/tags/rust")).await.expect("request") },
+        event = "server function failed",
+        event_kind = "Storage",
+        event_class = "Bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "boundary",
+        context = "server.projector.site_tag"
+    );
+
+    assert_sanitized_internal_server_error(response).await;
+    assert!(event.contains("injected site tag theme failure"));
 }

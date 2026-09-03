@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::http::{StatusCode, header};
 use tower::ServiceExt;
 
@@ -8,7 +10,10 @@ use crate::helpers::body_string;
 
 use storage::test_support::{Backend, TestEnv, backends};
 
-use super::fixtures::{get, projector_app, seed_published_post};
+use super::fixtures::{
+    assert_sanitized_internal_server_error, failing_site_config, failing_user_config, get,
+    projector_app, projector_app_with_dependencies, seed_published_post,
+};
 
 #[apply(backends)]
 #[tokio::test]
@@ -170,4 +175,64 @@ async fn permalink_storage_failure_keeps_500_and_reports_boundary_once(#[case] b
         .expect("read body");
     assert!(body.is_empty(), "500 body remains sanitized");
     assert!(event.contains("pool"), "typed storage source: {event}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn permalink_site_theme_failure_keeps_500_and_reports_boundary_once(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let (u, y, m, d, slug, ..) = seed_published_post(&state).await;
+    let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
+    let app = projector_app_with_dependencies(
+        Arc::clone(&state.posts),
+        Arc::clone(&state.users),
+        failing_site_config("injected permalink theme failure"),
+        Arc::clone(&state.user_config),
+    );
+
+    let (response, event) = crate::assert_error_signal!(
+        async { app.oneshot(get(&uri)).await.expect("request") },
+        event = "server function failed",
+        event_kind = "Storage",
+        event_class = "Bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "boundary",
+        context = "server.projector.permalink"
+    );
+
+    assert_sanitized_internal_server_error(response).await;
+    assert!(event.contains("injected permalink theme failure"));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn permalink_author_theme_failure_keeps_500_and_reports_boundary_once(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let (u, y, m, d, slug, ..) = seed_published_post(&state).await;
+    let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
+    let app = projector_app_with_dependencies(
+        Arc::clone(&state.posts),
+        Arc::clone(&state.users),
+        Arc::clone(&state.site_config),
+        failing_user_config("injected permalink author theme failure"),
+    );
+
+    let (response, event) = crate::assert_error_signal!(
+        async { app.oneshot(get(&uri)).await.expect("request") },
+        event = "server function failed",
+        event_kind = "Storage",
+        event_class = "Bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "boundary",
+        context = "server.projector.permalink"
+    );
+
+    assert_sanitized_internal_server_error(response).await;
+    assert!(event.contains("injected permalink author theme failure"));
 }

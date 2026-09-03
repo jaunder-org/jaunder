@@ -186,6 +186,16 @@ mod tests {
     use super::{SetDefaultPostFormat, SetSiteTheme, SetYourPagesTheme};
     use common::{render::PostFormat, theme::Theme};
 
+    #[cfg(feature = "server")]
+    use {
+        super::get_your_pages_theme,
+        crate::test_support::auth_parts,
+        common::ids::UserId,
+        leptos::prelude::*,
+        std::sync::Arc,
+        storage::{MockUserConfigStorage, UserConfigStorage},
+    };
+
     #[test]
     fn set_default_post_format_wire_rejects_unknown_token() {
         let ok: SetDefaultPostFormat = serde_qs::from_str("format=markdown").unwrap();
@@ -202,5 +212,23 @@ mod tests {
         assert_eq!(site.theme, Theme::Reader);
         assert!(serde_qs::from_str::<SetYourPagesTheme>("theme=bogus").is_err());
         assert!(serde_qs::from_str::<SetSiteTheme>("theme=bogus").is_err());
+    }
+
+    // guard:no-backend — isolates the authenticated endpoint's storage projection.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn your_pages_theme_reads_the_authenticated_authors_override() {
+        let owner = Owner::new();
+        owner.set();
+        provide_context(auth_parts(UserId::from(7), "alice"));
+        let mut config = MockUserConfigStorage::new();
+        config
+            .expect_get()
+            .withf(|user_id, _| *user_id == UserId::from(7))
+            .times(1)
+            .return_once(|_, _| Ok(Some("reader".to_owned())));
+        provide_context(Arc::new(config) as Arc<dyn UserConfigStorage>);
+
+        assert_eq!(get_your_pages_theme().await, Ok(Some(Theme::Reader)));
     }
 }

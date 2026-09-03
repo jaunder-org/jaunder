@@ -204,6 +204,50 @@ mod theme_tests {
             ThemeControlState::Ready(ThemeSelection::SiteDefault)
         );
     }
+
+    #[test]
+    fn theme_buttons_expose_selected_style_and_pressed_state() {
+        let terminal = ThemeSelection::Theme(Theme::Terminal);
+
+        assert_eq!(terminal.button_class(Some(terminal)), "j-btn is-selected");
+        assert_eq!(terminal.aria_pressed(Some(terminal)), "true");
+        assert_eq!(
+            ThemeSelection::SiteDefault.button_class(Some(terminal)),
+            "j-btn"
+        );
+        assert_eq!(
+            ThemeSelection::SiteDefault.aria_pressed(Some(terminal)),
+            "false"
+        );
+    }
+
+    #[test]
+    fn unresolved_theme_read_is_loading_without_a_selection() {
+        let state = ThemeControlState::resolve(None, None);
+
+        assert_eq!(state, ThemeControlState::Loading);
+        assert!(state.is_loading());
+        assert_eq!(state.selection(), None);
+    }
+
+    #[test]
+    fn ready_theme_state_exposes_its_selection_and_is_not_loading() {
+        let selection = ThemeSelection::Theme(Theme::Reader);
+        let state = ThemeControlState::Ready(selection);
+
+        assert!(!state.is_loading());
+        assert_eq!(state.selection(), Some(selection));
+    }
+
+    #[test]
+    fn failed_theme_mutation_does_not_request_a_reread() {
+        let outcome = Err(WebError::server_message("database unavailable"));
+
+        assert_eq!(
+            ThemeControlState::mutation_decision(&outcome),
+            ThemeMutationDecision::Error
+        );
+    }
 }
 
 #[cfg(test)]

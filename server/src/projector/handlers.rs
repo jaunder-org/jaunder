@@ -117,13 +117,22 @@ async fn site_timeline(
     Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
     headers: HeaderMap,
 ) -> Response {
-    let result = timeline::fetch_local_timeline(
+    let page = match timeline::fetch_local_timeline(
         posts.as_ref(),
         &ViewerIdentity::Anonymous,
         None,
         Some(PageSize::default()),
     )
-    .await;
+    .await
+    {
+        Ok(page) => page,
+        Err(error) => {
+            error
+                .with_context("boundary", "server.projector.timeline")
+                .emit_boundary_failure();
+            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
     let theme = match storage::resolve_public_theme(
         storage::PublicThemeOwner::Site,
         site_config.as_ref(),
@@ -139,21 +148,13 @@ async fn site_timeline(
             return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    match result {
-        Ok(page) => document::cacheable_presentation(
-            &headers,
-            &PublicPresentation {
-                theme,
-                page: PageSeed::SiteTimeline(page),
-            },
-        ),
-        Err(error) => {
-            error
-                .with_context("boundary", "server.projector.timeline")
-                .emit_boundary_failure();
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+    document::cacheable_presentation(
+        &headers,
+        &PublicPresentation {
+            theme,
+            page: PageSeed::SiteTimeline(page),
+        },
+    )
 }
 
 struct ThemeStores<'a> {
