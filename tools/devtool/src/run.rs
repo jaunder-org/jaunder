@@ -7,10 +7,11 @@
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use processkit::{Command, Outcome, RunningProcess};
 use serde::Serialize;
+use tokio::runtime::{Builder, Runtime};
 
 const RUN_DIR: &str = ".xtask/run";
 const RUN_HISTORY_LIMIT: usize = 50;
@@ -119,9 +120,6 @@ fn report_cleanup_failure(failed: bool, key: &str, stderr: &mut impl Write) {
         );
     }
 }
-fn kill_timed_out_child(kill: impl FnOnce() -> std::io::Result<()>, stderr: &mut impl Write) {
-    report_cleanup_failure(kill().is_err(), "devtool.run.timeout_kill", stderr);
-}
 
 /// Count `\n` bytes (wc -l semantics) by streaming, so a huge output file never
 /// lands in memory all at once.
@@ -199,40 +197,63 @@ fn signal_name(sig: i32) -> String {
     format!("SIG{sig}")
 }
 
-/// Split a finished status into (exit_code, signal). On unix a signal death has
-/// no exit code, so we report the signal instead.
-fn interpret_status(status: &std::process::ExitStatus) -> (Option<i32>, Option<i32>) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt;
-        if let Some(sig) = status.signal() {
-            return (None, Some(sig));
-        }
-    }
-    (status.code(), None)
+struct Process {
+    running: Option<RunningProcess>,
+    runtime: Runtime,
 }
 
-/// Wait for the child, killing it if `secs` elapses. Returns (status, timed_out).
-fn wait_with_timeout(
-    child: &mut std::process::Child,
-    secs: u64,
-) -> Result<(std::process::ExitStatus, bool), RunError> {
-    let wait_err = |e: std::io::Error| RunError {
-        message: format!("waiting on child: {e}"),
-        kind: "spawn",
-    };
-    let deadline = Instant::now() + Duration::from_secs(secs);
-    loop {
-        if let Some(status) = child.try_wait().map_err(wait_err)? {
-            return Ok((status, false));
-        }
-        if Instant::now() >= deadline {
-            kill_timed_out_child(|| child.kill(), &mut std::io::stderr());
-            let status = child.wait().map_err(wait_err)?;
-            return Ok((status, true));
-        }
-        std::thread::sleep(Duration::from_millis(50));
+impl Process {
+    fn start(command: Command, argv: &[String]) -> Result<Self, RunError> {
+        let runtime = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .map_err(|error| RunError {
+                message: format!("creating process runtime: {error}"),
+                kind: "spawn",
+            })?;
+        let running = runtime
+            .block_on(command.start())
+            .map_err(|error| RunError {
+                message: format!("spawning {argv:?}: {error}"),
+                kind: "spawn",
+            })?;
+        Ok(Self {
+            running: Some(running),
+            runtime,
+        })
     }
+
+    fn wait(mut self, argv: &[String]) -> Result<Outcome, RunError> {
+        let running = self
+            .running
+            .take()
+            .expect("a newly started process is still running");
+        self.runtime
+            .block_on(running.wait())
+            .map_err(|error| RunError {
+                message: format!("waiting on {argv:?}: {error}"),
+                kind: "spawn",
+            })
+    }
+}
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        // The process owns kill-on-drop containment; release it before its
+        // executor so unwind cannot strand processkit's teardown work.
+        std::mem::drop(self.running.take());
+    }
+}
+
+#[cfg(unix)]
+fn timeout_signal() -> Option<i32> {
+    Some(9)
+}
+
+#[cfg(not(unix))]
+fn timeout_signal() -> Option<i32> {
+    None
 }
 
 fn exec_capture(
@@ -242,43 +263,25 @@ fn exec_capture(
     out_path: &Path,
     err_path: &Path,
 ) -> Result<Capture, RunError> {
-    let mk = |p: &Path| -> Result<File, RunError> {
-        File::create(p).map_err(|e| RunError {
-            message: format!("creating {}: {e}", p.display()),
-            kind: "spawn",
-        })
-    };
-    let out_file = mk(out_path)?;
-    let err_file = mk(err_path)?;
-
-    let start = Instant::now();
-    let mut child = Command::new(&argv[0])
+    let command = Command::new(&argv[0])
         .args(&argv[1..])
         .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(out_file))
-        .stderr(Stdio::from(err_file))
-        .spawn()
-        .map_err(|e| RunError {
-            message: format!("spawning {argv:?}: {e}"),
-            kind: "spawn",
-        })?;
+        .stdout_file(out_path)
+        .stderr_file(err_path)
+        .timeout_opt(timeout.map(Duration::from_secs));
 
-    let (status, timed_out) = match timeout {
-        None => (
-            child.wait().map_err(|e| RunError {
-                message: format!("waiting on {argv:?}: {e}"),
-                kind: "spawn",
-            })?,
-            false,
-        ),
-        Some(secs) => wait_with_timeout(&mut child, secs)?,
-    };
+    let start = Instant::now();
+    let outcome = Process::start(command, argv)?.wait(argv)?;
     let duration_ms = start.elapsed().as_millis();
+    let timed_out = outcome.timed_out();
+    let signal = if timed_out {
+        timeout_signal()
+    } else {
+        outcome.signal()
+    };
 
-    let (exit_code, signal) = interpret_status(&status);
     Ok(Capture {
-        exit_code,
+        exit_code: outcome.code(),
         signal,
         timed_out,
         duration_ms,
@@ -411,6 +414,33 @@ mod tests {
         assert_eq!(code, 1);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn signalled_child_reports_signal_and_shell_exit_code() {
+        let cwd = tmp();
+        let executable = std::env::current_exe().unwrap();
+        let argv = vec![
+            executable.to_string_lossy().into_owned(),
+            "--exact".into(),
+            "run::tests::exit_via_sigterm".into(),
+            "--ignored".into(),
+        ];
+        let (r, code) = execute(&argv, &cwd, None).unwrap();
+        assert_eq!(r.exit_code, None);
+        assert!(!r.ok);
+        assert_eq!(r.signal.as_deref(), Some("SIGTERM"));
+        assert_eq!(r.timed_out, None);
+        assert_eq!(code, 143);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "subprocess fixture: terminates its test process with SIGTERM"]
+    fn exit_via_sigterm() {
+        signal_hook::low_level::raise(signal_hook::consts::SIGTERM).unwrap();
+        unreachable!("SIGTERM should terminate the subprocess");
+    }
+
     #[test]
     fn stdout_bytes_and_lines_counted() {
         let cwd = tmp();
@@ -473,9 +503,14 @@ mod tests {
     fn timeout_kills_and_reports() {
         let cwd = tmp();
         let (r, code) = execute(&["sleep".into(), "10".into()], &cwd, Some(1)).unwrap();
-        assert_eq!(r.timed_out, Some(true));
+        assert_eq!(r.exit_code, None);
         assert!(!r.ok);
+        #[cfg(unix)]
+        assert_eq!(r.signal.as_deref(), Some("SIGKILL"));
+        assert_eq!(r.timed_out, Some(true));
         assert_eq!(code, 124);
+        assert!(Path::new(&r.stdout.path).exists());
+        assert!(Path::new(&r.stderr.path).exists());
     }
 
     // Set mtime without a dependency: `File::set_modified` is stable since 1.75.
@@ -509,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn ancillary_warning_run_cleanup_preserves_primary_code() {
+    fn ancillary_history_warning_preserves_primary_code() {
         let dir = tmp();
         for i in 0..=RUN_HISTORY_LIMIT {
             let path = dir.join(format!("{i:04}.out"));
@@ -531,21 +566,10 @@ mod tests {
             },
             &mut stderr,
         );
-        kill_timed_out_child(
-            || {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "sensitive",
-                ))
-            },
-            &mut stderr,
-        );
         assert_eq!(primary_code, 124);
         let warning = String::from_utf8(stderr).unwrap();
-        for key in ["devtool.run.history_prune", "devtool.run.timeout_kill"] {
-            assert_eq!(warning.matches(key).count(), 1);
-        }
-        assert_eq!(warning.lines().count(), 2);
+        assert_eq!(warning.matches("devtool.run.history_prune").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
         assert!(!warning.contains("sensitive"));
     }
     #[test]
