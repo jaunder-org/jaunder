@@ -233,18 +233,9 @@ mod tests {
     use common::visibility::AudienceBase;
     use leptos::prelude::*;
 
-    /// Run `body` under a fresh reactive `Owner`, so `RwSignal`s work host-side
-    /// without a browser (the `web::reactive` / `forms::Field` convention).
-    fn with_owner(body: impl FnOnce()) {
-        let owner = Owner::new();
-        owner.set();
-        body();
-        drop(owner);
-    }
-
     #[test]
     fn inputs_map_every_publication_intent_to_the_wire_contract() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = ComposeState::new();
             let body: PostBody = "hello".parse().expect("a non-blank body parses");
             let scheduled_at: UtcInstant = "2999-02-03T10:15:00Z".parse().unwrap();
@@ -276,7 +267,7 @@ mod tests {
     /// same door, for the same reason (#860).
     #[test]
     fn seed_from_leaves_the_seeded_fields_consistent() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = ComposeState::new();
             assert!(!state.body.is_valid(), "a pristine composer is invalid");
 
@@ -296,7 +287,7 @@ mod tests {
     /// invalid again — which is what re-disables the submit buttons (#860).
     #[test]
     fn reset_returns_the_body_field_to_pristine() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = ComposeState::new();
             state.body.set_input("some text");
             state.body.touch();
@@ -312,7 +303,7 @@ mod tests {
     /// The gate blocks when the body does not parse — whatever the other predicate says.
     #[test]
     fn the_gate_blocks_an_unparseable_body() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let body = Field::<PostBody>::new();
             let (disabled, _) = submit_gate(body, Signal::derive(|| false), Callback::new(|_| {}));
 
@@ -330,7 +321,7 @@ mod tests {
     /// independently of the body.
     #[test]
     fn the_gate_blocks_on_the_callers_predicate() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let body = Field::<PostBody>::new();
             body.set_input("real text");
             let blocked = RwSignal::new(true);
@@ -352,7 +343,7 @@ mod tests {
     /// The click hands through the *parsed* body — the dispatch closure never parses.
     #[test]
     fn the_click_hands_through_a_parsed_body() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let body = Field::<PostBody>::new();
             body.set_input("real text");
             let seen: RwSignal<Vec<(String, bool)>> = RwSignal::new(Vec::new());
@@ -382,7 +373,7 @@ mod tests {
     /// conditions are the same one: disabled iff there is no payload.
     #[test]
     fn a_blocked_gate_dispatches_nothing() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let body = Field::<PostBody>::new();
             let ran = RwSignal::new(0_u32);
             let (disabled, on_click) = submit_gate(
@@ -429,7 +420,7 @@ mod tests {
     /// projector tests paint.
     #[test]
     fn seed_from_loads_an_existing_post_into_the_editor_fields() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = ComposeState::new();
             let fetched = crate::posts::render::test_fixtures::sample_post();
 
@@ -457,7 +448,7 @@ mod tests {
 
     #[test]
     fn tag_interactions_make_even_an_empty_collection_explicit() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = ComposeState::new();
             let input =
                 crate::tags::InputState::new(state.tags).with_on_change(state.tag_input_changed());
@@ -489,7 +480,7 @@ mod tests {
 
     #[test]
     fn reset_clears_the_post_body_but_keeps_format_and_audience() {
-        with_owner(|| {
+        Owner::new().with(|| {
             // `default()` here rather than `new()` so the `Default` impl is exercised
             // too; it delegates, so this covers both (the `web::reactive` precedent).
             let state = ComposeState::default();

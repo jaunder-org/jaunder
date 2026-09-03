@@ -227,13 +227,6 @@ mod tests {
         value.parse().unwrap()
     }
 
-    fn with_owner(body: impl FnOnce()) {
-        let owner = Owner::new();
-        owner.set();
-        body();
-        drop(owner);
-    }
-
     #[test]
     fn loaded_publication_uses_the_server_snapshot() {
         let fetched_at = instant("2026-08-13T12:00:00Z");
@@ -256,7 +249,7 @@ mod tests {
     }
     #[test]
     fn edit_submit_gate_routes_all_loaded_publication_states() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let body = Field::<PostBody>::new();
             body.set_input("body");
             let seen = RwSignal::new(None);
@@ -312,7 +305,7 @@ mod tests {
 
     #[test]
     fn untouched_schedule_preserves_the_exact_original_instant() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let original = instant("2026-11-01T05:30:00.123456789Z");
             let state = ScheduledEditState::new(original, "2026-11-01T01:30".into());
             assert_eq!(state.value.get(), "2026-11-01T01:30");
@@ -325,7 +318,7 @@ mod tests {
 
     #[test]
     fn clear_is_local_and_maps_only_to_draft() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state =
                 ScheduledEditState::new(instant("2999-01-01T09:00:00Z"), "2999-01-01T09:00".into());
             state.clear();
@@ -336,7 +329,7 @@ mod tests {
 
     #[test]
     fn edited_schedule_uses_the_parser_and_rejects_invalid_nonempty_input() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state =
                 ScheduledEditState::new(instant("2999-01-01T09:00:00Z"), "2999-01-01T09:00".into());
             state.set_input("not-a-date".into());
@@ -356,7 +349,7 @@ mod tests {
 
     #[test]
     fn scheduled_gate_dispatches_the_untouched_original_without_reparsing() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let original = instant("2026-11-01T05:30:00.123456789Z");
             let schedule = ScheduledEditState::new(original, "2026-11-01T01:30".into());
             let body = Field::<PostBody>::new();
@@ -378,7 +371,7 @@ mod tests {
 
     #[test]
     fn scheduled_gate_dispatches_draft_after_clear() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let schedule =
                 ScheduledEditState::new(instant("2999-01-01T09:00:00Z"), "2999-01-01T09:00".into());
             schedule.clear();
@@ -401,7 +394,7 @@ mod tests {
 
     #[test]
     fn scheduled_gate_blocks_invalid_input_and_dispatches_nothing() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let schedule =
                 ScheduledEditState::new(instant("2999-01-01T09:00:00Z"), "2999-01-01T09:00".into());
             schedule.set_input("not-a-date".into());
@@ -424,7 +417,7 @@ mod tests {
 
     #[test]
     fn scheduled_gate_blocks_body_and_caller_predicate() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let schedule =
                 ScheduledEditState::new(instant("2999-01-01T09:00:00Z"), "2999-01-01T09:00".into());
             let body = Field::<PostBody>::new();

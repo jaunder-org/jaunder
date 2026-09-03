@@ -176,18 +176,9 @@ mod tests {
         display.parse::<common::tag::TagLabel>().unwrap().into()
     }
 
-    /// Run `body` under a fresh reactive `Owner` (the `web::reactive`/`forms::Field`
-    /// convention), so `RwSignal`s work host-side without a browser.
-    fn with_owner(body: impl FnOnce()) {
-        let owner = Owner::new();
-        owner.set();
-        body();
-        drop(owner);
-    }
-
     #[test]
     fn arrow_keys_move_and_clamp_the_selection() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = InputState::new(RwSignal::new(Vec::new()));
             state
                 .suggestions
@@ -217,7 +208,7 @@ mod tests {
 
     #[test]
     fn enter_commits_the_selected_suggestion_and_clears_the_field() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = InputState::new(RwSignal::new(Vec::new()));
             state.suggestions.set(vec![summary("rust")]);
             state.selected_idx.set(Some(0));
@@ -232,7 +223,7 @@ mod tests {
 
     #[test]
     fn enter_commits_typed_text_preserving_casing() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = InputState::new(RwSignal::new(Vec::new()));
             state.input_text.set("Leptos".to_owned());
 
@@ -243,7 +234,7 @@ mod tests {
 
     #[test]
     fn enter_falls_through_to_typed_text_when_the_selection_is_stale() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = InputState::new(RwSignal::new(Vec::new()));
             // The selection index points past the (empty) suggestion list, so the
             // keyboard-commit path falls through to committing the typed text.
@@ -257,7 +248,7 @@ mod tests {
 
     #[test]
     fn enter_on_empty_field_passes_through_without_committing() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = InputState::new(RwSignal::new(Vec::new()));
             assert!(!state.handle_key("Tab"), "Tab passes through when empty");
             assert!(state.tags.get().is_empty());
@@ -266,7 +257,7 @@ mod tests {
 
     #[test]
     fn enter_on_invalid_text_sets_an_error_and_keeps_the_tags() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = InputState::new(RwSignal::new(Vec::new()));
             state.input_text.set("bad tag".to_owned());
 
@@ -278,7 +269,7 @@ mod tests {
 
     #[test]
     fn backspace_on_empty_field_removes_the_last_chip() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = InputState::new(RwSignal::new(vec![summary("a"), summary("b")]));
             assert!(!state.handle_key("Backspace"));
             assert_eq!(state.tags.get(), vec![summary("a")]);
@@ -287,7 +278,7 @@ mod tests {
 
     #[test]
     fn backspace_with_text_present_is_ignored() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = InputState::new(RwSignal::new(vec![summary("a")]));
             state.input_text.set("x".to_owned());
             assert!(!state.handle_key("Backspace"));
@@ -297,7 +288,7 @@ mod tests {
 
     #[test]
     fn escape_closes_the_dropdown() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = InputState::new(RwSignal::new(Vec::new()));
             state.suggestions.set(vec![summary("rust")]);
             state.suggestions_open.set(true);
@@ -311,7 +302,7 @@ mod tests {
 
     #[test]
     fn unhandled_key_is_a_no_op() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = InputState::new(RwSignal::new(Vec::new()));
             state.input_text.set("x".to_owned());
             assert!(!state.handle_key("z"));
@@ -321,7 +312,7 @@ mod tests {
 
     #[test]
     fn begin_input_schedules_for_a_prefix_and_bumps_the_tick() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = InputState::new(RwSignal::new(Vec::new()));
 
             let first = state.begin_input("Ru");
@@ -339,7 +330,7 @@ mod tests {
 
     #[test]
     fn begin_input_on_empty_clears_suggestions_and_schedules_nothing() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = InputState::new(RwSignal::new(Vec::new()));
             state.suggestions.set(vec![summary("rust")]);
             state.suggestions_open.set(true);
