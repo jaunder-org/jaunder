@@ -11,6 +11,9 @@
   stringly-typed-arg claim was already false), and the decode-stage consequence
   now records that an arg-decode failure emits boundary telemetry rather than
   vanishing
+- Note: amended 2026-09-03 (#859) — malformed typed-argument decode failures are
+  client errors: Jaunder's server-function response normalizer maps them to HTTP
+  400 while preserving the public `WebError::ServerFunction` payload
 
 ## Context
 
@@ -125,9 +128,15 @@ pre-validation using the same newtype `FromStr` — never a re-implemented rule.
   sanctioned ergonomic addition (#450); no macro or redesign is required.
 - Typing a `#[server]` arg moves that value's validation into arg-**decode**: a
   malformed value (only reachable by a non-browser client, since the disabled
-  button gates the browser) now fails _before_ the fn body, surfacing as a
-  generic transport/decode error rather than the controlled public message.
-  Accepted: that's the defense-in-depth path, not the user path. _Amended by
+  button gates the browser) fails _before_ the fn body. _Amended by #859._ The
+  server-function response normalizer classifies framework `Args`, `MissingArg`,
+  and input-side `Deserialization` failures as malformed client input and
+  returns HTTP 400 while preserving the public `WebError::ServerFunction`
+  payload and message. Function-body errors, output-side `Serialization`, and
+  other internal failures remain HTTP 500. The normalizer strips its internal
+  classification before the response crosses the public boundary; for
+  progressive-enhancement forms it also removes the malformed request's
+  framework-added redirect while leaving valid redirects unchanged. _Amended by
   #822._ This applies to **every** typed wire arg, secrets included — there is
   no stringly-typed carve-out, so nothing "still parses in the body". The decode
   path also used to skip the body's error-boundary telemetry entirely, leaving a

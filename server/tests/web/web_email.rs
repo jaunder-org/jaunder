@@ -321,5 +321,5 @@ async fn request_email_verification_invalid_email_returns_error(#[case] backend:
         Some(&cookie_header),
     )
     .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

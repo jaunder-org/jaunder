@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use axum::http::StatusCode;
+use axum::{
+    body::{Body, to_bytes},
+    http::{Request, StatusCode, header},
+};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -10,10 +13,12 @@ use common::test_support::parse_session_label;
 use server_fn::ServerFn;
 
 use crate::helpers::{
-    TestHttpResponse, create_session_for, create_user_and_session, post_form,
+    TestHttpResponse, create_session_for, create_user_and_session, make_app, post_form,
     post_form_with_credentials,
 };
 use storage::test_support::{Backend, TestEnv, backends};
+use tempfile::TempDir;
+use tower::ServiceExt;
 
 #[apply(backends)]
 #[tokio::test]
@@ -339,9 +344,9 @@ async fn create_app_password_rejects_blank_label(#[case] backend: Backend) {
     .await;
 
     // A blank/whitespace label is rejected at the typed-wire-arg decode
-    // (SessionLabel's FromStr), not a server-side check; it surfaces as 500 (the
-    // session-fn convention).
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    // (SessionLabel's FromStr), not a server-side check, so it is a malformed
+    // client request.
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[apply(backends)]
@@ -361,7 +366,62 @@ async fn create_app_password_rejects_overlong_label(#[case] backend: Backend) {
     )
     .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_app_password_rejects_missing_label(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+
+    let (status, body) = post_form(
+        &state,
+        <web::sessions::CreateAppPassword as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("server_function"), "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn malformed_progressive_form_is_not_redirected(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let storage = TempDir::new().unwrap();
+    let app = make_app(&state, &storage);
+    let request = |body: &str| {
+        Request::builder()
+            .method("POST")
+            .uri(<web::sessions::CreateAppPassword as ServerFn>::PATH)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(header::ACCEPT, "text/html")
+            .header(header::REFERER, "/app/sessions")
+            .header(header::COOKIE, &cookie)
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+
+    let response = app.clone().oneshot(request("label=%20%20")).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(!response.headers().contains_key(header::LOCATION));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body.contains("server_function"), "body: {body}");
+    assert!(!body.contains("server_function_input"), "body: {body}");
+
+    let response = app.oneshot(request("label=MarsEdit")).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        "/app/sessions"
+    );
 }
 
 #[apply(backends)]

@@ -1,3 +1,5 @@
+#[cfg(feature = "server")]
+use leptos::server_fn::{Bytes, Decodes, Encodes};
 use leptos::server_fn::{
     codec::JsonEncoding,
     error::{FromServerFnError, ServerFnErrorErr},
@@ -24,6 +26,9 @@ pub enum WebError {
     Server { message: String },
     #[error("server function error: {message}")]
     ServerFunction { message: String },
+    #[doc(hidden)]
+    #[error("server function error: {message}")]
+    ServerFunctionInput { message: String },
 }
 
 impl WebError {
@@ -56,16 +61,36 @@ impl WebError {
             message: message.into(),
         }
     }
+    /// Rewrites the private input-decode carrier to the stable public wire error.
+    #[cfg(feature = "server")]
+    pub fn normalize_server_fn_error_body(body: Bytes) -> Option<Bytes> {
+        let error = <JsonEncoding as Decodes<Self>>::decode(body).ok()?;
+        let Self::ServerFunctionInput { message } = error else {
+            return None;
+        };
+        <JsonEncoding as Encodes<Self>>::encode(&Self::server_function(message)).ok()
+    }
 }
 
 impl FromServerFnError for WebError {
     type Encoder = JsonEncoding;
 
     fn from_server_fn_error(value: ServerFnErrorErr) -> Self {
-        // Telemetry only — the returned wire error is unchanged.
+        // The response adapter consumes this server-only classification before
+        // the error crosses the public wire boundary.
         #[cfg(feature = "server")]
         super::server::emit_arg_decode_failure(&value);
-        Self::server_function(value.to_string())
+        let message = value.to_string();
+        #[cfg(feature = "server")]
+        if matches!(
+            value,
+            ServerFnErrorErr::Args(_)
+                | ServerFnErrorErr::MissingArg(_)
+                | ServerFnErrorErr::Deserialization(_)
+        ) {
+            return Self::ServerFunctionInput { message };
+        }
+        Self::server_function(message)
     }
 }
 
@@ -76,11 +101,36 @@ mod tests {
     use leptos::server_fn::{Decodes, Encodes, codec::JsonEncoding, error::ServerFnErrorErr};
 
     #[test]
-    fn server_function_errors_map_to_web_error() {
+    fn server_function_errors_preserve_the_framework_message() {
         let error = WebError::from_server_fn_error(ServerFnErrorErr::Args("bad arg".to_string()));
 
-        assert!(matches!(error, WebError::ServerFunction { .. }));
         assert!(error.to_string().contains("bad arg"));
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn only_input_decode_errors_have_a_normalizable_body() {
+        for error in [
+            ServerFnErrorErr::Args("args".to_string()),
+            ServerFnErrorErr::MissingArg("missing".to_string()),
+            ServerFnErrorErr::Deserialization("input".to_string()),
+        ] {
+            let body = WebError::from_server_fn_error(error).ser();
+            assert!(WebError::normalize_server_fn_error_body(body).is_some());
+        }
+
+        for error in [
+            ServerFnErrorErr::Registration("registration".to_string()),
+            ServerFnErrorErr::UnsupportedRequestMethod("method".to_string()),
+            ServerFnErrorErr::Request("request".to_string()),
+            ServerFnErrorErr::ServerError("server".to_string()),
+            ServerFnErrorErr::MiddlewareError("middleware".to_string()),
+            ServerFnErrorErr::Serialization("output".to_string()),
+            ServerFnErrorErr::Response("response".to_string()),
+        ] {
+            let body = WebError::from_server_fn_error(error).ser();
+            assert!(WebError::normalize_server_fn_error_body(body).is_none());
+        }
     }
 
     #[test]

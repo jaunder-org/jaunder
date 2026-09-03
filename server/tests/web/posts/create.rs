@@ -271,12 +271,12 @@ async fn create_post_extracts_markdown_heading_title(#[case] backend: Backend) {
 }
 
 // Shape B — create_post rejection cluster. Identical setup (author + session)
-// and assertion structure (INTERNAL_SERVER_ERROR + body substring); only the
-// request body/format and the expected error message vary. An invalid
-// `slug_override` and a blank body are both typed-wire-arg decode rejections
-// (`Option<Slug>`, `PostBody` — ADR-0065, #811), so the expected messages are
-// the types', not the handler's; client pre-validation is the user-facing path,
-// and the serde-bridge rejection is unit-tested in `common::slug`.
+// and assertion structure (BAD_REQUEST + body substring); only the request
+// body/format and the expected error message vary. An invalid `slug_override`
+// and a blank body are both typed-wire-arg decode rejections (`Option<Slug>`,
+// `PostBody` — ADR-0065, #811), so the expected messages are the types', not the
+// handler's; client pre-validation is the user-facing path, and the serde-bridge
+// rejection is unit-tested in `common::slug`.
 #[apply(backends_matrix)]
 #[case::empty_post(
     "",
@@ -311,7 +311,7 @@ async fn create_post_rejects(
     )
     .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     assert!(body.contains(expected), "body: {body}");
 }
 
@@ -763,7 +763,7 @@ async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
         Some(&cookie),
     )
     .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
     // The invalid token is rejected at the wire→TagLabel parse, surfacing
     // InvalidTagLabel's own message — the single validation source.
     assert!(body.contains("tag must be non-empty"), "body: {body}");
