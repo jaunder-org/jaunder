@@ -74,7 +74,9 @@ checks authenticated shell state after the CSR mount.
 **Evidence:** [`end2end/tests/posts.spec.ts`](../../end2end/tests/posts.spec.ts)
 creates posts and asserts timelines, permalinks, deletion, and author timelines;
 [`end2end/tests/unicode-slug.spec.ts`](../../end2end/tests/unicode-slug.spec.ts)
-exercises encoded permalink paths.
+exercises encoded permalink paths; and
+[`end2end/tests/theme.spec.ts`](../../end2end/tests/theme.spec.ts) proves
+viewer-independent site and author presentation precedence across public routes.
 
 ### Authenticated cockpit
 
@@ -107,9 +109,12 @@ direct token URL entry to `/verify-email?token=...`.
 
 **Evidence:**
 [`end2end/tests/profile.spec.ts`](../../end2end/tests/profile.spec.ts) asserts
-profile editing and default-post-format behavior.
+profile editing and default-post-format behavior;
 [`end2end/tests/email.spec.ts`](../../end2end/tests/email.spec.ts) asserts email
-status and change behavior plus invalid verification-token error handling.
+status and change behavior plus invalid verification-token error handling; and
+[`end2end/tests/theme.spec.ts`](../../end2end/tests/theme.spec.ts) asserts
+operator and author theme controls, authorization visibility, persistence, and
+the `Site default` reset.
 
 ### App password management
 

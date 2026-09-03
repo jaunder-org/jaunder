@@ -1,7 +1,8 @@
 use axum::http::{StatusCode, header};
 use tower::ServiceExt;
 
-use common::seed::{Page, PageSeed};
+use common::seed::{Page, PageSeed, PublicPresentation};
+use common::theme::Theme;
 use common::time::{PermalinkDate, UtcInstant};
 use common::visibility::ViewerIdentity;
 use rstest::*;
@@ -211,10 +212,14 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
             PageSeed::UserTag { .. } => "user tag",
             PageSeed::Permalink(_) => "permalink",
         };
-        let json = serde_json::to_string(&seed)
+        let presentation = PublicPresentation {
+            theme: Theme::Studio,
+            page: seed,
+        };
+        let json = serde_json::to_string(&presentation)
             .unwrap_or_else(|error| panic!("{variant} must serialize: {error}"));
         assert_ne!(json, "null", "{variant}");
-        let document = jaunder::projector::document(&seed);
+        let document = jaunder::projector::document_presentation(&presentation);
         assert!(
             !document.contains(r#"id="jaunder-seed">null</script>"#),
             "{variant} selected the defensive null fallback"

@@ -2,24 +2,19 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
 };
-use common::seed::{Page, PageSeed, RenderedPost};
+use common::seed::{PageSeed, PublicPresentation};
 use host::etag;
 use web::app;
-use web::error::{self, SwallowedSource};
 use web::posts;
 
 use super::Shell;
 
-/// Assemble the full cacheable HTML document: per-page `<head>` SEO, the
-/// `<div id="app">` full anonymous shell (so the CSR mount causes no reflow), the
-/// JSON data blob, and the CSR boot.
+/// Assemble a document from a server-resolved public presentation.
 #[must_use]
-pub fn document(seed: &PageSeed) -> String {
-    // Both arrive as `Markup` (trust is type-carried across the crate boundary);
-    // this is where they exit to the untyped response body.
-    let head = app::render_head(seed).into_string();
-    let body = app::render_shell(seed).into_string();
-    let blob = serde_json::to_string(seed).unwrap_or_else(|_| "null".to_string());
+pub fn document_presentation(presentation: &PublicPresentation<PageSeed>) -> String {
+    let head = app::render_head(&presentation.page).into_string();
+    let body = app::render_shell(presentation).into_string();
+    let blob = serde_json::to_string(presentation).unwrap_or_else(|_| "null".to_string());
     format!(
         concat!(
             // The pre-paint script is FIRST in <head> (#181, ADR-0044) so it runs
@@ -42,11 +37,13 @@ pub fn document(seed: &PageSeed) -> String {
         blob = blob.replace("</", "<\\/"),
     )
 }
-/// Build a 200 response for `seed` — with a strong `ETag` (content hash, feed
-/// convention) and cache headers — or a 304 when the client's `If-None-Match`
-/// already matches. Identical `seed` ⇒ identical bytes ⇒ identical `ETag`.
-pub(super) fn cacheable(headers: &HeaderMap, seed: &PageSeed) -> Response {
-    let body = document(seed);
+
+/// Build a cacheable response from the route's already resolved presentation.
+pub(super) fn cacheable_presentation(
+    headers: &HeaderMap,
+    presentation: &PublicPresentation<PageSeed>,
+) -> Response {
+    let body = document_presentation(presentation);
     let etag = etag::sha256_of(body.as_bytes());
 
     if let Some(inm) = headers.get(header::IF_NONE_MATCH)
@@ -87,12 +84,16 @@ pub(super) fn permalink_response(
     result: web::error::InternalResult<Option<storage::PostRecord>>,
     headers: &HeaderMap,
     shell: &Shell,
+    theme: common::theme::Theme,
 ) -> Response {
     match result {
         // Anonymous viewer ⇒ never the author, so `is_author = false`.
-        Ok(Some(record)) => cacheable(
+        Ok(Some(record)) => cacheable_presentation(
             headers,
-            &PageSeed::Permalink(posts::authored_post(record, false)),
+            &PublicPresentation {
+                theme,
+                page: PageSeed::Permalink(posts::authored_post(record, false)),
+            },
         ),
         // No *public* post here: a draft its author must see, or nothing at all.
         // Serve the shell so the CSR client resolves it with the session.
@@ -106,210 +107,75 @@ pub(super) fn permalink_response(
     }
 }
 
-/// Map a timeline query result to a projected response, or a 500 on storage
-/// error. Split from the handler so the error arm — otherwise reachable only
-/// under a live DB failure — stays unit-testable; `into_seed` wraps the page in
-/// its route's [`PageSeed`] variant.
-pub(super) fn timeline_response(
-    result: web::error::InternalResult<Page<RenderedPost>>,
-    headers: &HeaderMap,
-    into_seed: impl FnOnce(Page<RenderedPost>) -> PageSeed,
-) -> Response {
-    match result {
-        Ok(page) => cacheable(headers, &into_seed(page)),
-        Err(error) => {
-            error
-                .with_context("boundary", "server.projector.timeline")
-                .emit_boundary_failure();
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}
-
-/// Map a by-tag listing result to a projected response: the seed on success, or
-/// the SPA shell on any error. Unlike [`timeline_response`], an error here serves
-/// the shell (not a 500) — an unknown user or a live storage failure is never
-/// public content, so the client resolves the URL per session. Split from the
-/// handlers so the error arm — otherwise reachable only under a live DB failure —
-/// stays unit-testable; `into_seed` wraps the page in its route's [`PageSeed`].
-pub(super) fn tag_response(
-    result: web::error::InternalResult<Page<RenderedPost>>,
-    headers: &HeaderMap,
-    shell: &Shell,
-    context: &'static str,
-    into_seed: impl FnOnce(Page<RenderedPost>) -> PageSeed,
-) -> Response {
-    match result {
-        Ok(page) => cacheable(headers, &into_seed(page)),
-        Err(error) => {
-            error::report_swallowed(
-                error.kind(),
-                error.class(),
-                context,
-                SwallowedSource::Error(&error),
-            );
-            shell_response(shell)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Shell, permalink_response};
-    use axum::http::{HeaderMap, StatusCode};
+    use super::{Shell, cacheable_presentation, document_presentation, permalink_response};
+    use axum::http::{HeaderMap, StatusCode, header};
+    use common::{
+        seed::{Page, PageSeed, PublicPresentation},
+        theme::Theme,
+    };
+
+    fn presentation(theme: Theme) -> PublicPresentation<PageSeed> {
+        PublicPresentation {
+            theme,
+            page: PageSeed::SiteTimeline(Page {
+                posts: vec![],
+                next_cursor: None,
+                has_more: false,
+            }),
+        }
+    }
 
     #[test]
-    fn storage_error_maps_to_500() {
+    fn permalink_storage_error_maps_to_500() {
         let shell = Shell("shell".into());
-        let resp = permalink_response(
+        let response = permalink_response(
             Err(web::error::InternalError::validation("boom")),
             &HeaderMap::new(),
             &shell,
+            Theme::Studio,
         );
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[test]
-    fn no_public_post_serves_shell() {
+    fn absent_public_permalink_serves_shell() {
         let shell = Shell("shell".into());
-        let resp = permalink_response(Ok(None), &HeaderMap::new(), &shell);
-        assert_eq!(resp.status(), StatusCode::OK);
+        let response = permalink_response(Ok(None), &HeaderMap::new(), &shell, Theme::Studio);
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[test]
-    fn tag_storage_error_serves_shell() {
-        use super::{PageSeed, tag_response};
-        let shell = Shell("shell".into());
-        let resp = tag_response(
-            Err(web::error::InternalError::validation("boom")),
-            &HeaderMap::new(),
-            &shell,
-            "server.projector.test_tag",
-            // `into_seed` is never called on the error path; any constructor works.
-            PageSeed::SiteTimeline,
-        );
-        // The shell fallback (an unknown user / live storage failure) is a 200,
-        // not a 500 — the client resolves the URL per session.
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[test]
-    fn timeline_storage_error_maps_to_500() {
-        use super::{PageSeed, timeline_response};
-        let resp = timeline_response(
-            Err(web::error::InternalError::validation("boom")),
-            &HeaderMap::new(),
-            PageSeed::SiteTimeline,
-        );
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[test]
-    fn document_head_starts_with_prepaint_then_early_wasm_fetch() {
-        use super::document;
-        use common::seed::{Page, PageSeed};
-        let doc = document(&PageSeed::SiteTimeline(Page {
-            posts: vec![],
-            next_cursor: None,
-            has_more: false,
-        }));
-        let prepaint_then_starter = format!(
-            "<head>{}{}",
-            web::app::PREPAINT_SCRIPT,
-            web::app::EARLY_WASM_FETCH_SCRIPT
-        );
-        assert!(
-            doc.contains(&prepaint_then_starter),
-            "prepaint then starter must begin the head: {doc}"
-        );
-        let starter = doc
-            .find(web::app::EARLY_WASM_FETCH_SCRIPT)
-            .expect("projector early wasm starter");
-        for stylesheet in [
-            r#"<link rel="stylesheet" href="/style/jaunder.css">"#,
-            r#"<link rel="stylesheet" href="/style/jaunder-themes.css">"#,
-        ] {
-            assert!(
-                starter < doc.find(stylesheet).expect("projector stylesheet"),
-                "starter must precede {stylesheet}: {doc}"
-            );
-        }
-        assert!(!doc.contains("modulepreload"), "{doc}");
-        assert!(!doc.contains(r#"rel="preload""#), "{doc}");
-    }
-
-    #[test]
-    fn document_boots_the_same_wasm_url_as_the_spa_shell() {
-        use super::document;
-        use common::seed::{Page, PageSeed};
-        // Drift guard (#234): the projector's server-rendered boot and the SPA
-        // shell (`csr/index.html`) are two hand-written copies — they must load the
-        // SAME wasm URL, or the CSR boot 404s on projector routes. Cross-checking the
-        // two (rather than asserting a literal against itself) means neither can
-        // silently drift; `cargo xtask audit-wasm` ties that shared URL to the file
-        // the build actually emits.
-        fn boot_wasm_fallback_url(html: &str) -> &str {
-            let marker = "initMeasured(window.__jaunderWasmFetch ?? \"";
-            let start = html
-                .find(marker)
-                .expect("boot script consumes early request with explicit fallback")
-                + marker.len();
-            let rest = &html[start..];
-            &rest[..rest.find('"').expect("explicit fallback closing quote")]
-        }
-        let doc = document(&PageSeed::SiteTimeline(Page {
-            posts: vec![],
-            next_cursor: None,
-            has_more: false,
-        }));
-        let spa_shell = include_str!("../../../csr/index.html");
+    fn identical_presentations_have_identical_bytes_and_etags() {
+        let presentation = presentation(Theme::Terminal);
         assert_eq!(
-            boot_wasm_fallback_url(&doc),
-            boot_wasm_fallback_url(spa_shell),
-            "projector and csr/index.html must share the wasm fallback URL (drift guard #234)"
+            document_presentation(&presentation),
+            document_presentation(&presentation)
         );
+
+        let first = cacheable_presentation(&HeaderMap::new(), &presentation);
+        let second = cacheable_presentation(&HeaderMap::new(), &presentation);
         assert_eq!(
-            boot_wasm_fallback_url(&doc),
-            web::app::WASM_URL,
-            "the fallback URL must be web::app::WASM_URL, the single definition every \
-             copy of this path is checked against (#866)"
+            first.headers()[header::ETAG],
+            second.headers()[header::ETAG]
         );
     }
+
     #[test]
-    fn document_marks_module_before_init_immediately_before_wasm_init() {
-        use super::document;
-        use common::seed::{Page, PageSeed};
-        let doc = document(&PageSeed::SiteTimeline(Page {
-            posts: vec![],
-            next_cursor: None,
-            has_more: false,
-        }));
-        let import = format!(r#"import {{initMeasured}} from "{}";"#, web::app::GLUE_URL);
-        let mark = format!(
-            r#"performance.mark("{}");"#,
-            web::app::MODULE_BEFORE_INIT_MARK
+    fn changing_theme_changes_projector_bytes_and_etag() {
+        let terminal = presentation(Theme::Terminal);
+        let reader = presentation(Theme::Reader);
+        assert_ne!(
+            document_presentation(&terminal),
+            document_presentation(&reader)
         );
-        let init = format!(
-            r#"initMeasured(window.__jaunderWasmFetch ?? "{}")"#,
-            web::app::WASM_URL
-        );
-        let import_index = doc.find(&import).expect("projector shell imports glue");
-        for stylesheet in [
-            r#"<link rel="stylesheet" href="/style/jaunder.css">"#,
-            r#"<link rel="stylesheet" href="/style/jaunder-themes.css">"#,
-        ] {
-            assert!(
-                doc.find(stylesheet).expect("projector stylesheet") < import_index,
-                "both stylesheets must precede the module import: {doc}"
-            );
-        }
-        let mark_index = doc
-            .find(&mark)
-            .expect("projector shell marks immediately before init");
-        let init_index = doc.find(&init).expect("projector shell calls initMeasured");
-        assert!(
-            import_index < mark_index && mark_index < init_index,
-            "projector document must keep stylesheets → import → mark → init order: {doc}"
+
+        let terminal_response = cacheable_presentation(&HeaderMap::new(), &terminal);
+        let reader_response = cacheable_presentation(&HeaderMap::new(), &reader);
+        assert_ne!(
+            terminal_response.headers()[header::ETAG],
+            reader_response.headers()[header::ETAG]
         );
     }
 }

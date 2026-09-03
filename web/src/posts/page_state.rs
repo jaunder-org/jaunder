@@ -33,11 +33,12 @@ use common::revision_history::{
     RevisionHistoryAudience, RevisionHistoryDetail, RevisionHistoryTag,
 };
 use common::root_relative_url::RootRelativeUrl;
-use common::seed::{Page, PageSeed, RenderedPost};
+use common::seed::{AuthoredPost, Page, PageSeed, PublicPresentation, RenderedPost};
 use common::tag::Tag;
+use common::theme::Theme;
 use common::username::Username;
 use common::visibility::AudienceSelection;
-use common::{MutationOutcome, ids::PostId};
+use common::{MutationOutcome, ids::PostId, permalink_route::PermalinkRoute};
 
 use crate::audiences;
 use crate::error::{WebError, WebResult};
@@ -152,6 +153,84 @@ pub fn user_query(username: Option<Username>) -> WebResult<Username> {
 /// [`WebError::validation`] when the `:tag` segment did not parse.
 pub fn tag_query(tag: Option<Tag>) -> WebResult<Tag> {
     tag.ok_or_else(|| WebError::validation("Invalid tag"))
+}
+
+/// Deconstructs one server-resolved public destination so wasm route wiring can
+/// commit its theme and content together without recreating resolution rules.
+#[must_use]
+pub fn public_destination<Page>(presentation: PublicPresentation<Page>) -> (Theme, Page) {
+    (presentation.theme, presentation.page)
+}
+
+/// Validates a user route before awaiting its presentation fetch.
+///
+/// # Errors
+///
+/// Returns validation failures for malformed route values and propagates fetch
+/// failures.
+pub async fn user_destination<Page, Fetch, FetchFuture>(
+    username: Option<Username>,
+    fetch: Fetch,
+) -> WebResult<(Theme, Page)>
+where
+    Fetch: FnOnce(Username) -> FetchFuture,
+    FetchFuture: Future<Output = WebResult<PublicPresentation<Page>>>,
+{
+    fetch(user_query(username)?).await.map(public_destination)
+}
+
+/// Validates a site-tag route before awaiting its presentation fetch.
+///
+/// # Errors
+///
+/// Returns validation failures for malformed route values and propagates fetch
+/// failures.
+pub async fn tag_destination<Page, Fetch, FetchFuture>(
+    tag: Option<Tag>,
+    fetch: Fetch,
+) -> WebResult<(Theme, Page)>
+where
+    Fetch: FnOnce(Tag) -> FetchFuture,
+    FetchFuture: Future<Output = WebResult<PublicPresentation<Page>>>,
+{
+    fetch(tag_query(tag)?).await.map(public_destination)
+}
+
+/// Validates a user-tag route before awaiting its presentation fetch.
+///
+/// # Errors
+///
+/// Returns validation failures for malformed route values and propagates fetch
+/// failures.
+pub async fn user_tag_destination<Page, Fetch, FetchFuture>(
+    username: Option<Username>,
+    tag: Option<Tag>,
+    fetch: Fetch,
+) -> WebResult<(Theme, Page)>
+where
+    Fetch: FnOnce(Username, Tag) -> FetchFuture,
+    FetchFuture: Future<Output = WebResult<PublicPresentation<Page>>>,
+{
+    let (username, tag) = user_tag_query(username, tag)?;
+    fetch(username, tag).await.map(public_destination)
+}
+
+/// Validates a permalink route before awaiting its presentation fetch.
+///
+/// # Errors
+///
+/// Returns validation failures for malformed route values and propagates fetch
+/// failures.
+pub async fn permalink_destination<Fetch, FetchFuture>(
+    route: Option<PermalinkRoute>,
+    fetch: Fetch,
+) -> WebResult<(Theme, AuthoredPost)>
+where
+    Fetch: FnOnce(PermalinkRoute) -> FetchFuture,
+    FetchFuture: Future<Output = WebResult<PublicPresentation<AuthoredPost>>>,
+{
+    let route = route.ok_or_else(|| WebError::validation("Invalid permalink"))?;
+    fetch(route).await.map(public_destination)
 }
 
 /// Both route values the per-user tag listing needs, at once.
@@ -576,6 +655,17 @@ mod tests {
 
     fn rust() -> Tag {
         parse_tag("rust")
+    }
+
+    #[test]
+    fn public_destination_preserves_route_theme_and_page() {
+        let (theme, page) = public_destination(PublicPresentation {
+            theme: Theme::Reader,
+            page: page(true),
+        });
+
+        assert_eq!(theme, Theme::Reader);
+        assert!(page.has_more);
     }
 
     // --- seed adoption ---

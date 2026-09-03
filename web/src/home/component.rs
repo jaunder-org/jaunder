@@ -13,6 +13,7 @@ use common::{feed::FeedSurface, pagination::PageSize};
 
 #[component]
 pub fn HomePage() -> impl IntoView {
+    let theme = crate::app::public_theme();
     let state = TimelineState::default();
 
     // Public projector seed (#178/#179): `/` is the anonymous site (Local) timeline
@@ -40,13 +41,25 @@ pub fn HomePage() -> impl IntoView {
     // performed via the client-side action column, reflect immediately.
     let initial_page = client::reactive::resource(
         move || invalidator.track(),
-        move || timeline::list_local_timeline(None, Some(PageSize::default())),
+        move || async move {
+            timeline::list_local_timeline(None, Some(PageSize::default()))
+                .await
+                .map(super::site_destination)
+                .map(|(destination_theme, page)| {
+                    theme.set(destination_theme);
+                    page
+                })
+        },
     );
-
     timeline::wire_timeline_resolve(state, initial_page);
 
     let on_load_more = Callback::new(move |()| {
-        timeline::spawn_load_more(state, timeline::list_local_timeline);
+        timeline::spawn_load_more(state, move |cursor, limit| async move {
+            timeline::list_local_timeline(cursor, limit)
+                .await
+                .map(super::site_destination)
+                .map(|(_, page)| page)
+        });
     });
 
     // The masthead (topbar + anon Sign-in/Register links + hero) is the shared

@@ -126,6 +126,17 @@ pub struct AuthoredPost {
     pub format: PostFormat,
 }
 
+/// Server-resolved presentation for a public route.
+///
+/// The projector seed and every public navigation response use this one
+/// envelope. The theme is deliberately resolved by the server from route
+/// ownership, never from the viewer or browser-local state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicPresentation<Page> {
+    pub theme: crate::theme::Theme,
+    pub page: Page,
+}
+
 /// The initial data a public page is rendered from — serialized into the
 /// projector's `#jaunder-seed` blob and adopted by the CSR client on boot.
 ///
@@ -238,6 +249,19 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&page).unwrap(),
             r#"{"posts":[],"next_cursor":null,"has_more":false}"#
+        );
+    }
+
+    #[test]
+    fn public_presentation_serializes_the_server_resolved_theme_with_the_page() {
+        let presentation = PublicPresentation {
+            theme: crate::theme::Theme::Reader,
+            page: PageSeed::SiteTimeline(page(None)),
+        };
+
+        assert_eq!(
+            serde_json::to_string(&presentation).unwrap(),
+            r#"{"theme":"reader","page":{"SiteTimeline":{"posts":[],"next_cursor":null,"has_more":false}}}"#
         );
     }
 }

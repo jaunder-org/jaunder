@@ -1,17 +1,21 @@
-use crate::app::ThemeContext;
+use crate::auth;
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput, ValidatedTextarea};
 use crate::topbar::Topbar;
-use common::{MutationOutcome, bio::Bio, display_name::DisplayName, render::PostFormat};
+use common::{
+    MutationOutcome, bio::Bio, display_name::DisplayName, render::PostFormat, theme::Theme,
+};
 use leptos::prelude::*;
 
-use super::DefaultPostFormatState;
-use super::api::{self, SetDefaultPostFormat, Update};
+use super::api::{
+    self, ResetYourPagesTheme, SetDefaultPostFormat, SetSiteTheme, SetYourPagesTheme,
+};
+use super::{DefaultPostFormatState, ThemeControlState, ThemeMutationDecision, ThemeSelection};
 
 /// Profile page — shows username, display name, bio; allows updating.
 #[component]
 pub fn ProfilePage() -> impl IntoView {
-    let update_action = ServerAction::<Update>::new();
+    let update_action = ServerAction::<api::Update>::new();
     let profile = Resource::new(move || update_action.version().get(), |_| api::get());
     // Client-validated display name and bio (both optional: empty clears them),
     // owned by the component so the bespoke form can `.dispatch` the typed
@@ -41,7 +45,7 @@ pub fn ProfilePage() -> impl IntoView {
                                     .set(data.bio.as_deref().unwrap_or_default().to_string());
                                 let submit = move |_| {
                                     update_action
-                                        .dispatch(Update {
+                                        .dispatch(api::Update {
                                             display_name: dn_field.parsed(),
                                             bio: bio_field.parsed(),
                                         });
@@ -114,40 +118,146 @@ pub fn ProfilePage() -> impl IntoView {
     }
 }
 
-/// Browser-local built-in theme selector.
-///
-/// [`ThemeContext`] owns both the shared current value and the
-/// synchronous browser-local persistence path.
+/// Persisted public-theme controls. Every authenticated author receives an
+/// author-scoped control; operators additionally receive the site control.
 #[component]
 fn ThemeControl() -> impl IntoView {
-    let theme = use_context::<ThemeContext>().unwrap_or_else(ThemeContext::load);
+    let session = auth::use_session();
+    view! {
+        {move || match session.current.get() {
+            Some(user) => {
+                view! {
+                    <AuthorThemeControl />
+                    {user.is_operator.then(|| view! { <SiteThemeControl /> })}
+                }
+                    .into_any()
+            }
+            None => ().into_any(),
+        }}
+    }
+}
+
+struct AuthorThemeRuntime {
+    action: ServerAction<SetYourPagesTheme>,
+    reset: ServerAction<ResetYourPagesTheme>,
+    state: RwSignal<ThemeControlState>,
+    error: RwSignal<Option<String>>,
+}
+
+fn author_theme_runtime() -> AuthorThemeRuntime {
+    let action = ServerAction::<SetYourPagesTheme>::new();
+    let reset = ServerAction::<ResetYourPagesTheme>::new();
+    let reload = RwSignal::new(0);
+    let persisted = Resource::new(move || reload.get(), |_| api::get_your_pages_theme());
+    let state = RwSignal::new(ThemeControlState::Loading);
+    let error = RwSignal::new(None::<String>);
+
+    Effect::new(move |_| {
+        if let Some(result) = persisted.get() {
+            let last = state.get_untracked().selection();
+            if let Err(problem) = &result {
+                error.set(Some(problem.to_string()));
+            }
+            state.set(ThemeControlState::resolve(last, Some(&result)));
+        }
+    });
+    Effect::new(move |_| {
+        if let Some(result) = action.value().get() {
+            match ThemeControlState::mutation_decision(&result) {
+                ThemeMutationDecision::Error => {
+                    if let Err(problem) = result {
+                        error.set(Some(problem.to_string()));
+                    }
+                }
+                ThemeMutationDecision::RevalidateConfirmed => {
+                    error.set(None);
+                    reload.update(|version| *version += 1);
+                }
+                ThemeMutationDecision::RevalidateIndeterminate => {
+                    error.set(Some(
+                        "The theme change may have committed; its status could not be confirmed."
+                            .into(),
+                    ));
+                    reload.update(|version| *version += 1);
+                }
+            }
+        }
+    });
+    Effect::new(move |_| {
+        if let Some(result) = reset.value().get() {
+            match ThemeControlState::mutation_decision(&result) {
+                ThemeMutationDecision::Error => {
+                    if let Err(problem) = result {
+                        error.set(Some(problem.to_string()));
+                    }
+                }
+                ThemeMutationDecision::RevalidateConfirmed => {
+                    error.set(None);
+                    reload.update(|version| *version += 1);
+                }
+                ThemeMutationDecision::RevalidateIndeterminate => {
+                    error.set(Some(
+                        "The reset may have committed; its status could not be confirmed.".into(),
+                    ));
+                    reload.update(|version| *version += 1);
+                }
+            }
+        }
+    });
+
+    AuthorThemeRuntime {
+        action,
+        reset,
+        state,
+        error,
+    }
+}
+
+#[component]
+fn AuthorThemeControl() -> impl IntoView {
+    let AuthorThemeRuntime {
+        action,
+        reset,
+        state,
+        error,
+    } = author_theme_runtime();
+
     view! {
         <div class="j-card">
             <div class="j-card-head">
                 <div>
-                    <h2>"Theme"</h2>
-                    <div class="j-sub">"Choose how Jaunder looks in this browser."</div>
+                    <h2>"Your pages theme"</h2>
+                    <div class="j-sub">"Choose how your public pages look."</div>
                 </div>
             </div>
             <div class="j-form-body">
-                <div class="j-seg" role="group" aria-label="Theme">
-                    {[("terminal", "Terminal"), ("studio", "Studio"), ("reader", "Reader")]
+                <div class="j-seg" role="group" aria-label="Your pages theme">
+                    {[
+                        (ThemeSelection::SiteDefault, "Site default"),
+                        (ThemeSelection::Theme(Theme::Terminal), "Terminal"),
+                        (ThemeSelection::Theme(Theme::Studio), "Studio"),
+                        (ThemeSelection::Theme(Theme::Reader), "Reader"),
+                    ]
                         .into_iter()
-                        .map(|(theme_id, label)| {
+                        .map(move |(selection, label)| {
                             view! {
                                 <button
                                     type="button"
-                                    class=move || {
-                                        if theme.is_selected(theme_id) {
-                                            "j-btn is-selected"
-                                        } else {
-                                            "j-btn"
+                                    class=move || selection.button_class(state.get().selection())
+                                    aria-pressed=move || {
+                                        selection.aria_pressed(state.get().selection())
+                                    }
+                                    prop:disabled=move || state.get().is_loading()
+                                    on:click=move |_| {
+                                        match selection {
+                                            ThemeSelection::SiteDefault => {
+                                                reset.dispatch(ResetYourPagesTheme {});
+                                            }
+                                            ThemeSelection::Theme(theme) => {
+                                                action.dispatch(SetYourPagesTheme { theme });
+                                            }
                                         }
                                     }
-                                    aria-pressed=move || {
-                                        if theme.is_selected(theme_id) { "true" } else { "false" }
-                                    }
-                                    on:click=move |_| theme.select_builtin(theme_id)
                                 >
                                     {label}
                                 </button>
@@ -155,6 +265,115 @@ fn ThemeControl() -> impl IntoView {
                         })
                         .collect_view()}
                 </div>
+                {move || error.get().map(|message| view! { <p class="error">{message}</p> })}
+            </div>
+        </div>
+    }
+}
+
+struct SiteThemeRuntime {
+    action: ServerAction<SetSiteTheme>,
+    state: RwSignal<ThemeControlState>,
+    error: RwSignal<Option<String>>,
+}
+
+fn site_theme_runtime() -> SiteThemeRuntime {
+    let action = ServerAction::<SetSiteTheme>::new();
+    let reload = RwSignal::new(0);
+    let persisted = Resource::new(move || reload.get(), |_| api::get_site_theme());
+    let state = RwSignal::new(ThemeControlState::Loading);
+    let error = RwSignal::new(None::<String>);
+
+    Effect::new(move |_| {
+        if let Some(result) = persisted.get() {
+            let last = state.get_untracked().selection();
+            state.set(match result {
+                Ok(theme) => ThemeControlState::Ready(ThemeSelection::Theme(theme)),
+                Err(problem) => {
+                    error.set(Some(problem.to_string()));
+                    ThemeControlState::Failed(last)
+                }
+            });
+        }
+    });
+    Effect::new(move |_| {
+        if let Some(result) = action.value().get() {
+            match ThemeControlState::mutation_decision(&result) {
+                ThemeMutationDecision::Error => {
+                    if let Err(problem) = result {
+                        error.set(Some(problem.to_string()));
+                    }
+                }
+                ThemeMutationDecision::RevalidateConfirmed => {
+                    error.set(None);
+                    reload.update(|version| *version += 1);
+                }
+                ThemeMutationDecision::RevalidateIndeterminate => {
+                    error.set(Some(
+                        "The site theme change may have committed; its status could not be confirmed."
+                            .into(),
+                    ));
+                    reload.update(|version| *version += 1);
+                }
+            }
+        }
+    });
+
+    SiteThemeRuntime {
+        action,
+        state,
+        error,
+    }
+}
+
+#[component]
+fn SiteThemeControl() -> impl IntoView {
+    let SiteThemeRuntime {
+        action,
+        state,
+        error,
+    } = site_theme_runtime();
+
+    view! {
+        <div class="j-card">
+            <div class="j-card-head">
+                <div>
+                    <h2>"Site theme"</h2>
+                    <div class="j-sub">"Choose the default theme for public pages."</div>
+                </div>
+            </div>
+            <div class="j-form-body">
+                <div class="j-seg" role="group" aria-label="Site theme">
+                    {[
+                        (Theme::Terminal, "Terminal"),
+                        (Theme::Studio, "Studio"),
+                        (Theme::Reader, "Reader"),
+                    ]
+                        .into_iter()
+                        .map(move |(theme, label)| {
+                            view! {
+                                <button
+                                    type="button"
+                                    class=move || {
+                                        ThemeSelection::Theme(theme)
+                                            .button_class(state.get().selection())
+                                    }
+                                    aria-pressed=move || {
+                                        ThemeSelection::Theme(theme)
+                                            .aria_pressed(state.get().selection())
+                                    }
+                                    prop:disabled=move || state.get().is_loading()
+                                    on:click=move |_| {
+                                        action.dispatch(SetSiteTheme { theme });
+                                    }
+                                >
+                                    {label}
+                                </button>
+                            }
+                        })
+                        .collect_view()}
+                </div>
+                {move || error.get().map(|message| view! { <p class="error">{message}</p> })}
             </div>
         </div>
     }

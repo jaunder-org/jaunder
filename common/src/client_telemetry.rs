@@ -25,8 +25,6 @@ pub enum ClientErrorKind {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientErrorContext {
-    ThemeStorageRead,
-    ThemeStorageWrite,
     SessionMarkerRead,
     SessionMarkerWrite,
     SessionMarkerRemove,
@@ -85,9 +83,7 @@ mod tests {
         (ClientErrorKind::FormData, "form_data"),
         (ClientErrorKind::Internal, "internal"),
     ];
-    const CONTEXTS: [(ClientErrorContext, &str); 9] = [
-        (ClientErrorContext::ThemeStorageRead, "theme_storage_read"),
-        (ClientErrorContext::ThemeStorageWrite, "theme_storage_write"),
+    const CONTEXTS: [(ClientErrorContext, &str); 7] = [
         (ClientErrorContext::SessionMarkerRead, "session_marker_read"),
         (
             ClientErrorContext::SessionMarkerWrite,

@@ -33,6 +33,7 @@ mod password;
 mod post_service;
 mod postgres;
 mod posts;
+mod public_theme;
 mod role_instant;
 mod sessions;
 mod site_config;
@@ -82,6 +83,7 @@ pub use postgres::{
     resolved_postgres_options,
 };
 pub use posts::*;
+pub use public_theme::*;
 pub use sessions::*;
 pub use site_config::*;
 pub use smtp::*;

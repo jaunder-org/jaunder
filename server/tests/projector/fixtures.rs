@@ -10,8 +10,8 @@ use storage::test_support::{SeedRawPost, SeedUser};
 /// shell-fallback response apart from a projected one.
 pub(super) const TEST_SHELL: &str = "<!DOCTYPE html><!--test-shell--><html><body></body></html>";
 
-/// A router carrying only the public projector routes plus the posts store.
-///
+/// A router carrying only the public projector routes and their storage
+/// dependencies.
 /// The projector is feature-independent (mounted into the live router only under
 /// `csr`, but `register` itself always compiles), so registering it onto a bare
 /// router exercises it directly under the default test build — no `csr` feature,
@@ -21,6 +21,8 @@ pub(super) fn projector_app(state: &Arc<storage::AppState>) -> Router {
     jaunder::projector::register(Router::new(), shell)
         .layer(Extension(state.posts.clone()))
         .layer(Extension(state.users.clone()))
+        .layer(Extension(state.user_config.clone()))
+        .layer(Extension(state.site_config.clone()))
 }
 
 /// Seed a published, `rust`-tagged post; returns the seeded user's username and the

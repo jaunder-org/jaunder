@@ -25,6 +25,7 @@ impl StoredUserConfigValue {
 ///
 /// This trait manages individual user preferences and settings, which are
 /// separate from site-wide configuration.
+#[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait UserConfigStorage: Send + Sync {
     /// Returns a user's configuration value for a specific key.

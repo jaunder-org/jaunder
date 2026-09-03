@@ -35,7 +35,7 @@ Out:
     dual-backend storage tests prove site round-trip, author round-trip/delete,
     fallback, and read-error behavior.
 
-- [ ] Task 2: Carry effective theme through public rendering
+- [x] Task 2: Carry effective theme through public rendering
   - Contract: introduce one public-presentation envelope that carries a
     server-resolved `Theme` alongside projector seeds and client-navigation page
     data. A deep resolver module hides precedence: aggregate routes use site
@@ -48,7 +48,7 @@ Out:
     identity, and ETag change with theme; CSR navigation tests prove the
     destination theme replaces the source theme.
 
-- [ ] Task 3: Replace the settings control with persisted mutations
+- [x] Task 3: Replace the settings control with persisted mutations
   - Contract: `/profile` exposes `Your pages theme` to authenticated authors and
     `Site theme` only to operators. The author interface supports `Site default`
     by deleting the override. Server functions derive ownership from the
@@ -61,7 +61,7 @@ Out:
     reconciliation, and malformed wire-value rejection; focused web tests prove
     control state and reset semantics.
 
-- [ ] Task 4: Complete the public cutover and browser proof
+- [x] Task 4: Complete the public cutover and browser proof
   - Contract: delete `jaunder_theme`, its localStorage adapter and
     theme-specific client telemetry contexts/tests. Keep private cockpit
     rendering on Studio. Update architecture projection and the #1341 follow-up

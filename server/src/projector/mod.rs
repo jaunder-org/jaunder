@@ -23,6 +23,6 @@ mod document;
 mod handlers;
 mod shell;
 
-pub use document::document;
+pub use document::document_presentation;
 pub use handlers::register;
 pub use shell::Shell;

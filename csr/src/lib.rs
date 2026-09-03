@@ -5,7 +5,7 @@
 
 use client::{dom, perf, telemetry};
 use common::client_telemetry::{ClientErrorContext, ClientSourceKind};
-use common::seed::PageSeed;
+use common::seed::{PageSeed, PublicPresentation};
 
 use leptos::prelude::*;
 use web::app::App;
@@ -27,7 +27,7 @@ extern "C" {
     fn mark_ready();
 }
 
-fn projector_seed() -> Option<PageSeed> {
+fn projector_seed() -> Option<PublicPresentation<PageSeed>> {
     let json = dom::text_content_by_id("jaunder-seed");
     let Ok(seed) = web::app::decode_projector_seed(json.as_deref()) else {
         let source_kind = ClientSourceKind::InvalidSeed;
@@ -48,7 +48,7 @@ fn projector_seed() -> Option<PageSeed> {
 /// flash-free. On the static SPA shell (no blob, no `#app`) the seed is `None` and
 /// this is an ordinary `mount_to_body`.
 fn mount() {
-    let seed = projector_seed();
+    let presentation = projector_seed();
     perf::mark(perf::BOOT_SEED_PARSED);
     // App re-renders the identical content from `seed`, so removing the
     // server-painted copy avoids a duplicate paint without a visible flash (the
@@ -60,7 +60,12 @@ fn mount() {
     dom::remove_elements_by_selector(&format!("link[{}]", web::app::DISCOVERY_MARKER_ATTR));
     perf::mark(perf::BOOT_RENDER_START);
     leptos::mount::mount_to_body(move || {
-        provide_context(seed.clone());
+        provide_context(presentation.as_ref().map(|value| value.page.clone()));
+        provide_context(RwSignal::new(
+            presentation
+                .as_ref()
+                .map_or(common::theme::Theme::Studio, |value| value.theme),
+        ));
         view! { <App /> }
     });
 }

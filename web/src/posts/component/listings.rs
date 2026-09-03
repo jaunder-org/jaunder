@@ -33,17 +33,20 @@ pub fn UserTimelinePage() -> impl IntoView {
     });
 
     let mutate_version = RwSignal::new(0u32);
+    let theme = crate::app::public_theme();
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
     let initial_page = Resource::new(
         move || (username.get(), mutate_version.get()),
-        |(username, _)| async move {
-            timeline::list_by_user(
-                posts::user_query(username)?,
-                None,
-                Some(PageSize::default()),
-            )
+        move |(username, _)| async move {
+            posts::user_destination(username, |username| {
+                timeline::list_by_user(username, None, Some(PageSize::default()))
+            })
             .await
+            .map(|(destination_theme, page)| {
+                theme.set(destination_theme);
+                page
+            })
         },
     );
 
@@ -62,8 +65,9 @@ pub fn UserTimelinePage() -> impl IntoView {
 
     let on_load_more = Callback::new(move |()| {
         if let Ok(username) = posts::user_query(username.get_untracked()) {
-            timeline::spawn_load_more(state, move |cursor, limit| {
-                timeline::list_by_user(username, cursor, limit)
+            timeline::spawn_load_more(state, move |cursor, limit| async move {
+                let presentation = timeline::list_by_user(username, cursor, limit).await?;
+                Ok(presentation.page)
             });
         }
     });
@@ -106,12 +110,20 @@ pub fn SiteTagPage() -> impl IntoView {
     let tag = Memo::new(move |_| params.get().get("tag").and_then(|s| s.parse::<Tag>().ok()));
 
     let mutate_version = RwSignal::new(0u32);
+    let theme = crate::app::public_theme();
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
     let initial_page = Resource::new(
         move || (tag.get(), mutate_version.get()),
-        |(tag, _)| async move {
-            timeline::list_by_tag(posts::tag_query(tag)?, None, Some(PageSize::default())).await
+        move |(tag, _)| async move {
+            posts::tag_destination(tag, |tag| {
+                timeline::list_by_tag(tag, None, Some(PageSize::default()))
+            })
+            .await
+            .map(|(destination_theme, page)| {
+                theme.set(destination_theme);
+                page
+            })
         },
     );
 
@@ -129,8 +141,9 @@ pub fn SiteTagPage() -> impl IntoView {
 
     let on_load_more = Callback::new(move |()| {
         if let Ok(tag_value) = posts::tag_query(tag.get_untracked()) {
-            timeline::spawn_load_more(state, move |cursor, limit| {
-                timeline::list_by_tag(tag_value, cursor, limit)
+            timeline::spawn_load_more(state, move |cursor, limit| async move {
+                let presentation = timeline::list_by_tag(tag_value, cursor, limit).await?;
+                Ok(presentation.page)
             });
         }
     });
@@ -178,13 +191,20 @@ pub fn UserTagPage() -> impl IntoView {
     let tag = Memo::new(move |_| params.get().get("tag").and_then(|s| s.parse::<Tag>().ok()));
 
     let mutate_version = RwSignal::new(0u32);
+    let theme = crate::app::public_theme();
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
     let initial_page = Resource::new(
         move || (username.get(), tag.get(), mutate_version.get()),
-        |(username, tag, _)| async move {
-            let (username, tag) = posts::user_tag_query(username, tag)?;
-            timeline::list_by_user_and_tag(username, tag, None, Some(PageSize::default())).await
+        move |(username, tag, _)| async move {
+            posts::user_tag_destination(username, tag, |username, tag| {
+                timeline::list_by_user_and_tag(username, tag, None, Some(PageSize::default()))
+            })
+            .await
+            .map(|(destination_theme, page)| {
+                theme.set(destination_theme);
+                page
+            })
         },
     );
 
@@ -203,8 +223,11 @@ pub fn UserTagPage() -> impl IntoView {
         if let Ok((username_value, tag_value)) =
             posts::user_tag_query(username.get_untracked(), tag.get_untracked())
         {
-            timeline::spawn_load_more(state, move |cursor, limit| {
-                timeline::list_by_user_and_tag(username_value, tag_value, cursor, limit)
+            timeline::spawn_load_more(state, move |cursor, limit| async move {
+                let presentation =
+                    timeline::list_by_user_and_tag(username_value, tag_value, cursor, limit)
+                        .await?;
+                Ok(presentation.page)
             });
         }
     });

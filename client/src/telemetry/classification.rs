@@ -151,7 +151,7 @@ mod tests {
             (StorageError::Operation, ClientSourceKind::StorageOperation),
         ] {
             let events = [event(
-                ClientErrorContext::ThemeStorageRead,
+                ClientErrorContext::SessionMarkerRead,
                 error.source_kind(),
             )];
             assert_eq!(events.len(), 1);
@@ -162,7 +162,7 @@ mod tests {
         let missing: Result<Option<String>, StorageError> = Ok(None);
         let missing_event = missing
             .err()
-            .map(|error| event(ClientErrorContext::ThemeStorageRead, error.source_kind()));
+            .map(|error| event(ClientErrorContext::SessionMarkerRead, error.source_kind()));
         assert_eq!(missing_event, None);
         assert_eq!(
             StorageError::Unavailable.to_string(),

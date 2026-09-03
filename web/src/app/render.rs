@@ -16,16 +16,10 @@
 //! tests. Leaf primitives it composes (`posts::render::body`, `render_sidebar`) live in
 //! their own modules and are called cross-module.
 
-use common::seed::PageSeed;
+use common::seed::{PageSeed, PublicPresentation};
 use maud::{PreEscaped, html};
 
 use crate::html::Markup;
-
-/// The default theme applied to `<div class="j-root" data-theme=…>`. Lives here
-/// (the shell-rendering layer) so the projector's server-painted shell and the
-/// reactive `AppShell` share one value; re-exported from `app` (via `mod.rs`) for
-/// the client.
-pub const DEFAULT_THEME: &str = "studio";
 
 /// The pre-paint auth-detection script (#181, ADR-0044). A tiny inline, blocking
 /// `<head>` script: reads the localStorage auth marker (`jaunder_auth`, same key
@@ -193,9 +187,10 @@ fn feed_label(surface: &common::feed::FeedSurface) -> String {
 /// `current_user` resolves (that is #181, and needs no coincidence).
 /// `BackupBanner` renders nothing for an anonymous viewer, so it is omitted here.
 #[must_use]
-pub fn render_shell(seed: &PageSeed) -> Markup {
+pub fn render_shell(presentation: &PublicPresentation<PageSeed>) -> Markup {
+    let seed = &presentation.page;
     Markup::new(html! {
-        div class="j-root" data-theme=(DEFAULT_THEME) {
+        div class="j-root" data-theme=(presentation.theme.as_ref()) {
             div class="j-shell" {
                 aside class="j-sidebar" { (crate::sidebar::render_sidebar("")) }
                 div class="j-main-region" {
@@ -240,11 +235,6 @@ mod tests {
             render_discovery(&PageSeed::Permalink(sample_post())).as_str(),
             ""
         );
-    }
-
-    #[test]
-    fn default_theme_is_nonempty() {
-        assert!(!DEFAULT_THEME.is_empty());
     }
 
     /// maud (like any compile-time markup macro) needs a literal attribute *name*,
@@ -449,7 +439,11 @@ mod tests {
 
     #[test]
     fn shell_wraps_body_in_j_root_with_sidebar_and_main() {
-        let html = render_shell(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        let html = render_shell(&PublicPresentation {
+            theme: common::theme::Theme::Studio,
+            page: PageSeed::SiteTimeline(one_post_page()),
+        })
+        .into_string();
         assert!(
             html.starts_with(
                 "<div class=\"j-root\" data-theme=\"studio\"><div class=\"j-shell\">\

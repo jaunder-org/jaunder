@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use chrono::Datelike;
 use common::render::PostFormat;
-use common::seed::AuthoredPost;
+use common::seed::{AuthoredPost, PublicPresentation};
 use common::tag::TagLabel;
 use common::test_support::parse_post_body;
 use web::posts::{PostInputs, SavedPost};
@@ -158,7 +158,9 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "get body: {body}");
-    let response: AuthoredPost = serde_json::from_str(&body).unwrap();
+    let response: AuthoredPost = serde_json::from_str::<PublicPresentation<AuthoredPost>>(&body)
+        .unwrap()
+        .page;
     assert_eq!(response.post.tags.len(), 1);
     assert_eq!(response.post.tags[0].slug, "performance");
     assert_eq!(response.post.tags[0].display, "Performance");

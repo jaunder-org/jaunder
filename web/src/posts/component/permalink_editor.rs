@@ -47,6 +47,7 @@ type PermalinkFetchKey = (Option<PermalinkRoute>, u32);
 
 #[component]
 pub fn PostPage() -> impl IntoView {
+    let theme = crate::app::public_theme();
     // Public projector seed (#178/#179): the content the server painted for this
     // permalink. Adopted as the `Suspense` fallback below so first paint shows
     // real content (flash-free) instead of a spinner. The reactive fetch still
@@ -79,16 +80,15 @@ pub fn PostPage() -> impl IntoView {
     let refetch = RwSignal::new(0u32);
     let post = Resource::new(
         move || (route(), refetch.get()),
-        |(route, _): PermalinkFetchKey| async move {
-            let Some(route) = route else {
-                // A malformed permalink — an unparseable username, an absent/non-numeric/
-                // impossible date, or an unparseable slug — names no post that could
-                // exist, so 404 client-side without a round-trip. The route's
-                // `TildeUsername` segment guarantees the `~`, so a non-`~` server URL
-                // (e.g. /media/…) never reaches this page at all (#592).
-                return Err(WebError::validation("Invalid permalink"));
-            };
-            posts::get(route.username, route.date, route.slug).await
+        move |(route, _): PermalinkFetchKey| async move {
+            posts::permalink_destination(route, |route| {
+                posts::get(route.username, route.date, route.slug)
+            })
+            .await
+            .map(|(destination_theme, page)| {
+                theme.set(destination_theme);
+                page
+            })
         },
     );
 

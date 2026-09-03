@@ -26,6 +26,7 @@ use crate::site::SiteTitle;
 use crate::slug::Slug;
 use crate::tag::Tag;
 use crate::tagged_url::BaseUrl;
+use crate::theme::Theme;
 use crate::time::{PermalinkDate, UtcInstant};
 use crate::username::Username;
 
@@ -104,6 +105,7 @@ impl_borrowed_trace_field!(
     PermalinkDate,
     Tag,
     Username,
+    Theme,
 );
 
 #[cfg(test)]
@@ -120,6 +122,7 @@ mod tests {
     use crate::slug::Slug;
     use crate::tag::Tag;
     use crate::tagged_url::BaseUrl;
+    use crate::theme::Theme;
     use crate::time::{PermalinkDate, UtcInstant};
     use crate::username::Username;
 
@@ -161,6 +164,7 @@ mod tests {
         assert_borrowed_projection::<Slug>();
         assert_borrowed_projection::<PermalinkDate>();
         assert_borrowed_projection::<Tag>();
+        assert_borrowed_projection::<Theme>();
         assert_borrowed_projection::<Username>();
     }
 

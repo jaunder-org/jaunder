@@ -3,11 +3,6 @@
 //! that must coincide byte-for-byte lives in the sibling `super::render` leaf. No
 //! `#[cfg]` of its own — wasm-only via its `mod` line in `mod.rs`.
 
-/// The default theme, shared with the pure projector so the server-painted shell
-/// and this reactive `AppShell` agree on the initial `data-theme`.
-use client::telemetry;
-use common::client_telemetry::ClientErrorContext;
-
 use crate::audiences::AudiencesPage;
 use crate::auth::{LoginPage, LogoutPage};
 use crate::backup::{BackupBanner, BackupSettingsPage};
@@ -27,55 +22,17 @@ use crate::route_segments::TildeUsername;
 use crate::sessions::SessionsPage;
 use crate::sidebar::Sidebar;
 use crate::site::{SiteBaseUrlBanner, SiteSettingsPage};
+use common::theme::Theme;
 use leptos::prelude::*;
 use leptos_meta::{Title, provide_meta_context};
 use leptos_router::{
     ParamSegment, StaticSegment,
     components::{Outlet, ParentRoute, Route, Router, Routes},
+    hooks::use_location,
 };
-/// Browser-local theme state and the only mutation path for built-in selections.
-#[derive(Clone, Copy)]
-pub(crate) struct ThemeContext {
-    current: RwSignal<String>,
-}
-
-impl ThemeContext {
-    pub(crate) fn load() -> Self {
-        let resolution =
-            super::theme::resolve_theme(super::theme_storage::get(), super::DEFAULT_THEME);
-        if let Some(error) = resolution.error {
-            report_storage_error(ClientErrorContext::ThemeStorageRead, error);
-        }
-        Self {
-            current: RwSignal::new(resolution.theme),
-        }
-    }
-
-    pub(crate) fn current(self) -> String {
-        self.current.get()
-    }
-
-    pub(crate) fn is_selected(self, theme: &str) -> bool {
-        self.current.with(|current| current == theme)
-    }
-
-    /// Persist before updating reactive state, so an explicit selection survives
-    /// navigation even if this component's reactive owner is immediately disposed.
-    pub(crate) fn select_builtin(self, theme: &'static str) {
-        if let Err(error) = super::theme_storage::set(theme) {
-            report_storage_error(ClientErrorContext::ThemeStorageWrite, error);
-        }
-        self.current.set(theme.to_owned());
-    }
-}
-
-fn report_storage_error(context: ClientErrorContext, error: client::storage::StorageError) {
-    let source_kind = error.source_kind();
-    telemetry::report_swallowed(telemetry::error_kind(source_kind), context, source_kind);
-}
-
-fn provide_theme_context() {
-    provide_context(ThemeContext::load());
+#[must_use]
+pub fn public_theme() -> RwSignal<Theme> {
+    use_context::<RwSignal<Theme>>().unwrap_or_else(|| RwSignal::new(Theme::Studio))
 }
 
 #[component]
@@ -85,13 +42,24 @@ fn AppShell() -> impl IntoView {
     // consumer renders under this shell (#591).
     crate::auth::provide_session_context();
 
-    let theme = use_context::<ThemeContext>().unwrap_or_else(ThemeContext::load);
+    let theme = public_theme();
+    let location = use_location();
     // `data-theme` must be a plain dynamic attribute, NOT `attr:data-theme`: the
     // Leptos `attr:` directive prefix is only for spreading onto a component; on a
     // plain element it leaks a literal `attr:data-theme` attribute into the mounted
     // DOM and the `.j-root[data-theme=...]` theme selector stops matching (#22).
     view! {
-        <div class="j-root" data-theme=move || theme.current()>
+        <div
+            class="j-root"
+            data-theme=move || {
+                if common::theme::is_public_presentation_path(&location.pathname.get()) {
+                    theme.get()
+                } else {
+                    Theme::Studio
+                }
+                    .token()
+            }
+        >
             <div class="j-shell">
                 <Sidebar />
                 <div class="j-main-region">
@@ -115,8 +83,6 @@ pub fn App() -> impl IntoView {
     // can redirect, so login/logout/register use client-side pushState with no full
     // document reload. Chrome updates reactively via the shared session context, which
     // those components set/clear on success.
-
-    provide_theme_context();
 
     view! {
         <Title text="Jaunder" />

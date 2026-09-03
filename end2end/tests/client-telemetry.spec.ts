@@ -7,7 +7,6 @@ import {
   tracedContextCapture,
 } from "./fixtures";
 import { goto, waitForSelector } from "./helpers";
-import { navigateInApp } from "./navigate";
 import { pollUntil } from "./polling";
 import { applySeededSession } from "./seed";
 
@@ -340,125 +339,6 @@ test.describe.serial("browser diagnostic OTLP export", () => {
       ]),
     );
   });
-});
-
-test("audited browser failure warns before authenticated keepalive delivery", async ({
-  page,
-  registeredPage,
-  browserTrace,
-}) => {
-  const diagnosticPath = capturePathViaTool("diag");
-  const diagnosticBaseline = captureLines(diagnosticPath).length;
-
-  // Fault only the cosmetic theme write. Seeded session-marker writes still work,
-  // so the resulting telemetry request exercises cookie authentication rather than
-  // an anonymous rejection. The exception text is intentionally arbitrary: the
-  // closed event must not transport it.
-  await page.context().addInitScript(() => {
-    const nativeSetItem = Storage.prototype.setItem;
-    Storage.prototype.setItem = function (key: string, value: string): void {
-      if (key === "jaunder_theme") {
-        throw new DOMException(
-          "injected text must remain browser-local",
-          "QuotaExceededError",
-        );
-      }
-      nativeSetItem.call(this, key, value);
-    };
-  });
-
-  await registeredPage("/app");
-  await waitForSelector(page, "a[href='/logout']");
-
-  const settings = page.getByRole("link", { name: "Settings" });
-  await navigateInApp(page, () => settings.click(), {
-    url: "/profile",
-    ready: "div[role='group'][aria-label='Theme']",
-  });
-
-  const theme = page.getByRole("group", { name: "Theme" });
-  const reader = theme.getByRole("button", { name: "Reader" });
-  await reader.click();
-
-  // The failed persistence write is cosmetic: selecting a built-in changes the
-  // mounted caller-visible theme before the browser reports the write failure.
-  const root = page.locator(".j-root");
-  await expect(root).toHaveAttribute("data-theme", "reader");
-  await expect(reader).toHaveAttribute("aria-pressed", "true");
-  const observed = await pollUntil(
-    "wait.client_telemetry_start",
-    () => {
-      const sink = browserTrace();
-      const warning = sink?.browserDiagnostics.find(
-        (record) =>
-          record.kind === "console" &&
-          record.type === "warning" &&
-          record.text === LOCAL_WARNING,
-      );
-      const request = sink?.requestStarts.find(
-        (record) =>
-          record.method === "POST" &&
-          new URL(record.url).pathname === TELEMETRY_PATH,
-      );
-      return warning && request ? { warning, request } : undefined;
-    },
-    {
-      intervalMs: 100,
-      timeoutMs: 5_000,
-      describe: "the local warning and client-telemetry request start",
-    },
-  );
-
-  expect(observed.warning.sequence).toBeLessThan(observed.request.sequence);
-
-  await expect(root).toHaveAttribute("data-theme", "reader");
-  await expect(reader).toHaveAttribute("aria-pressed", "true");
-
-  const intakeWarning = await pollUntil(
-    "wait.client_telemetry_diag",
-    () => {
-      const matching = captureLines(diagnosticPath)
-        .slice(diagnosticBaseline)
-        .filter(
-          (line) =>
-            line.includes(INTAKE_WARNING) &&
-            line.includes('"error.context":"client.theme_storage.write"'),
-        );
-      return matching.length === 1 ? matching[0] : undefined;
-    },
-    {
-      intervalMs: 100,
-      timeoutMs: 5_000,
-      describe: "one captured server warning for the failed theme write",
-    },
-  );
-
-  for (const field of [
-    '"error.kind":"storage"',
-    '"error.class":"transient"',
-    '"error.disposition":"swallowed"',
-    '"telemetry.origin":"client"',
-    '"error.source_kind":"storage_operation"',
-  ]) {
-    expect(intakeWarning).toContain(field);
-  }
-  expect(intakeWarning).not.toContain(
-    "injected text must remain browser-local",
-  );
-
-  const matchingLocalWarnings =
-    browserTrace()?.browserDiagnostics.filter(
-      (record) =>
-        record.kind === "console" &&
-        record.type === "warning" &&
-        record.text === LOCAL_WARNING,
-    ) ?? [];
-  expect(matchingLocalWarnings).toHaveLength(1);
-
-  // The keepalive contract is request-start-before-teardown. Server acceptance was
-  // observed above only to prove the real authenticated path; nothing below asserts
-  // delivery after page termination.
-  await page.close();
 });
 
 test("session marker read failure reports before authenticated recovery", async ({
