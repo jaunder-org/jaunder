@@ -65,6 +65,26 @@ async fn storage_args(backend: Backend, base: &TempDir) -> (StorageArgs, Option<
     (StorageArgs { storage_path, db }, guard)
 }
 
+/// Owns initialized command storage and its backend resources for a test's lifetime.
+struct InitializedCommandEnv {
+    args: StorageArgs,
+    base: TempDir,
+    _postgres: Option<PostgresDbGuard>,
+}
+
+impl InitializedCommandEnv {
+    async fn new(backend: Backend) -> Self {
+        let base = TempDir::new().unwrap();
+        let (args, postgres) = storage_args(backend, &base).await;
+        cmd_init(&args, false).await.unwrap();
+        Self {
+            args,
+            base,
+            _postgres: postgres,
+        }
+    }
+}
+
 fn uninitialized_storage_args(backend: Backend, base: &TempDir) -> StorageArgs {
     let storage_path = base.path().join("storage");
     let db = match backend {
@@ -225,9 +245,8 @@ async fn command_source_chain_cmd_smtp_test_open(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn command_source_chain_cmd_smtp_test_quoted_sender_reaches_send(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("initialize");
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
         .expect("open");
@@ -258,9 +277,8 @@ async fn command_source_chain_cmd_smtp_test_quoted_sender_reaches_send(#[case] b
 #[apply(backends)]
 #[tokio::test]
 async fn command_source_chain_cmd_smtp_test_send(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("initialize");
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
         .expect("open");
@@ -292,10 +310,8 @@ async fn command_source_chain_cmd_smtp_test_send(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn after_init_server_responds_to_health_check(#[case] backend: Backend) {
-    let base = TempDir::new().unwrap();
-    let (args, _pg) = storage_args(backend, &base).await;
-
-    cmd_init(&args, false).await.unwrap();
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
 
     let OpenedDatabase {
         state, instance_id, ..
@@ -327,9 +343,8 @@ async fn after_init_server_responds_to_health_check(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn prepare_server_binds_and_builds_serving_router(#[case] backend: Backend) {
-    let base = TempDir::new().unwrap();
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.unwrap();
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
 
     // Pre-bind port 0 for a free port, then release it so prepare_server can
     // bind the same address.
@@ -361,9 +376,8 @@ async fn prepare_server_binds_and_builds_serving_router(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn prepare_server_writes_then_removes_runtime_file(#[case] backend: Backend) {
-    let base = TempDir::new().unwrap();
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.unwrap();
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
 
     let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let bind = probe.local_addr().unwrap();
@@ -395,9 +409,8 @@ async fn prepare_server_writes_then_removes_runtime_file(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_app_password_create_succeeds_for_existing_user(#[case] backend: Backend) {
-    let base = TempDir::new().unwrap();
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.unwrap();
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
     let username: Username = "alice".parse().unwrap();
     let password: Password = "password123".parse().unwrap();
     cmd_user_create(&args, &username, Some(password), None, false)
@@ -417,9 +430,8 @@ async fn cmd_app_password_create_succeeds_for_existing_user(#[case] backend: Bac
 #[apply(backends)]
 #[tokio::test]
 async fn app_password_create_records_the_default_label(#[case] backend: Backend) {
-    let base = TempDir::new().unwrap();
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.unwrap();
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
     let username: Username = "alice".parse().unwrap();
     let password: Password = "password123".parse().unwrap();
     cmd_user_create(&args, &username, Some(password), None, false)
@@ -454,9 +466,8 @@ async fn app_password_create_records_the_default_label(#[case] backend: Backend)
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_app_password_create_errors_for_unknown_user(#[case] backend: Backend) {
-    let base = TempDir::new().unwrap();
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.unwrap();
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
     let username: Username = "ghost".parse().unwrap();
 
     assert!(
@@ -525,10 +536,8 @@ async fn typed_account_command_source_app_password_session_create(#[case] backen
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_user_create_creates_retrievable_user(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     cmd_user_create(&args, &username, Some(password), None, false)
@@ -550,9 +559,8 @@ async fn cmd_user_create_creates_retrievable_user(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn typed_account_command_source_cmd_user_create(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
     let username: Username = "alice".parse().expect("valid username");
     let password: Password = "force-hash-error-for-test-coverage"
         .parse()
@@ -575,10 +583,8 @@ async fn typed_account_command_source_cmd_user_create(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_user_create_with_operator_flag_sets_is_operator(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
     let username: Username = "admin".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     cmd_user_create(&args, &username, Some(password), None, true)
@@ -604,10 +610,8 @@ async fn cmd_user_create_with_operator_flag_sets_is_operator(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_user_invite_creates_retrievable_invite(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
     cmd_user_invite(&args, Some(parse_invite_ttl_hours("48")))
         .await
         .expect("user invite");
@@ -622,10 +626,8 @@ async fn cmd_user_invite_creates_retrievable_invite(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_user_invite_default_expires_in(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
     cmd_user_invite(&args, None).await.expect("user invite");
 
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
@@ -645,10 +647,9 @@ async fn cmd_user_invite_default_expires_in(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
+    let base = &env.base;
     let backup_path = base.path().join("backup");
     cmd_backup(&args, BackupMode::Directory, Some(backup_path.clone()))
         .await
@@ -698,11 +699,11 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
                 .await
                 .expect("connect SQLite");
             sqlx::query_scalar(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-            )
-            .fetch_one(&pool)
-            .await
-            .expect("count SQLite tables")
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count SQLite tables")
         }
         storage::DbConnectOptions::Postgres { options, .. } => {
             let pool = PgPoolOptions::new()
@@ -711,7 +712,7 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
                 .expect("connect Postgres");
             sqlx::query_scalar(
                 "SELECT COUNT(*) FROM information_schema.tables \
-                 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
+             WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
             )
             .fetch_one(&pool)
             .await
@@ -729,9 +730,9 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_adopts_backup_instance_identity(#[case] backend: Backend) {
-    let source_base = TempDir::new().expect("source temp dir");
-    let (source_args, _pg_source) = storage_args(backend, &source_base).await;
-    cmd_init(&source_args, false).await.expect("init source");
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let source_base = &source_env.base;
     let source_identity = open_existing_database_with_observer(
         &source_args.db,
         &storage::StorageRuntimeConfig::default(),
@@ -747,10 +748,8 @@ async fn cmd_restore_adopts_backup_instance_identity(#[case] backend: Backend) {
     )
     .await
     .expect("backup");
-
-    let target_base = TempDir::new().expect("target temp dir");
-    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
-    cmd_init(&target_args, false).await.expect("init target");
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
     let bootstrap_identity = open_existing_database_with_observer(
         &target_args.db,
         &storage::StorageRuntimeConfig::default(),
@@ -776,9 +775,9 @@ async fn cmd_restore_adopts_backup_instance_identity(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_backup_propagates_media_mirror_failure(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
+    let base = &env.base;
     let media_path = args.storage_path.join("media");
     std::fs::remove_dir_all(&media_path).expect("remove media directory");
     std::fs::write(&media_path, "not a directory").expect("replace media with file");
@@ -801,9 +800,9 @@ async fn cmd_backup_propagates_media_mirror_failure(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_rejects_pre_identity_backup(#[case] backend: Backend) {
-    let source_base = TempDir::new().expect("source temp dir");
-    let (source_args, _pg_source) = storage_args(backend, &source_base).await;
-    cmd_init(&source_args, false).await.expect("init source");
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let source_base = &source_env.base;
     let backup_path = source_base.path().join("backup");
     cmd_backup(
         &source_args,
@@ -826,10 +825,8 @@ async fn cmd_restore_rejects_pre_identity_backup(#[case] backend: Backend) {
     .expect("write manifest");
     std::fs::remove_file(backup_path.join("db").join("instance_identity.ndjson"))
         .expect("remove instance identity export");
-
-    let target_base = TempDir::new().expect("target temp dir");
-    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
-    cmd_init(&target_args, false).await.expect("init target");
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
     let error = cmd_restore(&target_args, &backup_path)
         .await
         .expect_err("legacy schema must be rejected");
@@ -847,9 +844,9 @@ async fn cmd_restore_rejects_pre_identity_backup(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_preserves_microsecond_fixture_timestamp(#[case] backend: Backend) {
-    let source_base = TempDir::new().expect("source temp dir");
-    let (source_args, _pg_source) = storage_args(backend, &source_base).await;
-    cmd_init(&source_args, false).await.expect("init source");
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let source_base = &source_env.base;
     let ids = populate_backup_fixture(&source_args).await;
     let backup_path = source_base.path().join("backup");
     cmd_backup(
@@ -859,10 +856,8 @@ async fn cmd_restore_preserves_microsecond_fixture_timestamp(#[case] backend: Ba
     )
     .await
     .expect("backup");
-
-    let target_base = TempDir::new().expect("target temp dir");
-    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
-    cmd_init(&target_args, false).await.expect("init target");
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
     cmd_restore(&target_args, &backup_path)
         .await
         .expect("restore");
@@ -874,9 +869,9 @@ async fn cmd_restore_preserves_microsecond_fixture_timestamp(#[case] backend: Ba
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_rejects_row_missing_a_column(#[case] backend: Backend) {
-    let source_base = TempDir::new().expect("source temp dir");
-    let (source_args, _pg_source) = storage_args(backend, &source_base).await;
-    cmd_init(&source_args, false).await.expect("init source");
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let source_base = &source_env.base;
     populate_backup_fixture(&source_args).await;
     let backup_path = source_base.path().join("backup");
     cmd_backup(
@@ -911,10 +906,8 @@ async fn cmd_restore_rejects_row_missing_a_column(#[case] backend: Backend) {
         .expect("serialize users rows")
         .join("\n");
     std::fs::write(&users_ndjson, format!("{contents}\n")).expect("write corrupt users export");
-
-    let target_base = TempDir::new().expect("target temp dir");
-    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
-    cmd_init(&target_args, false).await.expect("init target");
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
     let error = cmd_restore(&target_args, &backup_path)
         .await
         .expect_err("restore rejects missing-column row");
@@ -928,10 +921,9 @@ async fn cmd_restore_rejects_row_missing_a_column(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_backup_writes_directory_backup(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
+    let base = &env.base;
     let username: Username = "backupuser".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     cmd_user_create(&args, &username, Some(password), None, false)
@@ -959,10 +951,8 @@ async fn cmd_backup_writes_directory_backup(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_backup_without_path_writes_under_storage_backups(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
     let written_path = cmd_backup(&args, BackupMode::Directory, None)
         .await
         .expect("backup");
@@ -975,10 +965,9 @@ async fn cmd_backup_without_path_writes_under_storage_backups(#[case] backend: B
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_refuses_missing_backup_path(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
+    let base = &env.base;
     let err = cmd_restore(&args, &base.path().join("missing"))
         .await
         .expect_err("restore fails");
@@ -990,10 +979,9 @@ async fn cmd_restore_refuses_missing_backup_path(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_refuses_populated_database(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
+    let base = &env.base;
     let username: Username = "restoreuser".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     cmd_user_create(&args, &username, Some(password), None, false)
@@ -1013,10 +1001,9 @@ async fn cmd_restore_refuses_populated_database(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_refuses_nonempty_media_directory(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
+    let base = &env.base;
     std::fs::write(args.storage_path.join("media").join("file.txt"), "media").expect("write media");
 
     let backup_path = base.path().join("backup");
@@ -1032,10 +1019,9 @@ async fn cmd_restore_refuses_nonempty_media_directory(#[case] backend: Backend) 
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_empty_target_rejects_invalid_backup(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
+    let base = &env.base;
     let backup_path = base.path().join("backup");
     std::fs::create_dir(&backup_path).expect("backup dir");
     let err = cmd_restore(&args, &backup_path)
@@ -1049,9 +1035,9 @@ async fn cmd_restore_empty_target_rejects_invalid_backup(#[case] backend: Backen
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (source_args, _pg_source) = storage_args(backend, &base).await;
-    cmd_init(&source_args, false).await.expect("init source");
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let base = &source_env.base;
     let ids = populate_backup_fixture(&source_args).await;
 
     let backup_path = base.path().join("backup");
@@ -1062,10 +1048,8 @@ async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
     )
     .await
     .expect("backup");
-
-    let target_base = TempDir::new().expect("target temp dir");
-    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
-    cmd_init(&target_args, false).await.expect("init target");
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
     let outcome = cmd_restore(&target_args, &backup_path)
         .await
         .expect("restore");
@@ -1081,9 +1065,9 @@ async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_reports_invalid_media_filename_without_rolling_back(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (source_args, _pg_source) = storage_args(backend, &base).await;
-    cmd_init(&source_args, false).await.expect("init source");
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let base = &source_env.base;
     populate_backup_fixture(&source_args).await;
 
     let backup_path = base.path().join("backup");
@@ -1095,11 +1079,8 @@ async fn cmd_restore_reports_invalid_media_filename_without_rolling_back(#[case]
     .await
     .expect("backup");
     rewrite_media_filename_in_backup(&backup_path, "my photo.jpg");
-
-    let target_base = TempDir::new().expect("target temp dir");
-    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
-    cmd_init(&target_args, false).await.expect("init target");
-
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
     let outcome = cmd_restore(&target_args, &backup_path)
         .await
         .expect("restore with diagnostics");
@@ -1130,9 +1111,9 @@ async fn cmd_restore_reports_invalid_media_filename_without_rolling_back(#[case]
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_rejects_zero_length_subscriber_ref(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (source_args, _pg_source) = storage_args(backend, &base).await;
-    cmd_init(&source_args, false).await.expect("init source");
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let base = &source_env.base;
     populate_backup_fixture(&source_args).await;
 
     let backup_path = base.path().join("backup");
@@ -1166,11 +1147,8 @@ async fn cmd_restore_rejects_zero_length_subscriber_ref(#[case] backend: Backend
         .join("\n")
         + "\n";
     std::fs::write(&subscriptions, corrupted).expect("write corrupted subscriptions");
-
-    let target_base = TempDir::new().expect("target temp dir");
-    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
-    cmd_init(&target_args, false).await.expect("init target");
-
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
     let error = cmd_restore(&target_args, &backup_path)
         .await
         .expect_err("restore rejects a zero-length subscriber reference");
@@ -1189,9 +1167,9 @@ async fn cmd_restore_rejects_zero_length_subscriber_ref(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_rejects_dangling_foreign_key(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (source_args, _pg_source) = storage_args(backend, &base).await;
-    cmd_init(&source_args, false).await.expect("init source");
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let base = &source_env.base;
     let ids = populate_backup_fixture(&source_args).await;
 
     let backup_path = base.path().join("backup");
@@ -1217,11 +1195,8 @@ async fn cmd_restore_rejects_dangling_foreign_key(#[case] backend: Backend) {
     )
     .expect("append dangling row");
     std::fs::write(&post_tags, contents).expect("write tampered post_tags");
-
-    let target_base = TempDir::new().expect("target temp dir");
-    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
-    cmd_init(&target_args, false).await.expect("init target");
-
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
     let err = cmd_restore(&target_args, &backup_path)
         .await
         .expect_err("restore rejects dangling FK");
@@ -1238,9 +1213,9 @@ async fn cmd_restore_rejects_dangling_foreign_key(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_rolls_back_on_malformed_row(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (source_args, _pg_source) = storage_args(backend, &base).await;
-    cmd_init(&source_args, false).await.expect("init source");
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let base = &source_env.base;
     populate_backup_fixture(&source_args).await;
 
     let backup_path = base.path().join("backup");
@@ -1259,11 +1234,8 @@ async fn cmd_restore_rolls_back_on_malformed_row(#[case] backend: Backend) {
     let mut contents = std::fs::read_to_string(&posts).expect("read posts");
     contents.push_str("[1, 2, 3]\n");
     std::fs::write(&posts, contents).expect("write tampered posts");
-
-    let target_base = TempDir::new().expect("target temp dir");
-    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
-    cmd_init(&target_args, false).await.expect("init target");
-
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
     let err = cmd_restore(&target_args, &backup_path)
         .await
         .expect_err("restore rejects malformed row");
@@ -1279,9 +1251,9 @@ async fn cmd_restore_rolls_back_on_malformed_row(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_rejects_missing_db_directory(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (source_args, _pg_source) = storage_args(backend, &base).await;
-    cmd_init(&source_args, false).await.expect("init source");
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let base = &source_env.base;
     populate_backup_fixture(&source_args).await;
 
     let backup_path = base.path().join("backup");
@@ -1294,11 +1266,8 @@ async fn cmd_restore_rejects_missing_db_directory(#[case] backend: Backend) {
     .expect("backup");
 
     std::fs::remove_dir_all(backup_path.join("db")).expect("remove db dir");
-
-    let target_base = TempDir::new().expect("target temp dir");
-    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
-    cmd_init(&target_args, false).await.expect("init target");
-
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
     let err = cmd_restore(&target_args, &backup_path)
         .await
         .expect_err("restore rejects missing db dir");
@@ -1312,9 +1281,9 @@ async fn cmd_restore_rejects_missing_db_directory(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_restores_archive_backup(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (source_args, _pg_source) = storage_args(backend, &base).await;
-    cmd_init(&source_args, false).await.expect("init source");
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let base = &source_env.base;
     let ids = populate_backup_fixture(&source_args).await;
 
     let archive_path = base.path().join("backup.tar.gz");
@@ -1326,10 +1295,8 @@ async fn cmd_restore_restores_archive_backup(#[case] backend: Backend) {
     .await
     .expect("backup");
     assert!(archive_path.is_file(), "archive backup is a single file");
-
-    let target_base = TempDir::new().expect("target temp dir");
-    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
-    cmd_init(&target_args, false).await.expect("init target");
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
     cmd_restore(&target_args, &archive_path)
         .await
         .expect("restore");
@@ -1355,10 +1322,8 @@ async fn cmd_smtp_test_fails_when_not_initialized(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_smtp_test_fails_when_smtp_not_configured(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
     let result = cmd_smtp_test(&args, &parse_email("alice@example.com")).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -1376,11 +1341,8 @@ async fn cmd_smtp_test_succeeds_with_mock_server(#[case] backend: Backend) {
         .assert_after_n_emails(1)
         .build();
     server.start();
-
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args;
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
         .expect("open db");
