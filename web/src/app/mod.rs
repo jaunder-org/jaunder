@@ -21,3 +21,5 @@ pub use render::{
 mod component;
 #[cfg(target_arch = "wasm32")]
 pub use component::App;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use component::ThemeContext;

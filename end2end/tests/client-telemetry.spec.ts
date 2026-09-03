@@ -7,6 +7,7 @@ import {
   tracedContextCapture,
 } from "./fixtures";
 import { goto, waitForSelector } from "./helpers";
+import { navigateInApp } from "./navigate";
 import { pollUntil } from "./polling";
 import { applySeededSession } from "./seed";
 
@@ -369,6 +370,21 @@ test("audited browser failure warns before authenticated keepalive delivery", as
   await registeredPage("/app");
   await waitForSelector(page, "a[href='/logout']");
 
+  const settings = page.getByRole("link", { name: "Settings" });
+  await navigateInApp(page, () => settings.click(), {
+    url: "/profile",
+    ready: "div[role='group'][aria-label='Theme']",
+  });
+
+  const theme = page.getByRole("group", { name: "Theme" });
+  const reader = theme.getByRole("button", { name: "Reader" });
+  await reader.click();
+
+  // The failed persistence write is cosmetic: selecting a built-in changes the
+  // mounted caller-visible theme before the browser reports the write failure.
+  const root = page.locator(".j-root");
+  await expect(root).toHaveAttribute("data-theme", "reader");
+  await expect(reader).toHaveAttribute("aria-pressed", "true");
   const observed = await pollUntil(
     "wait.client_telemetry_start",
     () => {
@@ -395,11 +411,8 @@ test("audited browser failure warns before authenticated keepalive delivery", as
 
   expect(observed.warning.sequence).toBeLessThan(observed.request.sequence);
 
-  // The failed persistence write is cosmetic: the mounted caller-visible theme
-  // remains the same studio theme the app selected before persistence failed.
-  const root = page.locator(".j-root");
-  await expect(root).toBeVisible();
-  await expect(root).toHaveAttribute("data-theme", "studio");
+  await expect(root).toHaveAttribute("data-theme", "reader");
+  await expect(reader).toHaveAttribute("aria-pressed", "true");
 
   const intakeWarning = await pollUntil(
     "wait.client_telemetry_diag",

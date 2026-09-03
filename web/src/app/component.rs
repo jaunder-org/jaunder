@@ -33,22 +33,49 @@ use leptos_router::{
     ParamSegment, StaticSegment,
     components::{Outlet, ParentRoute, Route, Router, Routes},
 };
+/// Browser-local theme state and the only mutation path for built-in selections.
+#[derive(Clone, Copy)]
+pub(crate) struct ThemeContext {
+    current: RwSignal<String>,
+}
+
+impl ThemeContext {
+    pub(crate) fn load() -> Self {
+        let resolution =
+            super::theme::resolve_theme(super::theme_storage::get(), super::DEFAULT_THEME);
+        if let Some(error) = resolution.error {
+            report_storage_error(ClientErrorContext::ThemeStorageRead, error);
+        }
+        Self {
+            current: RwSignal::new(resolution.theme),
+        }
+    }
+
+    pub(crate) fn current(self) -> String {
+        self.current.get()
+    }
+
+    pub(crate) fn is_selected(self, theme: &str) -> bool {
+        self.current.with(|current| current == theme)
+    }
+
+    /// Persist before updating reactive state, so an explicit selection survives
+    /// navigation even if this component's reactive owner is immediately disposed.
+    pub(crate) fn select_builtin(self, theme: &'static str) {
+        if let Err(error) = super::theme_storage::set(theme) {
+            report_storage_error(ClientErrorContext::ThemeStorageWrite, error);
+        }
+        self.current.set(theme.to_owned());
+    }
+}
+
 fn report_storage_error(context: ClientErrorContext, error: client::storage::StorageError) {
     let source_kind = error.source_kind();
     telemetry::report_swallowed(telemetry::error_kind(source_kind), context, source_kind);
 }
+
 fn provide_theme_context() {
-    let resolution = super::theme::resolve_theme(super::theme_storage::get(), super::DEFAULT_THEME);
-    if let Some(error) = resolution.error {
-        report_storage_error(ClientErrorContext::ThemeStorageRead, error);
-    }
-    let theme = RwSignal::new(resolution.theme);
-    provide_context(theme);
-    Effect::new(move |_| {
-        if let Err(error) = super::theme_storage::set(&theme.get()) {
-            report_storage_error(ClientErrorContext::ThemeStorageWrite, error);
-        }
-    });
+    provide_context(ThemeContext::load());
 }
 
 #[component]
@@ -58,14 +85,13 @@ fn AppShell() -> impl IntoView {
     // consumer renders under this shell (#591).
     crate::auth::provide_session_context();
 
-    let theme = use_context::<RwSignal<String>>()
-        .unwrap_or_else(|| RwSignal::new(super::DEFAULT_THEME.to_string()));
+    let theme = use_context::<ThemeContext>().unwrap_or_else(ThemeContext::load);
     // `data-theme` must be a plain dynamic attribute, NOT `attr:data-theme`: the
     // Leptos `attr:` directive prefix is only for spreading onto a component; on a
     // plain element it leaks a literal `attr:data-theme` attribute into the mounted
     // DOM and the `.j-root[data-theme=...]` theme selector stops matching (#22).
     view! {
-        <div class="j-root" data-theme=move || theme.get()>
+        <div class="j-root" data-theme=move || theme.current()>
             <div class="j-shell">
                 <Sidebar />
                 <div class="j-main-region">

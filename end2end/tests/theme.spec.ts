@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures";
 import { goto, signInAsNewUser } from "./helpers";
-import { allowSecondBoot } from "./bootBudget";
+import { navigateInApp } from "./navigate";
 import { seedPostsViaTool, seedUserViaTool } from "./seed";
 import { expectVisual } from "./visual";
 import { expectAccessible } from "./accessibility";
@@ -61,9 +61,16 @@ const ROOT = ".j-root";
 test("theme selector applies built-ins immediately and persists the selection", async ({
   registeredPage,
 }) => {
-  const page = await registeredPage("/profile");
-  const theme = page.getByRole("group", { name: "Theme" });
+  const page = await registeredPage("/app");
+  const settings = page.getByRole("link", { name: "Settings" });
 
+  await expect(settings).toHaveAttribute("href", "/profile");
+  await navigateInApp(page, () => settings.click(), {
+    url: "/profile",
+    ready: "div[role='group'][aria-label='Theme']",
+  });
+
+  const theme = page.getByRole("group", { name: "Theme" });
   await expect(theme).toBeVisible();
   await expect(theme.getByRole("button", { name: "Terminal" })).toHaveAttribute(
     "aria-pressed",
@@ -88,19 +95,27 @@ test("theme selector applies built-ins immediately and persists the selection", 
     await expect(button).toHaveAttribute("aria-pressed", "false");
     await button.click();
     await expect(page.locator(ROOT)).toHaveAttribute("data-theme", themeId);
+    expect(
+      await page.evaluate(() => localStorage.getItem("jaunder_theme")),
+    ).toBe(themeId);
     await expect(button).toHaveAttribute("aria-pressed", "true");
   }
 
-  allowSecondBoot(
-    page,
-    "reloading proves the browser-local theme selection survives a fresh CSR mount",
-  );
-  await goto(page, "/profile");
-  await expect(page.locator(ROOT)).toHaveAttribute("data-theme", "reader");
-  await expect(theme.getByRole("button", { name: "Reader" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  const freshPage = await page.context().newPage();
+  try {
+    await goto(freshPage, "/profile");
+    const freshTheme = freshPage.getByRole("group", { name: "Theme" });
+
+    await expect(freshPage.locator(ROOT)).toHaveAttribute(
+      "data-theme",
+      "reader",
+    );
+    await expect(
+      freshTheme.getByRole("button", { name: "Reader" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  } finally {
+    await freshPage.close();
+  }
 });
 
 test("theme selector preserves an unknown stored identifier until selection", async ({

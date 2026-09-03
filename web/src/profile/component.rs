@@ -1,3 +1,4 @@
+use crate::app::ThemeContext;
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput, ValidatedTextarea};
 use crate::topbar::Topbar;
@@ -115,13 +116,11 @@ pub fn ProfilePage() -> impl IntoView {
 
 /// Browser-local built-in theme selector.
 ///
-/// The shell owns persistence and error telemetry for its shared theme signal;
-/// this control only changes that signal so applying a selection is immediate.
+/// [`ThemeContext`] owns both the shared current value and the
+/// synchronous browser-local persistence path.
 #[component]
 fn ThemeControl() -> impl IntoView {
-    let theme = use_context::<RwSignal<String>>()
-        .unwrap_or_else(|| RwSignal::new(crate::app::DEFAULT_THEME.to_string()));
-
+    let theme = use_context::<ThemeContext>().unwrap_or_else(ThemeContext::load);
     view! {
         <div class="j-card">
             <div class="j-card-head">
@@ -139,20 +138,16 @@ fn ThemeControl() -> impl IntoView {
                                 <button
                                     type="button"
                                     class=move || {
-                                        if theme.with(|current| current == theme_id) {
+                                        if theme.is_selected(theme_id) {
                                             "j-btn is-selected"
                                         } else {
                                             "j-btn"
                                         }
                                     }
                                     aria-pressed=move || {
-                                        if theme.with(|current| current == theme_id) {
-                                            "true"
-                                        } else {
-                                            "false"
-                                        }
+                                        if theme.is_selected(theme_id) { "true" } else { "false" }
                                     }
-                                    on:click=move |_| theme.set(theme_id.to_string())
+                                    on:click=move |_| theme.select_builtin(theme_id)
                                 >
                                     {label}
                                 </button>
