@@ -21,7 +21,7 @@ Out:
 
 ## Task outline
 
-- [ ] Task 1: Certify the baseline/removal byte contrast
+- [x] Task 1: Certify the baseline/removal byte contrast
   - Contract: one baseline revision; one exact temporary diff limited to the
     direct seed-decode boundary; otherwise identical Nix/toolchain inputs.
     Persist realized Nix outputs, artifact hashes, commands, total pre-bindgen

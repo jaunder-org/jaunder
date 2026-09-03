@@ -1234,6 +1234,101 @@ workspace-wide, so setting it would flip the _server's_ release build to abort,
 where a panicking tokio task would kill the process. Recorded in the root
 `Cargo.toml` at the profile someone would add it to.
 
+## #856 — direct projector-seed `serde_json` WASM attribution (2026-09-02)
+
+**Verdict: material data gate passed; no production candidate was pursued in
+this task.** The pre-bindgen code-section contrast is **33,128 bytes**, which is
+**7,528 bytes above** the inclusive `25 * 1,024 = 25,600`-byte threshold. This
+certifies that direct `PageSeed` decoding is a material size lever; it does not
+claim a boot-time saving, and it is not itself a behavior-preserving change.
+
+### Reproducible arms and isolation
+
+Baseline was committed `HEAD` `e7921dd395a3ff4a07d4754c8ecbcb585548cba0`. Both
+arms used the same checkout and Nix inputs/toolchain, and each realized both
+outputs with:
+
+```bash
+devtool run -- nix build --print-out-paths --no-link .#csrWasm
+devtool run -- nix build --print-out-paths --no-link .#site
+```
+
+The removal arm's entire temporary source diff was limited to
+`decode_projector_seed` in `web/src/app/seed.rs`:
+
+```diff
+ pub fn decode_projector_seed(raw: Option<&str>) -> Result<Option<PageSeed>, serde_json::Error> {
+-    raw.map(serde_json::from_str).transpose()
++    let _ = raw;
++    Ok(None)
+ }
+```
+
+It retained the public signature while deliberately skipping parse work; it was
+an attribution instrument, not production behavior. The original source was
+restored immediately after the removal measurements
+(`devtool run -- git diff --exit-code -- web/src/app/seed.rs` exited 0).
+
+| arm      | realized `csrWasm` output                                   | pre-bindgen `lib/csr.wasm` SHA-256                                 | realized `site` output                                     | shipped `pkg/jaunder.wasm` SHA-256                                 |
+| -------- | ----------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------ |
+| baseline | `/nix/store/ay7hyxi4299qcwyf5wj7ngz8116hr962-jaunder-0.1.0` | `f142d4fa04901fe4f18477611bbd8c5ebc3f2b7af2654f9b3feb339e4f35bcdf` | `/nix/store/f2v981alflm0gg51j2vx93gznlxxnwb8-jaunder-site` | `f629a9a522d07c357367a88848759e9ec4e6ae97c6b805b8085b81d046f8cc9e` |
+| removal  | `/nix/store/dp193qij40j1334wzgvqi5d12imk15p6-jaunder-0.1.0` | `6ebdff2a38de6e40d617ef13e12cb7b6b7a40032a05f31985af3762b2e05457e` | `/nix/store/dc3gd62jfw7cnhcvgz14k8dminwpqxmh-jaunder-site` | `385e75b4d187eb8d69b656ffc74abee7862e194fa24c63c382ee7a907b5f7aaf` |
+
+The hashes above came from these exact commands:
+
+```bash
+devtool run -- sha256sum /nix/store/ay7hyxi4299qcwyf5wj7ngz8116hr962-jaunder-0.1.0/lib/csr.wasm /nix/store/f2v981alflm0gg51j2vx93gznlxxnwb8-jaunder-site/pkg/jaunder.wasm
+devtool run -- sha256sum /nix/store/dp193qij40j1334wzgvqi5d12imk15p6-jaunder-0.1.0/lib/csr.wasm /nix/store/dc3gd62jfw7cnhcvgz14k8dminwpqxmh-jaunder-site/pkg/jaunder.wasm
+```
+
+### Measurements
+
+The exact audit commands were:
+
+```bash
+devtool run -- cargo xtask --json audit-wasm --breakdown --wasm /nix/store/ay7hyxi4299qcwyf5wj7ngz8116hr962-jaunder-0.1.0/lib/csr.wasm
+devtool run -- cargo xtask --json audit-wasm --site-path /nix/store/f2v981alflm0gg51j2vx93gznlxxnwb8-jaunder-site
+devtool run -- cargo xtask --json audit-wasm --breakdown --wasm /nix/store/dp193qij40j1334wzgvqi5d12imk15p6-jaunder-0.1.0/lib/csr.wasm
+devtool run -- cargo xtask --json audit-wasm --site-path /nix/store/dc3gd62jfw7cnhcvgz14k8dminwpqxmh-jaunder-site
+```
+
+| measure                                             |      baseline |       removal | baseline − removal |
+| --------------------------------------------------- | ------------: | ------------: | -----------------: |
+| pre-bindgen artifact total bytes                    |    12,225,406 |    12,162,695 |             62,711 |
+| **pre-bindgen code-section bytes (deciding value)** | **2,971,939** | **2,938,811** |         **33,128** |
+| pre-bindgen `serde_json` attribution row            |       176,158 |       148,819 |             27,339 |
+| shipped optimized raw `pkg/jaunder.wasm` bytes      |     2,456,853 |     2,428,688 |             28,165 |
+
+`csrWasm` is deliberately pre-wasm-bindgen and unstripped: its name section lets
+`audit-wasm --breakdown` attribute code to crates. It is **not** the shipped
+download/compiler-input artifact. Conversely, the raw shipped `site` wasm is the
+ADR-0106 compiler-input proxy, but cannot answer crate attribution after
+`wasm-opt` strips names. Therefore the **33,128-byte code-section delta**, not
+the 27,339-byte `serde_json` row and not the 28,165-byte shipped-raw delta,
+decides materiality. The raw shipped delta is recorded separately; it must not
+be read as a boot-time result.
+
+Threshold arithmetic: `33,128 >= 25 * 1,024 = 25,600`; the margin is
+`33,128 - 25,600 = 7,528` bytes. The inclusive data gate is material, so Task 2
+must investigate the smallest behavior-preserving JSON-compatible reduction
+before any browser capture.
+
+### Dependency interpretation
+
+Both arms ran:
+
+```bash
+devtool run -- cargo tree -p csr --target wasm32-unknown-unknown -i serde_json
+```
+
+Both produced the same `serde_json v1.0.149` reachability: direct paths through
+`csr`, `client`, `web`, and `common`, plus transitive paths through
+`leptos`/`leptos_server`/`codee` and `server_fn` → `gloo-net` (also reached by
+`leptos_router`). Thus the removal eliminates only code made reachable by the
+direct decoder; it neither removes the dependency nor warrants changing
+`server_fn`, browser transport, or telemetry. Retained transitive `serde_json`
+is an expected result of the narrow contrast.
+
 ## #864 — firefox's wasm initialization floor (pre-registration, 2026-08-22)
 
 #836 found that firefox's historical `responseEnd → boot.entry` residual fit
