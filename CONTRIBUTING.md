@@ -466,6 +466,95 @@ the question. Focused `test-local` is an accelerator, not a certification gate.
 | `cargo xtask validate --no-e2e` | verify-only host/static surface plus Nix static proof, `wasm-budget`, Nix `wasm-tests`, Rust `coverage`/`coverage-gate`, Nix `doctests`/`doctests-gate`, and authoritative `elisp-coverage-producer` plus host consumer    | never mutates |
 | `cargo xtask validate`          | inherits the authoritative Emacs verdict, then adds all four `{sqlite,postgres}×{chromium,firefox}` browser E2E combinations and authoritative SQLite/Chromium server-function coverage verification — the full local gate | never mutates |
 
+#### Measuring Nix invalidation
+
+Every `cargo xtask` invocation overwrites `.xtask/last-result.json`. A
+Nix-backed successful step has this optional `nix` object; non-Nix steps omit
+it:
+
+```json
+{
+  "name": "nix-static-checks",
+  "duration_ms": 1234,
+  "nix": {
+    "installable": ".#checks.x86_64-linux.static-checks",
+    "derivation": "/nix/store/<hash>-static-checks.drv",
+    "realization": "reused"
+  }
+}
+```
+
+`installable` is the requested flake installable. `derivation`, when present, is
+the evaluated `.drv` identity to compare across records; it is omitted when that
+identity could not be observed. `realization` is deliberately conservative:
+`reused` means every output selected by that installable was already valid in
+the local store before its build; `realized` means one or more selected outputs
+were initially invalid and all were valid after the successful build; `unknown`
+means evaluation, parsing, or local-store probes could not establish either
+result. These states describe local-store availability, not whether Nix compiled
+locally or substituted an output, and they do not depend on Cachix, GitHub, raw
+Nix logs, or a store purge.
+
+To collect comparable invalidation records, work in a **disposable clone** made
+from the same commit as the intended comparison. From the checkout whose
+unrelated work you want to protect, create an unused sibling clone and run all
+remaining commands there:
+
+```bash
+git clone . ../jaunder-nix-reuse-measurement
+cd ../jaunder-nix-reuse-measurement
+```
+
+The clone starts from committed `HEAD`, so it does not carry the original
+checkout's uncommitted or untracked work. Do not use a checkout with work you
+need to retain: neither `git restore` below nor an accidental reset is a
+recovery mechanism for unrelated work. Start with the clean disposable tree,
+make the results directory (which is under the ignored `.xtask/` state), run
+this exact gate once to warm its outputs, then run it a second time and save
+only that second sidecar as the warm baseline:
+
+```bash
+mkdir -p .xtask/measurements
+cargo xtask validate --no-e2e --allow-dirty
+cargo xtask validate --no-e2e --allow-dirty
+cp .xtask/last-result.json .xtask/measurements/warm-baseline.json
+```
+
+`--allow-dirty` keeps each deliberately uncommitted sample in the disposable
+tree; it does not skip, weaken, or reorder any `validate --no-e2e` gate step.
+With the outputs warmed, one at a time append the listed measurement-only
+marker, run the same command, copy the sidecar before the next run, and restore
+**only** that named file before proceeding:
+
+```bash
+# Docs-only
+printf '\n<!-- Nix reuse measurement: docs-only. -->\n' >> docs/DESIGN.md
+cargo xtask validate --no-e2e --allow-dirty
+cp .xtask/last-result.json .xtask/measurements/docs-only.json
+git restore -- docs/DESIGN.md
+
+# Web-only
+printf '\n// Nix reuse measurement: web-only.\n' >> web/src/app/render.rs
+cargo xtask validate --no-e2e --allow-dirty
+cp .xtask/last-result.json .xtask/measurements/web-only.json
+git restore -- web/src/app/render.rs
+
+# Low-stack Rust only
+printf '\n// Nix reuse measurement: low-stack-rust.\n' >> common/src/text.rs
+cargo xtask validate --no-e2e --allow-dirty
+cp .xtask/last-result.json .xtask/measurements/low-stack-rust.json
+git restore -- common/src/text.rs
+```
+
+The markers are content-only, semantically inert changes in representative
+existing files. Do not combine samples, run another gate between a sample and
+its copy, or purge Nix stores. Compare each record's successful `steps[]`
+entries by `name`, `duration_ms`, `nix.installable`, optional `nix.derivation`,
+and `nix.realization`; compare equal derivation paths directly, and treat a
+missing derivation or `unknown` realization as evidence that the record is not
+classifiable, not as reuse or a build/substitution claim. Keep the four copied
+JSON files as the measurement evidence.
+
 #### Prepush parity by failure surface
 
 The fast local lane and `validate --no-e2e` do not run the same tests in

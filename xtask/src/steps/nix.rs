@@ -15,7 +15,8 @@ use processkit::{Outcome, StdioMode};
 use tokio::io::AsyncWrite;
 
 use super::process::Process;
-use crate::result::{CommandResult, StepResult};
+use crate::nix_build;
+use crate::result::{CommandResult, NixReport, StepResult};
 
 /// The flake checks are Linux-only (`optionalAttrs isLinux` in flake.nix);
 /// the project's CI host is x86_64-linux.
@@ -889,6 +890,7 @@ fn finish_build_with(
     build: BuildCompletion<'_>,
     write_excerpt: impl FnOnce() -> io::Result<String>,
     rescue: impl FnOnce() -> bool,
+    nix_report: impl FnOnce() -> NixReport,
     stderr: &mut impl Write,
 ) -> StepResult {
     let BuildCompletion {
@@ -913,7 +915,7 @@ fn finish_build_with(
     }
     if outcome.code() == Some(0) {
         report_build_diagnostic_failure(diagnostic_failed, stderr);
-        return StepResult::ok(step_name);
+        return StepResult::ok(step_name).nix(nix_report());
     }
     let Some(status) = build_status(outcome) else {
         report_build_diagnostic_failure(diagnostic_failed, stderr);
@@ -957,6 +959,7 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
     let out_link = format!(".xtask/gcroots/{check}");
     let installable = format!(".#checks.{SYSTEM}.{check}");
     let log_dir = format!(".xtask/diagnostics/{check}");
+    let before = nix_build::observe(&installable);
     let log_path = format!("{log_dir}/build.log");
     let diagnostic: Box<dyn Write + Send> = match File::create(&log_path) {
         Ok(file) => Box::new(file),
@@ -1005,6 +1008,7 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
         },
         || write_failure_excerpt(&log_path),
         || rescue_diagnostics(check),
+        || before.finish(&installable),
         &mut io::stderr(),
     )
     .with_duration(start.elapsed())
@@ -1145,9 +1149,20 @@ mod tests {
         finish_e2e_combo, lift_elisp_coverage_artifacts, prepare_build_dirs_with,
         report_build_diagnostic_failure, sentinel_detail, test_check_names, validate_check_names,
     };
+    use crate::audit_wasm::{ArtifactMetrics, AuditReport};
+    use crate::result::{NixRealization, NixReport};
+    use crate::steps::wasm_budget;
     use coverage::status::{CoverageStatus, StatusCategory};
     use doctests::check::{Kind, Violation};
     use doctests::status::DoctestStatus;
+
+    fn injected_nix_report(realization: NixRealization) -> NixReport {
+        NixReport {
+            installable: ".#checks.x86_64-linux.check".to_owned(),
+            derivation: Some("/nix/store/check.drv".to_owned()),
+            realization,
+        }
+    }
 
     #[test]
     fn nix_test_checks_include_the_authoritative_elisp_producer_once() {
@@ -1707,9 +1722,11 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
                 rescue_called.set(true);
                 false
             },
+            || panic!("failed build must not observe after completion"),
             &mut stderr,
         );
 
+        assert!(result.nix.is_none());
         assert_eq!(result.detail.as_deref(), Some("wait failed"));
         assert!(!excerpt_called.get());
         assert!(!rescue_called.get());
@@ -1740,9 +1757,11 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
                 rescue_called.set(true);
                 false
             },
+            || panic!("failed build must not observe after completion"),
             &mut stderr,
         );
 
+        assert!(result.nix.is_none());
         assert_eq!(
             result.detail.as_deref(),
             Some("failed to stream nix build stderr")
@@ -1773,9 +1792,11 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
                 rescue_called.set(true);
                 false
             },
+            || panic!("failed build must not observe after completion"),
             &mut stderr,
         );
 
+        assert!(result.nix.is_none());
         assert!(result.detail.unwrap().contains("signal: 15"));
         assert!(excerpt_called.get());
         assert!(rescue_called.get());
@@ -1803,10 +1824,12 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
                 rescue_called.set(true);
                 false
             },
+            || panic!("failed build must not observe after completion"),
             &mut stderr,
         );
 
         assert!(result.detail.unwrap().contains("signal: unknown"));
+        assert!(result.nix.is_none());
         assert!(excerpt_called.get());
         assert!(rescue_called.get());
     }
@@ -1825,12 +1848,90 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             },
             || panic!("successful build must not write an excerpt"),
             || panic!("successful build must not rescue diagnostics"),
+            || injected_nix_report(NixRealization::Unknown),
             &mut stderr,
         );
 
+        assert_eq!(
+            result.nix.expect("successful build report").realization,
+            NixRealization::Unknown
+        );
         assert!(result.ok);
     }
 
+    #[test]
+    fn successful_flake_checks_attach_each_realization_from_the_injected_seam() {
+        for realization in [
+            NixRealization::Reused,
+            NixRealization::Realized,
+            NixRealization::Unknown,
+        ] {
+            let mut stderr = Vec::new();
+            let step = finish_build_with(
+                BuildCompletion {
+                    step_name: "nix-check",
+                    installable: ".#checks.x86_64-linux.check",
+                    log_path: "build.log",
+                    diagnostic_failed: false,
+                    capture: BuildCaptureOutcome::default(),
+                    outcome: Ok(Outcome::Exited(0)),
+                },
+                || panic!("successful build must not write an excerpt"),
+                || panic!("successful build must not rescue diagnostics"),
+                || injected_nix_report(realization),
+                &mut stderr,
+            );
+            assert_eq!(
+                step.nix.expect("successful build report").realization,
+                realization
+            );
+        }
+    }
+
+    #[test]
+    fn gate_owned_build_paths_attach_reports() {
+        let mut stderr = Vec::new();
+        let flake = finish_build_with(
+            BuildCompletion {
+                step_name: "nix-check",
+                installable: ".#checks.x86_64-linux.check",
+                log_path: "build.log",
+                diagnostic_failed: false,
+                capture: BuildCaptureOutcome::default(),
+                outcome: Ok(Outcome::Exited(0)),
+            },
+            || panic!("successful build must not write an excerpt"),
+            || panic!("successful build must not rescue diagnostics"),
+            || injected_nix_report(NixRealization::Reused),
+            &mut stderr,
+        );
+        let mut result = CommandResult::new("validate");
+        wasm_budget::run_with(
+            &mut result,
+            || Ok("/nix/store/site".to_owned()),
+            |_| {
+                Ok(AuditReport {
+                    site_path: "/nix/store/site".to_owned(),
+                    artifacts: vec![ArtifactMetrics {
+                        path: "/nix/store/site/pkg/app.wasm".to_owned(),
+                        raw_bytes: 1,
+                        gzip_bytes: 0,
+                        brotli_bytes: 0,
+                    }],
+                })
+            },
+            || NixReport {
+                installable: ".#site".to_owned(),
+                derivation: Some("/nix/store/site.drv".to_owned()),
+                realization: NixRealization::Reused,
+            },
+            || Duration::from_millis(1),
+        );
+
+        let wasm = result.steps.last().expect("wasm-budget step");
+        assert!(flake.nix.is_some());
+        assert!(wasm.nix.is_some());
+    }
     #[test]
     fn build_directory_population_fails_closed_but_diagnostics_are_best_effort() {
         let gcroot_error = prepare_build_dirs_with(

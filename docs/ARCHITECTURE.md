@@ -2777,16 +2777,23 @@ different environments. They have the following explicit authority split
 root-workspace fence population in both directions; neither path may silently
 shrink it. Only the Nix path establishes the pinned sandbox/offline verdict.
 
-The heavy checks are Nix flake check derivations — the hermetic layer. xtask
-realizes each via
-`nix build -L --keep-failed --accept-flake-config --out-link .xtask/gcroots/<check>`
-(`xtask/src/steps/nix.rs:416`): cachix-substituted (an unchanged re-run is a
-substitution) and GC-rooted by the out-link, so garbage collection cannot evict
-warm gate. `wasm-tests` returns the browser test verdict directly. Rust coverage
-and doctests use producer/consumer pairs — `nix-coverage` + `nix-coverage-gate`,
+The hermetic layer has two gate-owned Nix-build paths. `steps::nix::build_check`
+builds flake checks as
+`nix build -L --keep-failed --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.x86_64-linux.<check>`;
+those flake-check out-links retain their selected outputs as GC roots.
+`steps::wasm_budget::run` separately builds `.#site` for the `wasm-budget`
+verdict through the existing no-link output-path helper
+(`nix_build::build_out_path`). On every successful build, both paths attach
+host-observed Nix evidence to their `StepResult`: the installable, the evaluated
+`.drv` path when available, and the conservative local-store realization
+(`reused`, `realized`, or `unknown`). That evidence says whether the
+installable's selected outputs were already locally valid or became valid during
+the gate; it does not attribute an output to local compilation or substitution.
+`wasm-tests` returns the browser test verdict directly. Rust coverage and
+doctests use producer/consumer pairs — `nix-coverage` + `nix-coverage-gate`,
 `nix-doctests` + `nix-doctests-gate` — whose producers cannot fail; xtask reads
-each verdict from the sandbox's `status.json` (`xtask/src/steps/nix.rs`). The
-Elisp producer instead returns the fixed
+each verdict from the sandbox's `status.json` (`steps::nix::coverage` and
+`steps::nix::doctests`). The Elisp producer instead returns the fixed
 `elisp-coverage/{lcov.info,summary.txt,status.json}` set for every controlled
 outcome; xtask lifts it and its host consumer reconciles current source, census,
 LCOV, and strict same-line `;; cov:ignore: <reason>` markers. Uncontrolled Nix
@@ -2800,12 +2807,12 @@ In order, host `static-checks` runs source consistency (`fmt`, `leptosfmt`,
 `xtask-fmt`), compile/type checks (`byte-compile`, `tsc`, `cargo-deny`,
 `clippy`, `web-server-clippy`, `web-no-server-clippy`, `wasm-clippy`,
 `tools-clippy`, `xtask-clippy`), then the `ert` runtime check. Both rungs run
-the same host steps (`xtask/src/lib.rs:457`-`:479`):
+the same host steps (`run_host_gate` in `xtask/src/lib.rs`):
 
 **Two different things are called `static-checks`, and conflating them is
 easy.** The host _step_ above runs the listed sub-steps through host-local
-lanes. The Nix `static-checks` _derivation_ (`flake.nix:1276`) runs the shared
-`devtool check --all --sandbox-cargo` definitions hermetically with
+lanes. The Nix `static-checks` derivation (`static-checks` in `flake.nix`) runs
+the shared `devtool check --all --sandbox-cargo` definitions hermetically with
 workspace-specific offline Cargo homes, including `ast-grep-tests` for committed
 rule fixtures and the `no-full-reload` repository scan
 ([proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
@@ -3045,10 +3052,13 @@ placed by a single litmus test — _where must this code execute?_
 - **`xtask`** — the host-side dev/CI driver
   (`cargo xtask check | validate | e2e | …`). It invokes `nix build` and
   consumes/analyzes exfiltrated build artifacts (coverage gate, CRAP gate,
-  reports). It carries the result envelope: every run rewrites the
-  `.xtask/last-result.json` sidecar (`xtask/src/result.rs`) and prints an
-  `xtask-done: command=… ok=… exit=… duration_ms=…` sentinel on stderr from
-  every exit path (`xtask/src/main.rs`), so a truncated log can still prove the
+  reports). It owns the result envelope: every run rewrites the
+  `.xtask/last-result.json` sidecar through `result::CommandResult::report`.
+  Each `result::StepResult` records its name, outcome, duration, and optional
+  `result::NixReport` for a successful gate-owned Nix build (`installable`,
+  optional evaluated `derivation`, and conservative `realization`). It also
+  prints an `xtask-done: command=… ok=… exit=… duration_ms=…` sentinel on stderr
+  from every exit path (`main::main`), so a truncated log can still prove the
   process finished ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
 - **`tools/devtool`** — the tool that must also run inside Nix build sandboxes,
   where `nix` and `xtask` are unavailable; `devtool coverage emit` produces
