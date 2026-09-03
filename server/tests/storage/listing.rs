@@ -28,7 +28,16 @@ async fn soft_delete_post_confirmed(state: &AppState, post_id: PostId, user_id: 
     let outcome = state
         .write_scope
         .run(move |transaction| {
-            Box::pin(async move { posts.soft_delete_post(transaction, post_id, user_id).await })
+            Box::pin(async move {
+                posts
+                    .soft_delete_post(
+                        transaction,
+                        post_id,
+                        user_id,
+                        common::time::UtcInstant::now(),
+                    )
+                    .await
+            })
         })
         .await
         .expect("soft_delete_post failed");

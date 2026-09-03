@@ -20,8 +20,8 @@ use crate::posts::media::{
 };
 use crate::posts::models::{
     CreatePostInput, CreatedPost, CurrentPostRevisionSummary, PermalinkDate, PermalinkDateText,
-    PostRecord, PostRevisionDetail, PostRevisionPage, PostRevisionRecord, PostRevisionTag,
-    UpdatePostInput,
+    PostMutation, PostRecord, PostRevisionDetail, PostRevisionPage, PostRevisionRecord,
+    PostRevisionTag, UpdatePostInput,
 };
 use crate::posts::syndication::{self, GoLivePost};
 use crate::posts::tags;
@@ -235,10 +235,11 @@ pub trait PostStorage: Send + Sync {
         post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
-    ) -> Result<PostRecord, UpdatePostError>;
+    ) -> Result<PostMutation, UpdatePostError>;
 
-    /// Publishes a draft through the owner-checked revision transaction. A
-    /// post that is already published is returned unchanged.
+    /// Publishes a draft through the owner-checked revision transaction,
+    /// returning locked old/new mutation evidence. A post that is already
+    /// published is returned unchanged.
     ///
     /// # Errors
     ///
@@ -250,9 +251,11 @@ pub trait PostStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<PostRecord, UpdatePostError>;
+        now: UtcInstant,
+    ) -> Result<PostMutation, UpdatePostError>;
 
-    /// Marks an owned live post as deleted through the revision transaction.
+    /// Marks an owned live post as deleted through the revision transaction,
+    /// returning locked old/new mutation evidence.
     ///
     /// # Errors
     ///
@@ -264,10 +267,11 @@ pub trait PostStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<(), UpdatePostError>;
+        now: UtcInstant,
+    ) -> Result<PostMutation, UpdatePostError>;
 
-    /// Reverts a live post owned by `user_id` to draft status, returning the row
-    /// written by the guarded mutation.
+    /// Reverts a live post owned by `user_id` to draft status, returning locked
+    /// old/new mutation evidence.
     ///
     /// # Errors
     ///
@@ -279,7 +283,8 @@ pub trait PostStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<PostRecord, UpdatePostError>;
+        now: UtcInstant,
+    ) -> Result<PostMutation, UpdatePostError>;
 
     /// Lists published posts for a specific user, ordered by creation date,
     /// applying the viewer-resolution filter. See ADR-0020.
@@ -548,37 +553,41 @@ pub trait PostDialect: Backend {
     /// Deletes every `post_media` row for a post. Bind order: `post_id`.
     const DELETE_POST_MEDIA: &'static str;
 
-    /// Updates a post and records a revision, returning the updated record.
+    /// Updates a post and records a revision, returning locked old/new mutation
+    /// evidence for its owning transaction.
     async fn update_post(
         transaction: &mut WriteTransaction,
         post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
-    ) -> Result<PostRecord, UpdatePostError>;
+    ) -> Result<PostMutation, UpdatePostError>;
 
-    /// Publishes a live owner's post through the backend's lifecycle revision
-    /// transaction. A matching current state is returned unchanged.
+    /// Publishes a live owner's post, returning locked old/new mutation evidence.
+    /// A matching current state is returned unchanged.
     async fn publish_post(
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<Option<PostRecord>, sqlx::Error>;
+        now: UtcInstant,
+    ) -> Result<Option<PostMutation>, sqlx::Error>;
 
-    /// Soft-deletes a live owner's row under the backend's lifecycle revision
-    /// transaction. Returns false when ownership or liveness did not match.
+    /// Soft-deletes a live owner's row, returning locked old/new mutation
+    /// evidence. `None` means ownership or liveness did not match.
     async fn soft_delete_post(
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<bool, sqlx::Error>;
+        now: UtcInstant,
+    ) -> Result<Option<PostMutation>, sqlx::Error>;
 
-    /// Reverts a live owner's publication state under the backend's lifecycle
-    /// transaction. A draft is returned unchanged.
+    /// Reverts a live owner's publication state, returning locked old/new
+    /// mutation evidence. A draft is returned unchanged.
     async fn unpublish_post(
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<Option<PostRecord>, sqlx::Error>;
+        now: UtcInstant,
+    ) -> Result<Option<PostMutation>, sqlx::Error>;
 
     /// Reconcile an active owner's post tags to `desired` in one transaction.
     /// Monomorphised because the **serialization** differs: `SQLite` opens
@@ -1277,7 +1286,7 @@ where
         post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
-    ) -> Result<PostRecord, UpdatePostError> {
+    ) -> Result<PostMutation, UpdatePostError> {
         DB::update_post(transaction, post_id, editor_user_id, input).await
     }
 
@@ -1291,9 +1300,10 @@ where
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<PostRecord, UpdatePostError> {
-        if let Some(row) = DB::publish_post(transaction, post_id, user_id).await? {
-            return Ok(row);
+        now: UtcInstant,
+    ) -> Result<PostMutation, UpdatePostError> {
+        if let Some(mutation) = DB::publish_post(transaction, post_id, user_id, now).await? {
+            return Ok(mutation);
         }
         let connection = DB::write_connection(transaction)?;
         let live = sqlx::query_scalar::<_, PostId>(
@@ -1319,9 +1329,10 @@ where
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<(), UpdatePostError> {
-        if DB::soft_delete_post(transaction, post_id, user_id).await? {
-            return Ok(());
+        now: UtcInstant,
+    ) -> Result<PostMutation, UpdatePostError> {
+        if let Some(mutation) = DB::soft_delete_post(transaction, post_id, user_id, now).await? {
+            return Ok(mutation);
         }
         let connection = DB::write_connection(transaction)?;
         let live = sqlx::query_scalar::<_, PostId>(
@@ -1347,9 +1358,10 @@ where
         transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
-    ) -> Result<PostRecord, UpdatePostError> {
-        if let Some(row) = DB::unpublish_post(transaction, post_id, user_id).await? {
-            return Ok(row);
+        now: UtcInstant,
+    ) -> Result<PostMutation, UpdatePostError> {
+        if let Some(mutation) = DB::unpublish_post(transaction, post_id, user_id, now).await? {
+            return Ok(mutation);
         }
         let connection = DB::write_connection(transaction)?;
         let live = sqlx::query_scalar::<_, PostId>(
@@ -1981,7 +1993,6 @@ where
     }
 }
 
-
 /// Database-provided physical identity retained only by the no-write regression.
 #[cfg(test)]
 #[derive(Debug, macros::SqlxBridge)]
@@ -2049,6 +2060,7 @@ mod tests {
                     posts
                         .update_post(transaction, post_id, editor_user_id, &input)
                         .await
+                        .map(|mutation| mutation.record)
                 })
             })
             .await
@@ -2099,7 +2111,12 @@ mod tests {
         let write_scope = state.write_scope.clone();
         write_scope
             .run(move |transaction| {
-                Box::pin(async move { posts.publish_post(transaction, post_id, user_id).await })
+                Box::pin(async move {
+                    posts
+                        .publish_post(transaction, post_id, user_id, UtcInstant::now())
+                        .await
+                        .map(|mutation| mutation.record)
+                })
             })
             .await
     }
@@ -2126,7 +2143,12 @@ mod tests {
         let write_scope = state.write_scope.clone();
         write_scope
             .run(move |transaction| {
-                Box::pin(async move { posts.unpublish_post(transaction, post_id, user_id).await })
+                Box::pin(async move {
+                    posts
+                        .unpublish_post(transaction, post_id, user_id, UtcInstant::now())
+                        .await
+                        .map(|mutation| mutation.record)
+                })
             })
             .await
     }
@@ -2153,7 +2175,12 @@ mod tests {
         let write_scope = state.write_scope.clone();
         write_scope
             .run(move |transaction| {
-                Box::pin(async move { posts.soft_delete_post(transaction, post_id, user_id).await })
+                Box::pin(async move {
+                    posts
+                        .soft_delete_post(transaction, post_id, user_id, UtcInstant::now())
+                        .await
+                        .map(|_| ())
+                })
             })
             .await
     }

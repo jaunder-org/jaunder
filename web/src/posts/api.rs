@@ -697,10 +697,6 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
                 .collect()
         })
         .unwrap_or_default();
-    let old_tag_slugs: Vec<Tag> = old
-        .as_ref()
-        .map(|post| post.tags.iter().map(|tag| tag.tag_slug.clone()).collect())
-        .unwrap_or_default();
 
     // Validate tags up-front so a malformed input rejects before any post
     // mutation lands. `None` preserves the current update surface behavior.
@@ -790,7 +786,6 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
             summary,
             audiences,
             tags: new_tags,
-            previous_tag_slugs: old_tag_slugs,
             request_clock,
             expectations,
         },
@@ -944,9 +939,15 @@ pub async fn publish(post_id: PostId) -> WebResult<MutationOutcome<SavedPost>> {
         .run(move |transaction| {
             Box::pin(async move {
                 let updated = posts
-                    .publish_post(transaction, post_id, auth.user_id)
+                    .publish_post(
+                        transaction,
+                        post_id,
+                        auth.user_id,
+                        common::time::UtcInstant::now(),
+                    )
                     .await
-                    .map_err(|error| InternalError::from(PerformUpdateError::from(error)))?;
+                    .map_err(|error| InternalError::from(PerformUpdateError::from(error)))?
+                    .record;
                 if updated.published_at.is_none() {
                     return Err(InternalError::not_found("Post"));
                 }
@@ -1005,7 +1006,12 @@ pub async fn delete(post_id: PostId) -> WebResult<MutationOutcome<()>> {
         .run(move |transaction| {
             Box::pin(async move {
                 posts
-                    .soft_delete_post(transaction, post_id, auth.user_id)
+                    .soft_delete_post(
+                        transaction,
+                        post_id,
+                        auth.user_id,
+                        common::time::UtcInstant::now(),
+                    )
                     .await
                     .map_err(|error| InternalError::from(PerformUpdateError::from(error)))?;
                 if let Some(feed_paths) = feed_paths {
@@ -1036,9 +1042,15 @@ pub async fn unpublish(post_id: PostId) -> WebResult<MutationOutcome<SavedPost>>
         .run(move |transaction| {
             Box::pin(async move {
                 let updated = posts
-                    .unpublish_post(transaction, post_id, auth.user_id)
+                    .unpublish_post(
+                        transaction,
+                        post_id,
+                        auth.user_id,
+                        common::time::UtcInstant::now(),
+                    )
                     .await
-                    .map_err(|error| InternalError::from(PerformUpdateError::from(error)))?;
+                    .map_err(|error| InternalError::from(PerformUpdateError::from(error)))?
+                    .record;
                 let tag_slugs: BTreeSet<Tag> = updated
                     .tags
                     .iter()
@@ -1355,7 +1367,8 @@ mod server_tests {
     use storage::{
         AudienceStorage, CreatedPost, CurrentPostRevisionSummary, FeedEventStorage,
         MediaContentLocks, MockAudienceStorage, MockFeedEventStorage, MockPostStorage, PostFormat,
-        PostRecord, PostRevisionMetadata, PostRevisionPage, PostStorage, UpdatePostError,
+        PostMutation, PostRecord, PostRevisionMetadata, PostRevisionPage, PostStorage,
+        UpdatePostError,
         test_support::{fixture_media_content_locks, mock_write_scope},
     };
     fn owned_post(user_id: UserId) -> PostRecord {
@@ -1378,6 +1391,16 @@ mod server_tests {
         }
     }
 
+    fn unchanged_mutation(user_id: UserId) -> PostMutation {
+        let record = owned_post(user_id);
+        PostMutation {
+            previous: record.clone(),
+            record,
+            previous_has_public_audience: false,
+            changed: false,
+        }
+    }
+
     /// Wires an authenticated owner (user 1) whose post store answers
     /// `publish_post` with `outcome`. Returns the owner, which the caller must keep
     /// alive across the `.await`.
@@ -1388,7 +1411,14 @@ mod server_tests {
         let mut posts = MockPostStorage::new();
         posts
             .expect_publish_post()
-            .returning(move |_transaction, _id, _user| outcome());
+            .returning(move |_transaction, _id, _user, _now| {
+                outcome().map(|record| PostMutation {
+                    previous: record.clone(),
+                    record,
+                    previous_has_public_audience: false,
+                    changed: true,
+                })
+            });
         provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
         provide_context(mock_write_scope());
         let mut events = MockFeedEventStorage::new();
@@ -1713,10 +1743,17 @@ mod server_tests {
         posts
             .expect_unpublish_post()
             .times(1)
-            .withf(|_transaction, post_id, user_id| {
+            .withf(|_transaction, post_id, user_id, _now| {
                 *post_id == PostId::from(1) && *user_id == UserId::from(1)
             })
-            .returning(move |_transaction, _post_id, _user_id| Ok(returned.clone()));
+            .returning(move |_transaction, _post_id, _user_id, _now| {
+                Ok(PostMutation {
+                    previous: returned.clone(),
+                    record: returned.clone(),
+                    previous_has_public_audience: true,
+                    changed: true,
+                })
+            });
         let owner = mutation_owner(posts);
 
         let saved = unpublish(PostId::from(1)).await;
@@ -1913,7 +1950,7 @@ mod server_tests {
         let mut posts = MockPostStorage::new();
         posts
             .expect_unpublish_post()
-            .returning(|_transaction, _post_id, _user_id| Err(UpdatePostError::Unauthorized));
+            .returning(|_transaction, _post_id, _user_id, _now| Err(UpdatePostError::Unauthorized));
         let owner = mutation_owner(posts);
 
         let result = unpublish(PostId::from(1)).await;
@@ -1971,7 +2008,7 @@ mod server_tests {
         posts
             .expect_update_post()
             .withf(|_transaction, _id, _user, input| input.tags.len() == 2)
-            .returning(|_transaction, _id, _user, _input| Ok(owned_post(UserId::from(1))));
+            .returning(|_transaction, _id, _user, _input| Ok(unchanged_mutation(UserId::from(1))));
         let owner = mutation_owner(posts);
         let result = update(
             PostId::from(1),
@@ -1993,7 +2030,7 @@ mod server_tests {
         posts
             .expect_update_post()
             .withf(|_transaction, _id, _user, input| input.tags.is_empty())
-            .returning(|_transaction, _id, _user, _input| Ok(owned_post(UserId::from(1))));
+            .returning(|_transaction, _id, _user, _input| Ok(unchanged_mutation(UserId::from(1))));
 
         let owner = mutation_owner(posts);
         let result = update(PostId::from(1), post_inputs(None)).await;
@@ -2016,7 +2053,7 @@ mod server_tests {
                 input.summary.as_deref() == Some("structured summary")
                     && input.audiences == [AudienceTarget::Subscribers]
             })
-            .returning(|_transaction, _id, _user, _input| Ok(owned_post(UserId::from(1))));
+            .returning(|_transaction, _id, _user, _input| Ok(unchanged_mutation(UserId::from(1))));
         let owner = mutation_owner(posts);
         let result = update(
             PostId::from(1),

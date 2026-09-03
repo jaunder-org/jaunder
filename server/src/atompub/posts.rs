@@ -469,7 +469,12 @@ pub async fn member_delete(
         .run(move |transaction| {
             Box::pin(async move {
                 posts
-                    .soft_delete_post(transaction, post.post_id, auth_user.user_id)
+                    .soft_delete_post(
+                        transaction,
+                        post.post_id,
+                        auth_user.user_id,
+                        common::time::UtcInstant::now(),
+                    )
                     .await
                     .map_err(member_delete_update_error)?;
                 feed_events
@@ -643,11 +648,6 @@ pub async fn member_put(
     let user_config = services.user_config();
     let site_config = services.site_config();
     let current = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
-    let previous_tag_slugs = current
-        .tags
-        .iter()
-        .map(|tag| tag.tag_slug.clone())
-        .collect();
 
     if !if_match_satisfied(&headers, &etag_for(&current)) {
         return Err(HandlerError::PreconditionFailed);
@@ -697,7 +697,6 @@ pub async fn member_put(
             summary,
             audiences,
             tags: categories,
-            previous_tag_slugs,
         },
     )
     .await?;

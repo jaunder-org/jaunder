@@ -39,7 +39,7 @@ Out:
     authenticated private-row crowd-out, all four surfaces, Deleted/non-Public
     due exclusions, deterministic ordering, and both due-time branches.
 
-- [ ] Task 2: Make the storage mutation boundary own projection invalidation
+- [x] Task 2: Make the storage mutation boundary own projection invalidation
   - Contract: one storage-owned transition policy derives old and new public
     projections at the request's explicit `UtcInstant`, deduplicates the exact
     Site/User/old-and-new-Tag paths, and calls `FeedEventStorage::enqueue_many`
