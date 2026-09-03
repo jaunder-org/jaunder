@@ -18,7 +18,7 @@ pub trait TraceField {
 use crate::backup::{BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use crate::ids::{AudienceId, PostId, RevisionId, SubscriptionId};
 use crate::invite::InviteTtlHours;
-use crate::media::{ContentHash, MediaSource};
+use crate::media::{hash::ContentHash, storage::MediaSource};
 use crate::pagination::{PageOffset, PageSize};
 use crate::render::PostFormat;
 use crate::seed::PageCursor;
@@ -112,7 +112,7 @@ mod tests {
     use crate::backup::{BackupMode, BackupSchedule, DestinationPath, RetentionCount};
     use crate::ids::{AudienceId, PostId, SubscriptionId};
     use crate::invite::InviteTtlHours;
-    use crate::media::{ContentHash, MediaSource};
+    use crate::media::{hash::ContentHash, storage::MediaSource};
     use crate::pagination::{PageOffset, PageSize};
     use crate::render::PostFormat;
     use crate::seed::PageCursor;
