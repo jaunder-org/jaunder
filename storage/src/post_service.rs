@@ -87,17 +87,18 @@ fn affected_post_feed_paths(
     current: (&PostRecord, bool),
     now: UtcInstant,
 ) -> Vec<host::feed::FeedPath> {
-    let previous =
-        previous.filter(|(record, has_public)| is_currently_public(record, *has_public, now));
-    let current = is_currently_public(current.0, current.1, now).then_some(current.0);
-    let Some(record) = current.or_else(|| previous.map(|(record, _)| record)) else {
+    let previous_is_public =
+        previous.is_some_and(|(record, has_public)| is_currently_public(record, has_public, now));
+    let current_is_public = is_currently_public(current.0, current.1, now);
+    if !previous_is_public && !current_is_public {
         return Vec::new();
-    };
+    }
+    let record = current.0;
     let mut tags = HashSet::new();
     let tag_slugs = previous
         .into_iter()
         .flat_map(|(record, _)| record.tags.iter())
-        .chain(current.into_iter().flat_map(|record| record.tags.iter()))
+        .chain(current.0.tags.iter())
         .map(|tag| &tag.tag_slug)
         .filter(|tag| tags.insert(*tag));
     feed::affected_feed_urls(&record.author_username, tag_slugs)
