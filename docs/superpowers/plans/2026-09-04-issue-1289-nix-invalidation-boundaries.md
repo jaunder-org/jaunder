@@ -49,7 +49,7 @@ Out:
     and sandbox Cargo behavior. A direct live-source `devtool check --all` host
     run proves the public aggregate.
 
-- [ ] Task 3: Replace the singular hermetic static derivation
+- [x] Task 3: Replace the singular hermetic static derivation
   - Contract: Nix checks are `static-docs` and `static-code`; xtask result steps
     are `nix-static-docs` and `nix-static-code`, built in that order before Nix
     test checks. Each derivation invokes `devtool check --group docs` or

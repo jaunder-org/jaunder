@@ -37,7 +37,10 @@ const TEST_CHECKS: [TestCheck; 4] = [
     TestCheck::ElispCoverageProducer,
 ];
 const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck::Doctests];
-const STATIC_CHECK: &str = "static-checks";
+const STATIC_CHECKS: [(&str, &str); 2] = [
+    ("nix-static-docs", "static-docs"),
+    ("nix-static-code", "static-code"),
+];
 
 /// The browser/backend combinations selected by the flake's `e2eCombos` catalog.
 ///
@@ -113,14 +116,19 @@ pub(crate) fn check_supporting_test_check_names() -> impl ExactSizeIterator<Item
 
 #[cfg(test)]
 fn validate_check_names() -> impl Iterator<Item = &'static str> {
-    std::iter::once(STATIC_CHECK).chain(TEST_CHECKS.iter().copied().map(TestCheck::name))
+    STATIC_CHECKS
+        .iter()
+        .map(|(_, check)| *check)
+        .chain(TEST_CHECKS.iter().copied().map(TestCheck::name))
 }
 
-/// Run the hermetic static-check derivation. This is validate-only: `check`
+/// Run the hermetic static-check derivations. This is validate-only: `check`
 /// already runs the host-local static lane, while CI's required validate job
 /// needs the same definitions proven inside Nix.
 pub fn static_checks(result: &mut CommandResult) {
-    result.push(build_check("nix-static-checks", STATIC_CHECK));
+    for (step, check) in STATIC_CHECKS {
+        result.push(build_check(step, check));
+    }
 }
 
 /// Run the Nix-backed test checks unless `--no-test` disables the group.
@@ -1143,7 +1151,7 @@ mod tests {
 
     use super::{
         BuildCaptureOutcome, BuildCompletion, BuildStderrTee, CommandResult, E2E_COMBOS,
-        E2eOutcome, FailedBuildDiagnostics, Process, StepResult, build_e2e_combos,
+        E2eOutcome, FailedBuildDiagnostics, Process, STATIC_CHECKS, StepResult, build_e2e_combos,
         check_supporting_test_check_names, doctest_sentinel_detail,
         failed_build_after_diagnostics_with, failed_status_step, finish_build_with,
         finish_e2e_combo, lift_elisp_coverage_artifacts, prepare_build_dirs_with,
@@ -1228,14 +1236,31 @@ mod tests {
     }
 
     #[test]
-    fn validate_check_names_include_static_checks_before_test_checks() {
+    fn validate_check_names_include_static_boundaries_before_test_checks() {
         assert!(validate_check_names().eq([
-            "static-checks",
+            "static-docs",
+            "static-code",
             "wasm-tests",
             "coverage",
             "doctests",
             "elisp-coverage-producer"
         ]));
+    }
+
+    #[test]
+    fn static_check_catalog_has_no_aggregate() {
+        assert_eq!(
+            STATIC_CHECKS,
+            [
+                ("nix-static-docs", "static-docs"),
+                ("nix-static-code", "static-code"),
+            ]
+        );
+        assert!(
+            !STATIC_CHECKS
+                .iter()
+                .any(|(_, check)| *check == "static-checks")
+        );
     }
 
     #[test]
@@ -2330,7 +2355,7 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
     #[test]
     fn e2e_outcome_ignores_an_earlier_global_failure() {
         let mut result = CommandResult::new("validate");
-        result.push(StepResult::fail("nix-static-checks"));
+        result.push(StepResult::fail("nix-static-docs"));
         let combo_start = result.steps.len();
         result.push(StepResult::ok("nix-e2e-sqlite-chromium"));
         result.push(StepResult::ok("e2e-duration-budget"));
