@@ -2040,13 +2040,13 @@ pub(crate) struct CorruptPostFormat(String);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::feed_cache::FeedCacheRow;
     use crate::posts::models::{PostBookkeepingExpectation, RenderedHtml};
     use crate::test_support::{
-        Backend, CloseablePool, MEDIA_TEST_SHA256, SeedRawPost, SeedUser, TestEnv, UpdateRawPost,
-        backends, create_draft_via_service, create_post_via_service, create_posts_confirmed,
-        fetch_post_media, fp, media_ref_for, media_row_exists, media_url_for, seed_media,
-        seed_users, set_post_tags_confirmed, update_post_body_via_service,
+        Backend, CloseablePool, MEDIA_TEST_SHA256, SeedFeedCache, SeedRawPost, SeedUser, TestEnv,
+        UpdateRawPost, backends, create_draft_via_service, create_post_via_service,
+        create_posts_confirmed, fetch_post_media, fp, media_ref_for, media_row_exists,
+        media_url_for, seed_media, seed_users, set_post_tags_confirmed,
+        update_post_body_via_service,
     };
 
     use chrono::Utc;
@@ -2057,7 +2057,6 @@ mod tests {
         parse_slug, parse_tag_label, parse_utc_instant,
     };
     use common::time::UtcInstant;
-    use host::feed::SyndicationFeedRepresentation;
     use rstest::*;
     use rstest_reuse::*;
     use sqlx::Row;
@@ -3485,33 +3484,13 @@ mod tests {
         // catch-up if they were readable.
         let stale = now - chrono::Duration::hours(1);
         for url in ["/feed.rss", "/feed.atom"] {
-            let feed_path = fp(url);
-            let (_, format) = feed_path.parts().expect("valid feed path");
-            let row = FeedCacheRow::new(
-                feed_path,
-                SyndicationFeedRepresentation::try_from_stored(
-                    format,
-                    format.content_type(),
-                    "<rss/>".into(),
-                )
-                .expect("matching stored representation metadata"),
-                parse_etag("\"sha256-deadbeef\""),
-                UtcInstant::from(stale),
-                UtcInstant::from(stale),
-            )
-            .expect("matching cache row formats");
-            let write_scope = state.write_scope.clone();
-            let feed_cache = Arc::clone(&state.feed_cache);
-            let outcome = write_scope
-                .run(move |transaction| {
-                    Box::pin(async move { feed_cache.upsert(transaction, row).await })
-                })
-                .await
-                .expect("seed cached feed");
-            assert!(matches!(
-                outcome,
-                common::mutation::MutationOutcome::Confirmed(())
-            ));
+            SeedFeedCache::new(fp(url))
+                .body("<rss/>".to_owned())
+                .etag(parse_etag("\"sha256-deadbeef\""))
+                .updated_at(UtcInstant::from(stale))
+                .generated_at(UtcInstant::from(stale))
+                .seed(state)
+                .await;
         }
         // Only reachable by DB tampering or a row written under a looser grammar:
         // `FeedPath`'s validating bridge rejects this on read.

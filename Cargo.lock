@@ -599,6 +599,7 @@ dependencies = [
  "sqlx",
  "strum",
  "thiserror 2.0.18",
+ "tinyvec",
  "tokio",
  "unicode-normalization",
  "unicode-segmentation",

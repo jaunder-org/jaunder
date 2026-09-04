@@ -228,30 +228,22 @@ pub async fn feed_user_tag(
 mod tests {
     use super::*;
     use chrono::{Duration, Utc};
-    use common::{feed::FeedFormat, test_support::parse_etag, time::UtcInstant};
-    use host::feed::SyndicationFeedRepresentation;
+    use common::{test_support::parse_etag, time::UtcInstant};
     use rstest::*;
     use rstest_reuse::*;
     use sqlx::Error;
     use storage::{
         FeedCacheError, FeedCacheRow, MockFeedCacheStorage, MockPostStorage, MockPublisherStorage,
         PublisherStorageError,
-        test_support::{Backend, backends},
+        test_support::{Backend, SeedFeedCache, backends},
     };
     fn sample_row(etag: &str, updated_at: UtcInstant) -> FeedCacheRow {
-        FeedCacheRow::new(
-            "/feed.rss".parse().expect("valid feed path"),
-            SyndicationFeedRepresentation::try_from_stored(
-                FeedFormat::Rss,
-                FeedFormat::Rss.content_type(),
-                "<rss/>".to_owned(),
-            )
-            .expect("matching stored representation metadata"),
-            parse_etag(etag),
-            updated_at,
-            updated_at,
-        )
-        .expect("matching cache row formats")
+        SeedFeedCache::new("/feed.rss".parse().expect("valid feed path"))
+            .body("<rss/>".to_owned())
+            .etag(parse_etag(etag))
+            .updated_at(updated_at)
+            .generated_at(updated_at)
+            .build()
     }
 
     fn empty_publisher() -> Arc<PublisherService> {

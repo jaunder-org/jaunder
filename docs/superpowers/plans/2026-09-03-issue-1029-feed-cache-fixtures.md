@@ -31,7 +31,7 @@ Out:
   - Verification: focused fixture contract tests cover each format's valid
     path-derived representation and body defaults, equal default timestamps,
     every override, non-persisting `build`, and both-backend `seed` round trips.
-- [ ] Task 2: Migrate storage and mock-handler fixture consumers
+- [x] Task 2: Migrate storage and mock-handler fixture consumers
   - Contract: use `build` in pure row fixtures and wherever cache write or
     commit behavior is under test; use `seed` only for ordinary persisted setup.
     Preserve direct mismatched construction and raw content-type, ETag, and
