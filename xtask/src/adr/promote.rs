@@ -1,14 +1,11 @@
-//! ADR numbering commands.
-//!
-//! - `cargo xtask adr promote`: number tracked drafts in `docs/adr/drafts/`,
-//!   graduating each into `docs/adr/NNNN-<slug>.md` and staging the complete
-//!   source-to-destination promotion.
+//! Stateful tracked-draft promotion orchestration.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use super::rewrite;
 use crate::adr_readme;
 use crate::doc_links;
 use crate::git;
@@ -17,80 +14,6 @@ use crate::result::StepResult;
 
 const ADR_DIR: &str = "docs/adr";
 const DRAFTS_DIR: &str = "docs/adr/drafts";
-
-/// Four-digit zero-padded number, e.g. `34 -> "0034"`.
-pub fn pad(n: u32) -> String {
-    format!("{n:04}")
-}
-
-/// Replace every occurrence of `old_stem` with `new_stem`.
-pub fn rewrite_stem(content: &str, old_stem: &str, new_stem: &str) -> String {
-    content.replace(old_stem, new_stem)
-}
-
-/// Rewrite every inline link target in `body`, removing one leading `../`.
-///
-/// A draft moves up exactly one directory at promotion (`docs/adr/drafts/x.md` ->
-/// `docs/adr/NNNN-x.md`), so each of its relative targets is off by exactly one
-/// level. Stating that invariant directly covers more than a sibling-ADR-specific
-/// rewrite would — `../template.md` is the shape `drafts/README.md` models for
-/// authors, and it breaks the same way.
-///
-/// Only targets inside `](...)` are touched, and only outside code spans and fenced
-/// blocks: a draft may legitimately discuss `../` in prose or show it in a shell
-/// snippet, and a blanket string replace would corrupt those. Targets that cannot
-/// lose a level (`..`, `../`, a bare name, a non-initial `../`) and non-relative
-/// targets (URLs, anchors) are left alone.
-pub fn strip_one_level(body: &str) -> String {
-    let mut out = String::with_capacity(body.len());
-    let mut cursor = 0;
-    for link in doc_links::links_in(body) {
-        if !doc_links::is_relative_target(&link.target) {
-            continue;
-        }
-        // `..` has no prefix to strip; `../` would strip to nothing.
-        let Some(rest) = link.target.strip_prefix("../") else {
-            continue;
-        };
-        if rest.is_empty() {
-            continue;
-        }
-        out.push_str(&body[cursor..link.span.start]);
-        out.push_str(rest);
-        cursor = link.span.end;
-    }
-    out.push_str(&body[cursor..]);
-    out
-}
-
-/// Rewrite a `proposed` status token to `accepted` — the acceptance event that
-/// promotion *is*, finally written down. `None` when there is no status line, or
-/// when its token is anything else.
-///
-/// Only `proposed` moves. `superseded`, `rejected` and `deprecated` on a draft are
-/// deliberate authorial statements — an ADR written to record a reversal, or to
-/// document a decision already dead — and promotion must not overwrite an author's
-/// explicit claim with a default. The guard is whole-remainder equality, so a
-/// multi-token status (`proposed (pending #742)`) is left alone too: it is
-/// malformed, and `adr-format` should say so on a stable tree rather than have
-/// promotion half-fix it.
-///
-/// The edit is confined to the status line's byte span, taken from the one shared
-/// [`adr_readme::status_line`] parse, so prose elsewhere in the draft that happens
-/// to contain the word "proposed" is untouched.
-pub(crate) fn accept_proposed_status(body: &str) -> Option<String> {
-    let status = adr_readme::status_line(body)?;
-    if status.rest != adr_readme::PROPOSED {
-        return None;
-    }
-    let line = &body[status.span.clone()];
-    Some(format!(
-        "{}{}{}",
-        &body[..status.span.start],
-        line.replacen(adr_readme::PROPOSED, adr_readme::ACCEPTED, 1),
-        &body[status.span.end..]
-    ))
-}
 
 /// ADR filenames currently in `repo`'s `docs/adr`.
 fn adr_filenames(repo: &Path) -> Result<Vec<String>> {
@@ -179,22 +102,6 @@ pub fn promote() -> StepResult {
     }
 }
 
-/// Promote the required first-line draft heading token and leave the body intact.
-///
-/// This deliberately does not use a whole-body replacement: ADRs about the draft
-/// workflow may discuss the literal `ADR-DRAFT` token in prose or code spans.
-fn promote_heading(body: &str, number: u32, draft_rel: &str) -> Result<String> {
-    let required = "# ADR-DRAFT: ";
-    let Some(rest) = body.strip_prefix(required) else {
-        bail!("{draft_rel} must start with `{required}` and a non-empty title");
-    };
-    let title = rest.split_once('\n').map_or(rest, |(line, _)| line);
-    if title.trim().is_empty() {
-        bail!("{draft_rel} must start with `{required}` and a non-empty title");
-    }
-    Ok(format!("# ADR-{}: {rest}", pad(number)))
-}
-
 /// Number every tracked draft in `docs/adr/drafts`, graduate it into
 /// `docs/adr/NNNN-<slug>.md`, record its acceptance in the status line, rewrite its
 /// path-form references, sync the README table, and stage the complete result.
@@ -216,7 +123,7 @@ pub(crate) fn run_promote(repo: &Path) -> Result<String> {
     let mut assigned: Vec<Promotion> = Vec::new();
     for slug in &slugs {
         let num = ids::next_number(&all);
-        let new_name = format!("{}-{slug}.md", pad(num));
+        let new_name = format!("{}-{slug}.md", rewrite::pad(num));
         all.push(new_name.clone());
         assigned.push(Promotion {
             slug: slug.clone(),
@@ -231,7 +138,7 @@ pub(crate) fn run_promote(repo: &Path) -> Result<String> {
         let draft_rel = format!("{DRAFTS_DIR}/{}.md", p.slug);
         let body = std::fs::read_to_string(repo.join(&draft_rel))
             .with_context(|| format!("reading {draft_rel}"))?;
-        let numbered = promote_heading(&body, p.num, &draft_rel)?;
+        let numbered = rewrite::promote_heading(&body, p.num, &draft_rel)?;
         promoted_bodies.push((draft_rel, numbered));
     }
 
@@ -253,11 +160,11 @@ pub(crate) fn run_promote(repo: &Path) -> Result<String> {
         // The file moves up one directory here, so its own relative links are
         // rewritten at the same moment — not after Pass C, which would see targets
         // that have already been rewritten to their assigned numbers.
-        let relinked = strip_one_level(&numbered);
+        let relinked = rewrite::strip_one_level(&numbered);
         // Numbering is the acceptance event; record it in the status line. The flag
         // rides on the promotion itself, so Pass C — which owns the summary — cannot
         // drift out of step with what Pass B actually wrote.
-        let graduated = match accept_proposed_status(&relinked) {
+        let graduated = match rewrite::accept_proposed_status(&relinked) {
             Some(accepted) => {
                 p.accepted = true;
                 accepted
@@ -276,9 +183,11 @@ pub(crate) fn run_promote(repo: &Path) -> Result<String> {
     let mut summary = Vec::new();
     for p in &assigned {
         let draft_stem = format!("drafts/{}", p.slug);
-        let new_stem = format!("{}-{}", pad(p.num), p.slug);
+        let new_stem = format!("{}-{}", rewrite::pad(p.num), p.slug);
         for file in git::grep_files(repo, &draft_stem)? {
-            rewrite_file(repo, &file, |c| rewrite_stem(c, &draft_stem, &new_stem))?;
+            rewrite_file(repo, &file, |c| {
+                rewrite::rewrite_stem(c, &draft_stem, &new_stem)
+            })?;
             git::add(repo, &file)?;
         }
         let status_note = if p.accepted {
@@ -346,69 +255,6 @@ mod tests {
     use super::*;
     use crate::test_support::{git_ok as git, write};
     use std::path::Path;
-
-    #[test]
-    fn pad_is_four_digits() {
-        assert_eq!(pad(34), "0034");
-        assert_eq!(pad(5), "0005");
-    }
-
-    #[test]
-    fn rewrite_stem_replaces_path_form_refs() {
-        let content = "See [the ADR](docs/adr/0034-bar.md) and 0034-bar.md again.";
-        let out = rewrite_stem(content, "0034-bar", "0035-bar");
-        assert_eq!(
-            out,
-            "See [the ADR](docs/adr/0035-bar.md) and 0035-bar.md again."
-        );
-    }
-
-    #[test]
-    fn strip_one_level_drops_a_single_leading_parent() {
-        assert_eq!(strip_one_level("[x](../0001-foo.md)"), "[x](0001-foo.md)");
-    }
-
-    #[test]
-    fn strip_one_level_drops_only_one_of_two() {
-        assert_eq!(
-            strip_one_level("[x](../../CONTRIBUTING.md)"),
-            "[x](../CONTRIBUTING.md)"
-        );
-    }
-
-    #[test]
-    fn strip_one_level_leaves_bare_targets_alone() {
-        assert_eq!(strip_one_level("[x](template.md)"), "[x](template.md)");
-    }
-
-    #[test]
-    fn strip_one_level_leaves_dot_dot_edge_cases_alone() {
-        assert_eq!(strip_one_level("[x](..)"), "[x](..)");
-        assert_eq!(strip_one_level("[x](../)"), "[x](../)");
-        assert_eq!(strip_one_level("[x](a/../b.md)"), "[x](a/../b.md)");
-    }
-
-    #[test]
-    fn strip_one_level_ignores_urls_and_anchors() {
-        let body = "[x](https://e.com/../a) [y](#s)";
-        assert_eq!(strip_one_level(body), body);
-    }
-
-    #[test]
-    fn strip_one_level_spares_links_inside_code() {
-        // Real `](...)` links, so this fails against any implementation that
-        // rewrites targets without honouring the code carve-out.
-        let body = "prose ../foo\n\n```\n[a](../x.md)\n```\n\n`[b](../y.md)`\n";
-        assert_eq!(strip_one_level(body), body);
-    }
-
-    #[test]
-    fn strip_one_level_rewrites_every_link_in_one_pass() {
-        assert_eq!(
-            strip_one_level("[a](../x.md) and [b](../y.md)"),
-            "[a](x.md) and [b](y.md)"
-        );
-    }
 
     #[test]
     fn promote_strips_one_level_from_sibling_links() {
