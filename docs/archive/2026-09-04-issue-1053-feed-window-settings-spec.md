@@ -4,7 +4,7 @@
 
 Syndication Feed selection is configurable through the site configuration values
 `feeds.min_items` and `feeds.min_days`, without weakening the feed policy in
-[ADR-0139](../../adr/0139-syndication-feed-hybrid-window.md).
+[ADR-0139](../adr/0139-syndication-feed-hybrid-window.md).
 
 Each accepted configuration snapshot is a coherent publisher generation: feeds
 produced from earlier configuration cannot become newly visible after it.
