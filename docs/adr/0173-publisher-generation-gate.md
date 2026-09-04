@@ -1,6 +1,6 @@
-# ADR-DRAFT: Fence publisher work with durable hub generations and a kernel gate
+# ADR-0173: Fence publisher work with durable hub generations and a kernel gate
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-03
 - Issue: [#1052](https://github.com/jaunder-org/jaunder/issues/1052)
 

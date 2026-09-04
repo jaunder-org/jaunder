@@ -198,6 +198,7 @@ convention). See the Status column below for each ADR's current status.
 | [0170](adr/0170-typed-test-site-config-baseline.md)                 | Use a typed site-config baseline for dual-backend tests                                                      | accepted   |
 | [0171](adr/0171-explicit-post-land-cleanup-command.md)              | Explicit post-land cleanup command                                                                           | accepted   |
 | [0172](adr/0172-temporary-atom-namespace-fork.md)                   | Temporary Atom namespace-aware fork                                                                          | accepted   |
+| [0173](adr/0173-publisher-generation-gate.md)                       | Fence publisher work with durable hub generations and a kernel gate                                          | accepted   |
 
 <!-- adr-table:end -->
 
