@@ -169,7 +169,7 @@ pub async fn seed_dead_letters(
                     anyhow::anyhow!("atomic WebSub dead-letter fixture failed: {error}")
                 })?,
             "atomic WebSub dead-letter fixture",
-        )?;
+        )?; // cov:ignore — llvm-cov attributes the already-covered outer `?` to its closing span
         ids.push(id);
     }
     Ok(ids)
@@ -452,6 +452,62 @@ mod seed_tests {
             .await
             .expect_err("invalid generated slug should error");
         assert!(err.to_string().contains("generated slug invalid"));
+    }
+}
+
+#[cfg(test)]
+mod dead_letter_tests {
+    //! `SQLite`-only by design (same rationale as `seed_tests`): this fixture
+    //! has no backend-specific policy and the e2e matrix exercises both
+    //! supported storage dialects.
+    use super::*;
+    use common::pagination::PageSize;
+    use storage::test_support;
+
+    #[tokio::test]
+    async fn seeds_terminal_events_in_each_requested_phase() {
+        let test_support::TestEnv { state, base: _base } =
+            test_support::Backend::Sqlite.setup().await;
+
+        for phase in [FeedEventPhase::Regeneration, FeedEventPhase::Publication] {
+            let ids = seed_dead_letters(&state, phase, 2).await.expect("seed ok");
+            assert_eq!(ids.len(), 2);
+
+            let page = state
+                .feed_events
+                .dead_letters(phase, None, PageSize::default())
+                .await
+                .expect("dead-letter page");
+            assert_eq!(page.events.len(), 2);
+            assert!(page.next_cursor.is_none());
+            for event in page.events {
+                assert!(ids.contains(&event.id));
+                assert_eq!(event.phase, phase);
+                assert_eq!(event.attempts, 1);
+                assert!(
+                    event
+                        .diagnostic
+                        .as_deref()
+                        .is_some_and(|diagnostic| diagnostic.contains("fixture"))
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reports_atomic_seed_transaction_failures() {
+        let test_support::TestEnv { state, base } = test_support::Backend::Sqlite.setup().await;
+        base.close_pool().await;
+
+        let error = seed_dead_letters(&state, FeedEventPhase::Regeneration, 1)
+            .await
+            .expect_err("closed storage must reject the atomic fixture");
+
+        assert!(
+            error
+                .to_string()
+                .contains("atomic WebSub dead-letter fixture failed")
+        );
     }
 }
 

@@ -41,11 +41,13 @@ impl PublisherGateGuard {
                 Err(TryLockError::WouldBlock) => {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
+                // cov:ignore-start -- advisory-lock backends expose no deterministic
+                // way to make a successfully opened regular file return this OS error.
                 Err(TryLockError::Error(error)) => {
                     return Err(error).with_context(|| {
                         format!("cannot acquire publisher gate {}", path.display())
                     });
-                }
+                } // cov:ignore-stop
             }
         }
     }
@@ -108,11 +110,14 @@ impl PublisherService {
                 Box::pin(async move { publisher.repair_malformed_hub(transaction, token).await })
             })
             .await?;
+        // cov:ignore-start -- downstream test scopes deliberately expose only confirmed
+        // commits or operation/begin failures, not post-commit acknowledgement loss.
         if matches!(committed, MutationOutcome::CommitIndeterminate(_)) {
             return Err(anyhow::anyhow!(
                 "malformed hub repair commit acknowledgement was indeterminate"
             ));
         }
+        // cov:ignore-stop
         Ok(self.publisher.snapshot().await?)
     }
 
@@ -147,9 +152,12 @@ impl PublisherService {
     pub async fn mutate_hub(&self, hub: Option<&HubUrl>) -> anyhow::Result<HubMutationOutcome> {
         match self.mutate_hub_with_feedback(hub).await? {
             MutationOutcome::Confirmed(outcome) => Ok(outcome),
+            // cov:ignore-start -- downstream test scopes cannot synthesize a
+            // post-commit acknowledgement loss; the write-scope crate owns that fault.
             MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
                 "hub mutation commit acknowledgement was indeterminate"
             )),
+            // cov:ignore-stop
         }
     }
 }
@@ -217,9 +225,12 @@ impl PublisherFinalizationGuard {
             })?;
         match committed {
             MutationOutcome::Confirmed(outcome) => Ok(outcome),
+            // cov:ignore-start — write scopes expose operation/begin failures but
+            // cannot synthesize post-commit acknowledgement loss.
             MutationOutcome::CommitIndeterminate(_) => Err(PublisherStorageError::Db(
                 Error::Protocol("cache commit acknowledgement was indeterminate".to_owned()),
             )),
+            // cov:ignore-stop
         }
     }
 }
@@ -227,10 +238,178 @@ impl PublisherFinalizationGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::{
+        feed::FeedFormat,
+        test_support::{parse_etag, parse_url},
+        time::UtcInstant,
+    };
     use host::config_key::SiteConfigKey;
+    use host::feed::SyndicationFeedRepresentation;
     use rstest::*;
     use rstest_reuse::*;
-    use storage::test_support::{Backend, backends, inject_invalid_site_config};
+    use sqlx::Error;
+    use storage::{
+        FeedCacheRow, MockPublisherStorage, PublisherStorageError,
+        test_support::{Backend, backends, inject_invalid_site_config},
+    };
+
+    fn cache_row() -> FeedCacheRow {
+        let now = UtcInstant::now();
+        FeedCacheRow::new(
+            "/feed.rss".parse().expect("valid feed path"),
+            SyndicationFeedRepresentation::try_from_stored(
+                FeedFormat::Rss,
+                FeedFormat::Rss.content_type(),
+                "<rss/>".to_owned(),
+            )
+            .expect("matching stored representation metadata"),
+            parse_etag("\"etag\""),
+            now,
+            now,
+        )
+        .expect("matching cache row formats")
+    }
+
+    #[tokio::test]
+    async fn publisher_gate_reports_unusable_storage_path() {
+        let file = tempfile::NamedTempFile::new().expect("temporary file");
+
+        let error = PublisherGateGuard::acquire(file.path())
+            .await
+            .err()
+            .expect("a file cannot become the gate directory");
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot create publisher gate directory")
+        );
+    }
+
+    #[tokio::test]
+    async fn websub_trait_maps_publisher_storage_errors() {
+        let directory = tempfile::tempdir().expect("temporary storage directory");
+        let mut publisher = MockPublisherStorage::new();
+        publisher
+            .expect_snapshot()
+            .returning(|| Err(PublisherStorageError::Db(Error::PoolClosed)));
+        let service = PublisherService::new(
+            directory.path().to_owned(),
+            Arc::new(publisher),
+            storage::test_support::mock_write_scope(),
+        );
+
+        let error = WebsubPublisher::hub_url(&service)
+            .await
+            .expect_err("storage error crosses WebSub publisher seam");
+
+        let source = std::error::Error::source(&error).expect("publisher error preserves source");
+        assert!(source.to_string().contains("closed"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn websub_trait_preserves_confirmed_hub_mutation_outcome(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let directory = tempfile::tempdir().expect("temporary storage directory");
+        let service = PublisherService::new(
+            directory.path().to_owned(),
+            Arc::clone(&env.state.publisher),
+            env.state.write_scope.clone(),
+        );
+
+        let outcome =
+            WebsubPublisher::mutate_hub(&service, Some(parse_url("https://example.com/hub")))
+                .await
+                .expect("confirmed mutation");
+
+        assert!(matches!(outcome, MutationOutcome::Confirmed(())));
+    }
+
+    #[tokio::test]
+    async fn websub_trait_maps_hub_mutation_errors() {
+        let directory = tempfile::tempdir().expect("temporary storage directory");
+        let mut publisher = MockPublisherStorage::new();
+        publisher
+            .expect_mutate_hub()
+            .returning(|_, _| Err(PublisherStorageError::Db(Error::PoolClosed)));
+        let service = PublisherService::new(
+            directory.path().to_owned(),
+            Arc::new(publisher),
+            storage::test_support::mock_write_scope(),
+        );
+
+        let error = WebsubPublisher::mutate_hub(&service, None)
+            .await
+            .expect_err("storage error crosses WebSub publisher seam");
+
+        let source = std::error::Error::source(&error).expect("publisher error preserves source");
+        assert!(source.to_string().contains("closed"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn finalization_commit_maps_operation_errors(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let generation = env
+            .state
+            .publisher
+            .snapshot()
+            .await
+            .expect("snapshot")
+            .generation;
+        let directory = tempfile::tempdir().expect("temporary storage directory");
+        let mut publisher = MockPublisherStorage::new();
+        publisher
+            .expect_commit_cache()
+            .returning(|_, _, _| Err(PublisherStorageError::Db(Error::PoolClosed)));
+        let service = PublisherService::new(
+            directory.path().to_owned(),
+            Arc::new(publisher),
+            storage::test_support::mock_write_scope(),
+        );
+
+        let error = service
+            .finalization_guard()
+            .await
+            .expect("gate acquired")
+            .commit_cache(generation, cache_row())
+            .await
+            .expect_err("operation error");
+
+        assert!(matches!(
+            error,
+            PublisherStorageError::Db(Error::PoolClosed)
+        ));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn finalization_commit_maps_begin_errors(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let generation = env
+            .state
+            .publisher
+            .snapshot()
+            .await
+            .expect("snapshot")
+            .generation;
+        let directory = tempfile::tempdir().expect("temporary storage directory");
+        let service = PublisherService::new(
+            directory.path().to_owned(),
+            Arc::clone(&env.state.publisher),
+            env.state.write_scope.clone(),
+        );
+        let guard = service.finalization_guard().await.expect("gate acquired");
+        env.base.close_pool().await;
+
+        let error = guard
+            .commit_cache(generation, cache_row())
+            .await
+            .expect_err("closed pool prevents beginning write scope");
+
+        assert!(matches!(error, PublisherStorageError::Db(_)));
+    }
 
     #[tokio::test]
     async fn publisher_gate_waits_for_prior_finalization_region() {

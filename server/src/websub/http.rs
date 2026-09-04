@@ -63,10 +63,13 @@ impl WebSubClient for HttpWebSubClient {
         // the ADR-0063 §5 carve-out. `IntoUrl` is sealed and has no impl for our
         // newtype, so `post` needs the `&str` explicitly.
         let form = [("hub.mode", "publish"), ("hub.url", feed_url.as_ref())];
+        // cov:ignore-start -- HubUrl validates its serialized URL at construction,
+        // so this defensive parse failure is unreachable through the typed boundary.
         let mut target = Url::parse(hub_url.as_ref()).map_err(|source| WebSubError::Retryable {
             reason: RetryableWebSubError::Transport(Box::new(source)),
             retry_after: None,
         })?;
+        // cov:ignore-stop
         let mut visited = HashSet::from([target.clone()]);
         let mut redirects = 0;
 
@@ -269,8 +272,10 @@ mod tests {
         tokio::spawn(async move {
             axum::serve(listener, app)
                 .await
-                .expect("test hub serves requests");
-        });
+                // The test-owned server is aborted at test teardown, so its terminal
+                // result is not observable by the client scenario.
+                .expect("test hub serves requests"); // cov:ignore
+        }); // cov:ignore
         (addr, received)
     }
 
@@ -288,10 +293,30 @@ mod tests {
                 retry_after,
                 reason,
             } => (retry_after, reason),
+            // cov:ignore-start — assertion helper's impossible variant in retryable-only tests
             WebSubError::Terminal { reason } => {
                 panic!("expected retryable failure, got terminal {reason}")
-            }
+            } // cov:ignore-stop
         }
+    }
+
+    fn failed_client_build() -> Result<reqwest::Client, String> {
+        Err("test client initialization failure".to_owned())
+    }
+
+    #[test]
+    fn client_initialization_failure_is_retryable_transport() {
+        let client = HttpWebSubClient {
+            client: LazyLock::new(failed_client_build),
+            timeout: Duration::from_secs(1),
+        };
+
+        let error = client
+            .client()
+            .expect_err("failed client build is retryable");
+        let (delay, reason) = retryable(error);
+        assert_eq!(delay, None);
+        assert!(matches!(reason, RetryableWebSubError::Transport(_)));
     }
 
     #[test]
@@ -667,7 +692,7 @@ mod tests {
     async fn spawn_hanging_hub() -> SocketAddr {
         let app = Router::new().fallback(post(|| async {
             tokio::time::sleep(Duration::from_secs(30)).await;
-            StatusCode::ACCEPTED
+            StatusCode::ACCEPTED // cov:ignore timeout cancels this test-only handler first
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -676,8 +701,9 @@ mod tests {
         tokio::spawn(async move {
             axum::serve(listener, app)
                 .await
-                .expect("test hub serves requests");
-        });
+                // The hanging server is intentionally cancelled after the client times out.
+                .expect("test hub serves requests"); // cov:ignore
+        }); // cov:ignore
         addr
     }
 
@@ -696,7 +722,7 @@ mod tests {
                 .expect_err("refused connection is retryable"),
         );
         let RetryableWebSubError::Transport(source) = reason else {
-            panic!("transport failure has typed transport reason");
+            panic!("transport failure has typed transport reason"); // cov:ignore
         };
         let source = source
             .downcast_ref::<reqwest::Error>()
@@ -711,7 +737,7 @@ mod tests {
                 .expect_err("timeout is retryable"),
         );
         let RetryableWebSubError::Transport(source) = reason else {
-            panic!("timeout has typed transport reason");
+            panic!("timeout has typed transport reason"); // cov:ignore
         };
         let source = source
             .downcast_ref::<reqwest::Error>()

@@ -9,34 +9,34 @@
 
 use serde::Serialize;
 
-/// Raw bytes of `pkg/jaunder.wasm` achieved after the owner Post Revision
-/// history UI landed (#1055), still using `wasm-opt -Oz`.
+/// Raw bytes of `pkg/jaunder.wasm` achieved after the WebSub recovery operator
+/// UI landed (#1052), still using `wasm-opt -Oz`.
 ///
 /// `validate` reports observed size as a drift against this. **A drift of a few
 /// bytes is build noise, not erosion**: the artifact is not bit-reproducible
 /// across builds — a docs-only commit was observed to move it by 13 bytes. Read
 /// the drift for its order of magnitude, not its sign; kilobytes mean something
 /// changed.
-pub const WASM_RAW_ACHIEVED_BYTES: u64 = 2_446_641;
+pub const WASM_RAW_ACHIEVED_BYTES: u64 = 2_598_316;
 
 /// The ceiling `cargo xtask validate` enforces.
 ///
-/// Headroom is **3.2%** over [`WASM_RAW_ACHIEVED_BYTES`]. The three optimisation
-/// levels were re-measured on the history-enabled bundle:
+/// Headroom is **3.1%** over [`WASM_RAW_ACHIEVED_BYTES`]. The three optimisation
+/// levels were re-measured on the WebSub-recovery bundle:
 ///
 /// | build                      | raw bytes |
 /// | -------------------------- | --------- |
-/// | `-Oz` (achieved)           | 2 446 641 |
-/// | **ceiling**                | **2 525 000** |
-/// | `-Os`                      | 2 535 744 |
-/// | `-O2`                      | 2 571 353 |
+/// | `-Oz` (achieved)           | 2 598 316 |
+/// | **ceiling**                | **2 680 000** |
+/// | `-Os`                      | 2 710 670 |
+/// | `-O2`                      | 2 748 684 |
 ///
 /// The ceiling leaves ordinary headroom but remains below both weaker
 /// optimisation levels, so losing `-Oz` still fails rather than being hidden by
 /// the feature-driven recalibration.
 ///
 /// Lower it deliberately, in the same commit as the win that earned it.
-pub const WASM_RAW_CEILING_BYTES: u64 = 2_525_000;
+pub const WASM_RAW_CEILING_BYTES: u64 = 2_680_000;
 
 #[derive(Debug, Serialize)]
 pub struct BudgetVerdict {
@@ -105,12 +105,12 @@ mod tests {
         assert!(m.to_uppercase().contains("RAW"), "{m}");
     }
 
-    /// Raw bytes of the shipped wasm at each `wasm-opt` level, measured in #836.
-    /// The committed ceiling is positioned against these, so they are the fixture
-    /// the next three tests run the real predicate over.
+    /// Raw bytes of the shipped wasm at the weaker `wasm-opt` levels, remeasured
+    /// on the WebSub-recovery bundle. `NO_WASM_OPT_BYTES` retains the pre-#836
+    /// historical guard. The next three tests run the real predicate over them.
     const NO_WASM_OPT_BYTES: u64 = 5_350_591;
-    const O2_LEVEL_BYTES: u64 = 2_571_353;
-    const OS_LEVEL_BYTES: u64 = 2_535_744;
+    const O2_LEVEL_BYTES: u64 = 2_748_684;
+    const OS_LEVEL_BYTES: u64 = 2_710_670;
 
     #[test]
     fn the_achieved_size_passes_its_own_budget() {

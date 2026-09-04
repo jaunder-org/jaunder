@@ -1163,6 +1163,33 @@ mod tests {
                 "--cursor",
                 "not-a-cursor",
             ],
+            vec![
+                "jaunder",
+                "websub",
+                "dead-letters",
+                "list",
+                "publication",
+                "--cursor",
+                ",42",
+            ],
+            vec![
+                "jaunder",
+                "websub",
+                "dead-letters",
+                "list",
+                "publication",
+                "--cursor",
+                "2026-09-03T12:00:00Z,",
+            ],
+            vec![
+                "jaunder",
+                "websub",
+                "dead-letters",
+                "list",
+                "publication",
+                "--cursor",
+                "2026-09-03T12:00:00Z,42,43",
+            ],
         ] {
             assert!(Cli::try_parse_from(args).is_err());
         }

@@ -230,10 +230,13 @@ mod tests {
     use chrono::{Duration, Utc};
     use common::{feed::FeedFormat, test_support::parse_etag, time::UtcInstant};
     use host::feed::SyndicationFeedRepresentation;
+    use rstest::*;
+    use rstest_reuse::*;
     use sqlx::Error;
     use storage::{
         FeedCacheError, FeedCacheRow, MockFeedCacheStorage, MockPostStorage, MockPublisherStorage,
         PublisherStorageError,
+        test_support::{Backend, backends},
     };
     fn sample_row(etag: &str, updated_at: UtcInstant) -> FeedCacheRow {
         FeedCacheRow::new(
@@ -261,6 +264,45 @@ mod tests {
 
     fn empty_posts() -> Arc<dyn PostStorage> {
         Arc::new(MockPostStorage::new())
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn regenerate_cache_miss_preserves_cache_commit_storage_errors(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let snapshot = env
+            .state
+            .publisher
+            .snapshot()
+            .await
+            .expect("valid snapshot");
+        let directory = tempfile::tempdir().expect("temporary storage directory");
+        let mut publisher = MockPublisherStorage::new();
+        publisher
+            .expect_snapshot()
+            .return_once(move || Ok(snapshot));
+        publisher
+            .expect_commit_cache()
+            .returning(|_, _, _| Err(PublisherStorageError::Db(Error::PoolClosed)));
+        let service = PublisherService::new(
+            directory.path().to_owned(),
+            Arc::new(publisher),
+            storage::test_support::mock_write_scope(),
+        );
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_list_published_in_window()
+            .returning(|_, _, _, _| Ok(Vec::new()));
+
+        let error = regenerate_cache_miss(
+            &service,
+            &posts,
+            FeedPath::canonical(&FeedSurface::Site, FeedFormat::Rss),
+        )
+        .await
+        .expect_err("cache commit failure");
+
+        assert!(matches!(error, RegenerateError::Storage(_)));
     }
 
     // guard:no-backend — mock store

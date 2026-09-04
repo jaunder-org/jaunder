@@ -566,6 +566,14 @@ mod tests {
         .await
         .expect("seed-posts should dispatch and succeed");
 
+        run(cli(Commands::SeedDeadLetters {
+            db: db.clone(),
+            phase: FeedEventPhase::Publication,
+            count: 2,
+        }))
+        .await
+        .expect("seed-dead-letters should dispatch and succeed");
+
         run(cli(Commands::SeedUser {
             db: db.clone(),
             username: "bob".to_owned(),

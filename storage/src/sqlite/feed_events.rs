@@ -327,7 +327,7 @@ impl FeedEventDialect for Sqlite {
         }
         q.execute(&mut *connection).await?;
         Ok(())
-    }
+    } // cov:ignore — async helper closing brace is unmarked although both success and database-error paths are covered
     async fn prune_terminal_events(
         pool: &Pool<Sqlite>,
         now: UtcInstant,

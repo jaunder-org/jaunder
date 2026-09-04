@@ -766,12 +766,15 @@ fn spawn_tick(worker: Arc<FeedWorker>) -> Pin<Box<dyn Future<Output = ()> + Send
 mod tests {
     use super::*;
     use crate::websub::NoopWebSubClient;
-    use common::tagged_url::HubUrl;
-    use host::feed::FeedEventStatus;
+    use common::{feed::FeedFormat, tagged_url::HubUrl, test_support::parse_etag};
+    use host::feed::{FeedEventStatus, SyndicationFeedRepresentation};
+    use rstest::*;
+    use rstest_reuse::*;
     use sqlx::Error as SqlxError;
     use storage::{
         FeedEventError, FeedEventRecord, MockFeedCacheStorage, MockFeedEventStorage,
-        MockPublisherStorage, test_support::mock_write_scope,
+        MockPublisherStorage,
+        test_support::{Backend, TestEnv, backends, mock_write_scope},
     };
 
     fn event(id: i64, feed_url: &str, attempts: i32) -> FeedEventRecord {
@@ -876,6 +879,94 @@ mod tests {
                 retry_after: None,
             })
         }
+    }
+
+    fn cache_row() -> FeedCacheRow {
+        let path: FeedPath = "/feed.rss".parse().expect("valid feed path");
+
+        let (_, format) = path.parts().expect("valid feed path");
+        let now = UtcInstant::now();
+        FeedCacheRow::new(
+            path,
+            SyndicationFeedRepresentation::try_from_stored(
+                format,
+                FeedFormat::Rss.content_type(),
+                "<rss/>".to_owned(),
+            )
+            .expect("valid feed representation"),
+            parse_etag("\"sha256-deadbeef\""),
+            now,
+            now,
+        )
+        .expect("matching feed cache row")
+    }
+    struct TerminalWebSubClient;
+
+    #[async_trait::async_trait]
+    impl WebSubClient for TerminalWebSubClient {
+        async fn send_publish(
+            &self,
+            _hub_url: &HubUrl,
+            _feed_url: &FeedUrl,
+        ) -> Result<(), crate::websub::WebSubError> {
+            Err(WebSubError::Terminal {
+                reason: crate::websub::TerminalWebSubError::Http { status: 410 },
+            })
+        }
+    }
+    struct UnexpectedWebSubClient;
+
+    #[async_trait::async_trait]
+    impl WebSubClient for UnexpectedWebSubClient {
+        // cov:ignore-start — this sentinel is required to remain uncalled; a call
+        // panics and fails the stale-finalization caller-boundary test.
+        async fn send_publish(
+            &self,
+            _hub_url: &HubUrl,
+            _feed_url: &FeedUrl,
+        ) -> Result<(), crate::websub::WebSubError> {
+            panic!("stale finalization must stop before WebSub publication");
+        }
+        // cov:ignore-stop
+    }
+
+    async fn storage_backed_worker(
+        backend: Backend,
+        feed_cache: MockFeedCacheStorage,
+        feed_events: MockFeedEventStorage,
+        websub: Arc<dyn WebSubClient>,
+    ) -> (FeedWorker, TestEnv) {
+        let env = backend.setup().await;
+        let publisher = Arc::new(PublisherService::new(
+            env.base.path().to_path_buf(),
+            Arc::clone(&env.state.publisher),
+            env.state.write_scope.clone(),
+        ));
+        let worker = FeedWorker::new(
+            Arc::new(storage::MockPostStorage::new()),
+            Arc::new(feed_cache),
+            Arc::new(mock_write_scope()),
+            publisher,
+            Arc::new(feed_events),
+            websub,
+        );
+        (worker, env)
+    }
+
+    #[tokio::test]
+    async fn failing_websub_client_returns_a_retryable_transport_error() {
+        let hub: HubUrl = "https://hub.example.test/".parse().expect("valid hub URL");
+        let feed: FeedUrl = "https://example.test/feed.rss"
+            .parse()
+            .expect("valid feed URL");
+
+        assert!(matches!(
+            FailingWebSubClient.send_publish(&hub, &feed).await,
+            Err(WebSubError::Retryable {
+                retry_after: None,
+                ..
+            })
+        ));
     }
 
     fn test_publisher() -> Arc<PublisherService> {
@@ -999,6 +1090,194 @@ mod tests {
         drop(guard);
         assert_context_once(&trace_text(&output), "server.feed.publisher_snapshot");
     }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publication_cache_read_outcomes_reset_or_retry_regeneration(#[case] backend: Backend) {
+        let mut missing = event(1, "/feed.rss", 0);
+        missing.phase = FeedEventPhase::Publication;
+        let mut missing_cache = MockFeedCacheStorage::new();
+        missing_cache.expect_get().times(1).returning(|_| Ok(None));
+        let mut missing_events = MockFeedEventStorage::new();
+        missing_events
+            .expect_reset_regeneration()
+            .times(1)
+            .returning(|_, ids, _| {
+                assert_eq!(ids, &[FeedEventId::from(1)]);
+                Ok(())
+            });
+        let (missing_worker, _env) = storage_backed_worker(
+            backend,
+            missing_cache,
+            missing_events,
+            Arc::new(NoopWebSubClient),
+        )
+        .await;
+        missing_worker
+            .process_feed_group(missing.feed_path.clone(), vec![missing])
+            .await;
+
+        let mut failed = event(2, "/feed.rss", 0);
+        failed.phase = FeedEventPhase::Publication;
+        let mut failed_cache = MockFeedCacheStorage::new();
+        failed_cache
+            .expect_get()
+            .times(1)
+            .returning(|_| Err(storage::FeedCacheError::Db(SqlxError::PoolClosed)));
+        let mut failed_events = MockFeedEventStorage::new();
+        failed_events
+            .expect_retry_regeneration()
+            .times(1)
+            .returning(|_, ids, message, _| {
+                assert_eq!(ids, &[FeedEventId::from(2)]);
+                assert_eq!(message, "publication cache read failed");
+                Ok(())
+            });
+        let (failed_worker, _env) = storage_backed_worker(
+            backend,
+            failed_cache,
+            failed_events,
+            Arc::new(NoopWebSubClient),
+        )
+        .await;
+        failed_worker
+            .process_feed_group(failed.feed_path.clone(), vec![failed])
+            .await;
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn stale_publication_generation_restarts_regeneration_through_storage(
+        #[case] backend: Backend,
+    ) {
+        let row = event(1, "/feed.rss", 0);
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_restart_regeneration()
+            .times(2)
+            .returning(|_, ids, _| {
+                assert_eq!(ids, &[FeedEventId::from(1)]);
+                Ok(())
+            });
+        let (worker, _env) = storage_backed_worker(
+            backend,
+            MockFeedCacheStorage::new(),
+            events,
+            Arc::new(NoopWebSubClient),
+        )
+        .await;
+        let snapshot = worker
+            .publisher
+            .snapshot()
+            .await
+            .expect("publisher snapshot");
+        let hub: HubUrl = "https://hub.example.test/".parse().expect("valid hub URL");
+        worker
+            .publisher
+            .mutate_hub(Some(&hub))
+            .await
+            .expect("advance generation");
+        let guard = worker
+            .publisher
+            .finalization_guard()
+            .await
+            .expect("publisher guard");
+        assert!(
+            !worker
+                .finalize_feed_group(
+                    &guard,
+                    &snapshot,
+                    cache_row(),
+                    &[],
+                    &[row.id],
+                    std::slice::from_ref(&row),
+                )
+                .await
+        );
+        assert!(
+            !worker
+                .finalize_feed_group(&guard, &snapshot, cache_row(), &[row.id], &[row.id], &[row],)
+                .await
+        );
+
+        let snapshot_for_mock = snapshot.clone();
+        let mut publisher_storage = MockPublisherStorage::new();
+        publisher_storage
+            .expect_snapshot()
+            .times(1)
+            .returning(move || Ok(snapshot_for_mock.clone()));
+        publisher_storage
+            .expect_is_current_generation()
+            .times(1)
+            .returning(|_| Ok(false));
+        let directory = tempfile::tempdir().expect("publisher gate directory");
+        let publisher = Arc::new(PublisherService::new(
+            directory.path().to_owned(),
+            Arc::new(publisher_storage),
+            mock_write_scope(),
+        ));
+        let mut cache = MockFeedCacheStorage::new();
+        cache
+            .expect_get()
+            .times(1)
+            .returning(|_| Ok(Some(cache_row())));
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_restart_regeneration()
+            .times(1)
+            .returning(|_, ids, _| {
+                assert_eq!(ids, &[FeedEventId::from(2)]);
+                Ok(())
+            });
+        let caller_worker = FeedWorker::new(
+            Arc::new(storage::MockPostStorage::new()),
+            Arc::new(cache),
+            Arc::new(mock_write_scope()),
+            publisher,
+            Arc::new(events),
+            Arc::new(UnexpectedWebSubClient),
+        );
+        let mut publication = event(2, "/feed.rss", 0);
+        publication.phase = FeedEventPhase::Publication;
+        caller_worker
+            .process_feed_group(publication.feed_path.clone(), vec![publication])
+            .await;
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn terminal_websub_failure_dead_letters_without_retry(#[case] backend: Backend) {
+        let row = event(9, "/feed.rss", 0);
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_dead_letter_publication()
+            .times(1)
+            .returning(|_, ids, message, _| {
+                assert_eq!(ids, &[FeedEventId::from(9)]);
+                assert!(message.contains("terminal HTTP 410"));
+                Ok(())
+            });
+        let (worker, _env) = storage_backed_worker(
+            backend,
+            MockFeedCacheStorage::new(),
+            events,
+            Arc::new(TerminalWebSubClient),
+        )
+        .await;
+        let hub: HubUrl = "https://hub.example.test/".parse().expect("valid hub URL");
+        worker
+            .publisher
+            .mutate_hub(Some(&hub))
+            .await
+            .expect("set hub");
+        let snapshot = worker.publisher.snapshot().await.expect("snapshot");
+        let guard = worker.publisher.finalization_guard().await.expect("guard");
+        let path = row.feed_path.clone();
+        let id = row.id;
+        worker
+            .publish_feed(&guard, &snapshot, &path, &[id], &[row])
+            .await;
+    }
     #[tokio::test]
     async fn missing_cache_resets_regeneration_budget_without_retry() {
         let mut events = MockFeedEventStorage::new();
@@ -1025,6 +1304,41 @@ mod tests {
             });
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
         worker.restart_regeneration(&[FeedEventId::from(1)]).await;
+    }
+
+    #[tokio::test]
+    async fn restart_and_reset_storage_failures_are_reported_once() {
+        let mut restart_events = MockFeedEventStorage::new();
+        restart_events
+            .expect_restart_regeneration()
+            .times(1)
+            .returning(|_, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
+        let restart_worker = worker_with_websub(restart_events, Arc::new(NoopWebSubClient));
+        let (restart_guard, restart_output) = trace_capture();
+        restart_worker
+            .restart_regeneration(&[FeedEventId::from(1)])
+            .await;
+        drop(restart_guard);
+        assert_context_once(
+            &trace_text(&restart_output),
+            "server.feed.status_write.stale_generation",
+        );
+
+        let mut reset_events = MockFeedEventStorage::new();
+        reset_events
+            .expect_reset_regeneration()
+            .times(1)
+            .returning(|_, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
+        let reset_worker = worker_with_websub(reset_events, Arc::new(NoopWebSubClient));
+        let (reset_guard, reset_output) = trace_capture();
+        reset_worker
+            .reset_regeneration(&[FeedEventId::from(2)])
+            .await;
+        drop(reset_guard);
+        assert_context_once(
+            &trace_text(&reset_output),
+            "server.feed.status_write.missing_cache",
+        );
     }
 
     #[tokio::test]
@@ -1543,5 +1857,142 @@ mod tests {
             .returning(|_, _, _| Ok(vec![]));
         let w = worker(posts, storage::MockFeedCacheStorage::new(), events);
         spawn_tick(Arc::new(w)).await;
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn finalization_storage_read_failure_retries_regeneration(#[case] backend: Backend) {
+        let row = event(1, "/feed.rss", 0);
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_retry_regeneration()
+            .times(1)
+            .returning(|_, ids, message, _| {
+                assert_eq!(ids, &[FeedEventId::from(1)]);
+                assert_eq!(message, "publisher generation check failed");
+                Ok(())
+            });
+        let (worker, env) = storage_backed_worker(
+            backend,
+            MockFeedCacheStorage::new(),
+            events,
+            Arc::new(NoopWebSubClient),
+        )
+        .await;
+        let snapshot = worker.publisher.snapshot().await.expect("snapshot");
+        let guard = worker.publisher.finalization_guard().await.expect("guard");
+        env.base.close_pool().await;
+        assert!(
+            !worker
+                .finalize_feed_group(&guard, &snapshot, cache_row(), &[], &[row.id], &[row],)
+                .await
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn finalization_cache_write_failure_retries_regeneration(#[case] backend: Backend) {
+        let row = event(2, "/feed.rss", 0);
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_retry_regeneration()
+            .times(1)
+            .returning(|_, ids, message, _| {
+                assert_eq!(ids, &[FeedEventId::from(2)]);
+                assert_eq!(message, "cache commit failed");
+                Ok(())
+            });
+        let (worker, env) = storage_backed_worker(
+            backend,
+            MockFeedCacheStorage::new(),
+            events,
+            Arc::new(NoopWebSubClient),
+        )
+        .await;
+        let snapshot = worker.publisher.snapshot().await.expect("snapshot");
+        let guard = worker.publisher.finalization_guard().await.expect("guard");
+        env.base.close_pool().await;
+        assert!(
+            !worker
+                .finalize_feed_group(&guard, &snapshot, cache_row(), &[row.id], &[row.id], &[row],)
+                .await
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn unavailable_finalization_gate_retries_regeneration(#[case] backend: Backend) {
+        let mut row = event(3, "/feed.rss", 0);
+        row.phase = FeedEventPhase::Publication;
+        let env = backend.setup().await;
+        let file = tempfile::NamedTempFile::new().expect("temporary file");
+        let publisher = Arc::new(PublisherService::new(
+            file.path().to_owned(),
+            Arc::clone(&env.state.publisher),
+            env.state.write_scope.clone(),
+        ));
+        let mut cache = MockFeedCacheStorage::new();
+        cache
+            .expect_get()
+            .times(1)
+            .returning(|_| Ok(Some(cache_row())));
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_retry_regeneration()
+            .times(1)
+            .returning(|_, ids, message, _| {
+                assert_eq!(ids, &[FeedEventId::from(3)]);
+                assert_eq!(message, "publisher finalization unavailable");
+                Ok(())
+            });
+        let worker = FeedWorker::new(
+            Arc::new(storage::MockPostStorage::new()),
+            Arc::new(cache),
+            Arc::new(mock_write_scope()),
+            publisher,
+            Arc::new(events),
+            Arc::new(NoopWebSubClient),
+        );
+        worker
+            .process_feed_group(row.feed_path.clone(), vec![row])
+            .await;
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn configured_hub_without_base_retries_regeneration(#[case] backend: Backend) {
+        let row = event(4, "/feed.rss", 0);
+        let env = backend.setup().base_url(None).await;
+        let publisher = Arc::new(PublisherService::new(
+            env.base.path().to_path_buf(),
+            Arc::clone(&env.state.publisher),
+            env.state.write_scope.clone(),
+        ));
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_retry_regeneration()
+            .times(1)
+            .returning(|_, ids, message, _| {
+                assert_eq!(ids, &[FeedEventId::from(4)]);
+                assert_eq!(message, "site.base_url is unset");
+                Ok(())
+            });
+        let worker = FeedWorker::new(
+            Arc::new(storage::MockPostStorage::new()),
+            Arc::new(MockFeedCacheStorage::new()),
+            Arc::new(mock_write_scope()),
+            Arc::clone(&publisher),
+            Arc::new(events),
+            Arc::new(NoopWebSubClient),
+        );
+        let hub: HubUrl = "https://hub.example.test/".parse().expect("valid hub URL");
+        publisher.mutate_hub(Some(&hub)).await.expect("set hub");
+        let snapshot = publisher.snapshot().await.expect("snapshot");
+        let guard = publisher.finalization_guard().await.expect("guard");
+        let path = row.feed_path.clone();
+        let id = row.id;
+        worker
+            .publish_feed(&guard, &snapshot, &path, &[id], &[row])
+            .await;
     }
 }
