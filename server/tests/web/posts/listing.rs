@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use common::seed::{Page, RenderedPost};
+use common::seed::{Page, PublicPresentation, RenderedPost};
 use common::tag::TagLabel;
 use common::test_support::{parse_post_body, parse_tag_label};
+use common::theme::Theme;
 use server_fn::ServerFn;
 use storage::PostFormat;
 use web::posts::{PostInputs, SavedPost, UnpublishedPost};
@@ -407,7 +408,10 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
 
     let (status, body) = list_user_posts(&state, &author.username, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let first_page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let first_page: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
     assert!(first_page.has_more, "body: {body}");
     assert!(first_page.next_cursor.is_some(), "body: {body}");
@@ -429,7 +433,10 @@ async fn list_user_posts_returns_published_posts_with_cursor_pagination(#[case] 
     let (status, body) =
         list_user_posts(&state, &author.username, first_page.next_cursor, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let second_page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let second_page: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     assert_eq!(second_page.posts.len(), 1, "body: {body}");
     assert!(!second_page.has_more, "body: {body}");
 }
@@ -502,7 +509,10 @@ async fn timeline_page_two_uses_the_cursor_the_first_page_returned(#[case] backe
 
     let (status, body) = list_user_posts(&state, &author.username, None, 1, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let first_page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let first_page: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     assert_eq!(first_page.posts.len(), 1, "body: {body}");
     let cursor = first_page
         .next_cursor
@@ -510,7 +520,10 @@ async fn timeline_page_two_uses_the_cursor_the_first_page_returned(#[case] backe
 
     let (status, body) = list_user_posts(&state, &author.username, Some(cursor), 1, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let second_page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let second_page: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     assert_eq!(second_page.posts.len(), 1, "body: {body}");
     assert_ne!(
         second_page.posts[0].post_id, first_page.posts[0].post_id,
@@ -572,7 +585,10 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
 
     let (status, body) = list_local_timeline(&state, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let first_page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let first_page: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     assert_eq!(first_page.posts.len(), 50, "body: {body}");
     assert!(first_page.has_more, "body: {body}");
     assert!(first_page.next_cursor.is_some(), "body: {body}");
@@ -607,7 +623,10 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
 
     let (status, body) = list_local_timeline(&state, first_page.next_cursor, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let second_page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let second_page: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     assert_eq!(second_page.posts.len(), 2, "body: {body}");
     assert!(!second_page.has_more, "body: {body}");
 }
@@ -718,13 +737,30 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
 
     let (status, body) = list_user_posts(&state, &session.username, None, 50, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "list body: {body}");
-    let page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let page: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     assert_eq!(page.posts.len(), 1);
     let post = &page.posts[0];
     let slugs: Vec<&str> = post.tags.iter().map(|t| t.slug.as_ref()).collect();
     assert_eq!(slugs, vec!["rust", "web"]);
     // Display casing is preserved (author-provided).
     assert!(post.tags.iter().any(|t| t.display == "Rust"));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn list_user_posts_for_unknown_user_keeps_empty_profile_with_site_theme(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+
+    let (status, body) = list_user_posts(&state, "nobody", None, 50, None).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let presentation: PublicPresentation<Page<RenderedPost>> = serde_json::from_str(&body).unwrap();
+    assert_eq!(presentation.theme, Theme::Studio);
+    assert!(presentation.page.posts.is_empty());
 }
 
 #[apply(backends)]
@@ -783,7 +819,10 @@ async fn list_posts_by_tag_returns_matching_posts_from_all_users(#[case] backend
 
     let (status, body) = list_posts_by_tag(&state, "rust", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let page: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     // Three posts carry the "rust" tag, across both authors.
     assert_eq!(page.posts.len(), 3);
     let usernames: std::collections::HashSet<&str> =
@@ -799,7 +838,10 @@ async fn list_posts_by_tag_returns_empty_for_unknown_tag(#[case] backend: Backen
 
     let (status, body) = list_posts_by_tag(&state, "rust", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let page: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     assert!(page.posts.is_empty());
     assert!(!page.has_more);
 }
@@ -834,7 +876,10 @@ async fn list_user_posts_by_tag_scopes_to_user(#[case] backend: Backend) {
 
     let (status, body) = list_user_posts_by_tag(&state, &author.username, "shared", None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let page: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     assert_eq!(page.posts.len(), 1);
     assert_eq!(page.posts[0].username, author.username);
 }

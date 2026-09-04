@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use chrono::Datelike;
 use common::ids::{AudienceId, PostId, SubscriptionId, UserId};
-use common::seed::{AuthoredPost, Page, RenderedPost};
+use common::seed::{AuthoredPost, Page, PublicPresentation, RenderedPost};
 use common::test_support::{parse_audience_name, parse_post_body};
 use server_fn::ServerFn;
 use storage::PostFormat;
@@ -336,7 +336,9 @@ async fn get_post_returns_scheduled_post_at_canonical_permalink_to_author(
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let returned: AuthoredPost = serde_json::from_str(&body).unwrap();
+    let returned: AuthoredPost = serde_json::from_str::<PublicPresentation<AuthoredPost>>(&body)
+        .unwrap()
+        .page;
     assert_eq!(returned.post.post_id, scheduled.post_id);
     assert!(returned.post.is_author);
 }
@@ -400,7 +402,10 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // Anonymous viewer: only the Public post.
     let (status, body) = list_local_timeline(&state, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let anon: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let anon: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     assert_eq!(
         timeline_slugs(&anon),
         [public.slug.to_string()].into_iter().collect(),
@@ -410,7 +415,10 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // Author: sees all of their own posts, including the private one.
     let (status, body) = list_local_timeline(&state, None, 50, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let authored: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let authored: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     assert_eq!(
         timeline_slugs(&authored),
         [
@@ -427,7 +435,10 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // Active subscriber + named member: Public + Subscribers + Named (not Private).
     let (status, body) = list_local_timeline(&state, None, 50, Some(&subscriber_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let sub: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let sub: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     assert_eq!(
         timeline_slugs(&sub),
         [
@@ -456,7 +467,10 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     )
     .await;
     assert_eq!(response.status, StatusCode::OK, "body: {}", response.body);
-    let bearer_page: Page<RenderedPost> = serde_json::from_str(&response.body).unwrap();
+    let bearer_page: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&response.body)
+            .unwrap()
+            .page;
     assert_eq!(
         timeline_slugs(&bearer_page),
         [
@@ -494,7 +508,10 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // admitted to subscriber/named content).
     let (status, body) = list_local_timeline(&state, None, 50, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let stranger_page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
+    let stranger_page: Page<RenderedPost> =
+        serde_json::from_str::<PublicPresentation<Page<RenderedPost>>>(&body)
+            .unwrap()
+            .page;
     assert_eq!(
         timeline_slugs(&stranger_page),
         [public.slug.to_string()].into_iter().collect(),

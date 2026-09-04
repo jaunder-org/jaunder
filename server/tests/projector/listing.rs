@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use axum::http::{StatusCode, header};
 use tower::ServiceExt;
 
-use common::seed::{Page, PageSeed};
+use common::seed::{Page, PageSeed, PublicPresentation};
+use common::theme::Theme;
 use common::time::{PermalinkDate, UtcInstant};
 use common::visibility::ViewerIdentity;
 use rstest::*;
@@ -9,9 +12,15 @@ use rstest_reuse::*;
 
 use crate::helpers::body_string;
 
-use storage::test_support::{Backend, TestEnv, backends};
+use storage::{
+    MockUserStorage, UserStorage,
+    test_support::{Backend, TestEnv, backends},
+};
 
-use super::fixtures::{TEST_SHELL, get, projector_app, seed_published_post};
+use super::fixtures::{
+    TEST_SHELL, assert_sanitized_internal_server_error, failing_site_config, get, projector_app,
+    projector_app_with_dependencies, seed_published_post,
+};
 
 #[apply(backends)]
 #[tokio::test]
@@ -120,6 +129,33 @@ async fn site_timeline_storage_failure_keeps_500_and_reports_boundary_once(
 
 #[apply(backends)]
 #[tokio::test]
+async fn site_timeline_theme_failure_keeps_500_and_reports_boundary_once(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    seed_published_post(&state).await;
+    let app = projector_app_with_dependencies(
+        Arc::clone(&state.posts),
+        Arc::clone(&state.users),
+        failing_site_config("injected site timeline theme failure"),
+        Arc::clone(&state.user_config),
+    );
+
+    let (response, event) = crate::assert_error_signal!(
+        async { app.oneshot(get("/")).await.expect("request") },
+        event = "server function failed",
+        event_kind = "Storage",
+        event_class = "Bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "boundary",
+        context = "server.projector.timeline_theme"
+    );
+
+    assert_sanitized_internal_server_error(response).await;
+    assert!(event.contains("injected site timeline theme failure"));
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn profile_storage_failure_keeps_no_store_shell_and_reports_once(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let (username, ..) = seed_published_post(&state).await;
@@ -154,6 +190,79 @@ async fn profile_storage_failure_keeps_no_store_shell_and_reports_once(#[case] b
         .expect("read body");
     assert_eq!(body.as_ref(), TEST_SHELL.as_bytes(), "exact CSR shell body");
     assert!(event.contains("pool"), "typed storage source: {event}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn profile_owner_lookup_failure_keeps_500_and_reports_boundary_once(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let (username, ..) = seed_published_post(&state).await;
+    let mut users = MockUserStorage::new();
+    users
+        .expect_get_user_by_username()
+        .times(1)
+        .return_once(|_| {
+            Err(sqlx::Error::Io(std::io::Error::other(
+                "injected owner lookup failure",
+            )))
+        });
+    let app = projector_app_with_dependencies(
+        Arc::clone(&state.posts),
+        Arc::new(users) as Arc<dyn UserStorage>,
+        Arc::clone(&state.site_config),
+        Arc::clone(&state.user_config),
+    );
+
+    let (response, event) = crate::assert_error_signal!(
+        async {
+            app.oneshot(get(&format!("/~{username}")))
+                .await
+                .expect("request")
+        },
+        event = "server function failed",
+        event_kind = "Storage",
+        event_class = "Bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "boundary",
+        context = "server.projector.profile"
+    );
+
+    assert_sanitized_internal_server_error(response).await;
+    assert!(event.contains("injected owner lookup failure"));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn profile_theme_failure_keeps_500_and_reports_boundary_once(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let (username, ..) = seed_published_post(&state).await;
+    let app = projector_app_with_dependencies(
+        Arc::clone(&state.posts),
+        Arc::clone(&state.users),
+        failing_site_config("injected profile theme failure"),
+        Arc::clone(&state.user_config),
+    );
+
+    let (response, event) = crate::assert_error_signal!(
+        async {
+            app.oneshot(get(&format!("/~{username}")))
+                .await
+                .expect("request")
+        },
+        event = "server function failed",
+        event_kind = "Storage",
+        event_class = "Bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "boundary",
+        context = "server.projector.profile"
+    );
+
+    assert_sanitized_internal_server_error(response).await;
+    assert!(event.contains("injected profile theme failure"));
 }
 
 #[apply(backends)]
@@ -211,10 +320,14 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
             PageSeed::UserTag { .. } => "user tag",
             PageSeed::Permalink(_) => "permalink",
         };
-        let json = serde_json::to_string(&seed)
+        let presentation = PublicPresentation {
+            theme: Theme::Studio,
+            page: seed,
+        };
+        let json = serde_json::to_string(&presentation)
             .unwrap_or_else(|error| panic!("{variant} must serialize: {error}"));
         assert_ne!(json, "null", "{variant}");
-        let document = jaunder::projector::document(&seed);
+        let document = jaunder::projector::document_presentation(&presentation);
         assert!(
             !document.contains(r#"id="jaunder-seed">null</script>"#),
             "{variant} selected the defensive null fallback"

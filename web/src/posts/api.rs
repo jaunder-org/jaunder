@@ -27,7 +27,7 @@ use common::{
     visibility::AudienceSelection,
 };
 
-use common::seed::{AuthoredPost, Page, PageCursor};
+use common::seed::{AuthoredPost, Page, PageCursor, PublicPresentation};
 
 use crate::error::WebResult;
 
@@ -57,7 +57,7 @@ use {
         self, AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MediaContentLocks,
         PerformUpdateError, PostBookkeepingExpectation, PostCreation, PostLifecycle, PostRecord,
         PostRevisionDetail, PostRevisionMetadata, PostStorage, PostUpdate, PublishUpdate,
-        SiteConfigStorage, WriteScope,
+        SiteConfigStorage, UserConfigStorage, WriteScope,
     },
 };
 
@@ -598,9 +598,32 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<SavedPost>> {
     Ok(outcome)
 }
 
+#[cfg(feature = "server")]
+async fn public_post_presentation(
+    post: PostRecord,
+    is_author: bool,
+) -> crate::error::InternalResult<PublicPresentation<AuthoredPost>> {
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let user_config = expect_context::<Arc<dyn UserConfigStorage>>();
+    let theme = storage::resolve_public_theme(
+        storage::PublicThemeOwner::Author(post.user_id),
+        site_config.as_ref(),
+        user_config.as_ref(),
+    )
+    .await?;
+    Ok(PublicPresentation {
+        theme,
+        page: server::authored_post(post, is_author),
+    })
+}
+
 /// Retrieves a post by its permalink.
 #[macros::server]
-pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResult<AuthoredPost> {
+pub async fn get(
+    username: Username,
+    date: PermalinkDate,
+    slug: Slug,
+) -> WebResult<PublicPresentation<AuthoredPost>> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let now = UtcInstant::now();
 
@@ -611,7 +634,7 @@ pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResu
         let is_author = auth::require_auth()
             .await
             .is_ok_and(|auth| auth.user_id == post.user_id);
-        return Ok(server::authored_post(post, is_author));
+        return public_post_presentation(post, is_author).await;
     }
 
     // The visibility-filtered lookup above found nothing public at this
@@ -631,7 +654,7 @@ pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResu
         .await?
         .ok_or_else(server::not_found_error)?;
 
-    Ok(server::authored_post(post, true))
+    public_post_presentation(post, true).await
 }
 
 /// Retrieves a Post and a same-response time snapshot for its authenticated

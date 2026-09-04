@@ -1,26 +1,76 @@
 use std::sync::Arc;
 
-use axum::{Router, body::Body, extract::Extension, http::Request};
+use axum::{
+    Router,
+    body::Body,
+    extract::Extension,
+    http::{Request, StatusCode, header},
+    response::Response,
+};
 use chrono::Datelike;
 use common::post_title::PostTitle;
-use storage::RenderedHtml;
 use storage::test_support::{SeedRawPost, SeedUser};
+use storage::{
+    MockSiteConfigStorage, MockUserConfigStorage, PostStorage, RenderedHtml, SiteConfigStorage,
+    UserConfigStorage, UserStorage,
+};
 
 /// A recognizable stand-in for the real `index.html`, so tests can tell a
 /// shell-fallback response apart from a projected one.
 pub(super) const TEST_SHELL: &str = "<!DOCTYPE html><!--test-shell--><html><body></body></html>";
 
-/// A router carrying only the public projector routes plus the posts store.
-///
+/// A router carrying only the public projector routes and their storage
+/// dependencies.
 /// The projector is feature-independent (mounted into the live router only under
 /// `csr`, but `register` itself always compiles), so registering it onto a bare
 /// router exercises it directly under the default test build — no `csr` feature,
 /// no full `create_router`.
 pub(super) fn projector_app(state: &Arc<storage::AppState>) -> Router {
+    projector_app_with_dependencies(
+        Arc::clone(&state.posts),
+        Arc::clone(&state.users),
+        Arc::clone(&state.site_config),
+        Arc::clone(&state.user_config),
+    )
+}
+
+/// A projector router with independently replaceable storage dependencies.
+///
+/// Real-backend failure tests close a shared pool, which cannot reach a later
+/// dependency after an earlier database read succeeds. Trait-level replacements
+/// keep the preceding route reads real while faulting the intended boundary.
+pub(super) fn projector_app_with_dependencies(
+    posts: Arc<dyn PostStorage>,
+    users: Arc<dyn UserStorage>,
+    site_config: Arc<dyn SiteConfigStorage>,
+    user_config: Arc<dyn UserConfigStorage>,
+) -> Router {
     let shell = jaunder::projector::Shell(TEST_SHELL.into());
     jaunder::projector::register(Router::new(), shell)
-        .layer(Extension(state.posts.clone()))
-        .layer(Extension(state.users.clone()))
+        .layer(Extension(posts))
+        .layer(Extension(users))
+        .layer(Extension(user_config))
+        .layer(Extension(site_config))
+}
+
+/// A site-theme store whose read fails after the route's content query succeeds.
+pub(super) fn failing_site_config(message: &'static str) -> Arc<dyn SiteConfigStorage> {
+    let mut site_config = MockSiteConfigStorage::new();
+    site_config
+        .expect_get_theme()
+        .times(1)
+        .return_once(move || Err(sqlx::Error::Io(std::io::Error::other(message))));
+    Arc::new(site_config)
+}
+
+/// An author-theme store whose read fails after the site theme is available.
+pub(super) fn failing_user_config(message: &'static str) -> Arc<dyn UserConfigStorage> {
+    let mut user_config = MockUserConfigStorage::new();
+    user_config
+        .expect_get()
+        .times(1)
+        .return_once(move |_, _| Err(sqlx::Error::Io(std::io::Error::other(message))));
+    Arc::new(user_config)
 }
 
 /// Seed a published, `rust`-tagged post; returns the seeded user's username and the
@@ -60,4 +110,17 @@ pub(super) fn get(uri: &str) -> Request<Body> {
         .uri(uri)
         .body(Body::empty())
         .unwrap()
+}
+
+/// Assert the public projector's sanitized, non-cacheable storage-failure response.
+pub(super) async fn assert_sanitized_internal_server_error(response: Response) {
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        response.headers().get(header::CACHE_CONTROL).is_none(),
+        "500 is not cached"
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    assert!(body.is_empty(), "500 body remains sanitized");
 }

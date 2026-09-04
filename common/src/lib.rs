@@ -53,6 +53,7 @@ pub mod tagged_url;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod text;
+pub mod theme;
 pub mod time;
 pub mod token;
 pub mod trace_field;

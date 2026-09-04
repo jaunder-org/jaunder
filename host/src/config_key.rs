@@ -21,6 +21,7 @@ use common::{
     smtp_tls_mode::SmtpTlsMode,
     smtp_username::SmtpUsername,
     tagged_url::{BaseUrl, HubUrl},
+    theme::Theme,
     visibility::DefaultAudience,
 };
 
@@ -146,6 +147,7 @@ site_config_keys! {
     FeedsMinDays           => "feeds.min_days"            : FeedMinDays,                  bad: "0";
     FeedsWebsubHubUrl      => "feeds.websub_hub_url"      : HubUrl { optional },          bad: "nonsense://x";
     PostsDefaultAudience   => "posts.default_audience"    : DefaultAudience,              bad: "everyone";
+    SiteTheme              => "site.theme"                : Theme,                        bad: "solarized";
     SiteRegistrationPolicy => "site.registration_policy"  : RegistrationPolicy,           bad: "sideways";
     SiteTitle              => "site.title"                : SiteTitle,                    bad: "";
     SiteBaseUrl            => "site.base_url"             : BaseUrl { optional },         bad: "nonsense://x";
@@ -235,6 +237,7 @@ macro_rules! user_config_keys {
 
 user_config_keys! {
     DefaultPostFormat => "posts.default_format" : PostFormat, bad: "hieroglyphs";
+    Theme             => "user.theme"           : Theme,      bad: "solarized";
 }
 
 #[cfg(test)]
@@ -253,7 +256,7 @@ mod tests {
             assert_eq!(SiteConfigKey::from_str(dotted).ok().as_ref(), Some(key));
             assert!(dotted.contains('.'), "{dotted} must be namespace.name");
         }
-        assert_eq!(SiteConfigKey::VARIANTS.len(), 19);
+        assert_eq!(SiteConfigKey::VARIANTS.len(), 20);
     }
 
     #[test]
@@ -328,6 +331,7 @@ mod tests {
             (SiteConfigKey::SmtpTlsMode, "starttls"),
             (SiteConfigKey::BackupRetentionCount, "7"),
             (SiteConfigKey::PostsDefaultAudience, "subscribers"),
+            (SiteConfigKey::SiteTheme, "reader"),
         ] {
             let dotted = key.as_ref();
             let got = key.validate(good);
@@ -358,6 +362,9 @@ mod tests {
                 .validate("hieroglyphs")
                 .is_err()
         );
+        assert!(UserConfigKey::Theme.validate("studio").is_ok());
+        assert!(UserConfigKey::Theme.validate("solarized").is_err());
+        assert_eq!(UserConfigKey::VARIANTS.len(), 2);
         for key in UserConfigKey::VARIANTS {
             let dotted = key.as_ref();
             let bad = key.known_bad_example();

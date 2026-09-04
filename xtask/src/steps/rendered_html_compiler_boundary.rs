@@ -7,7 +7,7 @@
 //! privacy rejects both raw construction and the test-only fixture helper.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::result::{CommandResult, StepResult};
@@ -79,15 +79,23 @@ fn diagnostic_tail(diagnostic: &str) -> &str {
     &diagnostic[start..]
 }
 
-fn check() -> std::result::Result<(), String> {
-    let root = crate::git::toplevel(Path::new(".")).map_err(|error| error.to_string())?;
-    let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
-    let manifest_path = temporary.path().join("Cargo.toml");
-    let source_path = temporary.path().join("src/lib.rs");
-    let common = Path::new(&root).join("common");
+fn prepare_fixture(root: &Path, temporary: &Path) -> std::io::Result<(PathBuf, PathBuf)> {
+    let manifest_path = temporary.join("Cargo.toml");
+    let source_path = temporary.join("src/lib.rs");
+    fs::create_dir(temporary.join("src"))?;
+    fs::write(&manifest_path, manifest(&root.join("common")))?;
+    // Keep downstream feature resolution independent while anchoring transitive
+    // versions to the repository's reviewed dependency graph.
+    fs::copy(root.join("Cargo.lock"), temporary.join("Cargo.lock"))?;
+    Ok((manifest_path, source_path))
+}
 
-    fs::create_dir(temporary.path().join("src")).map_err(|error| error.to_string())?;
-    fs::write(&manifest_path, manifest(&common)).map_err(|error| error.to_string())?;
+fn check() -> std::result::Result<(), String> {
+    let root =
+        PathBuf::from(crate::git::toplevel(Path::new(".")).map_err(|error| error.to_string())?);
+    let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let (manifest_path, source_path) =
+        prepare_fixture(&root, temporary.path()).map_err(|error| error.to_string())?;
 
     let fixtures = [
         Fixture {
@@ -145,6 +153,29 @@ mod tests {
         let rendered = manifest(Path::new("/repo/common"));
         assert!(rendered.contains("default-features = false"));
         assert!(rendered.contains("path = \"/repo/common\""));
+    }
+
+    #[test]
+    fn standalone_fixture_anchors_versions_to_the_workspace_lockfile() {
+        let root = tempfile::tempdir().expect("root");
+        fs::create_dir(root.path().join("common")).expect("common directory");
+        fs::write(root.path().join("Cargo.lock"), "reviewed dependency graph")
+            .expect("root lockfile");
+        let fixture = tempfile::tempdir().expect("fixture");
+
+        let (manifest_path, source_path) =
+            prepare_fixture(root.path(), fixture.path()).expect("prepare fixture");
+
+        assert_eq!(
+            fs::read_to_string(fixture.path().join("Cargo.lock")).expect("fixture lockfile"),
+            "reviewed dependency graph"
+        );
+        assert!(source_path.parent().expect("source parent").is_dir());
+        assert!(
+            fs::read_to_string(manifest_path)
+                .expect("fixture manifest")
+                .contains(root.path().join("common").to_string_lossy().as_ref())
+        );
     }
 
     #[test]

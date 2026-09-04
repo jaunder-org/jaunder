@@ -1,6 +1,6 @@
 //! Pure projector-seed decoding shared by CSR boot and host tests.
 
-use common::seed::PageSeed;
+use common::seed::{PageSeed, PublicPresentation};
 
 /// Decode the optional projector seed blob.
 ///
@@ -12,7 +12,9 @@ use common::seed::PageSeed;
 ///
 /// Returns the projector seed's [`serde_json::Error`] when a present blob is
 /// malformed or does not match [`PageSeed`].
-pub fn decode_projector_seed(raw: Option<&str>) -> Result<Option<PageSeed>, serde_json::Error> {
+pub fn decode_projector_seed(
+    raw: Option<&str>,
+) -> Result<Option<PublicPresentation<PageSeed>>, serde_json::Error> {
     raw.map(serde_json::from_str).transpose()
 }
 
@@ -32,12 +34,15 @@ mod tests {
     }
 
     #[test]
-    fn valid_page_seed_decodes() {
-        let json = r#"{"SiteTimeline":{"posts":[],"has_more":false,"next_cursor":null}}"#;
+    fn valid_presentation_retains_the_server_resolved_destination_theme() {
+        let json = r#"{"theme":"reader","page":{"SiteTimeline":{"posts":[],"has_more":false,"next_cursor":null}}}"#;
 
         assert!(matches!(
             decode_projector_seed(Some(json)),
-            Ok(Some(PageSeed::SiteTimeline(_)))
+            Ok(Some(PublicPresentation {
+                theme: common::theme::Theme::Reader,
+                page: PageSeed::SiteTimeline(_),
+            }))
         ));
     }
 }

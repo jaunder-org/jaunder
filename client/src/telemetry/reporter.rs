@@ -155,7 +155,7 @@ mod tests {
     fn report_one(reporter: &Reporter<ManualTransport>) {
         reporter.report_swallowed(
             ClientErrorKind::Storage,
-            ClientErrorContext::ThemeStorageRead,
+            ClientErrorContext::SessionMarkerRead,
             ClientSourceKind::StorageUnavailable,
         );
     }
@@ -174,7 +174,7 @@ mod tests {
 
         reporter.report_swallowed(
             ClientErrorKind::Storage,
-            ClientErrorContext::ThemeStorageRead,
+            ClientErrorContext::SessionMarkerRead,
             ClientSourceKind::StorageUnavailable,
         );
 
@@ -184,7 +184,7 @@ mod tests {
             vec![ClientTelemetryEvent {
                 version: client_telemetry::WIRE_VERSION,
                 kind: ClientErrorKind::Storage,
-                context: ClientErrorContext::ThemeStorageRead,
+                context: ClientErrorContext::SessionMarkerRead,
                 source_kind: ClientSourceKind::StorageUnavailable,
             }]
         );
@@ -221,7 +221,7 @@ mod tests {
 
         reporter.report_swallowed(
             ClientErrorKind::Storage,
-            ClientErrorContext::ThemeStorageRead,
+            ClientErrorContext::SessionMarkerRead,
             ClientSourceKind::StorageUnavailable,
         );
 

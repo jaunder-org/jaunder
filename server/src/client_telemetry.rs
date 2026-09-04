@@ -301,8 +301,6 @@ fn error_classification(kind: ClientErrorKind) -> (ErrorKind, ErrorClass) {
 
 fn error_context(context: ClientErrorContext) -> &'static str {
     match context {
-        ClientErrorContext::ThemeStorageRead => "client.theme_storage.read",
-        ClientErrorContext::ThemeStorageWrite => "client.theme_storage.write",
         ClientErrorContext::SessionMarkerRead => "client.session_marker.read",
         ClientErrorContext::SessionMarkerWrite => "client.session_marker.write",
         ClientErrorContext::SessionMarkerRemove => "client.session_marker.remove",
@@ -525,14 +523,6 @@ mod tests {
         }
 
         let contexts = [
-            (
-                ClientErrorContext::ThemeStorageRead,
-                "client.theme_storage.read",
-            ),
-            (
-                ClientErrorContext::ThemeStorageWrite,
-                "client.theme_storage.write",
-            ),
             (
                 ClientErrorContext::SessionMarkerRead,
                 "client.session_marker.read",

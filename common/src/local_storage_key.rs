@@ -17,8 +17,6 @@
 pub enum LocalStorageKey {
     #[strum(serialize = "jaunder_auth")]
     AuthMarker,
-    #[strum(serialize = "jaunder_theme")]
-    Theme,
     #[strum(serialize = "jaunder_home_redirect")]
     HomeRedirectPreference,
 }
@@ -41,7 +39,7 @@ mod tests {
             );
             assert!(!storage_key.is_empty());
         }
-        assert_eq!(LocalStorageKey::VARIANTS.len(), 3);
+        assert_eq!(LocalStorageKey::VARIANTS.len(), 2);
     }
 
     #[test]

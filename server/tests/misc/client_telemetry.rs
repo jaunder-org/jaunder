@@ -157,7 +157,7 @@ fn event() -> ClientTelemetryEvent {
     ClientTelemetryEvent {
         version: WIRE_VERSION,
         kind: ClientErrorKind::Storage,
-        context: ClientErrorContext::ThemeStorageRead,
+        context: ClientErrorContext::SessionMarkerRead,
         source_kind: ClientSourceKind::StorageUnavailable,
     }
 }
@@ -284,9 +284,9 @@ async fn malformed_json_unsupported_version_unknown_enum_and_unknown_field_retur
     let cookie = session.cookie();
     let bodies = [
         "{".to_owned(),
-        r#"{"version":2,"kind":"storage","context":"theme_storage_read","source_kind":"storage_unavailable"}"#.to_owned(),
-        r#"{"version":1,"kind":"unknown","context":"theme_storage_read","source_kind":"storage_unavailable"}"#.to_owned(),
-        r#"{"version":1,"kind":"storage","context":"theme_storage_read","source_kind":"storage_unavailable","detail":"unbounded"}"#.to_owned(),
+        r#"{"version":2,"kind":"storage","context":"session_marker_read","source_kind":"storage_unavailable"}"#.to_owned(),
+        r#"{"version":1,"kind":"unknown","context":"session_marker_read","source_kind":"storage_unavailable"}"#.to_owned(),
+        r#"{"version":1,"kind":"storage","context":"session_marker_read","source_kind":"storage_unavailable","detail":"unbounded"}"#.to_owned(),
     ];
 
     for body in bodies {
@@ -431,7 +431,7 @@ async fn valid_cookie_returns_204_and_reports_one_client_swallow(#[case] backend
         r#""error.class":"transient""#,
         r#""error.disposition":"swallowed""#,
         r#""telemetry.origin":"client""#,
-        r#""error.context":"client.theme_storage.read""#,
+        r#""error.context":"client.session_marker.read""#,
         r#""error.source_kind":"storage_unavailable""#,
     ] {
         assert!(warning.contains(field), "missing {field}: {warning}");

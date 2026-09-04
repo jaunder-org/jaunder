@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use common::MutationOutcome;
 use common::mailer::test_utils::CapturingMailSender;
 use common::registration::RegistrationPolicy;
 use common::test_support::{
     parse_bio, parse_display_name, parse_email, parse_invite_ttl_hours, parse_session_label,
 };
+use common::{MutationOutcome, theme::Theme};
 use server_fn::ServerFn;
 use storage::{EmailVerified, ProfileUpdate};
 
@@ -140,6 +140,139 @@ async fn update_profile_persists_changes(#[case] backend: Backend) {
         "display_name not persisted: {body}"
     );
     assert!(body.contains("My bio"), "bio not persisted: {body}");
+}
+
+// ── Persisted public-theme settings (#21) ─────────────────────────────────
+
+#[apply(backends)]
+#[tokio::test]
+async fn site_theme_endpoints_reject_anonymous_and_members_but_allow_operators(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let member = create_user_and_session(&state).await;
+    let operator = create_operator_and_session(&state).await;
+
+    let (status, _) = post_form(
+        &state,
+        <web::profile::GetSiteTheme as ServerFn>::PATH,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let (status, _) = post_form(
+        &state,
+        <web::profile::GetSiteTheme as ServerFn>::PATH,
+        "",
+        Some(&member.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let (status, _) = post_form(
+        &state,
+        <web::profile::SetSiteTheme as ServerFn>::PATH,
+        "theme=terminal",
+        Some(&member.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let (status, _) = post_form(
+        &state,
+        <web::profile::SetSiteTheme as ServerFn>::PATH,
+        "theme=terminal",
+        Some(&operator.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = post_form(
+        &state,
+        <web::profile::GetSiteTheme as ServerFn>::PATH,
+        "",
+        Some(&operator.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains("terminal"), "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn author_theme_endpoints_are_self_owned_and_site_default_deletes_only_callers_override(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let first = create_user_and_session(&state).await;
+    let second = create_user_and_session(&state).await;
+
+    let (status, _) = post_form(
+        &state,
+        <web::profile::SetYourPagesTheme as ServerFn>::PATH,
+        "theme=terminal",
+        Some(&first.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post_form(
+        &state,
+        <web::profile::SetYourPagesTheme as ServerFn>::PATH,
+        "theme=reader",
+        Some(&second.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = post_form(
+        &state,
+        <web::profile::ResetYourPagesTheme as ServerFn>::PATH,
+        "",
+        Some(&first.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        storage::get_theme_override(state.user_config.as_ref(), first.user_id)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        storage::get_theme_override(state.user_config.as_ref(), second.user_id)
+            .await
+            .unwrap(),
+        Some(Theme::Reader)
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn author_theme_endpoint_rejects_anonymous_and_malformed_theme_tokens(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let member = create_user_and_session(&state).await;
+
+    let (status, _) = post_form(
+        &state,
+        <web::profile::GetYourPagesTheme as ServerFn>::PATH,
+        "",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let (status, _) = post_form(
+        &state,
+        <web::profile::SetYourPagesTheme as ServerFn>::PATH,
+        "theme=not-a-theme",
+        Some(&member.cookie()),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK);
 }
 
 // ── Sessions tests (M2.10.7, M2.10.8) ────────────────────────────────────

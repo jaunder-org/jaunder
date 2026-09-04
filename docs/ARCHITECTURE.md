@@ -1159,6 +1159,16 @@ _same_ pure fns the projector uses (`web/src/home/component.rs:70`,
 `sidebar/component.rs:60-70`, `posts/component/display.rs`), so the CSR mount
 causes no reflow: flash-free by coincidence, not markup twins.
 
+Public presentation carries one server-resolved `Theme` with its page seed in
+`PublicPresentation<PageSeed>`. Aggregate routes use the typed site setting; an
+author timeline, author tag, or permalink uses that author's optional typed
+override and otherwise inherits the site setting. The projector serializes and
+paints this same envelope before CSS paint, and public navigation replaces the
+mounted theme with the destination envelope's value. It never reads viewer,
+session, or browser state: identical route content and effective theme produce
+the same representation bytes and cache identity, while a different effective
+theme changes that representation.
+
 Markup is built with **maud's `html!`**
 ([ADR-0093](adr/0093-web-render-html-macro.md)), and the trusted-HTML invariant
 is carried by one crate-local newtype, `web::html::Markup` (`web/src/html.rs`),
@@ -1887,6 +1897,12 @@ boundary; an absent or unparseable stored row defensively reads as `Private`,
 while database errors propagate. The stored tokens and parser come from the
 closed-enum convention rather than a config-specific matcher
 ([ADR-0091](adr/0091-text-enum-closed-string-enum-convention.md)).
+
+The same closed `Theme` type backs `site.theme` in `SiteConfigStorage` and an
+optional `theme` override in `UserConfigStorage`. Operators alone manage the
+site setting; each authenticated author manages only their own override.
+Removing an override is the explicit `Site default` choice, so later site-theme
+changes flow through inherited author pages without a browser-local preference.
 
 Deployment is configured by clap flags with matching `JAUNDER_*` environment
 fallbacks and documented defaults

@@ -71,14 +71,14 @@ export default defineConfig({
     screenshot: "only-on-failure",
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
-  // admin-site and invite mutate global site-config singletons (site.title/base_url;
-  // site.registration_policy, #433).  Playwright's `fullyParallel: false` is
-  // only intra-file, so the mutating files live in dependent projects to prevent
-  // cross-file overlap under workers=2. Each gated browser runs its zero-retry
-  // visual contracts first, the parallel ordinary tests second, then admin-site,
-  // then invite. Reciprocal tag filters keep each behavioral test in exactly one
-  // project. At workers=1 the ordinary/admin serialization is inert. WebKit is
-  // host-only and excludes visual tests.
+  // admin-site, theme, and invite mutate global site-config singletons
+  // (site.title/base_url/theme; site.registration_policy, #433). Playwright's
+  // `fullyParallel: false` is only intra-file, so the mutating files live in
+  // dependent projects to prevent cross-file overlap under workers=2. Each gated
+  // browser runs its zero-retry visual contracts first, the parallel ordinary
+  // tests second, then admin-site/theme, then invite. Reciprocal tag filters keep
+  // each behavioral test in exactly one project. At workers=1 the ordinary/admin
+  // serialization is inert. WebKit is host-only and excludes visual tests.
   projects: [
     {
       name: "chromium-visual",
@@ -92,7 +92,7 @@ export default defineConfig({
     },
     {
       name: "chromium",
-      testIgnore: /(admin-site|invite)\.spec\.ts/,
+      testIgnore: /(admin-site|theme|invite)\.spec\.ts/,
       grepInvert: visualTag,
       dependencies: ["chromium-visual"],
       use: {
@@ -102,7 +102,7 @@ export default defineConfig({
     },
     {
       name: "chromium-admin-site",
-      testMatch: /admin-site\.spec\.ts/,
+      testMatch: /(admin-site|theme)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
@@ -135,7 +135,7 @@ export default defineConfig({
     },
     {
       name: "firefox",
-      testIgnore: /(admin-site|invite)\.spec\.ts/,
+      testIgnore: /(admin-site|theme|invite)\.spec\.ts/,
       grepInvert: visualTag,
       dependencies: ["firefox-visual"],
       use: {
@@ -145,7 +145,7 @@ export default defineConfig({
     },
     {
       name: "firefox-admin-site",
-      testMatch: /admin-site\.spec\.ts/,
+      testMatch: /(admin-site|theme)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
@@ -168,8 +168,17 @@ export default defineConfig({
     },
     {
       name: "webkit",
-      testIgnore: /(admin-site|invite)\.spec\.ts/,
+      testIgnore: /(admin-site|theme|invite)\.spec\.ts/,
       grepInvert: visualTag,
+      use: { ...devices["Desktop Safari"] },
+    },
+    {
+      name: "webkit-theme",
+      testMatch: /theme\.spec\.ts/,
+      grepInvert: visualTag,
+      fullyParallel: false,
+      workers: 1,
+      dependencies: ["webkit"],
       use: { ...devices["Desktop Safari"] },
     },
   ],

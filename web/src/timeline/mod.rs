@@ -5,9 +5,9 @@
 //!
 //! The `#[server]` listing fns live in the `api` leaf and their host-only storage
 //! queries in `server` — the vertical owns both so that `(vertical, ident)` is a
-//! key the compiler enforces (#714). The wire types they exchange
-//! (`Page<RenderedPost>`) are defined in `common::seed`.
-//!
+//! key the compiler enforces (#714). Public listing responses carry
+//! `PublicPresentation<Page<RenderedPost>>`; the private home feed retains
+//! `Page<RenderedPost>`. Both wire types are defined in `common::seed`.
 //! Alongside them sit the pure host-tested `state` and `render` leaves and the
 //! wasm-only reactive `component`. `state` holds the reactive
 //! `TimelineState` signal bundle as well as the pure value model (#671) — both

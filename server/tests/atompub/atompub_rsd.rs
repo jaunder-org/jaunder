@@ -79,7 +79,7 @@ async fn user_page_includes_rsd_autodiscovery_link(
     #[case] expected_fragment: &str,
 ) {
     let TestEnv { state, base } = backend.setup().await;
-    create_user_and_session(&state).await;
+    let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
 
     // The projector's render of the user page hoists the EditURI autodiscovery
@@ -87,7 +87,7 @@ async fn user_page_includes_rsd_autodiscovery_link(
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/~alice")
+                .uri(format!("/~{}", session.username))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -96,5 +96,6 @@ async fn user_page_includes_rsd_autodiscovery_link(
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_string(response).await;
-    assert!(body.contains(expected_fragment), "{body}");
+    let expected_fragment = expected_fragment.replace("alice", &session.username);
+    assert!(body.contains(&expected_fragment), "{body}");
 }

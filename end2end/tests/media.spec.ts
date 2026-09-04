@@ -333,10 +333,20 @@ test.describe("Media delete guard", () => {
 
   test("forced media delete refuses rowless references and cannot double dispatch", async ({
     page,
+    tracedContext,
   }) => {
     await signInAsNewUser(page);
     const { url } = await uploadMedia(page, "forced.jpg");
-    await createPostViaApi(page, { body: `![pic](${url})` });
+    // Force may discard the owner's own reconstruction. A different user's Post
+    // supplies the global rowless reference that force must still preserve.
+    const referenceContext = await tracedContext();
+    try {
+      const referencePage = await referenceContext.newPage();
+      await signInAsNewUser(referencePage);
+      await createPostViaApi(referencePage, { body: `![pic](${url})` });
+    } finally {
+      await referenceContext.close();
+    }
     await attemptDelete(page);
     const forceButton = page.getByRole("button", { name: /^Force delete / });
 
@@ -363,7 +373,13 @@ test.describe("Media delete guard", () => {
     await expect(forceButton).toBeDisabled();
     await forceButton.click({ force: true });
     expect(counts.deleteRequests()).toBe(1);
+    const settled = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/media/delete") &&
+        response.request().method() === "POST",
+    );
     release();
+    await settled;
 
     await expect(forceButton).toBeEnabled();
     await expect(
