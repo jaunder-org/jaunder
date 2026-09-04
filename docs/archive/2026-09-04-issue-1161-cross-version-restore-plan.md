@@ -60,6 +60,17 @@ Out:
   - Verification: documentation gates resolve every draft citation and the
     architecture prose agrees with the shipped manifest and errors.
 
+- [x] Task 4: Make backup format review mechanically unavoidable
+  - Contract: keep `CURRENT_BACKUP_FORMAT_VERSION` explicit and independent of
+    migration count. Add a fail-closed host gate over the exact inventory of
+    representation-defining backup modules. Compatible source drift requires
+    refreshed Git blob identities; incompatible drift also requires a format
+    version increment. Missing inputs, source-set drift, malformed inventory,
+    and source/inventory version disagreement fail.
+  - Verification: focused xtask tests cover clean inventory, source drift,
+    source-set drift, malformed/non-literal version declarations, and version
+    mismatch; the real-tree gate passes with the committed inventory.
+
 ## Ordering and contracts
 
 - Task 1 owns the compatibility API and error taxonomy consumed by Task 2.
@@ -67,6 +78,8 @@ Out:
   assertions follow Task 1’s public errors and the approved spec.
 - Task 3 records the final names and behavior after Tasks 1–2 stabilize; the ADR
   remains numberless and proposed for post-merge promotion.
+- Task 4 is a post-review hardening decision requested before PR finalization;
+  it changes no restore behavior and keeps migration/schema authority separate.
 - Each completed task proceeds through `jaunder-commit`; the commit hook owns
   the single precommit gate.
 
@@ -86,3 +99,6 @@ Out:
   for the removed package-version mismatch variant.
 - Backend-parametric tests and both-direction interoperability protect the
   portable-backup contract.
+- The source inventory covers format, archive, media, catalog, binding,
+  validation, orchestration, and both backend backup adapters exactly; moved or
+  newly introduced representation logic requires an inventory change.

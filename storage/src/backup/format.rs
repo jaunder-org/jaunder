@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 use super::{BackupMode, error::BackupError};
 
 const LEGACY_BACKUP_FORMAT_VERSION: u32 = 1;
-pub(crate) const CURRENT_BACKUP_FORMAT_VERSION: u32 = LEGACY_BACKUP_FORMAT_VERSION;
+pub(crate) const CURRENT_BACKUP_FORMAT_VERSION: u32 = 1;
 
 const fn legacy_backup_format_version() -> u32 {
     LEGACY_BACKUP_FORMAT_VERSION

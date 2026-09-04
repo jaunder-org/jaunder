@@ -189,6 +189,11 @@ pub(crate) const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
     // and they must run before expensive compile/type work.
     HostGateStep::StaticChecks(steps::static_checks::Phase::SourceConsistency),
     HostGateStep::ResultOnly {
+        name: "backup-format-version",
+        run: steps::backup_format_version_check::run,
+        markdown_eligible: false,
+    },
+    HostGateStep::ResultOnly {
         name: "sequence-check",
         run: steps::sequence_check::run,
         markdown_eligible: true,
@@ -600,6 +605,7 @@ mod tests {
     fn host_gate_order_prioritizes_cheap_actionable_feedback() {
         let names = host_gate_step_names_for_test(Mode::Check);
         let write_transaction_contract = position(&names, "write-transaction-contract");
+        let backup_format_version = position(&names, "backup-format-version");
         let target_closure = position(&names, "common-host-target-closure");
 
         let fmt = position(&names, "fmt");
@@ -614,6 +620,10 @@ mod tests {
         assert!(
             target_closure < clippy,
             "target-resolved repository-shape checks run before compile checks"
+        );
+        assert!(
+            backup_format_version < clippy,
+            "backup format compatibility is checked before compile work"
         );
         assert!(
             write_transaction_contract < clippy,

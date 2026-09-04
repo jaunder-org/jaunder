@@ -34,6 +34,12 @@ Compatibility authorities are the backup format and the database schema version:
 - The manifest carries an explicit integer `format_version`. Version 1 exports
   write `1`; an absent member in historical manifests means legacy format 1.
   Only supported format versions are readable.
+- The format version is deliberately independent of database migration count:
+  migrations already have the separate schema-version authority and do not all
+  alter the portable representation. A fail-closed xtask inventory records the
+  Git blob identity of every representation-defining backup source. Source drift
+  must be acknowledged by refreshing the inventory; incompatible drift must also
+  increment the explicit format version.
 - A restore requires an exact schema-version match. No schema transformation or
   compatibility registry is implied.
 - Producing package version and backend-specific schema checksum are provenance,
@@ -55,10 +61,15 @@ and mismatched schemas fail closed before restore begins. The policy preserves
 backend portability without pretending backend-specific schema checksums are
 portable.
 
-This decision rejects package-version equality, SemVer ranges, warning or
-acknowledgement workflows, structural trial restores, and using schema checksums
-as compatibility gates. Those alternatives either confuse provenance with
-readability, impose arbitrary release chronology, or make compatibility depend
-on backend-specific incidental representation. It also rejects implicit
-cross-schema restore: supporting one requires a separately specified and tested
-migration path.
+This decision rejects package-version equality, SemVer ranges, operator warning
+or acknowledgement workflows, structural trial restores, migration-derived
+format versions, and schema checksums as compatibility gates. Those alternatives
+either confuse provenance with readability, impose arbitrary release chronology,
+or make compatibility depend on backend-specific incidental representation. It
+also rejects implicit cross-schema restore: supporting one requires a separately
+specified and tested migration path.
+
+The source inventory makes backup-format review unavoidable without pretending
+that source identity can decide semantic compatibility. Compatible refactors may
+refresh hashes at the current version; incompatible representation changes add a
+version and retain the immutable legacy-v1 default.
