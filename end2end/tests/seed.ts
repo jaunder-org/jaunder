@@ -238,7 +238,7 @@ export async function redriveDeadLettersViaCli(
  * subcommand (#8) — the same in-process storage write the canonical e2e seed
  * uses (`devtool seed-e2e` sets `site.registration_policy=open` this way). The
  * running server reads site config live per request, so a test can flip
- * `site.registration_policy` to `invite_only` (or set `site.base_url`) and the
+ * `site.registration_policy` to `operator_invites` (or set `site.base_url`) and the
  * next request observes it. There is no UI for the registration policy, so this
  * is the only seam. Global mutation — a spec that calls this must run isolated
  * from parallel specs that read the same key (see playwright.config's `-admin`

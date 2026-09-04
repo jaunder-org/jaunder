@@ -13,9 +13,9 @@ use common::{
 };
 use leptos::prelude::*;
 
-/// Guidance shown on `/register` in invite-only mode when the URL carries no invite
-/// code — the visitor didn't follow an invitation link, so a register form would only
-/// fail "invite code required". (#444 will turn this into a request-an-invitation form.)
+/// Guidance shown on `/register` under an invitation policy when the URL carries
+/// no invite code: the visitor did not follow an invitation link, so a register
+/// form would only fail with "invite code required."
 /// Exercised by the invite e2e (Test B), not host tests.
 #[component]
 fn InviteLinkRequired() -> impl IntoView {
@@ -77,18 +77,19 @@ pub fn RegisterPage() -> impl IntoView {
                         let invite_code = invite_code.clone();
                         Suspend::new(async move {
                             let p = policy.await;
-                            let is_invite_only = matches!(p, Ok(RegistrationPolicy::InviteOnly));
-                            if is_invite_only && invite_code.is_empty() {
+                            let requires_invitation = p
+                                .is_ok_and(RegistrationPolicy::requires_invitation);
+                            if requires_invitation && invite_code.is_empty() {
                                 return view! { <InviteLinkRequired /> }.into_any();
                             }
-                            // No code in the URL under invite-only: guide, don't show a
-                            // form that would only fail server-side.
+                            // No code in the URL under an invitation policy: guide, don't show
+                            // a form that would only fail server-side.
 
                             view! {
                                 <RegistrationForm
                                     action=register_action
                                     invite_code=invite_code.clone()
-                                    show_invite_note=is_invite_only
+                                    show_invite_note=requires_invitation
                                 />
                             }
                                 .into_any()

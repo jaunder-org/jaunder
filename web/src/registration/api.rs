@@ -92,9 +92,7 @@ fn finalize_registration(outcome: MutationOutcome<RawToken>) -> MutationOutcome<
     }
 }
 
-/// Returns the site's current registration policy — one of
-/// [`RegistrationPolicy::Open`], [`RegistrationPolicy::InviteOnly`], or
-/// [`RegistrationPolicy::Closed`].
+/// Returns the site's current registration policy.
 #[macros::server]
 pub async fn get_policy() -> WebResult<RegistrationPolicy> {
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -141,9 +139,10 @@ pub async fn register(
     span.record("registration.policy", policy.as_ref());
 
     let metric_policy = match &policy {
-        RegistrationPolicy::Open => host::metrics::RegistrationPolicy::Open,
-        RegistrationPolicy::InviteOnly => host::metrics::RegistrationPolicy::InviteOnly,
         RegistrationPolicy::Closed => host::metrics::RegistrationPolicy::Closed,
+        RegistrationPolicy::OperatorInvites => host::metrics::RegistrationPolicy::OperatorInvites,
+        RegistrationPolicy::MemberInvites => host::metrics::RegistrationPolicy::MemberInvites,
+        RegistrationPolicy::Open => host::metrics::RegistrationPolicy::Open,
     };
     let prepared_password = if matches!(&policy, RegistrationPolicy::Open) {
         Some(
@@ -154,7 +153,7 @@ pub async fn register(
     } else {
         None
     };
-    let is_invite_registration = matches!(&policy, RegistrationPolicy::InviteOnly);
+    let is_invite_registration = policy.requires_invitation();
     let operation_span = span.clone();
     let scope_result = write_scope
         .run(|transaction| {
@@ -180,7 +179,7 @@ pub async fn register(
                             .map(|user_id| (user_id, None))
                             .map_err(Into::into)
                     }
-                    RegistrationPolicy::InviteOnly => {
+                    RegistrationPolicy::OperatorInvites | RegistrationPolicy::MemberInvites => {
                         if let Some(proffered) = invite_code {
                             operation_span
                                 .record("registration.outcome", "create_user_with_invite");

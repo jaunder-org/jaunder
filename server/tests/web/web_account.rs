@@ -405,7 +405,7 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
 async fn create_invite_nested_request_maps_fields(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend
         .setup()
-        .registration(RegistrationPolicy::InviteOnly)
+        .registration(RegistrationPolicy::OperatorInvites)
         .await;
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
@@ -712,12 +712,12 @@ async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
-// list_invites returns error when policy is not InviteOnly.
+// list_invites returns error when no invitation policy is active.
 #[apply(backends)]
 #[tokio::test]
-async fn list_invites_returns_error_when_policy_not_invite_only(#[case] backend: Backend) {
+async fn list_invites_returns_error_when_policy_is_not_invitation_based(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    // The default Open policy is not InviteOnly.
+    // The default Open policy does not permit invitation listing.
 
     let cookie = create_user_and_session(&state).await.cookie();
 
@@ -731,7 +731,7 @@ async fn list_invites_returns_error_when_policy_not_invite_only(#[case] backend:
     assert_ne!(
         status,
         StatusCode::OK,
-        "list_invites should fail when policy is not invite_only"
+        "list_invites should fail when invitations are unavailable"
     );
 }
 

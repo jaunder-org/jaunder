@@ -13,7 +13,7 @@ import { extractInviteCode } from "./mail";
 import { seedConfigViaTool } from "./seed";
 
 // #433: the invitation round trip. These tests flip `site.registration_policy`
-// to `invite_only` — a global site-config singleton — so this spec runs in the
+// to `operator_invites` — a global site-config singleton — so this spec runs in the
 // serial `*-admin` Playwright project (after the parallel main project), exactly
 // like admin-site.spec, and never overlaps specs that register users under the
 // seeded `open` policy. The default is restored in afterAll.
@@ -33,13 +33,13 @@ test("invite link registration completes end-to-end", async ({
   user,
   mailbox,
 }) => {
-  // Establish invite-only and a base URL so invites::create can build the link
+  // Establish operator-issued invitations and a base URL so invites::create can build the link
   // (`{base_url}/register?invite_code=<code>`); it errors without a base URL.
-  await seedConfigViaTool("site.registration_policy", "invite_only");
+  await seedConfigViaTool("site.registration_policy", "operator_invites");
   await seedConfigViaTool("site.base_url", "https://example.com");
 
   // The operator sends an invite to this test's mailbox recipient via the
-  // /invites UI (shows a "Page not found." fallback unless invite_only, which
+  // /invites UI (shows a "Page not found." fallback unless operator_invites, which
   // we just set).
   await signInAs(page, "testoperator");
   await goto(page, "/invites");
@@ -92,7 +92,7 @@ test("invite creation pending prevents duplicate dispatch", async ({
   page,
   user,
 }) => {
-  await seedConfigViaTool("site.registration_policy", "invite_only");
+  await seedConfigViaTool("site.registration_policy", "operator_invites");
   await seedConfigViaTool("site.base_url", "https://example.com");
   await signInAs(page, "testoperator");
   await goto(page, "/invites");
@@ -119,7 +119,7 @@ test("invite creation pending prevents duplicate dispatch", async ({
 });
 
 test("invite creation server failure renders error", async ({ page, user }) => {
-  await seedConfigViaTool("site.registration_policy", "invite_only");
+  await seedConfigViaTool("site.registration_policy", "operator_invites");
   await seedConfigViaTool("site.base_url", "https://example.com");
   await signInAs(page, "testoperator");
   await goto(page, "/invites");
@@ -142,7 +142,7 @@ test("invite creation server failure renders error", async ({ page, user }) => {
 });
 
 test("invite creation invalid fields do not dispatch", async ({ page }) => {
-  await seedConfigViaTool("site.registration_policy", "invite_only");
+  await seedConfigViaTool("site.registration_policy", "operator_invites");
   await seedConfigViaTool("site.base_url", "https://example.com");
   await signInAs(page, "testoperator");
   await goto(page, "/invites");
@@ -164,13 +164,13 @@ test("invite creation invalid fields do not dispatch", async ({ page }) => {
   expect(createRequests).toBe(0);
 });
 
-// Test B — no-code guidance: in invite_only mode, visiting /register with no
-// invite_code shows the guidance text and renders no register submit button.
-test("invite-only /register with no code shows guidance and no submit button", async ({
+// Test B — no-code guidance: in operator-issued invitation mode, visiting /register with
+// no invite_code shows the guidance text and renders no register submit button.
+test("operator-invites /register with no code shows guidance and no submit button", async ({
   page,
 }) => {
-  // Holdout (spec D6): the invite-only guidance branch.
-  await seedConfigViaTool("site.registration_policy", "invite_only");
+  // Holdout (spec D6): the invitation-required guidance branch.
+  await seedConfigViaTool("site.registration_policy", "operator_invites");
   const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
 
   await goto(page, "/register", { timeout: firstNav });

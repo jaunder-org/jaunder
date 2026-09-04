@@ -33,7 +33,7 @@ macro_rules! enum_attr {
 enum_attr!(LoginOutcome { Success => "success", InvalidCredentials => "invalid_credentials", InternalError => "internal_error" });
 enum_attr!(SessionOutcome { Ok => "ok", InvalidToken => "invalid_token", SessionNotFound => "session_not_found", Internal => "internal" });
 enum_attr!(RegistrationSource { Web => "web", Cli => "cli" });
-enum_attr!(RegistrationPolicy { Open => "open", InviteOnly => "invite_only", Closed => "closed", CliBypass => "cli_bypass" });
+enum_attr!(RegistrationPolicy { Closed => "closed", OperatorInvites => "operator_invites", MemberInvites => "member_invites", Open => "open", CliBypass => "cli_bypass" });
 enum_attr!(RegistrationResult { Ok => "ok", Rejected => "rejected" });
 enum_attr!(InviteEvent { Created => "created", Redeemed => "redeemed" });
 enum_attr!(PasswordResetEvent { Requested => "requested", Completed => "completed" });
@@ -447,7 +447,7 @@ mod tests {
         session_validation(SessionOutcome::InvalidToken);
         registration(
             RegistrationSource::Web,
-            RegistrationPolicy::InviteOnly,
+            RegistrationPolicy::OperatorInvites,
             RegistrationResult::Rejected,
         );
         invite(InviteEvent::Redeemed);
@@ -784,9 +784,13 @@ mod tests {
         assert_eq!(RegistrationSource::Web.as_str(), "web");
         assert_eq!(RegistrationSource::Cli.as_str(), "cli");
 
-        assert_eq!(RegistrationPolicy::Open.as_str(), "open");
-        assert_eq!(RegistrationPolicy::InviteOnly.as_str(), "invite_only");
         assert_eq!(RegistrationPolicy::Closed.as_str(), "closed");
+        assert_eq!(
+            RegistrationPolicy::OperatorInvites.as_str(),
+            "operator_invites"
+        );
+        assert_eq!(RegistrationPolicy::MemberInvites.as_str(), "member_invites");
+        assert_eq!(RegistrationPolicy::Open.as_str(), "open");
         assert_eq!(RegistrationPolicy::CliBypass.as_str(), "cli_bypass");
 
         assert_eq!(RegistrationResult::Ok.as_str(), "ok");

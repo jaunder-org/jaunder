@@ -38,7 +38,13 @@ pub fn InvitesPage() -> impl IntoView {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
                     {move || Suspend::new(async move {
-                        if policy.await != Ok(RegistrationPolicy::InviteOnly) {
+                        if !matches!(
+                            policy.await,
+                            Ok(
+                                RegistrationPolicy::OperatorInvites
+                                | RegistrationPolicy::MemberInvites,
+                            )
+                        ) {
                             return view! { <p>"Page not found."</p> }.into_any();
                         }
                         match invites.await {

@@ -805,7 +805,7 @@ mod tests {
         let _parent_guard = parent.enter();
         parent.record(
             "registration.policy",
-            tracing::field::display("invite_only"),
+            tracing::field::display("operator_invites"),
         );
         let child = tracing::info_span!("storage.user.create_user", db.system = "postgres");
         let _child_guard = child.enter();
@@ -822,7 +822,7 @@ mod tests {
             "span trace missed child: {trace}"
         );
         assert!(
-            trace.contains("registration.policy") && trace.contains("invite_only"),
+            trace.contains("registration.policy") && trace.contains("operator_invites"),
             "span trace missed recorded determinant field: {trace}"
         );
         assert!(

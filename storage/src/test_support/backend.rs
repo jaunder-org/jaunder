@@ -877,7 +877,7 @@ mod tests {
     impl FixtureOverride {
         fn apply(self, setup: SetupBuilder) -> SetupBuilder {
             match self {
-                Self::Registration => setup.registration(RegistrationPolicy::InviteOnly),
+                Self::Registration => setup.registration(RegistrationPolicy::OperatorInvites),
                 Self::BaseUrl => setup.base_url(Some("https://override.example/".parse().unwrap())),
                 Self::Backup => setup.backup(BackupConfig::default()),
                 Self::MediaLimits => setup.media_limits("5".parse().unwrap(), "6".parse().unwrap()),
@@ -909,7 +909,7 @@ mod tests {
         let backup = BackupConfig::default();
         let env = backend
             .setup()
-            .registration(RegistrationPolicy::InviteOnly)
+            .registration(RegistrationPolicy::OperatorInvites)
             .base_url(Some(base_url))
             .backup(backup.clone())
             .media_limits(max_file_size, user_quota)
@@ -917,7 +917,7 @@ mod tests {
         let storage = &*env.state.site_config;
         assert_eq!(
             storage.get_registration_policy().await.unwrap(),
-            RegistrationPolicy::InviteOnly
+            RegistrationPolicy::OperatorInvites
         );
         assert_eq!(
             storage.get_identity().await.unwrap().base_url.as_deref(),
