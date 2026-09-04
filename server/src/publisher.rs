@@ -288,6 +288,9 @@ mod tests {
             parse_etag("\"etag\""),
             now,
             now,
+            "0000000000000000000000000000000000000000000000000000000000000000"
+                .parse()
+                .expect("valid fingerprint"),
         )
         .expect("matching cache row formats")
     }

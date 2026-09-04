@@ -199,8 +199,8 @@ async fn handler_cache_miss_restarts_after_hub_mutation_and_caches_only_new_disc
                     .body()
                     .contains(new_hub_for_write.as_ref())
             );
-            *committed_for_write.lock().expect("committed row") = Some(row);
-            Ok(storage::CacheCommitOutcome::Committed)
+            *committed_for_write.lock().expect("committed row") = Some(row.clone());
+            Ok(storage::CacheCommitOutcome::Committed(row))
         });
     let mut posts = storage::MockPostStorage::new();
     posts
@@ -279,7 +279,7 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
     SeedFeedCache::new(fp("/~bob/feed.rss"))
         .body(known_body.to_owned())
         .etag(parse_etag(etag))
-        .updated_at(updated_at)
+        .representation_modified_at(updated_at)
         .generated_at(UtcInstant::now())
         .seed(&state)
         .await;
@@ -342,7 +342,7 @@ async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
     SeedFeedCache::new(fp(&feed_path))
         .body(cached_body.to_owned())
         .etag(parse_etag(etag))
-        .updated_at(UtcInstant::now())
+        .representation_modified_at(UtcInstant::now())
         .generated_at(UtcInstant::now())
         .seed(&state)
         .await;
@@ -412,7 +412,7 @@ async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
     SeedFeedCache::new(fp("/~charlie/feed.rss"))
         .body("feed body".to_owned())
         .etag(parse_etag(etag))
-        .updated_at(UtcInstant::now())
+        .representation_modified_at(UtcInstant::now())
         .generated_at(UtcInstant::now())
         .seed(&state)
         .await;
@@ -446,7 +446,7 @@ async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: B
     SeedFeedCache::new(fp("/~dave/feed.rss"))
         .body("feed body".to_owned())
         .etag(parse_etag("\"test-etag\""))
-        .updated_at(UtcInstant::from(update_time))
+        .representation_modified_at(UtcInstant::from(update_time))
         .generated_at(UtcInstant::now())
         .seed(&state)
         .await;

@@ -400,7 +400,7 @@ impl FeedWorker {
             };
         }
         match guard.commit_cache(snapshot.generation, row).await {
-            Ok(CacheCommitOutcome::Committed) => self.mark_regenerated(regeneration_ids).await,
+            Ok(CacheCommitOutcome::Committed(_)) => self.mark_regenerated(regeneration_ids).await,
             Ok(CacheCommitOutcome::StaleGeneration) => {
                 self.restart_regeneration(ids).await;
                 false
@@ -897,6 +897,9 @@ mod tests {
             parse_etag("\"sha256-deadbeef\""),
             now,
             now,
+            "0000000000000000000000000000000000000000000000000000000000000000"
+                .parse()
+                .expect("valid fingerprint"),
         )
         .expect("matching feed cache row")
     }

@@ -90,6 +90,7 @@ pub async fn render(
         etag,
         representation_modified_at,
         generated_at,
+        fingerprint,
     )
     .map_err(|error| RegenerateError::BadUrl(error.to_string()))
 }

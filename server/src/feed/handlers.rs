@@ -52,8 +52,8 @@ async fn regenerate_cache_miss(
             .finalization_guard()
             .await
             .map_err(RegenerateError::Publisher)?;
-        match guard.commit_cache(snapshot.generation, row.clone()).await {
-            Ok(CacheCommitOutcome::Committed) => return Ok(row),
+        match guard.commit_cache(snapshot.generation, row).await {
+            Ok(CacheCommitOutcome::Committed(effective_row)) => return Ok(effective_row),
             Ok(CacheCommitOutcome::StaleGeneration) => {}
             Err(error) => return Err(RegenerateError::Storage(Box::new(error))),
         }
@@ -97,7 +97,7 @@ async fn serve(
         }
     };
 
-    let last_modified: SystemTime = row.updated_at.value().into();
+    let last_modified: SystemTime = row.representation_modified_at.value().into();
     let status =
         if conditional::is_not_modified(&headers, row.etag.as_ref().as_bytes(), last_modified) {
             StatusCode::NOT_MODIFIED
@@ -130,8 +130,8 @@ fn cache_headers(row: &FeedCacheRow) -> Result<HeaderMap, InternalError> {
     let etag = HeaderValue::from_bytes(row.etag.as_ref().as_bytes())
         .map_err(map_feed_response_metadata_failure)?;
     headers.insert(header::ETAG, etag);
-    let updated_at: SystemTime = row.updated_at.value().into();
-    let last_modified = HeaderValue::from_str(&httpdate::fmt_http_date(updated_at))
+    let representation_modified_at: SystemTime = row.representation_modified_at.value().into();
+    let last_modified = HeaderValue::from_str(&httpdate::fmt_http_date(representation_modified_at))
         .map_err(map_feed_response_metadata_failure)?;
     headers.insert(header::LAST_MODIFIED, last_modified);
     headers.insert(
@@ -258,7 +258,7 @@ mod tests {
         SeedFeedCache::new("/feed.rss".parse().expect("valid feed path"))
             .body("<rss/>".to_owned())
             .etag(parse_etag(etag))
-            .updated_at(updated_at)
+            .representation_modified_at(updated_at)
             .generated_at(updated_at)
             .build()
     }
