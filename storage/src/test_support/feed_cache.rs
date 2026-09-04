@@ -6,7 +6,10 @@ use crate::feed_cache::FeedCacheRow;
 
 use chrono::Timelike;
 use common::{etag::ETag, feed::FeedFormat, test_support::parse_etag, time::UtcInstant};
-use host::feed::{FeedPath, SyndicationFeedRepresentation};
+use host::{
+    etag::FeedSemanticFingerprint,
+    feed::{FeedPath, SyndicationFeedRepresentation},
+};
 use std::sync::Arc;
 
 /// A coherent cached feed row whose representation metadata is derived from its
@@ -16,8 +19,9 @@ pub struct SeedFeedCache {
     format: FeedFormat,
     body: String,
     etag: ETag,
-    updated_at: UtcInstant,
+    representation_modified_at: UtcInstant,
     generated_at: UtcInstant,
+    semantic_fingerprint: FeedSemanticFingerprint,
 }
 
 impl SeedFeedCache {
@@ -39,8 +43,12 @@ impl SeedFeedCache {
             format,
             body: default_body(format),
             etag: parse_etag("\"sha256-seeded-feed\""),
-            updated_at: now,
+            representation_modified_at: now,
             generated_at: now,
+            semantic_fingerprint:
+                "0000000000000000000000000000000000000000000000000000000000000000"
+                    .parse()
+                    .expect("valid default semantic fingerprint"),
         }
     }
 
@@ -58,10 +66,10 @@ impl SeedFeedCache {
         self
     }
 
-    /// Override the cache update timestamp.
+    /// Override the representation modification timestamp.
     #[must_use]
-    pub fn updated_at(mut self, updated_at: UtcInstant) -> Self {
-        self.updated_at = storage_instant(updated_at);
+    pub fn representation_modified_at(mut self, representation_modified_at: UtcInstant) -> Self {
+        self.representation_modified_at = storage_instant(representation_modified_at);
         self
     }
 
@@ -69,6 +77,13 @@ impl SeedFeedCache {
     #[must_use]
     pub fn generated_at(mut self, generated_at: UtcInstant) -> Self {
         self.generated_at = storage_instant(generated_at);
+        self
+    }
+
+    /// Override the semantic identity.
+    #[must_use]
+    pub fn semantic_fingerprint(mut self, semantic_fingerprint: FeedSemanticFingerprint) -> Self {
+        self.semantic_fingerprint = semantic_fingerprint;
         self
     }
 
@@ -91,8 +106,9 @@ impl SeedFeedCache {
             self.feed_path,
             representation,
             self.etag,
-            self.updated_at,
+            self.representation_modified_at,
             self.generated_at,
+            self.semantic_fingerprint,
         )
         .expect("path-derived feed representation matches feed cache path")
     }
@@ -218,20 +234,29 @@ mod tests {
     }
 
     #[test]
-    fn build_defaults_timestamp_roles_to_one_instant() {
-        let row = SeedFeedCache::new(fp("/feed.rss")).build();
+    fn build_truncates_representation_modification_time_without_changing_generated_at() {
+        let representation_modified_at = parse_utc_instant("2026-08-25T01:02:03.123456Z");
+        let generated_at = parse_utc_instant("2026-08-25T01:02:03.654321Z");
+        let row = SeedFeedCache::new(fp("/feed.rss"))
+            .representation_modified_at(representation_modified_at)
+            .generated_at(generated_at)
+            .build();
 
-        assert_eq!(row.updated_at, row.generated_at);
+        assert_eq!(
+            row.representation_modified_at,
+            parse_utc_instant("2026-08-25T01:02:03Z")
+        );
+        assert_eq!(row.generated_at, generated_at);
     }
 
     #[test]
     fn build_preserves_each_override() {
-        let updated_at = parse_utc_instant("2026-08-25T01:02:03.123456Z");
+        let representation_modified_at = parse_utc_instant("2026-08-25T01:02:03.123456Z");
         let generated_at = parse_utc_instant("2026-08-25T01:02:04.123456Z");
         let row = SeedFeedCache::new(fp("/feed.rss"))
             .body("<rss><channel><title>Overridden</title></channel></rss>".to_owned())
             .etag(parse_etag("\"sha256-overridden\""))
-            .updated_at(updated_at)
+            .representation_modified_at(representation_modified_at)
             .generated_at(generated_at)
             .build();
 
@@ -240,7 +265,10 @@ mod tests {
             "<rss><channel><title>Overridden</title></channel></rss>"
         );
         assert_eq!(row.etag, parse_etag("\"sha256-overridden\""));
-        assert_eq!(row.updated_at, updated_at);
+        assert_eq!(
+            row.representation_modified_at,
+            parse_utc_instant("2026-08-25T01:02:03Z")
+        );
         assert_eq!(row.generated_at, generated_at);
     }
 
@@ -270,10 +298,10 @@ mod tests {
         let env = backend.setup().await;
         let feed_path = fp("/feed.atom");
         let persisted_at = parse_utc_instant("2026-08-25T01:02:03.123456789Z");
-        let stored_at = parse_utc_instant("2026-08-25T01:02:03.123456Z");
+        let stored_at = parse_utc_instant("2026-08-25T01:02:03Z");
 
         let seeded = SeedFeedCache::new(feed_path.clone())
-            .updated_at(persisted_at)
+            .representation_modified_at(persisted_at)
             .generated_at(persisted_at)
             .seed(&env.state)
             .await;
@@ -285,8 +313,7 @@ mod tests {
             .unwrap()
             .expect("seeded feed cache row exists");
 
-        assert_eq!(seeded.updated_at, stored_at);
-        assert_eq!(seeded.generated_at, stored_at);
+        assert_eq!(seeded.representation_modified_at, stored_at);
         assert_eq!(seeded, stored);
     }
 }

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::SystemTime};
 
 use axum::{
     Extension,
@@ -15,7 +15,10 @@ use host::feed::FeedPath;
 use host::metrics;
 use storage::{CacheCommitOutcome, FeedCacheError, FeedCacheRow, FeedCacheStorage, PostStorage};
 
-use super::regenerate::{self, RegenerateError};
+use super::{
+    conditional,
+    regenerate::{self, RegenerateError},
+};
 use crate::publisher::PublisherService;
 use crate::soft_path::SoftPath;
 use web::error::InternalError;
@@ -49,8 +52,8 @@ async fn regenerate_cache_miss(
             .finalization_guard()
             .await
             .map_err(RegenerateError::Publisher)?;
-        match guard.commit_cache(snapshot.generation, row.clone()).await {
-            Ok(CacheCommitOutcome::Committed) => return Ok(row),
+        match guard.commit_cache(snapshot.generation, row).await {
+            Ok(CacheCommitOutcome::Committed(effective_row)) => return Ok(effective_row),
             Ok(CacheCommitOutcome::StaleGeneration) => {}
             Err(error) => return Err(RegenerateError::Storage(Box::new(error))),
         }
@@ -94,41 +97,58 @@ async fn serve(
         }
     };
 
-    if let Some(etag) = headers.get(header::IF_NONE_MATCH)
-        && etag.to_str().ok() == Some(row.etag.as_ref())
-    {
-        return StatusCode::NOT_MODIFIED.into_response();
-    }
-    if let Some(ims) = headers.get(header::IF_MODIFIED_SINCE)
-        && let Some(t) = ims
-            .to_str()
-            .ok()
-            .and_then(|s| chrono::DateTime::parse_from_rfc2822(s).ok())
-        && row.updated_at.value() <= t.with_timezone(&chrono::Utc)
-    {
-        return StatusCode::NOT_MODIFIED.into_response();
-    } // cov:ignore fall-through brace; llvm-cov leaves it unmarked though the row-newer (200, not 304) path is tested
+    let last_modified: SystemTime = row.representation_modified_at.value().into();
+    let status =
+        if conditional::is_not_modified(&headers, row.etag.as_ref().as_bytes(), last_modified) {
+            StatusCode::NOT_MODIFIED
+        } else {
+            StatusCode::OK
+        };
+    finish_cached_response(cached_response(row, status))
+}
 
-    let mut resp_headers = HeaderMap::new();
-    if let Ok(ct) = HeaderValue::from_str(&row.representation().content_type()) {
-        resp_headers.insert(header::CONTENT_TYPE, ct);
+fn finish_cached_response(result: Result<Response, InternalError>) -> Response {
+    match result {
+        Ok(response) => response,
+        Err(error) => {
+            error.emit_boundary_failure();
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
     }
-    if let Ok(etag) = HeaderValue::from_str(&row.etag) {
-        resp_headers.insert(header::ETAG, etag);
+}
+
+fn cached_response(row: FeedCacheRow, status: StatusCode) -> Result<Response, InternalError> {
+    let mut headers = cache_headers(&row)?;
+    if status == StatusCode::OK {
+        let content_type = HeaderValue::from_str(&row.representation().content_type())
+            .map_err(map_feed_response_metadata_failure)?;
+        headers.insert(header::CONTENT_TYPE, content_type);
+        return Ok((status, headers, row.into_representation().into_body()).into_response());
     }
-    if let Ok(lm) = HeaderValue::from_str(&row.updated_at.value().to_rfc2822()) {
-        resp_headers.insert(header::LAST_MODIFIED, lm);
-    }
-    resp_headers.insert(
+
+    Ok((status, headers).into_response())
+}
+
+fn cache_headers(row: &FeedCacheRow) -> Result<HeaderMap, InternalError> {
+    let mut headers = HeaderMap::new();
+    let etag = HeaderValue::from_bytes(row.etag.as_ref().as_bytes())
+        .map_err(map_feed_response_metadata_failure)?;
+    headers.insert(header::ETAG, etag);
+    let representation_modified_at: SystemTime = row.representation_modified_at.value().into();
+    let last_modified = HeaderValue::from_str(&httpdate::fmt_http_date(representation_modified_at))
+        .map_err(map_feed_response_metadata_failure)?;
+    headers.insert(header::LAST_MODIFIED, last_modified);
+    headers.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=300"),
     );
-    (
-        StatusCode::OK,
-        resp_headers,
-        row.into_representation().into_body(),
-    )
-        .into_response()
+    Ok(headers)
+}
+
+fn map_feed_response_metadata_failure(
+    error: axum::http::header::InvalidHeaderValue,
+) -> InternalError {
+    InternalError::server(error).with_context("boundary", "server.feed.response_metadata")
 }
 
 pub async fn feed_site(
@@ -227,8 +247,9 @@ pub async fn feed_user_tag(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Duration, Utc};
+    use chrono::{TimeZone, Utc};
     use common::{test_support::parse_etag, time::UtcInstant};
+    use http_body_util::BodyExt;
     use rstest::*;
     use rstest_reuse::*;
     use sqlx::Error;
@@ -241,7 +262,7 @@ mod tests {
         SeedFeedCache::new("/feed.rss".parse().expect("valid feed path"))
             .body("<rss/>".to_owned())
             .etag(parse_etag(etag))
-            .updated_at(updated_at)
+            .representation_modified_at(updated_at)
             .generated_at(updated_at)
             .build()
     }
@@ -254,6 +275,15 @@ mod tests {
         ))
     }
 
+    async fn body_bytes(response: Response) -> Vec<u8> {
+        response
+            .into_body()
+            .collect()
+            .await
+            .expect("response body is readable")
+            .to_bytes()
+            .to_vec()
+    }
     fn empty_posts() -> Arc<dyn PostStorage> {
         Arc::new(MockPostStorage::new())
     }
@@ -342,19 +372,23 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
-
     // guard:no-backend — mock store
     #[tokio::test]
-    async fn serve_returns_304_on_if_none_match() {
+    async fn serve_returns_a_metadata_complete_body_free_304_on_if_none_match() {
+        let updated_at = UtcInstant::from(
+            Utc.with_ymd_and_hms(1994, 11, 6, 8, 49, 37)
+                .single()
+                .expect("valid timestamp"),
+        );
         let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
-            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::now()))));
+            .returning(move |_| Ok(Some(sample_row("\"etag-1\"", updated_at))));
 
         let mut headers = HeaderMap::new();
         headers.insert(
             header::IF_NONE_MATCH,
-            HeaderValue::from_static("\"etag-1\""),
+            HeaderValue::from_static("W/\"etag-1\""),
         );
 
         let resp = serve(
@@ -367,22 +401,75 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(resp.headers()[header::ETAG], "\"etag-1\"");
+        assert_eq!(
+            resp.headers()[header::LAST_MODIFIED],
+            "Sun, 06 Nov 1994 08:49:37 GMT"
+        );
+        assert_eq!(resp.headers()[header::CACHE_CONTROL], "public, max-age=300");
+        assert!(!resp.headers().contains_key(header::CONTENT_TYPE));
+        assert_eq!(body_bytes(resp).await, b"");
     }
-
     // guard:no-backend — mock store
     #[tokio::test]
-    async fn serve_returns_200_when_if_none_match_does_not_match() {
+    async fn serve_returns_a_metadata_complete_200_on_nonmatching_if_none_match() {
+        let updated_at = UtcInstant::from(
+            Utc.with_ymd_and_hms(1994, 11, 6, 8, 49, 37)
+                .single()
+                .expect("valid timestamp"),
+        );
         let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
-            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::now()))));
+            .returning(move |_| Ok(Some(sample_row("\"etag-1\"", updated_at))));
 
-        // IF_NONE_MATCH present but a different etag: the conditional falls
-        // through to a normal 200 rather than returning 304.
         let mut headers = HeaderMap::new();
         headers.insert(
             header::IF_NONE_MATCH,
             HeaderValue::from_static("\"etag-other\""),
+        );
+
+        let resp = serve(
+            Arc::new(cache),
+            empty_publisher(),
+            empty_posts(),
+            headers,
+            FeedSurface::Site,
+            FeedFormat::Rss,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()[header::CONTENT_TYPE],
+            "application/rss+xml; charset=utf-8"
+        );
+        assert_eq!(resp.headers()[header::ETAG], "\"etag-1\"");
+        assert_eq!(
+            resp.headers()[header::LAST_MODIFIED],
+            "Sun, 06 Nov 1994 08:49:37 GMT"
+        );
+        assert_eq!(resp.headers()[header::CACHE_CONTROL], "public, max-age=300");
+        assert_eq!(body_bytes(resp).await, b"<rss/>");
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn serve_does_not_fall_back_to_if_modified_since_when_if_none_match_is_present() {
+        let updated_at = UtcInstant::from(
+            Utc.with_ymd_and_hms(1994, 11, 6, 8, 49, 37)
+                .single()
+                .expect("valid timestamp"),
+        );
+        let mut cache = MockFeedCacheStorage::new();
+        cache
+            .expect_get()
+            .returning(move |_| Ok(Some(sample_row("\"etag-1\"", updated_at))));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("malformed"));
+        headers.insert(
+            header::IF_MODIFIED_SINCE,
+            HeaderValue::from_static("Sun, 06 Nov 1994 08:49:37 GMT"),
         );
 
         let resp = serve(
@@ -400,19 +487,20 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_returns_200_when_modified_since_is_stale() {
-        // Row updated *after* the client's If-Modified-Since date: the
-        // conditional falls through to a 200 rather than returning 304.
-        let updated_at = UtcInstant::now();
+        let updated_at = UtcInstant::from(
+            Utc.with_ymd_and_hms(1994, 11, 6, 8, 49, 37)
+                .single()
+                .expect("valid timestamp"),
+        );
         let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
             .returning(move |_| Ok(Some(sample_row("\"etag-1\"", updated_at))));
 
         let mut headers = HeaderMap::new();
-        let ims = (Utc::now() - Duration::days(1)).to_rfc2822();
         headers.insert(
             header::IF_MODIFIED_SINCE,
-            HeaderValue::from_str(&ims).unwrap(),
+            HeaderValue::from_static("Sat, 05 Nov 1994 08:49:37 GMT"),
         );
 
         let resp = serve(
@@ -430,17 +518,20 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_returns_304_on_if_modified_since() {
-        let updated_at = UtcInstant::from(Utc::now() - Duration::days(1));
+        let updated_at = UtcInstant::from(
+            Utc.with_ymd_and_hms(1994, 11, 6, 8, 49, 37)
+                .single()
+                .expect("valid timestamp"),
+        );
         let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
             .returning(move |_| Ok(Some(sample_row("\"etag-1\"", updated_at))));
 
         let mut headers = HeaderMap::new();
-        let ims = (Utc::now() + Duration::days(1)).to_rfc2822();
         headers.insert(
             header::IF_MODIFIED_SINCE,
-            HeaderValue::from_str(&ims).unwrap(),
+            HeaderValue::from_static("Sun, 06 Nov 1994 08:49:37 GMT"),
         );
 
         let resp = serve(
@@ -453,6 +544,15 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+    }
+
+    #[test]
+    fn invalid_response_metadata_returns_a_sanitized_internal_error() {
+        let invalid_header = HeaderValue::from_bytes(b"\n").expect_err("newline is invalid");
+        let response =
+            finish_cached_response(Err(map_feed_response_metadata_failure(invalid_header)));
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     // guard:no-backend — mock store

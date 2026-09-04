@@ -101,12 +101,13 @@ pub struct FeedMetadata {
     pub canonical_url: CanonicalUrl,
     pub self_url: FeedUrl,
     pub hub_url: Option<HubUrl>,
-    pub updated_at: DateTime<Utc>,
+    /// Feed-level timestamp selected by cache identity comparison, not an item timestamp.
+    pub representation_modified_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
 pub struct FeedItem {
-    pub id: PostId, // last_post_id input to ETag
+    pub id: PostId,
     pub title: Option<PostTitle>,
     pub permalink: PermalinkUrl,
     pub summary: Option<PostSummary>,

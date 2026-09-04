@@ -10,7 +10,7 @@ use host::config_key::SiteConfigKey;
 use host::feed::{FeedMinDays, FeedMinItems, FeedPath, FeedsConfig};
 use sqlx::{ColumnIndex, Database, Decode, Encode, Error, Executor, FromRow, Pool, Type};
 
-use crate::feed_cache::{FeedCacheError, FeedCacheRow, upsert_on_connection};
+use crate::feed_cache::{FeedCacheError, FeedCacheRow, StoredFeedCacheRow, upsert_on_connection};
 use crate::site_config;
 use crate::site_config::StoredSiteConfigValue;
 use crate::sql::QueryStorageExt;
@@ -64,9 +64,9 @@ pub enum HubMutationOutcome {
 }
 
 /// Result of a generation-fenced cache write.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CacheCommitOutcome {
-    Committed,
+    Committed(FeedCacheRow),
     StaleGeneration,
 }
 
@@ -195,6 +195,7 @@ where
     for<'q> ContentType: Encode<'q, DB> + Type<DB>,
     for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
     for<'q> FeedPath: Encode<'q, DB> + Type<DB>,
+    StoredFeedCacheRow: for<'r> FromRow<'r, DB::Row>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -401,14 +402,15 @@ where
         if current.is_none() {
             return Ok(CacheCommitOutcome::StaleGeneration);
         }
-        upsert_on_connection::<DB>(connection, row).await?;
-        Ok(CacheCommitOutcome::Committed)
+        let effective_row = upsert_on_connection::<DB>(connection, row).await?;
+        Ok(CacheCommitOutcome::Committed(effective_row))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use tokio::sync::Barrier;
 
     use super::*;
     use crate::test_support::fp;
@@ -487,6 +489,9 @@ mod tests {
             parse_etag("\"sha256-deadbeef\""),
             now,
             now,
+            "0000000000000000000000000000000000000000000000000000000000000000"
+                .parse()
+                .expect("valid fingerprint"),
         )
         .expect("matching cache row")
     }
@@ -607,6 +612,177 @@ mod tests {
                 .expect("fence stale cache commit"),
         );
         assert_eq!(outcome, CacheCommitOutcome::StaleGeneration);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn cache_commit_returns_the_effective_existing_row_for_matching_identity(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        seed_cache(&env, cache_row()).await;
+        let existing = env
+            .state
+            .feed_cache
+            .get(&fp("/feed.rss"))
+            .await
+            .unwrap()
+            .expect("seeded cache row");
+        let generation = env.state.publisher.snapshot().await.unwrap().generation;
+        let publisher = Arc::clone(&env.state.publisher);
+        let candidate = FeedCacheRow::new(
+            fp("/feed.rss"),
+            SyndicationFeedRepresentation::try_from_stored(
+                common::feed::FeedFormat::Rss,
+                common::feed::FeedFormat::Rss.content_type(),
+                "<rss>discarded</rss>".to_owned(),
+            )
+            .expect("valid representation"),
+            parse_etag("\"sha256-discarded\""),
+            UtcInstant::from(
+                existing.representation_modified_at.value() + chrono::Duration::seconds(1),
+            ),
+            UtcInstant::from(existing.generated_at.value() + chrono::Duration::seconds(1)),
+            existing.semantic_fingerprint().clone(),
+        )
+        .expect("matching cache row");
+        let outcome = confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        publisher
+                            .commit_cache(transaction, generation, candidate)
+                            .await
+                    })
+                })
+                .await
+                .expect("commit cache"),
+        );
+
+        assert_eq!(
+            outcome,
+            CacheCommitOutcome::Committed(
+                FeedCacheRow::new(
+                    fp("/feed.rss"),
+                    existing.representation().clone(),
+                    existing.etag.clone(),
+                    existing.representation_modified_at,
+                    UtcInstant::from(existing.generated_at.value() + chrono::Duration::seconds(1)),
+                    existing.semantic_fingerprint().clone(),
+                )
+                .expect("matching effective row")
+            )
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn concurrent_matching_fingerprint_commits_preserve_one_identity(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let existing = cache_row();
+        seed_cache(&env, existing).await;
+        let existing = env
+            .state
+            .feed_cache
+            .get(&fp("/feed.rss"))
+            .await
+            .unwrap()
+            .expect("seeded cache row");
+        let generation = env.state.publisher.snapshot().await.unwrap().generation;
+        let candidate = |body: &str, offset| {
+            FeedCacheRow::new(
+                fp("/feed.rss"),
+                SyndicationFeedRepresentation::try_from_stored(
+                    common::feed::FeedFormat::Rss,
+                    common::feed::FeedFormat::Rss.content_type(),
+                    body.to_owned(),
+                )
+                .expect("valid representation"),
+                parse_etag("\"sha256-candidate\""),
+                UtcInstant::from(
+                    existing.representation_modified_at.value() + chrono::Duration::seconds(offset),
+                ),
+                UtcInstant::from(existing.generated_at.value() + chrono::Duration::seconds(offset)),
+                existing.semantic_fingerprint().clone(),
+            )
+            .expect("matching cache row")
+        };
+        let first = candidate("<rss>first candidate</rss>", 1);
+        let latest_generated_at =
+            UtcInstant::from(existing.generated_at.value() + chrono::Duration::seconds(2));
+        let second = candidate("<rss>second candidate</rss>", 2);
+        let barrier = Arc::new(Barrier::new(2));
+        let one_publisher = Arc::clone(&env.state.publisher);
+        let two_publisher = Arc::clone(&env.state.publisher);
+        let one_scope = env.state.write_scope.clone();
+        let two_scope = env.state.write_scope.clone();
+        let one_barrier = Arc::clone(&barrier);
+        let two_barrier = Arc::clone(&barrier);
+        let (one, two) = tokio::join!(
+            async move {
+                one_barrier.wait().await;
+                one_scope
+                    .run(move |transaction| {
+                        Box::pin(async move {
+                            one_publisher
+                                .commit_cache(transaction, generation, first)
+                                .await
+                        })
+                    })
+                    .await
+            },
+            async move {
+                two_barrier.wait().await;
+                two_scope
+                    .run(move |transaction| {
+                        Box::pin(async move {
+                            two_publisher
+                                .commit_cache(transaction, generation, second)
+                                .await
+                        })
+                    })
+                    .await
+            },
+        );
+        let CacheCommitOutcome::Committed(one) = confirmed(one.expect("first commit")) else {
+            panic!("first commit must be current")
+        };
+        let CacheCommitOutcome::Committed(two) = confirmed(two.expect("second commit")) else {
+            panic!("second commit must be current")
+        };
+        for row in [one, two] {
+            assert_eq!(
+                row.representation().body(),
+                existing.representation().body()
+            );
+            assert_eq!(row.etag, existing.etag);
+            assert_eq!(
+                row.representation_modified_at,
+                existing.representation_modified_at
+            );
+            assert!(row.generated_at > existing.generated_at);
+            assert!(row.generated_at <= latest_generated_at);
+        }
+        let persisted = env
+            .state
+            .feed_cache
+            .get(&fp("/feed.rss"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            persisted.representation().body(),
+            existing.representation().body()
+        );
+        assert_eq!(persisted.etag, existing.etag);
+        assert_eq!(
+            persisted.representation_modified_at,
+            existing.representation_modified_at
+        );
+        assert_eq!(persisted.generated_at, latest_generated_at);
     }
 
     /// A callback failure rolls back configuration, generation, and cache

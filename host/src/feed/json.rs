@@ -114,6 +114,21 @@ mod tests {
     }
 
     #[test]
+    fn has_no_feed_timestamp_and_retains_item_modification_time() {
+        let mut metadata = meta(None, Some("A site"));
+        metadata.representation_modified_at =
+            chrono::Utc.with_ymd_and_hms(2026, 2, 3, 4, 5, 6).unwrap();
+        let item = item(Some(parse_post_title("t")), vec![]);
+        let expected_item_time = item.updated_at.to_rfc3339();
+
+        let rendered = render_json(&metadata, &[item]);
+        let value: Value = serde_json::from_str(rendered.body()).unwrap();
+
+        assert!(value.get("date_modified").is_none());
+        assert_eq!(value["items"][0]["date_modified"], expected_item_time);
+    }
+
+    #[test]
     fn emits_feed_url_as_self() {
         let out = render_json(&meta(None, Some("A site")), &[]);
         let v: Value = serde_json::from_str(out.body()).unwrap();

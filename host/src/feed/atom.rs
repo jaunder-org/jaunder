@@ -65,7 +65,7 @@ pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRe
     let feed = Feed {
         title: Text::plain(meta.title.to_string()),
         id: meta.self_url.to_string(),
-        updated: meta.updated_at.fixed_offset(),
+        updated: meta.representation_modified_at.fixed_offset(),
         subtitle: meta
             .description
             .as_ref()
@@ -131,6 +131,20 @@ mod tests {
 
         let with = render_atom(&meta(None, Some("A site")), &[]);
         assert!(with.body().contains("<subtitle>A site</subtitle>"));
+    }
+
+    #[test]
+    fn uses_feed_representation_time_for_updated() {
+        let representation_time = chrono::Utc.with_ymd_and_hms(2026, 2, 3, 4, 5, 6).unwrap();
+        let mut metadata = meta(None, Some("A site"));
+        metadata.representation_modified_at = representation_time;
+
+        let rendered = render_atom(&metadata, &[item()]);
+
+        assert!(rendered.body().contains(&format!(
+            "<updated>{}</updated>",
+            representation_time.to_rfc3339()
+        )));
     }
 
     #[test]

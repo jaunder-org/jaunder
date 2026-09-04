@@ -375,7 +375,7 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
     SeedFeedCache::new(fp("/feed.atom"))
         .body("stale".to_owned())
         .etag(parse_etag("\"etag\""))
-        .updated_at(UtcInstant::from(t0))
+        .representation_modified_at(UtcInstant::from(t0))
         .generated_at(UtcInstant::from(t0))
         .seed(&state)
         .await;
@@ -425,7 +425,7 @@ async fn startup_catchup_ignores_nonpublic_posts(#[case] backend: Backend) {
     SeedFeedCache::new(fp("/feed.atom"))
         .body("stale".to_owned())
         .etag(parse_etag("\"etag\""))
-        .updated_at(UtcInstant::from(t0))
+        .representation_modified_at(UtcInstant::from(t0))
         .generated_at(UtcInstant::from(t0))
         .seed(&state)
         .await;

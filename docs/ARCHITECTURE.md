@@ -735,19 +735,22 @@ are errors
 [Setting activation, arithmetic, and corrupted values](https://github.com/jaunder-org/jaunder/issues/1053)
 remain implementation debt.
 
-**Accepted validation target.** Each cached representation is to carry a strong,
-deterministic ETag from every ordered serializer input plus serializer revision;
-identical semantic inputs and bytes retain it. A persisted whole-second
-representation-modification time is to change only with representation identity
-and supply `Last-Modified`. `If-None-Match` uses RFC 9110 weak comparison, lists
-and wildcard, and takes precedence over `If-Modified-Since`; matching GET/HEAD
-returns 304 without a body, nonmatching GET returns a body, and nonmatching HEAD
-returns GET-equivalent headers without one. Current validators and cache
-metadata accompany 304. `Cache-Control: public, max-age=300` is a downstream
-revalidation policy, not a regeneration promise
+**Accepted validation.** Each cached representation carries a strong,
+deterministic ETag derived from every ordered serializer input, its serializer
+revision, and the selected persisted whole-second representation-modification
+time. The cache stores the semantic-input fingerprint alongside the body, ETag,
+representation-modification time, and `generated_at`. Its generation-fenced
+atomic write preserves the stored body, ETag, and representation-modification
+time when the fingerprint matches, while advancing `generated_at`; a changed
+fingerprint installs the new representation identity. `Last-Modified` is the
+persisted representation-modification time. `If-None-Match` uses RFC 9110 weak
+comparison, lists, and wildcard, and takes precedence over `If-Modified-Since`;
+matching GET/HEAD returns 304 without a body or `Content-Type`, and nonmatching
+GET returns a body while nonmatching HEAD returns GET-equivalent headers without
+one. Current validators and cache metadata accompany 304.
+`Cache-Control: public, max-age=300` is a downstream revalidation policy, not a
+regeneration promise
 ([Syndication Feed HTTP-validation decision](adr/0138-syndication-feed-http-validation.md)).
-[Current tuple completeness, item-derived timestamp, 304 metadata, and conditional parsing](https://github.com/jaunder-org/jaunder/issues/1054)
-remain implementation debt.
 
 The Atom feed document is built by upstream `atom_syndication` through the
 host-owned Syndication Feed renderer; RSS goes through the `rss` crate the same

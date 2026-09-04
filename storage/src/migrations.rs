@@ -237,7 +237,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            31
+            32
         );
         assert_eq!(
             db.pool
@@ -267,6 +267,33 @@ mod tests {
                 .count(),
             2,
             "absolute and scheme-relative spellings remain distinct exact rows"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0032_invalidates_pre_fingerprint_feed_cache_rows(#[case] backend: Backend) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(31).await.unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO feed_cache \
+                 (feed_url, body, etag, content_type, updated_at, generated_at) VALUES \
+                 ('/feed.rss', '<rss/>', '\"legacy\"', 'application/rss+xml; charset=utf-8', \
+                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            .await
+            .unwrap();
+
+        db.migrate_current().await.unwrap();
+
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_cache")
+                .await
+                .unwrap(),
+            0,
+            "legacy cache rows cannot establish semantic identity"
         );
     }
 
@@ -715,7 +742,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            31
+            32
         );
         assert_eq!(
             db.pool

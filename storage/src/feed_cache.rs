@@ -3,9 +3,11 @@
 //! served by `GET /feed.{rss,atom,json}` and the other feed endpoints.
 
 use async_trait::async_trait;
+use chrono::TimeDelta;
 use common::{etag::ETag, feed::FeedFormat, media::ContentType, time::UtcInstant};
-use host::feed::{
-    FeedPath, MismatchedStoredSyndicationFeedMetadata, SyndicationFeedRepresentation,
+use host::{
+    etag::FeedSemanticFingerprint,
+    feed::{FeedPath, MismatchedStoredSyndicationFeedMetadata, SyndicationFeedRepresentation},
 };
 use sqlx::{Database, Pool};
 use thiserror::Error;
@@ -13,14 +15,14 @@ use thiserror::Error;
 use crate::sql::QueryStorageExt;
 use crate::{WriteTransaction, backend::Backend, role_instant::impl_role_instant};
 
-/// The `feed_cache.updated_at` storage timestamp role, distinct from
-/// `generated_at` so mappings cannot transpose silently (#751).
+/// The `feed_cache.representation_modified_at` storage timestamp role, distinct
+/// from `generated_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-pub(crate) struct FeedCacheUpdatedAt(UtcInstant);
-impl_role_instant!(FeedCacheUpdatedAt, UtcInstant);
+pub(crate) struct FeedCacheRepresentationModifiedAt(UtcInstant);
+impl_role_instant!(FeedCacheRepresentationModifiedAt, UtcInstant);
 
 /// The `feed_cache.generated_at` storage timestamp role, distinct from
-/// `updated_at` so mappings cannot transpose silently (#751).
+/// `representation_modified_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
 pub(crate) struct FeedCacheGeneratedAt(UtcInstant);
 impl_role_instant!(FeedCacheGeneratedAt, UtcInstant);
@@ -30,6 +32,19 @@ impl_role_instant!(FeedCacheGeneratedAt, UtcInstant);
 pub(crate) struct StoredFeedBody(pub(crate) String);
 
 impl StoredFeedBody {
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
+/// Validated semantic identity encoded for the storage boundary.
+#[derive(Debug, macros::SqlxBridge)]
+pub(crate) struct StoredFeedSemanticFingerprint(String);
+
+impl StoredFeedSemanticFingerprint {
+    fn from_fingerprint(fingerprint: &FeedSemanticFingerprint) -> Self {
+        Self(fingerprint.to_string())
+    }
+
     fn into_inner(self) -> String {
         self.0
     }
@@ -45,8 +60,9 @@ pub struct FeedCacheRow {
     /// The stored strong `ETag`. Decodes through the `ETag` sqlx bridge (#438/#634), so a
     /// corrupt/migrated value is rejected as a `ColumnDecode` error on read-back.
     pub etag: ETag,
-    pub updated_at: UtcInstant,
+    pub representation_modified_at: UtcInstant,
     pub generated_at: UtcInstant,
+    semantic_fingerprint: FeedSemanticFingerprint,
 }
 
 /// A feed-cache path whose format conflicts with its rendered representation.
@@ -71,8 +87,9 @@ impl FeedCacheRow {
         feed_path: FeedPath,
         representation: SyndicationFeedRepresentation,
         etag: ETag,
-        updated_at: UtcInstant,
+        representation_modified_at: UtcInstant,
         generated_at: UtcInstant,
+        semantic_fingerprint: FeedSemanticFingerprint,
     ) -> Result<Self, MismatchedFeedCacheRowFormat> {
         let path_format = feed_path.parts().map(|(_, format)| format);
         let representation_format = representation.format();
@@ -83,16 +100,21 @@ impl FeedCacheRow {
                 representation_format,
             });
         }
+        let representation_modified_at = UtcInstant::from(
+            representation_modified_at.value()
+                - TimeDelta::nanoseconds(i64::from(
+                    representation_modified_at.value().timestamp_subsec_nanos(),
+                )),
+        );
         Ok(Self {
             feed_path,
             representation,
             etag,
-            updated_at,
+            representation_modified_at,
             generated_at,
+            semantic_fingerprint,
         })
     }
-
-    /// Returns the canonical path that keys this cache entry.
     #[must_use]
     pub fn feed_path(&self) -> &FeedPath {
         &self.feed_path
@@ -109,11 +131,19 @@ impl FeedCacheRow {
     pub fn into_representation(self) -> SyndicationFeedRepresentation {
         self.representation
     }
+
+    /// Returns the validated semantic identity used for atomic cache replacement.
+    #[must_use]
+    pub fn semantic_fingerprint(&self) -> &FeedSemanticFingerprint {
+        &self.semantic_fingerprint
+    }
 }
 #[derive(Debug, Error)]
 pub enum FeedCacheError {
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
+    #[error("stored feed cache semantic fingerprint is invalid")]
+    InvalidSemanticFingerprint,
     #[error("stored feed cache metadata conflicts for {feed_path}: {source}")]
     MismatchedStoredMetadata {
         feed_path: FeedPath,
@@ -141,13 +171,14 @@ pub trait FeedCacheStorage: Send + Sync {
 }
 
 #[derive(Debug, sqlx::FromRow)]
-struct StoredFeedCacheRow {
+pub(crate) struct StoredFeedCacheRow {
     feed_url: FeedPath,
     body: StoredFeedBody,
     etag: ETag,
     content_type: ContentType,
-    updated_at: FeedCacheUpdatedAt,
+    representation_modified_at: FeedCacheRepresentationModifiedAt,
     generated_at: FeedCacheGeneratedAt,
+    semantic_fingerprint: StoredFeedSemanticFingerprint,
 }
 
 struct FeedCacheRowParts {
@@ -155,20 +186,27 @@ struct FeedCacheRowParts {
     body: String,
     etag: ETag,
     content_type: ContentType,
-    updated_at: FeedCacheUpdatedAt,
+    representation_modified_at: FeedCacheRepresentationModifiedAt,
     generated_at: FeedCacheGeneratedAt,
+    semantic_fingerprint: FeedSemanticFingerprint,
 }
 
 // `FeedPath` and `ContentType` decode through validating sqlx bridges (#438).
 // This mapper establishes the remaining semantic agreement before exposing a row.
 fn row_from_stored(row: StoredFeedCacheRow) -> Result<FeedCacheRow, FeedCacheError> {
+    let semantic_fingerprint = row
+        .semantic_fingerprint
+        .into_inner()
+        .parse()
+        .map_err(|_| FeedCacheError::InvalidSemanticFingerprint)?;
     let parts = FeedCacheRowParts {
         feed_path: row.feed_url,
         body: row.body.into_inner(),
         etag: row.etag,
         content_type: row.content_type,
-        updated_at: row.updated_at,
+        representation_modified_at: row.representation_modified_at,
         generated_at: row.generated_at,
+        semantic_fingerprint,
     };
     let format = parts
         .feed_path
@@ -185,8 +223,9 @@ fn row_from_stored(row: StoredFeedCacheRow) -> Result<FeedCacheRow, FeedCacheErr
         parts.feed_path,
         representation,
         parts.etag,
-        parts.updated_at.value(),
+        parts.representation_modified_at.value(),
         parts.generated_at.value(),
+        parts.semantic_fingerprint,
     ) else {
         unreachable!("stored representation and path share the decoded format")
     };
@@ -230,8 +269,8 @@ where
     )]
     async fn get(&self, feed_path: &FeedPath) -> Result<Option<FeedCacheRow>, FeedCacheError> {
         let row = sqlx::query_as::<_, StoredFeedCacheRow>(
-            "SELECT feed_url, body, etag, content_type, updated_at, generated_at \
-             FROM feed_cache WHERE feed_url = $1",
+            "SELECT feed_url, body, etag, content_type, representation_modified_at, generated_at, \
+             semantic_fingerprint FROM feed_cache WHERE feed_url = $1",
         )
         .bind_storage(feed_path)
         .fetch_optional(&self.pool)
@@ -250,7 +289,9 @@ where
         row: FeedCacheRow,
     ) -> Result<(), FeedCacheError> {
         let connection = DB::write_connection(transaction)?;
-        upsert_on_connection::<DB>(connection, row).await
+        upsert_on_connection::<DB>(connection, row)
+            .await
+            .map(|_| ())
     }
 
     #[tracing::instrument(
@@ -280,9 +321,10 @@ where
 pub(crate) async fn upsert_on_connection<DB>(
     connection: &mut DB::Connection,
     row: FeedCacheRow,
-) -> Result<(), FeedCacheError>
+) -> Result<FeedCacheRow, FeedCacheError>
 where
     DB: Database,
+    StoredFeedCacheRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     String: sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
@@ -294,22 +336,40 @@ where
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     let body = StoredFeedBody(row.representation().body().to_owned());
-    sqlx::query(
-        "INSERT INTO feed_cache (feed_url, body, etag, content_type, updated_at, generated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
+    let stored = sqlx::query_as::<_, StoredFeedCacheRow>(
+        "INSERT INTO feed_cache \
+         (feed_url, body, etag, content_type, representation_modified_at, generated_at, semantic_fingerprint) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) \
          ON CONFLICT(feed_url) DO UPDATE SET \
-         body = excluded.body, etag = excluded.etag, content_type = excluded.content_type, \
-         updated_at = excluded.updated_at, generated_at = excluded.generated_at",
+         body = CASE WHEN feed_cache.semantic_fingerprint = excluded.semantic_fingerprint \
+             THEN feed_cache.body ELSE excluded.body END, \
+         etag = CASE WHEN feed_cache.semantic_fingerprint = excluded.semantic_fingerprint \
+             THEN feed_cache.etag ELSE excluded.etag END, \
+         content_type = CASE WHEN feed_cache.semantic_fingerprint = excluded.semantic_fingerprint \
+             THEN feed_cache.content_type ELSE excluded.content_type END, \
+         representation_modified_at = CASE \
+             WHEN feed_cache.semantic_fingerprint = excluded.semantic_fingerprint \
+             THEN feed_cache.representation_modified_at ELSE excluded.representation_modified_at END, \
+         generated_at = CASE \
+             WHEN feed_cache.semantic_fingerprint = excluded.semantic_fingerprint \
+                 AND feed_cache.generated_at > excluded.generated_at \
+             THEN feed_cache.generated_at ELSE excluded.generated_at END, \
+         semantic_fingerprint = excluded.semantic_fingerprint \
+         RETURNING feed_url, body, etag, content_type, representation_modified_at, generated_at, \
+         semantic_fingerprint",
     )
     .bind_storage(&row.feed_path)
     .bind_storage(body)
     .bind_storage(&row.etag)
     .bind_storage(row.representation().content_type())
-    .bind_storage(row.updated_at)
+    .bind_storage(row.representation_modified_at)
     .bind_storage(row.generated_at)
-    .execute(connection)
+    .bind_storage(StoredFeedSemanticFingerprint::from_fingerprint(
+        row.semantic_fingerprint(),
+    ))
+    .fetch_one(connection)
     .await?;
-    Ok(())
+    row_from_stored(stored)
 }
 
 #[cfg(test)]
@@ -358,7 +418,10 @@ mod tests {
         let updated_at = UtcInstant::now();
         let generated_at = UtcInstant::from(updated_at.value() + chrono::Duration::seconds(5));
 
-        assert_eq!(FeedCacheUpdatedAt(updated_at).value(), updated_at);
+        assert_eq!(
+            FeedCacheRepresentationModifiedAt(updated_at).value(),
+            updated_at
+        );
         assert_eq!(FeedCacheGeneratedAt(generated_at).value(), generated_at);
     }
 
@@ -378,6 +441,9 @@ mod tests {
             parse_etag("\"sha256-deadbeef\""),
             updated_at,
             UtcInstant::from(updated_at.value() + chrono::Duration::seconds(5)),
+            "0000000000000000000000000000000000000000000000000000000000000000"
+                .parse()
+                .expect("valid fingerprint"),
         )
         .expect_err("RSS path must reject Atom representation");
 
@@ -386,7 +452,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn upsert_then_get_roundtrips_adjacent_timestamp_roles_at_microsecond_precision(
+    async fn upsert_then_get_roundtrips_whole_second_representation_modification_time(
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
@@ -394,7 +460,7 @@ mod tests {
         let row = SeedFeedCache::new(feed_path.clone())
             .body("<rss/>".to_owned())
             .etag(parse_etag("\"sha256-deadbeef\""))
-            .updated_at(
+            .representation_modified_at(
                 "2026-08-25T01:02:03.123456Z"
                     .parse()
                     .expect("valid UTC instant"),
@@ -413,24 +479,36 @@ mod tests {
             .await
             .unwrap()
             .expect("present");
-        assert_eq!(got.updated_at, row.updated_at);
+        assert_eq!(
+            got.representation_modified_at,
+            row.representation_modified_at
+        );
         assert_eq!(got.generated_at, row.generated_at);
-        assert_ne!(got.updated_at, got.generated_at);
-        assert_eq!(got.feed_path(), "/feed.rss");
-        assert_eq!(got.representation().body(), "<rss/>");
+        assert_eq!(
+            got.representation_modified_at
+                .value()
+                .timestamp_subsec_nanos(),
+            0
+        );
     }
 
     #[apply(backends)]
     #[tokio::test]
-    async fn second_upsert_updates_existing_body(#[case] backend: Backend) {
+    async fn matching_fingerprint_upsert_preserves_existing_representation(
+        #[case] backend: Backend,
+    ) {
         let env = backend.setup().await;
-        let row = SeedFeedCache::new(fp("/feed.rss")).build();
+        let row = SeedFeedCache::new(fp("/feed.rss"))
+            .body("<rss>first</rss>".to_owned())
+            .build();
         upsert_confirmed(&env.state, row.clone()).await;
         let replacement = SeedFeedCache::new(fp("/feed.rss"))
-            .body("<rss>updated</rss>".to_owned())
-            .etag(row.etag.clone())
-            .updated_at(row.updated_at)
-            .generated_at(row.generated_at)
+            .body("<rss>discarded</rss>".to_owned())
+            .etag(parse_etag("\"sha256-rejected-candidate\""))
+            .representation_modified_at(row.representation_modified_at)
+            .generated_at(UtcInstant::from(
+                row.generated_at.value() + chrono::Duration::seconds(1),
+            ))
             .build();
         upsert_confirmed(&env.state, replacement).await;
         let got = env
@@ -440,7 +518,40 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(got.representation().body(), "<rss>updated</rss>");
+        assert_eq!(got.representation().body(), "<rss>first</rss>");
+        assert_eq!(got.etag, row.etag);
+        assert_eq!(
+            got.representation_modified_at,
+            row.representation_modified_at
+        );
+        assert!(got.generated_at > row.generated_at);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn different_fingerprint_upsert_replaces_representation(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let row = SeedFeedCache::new(fp("/feed.rss"))
+            .body("<rss>first</rss>".to_owned())
+            .build();
+        upsert_confirmed(&env.state, row).await;
+        let replacement = SeedFeedCache::new(fp("/feed.rss"))
+            .body("<rss>replacement</rss>".to_owned())
+            .semantic_fingerprint(
+                "1111111111111111111111111111111111111111111111111111111111111111"
+                    .parse()
+                    .expect("valid fingerprint"),
+            )
+            .build();
+        upsert_confirmed(&env.state, replacement.clone()).await;
+        let got = env
+            .state
+            .feed_cache
+            .get(&fp("/feed.rss"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got, replacement);
     }
 
     #[apply(backends)]
@@ -526,6 +637,26 @@ mod tests {
             matches!(err, FeedCacheError::Db(sqlx::Error::ColumnDecode { .. })),
             "expected a column-decode error, got: {err:?}"
         );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_rejects_a_malformed_semantic_fingerprint(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        SeedFeedCache::new(fp("/feed.rss")).seed(&env.state).await;
+        env.base
+            .pool()
+            .execute(
+                "UPDATE feed_cache SET semantic_fingerprint = 'not-a-fingerprint' \
+                 WHERE feed_url = '/feed.rss'",
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            env.state.feed_cache.get(&fp("/feed.rss")).await,
+            Err(FeedCacheError::InvalidSemanticFingerprint)
+        ));
     }
 
     #[apply(backends)]

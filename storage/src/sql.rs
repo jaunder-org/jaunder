@@ -5,7 +5,10 @@ use std::fmt::Display;
 use crate::backup::{
     CatalogTableName, RestoreBoolean, RestoreInteger, RestoreJson, RestoreReal, RestoreText,
 };
-use crate::feed_cache::{FeedCacheGeneratedAt, FeedCacheUpdatedAt, StoredFeedBody};
+use crate::feed_cache::{
+    FeedCacheGeneratedAt, FeedCacheRepresentationModifiedAt, StoredFeedBody,
+    StoredFeedSemanticFingerprint,
+};
 use crate::feed_events::{FeedEventAttempts, StoredFeedDiagnostic};
 use crate::helpers::{SerializedPostTags, SessionCreatedAt, SessionLastUsedAt, StoredSessionLabel};
 use crate::invites::{InviteCreatedAt, InviteExpiresAt};
@@ -251,13 +254,14 @@ approve_storage_binds!(
     TargetKind,
     TokenHash,
     FeedCacheGeneratedAt,
-    FeedCacheUpdatedAt,
+    FeedCacheRepresentationModifiedAt,
     FeedEventAttempts,
     InviteCreatedAt,
     InviteExpiresAt,
     SessionCreatedAt,
     SessionLastUsedAt,
     StoredFeedBody,
+    StoredFeedSemanticFingerprint,
     StoredFeedDiagnostic,
     PublisherGeneration,
     StoredSessionLabel,

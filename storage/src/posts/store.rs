@@ -3487,7 +3487,7 @@ mod tests {
             SeedFeedCache::new(fp(url))
                 .body("<rss/>".to_owned())
                 .etag(parse_etag("\"sha256-deadbeef\""))
-                .updated_at(UtcInstant::from(stale))
+                .representation_modified_at(UtcInstant::from(stale))
                 .generated_at(UtcInstant::from(stale))
                 .seed(state)
                 .await;
@@ -3505,8 +3505,8 @@ mod tests {
             .pool()
             .execute(
                 "INSERT INTO feed_cache \
-                 (feed_url, body, etag, content_type, updated_at, generated_at) \
-                 SELECT 'also-not-a-feed-path', body, etag, content_type, updated_at, generated_at \
+                 (feed_url, body, etag, content_type, representation_modified_at, generated_at, semantic_fingerprint) \
+                 SELECT 'also-not-a-feed-path', body, etag, content_type, representation_modified_at, generated_at, semantic_fingerprint \
                  FROM feed_cache WHERE feed_url = 'not-a-feed-path'",
             )
             .await
