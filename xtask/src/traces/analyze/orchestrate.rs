@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use super::super::{
-    parse::{Filters, Span, read_spans},
+    parse::{self, Filters, Span},
     report::ReportedDurations,
 };
 use super::model::Analysis;
@@ -65,7 +65,7 @@ pub fn analyze(
 ) -> Result<Analysis> {
     let mut spans = Vec::new();
     for input in inputs {
-        spans.extend(read_spans(input, &filters)?);
+        spans.extend(parse::read_spans(input, &filters)?);
     }
     analyze_spans(spans, filters.project, reported)
 }

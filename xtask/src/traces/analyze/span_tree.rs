@@ -4,7 +4,7 @@ use super::super::{
     parse::{self, Span},
     report::{AttemptKey, ReportedDurations},
 };
-use super::model::{LIFECYCLE_SPAN_NAME, SpanCoverageRow};
+use super::model::{self, SpanCoverageRow};
 
 /// The e2e project label a report groups on: the span's `e2e.project`, or `-`
 /// when unset (Node's `getAttr(...) || "-"`).
@@ -51,7 +51,7 @@ pub fn span_coverage(spans: &[Span], reported: &ReportedDurations) -> Vec<SpanCo
 
     let mut rows: Vec<SpanCoverageRow> = spans
         .iter()
-        .filter(|span| span.name == LIFECYCLE_SPAN_NAME)
+        .filter(|span| span.name == model::LIFECYCLE_SPAN_NAME)
         .filter_map(|envelope| {
             let key = AttemptKey {
                 test: parse::get_attr(&envelope.raw, "e2e.test"),
@@ -111,9 +111,10 @@ pub(super) fn coverage_note(
                 .to_owned(),
         );
     }
-    if !spans.iter().any(|s| s.name == LIFECYCLE_SPAN_NAME) {
+    if !spans.iter().any(|s| s.name == model::LIFECYCLE_SPAN_NAME) {
         return Some(format!(
-            "no `{LIFECYCLE_SPAN_NAME}` spans in the capture (pre-#794 traces have none)"
+            "no `{}` spans in the capture (pre-#794 traces have none)",
+            model::LIFECYCLE_SPAN_NAME
         ));
     }
     Some(format!(
