@@ -22,7 +22,7 @@ pub fn feed_metadata(self_url: FeedUrl) -> FeedMetadata {
         canonical_url: parse_url("https://example.com/"),
         self_url,
         hub_url: None,
-        updated_at: parse_utc_instant("2026-01-01T00:00:00Z").into(),
+        representation_modified_at: parse_utc_instant("2026-01-01T00:00:00Z").into(),
     }
 }
 

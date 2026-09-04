@@ -1,3 +1,5 @@
+use chrono::TimeDelta;
+
 use common::{
     feed::{FeedFormat, FeedSurface},
     tagged_url::{self, BaseUrl, CanonicalUrl, FeedUrl, Permalink},
@@ -41,9 +43,13 @@ pub async fn render(
         min_items: snapshot.feeds.min_items,
         min_days: snapshot.feeds.min_days,
     };
-    let now = UtcInstant::now();
+    let generated_at = UtcInstant::now();
+    let representation_modified_at = UtcInstant::from(
+        generated_at.value()
+            - TimeDelta::nanoseconds(i64::from(generated_at.value().timestamp_subsec_nanos())),
+    );
     let published = posts
-        .list_published_in_window(&surface, &window, now, &ViewerIdentity::Anonymous)
+        .list_published_in_window(&surface, &window, generated_at, &ViewerIdentity::Anonymous)
         .await
         .map_err(storage_err)?;
 
@@ -63,27 +69,29 @@ pub async fn render(
         }
     };
     let canonical_url: CanonicalUrl = tagged_url::compose(base, &canonical_path);
-    let updated_at = items
-        .iter()
-        .map(|item| item.updated_at)
-        .max()
-        .unwrap_or_else(|| now.value());
     let meta = FeedMetadata {
         title: FeedTitle::for_surface(&snapshot.identity.title, &surface),
         description: None,
         canonical_url,
         self_url,
         hub_url: snapshot.feeds.websub_hub_url.clone(),
-        updated_at,
+        representation_modified_at: representation_modified_at.value(),
     };
     let body = match format {
         FeedFormat::Rss => feed::render_rss(&meta, &items),
         FeedFormat::Atom => feed::render_atom(&meta, &items),
         FeedFormat::Json => feed::render_json(&meta, &items),
     };
-    let etag = etag::feed_etag(&items, now.value());
-    FeedCacheRow::new(feed_path, body, etag, UtcInstant::from(updated_at), now)
-        .map_err(|error| RegenerateError::BadUrl(error.to_string()))
+    let fingerprint = etag::feed_semantic_fingerprint(format, &meta, &items);
+    let etag = etag::feed_etag(&fingerprint, representation_modified_at.value());
+    FeedCacheRow::new(
+        feed_path,
+        body,
+        etag,
+        representation_modified_at,
+        generated_at,
+    )
+    .map_err(|error| RegenerateError::BadUrl(error.to_string()))
 }
 
 fn storage_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> RegenerateError {

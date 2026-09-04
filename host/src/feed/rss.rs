@@ -55,7 +55,7 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRep
                 .map(ToString::to_string)
                 .unwrap_or_default(),
         )
-        .last_build_date(Some(meta.updated_at.to_rfc2822()))
+        .last_build_date(Some(meta.representation_modified_at.to_rfc2822()))
         .atom_ext(Some(AtomExtension { links: atom_links }))
         .items(rss_items);
 
@@ -116,6 +116,21 @@ mod tests {
         let with = render_rss(&meta(None, Some("A site")), &[]);
         let channel = rss::Channel::read_from(with.body().as_bytes()).unwrap();
         assert_eq!(channel.description(), "A site");
+    }
+
+    #[test]
+    fn uses_feed_representation_time_for_last_build_date() {
+        let representation_time = chrono::Utc.with_ymd_and_hms(2026, 2, 3, 4, 5, 6).unwrap();
+        let mut metadata = meta(None, Some("A site"));
+        metadata.representation_modified_at = representation_time;
+
+        let rendered = render_rss(&metadata, &[item(Some("Hello"))]);
+        let channel = rss::Channel::read_from(rendered.body().as_bytes()).unwrap();
+
+        assert_eq!(
+            channel.last_build_date(),
+            Some(representation_time.to_rfc2822().as_str())
+        );
     }
 
     #[test]
