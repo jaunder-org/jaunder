@@ -33,11 +33,7 @@ impl SeedFeedCache {
             .parts()
             .expect("validated feed path has a recoverable format")
             .1;
-        let now = UtcInstant::now().value();
-        let now = UtcInstant::from(
-            now.with_nanosecond(now.nanosecond() / 1_000 * 1_000)
-                .expect("truncated nanoseconds are valid"),
-        );
+        let now = storage_instant(UtcInstant::now());
         Self {
             feed_path,
             format,
@@ -65,14 +61,14 @@ impl SeedFeedCache {
     /// Override the cache update timestamp.
     #[must_use]
     pub fn updated_at(mut self, updated_at: UtcInstant) -> Self {
-        self.updated_at = updated_at;
+        self.updated_at = storage_instant(updated_at);
         self
     }
 
     /// Override the feed generation timestamp.
     #[must_use]
     pub fn generated_at(mut self, generated_at: UtcInstant) -> Self {
-        self.generated_at = generated_at;
+        self.generated_at = storage_instant(generated_at);
         self
     }
 
@@ -120,6 +116,14 @@ impl SeedFeedCache {
         confirmed_for(outcome, "seed feed cache");
         returned
     }
+}
+fn storage_instant(instant: UtcInstant) -> UtcInstant {
+    let instant = instant.value();
+    UtcInstant::from(
+        instant
+            .with_nanosecond(instant.nanosecond() / 1_000 * 1_000)
+            .expect("truncated nanoseconds are valid"),
+    )
 }
 
 fn default_body(format: common::feed::FeedFormat) -> String {
@@ -265,8 +269,14 @@ mod tests {
     async fn seed_persists_and_returns_the_inserted_feed_cache_row(#[case] backend: Backend) {
         let env = backend.setup().await;
         let feed_path = fp("/feed.atom");
+        let persisted_at = parse_utc_instant("2026-08-25T01:02:03.123456789Z");
+        let stored_at = parse_utc_instant("2026-08-25T01:02:03.123456Z");
 
-        let seeded = SeedFeedCache::new(feed_path.clone()).seed(&env.state).await;
+        let seeded = SeedFeedCache::new(feed_path.clone())
+            .updated_at(persisted_at)
+            .generated_at(persisted_at)
+            .seed(&env.state)
+            .await;
         let stored = env
             .state
             .feed_cache
@@ -275,6 +285,8 @@ mod tests {
             .unwrap()
             .expect("seeded feed cache row exists");
 
+        assert_eq!(seeded.updated_at, stored_at);
+        assert_eq!(seeded.generated_at, stored_at);
         assert_eq!(seeded, stored);
     }
 }
