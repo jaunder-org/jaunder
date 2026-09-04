@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 
-import type { BrowserContext } from "@playwright/test";
+import type { BrowserContext, Disposable } from "@playwright/test";
 
 import { withTimedAction } from "./actions";
 import { BASE_URL } from "./helpers";
@@ -32,16 +32,11 @@ export type SeededSession = Pick<
   "setCookie" | "marker" | "markerKey"
 >;
 
-/** Companion cookie carrying the marker payload to the init script. Named to
- *  stay clear of AC2's `jaunder_auth` rg check — the marker key itself is
- *  never spelled in TypeScript; it arrives in the seed record. */
-const SEED_MARKER_COOKIE = "jaunder_seed_marker";
-/** localStorage tombstone: the marker value the init script last applied. */
+/** localStorage tombstone: the nonce of the marker the init script last applied. */
 const SEED_APPLIED_KEY = "jaunder_seed_applied";
 
-/** Contexts whose tombstoned init script is already registered — one script
- *  per context (Playwright 1.58.2 cannot remove init scripts, spec D3). */
-const scriptedContexts = new WeakSet<BrowserContext>();
+/** The currently installed seeded-auth script for each context. */
+const seededScripts = new WeakMap<BrowserContext, Disposable>();
 
 /** Run a `test-support` session subcommand and parse its one-line JSON
  *  record. `--db` comes from `JAUNDER_DB` in the environment in both
@@ -92,19 +87,15 @@ export async function createSessionViaTool(
 }
 
 /**
- * Inject a seeded session into `context`: the session cookie, plus a readable
- * companion cookie that carries the marker payload to one tombstoned init
- * script registered per context (spec D3). Does NOT navigate (spec D5) — the
- * caller's first `goto` is the cold navigation.
+ * Inject a seeded session into `context`. Each seed replaces the context's
+ * previous disposable init script, then injects only the server-emitted session
+ * cookie. Does NOT navigate (spec D5) — the caller's first `goto` is the cold
+ * navigation.
  *
- * The init script runs before the document's own pre-paint `<head>` script on
- * every document load, and applies the companion cookie's marker only when the
- * companion value (a per-seed nonce + the marker) differs from what it last
- * applied (the tombstone in localStorage). That is what makes it correct
- * without call-site cooperation: later navigations are a no-op (the app owns
- * the marker), a UI logout is respected (the app's removal is not re-applied),
- * and a re-seed swaps the marker — even re-seeding the SAME user after a
- * logout, which the nonce distinguishes from the logout's no-op.
+ * The replacement script bakes the Rust-owned marker and a fresh nonce into its
+ * source. On each document it writes the marker only when the nonce differs
+ * from the localStorage tombstone: later loads leave a UI logout alone, while a
+ * fresh seed for the same user still restores the marker before paint.
  */
 export async function applySeededSession(
   context: BrowserContext,
@@ -136,42 +127,22 @@ export async function applySeededSession(
   // header carries no Domain — so the origin's hostname is spelled here.
   const domain = new URL(BASE_URL).hostname;
 
-  await context.addCookies([
-    { name, value, domain, path, httpOnly, sameSite },
-    {
-      name: SEED_MARKER_COOKIE,
-      // A per-seed nonce prefixes the marker so the tombstone distinguishes
-      // "same marker, new seed" (re-apply) from "same marker, same seed"
-      // (no-op — the logout case). Without it, seed → logout → re-seed the
-      // SAME user would boot anonymous pre-paint despite a valid session.
-      value: `${crypto.randomUUID()}.${encodeURIComponent(session.marker)}`,
-      domain,
-      path: "/",
-      httpOnly: false,
-      sameSite: "Lax",
-    },
-  ]);
+  const previous = seededScripts.get(context);
+  if (previous !== undefined) {
+    await previous.dispose();
+    seededScripts.delete(context);
+  }
 
-  if (!scriptedContexts.has(context)) {
-    scriptedContexts.add(context);
-    await context.addInitScript(`(() => {
-  const prefix = ${JSON.stringify(SEED_MARKER_COOKIE)} + "=";
-  let want = null;
-  for (const part of document.cookie.split("; ")) {
-    if (part.startsWith(prefix)) {
-      want = part.slice(prefix.length);
-      break;
-    }
-  }
-  if (want === null) return;
-  if (localStorage.getItem(${JSON.stringify(SEED_APPLIED_KEY)}) === want) return;
-  localStorage.setItem(
-    ${JSON.stringify(session.markerKey)},
-    decodeURIComponent(want.slice(want.indexOf(".") + 1)),
-  );
-  localStorage.setItem(${JSON.stringify(SEED_APPLIED_KEY)}, want);
+  const nonce = crypto.randomUUID();
+  const replacement = await context.addInitScript(`(() => {
+  const nonce = ${JSON.stringify(nonce)};
+  if (localStorage.getItem(${JSON.stringify(SEED_APPLIED_KEY)}) === nonce) return;
+  localStorage.setItem(${JSON.stringify(session.markerKey)}, ${JSON.stringify(session.marker)});
+  localStorage.setItem(${JSON.stringify(SEED_APPLIED_KEY)}, nonce);
 })();`);
-  }
+  seededScripts.set(context, replacement);
+
+  await context.addCookies([{ name, value, domain, path, httpOnly, sameSite }]);
 }
 
 /**
