@@ -880,6 +880,8 @@ impl MediaManager {
 #[cfg(test)]
 mod tests {
     use std::fs as std_fs;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::task::Poll;
 
@@ -1406,10 +1408,12 @@ mod tests {
         );
         let polls = Arc::new(AtomicUsize::new(0));
         let stream_polls = Arc::clone(&polls);
+        // cov:ignore-start — executing this sentinel violates the asserted no-poll invariant
         let stream = stream::poll_fn(move |_| {
             stream_polls.fetch_add(1, Ordering::Relaxed);
             Poll::Ready(None::<Result<Bytes, io::Error>>)
         });
+        // cov:ignore-stop
 
         let err = manager
             .upload(
@@ -1504,6 +1508,120 @@ mod tests {
         assert!(
             !temp.path().join("media").join("tmp").exists(),
             "storage failure must stop before temporary-file work"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn admitted_upload_completes_after_disable_but_the_next_attempt_is_rejected(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let manager = Arc::new(MediaManager::new(
+            env.state.media.clone(),
+            env.state.posts.clone(),
+            env.state.site_config.clone(),
+            env.state.write_scope.clone(),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
+        ));
+        let (admitted_tx, admitted_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let first_manager = Arc::clone(&manager);
+        let first_upload = tokio::spawn(async move {
+            let mut admitted_tx = Some(admitted_tx);
+            let mut release_rx = release_rx;
+            let mut sent = false;
+            let stream = stream::poll_fn(move |context| {
+                if sent {
+                    return Poll::Ready(None::<Result<Bytes, io::Error>>);
+                }
+                if let Some(admitted_tx) = admitted_tx.take() {
+                    admitted_tx.send(()).expect("test observes admitted upload"); // cov:ignore — failure requires violating the test's receiver-before-release invariant
+                }
+                match Pin::new(&mut release_rx).poll(context) {
+                    Poll::Pending => Poll::Pending,
+                    Poll::Ready(Ok(())) => {
+                        sent = true;
+                        Poll::Ready(Some(Ok(Bytes::from_static(b"admitted"))))
+                    }
+                    Poll::Ready(Err(_)) => panic!("test must release admitted upload"), // cov:ignore — sender cancellation violates the test's release-before-await invariant
+                }
+            });
+            first_manager
+                .upload(
+                    user_id,
+                    &parse_filename("admitted.png"),
+                    Some(parse_content_type("image/png")),
+                    stream,
+                )
+                .await
+        });
+
+        admitted_rx
+            .await
+            .expect("upload reaches its content stream");
+        let site_config = Arc::clone(&env.state.site_config);
+        crate::test_support::confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        site_config
+                            .set_media_uploads_enabled(transaction, false)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        release_tx.send(()).expect("release admitted upload");
+        let first = first_upload
+            .await
+            .expect("first upload task joins")
+            .expect("admitted upload completes");
+        let first_media = upload_ref(&first);
+        let usage_after_first = env
+            .state
+            .media
+            .get_user_upload_usage(user_id)
+            .await
+            .expect("read first upload usage");
+
+        let err = manager
+            .upload_bytes(
+                user_id,
+                &parse_filename("rejected.png"),
+                parse_content_type("image/png"),
+                b"rejected",
+            )
+            .await
+            .expect_err("new upload must observe disabled capability");
+        assert!(matches!(
+            err.downcast_ref::<MediaError>(),
+            Some(MediaError::UploadsDisabled)
+        ));
+        assert!(media_row_exists(&env.state, user_id, &first_media).await);
+        assert_eq!(
+            env.state
+                .media
+                .get_user_upload_usage(user_id)
+                .await
+                .expect("read rejected upload usage"),
+            usage_after_first,
+            "rejected upload must not mutate durable media quota"
+        );
+        let tmp_dir = env.base.path().join("media").join("tmp");
+        assert!(
+            std_fs::read_dir(tmp_dir)
+                .expect("read temporary upload directory")
+                .next()
+                .is_none(),
+            "rejected upload must not create a temporary artifact"
         );
     }
 

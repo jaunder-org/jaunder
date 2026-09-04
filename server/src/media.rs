@@ -340,6 +340,10 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
+            map_error(&anyhow::anyhow!(MediaError::UploadsDisabled)),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
             map_error(&anyhow::anyhow!(MediaError::PayloadTooLarge)),
             StatusCode::PAYLOAD_TOO_LARGE
         );

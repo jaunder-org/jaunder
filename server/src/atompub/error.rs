@@ -181,18 +181,19 @@ impl From<storage::DeleteMediaError> for HandlerError {
 impl From<anyhow::Error> for HandlerError {
     /// The media upload pipeline (`MediaManager::upload_bytes`) reports failures as
     /// `anyhow::Error`; `media::map_error` decides the client-facing status
-    /// (e.g. `413` for an oversized payload). Log the underlying error — it is
-    /// infrastructure detail, not user content — then pass the mapped status through.
+    /// (e.g. `413` for an oversized payload). Expected typed client outcomes keep
+    /// their bounded public classification; remaining failures are logged before their
+    /// mapped status is passed through.
     fn from(err: anyhow::Error) -> Self {
-        tracing::error!(error = %err, "AtomPub media upload failed");
         if matches!(
             err.downcast_ref::<storage::MediaError>(),
             Some(storage::MediaError::UploadsDisabled)
         ) {
-            HandlerError::UploadsDisabled
-        } else {
-            HandlerError::Status(crate::media::map_error(&err))
+            return HandlerError::UploadsDisabled;
         }
+
+        tracing::error!(error = %err, "AtomPub media upload failed");
+        HandlerError::Status(crate::media::map_error(&err))
     }
 }
 
@@ -230,6 +231,12 @@ mod tests {
         // media::map_error; a generic error yields a non-success status.
         let code = status(anyhow::anyhow!("upload boom").into());
         assert!(code.is_client_error() || code.is_server_error());
+    }
+
+    #[test]
+    fn disabled_upload_error_is_forbidden() {
+        let error = anyhow::anyhow!(storage::MediaError::UploadsDisabled);
+        assert_eq!(status(error.into()), StatusCode::FORBIDDEN);
     }
 
     #[test]

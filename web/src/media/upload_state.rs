@@ -64,6 +64,30 @@ pub fn delete_invalidates_media_resources(outcome: &MutationOutcome<MediaDeletio
     )
 }
 
+/// The media page's upload-area presentation for its capability resource.
+///
+/// Loading and read failures deliberately withhold controls: an unavailable config
+/// read must never look like permission to create media. This only controls what the
+/// page shows; the media manager independently enforces the capability.
+#[derive(Debug, PartialEq, Eq)]
+pub enum UploadPresentation {
+    Loading,
+    Enabled,
+    Disabled,
+    Error(String),
+}
+
+/// Classifies the current capability resource state for the media page.
+#[must_use]
+pub fn upload_presentation(capability: Option<WebResult<bool>>) -> UploadPresentation {
+    match capability {
+        None => UploadPresentation::Loading,
+        Some(Ok(true)) => UploadPresentation::Enabled,
+        Some(Ok(false)) => UploadPresentation::Disabled,
+        Some(Err(error)) => UploadPresentation::Error(error.to_string()),
+    }
+}
+
 /// The caller notifications an upload fires, bundled so the component hands one
 /// `Copy` value to [`UploadState::settle`] instead of threading optional props through
 /// the spawned future.
@@ -261,6 +285,34 @@ mod tests {
             self.indeterminate.set(0);
             self.failed.set(None);
         }
+    }
+    #[test]
+    fn upload_presentation_waits_for_capability() {
+        assert_eq!(upload_presentation(None), UploadPresentation::Loading);
+    }
+
+    #[test]
+    fn upload_presentation_shows_controls_when_enabled() {
+        assert_eq!(
+            upload_presentation(Some(Ok(true))),
+            UploadPresentation::Enabled
+        );
+    }
+
+    #[test]
+    fn upload_presentation_hides_controls_when_disabled() {
+        assert_eq!(
+            upload_presentation(Some(Ok(false))),
+            UploadPresentation::Disabled
+        );
+    }
+
+    #[test]
+    fn upload_presentation_hides_controls_when_capability_read_fails() {
+        assert_eq!(
+            upload_presentation(Some(Err(WebError::server_message("config unavailable")))),
+            UploadPresentation::Error("server error: config unavailable".to_owned())
+        );
     }
 
     #[test]

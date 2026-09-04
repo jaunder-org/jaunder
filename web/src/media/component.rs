@@ -12,8 +12,8 @@ use common::pagination::{PageOffset, PageSize};
 use common::root_relative_url::RootRelativeUrl;
 
 use super::{
-    Delete, DeleteMediaRequest, Item, MediaDeletion, UploadCallbacks, UploadState, UsageData, api,
-    upload_state,
+    Delete, DeleteMediaRequest, Item, MediaDeletion, UploadCallbacks, UploadPresentation,
+    UploadState, UsageData, api, upload_state,
 };
 use crate::error::{WebError, WebResult};
 use crate::forms;
@@ -161,27 +161,12 @@ pub fn MediaPage() -> impl IntoView {
         move || media.track(),
         || api::list_mine(None, Some(PageSize::default()), Some(PageOffset::default())),
     );
+    let uploads_enabled = reactive::resource(|| 0, api::get_uploads_enabled);
 
     view! {
         <Topbar title="Media" sub="Your uploads" />
         <div class="j-page">
-            <div class="j-sb-head" style="margin-bottom:8px">
-                "Upload"
-            </div>
-            <div style="margin-bottom:24px">
-                <MediaUpload
-                    on_uploaded=Callback::new(move |_url: RootRelativeUrl| {
-                        media.notify();
-                    })
-                    on_indeterminate=Callback::new(move |()| {
-                        media.notify();
-                    })
-                    on_error=Callback::new(move |msg: String| {
-                        leptos::logging::warn!("upload error: {msg}");
-                    })
-                    show_result=true
-                />
-            </div>
+            <MediaUploadPanel uploads_enabled=uploads_enabled media=media />
             <MediaUsagePanel usage=usage />
             <MediaListPanel media_list=media_list delete_action=delete_action />
             <MediaDeleteOutcome
@@ -189,6 +174,60 @@ pub fn MediaPage() -> impl IntoView {
                 last_delete_request=last_delete_request
             />
         </div>
+    }
+}
+
+/// The upload controls, read-only notice, or config-read failure for the media page.
+///
+/// The presentation is intentionally advisory. `MediaManager` rejects disabled uploads
+/// regardless of whether a client reaches these controls.
+#[component]
+fn MediaUploadPanel(
+    uploads_enabled: Resource<WebResult<bool>>,
+    media: Invalidator,
+) -> impl IntoView {
+    view! {
+        <Suspense fallback=|| {
+            view! { <p class="j-loading">"Loading upload settings\u{2026}"</p> }
+        }>
+            {move || Suspend::new(async move {
+                match super::upload_presentation(Some(uploads_enabled.await)) {
+                    UploadPresentation::Enabled => {
+                        view! {
+                            <div class="j-sb-head" style="margin-bottom:8px">
+                                "Upload"
+                            </div>
+                            <div style="margin-bottom:24px">
+                                <MediaUpload
+                                    on_uploaded=Callback::new(move |_url: RootRelativeUrl| {
+                                        media.notify();
+                                    })
+                                    on_indeterminate=Callback::new(move |()| {
+                                        media.notify();
+                                    })
+                                    on_error=Callback::new(move |msg: String| {
+                                        leptos::logging::warn!("upload error: {msg}");
+                                    })
+                                    show_result=true
+                                />
+                            </div>
+                        }
+                            .into_any()
+                    }
+                    UploadPresentation::Disabled => {
+                        view! { <p>"Media uploads are disabled by the site operator."</p> }
+                            .into_any()
+                    }
+                    UploadPresentation::Error(message) => {
+                        view! { <p class="error">{message}</p> }.into_any()
+                    }
+                    UploadPresentation::Loading => {
+                        view! { <p class="j-loading">"Loading upload settings\u{2026}"</p> }
+                            .into_any()
+                    }
+                }
+            })}
+        </Suspense>
     }
 }
 

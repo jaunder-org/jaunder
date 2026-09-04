@@ -1,4 +1,4 @@
-use super::UpdateIdentity;
+use super::{UpdateIdentity, UpdateMediaUploadsEnabled};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
@@ -32,6 +32,7 @@ pub fn SiteSettingsPage() -> impl IntoView {
                         }
                     })}
                 </Suspense>
+                <MediaUploadsCard />
                 {move || {
                     update_action
                         .value()
@@ -56,8 +57,56 @@ pub fn SiteSettingsPage() -> impl IntoView {
                             }
                         })
                 }}
+
             </div>
         </div>
+    }
+}
+#[component]
+fn MediaUploadsCard() -> impl IntoView {
+    let update_action = ServerAction::<UpdateMediaUploadsEnabled>::new();
+    let uploads_enabled = Resource::new(
+        move || update_action.version().get(),
+        |_| super::get_media_uploads_enabled(),
+    );
+
+    view! {
+        <Suspense fallback=|| {
+            view! { <p class="j-loading j-settings-loading">"Loading\u{2026}"</p> }
+        }>
+            {move || Suspend::new(async move {
+                match uploads_enabled.await {
+                    Ok(enabled) => media_uploads_form(enabled, update_action).into_any(),
+                    Err(error) => {
+                        view! { <p class="error j-settings-error">{error.to_string()}</p> }
+                            .into_any()
+                    }
+                }
+            })}
+        </Suspense>
+        {move || {
+            update_action
+                .value()
+                .get()
+                .map(|result: Result<MutationOutcome<()>, WebError>| {
+                    match crate::mutation_feedback::classify(
+                        result,
+                        "Save acknowledgement was lost; reload to verify media uploads.",
+                    ) {
+                        crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
+                            view! {
+                                <p class="j-settings-saved" role="status">
+                                    "Media upload settings saved."
+                                </p>
+                            }
+                                .into_any()
+                        }
+                        crate::mutation_feedback::MutationFeedback::Error(message) => {
+                            view! { <p class="error j-settings-error">{message}</p> }.into_any()
+                        }
+                    }
+                })
+        }}
     }
 }
 
@@ -116,6 +165,56 @@ fn site_settings_form(
                     on:click=submit
                 >
                     "Save Site Settings"
+                </button>
+            </div>
+        </div>
+    }
+}
+
+/// Renders the independently persisted capability that allows new media uploads.
+fn media_uploads_form(
+    enabled: bool,
+    update_action: ServerAction<UpdateMediaUploadsEnabled>,
+) -> impl IntoView {
+    let uploads_enabled = RwSignal::new(enabled);
+    view! {
+        <div class="j-card j-site-form">
+            <div class="j-card-head">
+                <div>
+                    <h2>"Media Uploads"</h2>
+                    <div class="j-sub">
+                        "Allow members to upload new media through the web interface and AtomPub."
+                    </div>
+                </div>
+            </div>
+            <div class="j-site-form-body">
+                <div class="j-site-field j-site-field-wide">
+                    <label for="media-uploads-enabled">
+                        <input
+                            id="media-uploads-enabled"
+                            name="uploads_enabled"
+                            type="checkbox"
+                            prop:checked=move || uploads_enabled.get()
+                            on:change=move |event| {
+                                uploads_enabled.set(event_target_checked(&event));
+                            }
+                        />
+                        " Enable new media uploads"
+                    </label>
+                </div>
+            </div>
+            <div class="j-site-form-actions">
+                <button
+                    type="button"
+                    class="j-btn is-primary"
+                    on:click=move |_| {
+                        update_action
+                            .dispatch(UpdateMediaUploadsEnabled {
+                                uploads_enabled: uploads_enabled.get(),
+                            });
+                    }
+                >
+                    "Save Media Uploads"
                 </button>
             </div>
         </div>

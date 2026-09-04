@@ -55,7 +55,7 @@ Out:
     while disabled; enabled and absent behavior preserve existing upload
     contracts.
 
-- [ ] Task 3: Add the independent operator control
+- [x] Task 3: Add the independent operator control
   - Depends on: Task 1's typed site-config boundary.
   - Contract: `/admin/site` adds a separately loaded and saved Media Uploads
     card whose checkbox writes only the capability. Its read/write server
@@ -66,7 +66,7 @@ Out:
     `admin-site.spec.ts` flow disables and re-enables uploads and confirms site
     identity is unchanged.
 
-- [ ] Task 4: Project read-only state through the media page
+- [x] Task 4: Project read-only state through the media page
   - Depends on: Task 1's typed site-config boundary and Task 2's server
     authority.
   - Contract: `/media` remains available and continues rendering usage and

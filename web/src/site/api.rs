@@ -25,6 +25,34 @@ pub async fn get_identity() -> WebResult<SiteIdentity> {
 }
 
 #[macros::server]
+pub async fn get_media_uploads_enabled() -> WebResult<bool> {
+    auth::require_operator().await?;
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    site_config
+        .get_media_uploads_enabled()
+        .await
+        .map_err(InternalError::storage)
+}
+
+#[macros::server]
+pub async fn update_media_uploads_enabled(uploads_enabled: bool) -> WebResult<MutationOutcome<()>> {
+    auth::require_operator().await?;
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let write_scope = expect_context::<WriteScope>();
+    write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                site_config
+                    .set_media_uploads_enabled(transaction, uploads_enabled)
+                    .await
+                    .map_err(InternalError::storage)
+            })
+        })
+        .await
+        .map_err(from_write_scope_error)
+}
+
+#[macros::server]
 pub async fn update_identity(
     title: SiteTitle,
     base_url: Option<BaseUrl>,

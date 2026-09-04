@@ -50,7 +50,9 @@ pub(crate) async fn normalize(response: impl IntoResponse) -> Response {
     let (status, remove_location) = match status {
         400 => (StatusCode::BAD_REQUEST, true),
         403 => (StatusCode::FORBIDDEN, false),
-        _ => return Response::from_parts(parts, Body::from(body)),
+        // `WebError::server_fn_error_status` only returns `Some(400)`, `Some(403)`, or
+        // `None`; the preceding `let Some` has already excluded `None`.
+        _ => return Response::from_parts(parts, Body::from(body)), // cov:ignore
     };
     parts.status = status;
     if remove_location {

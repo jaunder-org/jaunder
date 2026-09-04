@@ -59,6 +59,20 @@ pub struct UsageData {
     pub max_file_size_bytes: MaxFileSize,
 }
 
+/// Whether the site operator currently permits new media uploads.
+///
+/// This is a presentation hint for the authenticated media page. The media manager
+/// remains the authoritative enforcement boundary for every upload attempt.
+#[macros::server]
+pub async fn get_uploads_enabled() -> WebResult<bool> {
+    auth::require_auth().await?;
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    site_config
+        .get_media_uploads_enabled()
+        .await
+        .map_err(InternalError::storage)
+}
+
 /// The deletion disposition returned by [`delete`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MediaDeletion {

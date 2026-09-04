@@ -232,6 +232,142 @@ async fn update_site_identity_requires_operator(#[case] backend: Backend) {
     assert!(member_body.contains("unauthorized"), "body: {member_body}");
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn media_upload_capability_requires_operator(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let member_cookie = create_user_and_session(&state).await.cookie();
+
+    for (path, body) in [
+        (<web::site::GetMediaUploadsEnabled as ServerFn>::PATH, ""),
+        (
+            <web::site::UpdateMediaUploadsEnabled as ServerFn>::PATH,
+            "uploads_enabled=false",
+        ),
+    ] {
+        let (status, response) = post_form(&state, path, body, Some(&member_cookie)).await;
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "body: {response}"
+        );
+        assert!(response.contains("unauthorized"), "body: {response}");
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn media_upload_capability_defaults_enabled_and_round_trips(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_operator_and_session(&state).await.cookie();
+
+    let (initial_status, initial_body) = post_form(
+        &state,
+        <web::site::GetMediaUploadsEnabled as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(initial_status, StatusCode::OK, "body: {initial_body}");
+    assert!(serde_json::from_str::<bool>(&initial_body).expect("boolean response"));
+
+    for (body, expected) in [
+        ("uploads_enabled=false", false),
+        ("uploads_enabled=true", true),
+    ] {
+        let (update_status, update_body) = post_form(
+            &state,
+            <web::site::UpdateMediaUploadsEnabled as ServerFn>::PATH,
+            body,
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(update_status, StatusCode::OK, "body: {update_body}");
+
+        let (get_status, get_body) = post_form(
+            &state,
+            <web::site::GetMediaUploadsEnabled as ServerFn>::PATH,
+            "",
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(get_status, StatusCode::OK, "body: {get_body}");
+        assert_eq!(
+            serde_json::from_str::<bool>(&get_body).expect("boolean response"),
+            expected
+        );
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn media_upload_capability_and_site_identity_save_independently(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_operator_and_session(&state).await.cookie();
+
+    let identity_body = "title=Independent+Site&base_url=https%3A%2F%2Fexample.com";
+    let (identity_status, identity_response) = post_form(
+        &state,
+        <web::site::UpdateIdentity as ServerFn>::PATH,
+        identity_body,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(identity_status, StatusCode::OK, "body: {identity_response}");
+
+    let (capability_status, capability_response) = post_form(
+        &state,
+        <web::site::UpdateMediaUploadsEnabled as ServerFn>::PATH,
+        "uploads_enabled=false",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        capability_status,
+        StatusCode::OK,
+        "body: {capability_response}"
+    );
+
+    let (identity_status, identity_response) = post_form(
+        &state,
+        <web::site::GetIdentity as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(identity_status, StatusCode::OK, "body: {identity_response}");
+    let identity: SiteIdentity = serde_json::from_str(&identity_response).expect("identity");
+    assert_eq!(identity.title, "Independent Site");
+    assert_eq!(identity.base_url.as_deref(), Some("https://example.com/"));
+
+    let (identity_update_status, identity_update_response) = post_form(
+        &state,
+        <web::site::UpdateIdentity as ServerFn>::PATH,
+        "title=Renamed+Site",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        identity_update_status,
+        StatusCode::OK,
+        "body: {identity_update_response}"
+    );
+
+    let (capability_status, capability_response) = post_form(
+        &state,
+        <web::site::GetMediaUploadsEnabled as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        capability_status,
+        StatusCode::OK,
+        "body: {capability_response}"
+    );
+    assert!(!serde_json::from_str::<bool>(&capability_response).expect("boolean response"));
+}
+
 // #575 base-URL warning banner endpoint. Mirrors web_backup.rs's
 // `backup_warning_*` tests: a soft operator check (`Ok(false)`, never an error,
 // for non-operators) over whether `SiteIdentity.base_url` is unset. The visible
