@@ -602,10 +602,21 @@ static-docs =
       src = craneLib.path ../.;
       filter =
         path: type:
-        type == "directory"
-        || pkgs.lib.hasSuffix ".md" path
-        || pkgs.lib.hasSuffix "/.prettierrc.json" path
-        || pkgs.lib.hasSuffix "/.prettierignore" path;
+        let
+          relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+          ignored =
+            relative == "docs/archive"
+            || pkgs.lib.hasPrefix "docs/archive/" relative
+            || relative == ".claude"
+            || pkgs.lib.hasPrefix ".claude/" relative;
+        in
+        !ignored
+        && (
+          type == "directory"
+          || pkgs.lib.hasSuffix ".md" path
+          || pkgs.lib.hasSuffix "/.prettierrc.json" path
+          || pkgs.lib.hasSuffix "/.prettierignore" path
+        );
     };
   in
   pkgs.runCommand "static-docs"
