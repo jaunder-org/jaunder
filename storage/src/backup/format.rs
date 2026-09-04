@@ -12,6 +12,13 @@ use serde_json::{Map, Value};
 
 use super::{BackupMode, error::BackupError};
 
+const LEGACY_BACKUP_FORMAT_VERSION: u32 = 1;
+pub(crate) const CURRENT_BACKUP_FORMAT_VERSION: u32 = 1;
+
+const fn legacy_backup_format_version() -> u32 {
+    LEGACY_BACKUP_FORMAT_VERSION
+}
+
 // Tables deliberately excluded from backup: _sqlx_migrations is schema state and feed_cache is regenerable.
 pub(crate) const TABLES_EXCLUDED_FROM_BACKUP: &[&str] = &["_sqlx_migrations", "feed_cache"];
 
@@ -54,6 +61,8 @@ pub(crate) fn restore_table_order(tables: &[String]) -> Vec<&str> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupManifest {
+    #[serde(default = "legacy_backup_format_version")]
+    pub format_version: u32,
     pub version: String,
     pub schema_version: i64,
     pub schema_checksum: String,
@@ -75,6 +84,7 @@ pub(crate) fn build_manifest(
     tables: Vec<String>,
 ) -> BackupManifest {
     BackupManifest {
+        format_version: CURRENT_BACKUP_FORMAT_VERSION,
         version: env!("CARGO_PKG_VERSION").to_owned(),
         schema_version,
         schema_checksum,
@@ -123,16 +133,20 @@ pub(super) fn read_manifest(source_path: &Path) -> Result<BackupManifest, Backup
         )));
     }
 
-    let file = File::open(manifest_path)?;
-    Ok(serde_json::from_reader(file)?)
+    let file = File::open(&manifest_path)?;
+    serde_json::from_reader(file).map_err(|error| {
+        BackupError::InvalidBackup(format!(
+            "malformed manifest {}: {error}",
+            manifest_path.display()
+        ))
+    })
 }
 
 pub(super) fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupError> {
-    let current_version = env!("CARGO_PKG_VERSION");
-    if manifest.version != current_version {
-        return Err(BackupError::VersionMismatch {
-            backup_version: manifest.version.clone(),
-            current_version,
+    if manifest.format_version != CURRENT_BACKUP_FORMAT_VERSION {
+        return Err(BackupError::UnsupportedFormatVersion {
+            backup_version: manifest.format_version,
+            current_version: CURRENT_BACKUP_FORMAT_VERSION,
         });
     }
     Ok(())
@@ -280,8 +294,9 @@ mod tests {
     }
 
     #[test]
-    fn backup_manifest_timestamp_retains_rfc3339_serde_form() {
+    fn backup_manifest_serializes_format_version_and_timestamp() {
         let manifest = BackupManifest {
+            format_version: 1,
             version: "0.1.0".to_owned(),
             schema_version: 1,
             schema_checksum: "checksum".to_owned(),
@@ -293,6 +308,7 @@ mod tests {
         };
 
         let json = serde_json::to_value(&manifest).expect("manifest serializes");
+        assert_eq!(json["format_version"], 1);
         assert_eq!(json["timestamp"], "2026-08-26T01:02:03.123456Z");
         assert_eq!(
             serde_json::from_value::<BackupManifest>(json)
@@ -300,6 +316,47 @@ mod tests {
                 .timestamp,
             manifest.timestamp
         );
+    }
+
+    #[test]
+    fn absent_format_version_is_legacy_v1_but_malformed_value_is_rejected() {
+        let legacy = serde_json::json!({
+            "version": "0.1.0",
+            "schema_version": 1,
+            "schema_checksum": "checksum",
+            "timestamp": "2026-08-26T01:02:03Z",
+            "mode": "directory",
+            "tables": []
+        });
+        let manifest =
+            serde_json::from_value::<BackupManifest>(legacy).expect("legacy v1 manifest");
+        assert_eq!(manifest.format_version, 1);
+
+        let malformed = serde_json::json!({
+            "format_version": "1",
+            "version": "0.1.0",
+            "schema_version": 1,
+            "schema_checksum": "checksum",
+            "timestamp": "2026-08-26T01:02:03Z",
+            "mode": "directory",
+            "tables": []
+        });
+        serde_json::from_value::<BackupManifest>(malformed)
+            .expect_err("malformed explicit format version");
+    }
+
+    #[test]
+    fn read_manifest_classifies_malformed_manifest_as_invalid_backup() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        fs::write(
+            temp.path().join("manifest.json"),
+            r#"{"format_version":"1"}"#,
+        )
+        .expect("write malformed manifest");
+
+        let error = read_manifest(temp.path()).expect_err("malformed manifest");
+        assert!(matches!(error, BackupError::InvalidBackup(_)));
+        Ok(())
     }
 
     #[test]
@@ -312,9 +369,10 @@ mod tests {
     }
 
     #[test]
-    fn validate_manifest_rejects_wrong_version() {
+    fn validate_manifest_accepts_different_package_version() {
         let manifest = BackupManifest {
-            version: "0.0.0".to_owned(),
+            format_version: CURRENT_BACKUP_FORMAT_VERSION,
+            version: "another-release".to_owned(),
             schema_version: 11,
             schema_checksum: "checksum".to_owned(),
             timestamp: UtcInstant::now(),
@@ -322,13 +380,35 @@ mod tests {
             tables: Vec::new(),
         };
 
-        let error = validate_manifest(&manifest).expect_err("version mismatch");
-        assert!(matches!(error, BackupError::VersionMismatch { .. }));
+        validate_manifest(&manifest).expect("package version is provenance");
+    }
+
+    #[test]
+    fn validate_manifest_rejects_unsupported_format_version() {
+        let manifest = BackupManifest {
+            format_version: 2,
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            schema_version: 11,
+            schema_checksum: "checksum".to_owned(),
+            timestamp: UtcInstant::now(),
+            mode: BackupMode::Directory,
+            tables: Vec::new(),
+        };
+
+        let error = validate_manifest(&manifest).expect_err("unsupported format");
+        assert!(matches!(
+            error,
+            BackupError::UnsupportedFormatVersion {
+                backup_version: 2,
+                current_version: CURRENT_BACKUP_FORMAT_VERSION
+            }
+        ));
     }
 
     #[test]
     fn ensure_schema_version_rejects_legacy_schema() {
         let manifest = BackupManifest {
+            format_version: CURRENT_BACKUP_FORMAT_VERSION,
             version: env!("CARGO_PKG_VERSION").to_owned(),
             schema_version: 26,
             schema_checksum: "checksum".to_owned(),

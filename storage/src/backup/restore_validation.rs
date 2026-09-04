@@ -742,6 +742,7 @@ mod tests {
 
     fn identity_manifest(tables: Vec<String>) -> BackupManifest {
         BackupManifest {
+            format_version: crate::backup::format::CURRENT_BACKUP_FORMAT_VERSION,
             version: env!("CARGO_PKG_VERSION").to_owned(),
             schema_version: 27,
             schema_checksum: "test".to_owned(),

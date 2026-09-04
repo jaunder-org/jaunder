@@ -20,10 +20,12 @@ pub enum BackupError {
     DestinationExists(PathBuf),
     #[error("invalid backup: {0}")]
     InvalidBackup(String),
-    #[error("backup was created by jaunder {backup_version}, but this binary is {current_version}")]
-    VersionMismatch {
-        backup_version: String,
-        current_version: &'static str,
+    #[error(
+        "backup format version {backup_version} is unsupported; this binary supports version {current_version}"
+    )]
+    UnsupportedFormatVersion {
+        backup_version: u32,
+        current_version: u32,
     },
     #[error(
         "backup schema version {backup_version} does not match target schema version {target_version}"
