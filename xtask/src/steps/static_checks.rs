@@ -1,8 +1,7 @@
 use xshell::Shell;
 
-use crate::ExecutionPolicy;
 use crate::compile_cache;
-use crate::result::{CommandResult, Mode, StepResult};
+use crate::result::{Mode, StepResult};
 use crate::sh;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -146,40 +145,6 @@ fn cargo_compile_check(name: &'static str, args: Vec<&'static str>) -> StepSpec 
     }
 }
 
-pub(crate) fn run_phase_with(
-    sh: &Shell,
-    mode: Mode,
-    phase: Phase,
-    policy: ExecutionPolicy,
-    result: &mut CommandResult,
-    mut run: impl FnMut(&Shell, &StepSpec) -> StepResult,
-) {
-    crate::run_with_policy(
-        policy,
-        result,
-        specs_for_phase(phase, mode),
-        |spec, result| result.push(run(sh, &spec)),
-    );
-}
-
-pub(crate) fn run_markdown_phase_with(
-    sh: &Shell,
-    mode: Mode,
-    phase: Phase,
-    policy: ExecutionPolicy,
-    result: &mut CommandResult,
-    mut run: impl FnMut(&Shell, &StepSpec) -> StepResult,
-) {
-    crate::run_with_policy(
-        policy,
-        result,
-        specs_for_phase(phase, mode)
-            .into_iter()
-            .filter(|spec| spec.markdown_eligible),
-        |spec, result| result.push(run(sh, &spec)),
-    );
-}
-
 pub(crate) fn run_spec(sh: &Shell, spec: &StepSpec) -> StepResult {
     if spec.cache_rustc {
         let (env, cache_detail) = compile_cache::cargo_compile_env();
@@ -199,68 +164,6 @@ pub(crate) fn run_spec(sh: &Shell, spec: &StepSpec) -> StepResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::StepResult;
-
-    #[test]
-    fn fail_fast_static_phase_stops_after_the_first_failed_spec() {
-        let sh = Shell::new().expect("create shell");
-        let mut result = CommandResult::new("precommit");
-        let mut invoked = Vec::new();
-
-        run_phase_with(
-            &sh,
-            Mode::Fix,
-            Phase::SourceConsistency,
-            crate::ExecutionPolicy::FailFast,
-            &mut result,
-            |_, spec| {
-                invoked.push(spec.name);
-                if invoked.len() == 1 {
-                    StepResult::fail(spec.name).detail("synthetic static failure")
-                } else {
-                    StepResult::ok(spec.name)
-                }
-            },
-        );
-
-        assert_eq!(invoked.len(), 1, "later static specs must not run");
-        assert_eq!(result.steps.len(), 1);
-        assert_eq!(
-            result.steps[0].detail.as_deref(),
-            Some("synthetic static failure")
-        );
-    }
-
-    #[test]
-    fn exhaustive_static_phase_continues_after_a_failed_spec() {
-        let sh = Shell::new().expect("create shell");
-        let expected = specs_for_phase(Phase::SourceConsistency, Mode::Check).len();
-        let mut result = CommandResult::new("check");
-        let mut invoked = 0;
-
-        run_phase_with(
-            &sh,
-            Mode::Check,
-            Phase::SourceConsistency,
-            crate::ExecutionPolicy::Exhaustive,
-            &mut result,
-            |_, spec| {
-                invoked += 1;
-                if invoked == 1 {
-                    StepResult::fail(spec.name).detail("synthetic static failure")
-                } else {
-                    StepResult::ok(spec.name)
-                }
-            },
-        );
-
-        assert_eq!(
-            invoked, expected,
-            "exhaustive execution keeps later diagnostics"
-        );
-        assert_eq!(result.steps.len(), expected);
-        assert!(!result.ok);
-    }
 
     fn find<'a>(specs: &'a [StepSpec], name: &str) -> &'a StepSpec {
         specs.iter().find(|s| s.name == name).expect("step present")
