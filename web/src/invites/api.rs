@@ -136,3 +136,45 @@ pub async fn list() -> WebResult<Vec<Info>> {
         })
         .collect())
 }
+
+#[cfg(all(test, feature = "server"))]
+mod server_tests {
+    use super::{CreateInviteRequest, create};
+    use crate::{error::WebError, test_support::auth_parts};
+    use common::{ids::UserId, registration::RegistrationPolicy, test_support::parse_email};
+    use leptos::prelude::{Owner, provide_context};
+    use std::sync::Arc;
+    use storage::{MockSiteConfigStorage, MockUserStorage, SiteConfigStorage, UserStorage};
+
+    // guard:no-backend — verifies the authorization rejection precedes all write and mail work.
+    #[tokio::test]
+    async fn create_rejects_absent_user_before_invite_side_effects() {
+        let owner = Owner::new();
+        owner.set();
+        provide_context(auth_parts(UserId::from(1), "ghost"));
+
+        let mut site_config = MockSiteConfigStorage::new();
+        site_config
+            .expect_get_registration_policy()
+            .times(1)
+            .return_once(|| Ok(RegistrationPolicy::OperatorInvites));
+        provide_context(Arc::new(site_config) as Arc<dyn SiteConfigStorage>);
+
+        let mut users = MockUserStorage::new();
+        users
+            .expect_get_user()
+            .withf(|user_id| *user_id == UserId::from(1))
+            .times(1)
+            .return_once(|_| Ok(None));
+        provide_context(Arc::new(users) as Arc<dyn UserStorage>);
+
+        let result = create(CreateInviteRequest {
+            expires_in_hours: None,
+            recipient_email: parse_email("invitee@example.com"),
+        })
+        .await;
+        drop(owner);
+
+        assert_eq!(result.unwrap_err(), WebError::Unauthorized);
+    }
+}
