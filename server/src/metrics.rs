@@ -1058,6 +1058,7 @@ mod tests {
         let backup = backup_root.join("backup-20260102T000000Z");
         std::fs::create_dir_all(&backup).expect("backup dir");
         let manifest = storage::BackupManifest {
+            format_version: 1,
             version: "0.1.0".to_owned(),
             schema_version: 1,
             schema_checksum: "test-checksum".to_owned(),

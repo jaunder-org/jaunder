@@ -416,6 +416,7 @@ mod tests {
 
     fn test_manifest(timestamp: &str, mode: BackupMode) -> BackupManifest {
         BackupManifest {
+            format_version: 1,
             version: "0.1.0".to_owned(),
             schema_version: 1,
             schema_checksum: "test".to_owned(),
