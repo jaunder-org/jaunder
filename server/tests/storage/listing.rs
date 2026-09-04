@@ -713,6 +713,52 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
 
 #[apply(backends)]
 #[tokio::test]
+async fn list_published_in_window_with_unrepresentable_cutoff_keeps_eligible_history(
+    #[case] backend: Backend,
+) {
+    use chrono::Duration;
+    use common::feed::FeedSurface;
+    use host::{
+        feed::HybridWindow,
+        test_support::{parse_feed_min_days, parse_feed_min_items},
+    };
+
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = SeedUser::new().seed(state).await;
+    let now = Utc::now();
+    let publish = |days_ago| {
+        SeedRawPost::new(author.user_id)
+            .published_at(UtcInstant::from(now - Duration::days(days_ago)))
+    };
+
+    let yesterday = publish(1).seed(state).await;
+    let last_month = publish(31).seed(state).await;
+    let last_year = publish(365).seed(state).await;
+    publish(-1).seed(state).await;
+
+    let posts = state
+        .posts
+        .list_published_in_window(
+            &FeedSurface::Site,
+            &HybridWindow {
+                min_items: parse_feed_min_items("1"),
+                min_days: parse_feed_min_days(&u32::MAX.to_string()),
+            },
+            UtcInstant::from(now),
+            &ViewerIdentity::Anonymous,
+        )
+        .await
+        .unwrap();
+
+    // An unrepresentably old cutoff is all eligible history, never an overflow.
+    let actual: Vec<_> = posts.iter().map(|post| post.post_id).collect();
+    let expected = vec![yesterday.post_id, last_month.post_id, last_year.post_id];
+    assert_eq!(actual, expected);
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn list_published_in_window_resolves_viewers_before_ranking(#[case] backend: Backend) {
     use chrono::Duration;
     use common::feed::FeedSurface;

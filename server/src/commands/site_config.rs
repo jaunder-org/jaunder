@@ -5,6 +5,7 @@ use host::config_key::SiteConfigKey;
 use crate::cli::StorageArgs;
 use crate::publisher::PublisherService;
 use common::tagged_url::HubUrl;
+use storage::FeedWindowMutation;
 
 use super::support;
 
@@ -32,6 +33,17 @@ pub(super) async fn cmd_site_config_set(
             state.write_scope.clone(),
         );
         publisher.mutate_hub(hub.as_ref()).await?;
+    } else if let Some(mutation) = match key {
+        SiteConfigKey::FeedsMinItems => Some(FeedWindowMutation::SetMinItems(value.parse()?)),
+        SiteConfigKey::FeedsMinDays => Some(FeedWindowMutation::SetMinDays(value.parse()?)),
+        _ => None,
+    } {
+        let publisher = PublisherService::new(
+            storage.storage_path.clone(),
+            Arc::clone(&state.publisher),
+            state.write_scope.clone(),
+        );
+        publisher.mutate_feed_window(mutation).await?;
     } else {
         let site_config = Arc::clone(&state.site_config);
         let value_for_set = value.to_owned();
@@ -81,6 +93,11 @@ pub(super) async fn cmd_site_config_unset(
 ) -> anyhow::Result<()> {
     let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime).await?;
+    let mutation = match key {
+        SiteConfigKey::FeedsMinItems => Some(FeedWindowMutation::UnsetMinItems),
+        SiteConfigKey::FeedsMinDays => Some(FeedWindowMutation::UnsetMinDays),
+        _ => None,
+    };
     if key == SiteConfigKey::FeedsWebsubHubUrl {
         let publisher = PublisherService::new(
             storage.storage_path.clone(),
@@ -88,6 +105,16 @@ pub(super) async fn cmd_site_config_unset(
             state.write_scope.clone(),
         );
         publisher.mutate_hub(None).await?;
+        eprintln!("unset site_config {key}");
+        return Ok(());
+    }
+    if let Some(mutation) = mutation {
+        let publisher = PublisherService::new(
+            storage.storage_path.clone(),
+            Arc::clone(&state.publisher),
+            state.write_scope.clone(),
+        );
+        publisher.mutate_feed_window(mutation).await?;
         eprintln!("unset site_config {key}");
         return Ok(());
     }
@@ -137,7 +164,10 @@ fn format_entries(entries: &[(String, String)]) -> String {
 mod tests {
     use std::sync::Arc;
 
+    use tempfile::TempDir;
+
     use super::*;
+    use host::test_support::{parse_feed_min_days, parse_feed_min_items};
     use rstest::*;
     use rstest_reuse::*;
     use storage::{
@@ -146,7 +176,6 @@ mod tests {
             Backend, PostgresDbGuard, TestEnv, backends, confirmed, sqlite_url, unique_postgres_url,
         },
     };
-    use tempfile::TempDir;
 
     use super::super::test_support::sqlite_storage_args;
 
@@ -267,6 +296,69 @@ mod tests {
                 .unwrap(),
             None,
         );
+    }
+
+    /// Feed-window CLI mutations select the publisher boundary, preserving the
+    /// companion minimum and exposing absent-value defaults after unset.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn site_config_feed_window_set_and_unset_use_publisher_snapshots(
+        #[case] backend: Backend,
+    ) {
+        let base = TempDir::new().expect("temp dir");
+        let (args, _pg) = site_config_args(backend, &base).await;
+
+        let state = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("reopen");
+        let mut generation = state
+            .publisher
+            .snapshot()
+            .await
+            .expect("publisher snapshot")
+            .generation;
+
+        cmd_site_config_set(&args, SiteConfigKey::FeedsMinItems, "42")
+            .await
+            .expect("set minimum items through publisher");
+        cmd_site_config_set(&args, SiteConfigKey::FeedsMinDays, "7")
+            .await
+            .expect("set minimum days through publisher");
+
+        let snapshot = state
+            .publisher
+            .snapshot()
+            .await
+            .expect("publisher snapshot");
+        assert!(snapshot.generation > generation);
+        generation = snapshot.generation;
+        assert_eq!(snapshot.feeds.min_items, parse_feed_min_items("42"));
+        assert_eq!(snapshot.feeds.min_days, parse_feed_min_days("7"));
+
+        cmd_site_config_unset(&args, SiteConfigKey::FeedsMinItems)
+            .await
+            .expect("unset minimum items through publisher");
+        let snapshot = state
+            .publisher
+            .snapshot()
+            .await
+            .expect("publisher snapshot");
+        assert_eq!(snapshot.feeds.min_items, parse_feed_min_items("20"));
+        assert_eq!(snapshot.feeds.min_days, parse_feed_min_days("7"));
+        assert!(snapshot.generation > generation);
+        generation = snapshot.generation;
+
+        cmd_site_config_unset(&args, SiteConfigKey::FeedsMinDays)
+            .await
+            .expect("unset minimum days through publisher");
+        let snapshot = state
+            .publisher
+            .snapshot()
+            .await
+            .expect("publisher snapshot");
+        assert_eq!(snapshot.feeds.min_items, parse_feed_min_items("20"));
+        assert!(snapshot.generation > generation);
+        assert_eq!(snapshot.feeds.min_days, parse_feed_min_days("30"));
     }
 
     #[apply(backends)]

@@ -38,7 +38,7 @@ pub(crate) async fn list_published_in_window_rows<DB>(
     pool: &Pool<DB>,
     surface: &common::feed::FeedSurface,
     now: UtcInstant,
-    cutoff: UtcInstant,
+    cutoff: Option<UtcInstant>,
     min_items: FeedMinItems,
     viewer: &common::visibility::ViewerIdentity,
 ) -> Result<Vec<PostRecord>>
@@ -49,6 +49,7 @@ where
     for<'q> i64: Encode<'q, DB> + Type<DB>,
     for<'q> &'q str: Encode<'q, DB> + Type<DB>,
     for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
+    for<'q> Option<UtcInstant>: Encode<'q, DB> + Type<DB>,
     // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
     for<'q> Option<UserId>: Encode<'q, DB> + Type<DB>,
     for<'q> Option<ChannelId>: Encode<'q, DB> + Type<DB>,
@@ -66,7 +67,7 @@ where
     let tags = DB::TAGS_SUBQUERY;
     match surface {
         FeedSurface::Site => {
-            // Binds: $1 now, $2 min_items, $3 cutoff, then the variant-sized
+            // Binds: $1 now, $2 min_items, $3 optional cutoff, then the
             // resolution fragment from $4. It filters the ranked CTE and still
             // uses the last placeholders, so the returned `next` is discarded.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 4);
@@ -78,8 +79,8 @@ where
             binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::User { username } => {
-            // Binds: $1 now, $2 username, $3 min_items, $4 cutoff, then the
-            // variant-sized ranked-CTE resolution fragment from $5.
+            // Binds: $1 now, $2 username, $3 min_items, $4 optional cutoff,
+            // then the variant-sized ranked-CTE resolution fragment from $5.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
@@ -90,8 +91,8 @@ where
             binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::SiteTag { tag } => {
-            // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, then the
-            // variant-sized ranked-CTE resolution fragment from $5.
+            // Binds: $1 now, $2 tag, $3 min_items, $4 optional cutoff, then
+            // the variant-sized ranked-CTE resolution fragment from $5.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
@@ -102,8 +103,9 @@ where
             binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::UserTag { username, tag } => {
-            // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff, then
-            // the variant-sized ranked-CTE resolution fragment from $6.
+            // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 optional
+            // cutoff, then the variant-sized ranked-CTE resolution fragment
+            // from $6.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 6);
             let sql = window_sql(surface, tags, &resolution);
             let query = sqlx::query_as::<_, PostRecord>(&sql)
@@ -144,7 +146,7 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
  FROM ranked r
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
- WHERE (r.rn <= $2 OR r.published_at >= $3)
+ WHERE (r.rn <= $2 OR $3 IS NULL OR r.published_at >= $3)
  ORDER BY p.published_at DESC, p.post_id DESC"
         ),
         FeedSurface::User { .. } => format!(
@@ -165,7 +167,7 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
  FROM ranked r
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
- WHERE (r.rn <= $3 OR r.published_at >= $4)
+ WHERE (r.rn <= $3 OR $4 IS NULL OR r.published_at >= $4)
  ORDER BY p.published_at DESC, p.post_id DESC"
         ),
         FeedSurface::SiteTag { .. } => format!(
@@ -187,7 +189,7 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
  FROM ranked r
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
- WHERE (r.rn <= $3 OR r.published_at >= $4)
+ WHERE (r.rn <= $3 OR $4 IS NULL OR r.published_at >= $4)
  ORDER BY p.published_at DESC, p.post_id DESC"
         ),
         FeedSurface::UserTag { .. } => format!(
@@ -211,7 +213,7 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
  FROM ranked r
  JOIN posts p ON p.post_id = r.post_id
  JOIN users u ON p.user_id = u.user_id
- WHERE (r.rn <= $4 OR r.published_at >= $5)
+ WHERE (r.rn <= $4 OR $5 IS NULL OR r.published_at >= $5)
  ORDER BY p.published_at DESC, p.post_id DESC"
         ),
     }
