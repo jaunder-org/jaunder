@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::{WebSubClient, WebSubError};
+use super::{RetryableWebSubError, WebSubClient, WebSubError};
 use common::tagged_url::{FeedUrl, HubUrl};
 
 type OpenOperation<W> = fn(&Path) -> io::Result<W>;
@@ -47,10 +47,16 @@ impl FileCapturingWebSubClient {
         .to_string();
         line.push('\n');
 
-        let mut file = open(&self.path).map_err(|source| WebSubError::Http(Box::new(source)))?;
+        let mut file = open(&self.path).map_err(|source| WebSubError::Retryable {
+            reason: RetryableWebSubError::Transport(Box::new(source)),
+            retry_after: None,
+        })?;
         file.write_all(line.as_bytes())
             .and_then(|()| file.flush())
-            .map_err(|source| WebSubError::Http(Box::new(source)))
+            .map_err(|source| WebSubError::Retryable {
+                reason: RetryableWebSubError::Transport(Box::new(source)),
+                retry_after: None,
+            })
     }
 }
 
@@ -102,6 +108,7 @@ mod tests {
             .send_publish_with(&hub_url(), &feed_url("alice"), open)
             .expect_err("injected write must propagate");
         let source = std::error::Error::source(&error)
+            .and_then(|error| error.source())
             .and_then(|error| error.downcast_ref::<io::Error>())
             .expect("typed I/O source");
         assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
@@ -119,6 +126,7 @@ mod tests {
             .send_publish_with(&hub_url(), &feed_url("alice"), open)
             .expect_err("injected flush must propagate");
         let source = std::error::Error::source(&error)
+            .and_then(|error| error.source())
             .and_then(|error| error.downcast_ref::<io::Error>())
             .expect("typed I/O source");
         assert_eq!(source.kind(), io::ErrorKind::WriteZero);
@@ -172,7 +180,7 @@ mod tests {
             .send_publish(&hub_url(), &feed_url("alice"))
             .await
             .expect_err("open should fail");
-        assert!(matches!(err, WebSubError::Http(_)));
+        assert!(matches!(err, WebSubError::Retryable { .. }));
     }
 
     // /dev/full opens successfully but every write fails with ENOSPC, which
@@ -185,6 +193,6 @@ mod tests {
             .send_publish(&hub_url(), &feed_url("alice"))
             .await
             .expect_err("write should fail");
-        assert!(matches!(err, WebSubError::Http(_)));
+        assert!(matches!(err, WebSubError::Retryable { .. }));
     }
 }

@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode, header},
 };
 use chrono::{Timelike, Utc};
-use common::{feed::FeedFormat, test_support::parse_etag, time::UtcInstant};
+use common::{feed::FeedFormat, tagged_url::HubUrl, test_support::parse_etag, time::UtcInstant};
 use host::feed::SyndicationFeedRepresentation;
 use tower::ServiceExt;
 
@@ -12,7 +12,7 @@ use rstest_reuse::*;
 use std::error::Error;
 use std::sync::Arc;
 
-use crate::helpers::make_app;
+use crate::helpers::{body_string, make_app};
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix, fp,
 };
@@ -70,6 +70,31 @@ fn with_feed_cache(
         user_config: state.user_config.clone(),
         feed_cache,
         feed_events: state.feed_events.clone(),
+        publisher: state.publisher.clone(),
+        write_scope: state.write_scope.clone(),
+    })
+}
+
+fn with_posts_and_publisher(
+    state: &Arc<storage::AppState>,
+    posts: Arc<dyn storage::PostStorage>,
+    publisher: Arc<dyn storage::PublisherStorage>,
+) -> Arc<storage::AppState> {
+    Arc::new(storage::AppState {
+        site_config: state.site_config.clone(),
+        users: state.users.clone(),
+        sessions: state.sessions.clone(),
+        invites: state.invites.clone(),
+        email_verifications: state.email_verifications.clone(),
+        password_resets: state.password_resets.clone(),
+        posts,
+        subscriptions: state.subscriptions.clone(),
+        audiences: state.audiences.clone(),
+        media: state.media.clone(),
+        user_config: state.user_config.clone(),
+        feed_cache: state.feed_cache.clone(),
+        feed_events: state.feed_events.clone(),
+        publisher,
         write_scope: state.write_scope.clone(),
     })
 }
@@ -146,6 +171,103 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
         !cached.representation().body().is_empty(),
         "cached body should not be empty"
     );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn handler_cache_miss_restarts_after_hub_mutation_and_caches_only_new_discovery(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base } = backend.setup().await;
+    let publisher = Arc::new(jaunder::publisher::PublisherService::new(
+        base.path().to_path_buf(),
+        Arc::clone(&state.publisher),
+        state.write_scope.clone(),
+    ));
+    let old_hub: HubUrl = "https://old-hub.example/".parse().expect("valid hub URL");
+    let new_hub: HubUrl = "https://new-hub.example/".parse().expect("valid hub URL");
+    publisher
+        .mutate_hub(Some(&old_hub))
+        .await
+        .expect("seed old normalized hub");
+    let old_snapshot = state.publisher.snapshot().await.expect("old snapshot");
+    publisher
+        .mutate_hub(Some(&new_hub))
+        .await
+        .expect("replace normalized hub");
+    let new_snapshot = state.publisher.snapshot().await.expect("new snapshot");
+
+    let snapshots = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::from([
+        old_snapshot,
+        new_snapshot.clone(),
+    ])));
+    let snapshots_for_read = Arc::clone(&snapshots);
+    let committed = Arc::new(std::sync::Mutex::new(None));
+    let committed_for_write = Arc::clone(&committed);
+    let old_hub_for_write = old_hub.clone();
+    let new_hub_for_write = new_hub.clone();
+    let expected_generation = new_snapshot.generation;
+    let mut publisher_storage = storage::MockPublisherStorage::new();
+    publisher_storage
+        .expect_snapshot()
+        .times(2)
+        .returning(move || {
+            Ok(snapshots_for_read
+                .lock()
+                .expect("snapshot queue")
+                .pop_front()
+                .expect("expected snapshot"))
+        });
+    publisher_storage
+        .expect_commit_cache()
+        .times(2)
+        .returning(move |_, generation, row| {
+            if row
+                .representation()
+                .body()
+                .contains(old_hub_for_write.as_ref())
+            {
+                return Ok(storage::CacheCommitOutcome::StaleGeneration);
+            }
+            assert_eq!(generation, expected_generation);
+            assert!(
+                row.representation()
+                    .body()
+                    .contains(new_hub_for_write.as_ref())
+            );
+            *committed_for_write.lock().expect("committed row") = Some(row);
+            Ok(storage::CacheCommitOutcome::Committed)
+        });
+    let mut posts = storage::MockPostStorage::new();
+    posts
+        .expect_list_published_in_window()
+        .times(2)
+        .returning(|_, _, _, _| Ok(vec![]));
+    let state = with_posts_and_publisher(&state, Arc::new(posts), Arc::new(publisher_storage));
+    let app = make_app(&state, &base);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/feed.rss")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(body.contains(new_hub.as_ref()));
+    assert!(!body.contains(old_hub.as_ref()));
+
+    let cached = committed
+        .lock()
+        .expect("committed row")
+        .take()
+        .expect("cache entry committed");
+    assert!(cached.representation().body().contains(new_hub.as_ref()));
+    assert!(!cached.representation().body().contains(old_hub.as_ref()));
 }
 
 #[apply(backends)]

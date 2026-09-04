@@ -40,8 +40,8 @@ enum_attr!(PasswordResetEvent { Requested => "requested", Completed => "complete
 enum_attr!(EmailKind { Verification => "verification", PasswordReset => "password_reset", Invite => "invite" });
 enum_attr!(SendResult { Success => "success", Failure => "failure" });
 enum_attr!(UploadOutcome { Stored => "stored", Deduplicated => "deduplicated", QuotaExceeded => "quota_exceeded", TooLarge => "too_large", Invalid => "invalid", Error => "error" });
-enum_attr!(RegenResult { Ok => "ok", Error => "error" });
-enum_attr!(PingOutcome { Success => "success", Failed => "failed", Exhausted => "exhausted", NoHub => "no_hub" });
+enum_attr!(RegenResult { Ok => "ok", Error => "error", Exhausted => "exhausted" });
+enum_attr!(PingOutcome { Success => "success", Failed => "failed", Exhausted => "exhausted", Terminal => "terminal", NoHub => "no_hub" });
 enum_attr!(CacheResult { Hit => "hit", Miss => "miss" });
 enum_attr!(BackupResult { Success => "success", Failure => "failure" });
 enum_attr!(PostEvent { Created => "created", Updated => "updated", Published => "published", Deleted => "deleted" });
@@ -814,10 +814,12 @@ mod tests {
 
         assert_eq!(RegenResult::Ok.as_str(), "ok");
         assert_eq!(RegenResult::Error.as_str(), "error");
+        assert_eq!(RegenResult::Exhausted.as_str(), "exhausted");
 
         assert_eq!(PingOutcome::Success.as_str(), "success");
         assert_eq!(PingOutcome::Failed.as_str(), "failed");
         assert_eq!(PingOutcome::Exhausted.as_str(), "exhausted");
+        assert_eq!(PingOutcome::Terminal.as_str(), "terminal");
         assert_eq!(PingOutcome::NoHub.as_str(), "no_hub");
 
         assert_eq!(CacheResult::Hit.as_str(), "hit");

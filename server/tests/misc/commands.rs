@@ -4,15 +4,19 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use clap::Parser as _;
-use common::test_support::{parse_email, parse_invite_ttl_hours, parse_session_label};
-use common::username::Username;
-use host::config_key::SiteConfigKey;
-use host::password::Password;
-use jaunder::cli::{Cli, Commands, StorageArgs};
+use clap::Parser;
+use common::{
+    pagination::PageSize,
+    test_support::{parse_email, parse_invite_ttl_hours, parse_session_label},
+    time::UtcInstant,
+    username::Username,
+};
+use host::{config_key::SiteConfigKey, feed::FeedEventPhase, password::Password};
+use jaunder::cli::{Cli, Commands, DeadLetterAction, StorageArgs, WebsubAction};
 use jaunder::commands::{
-    ServeCapturePaths, app_password_create, cmd_app_password_create, cmd_backup, cmd_init,
-    cmd_restore, cmd_serve, cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
+    CommandOutput, ServeCapturePaths, app_password_create, cmd_app_password_create, cmd_backup,
+    cmd_init, cmd_restore, cmd_serve, cmd_smtp_test, cmd_user_create, cmd_user_invite,
+    prepare_server,
 };
 use sqlx::{postgres::PgPoolOptions, sqlite::SqlitePoolOptions};
 use storage::{
@@ -29,9 +33,9 @@ use crate::misc::backup_fixture::{
     assert_backup_fixture_restored, assert_target_unmodified, populate_backup_fixture,
 };
 use storage::test_support::{
-    Backend, PostgresDbGuard, PostgresTestConfig, SeedUser, backends, nonexistent_postgres_url,
-    noop_mailer, raw_media_filename_exists, rewrite_media_filename_in_backup, sqlite_url,
-    unique_postgres_url,
+    Backend, PostgresDbGuard, PostgresTestConfig, SeedUser, backends, confirmed,
+    nonexistent_postgres_url, noop_mailer, raw_media_filename_exists,
+    rewrite_media_filename_in_backup, sqlite_url, unique_postgres_url,
 };
 
 fn default_host_config() -> (host::telemetry::TelemetryConfig, Option<ServeCapturePaths>) {
@@ -302,6 +306,125 @@ async fn command_source_chain_cmd_smtp_test_send(#[case] backend: Backend) {
             .downcast_ref::<lettre::transport::smtp::Error>()
             .is_some()),
         "cmd_smtp_test must retain the send source: {error:#}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn websub_dispatch_lists_and_redrives_the_exact_terminal_selection(#[case] backend: Backend) {
+    let env = InitializedCommandEnv::new(backend).await;
+    let args = env.args.clone();
+    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("open initialized database");
+    let path = "/feed.rss".parse().expect("feed path");
+    let feed_events = Arc::clone(&state.feed_events);
+    let id = confirmed(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { feed_events.enqueue(transaction, &path).await })
+            })
+            .await
+            .expect("enqueue terminal fixture"),
+    );
+    let feed_events = Arc::clone(&state.feed_events);
+    confirmed(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    feed_events
+                        .dead_letter_publication(
+                            transaction,
+                            &[id],
+                            "publication terminal fixture",
+                            UtcInstant::now(),
+                        )
+                        .await
+                })
+            })
+            .await
+            .expect("terminalize fixture"),
+    );
+
+    let (telemetry, _) = default_host_config();
+    let output = Commands::Websub {
+        action: WebsubAction::DeadLetters {
+            action: DeadLetterAction::List {
+                storage: args.clone(),
+                phase: FeedEventPhase::Publication,
+                cursor: None,
+                page_size: PageSize::default(),
+            },
+        },
+    }
+    .execute(&telemetry, None)
+    .await
+    .expect("list terminal events");
+    assert!(matches!(output, CommandOutput::None));
+
+    let page = state
+        .feed_events
+        .dead_letters(FeedEventPhase::Publication, None, PageSize::default())
+        .await
+        .expect("inspect terminal events");
+    assert_eq!(
+        page.events.iter().map(|event| event.id).collect::<Vec<_>>(),
+        [id]
+    );
+
+    let output = Commands::Websub {
+        action: WebsubAction::DeadLetters {
+            action: DeadLetterAction::Redrive {
+                storage: args,
+                ids: vec![id],
+            },
+        },
+    }
+    .execute(&telemetry, None)
+    .await
+    .expect("redrive exact terminal event");
+    assert!(matches!(output, CommandOutput::None));
+    assert!(
+        state
+            .feed_events
+            .dead_letters(FeedEventPhase::Publication, None, PageSize::default())
+            .await
+            .expect("inspect redriven terminal events")
+            .events
+            .is_empty(),
+        "the requested terminal event was redriven"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn websub_dispatch_preserves_database_open_errors(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let args = uninitialized_storage_args(backend, &base);
+    let (telemetry, _) = default_host_config();
+
+    let error = Commands::Websub {
+        action: WebsubAction::DeadLetters {
+            action: DeadLetterAction::List {
+                storage: args,
+                phase: FeedEventPhase::Regeneration,
+                cursor: None,
+                page_size: PageSize::default(),
+            },
+        },
+    }
+    .execute(&telemetry, None)
+    .await
+    .err()
+    .expect("uninitialized storage rejects the command");
+
+    assert!(
+        error
+            .chain()
+            .any(|source| source.downcast_ref::<sqlx::Error>().is_some()),
+        "websub dead-letters list must retain its typed SQLx source: {error:#}"
     );
 }
 
@@ -681,6 +804,7 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
             "post_revisions",
             "post_tags",
             "posts",
+            "publisher_state",
             "sessions",
             "site_config",
             "subscription_statuses",
@@ -720,7 +844,7 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
         }
     };
     assert_eq!(
-        live_table_count, 27,
+        live_table_count, 28,
         "a table was added or removed — update the golden set and denylist deliberately"
     );
 }
@@ -834,7 +958,7 @@ async fn cmd_restore_rejects_pre_identity_backup(#[case] backend: Backend) {
         error.downcast_ref::<BackupError>(),
         Some(BackupError::SchemaVersionMismatch {
             backup_version: 26,
-            target_version: 29
+            target_version: 31
         })
     ));
 }

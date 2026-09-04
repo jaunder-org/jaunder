@@ -7,6 +7,7 @@ mod storage_bootstrap;
 mod support;
 #[cfg(test)]
 mod test_support;
+mod websub;
 
 pub use account::{
     app_password_create, cmd_app_password_create, cmd_smtp_test, cmd_user_create, cmd_user_invite,

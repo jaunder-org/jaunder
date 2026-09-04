@@ -17,7 +17,7 @@ pub(super) struct NavItem {
     pub(super) requires_operator: bool,
 }
 
-pub(super) static NAV_ITEMS: LazyLock<[NavItem; 14]> = LazyLock::new(|| {
+pub(super) static NAV_ITEMS: LazyLock<[NavItem; 15]> = LazyLock::new(|| {
     [
         NavItem {
             key: "home",
@@ -135,6 +135,14 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 14]> = LazyLock::new(|| {
             requires_auth: true,
             requires_operator: true,
         },
+        NavItem {
+            key: "admin-websub",
+            label: "WebSub Recovery",
+            icon_path: Icons::SHIELD,
+            href: Some(root_relative_url("/admin/websub")),
+            requires_auth: true,
+            requires_operator: true,
+        },
     ]
 });
 
@@ -243,6 +251,7 @@ mod tests {
         assert!(!html.contains(">Settings<"), "{html}");
         assert!(!html.contains(">Configure Backups<"), "{html}");
         assert!(!html.contains(">Site Settings<"), "{html}");
+        assert!(!html.contains(">WebSub Recovery<"), "{html}");
         // Sources section + empty footer.
         assert!(
             html.contains("<div class=\"j-source-name\">Bluesky</div>"),
@@ -280,6 +289,7 @@ mod tests {
                 ("settings", "/profile"),
                 ("admin-backups", "/admin/backups"),
                 ("admin-site", "/admin/site"),
+                ("admin-websub", "/admin/websub"),
             ]
         );
 

@@ -27,7 +27,7 @@ impl_role_instant!(FeedCacheGeneratedAt, UtcInstant);
 
 /// A rendered feed body stored and served verbatim until representation validation.
 #[derive(Debug, macros::SqlxBridge)]
-pub(crate) struct StoredFeedBody(String);
+pub(crate) struct StoredFeedBody(pub(crate) String);
 
 impl StoredFeedBody {
     fn into_inner(self) -> String {
@@ -250,23 +250,7 @@ where
         row: FeedCacheRow,
     ) -> Result<(), FeedCacheError> {
         let connection = DB::write_connection(transaction)?;
-        let body = StoredFeedBody(row.representation().body().to_owned());
-        sqlx::query(
-            "INSERT INTO feed_cache (feed_url, body, etag, content_type, updated_at, generated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6) \
-             ON CONFLICT(feed_url) DO UPDATE SET \
-             body = excluded.body, etag = excluded.etag, content_type = excluded.content_type, \
-             updated_at = excluded.updated_at, generated_at = excluded.generated_at",
-        )
-        .bind_storage(&row.feed_path)
-        .bind_storage(body)
-        .bind_storage(&row.etag)
-        .bind_storage(row.representation().content_type())
-        .bind_storage(row.updated_at)
-        .bind_storage(row.generated_at)
-        .execute(&mut *connection)
-        .await?;
-        Ok(())
+        upsert_on_connection::<DB>(connection, row).await
     }
 
     #[tracing::instrument(
@@ -286,6 +270,46 @@ where
             .await?;
         Ok(())
     }
+}
+
+/// Writes `row` using an already-acquired short write connection.
+///
+/// Publisher generation fencing owns the transaction that decides whether this
+/// operation is permitted; this helper keeps representation decomposition and
+/// feed-cache SQL owned by the cache module.
+pub(crate) async fn upsert_on_connection<DB>(
+    connection: &mut DB::Connection,
+    row: FeedCacheRow,
+) -> Result<(), FeedCacheError>
+where
+    DB: Database,
+    String: sqlx::Type<DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+    for<'q> ETag: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> ContentType: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> FeedPath: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    let body = StoredFeedBody(row.representation().body().to_owned());
+    sqlx::query(
+        "INSERT INTO feed_cache (feed_url, body, etag, content_type, updated_at, generated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
+         ON CONFLICT(feed_url) DO UPDATE SET \
+         body = excluded.body, etag = excluded.etag, content_type = excluded.content_type, \
+         updated_at = excluded.updated_at, generated_at = excluded.generated_at",
+    )
+    .bind_storage(&row.feed_path)
+    .bind_storage(body)
+    .bind_storage(&row.etag)
+    .bind_storage(row.representation().content_type())
+    .bind_storage(row.updated_at)
+    .bind_storage(row.generated_at)
+    .execute(connection)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]

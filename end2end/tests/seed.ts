@@ -206,6 +206,33 @@ export async function seedPostsViaTool(
   });
 }
 
+/** Seed terminal WebSub events through the real feed-event lifecycle. */
+export async function seedDeadLettersViaTool(
+  phase: "regeneration" | "publication",
+  count: number,
+): Promise<number[]> {
+  return withTimedAction(null, "tool.websub.seed_dead_letters", async () => {
+    const stdout = execFileSync(
+      "test-support",
+      ["seed-dead-letters", "--phase", phase, "--count", String(count)],
+      { stdio: "pipe", env: process.env, encoding: "utf8" },
+    );
+    return JSON.parse(stdout) as number[];
+  });
+}
+
+/** Requeue exact terminal WebSub events through the operator recovery CLI. */
+export async function redriveDeadLettersViaCli(
+  ids: readonly string[],
+): Promise<void> {
+  await withTimedAction(null, "cli.websub.dead_letters.redrive", async () => {
+    execFileSync("jaunder", ["websub", "dead-letters", "redrive", ...ids], {
+      stdio: "pipe",
+      env: process.env,
+    });
+  });
+}
+
 /**
  * Set a single site-config key/value via the shipped `jaunder site-config set`
  * subcommand (#8) — the same in-process storage write the canonical e2e seed

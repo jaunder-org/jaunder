@@ -34,6 +34,7 @@ mod post_service;
 mod postgres;
 mod posts;
 mod public_theme;
+mod publisher;
 mod role_instant;
 mod sessions;
 mod site_config;
@@ -84,6 +85,7 @@ pub use postgres::{
 };
 pub use posts::*;
 pub use public_theme::*;
+pub use publisher::*;
 pub use sessions::*;
 pub use site_config::*;
 pub use smtp::*;

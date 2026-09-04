@@ -50,6 +50,10 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::site::GetIdentity>();
         server_fn::axum::register_explicit::<web::site::UpdateIdentity>();
         server_fn::axum::register_explicit::<web::site::IsBaseUrlWarningVisible>();
+        server_fn::axum::register_explicit::<web::websub::GetWebsubSettings>();
+        server_fn::axum::register_explicit::<web::websub::UpdateWebsubHub>();
+        server_fn::axum::register_explicit::<web::websub::ListDeadLetters>();
+        server_fn::axum::register_explicit::<web::websub::RedriveDeadLetters>();
         server_fn::axum::register_explicit::<web::media::ListMine>();
         server_fn::axum::register_explicit::<web::media::GetUsage>();
         server_fn::axum::register_explicit::<web::media::Delete>();
@@ -82,4 +86,4 @@ pub fn ensure_server_fns_registered() {
 /// fn in `web/src`; this constant tracks the list; and
 /// `server_fn_wire::every_server_fn_path_is_api_vertical_ident_and_distinct`
 /// checks itself against the constant. Each link is short enough to keep honest.
-pub const REGISTERED_SERVER_FN_COUNT: usize = 64;
+pub const REGISTERED_SERVER_FN_COUNT: usize = 68;

@@ -51,6 +51,7 @@ fn with_site_config(
         user_config: state.user_config.clone(),
         feed_cache: state.feed_cache.clone(),
         feed_events: state.feed_events.clone(),
+        publisher: state.publisher.clone(),
         write_scope: state.write_scope.clone(),
     })
 }

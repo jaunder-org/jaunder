@@ -48,3 +48,4 @@ mod test_support;
 pub mod timeline;
 pub mod topbar;
 pub mod viewer;
+pub mod websub;

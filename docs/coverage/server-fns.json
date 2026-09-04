@@ -63,7 +63,11 @@
     "timeline::list_by_user",
     "timeline::list_by_user_and_tag",
     "timeline::list_home_feed",
-    "timeline::list_local_timeline"
+    "timeline::list_local_timeline",
+    "websub::get_websub_settings",
+    "websub::list_dead_letters",
+    "websub::redrive_dead_letters",
+    "websub::update_websub_hub"
   ],
   "orphans": {}
 }

@@ -2,12 +2,12 @@ use std::path::PathBuf;
 
 use storage::BackupRestoreOutcome;
 
-use crate::cli::{Commands, SiteConfigAction};
+use crate::cli::{Commands, DeadLetterAction, DeadLetterCursor, SiteConfigAction, WebsubAction};
 
 use super::{
     account, backup,
     lifecycle::{self, ServeCapturePaths},
-    site_config, storage_bootstrap,
+    site_config, storage_bootstrap, websub,
 };
 
 pub enum CommandOutput {
@@ -102,6 +102,7 @@ impl Commands {
             // SiteConfigAction::execute (a sibling match), preserving the low-CRAP
             // one-arm-per-command dispatch shape. Copy this pattern for future groups.
             Commands::SiteConfig { action } => action.execute().await.map(|()| CommandOutput::None),
+            Commands::Websub { action } => action.execute().await.map(|()| CommandOutput::None),
         }
     }
 }
@@ -125,6 +126,48 @@ impl SiteConfigAction {
             SiteConfigAction::List { storage } => site_config::cmd_site_config_list(&storage).await,
             SiteConfigAction::Unset { storage, key } => {
                 site_config::cmd_site_config_unset(&storage, key).await
+            }
+        }
+    }
+}
+
+impl WebsubAction {
+    /// Dispatch a `websub` leaf group.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the selected leaf's failure.
+    pub async fn execute(self) -> anyhow::Result<()> {
+        match self {
+            WebsubAction::DeadLetters { action } => action.execute().await,
+        }
+    }
+}
+
+impl DeadLetterAction {
+    /// Dispatch a `websub dead-letters` leaf.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the selected leaf's failure.
+    pub async fn execute(self) -> anyhow::Result<()> {
+        match self {
+            DeadLetterAction::List {
+                storage,
+                phase,
+                cursor,
+                page_size,
+            } => {
+                websub::cmd_dead_letters_list(
+                    &storage,
+                    phase,
+                    cursor.map(DeadLetterCursor::into_inner),
+                    page_size,
+                )
+                .await
+            }
+            DeadLetterAction::Redrive { storage, ids } => {
+                websub::cmd_dead_letters_redrive(&storage, &ids).await
             }
         }
     }

@@ -22,7 +22,7 @@ use common::token::TokenHash;
 use common::username::Username;
 use common::visibility::{Channel, SubscriptionStatus, TargetKind};
 use host::config_key::{SiteConfigKey, UserConfigKey};
-use host::feed::{FeedEventStatus, FeedPath};
+use host::feed::{FeedEventPhase, FeedEventStatus, FeedPath};
 use host::invite::InviteCode;
 use host::stored_password_hash::StoredPasswordHash;
 
@@ -254,6 +254,7 @@ typed_restore_row!(EmailVerificationsRestoreRow, "email_verifications" {
 typed_restore_row!(FeedEventsRestoreRow, "feed_events" {
     feed_url: FeedPath => ("feed_url", "feed path"),
     status: FeedEventStatus => ("status", "feed event status"),
+    phase: FeedEventPhase => ("phase", "feed event phase"),
 });
 
 struct IdempotencyKeysRestoreRow {
@@ -494,6 +495,7 @@ pub(crate) const RESTORE_COLUMN_COVERAGE: &[RestoreColumnCoverage] = &[
         RestoreBadValue::Text("not a feed"),
     ),
     covered("feed_events", "status", RestoreBadValue::Text("sideways")),
+    covered("feed_events", "phase", RestoreBadValue::Text("sideways")),
     covered("idempotency_keys", "key", RestoreBadValue::Text("")),
     covered("invites", "code", RestoreBadValue::Text("!")),
     covered("media", "sha256", RestoreBadValue::Text("bad")),
@@ -648,6 +650,7 @@ const BACKED_UP_DOMAIN_COLUMNS: &[(&str, &str)] = &[
     ("email_verifications", "token_hash"),
     ("feed_events", "feed_url"),
     ("feed_events", "status"),
+    ("feed_events", "phase"),
     ("idempotency_keys", "key"),
     ("invites", "code"),
     ("media", "content_type"),

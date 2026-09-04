@@ -9,10 +9,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Duration;
 use common::ids::FeedEventId;
-use common::pagination::RowLimit;
+use common::pagination::{PageSize, RowLimit};
 use common::time::UtcInstant;
 use host::{
-    feed::{FeedEventClaimLimit, FeedEventStatus, FeedPath},
+    error::{self, ErrorClass, ErrorKind, SwallowedSource},
+    feed::{FeedEventClaimLimit, FeedEventPhase, FeedEventStatus, FeedPath},
     metrics,
     retention::Domain,
 };
@@ -21,8 +22,9 @@ use thiserror::Error;
 #[cfg(test)]
 use tokio::sync::{Notify, RwLock};
 
-use crate::backend::Backend;
-use crate::sql::QueryStorageExt;
+#[cfg(test)]
+use crate::WriteScope;
+use crate::{WriteTransaction, backend::Backend, sql::QueryStorageExt};
 
 /// A nonnegative retry count stored on a feed event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::NumNewtype)]
@@ -39,11 +41,20 @@ impl FeedEventAttempts {
     }
 }
 
-/// Free-form feed processing diagnostic retained exactly for the public record.
+/// Free-form feed processing diagnostic retained for operators.
 #[derive(Debug, macros::SqlxBridge)]
 pub(crate) struct StoredFeedDiagnostic(String);
 
 impl StoredFeedDiagnostic {
+    fn bounded(value: &str) -> Self {
+        const LIMIT: usize = 1_024;
+        if value.chars().count() <= LIMIT {
+            return Self(value.to_owned());
+        }
+        let prefix: String = value.chars().take(LIMIT - 1).collect();
+        Self(format!("{prefix}…"))
+    }
+
     fn into_inner(self) -> String {
         self.0
     }
@@ -63,8 +74,11 @@ pub(crate) struct ClaimedFeedEventRow {
     id: FeedEventId,
     feed_url: StoredFeedUrl,
     status: FeedEventStatus,
-    attempts: FeedEventAttempts,
-    last_error: Option<StoredFeedDiagnostic>,
+    phase: FeedEventPhase,
+    regeneration_attempts: FeedEventAttempts,
+    publication_attempts: FeedEventAttempts,
+    regeneration_diagnostic: Option<StoredFeedDiagnostic>,
+    publication_diagnostic: Option<StoredFeedDiagnostic>,
     next_attempt_at: UtcInstant,
     claimed_at: Option<UtcInstant>,
     terminal_at: Option<UtcInstant>,
@@ -75,13 +89,48 @@ pub(crate) struct ClaimedFeedEventRow {
 
 /// A feed event after the claim query's fully typed intermediate has passed
 /// feed-URL-only policy conversion.
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct DeadLetterRow {
+    id: FeedEventId,
+    feed_url: StoredFeedUrl,
+    phase: FeedEventPhase,
+    attempts: FeedEventAttempts,
+    terminal_at: UtcInstant,
+    diagnostic: Option<StoredFeedDiagnostic>,
+}
+
+impl DeadLetterRow {
+    fn into_record(self) -> Result<FeedEventDeadLetter, FeedEventDeadLetterError> {
+        let feed_path = self.feed_url.into_feed_path().map_err(|_| {
+            error::report_swallowed(
+                ErrorKind::Storage,
+                ErrorClass::Bug,
+                "storage.feed_events.decode_dead_letter_feed_path",
+                SwallowedSource::Redacted,
+            );
+            FeedEventDeadLetterError::CorruptRow
+        })?;
+        Ok(FeedEventDeadLetter {
+            id: self.id,
+            feed_path,
+            phase: self.phase,
+            attempts: self.attempts.into_i32(),
+            terminal_at: self.terminal_at,
+            diagnostic: self.diagnostic.map(StoredFeedDiagnostic::into_inner),
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedEventRecord {
     pub id: FeedEventId,
     pub feed_path: FeedPath,
     pub status: FeedEventStatus,
-    pub attempts: i32,
-    pub last_error: Option<String>,
+    pub phase: FeedEventPhase,
+    pub regeneration_attempts: i32,
+    pub publication_attempts: i32,
+    pub regeneration_diagnostic: Option<String>,
+    pub publication_diagnostic: Option<String>,
     pub next_attempt_at: UtcInstant,
     pub claimed_at: Option<UtcInstant>,
     pub terminal_at: Option<UtcInstant>,
@@ -96,9 +145,23 @@ pub enum FeedEventError {
     Db(#[from] sqlx::Error),
 }
 
-/// One row of a claim batch: either a converted record, or the id of a row whose
-/// feed URL will not parse and which must therefore be purged.
-///
+/// Failure while reading an operator dead-letter page.
+#[derive(Debug, Error)]
+pub enum FeedEventDeadLetterError {
+    #[error("database error: {0}")]
+    Db(#[from] sqlx::Error),
+    #[error("a terminal feed event has an invalid stored feed path")]
+    CorruptRow,
+}
+
+/// Failure while atomically redriving an exact operator selection.
+#[derive(Debug, Error)]
+pub enum FeedEventRedriveError {
+    #[error("database error: {0}")]
+    Db(#[from] sqlx::Error),
+    #[error(transparent)]
+    Rejected(#[from] FeedEventRedriveRejected),
+}
 /// Claim decoding itself is strict: [`ClaimedFeedEventRow`] is derived and every
 /// leaf has a declaration-backed type. This conversion owns the sole policy
 /// exception: a lossless stored feed URL that cannot become a [`FeedPath`] is
@@ -115,8 +178,11 @@ impl From<ClaimedFeedEventRow> for ClaimedRow {
             id,
             feed_url,
             status,
-            attempts,
-            last_error,
+            phase,
+            regeneration_attempts,
+            publication_attempts,
+            regeneration_diagnostic,
+            publication_diagnostic,
             next_attempt_at,
             claimed_at,
             terminal_at,
@@ -127,12 +193,19 @@ impl From<ClaimedFeedEventRow> for ClaimedRow {
         let Ok(feed_path) = feed_url.into_feed_path() else {
             return Self::Corrupt(id);
         };
+        let regeneration_attempts = regeneration_attempts.into_i32();
+        let publication_attempts = publication_attempts.into_i32();
+        let regeneration_diagnostic = regeneration_diagnostic.map(StoredFeedDiagnostic::into_inner);
+        let publication_diagnostic = publication_diagnostic.map(StoredFeedDiagnostic::into_inner);
         Self::Record(Box::new(FeedEventRecord {
             id,
             feed_path,
             status,
-            attempts: attempts.into_i32(),
-            last_error: last_error.map(StoredFeedDiagnostic::into_inner),
+            phase,
+            regeneration_attempts,
+            publication_attempts,
+            regeneration_diagnostic,
+            publication_diagnostic,
             next_attempt_at,
             claimed_at,
             terminal_at,
@@ -142,6 +215,36 @@ impl From<ClaimedFeedEventRow> for ClaimedRow {
         }))
     }
 }
+
+/// Stable keyset position for newest-first dead-letter inspection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FeedEventDeadLetterCursor {
+    pub terminal_at: UtcInstant,
+    pub id: FeedEventId,
+}
+
+/// Operator-safe projection of one terminal feed event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeedEventDeadLetter {
+    pub id: FeedEventId,
+    pub feed_path: FeedPath,
+    pub phase: FeedEventPhase,
+    pub attempts: i32,
+    pub terminal_at: UtcInstant,
+    pub diagnostic: Option<String>,
+}
+
+/// A bounded dead-letter page and the cursor for its successor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeedEventDeadLetterPage {
+    pub events: Vec<FeedEventDeadLetter>,
+    pub next_cursor: Option<FeedEventDeadLetterCursor>,
+}
+
+/// Exact-ID redrive rejected before changing any selected row.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[error("one or more feed events are absent, expired, or not dead-lettered")]
+pub struct FeedEventRedriveRejected;
 
 /// Splits a claim batch into the records the worker can act on and the ids to
 /// purge. One-or-more corrupt rows produce one redacted report for the whole
@@ -156,11 +259,11 @@ pub(crate) fn partition_claimed(rows: Vec<ClaimedRow>) -> (Vec<FeedEventRecord>,
         }
     }
     if !corrupt.is_empty() {
-        host::error::report_swallowed(
-            host::error::ErrorKind::Storage,
-            host::error::ErrorClass::Bug,
+        error::report_swallowed(
+            ErrorKind::Storage,
+            ErrorClass::Bug,
             "storage.feed_events.decode_feed_path",
-            host::error::SwallowedSource::Redacted,
+            SwallowedSource::Redacted,
         );
     }
     (records, corrupt)
@@ -176,8 +279,8 @@ pub(crate) fn finish_corrupt_purge(
     crate::helpers::preserve_after_secondary(
         records,
         purge,
-        host::error::ErrorKind::Storage,
-        host::error::ErrorClass::Transient,
+        ErrorKind::Storage,
+        ErrorClass::Transient,
         context,
     )
 }
@@ -207,7 +310,7 @@ pub trait FeedEventStorage: Send + Sync {
     /// transaction. Returns the new row id.
     async fn enqueue(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         feed_path: &FeedPath,
     ) -> Result<FeedEventId, FeedEventError>;
 
@@ -218,7 +321,7 @@ pub trait FeedEventStorage: Send + Sync {
     /// by grouping on `feed_path`.
     async fn enqueue_many(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         feed_paths: &[FeedPath],
     ) -> Result<(), FeedEventError>;
 
@@ -230,7 +333,7 @@ pub trait FeedEventStorage: Send + Sync {
     /// `claimed_at = now`.
     async fn claim_pending_batch(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         limit: usize,
         lease_timeout: Duration,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError>;
@@ -238,11 +341,26 @@ pub trait FeedEventStorage: Send + Sync {
     /// Count rows currently claimable by the feed worker without claiming them.
     async fn claimable_count(&self, lease_timeout: Duration) -> Result<u64, FeedEventError>;
 
-    /// Stamp `regenerated_at = now` on the given rows. Status is unchanged
-    /// (still `claimed` until ping resolves).
+    /// List terminal rows for one failed phase in stable newest-first order.
+    async fn dead_letters(
+        &self,
+        phase: FeedEventPhase,
+        cursor: Option<FeedEventDeadLetterCursor>,
+        page_size: PageSize,
+    ) -> Result<FeedEventDeadLetterPage, FeedEventDeadLetterError>;
+
+    /// Atomically requeue exact dead-letter ids. Every supplied id must still
+    /// exist, be terminal, and be inside failed-event retention.
+    async fn redrive_dead_letters(
+        &self,
+        transaction: &mut WriteTransaction,
+        ids: &[FeedEventId],
+        now: UtcInstant,
+    ) -> Result<(), FeedEventRedriveError>;
+    /// Stamp regeneration then advance the row to the publication phase.
     async fn mark_regenerated(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         ids: &[FeedEventId],
     ) -> Result<(), FeedEventError>;
 
@@ -250,31 +368,68 @@ pub trait FeedEventStorage: Send + Sync {
     /// supplied terminal instant for the retention cutoff.
     async fn mark_pinged(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         ids: &[FeedEventId],
         now: UtcInstant,
     ) -> Result<(), FeedEventError>;
 
-    /// Re-queue rows for another attempt: status back to `pending`,
-    /// increment attempts, record the error, schedule the next attempt,
-    /// and clear `claimed_at`.
-    async fn mark_failed(
+    /// Re-queue rows for a regeneration attempt. This always re-enters the
+    /// regeneration phase, increments its budget, records its diagnostic, and
+    /// clears the claim.
+    async fn retry_regeneration(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         ids: &[FeedEventId],
         error: &str,
         next_attempt_at: UtcInstant,
     ) -> Result<(), FeedEventError>;
 
-    /// Terminal failure: set `status = 'failed'`, record the final error, and
-    /// persist the supplied terminal instant for the retention cutoff.
-    async fn mark_exhausted(
+    /// Terminal regeneration failure. This always terminalizes in the
+    /// regeneration phase and increments only its budget.
+    async fn dead_letter_regeneration(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         ids: &[FeedEventId],
         error: &str,
         now: UtcInstant,
     ) -> Result<(), FeedEventError>;
+
+    /// Re-queue rows for a publication attempt, incrementing only the
+    /// publication budget and retaining its diagnostic.
+    async fn retry_publication(
+        &self,
+        transaction: &mut WriteTransaction,
+        ids: &[FeedEventId],
+        error: &str,
+        next_attempt_at: UtcInstant,
+    ) -> Result<(), FeedEventError>;
+
+    /// Terminal publication failure, incrementing only the publication budget.
+    async fn dead_letter_publication(
+        &self,
+        transaction: &mut WriteTransaction,
+        ids: &[FeedEventId],
+        error: &str,
+        now: UtcInstant,
+    ) -> Result<(), FeedEventError>;
+    /// Requeue stale work in the regeneration phase without charging the
+    /// failed attempt. A stale snapshot starts a fresh regeneration budget.
+    async fn restart_regeneration(
+        &self,
+        transaction: &mut WriteTransaction,
+        ids: &[FeedEventId],
+        now: UtcInstant,
+    ) -> Result<(), FeedEventError>;
+
+    /// Re-enter regeneration after the publication cache disappeared. This is a
+    /// new regeneration cycle, so its budget and diagnostic are reset.
+    async fn reset_regeneration(
+        &self,
+        transaction: &mut WriteTransaction,
+        ids: &[FeedEventId],
+        now: UtcInstant,
+    ) -> Result<(), FeedEventError>;
+
     /// Delete terminal rows eligible at the supplied instant in fixed-size
     /// statements, releasing the connection after each statement.
     #[cfg(test)]
@@ -293,11 +448,11 @@ pub trait FeedEventStorage: Send + Sync {
 /// from an `id IN (SELECT … LIMIT …)` subquery. `SQLite` must avoid the earlier
 /// read-then-write transaction (SELECT ids → UPDATE → SELECT rows), which is
 /// `SQLITE_BUSY`-prone under concurrency; see ADR-0021.
-///
-/// The bulk-id methods (`mark_regenerated`, `mark_pinged`, `mark_failed`,
-/// `mark_exhausted`) also diverge: `SQLite` does not support array binding so
-/// they use a dynamically-built `IN (?, ?, …)` pattern; Postgres uses
-/// `WHERE id = ANY($n)` with a slice binding — a cleaner and cheaper approach.
+/// The bulk-id methods (`mark_regenerated`, `mark_pinged`, and the explicit
+/// regeneration/publication retry and dead-letter transitions) diverge:
+/// `SQLite` does not support array binding so they use a dynamically-built
+/// `IN (?, ?, …)` pattern; Postgres uses `WHERE id = ANY($n)` with a slice
+/// binding — a cleaner and cheaper approach.
 #[async_trait]
 pub(crate) trait FeedEventDialect: Backend {
     /// Atomically claim and return up to `limit` eligible rows.
@@ -315,6 +470,20 @@ pub(crate) trait FeedEventDialect: Backend {
         lease_cutoff: UtcInstant,
     ) -> Result<u64, FeedEventError>;
 
+    async fn dead_letters(
+        pool: &Pool<Self>,
+        phase: FeedEventPhase,
+        cursor: Option<FeedEventDeadLetterCursor>,
+        limit: RowLimit,
+    ) -> Result<Vec<DeadLetterRow>, FeedEventDeadLetterError>;
+
+    async fn redrive_dead_letters(
+        connection: &mut Self::Connection,
+        ids: &[FeedEventId],
+        now: UtcInstant,
+        failed_cutoff: UtcInstant,
+    ) -> Result<bool, FeedEventRedriveError>;
+
     /// Stamp `regenerated_at = now` on all rows whose id is in `ids`.
     async fn mark_regenerated(
         connection: &mut Self::Connection,
@@ -328,22 +497,51 @@ pub(crate) trait FeedEventDialect: Backend {
         now: UtcInstant,
     ) -> Result<(), FeedEventError>;
 
-    /// Re-queue rows for another attempt.
-    async fn mark_failed(
+    /// Re-queue in the regeneration phase, charging only regeneration.
+    async fn retry_regeneration(
         connection: &mut Self::Connection,
         ids: &[FeedEventId],
         error: &StoredFeedDiagnostic,
         next_attempt_at: UtcInstant,
     ) -> Result<(), FeedEventError>;
 
-    /// Terminal failure: set `status = 'failed'`, record the final error, and
-    /// persist `terminal_at`.
-    async fn mark_exhausted(
+    /// Terminalize in the regeneration phase, charging only regeneration.
+    async fn dead_letter_regeneration(
         connection: &mut Self::Connection,
         ids: &[FeedEventId],
         error: &StoredFeedDiagnostic,
         now: UtcInstant,
     ) -> Result<(), FeedEventError>;
+
+    /// Re-queue in the publication phase, charging only publication.
+    async fn retry_publication(
+        connection: &mut Self::Connection,
+        ids: &[FeedEventId],
+        error: &StoredFeedDiagnostic,
+        next_attempt_at: UtcInstant,
+    ) -> Result<(), FeedEventError>;
+
+    /// Terminalize in the publication phase, charging only publication.
+    async fn dead_letter_publication(
+        connection: &mut Self::Connection,
+        ids: &[FeedEventId],
+        error: &StoredFeedDiagnostic,
+        now: UtcInstant,
+    ) -> Result<(), FeedEventError>;
+    /// Requeue a stale generation with a fresh regeneration budget.
+    async fn restart_regeneration(
+        connection: &mut Self::Connection,
+        ids: &[FeedEventId],
+        now: UtcInstant,
+    ) -> Result<(), FeedEventError>;
+
+    /// Re-enter regeneration with a fresh regeneration budget.
+    async fn reset_regeneration(
+        connection: &mut Self::Connection,
+        ids: &[FeedEventId],
+        now: UtcInstant,
+    ) -> Result<(), FeedEventError>;
+
     /// Delete one bounded batch of terminal rows eligible at the frozen `now`.
     ///
     /// Failed rows use the separately derived `failed_cutoff` retention boundary.
@@ -408,7 +606,7 @@ where
     )]
     async fn enqueue(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         feed_path: &FeedPath,
     ) -> Result<FeedEventId, FeedEventError> {
         let connection = DB::write_connection(transaction)?;
@@ -427,7 +625,7 @@ where
     )]
     async fn enqueue_many(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         feed_paths: &[FeedPath],
     ) -> Result<(), FeedEventError> {
         let connection = DB::write_connection(transaction)?;
@@ -447,7 +645,7 @@ where
     )]
     async fn claim_pending_batch(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         limit: usize,
         lease_timeout: Duration,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
@@ -469,6 +667,51 @@ where
         DB::claimable_count(&self.pool, now, lease_cutoff).await
     }
 
+    async fn dead_letters(
+        &self,
+        phase: FeedEventPhase,
+        cursor: Option<FeedEventDeadLetterCursor>,
+        page_size: PageSize,
+    ) -> Result<FeedEventDeadLetterPage, FeedEventDeadLetterError> {
+        let mut rows = DB::dead_letters(&self.pool, phase, cursor, page_size.fetch_limit()).await?;
+        let has_more = page_size.has_more(rows.len());
+        rows.truncate(page_size.page_len());
+        let events = rows
+            .into_iter()
+            .map(DeadLetterRow::into_record)
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = has_more
+            .then(|| {
+                events.last().map(|event| FeedEventDeadLetterCursor {
+                    terminal_at: event.terminal_at,
+                    id: event.id,
+                })
+            })
+            .flatten();
+        Ok(FeedEventDeadLetterPage {
+            events,
+            next_cursor,
+        })
+    }
+
+    async fn redrive_dead_letters(
+        &self,
+        transaction: &mut WriteTransaction,
+        ids: &[FeedEventId],
+        now: UtcInstant,
+    ) -> Result<(), FeedEventRedriveError> {
+        if ids.is_empty() {
+            return Err(FeedEventRedriveRejected.into());
+        }
+        let connection = DB::write_connection(transaction)?;
+        let failed_cutoff = UtcInstant::from(now.value() - FAILED_EVENT_RETENTION);
+        if DB::redrive_dead_letters(connection, ids, now, failed_cutoff).await? {
+            Ok(())
+        } else {
+            Err(FeedEventRedriveRejected.into())
+        }
+    }
+
     #[tracing::instrument(
         name = "storage.feed_events.mark_regenerated",
         skip(self, transaction, ids),
@@ -476,7 +719,7 @@ where
     )]
     async fn mark_regenerated(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         ids: &[FeedEventId],
     ) -> Result<(), FeedEventError> {
         if ids.is_empty() {
@@ -493,7 +736,7 @@ where
     )]
     async fn mark_pinged(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         ids: &[FeedEventId],
         now: UtcInstant,
     ) -> Result<(), FeedEventError> {
@@ -503,15 +746,14 @@ where
         let connection = DB::write_connection(transaction)?;
         DB::mark_pinged(connection, ids, now).await
     }
-
     #[tracing::instrument(
-        name = "storage.feed_events.mark_failed",
+        name = "storage.feed_events.retry_regeneration",
         skip(self, transaction, ids, error),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn mark_failed(
+    async fn retry_regeneration(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         ids: &[FeedEventId],
         error: &str,
         next_attempt_at: UtcInstant,
@@ -520,18 +762,18 @@ where
             return Ok(());
         }
         let connection = DB::write_connection(transaction)?;
-        let error = StoredFeedDiagnostic(error.to_owned());
-        DB::mark_failed(connection, ids, &error, next_attempt_at).await
+        let error = StoredFeedDiagnostic::bounded(error);
+        DB::retry_regeneration(connection, ids, &error, next_attempt_at).await
     }
 
     #[tracing::instrument(
-        name = "storage.feed_events.mark_exhausted",
+        name = "storage.feed_events.dead_letter_regeneration",
         skip(self, transaction, ids, error),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn mark_exhausted(
+    async fn dead_letter_regeneration(
         &self,
-        transaction: &mut crate::WriteTransaction,
+        transaction: &mut WriteTransaction,
         ids: &[FeedEventId],
         error: &str,
         now: UtcInstant,
@@ -540,8 +782,84 @@ where
             return Ok(());
         }
         let connection = DB::write_connection(transaction)?;
-        let error = StoredFeedDiagnostic(error.to_owned());
-        DB::mark_exhausted(connection, ids, &error, now).await
+        let error = StoredFeedDiagnostic::bounded(error);
+        DB::dead_letter_regeneration(connection, ids, &error, now).await
+    }
+
+    #[tracing::instrument(
+        name = "storage.feed_events.retry_publication",
+        skip(self, transaction, ids, error),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn retry_publication(
+        &self,
+        transaction: &mut WriteTransaction,
+        ids: &[FeedEventId],
+        error: &str,
+        next_attempt_at: UtcInstant,
+    ) -> Result<(), FeedEventError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let connection = DB::write_connection(transaction)?;
+        let error = StoredFeedDiagnostic::bounded(error);
+        DB::retry_publication(connection, ids, &error, next_attempt_at).await
+    }
+
+    #[tracing::instrument(
+        name = "storage.feed_events.dead_letter_publication",
+        skip(self, transaction, ids, error),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn dead_letter_publication(
+        &self,
+        transaction: &mut WriteTransaction,
+        ids: &[FeedEventId],
+        error: &str,
+        now: UtcInstant,
+    ) -> Result<(), FeedEventError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let connection = DB::write_connection(transaction)?;
+        let error = StoredFeedDiagnostic::bounded(error);
+        DB::dead_letter_publication(connection, ids, &error, now).await
+    }
+
+    #[tracing::instrument(
+        name = "storage.feed_events.restart_regeneration",
+        skip(self, transaction, ids),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn restart_regeneration(
+        &self,
+        transaction: &mut WriteTransaction,
+        ids: &[FeedEventId],
+        now: UtcInstant,
+    ) -> Result<(), FeedEventError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let connection = DB::write_connection(transaction)?;
+        DB::restart_regeneration(connection, ids, now).await
+    }
+
+    #[tracing::instrument(
+        name = "storage.feed_events.reset_regeneration",
+        skip(self, transaction, ids),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn reset_regeneration(
+        &self,
+        transaction: &mut WriteTransaction,
+        ids: &[FeedEventId],
+        now: UtcInstant,
+    ) -> Result<(), FeedEventError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let connection = DB::write_connection(transaction)?;
+        DB::reset_regeneration(connection, ids, now).await
     }
     #[tracing::instrument(
         name = "storage.feed_events.prune_terminal_events",
@@ -592,10 +910,19 @@ mod tests {
     use rstest::*;
     use rstest_reuse::*;
 
+    #[test]
+    fn diagnostics_are_truncated_at_a_unicode_scalar_boundary() {
+        let value = format!("{}{}", "🦀".repeat(1_024), "tail");
+        let bounded = StoredFeedDiagnostic::bounded(&value).into_inner();
+        assert_eq!(bounded.chars().count(), 1_024);
+        assert_eq!(bounded.chars().last(), Some('…'));
+        assert!(bounded.starts_with(&"🦀".repeat(1_023)));
+    }
+
     async fn confirmed<T>(
-        scope: &crate::WriteScope,
+        scope: &WriteScope,
         callback: impl for<'scope> FnOnce(
-            &'scope mut crate::WriteTransaction,
+            &'scope mut WriteTransaction,
         ) -> futures_util::future::BoxFuture<
             'scope,
             Result<T, FeedEventError>,
@@ -656,7 +983,7 @@ mod tests {
         .await;
     }
 
-    async fn mark_failed(
+    async fn retry_regeneration(
         scope: &crate::WriteScope,
         feed_events: Arc<dyn FeedEventStorage>,
         ids: Vec<FeedEventId>,
@@ -666,14 +993,14 @@ mod tests {
         confirmed(scope, move |transaction| {
             Box::pin(async move {
                 feed_events
-                    .mark_failed(transaction, &ids, &error, next_attempt_at)
+                    .retry_regeneration(transaction, &ids, &error, next_attempt_at)
                     .await
             })
         })
         .await;
     }
 
-    async fn mark_exhausted(
+    async fn dead_letter_regeneration(
         scope: &crate::WriteScope,
         feed_events: Arc<dyn FeedEventStorage>,
         ids: Vec<FeedEventId>,
@@ -683,16 +1010,303 @@ mod tests {
         confirmed(scope, move |transaction| {
             Box::pin(async move {
                 feed_events
-                    .mark_exhausted(transaction, &ids, &error, now)
+                    .dead_letter_regeneration(transaction, &ids, &error, now)
                     .await
             })
         })
         .await;
     }
 
+    async fn dead_letter_publication(
+        scope: &crate::WriteScope,
+        feed_events: Arc<dyn FeedEventStorage>,
+        ids: Vec<FeedEventId>,
+        error: String,
+        now: UtcInstant,
+    ) {
+        confirmed(scope, move |transaction| {
+            Box::pin(async move {
+                feed_events
+                    .dead_letter_publication(transaction, &ids, &error, now)
+                    .await
+            })
+        })
+        .await;
+    }
+
+    async fn confirmed_redrive(
+        scope: &crate::WriteScope,
+        feed_events: Arc<dyn FeedEventStorage>,
+        ids: Vec<FeedEventId>,
+        now: UtcInstant,
+    ) {
+        let outcome = scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    feed_events
+                        .redrive_dead_letters(transaction, &ids, now)
+                        .await
+                })
+            })
+            .await
+            .expect("dead-letter redrive write");
+        confirmed_for(outcome, "dead-letter redrive acknowledgement");
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn dead_letters_page_stably_and_redrive_exact_ids_atomically(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let feeds = Arc::clone(&env.state.feed_events);
+        let ids = vec![
+            enqueue(&env.state.write_scope, Arc::clone(&feeds), fp("/feed.rss")).await,
+            enqueue(
+                &env.state.write_scope,
+                Arc::clone(&feeds),
+                fp("/~one/feed.rss"),
+            )
+            .await,
+            enqueue(
+                &env.state.write_scope,
+                Arc::clone(&feeds),
+                fp("/tags/one/feed.rss"),
+            )
+            .await,
+        ];
+        claim(
+            &env.state.write_scope,
+            Arc::clone(&feeds),
+            10,
+            Duration::minutes(5),
+        )
+        .await;
+        let terminal = fixture_instant(1_000);
+        for id in &ids {
+            dead_letter_regeneration(
+                &env.state.write_scope,
+                Arc::clone(&feeds),
+                vec![*id],
+                "regeneration failure".to_owned(),
+                terminal,
+            )
+            .await;
+        }
+        let publication_id = enqueue(
+            &env.state.write_scope,
+            Arc::clone(&feeds),
+            fp("/~publication/feed.rss"),
+        )
+        .await;
+        claim(
+            &env.state.write_scope,
+            Arc::clone(&feeds),
+            10,
+            Duration::minutes(5),
+        )
+        .await;
+        mark_regenerated(
+            &env.state.write_scope,
+            Arc::clone(&feeds),
+            vec![publication_id],
+        )
+        .await;
+        dead_letter_publication(
+            &env.state.write_scope,
+            Arc::clone(&feeds),
+            vec![publication_id],
+            "publication failure".to_owned(),
+            terminal,
+        )
+        .await;
+        let publication = feeds
+            .dead_letters(FeedEventPhase::Publication, None, PageSize::default())
+            .await
+            .unwrap();
+        assert_eq!(publication.events.len(), 1);
+        assert_eq!(publication.events[0].id, publication_id);
+        assert_eq!(
+            publication.events[0].attempts, 1,
+            "terminal publication counts its final attempt"
+        );
+
+        let size = PageSize::try_from(2).unwrap();
+        let first = feeds
+            .dead_letters(FeedEventPhase::Regeneration, None, size)
+            .await
+            .unwrap();
+        assert_eq!(first.events.len(), 2);
+        assert!(
+            first.events.iter().all(|event| event.attempts == 1),
+            "terminal regeneration counts each final attempt"
+        );
+        let cursor = first.next_cursor.expect("overfetch supplies a cursor");
+        let second = feeds
+            .dead_letters(FeedEventPhase::Regeneration, Some(cursor), size)
+            .await
+            .unwrap();
+        assert_eq!(second.events.len(), 1);
+        assert!(second.next_cursor.is_none());
+        let paged: std::collections::HashSet<_> = first
+            .events
+            .iter()
+            .chain(&second.events)
+            .map(|event| event.id)
+            .collect();
+        assert_eq!(
+            paged.len(),
+            ids.len(),
+            "no terminal event is skipped or duplicated"
+        );
+
+        let duplicate = ids[0];
+        let rejection = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                let feeds = Arc::clone(&feeds);
+                Box::pin(async move {
+                    feeds
+                        .redrive_dead_letters(transaction, &[duplicate, duplicate], terminal)
+                        .await
+                })
+            })
+            .await
+            .expect_err("duplicate exact ids reject the complete redrive");
+        assert!(matches!(
+            rejection,
+            crate::WriteScopeError::Operation(FeedEventRedriveError::Rejected(_))
+        ));
+        let after_rejection = env
+            .state
+            .feed_events
+            .dead_letters(FeedEventPhase::Regeneration, None, PageSize::default())
+            .await
+            .unwrap();
+        assert_eq!(after_rejection.events.len(), ids.len());
+
+        confirmed_redrive(
+            &env.state.write_scope,
+            Arc::clone(&env.state.feed_events),
+            vec![ids[0], ids[1]],
+            terminal,
+        )
+        .await;
+        let remaining = env
+            .state
+            .feed_events
+            .dead_letters(FeedEventPhase::Regeneration, None, PageSize::default())
+            .await
+            .unwrap();
+        assert_eq!(remaining.events.len(), 1);
+        assert_eq!(remaining.events[0].id, ids[2]);
+
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(
+                "UPDATE feed_events SET regeneration_attempts = 7, publication_attempts = 4 \
+                 WHERE id = $1",
+            )
+            .bind_storage(publication_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        });
+        confirmed_redrive(
+            &env.state.write_scope,
+            Arc::clone(&env.state.feed_events),
+            vec![publication_id],
+            terminal,
+        )
+        .await;
+        let redriven = claim(
+            &env.state.write_scope,
+            Arc::clone(&env.state.feed_events),
+            10,
+            Duration::minutes(5),
+        )
+        .await;
+        let publication = redriven
+            .into_iter()
+            .find(|event| event.id == publication_id)
+            .expect("publication redrive is claimable");
+        assert_eq!(publication.phase, FeedEventPhase::Publication);
+        assert_eq!(publication.regeneration_attempts, 7);
+        assert_eq!(publication.publication_attempts, 0);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn redrive_rejects_expired_dead_letter_before_pruning(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let feeds = Arc::clone(&env.state.feed_events);
+        let id = enqueue(&env.state.write_scope, Arc::clone(&feeds), fp("/feed.rss")).await;
+        claim(
+            &env.state.write_scope,
+            Arc::clone(&feeds),
+            1,
+            Duration::minutes(5),
+        )
+        .await;
+        let terminal = fixture_instant(1_000);
+        dead_letter_regeneration(
+            &env.state.write_scope,
+            Arc::clone(&feeds),
+            vec![id],
+            "expired regeneration failure".to_owned(),
+            terminal,
+        )
+        .await;
+        let now = UtcInstant::from(terminal.value() + Duration::days(8));
+
+        let rejection = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { feeds.redrive_dead_letters(transaction, &[id], now).await })
+            })
+            .await
+            .expect_err("expired dead letter must reject before pruning");
+        assert!(matches!(
+            rejection,
+            crate::WriteScopeError::Operation(FeedEventRedriveError::Rejected(_))
+        ));
+        let remaining = env
+            .state
+            .feed_events
+            .dead_letters(FeedEventPhase::Regeneration, None, PageSize::default())
+            .await
+            .unwrap();
+        assert_eq!(remaining.events.len(), 1);
+        assert_eq!(remaining.events[0].id, id);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn corrupt_dead_letter_path_fails_the_page_without_advancing_a_cursor(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(
+                "INSERT INTO feed_events \
+                 (feed_url, status, phase, regeneration_attempts, publication_attempts, \
+                  next_attempt_at, terminal_at, created_at) \
+                 VALUES ('not-a-feed-path', 'failed', 'regeneration', 1, 0, \
+                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            .execute(pool)
+            .await
+            .unwrap();
+        });
+        let error = env
+            .state
+            .feed_events
+            .dead_letters(FeedEventPhase::Regeneration, None, PageSize::default())
+            .await
+            .expect_err("a corrupt terminal path must not produce an unstable short page");
+        assert!(matches!(error, FeedEventDeadLetterError::CorruptRow));
+    }
+
     // The token ↔ variant mapping is the `text_enum` attribute's, tested at the type
     // in `common/src/feed/event_status.rs`.
-
     #[apply(backends)]
     #[tokio::test]
     async fn enqueue_creates_pending_row(#[case] backend: Backend) {
@@ -819,7 +1433,7 @@ mod tests {
             fp("/feed.rss"),
         )
         .await;
-        mark_failed(
+        retry_regeneration(
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             vec![id],
@@ -967,20 +1581,19 @@ mod tests {
             fp("/feed.rss"),
         )
         .await;
-        // Widen `attempts` past `i32` and store an out-of-range value — the shape of a
-        // migration that grows a column without the Rust side following. `status` would
-        // be the obvious lever now that it is a closed enum, but the claim's own
-        // eligibility predicate filters on `status`, so a bad one is never selected (D5).
+        // Widen the active phase counter past `i32` and store an out-of-range
+        // value. A claimed row must not be silently discarded for this decode
+        // failure.
         if matches!(backend, Backend::Postgres) {
             env.base
                 .pool()
-                .execute("ALTER TABLE feed_events ALTER COLUMN attempts TYPE bigint")
+                .execute("ALTER TABLE feed_events ALTER COLUMN regeneration_attempts TYPE bigint")
                 .await
                 .unwrap();
         }
         env.base
             .pool()
-            .execute("UPDATE feed_events SET attempts = 3000000000")
+            .execute("UPDATE feed_events SET regeneration_attempts = 3000000000")
             .await
             .unwrap();
 
@@ -1052,7 +1665,7 @@ mod tests {
         .await;
         env.base
             .pool()
-            .execute("UPDATE feed_events SET attempts = -1")
+            .execute("UPDATE feed_events SET regeneration_attempts = -1")
             .await
             .unwrap();
 
@@ -1330,7 +1943,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn mark_failed_increments_attempts_and_reschedules(#[case] backend: Backend) {
+    async fn retry_regeneration_increments_attempts_and_reschedules(#[case] backend: Backend) {
         let env = backend.setup().await;
         let id = enqueue(
             &env.state.write_scope,
@@ -1346,7 +1959,7 @@ mod tests {
         )
         .await;
         let future = UtcInstant::from(Utc::now() + Duration::minutes(1));
-        mark_failed(
+        retry_regeneration(
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             vec![id],
@@ -1367,7 +1980,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn mark_exhausted_marks_failed_terminal(#[case] backend: Backend) {
+    async fn dead_letter_regeneration_marks_failed_terminal(#[case] backend: Backend) {
         let env = backend.setup().await;
         let id = enqueue(
             &env.state.write_scope,
@@ -1375,7 +1988,7 @@ mod tests {
             fp("/feed.rss"),
         )
         .await;
-        mark_exhausted(
+        dead_letter_regeneration(
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             vec![id],
@@ -1402,6 +2015,56 @@ mod tests {
         )
         .await;
         assert!(next.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn default_dead_letter_page_overfetches_fifty_one_rows(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let feeds = Arc::clone(&env.state.feed_events);
+        let ids = futures_util::future::join_all((0..51).map(|index| {
+            enqueue(
+                &env.state.write_scope,
+                Arc::clone(&feeds),
+                fp(&format!("/~pagination-{index}/feed.rss")),
+            )
+        }))
+        .await;
+        claim(
+            &env.state.write_scope,
+            Arc::clone(&feeds),
+            100,
+            Duration::minutes(5),
+        )
+        .await;
+        let terminal = fixture_instant(700_000);
+        for id in &ids {
+            dead_letter_regeneration(
+                &env.state.write_scope,
+                Arc::clone(&feeds),
+                vec![*id],
+                "terminal".to_owned(),
+                terminal,
+            )
+            .await;
+        }
+
+        let first = feeds
+            .dead_letters(FeedEventPhase::Regeneration, None, PageSize::default())
+            .await
+            .expect("first page");
+        assert_eq!(first.events.len(), 50);
+        let cursor = first.next_cursor.expect("51st row must produce a cursor");
+        let second = feeds
+            .dead_letters(
+                FeedEventPhase::Regeneration,
+                Some(cursor),
+                PageSize::default(),
+            )
+            .await
+            .expect("second page");
+        assert_eq!(second.events.len(), 1);
+        assert!(second.next_cursor.is_none());
     }
 
     fn fixture_instant(microsecond: u32) -> UtcInstant {
@@ -1544,18 +2207,20 @@ mod tests {
         let claimed_rows = crate::with_closeable_pool!(env.base.pool(), pool, {
             for fixture in &fixtures {
                 let attempts = FeedEventAttempts(fixture.2);
-                let last_error = fixture
+                let diagnostic = fixture
                     .3
                     .map(|error| StoredFeedDiagnostic(error.to_owned()));
                 sqlx::query(
                     "INSERT INTO feed_events \
-                     (feed_url, status, attempts, last_error, next_attempt_at, claimed_at, terminal_at, created_at, regenerated_at, pinged_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                     (feed_url, status, phase, regeneration_attempts, publication_attempts, \
+                      regeneration_diagnostic, publication_diagnostic, next_attempt_at, claimed_at, \
+                      terminal_at, created_at, regenerated_at, pinged_at) \
+                     VALUES ($1, $2, 'regeneration', $3, 0, $4, NULL, $5, $6, $7, $8, $9, $10)",
                 )
                 .bind_storage(&fixture.0)
                 .bind_storage(fixture.1)
                 .bind_storage(attempts)
-                .bind_storage(last_error)
+                .bind_storage(diagnostic)
                 .bind_storage(fixture.4)
                 .bind_storage(fixture.5)
                 .bind_storage(fixture.6)
@@ -1568,7 +2233,8 @@ mod tests {
             }
 
             sqlx::query_as::<_, ClaimedFeedEventRow>(
-                "SELECT id, feed_url, status, attempts, last_error, next_attempt_at, claimed_at, terminal_at, \
+                "SELECT id, feed_url, status, phase, regeneration_attempts, publication_attempts, \
+                 regeneration_diagnostic, publication_diagnostic, next_attempt_at, claimed_at, terminal_at, \
                  created_at, regenerated_at, pinged_at FROM feed_events ORDER BY id",
             )
             .fetch_all(pool)
@@ -1586,8 +2252,8 @@ mod tests {
             assert!(i64::from(row.id) > 0);
             assert_eq!(row.feed_path, fixture.0);
             assert_eq!(row.status, fixture.1);
-            assert_eq!(row.attempts, fixture.2);
-            assert_eq!(row.last_error.as_deref(), fixture.3);
+            assert_eq!(row.regeneration_attempts, fixture.2);
+            assert_eq!(row.regeneration_diagnostic.as_deref(), fixture.3);
             assert_eq!(row.next_attempt_at, fixture.4);
             assert_eq!(row.claimed_at, fixture.5);
             assert_eq!(row.terminal_at, fixture.6);
@@ -1777,7 +2443,7 @@ mod tests {
             UtcInstant::now(),
         )
         .await;
-        mark_failed(
+        retry_regeneration(
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             Vec::new(),
@@ -1785,7 +2451,7 @@ mod tests {
             UtcInstant::now(),
         )
         .await;
-        mark_exhausted(
+        dead_letter_regeneration(
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             Vec::new(),

@@ -82,7 +82,7 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
         .run(move |transaction| {
             Box::pin(async move {
                 feed_events_for_failure
-                    .mark_failed(transaction, &ids_for_failure, failure_reason, retry_at)
+                    .retry_regeneration(transaction, &ids_for_failure, failure_reason, retry_at)
                     .await
             })
         })
@@ -97,7 +97,7 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
         .run(move |transaction| {
             Box::pin(async move {
                 feed_events_for_exhaustion
-                    .mark_exhausted(
+                    .dead_letter_regeneration(
                         transaction,
                         &ids_for_exhaustion,
                         exhaustion_reason,
@@ -108,4 +108,98 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
         })
         .await
         .unwrap();
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn stale_generation_restarts_with_fresh_regeneration_budget(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let feed_events = state.feed_events.clone();
+    let event_id = storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { feed_events.enqueue(transaction, &fp("/feed.rss")).await })
+            })
+            .await
+            .unwrap(),
+        "enqueue acknowledgement",
+    );
+    let event_ids = vec![event_id];
+    let retry_at = UtcInstant::from(chrono::Utc::now() + chrono::Duration::hours(1));
+
+    let feed_events = state.feed_events.clone();
+    let ids = event_ids.clone();
+    state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                feed_events
+                    .retry_regeneration(transaction, &ids, "old regeneration failure", retry_at)
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    let feed_events = state.feed_events.clone();
+    let ids = event_ids.clone();
+    state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move { feed_events.mark_regenerated(transaction, &ids).await })
+        })
+        .await
+        .unwrap();
+    let feed_events = state.feed_events.clone();
+    let ids = event_ids.clone();
+    state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                feed_events
+                    .retry_publication(transaction, &ids, "publication failure", retry_at)
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    let feed_events = state.feed_events.clone();
+    let ids = event_ids.clone();
+    state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                feed_events
+                    .restart_regeneration(transaction, &ids, UtcInstant::now())
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+
+    let feed_events = state.feed_events.clone();
+    let claimed = storage::test_support::confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    feed_events
+                        .claim_pending_batch(transaction, 1, chrono::Duration::minutes(5))
+                        .await
+                })
+            })
+            .await
+            .unwrap(),
+        "claim acknowledgement",
+    );
+    let restarted = claimed.first().expect("restarted event is claimable");
+    assert_eq!(restarted.id, event_id);
+    assert_eq!(restarted.regeneration_attempts, 0);
+    assert_eq!(restarted.regeneration_diagnostic, None);
+    assert_eq!(restarted.publication_attempts, 1);
+    assert_eq!(
+        restarted.publication_diagnostic.as_deref(),
+        Some("publication failure")
+    );
 }

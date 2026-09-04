@@ -7,6 +7,6 @@ pub use http::HttpWebSubClient;
 pub use noop::NoopWebSubClient;
 
 mod contract;
-pub use contract::{WebSubClient, WebSubError};
+pub use contract::{RetryableWebSubError, TerminalWebSubError, WebSubClient, WebSubError};
 mod factory;
 pub use factory::default_client;

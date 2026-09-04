@@ -13,6 +13,7 @@ pub mod media_ownership;
 pub mod metrics;
 pub mod observability;
 pub mod projector;
+pub mod publisher;
 pub mod runtime_file;
 mod scheduled_worker;
 mod server_fn_response;
@@ -28,13 +29,19 @@ use std::{path::PathBuf, sync::Arc};
 use axum::{
     Router,
     http::{HeaderName, HeaderValue},
+    routing,
 };
 use axum_embed::ServeEmbed;
+use common::mailer::MailSender;
 use leptos::prelude::*;
 
-use crate::{assets::StaticAssets, media_ownership::LiveMediaReferenceOwnershipResolver};
+use crate::{
+    assets::StaticAssets, feed::handlers, media_ownership::LiveMediaReferenceOwnershipResolver,
+    publisher::PublisherService,
+};
 use ::storage::{
     AppState, InstanceId, MediaContentLocks, MediaManager, MediaReferenceOwnershipResolver,
+    SessionStorage, WriteScope,
 };
 
 async fn retire_session_cookie(
@@ -78,7 +85,7 @@ async fn set_instance_header(
 pub fn create_router(
     state: Arc<AppState>,
     instance_id: InstanceId,
-    mailer: Arc<dyn common::mailer::MailSender>,
+    mailer: Arc<dyn MailSender>,
     secure_cookies: bool,
     storage_path: PathBuf,
 ) -> Result<Router, axum::http::header::InvalidHeaderValue> {
@@ -92,21 +99,42 @@ pub fn create_router(
     )
 }
 
-fn build_media_manager(
-    state: &AppState,
-    content_locks: Arc<MediaContentLocks>,
-    instance_id: InstanceId,
-    ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
-) -> Arc<MediaManager> {
-    Arc::new(MediaManager::new(
-        state.media.clone(),
-        state.posts.clone(),
-        state.site_config.clone(),
-        state.write_scope.clone(),
-        content_locks,
-        instance_id,
-        ownership_resolver,
-    ))
+fn build_application_routes<F>(
+    sessions: Arc<dyn SessionStorage>,
+    write_scope: WriteScope,
+    provide_server_function_contexts: F,
+) -> Router
+where
+    F: Fn() + Clone + Send + Sync + 'static,
+{
+    let client_telemetry = client_telemetry::router(
+        sessions,
+        write_scope,
+        Arc::new(client_telemetry::ClientTelemetryLimiter::new()),
+    );
+
+    Router::new()
+        .nest_service("/style", ServeEmbed::<StaticAssets>::new())
+        .merge(crate::media::router())
+        .merge(crate::atompub::router())
+        .merge(client_telemetry)
+        .route(
+            "/api/{*fn_name}",
+            routing::post(move |req: axum::extract::Request| {
+                let provide_server_function_contexts = provide_server_function_contexts.clone();
+                server_fn_response::handle_with_context(provide_server_function_contexts, req)
+            }),
+        )
+        .route("/feed.{ext}", routing::get(handlers::feed_site))
+        .route(
+            "/tags/{tag}/feed.{ext}",
+            routing::get(handlers::feed_site_tag),
+        )
+        .route("/~{username}/feed.{ext}", routing::get(handlers::feed_user))
+        .route(
+            "/~{username}/tags/{tag}/feed.{ext}",
+            routing::get(handlers::feed_user_tag),
+        )
 }
 
 /// Builds a router with an injected foreign-reference ownership resolver.
@@ -120,92 +148,59 @@ fn build_media_manager(
 pub fn create_router_with_media_reference_ownership_resolver(
     state: Arc<AppState>,
     instance_id: InstanceId,
-    mailer: Arc<dyn common::mailer::MailSender>,
+    mailer: Arc<dyn MailSender>,
     secure_cookies: bool,
     storage_path: PathBuf,
     media_ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
 ) -> Result<Router, axum::http::header::InvalidHeaderValue> {
-    // Per-trait extensions for the raw axum HTTP handlers (feed, atompub,
-    // media). The whole `AppState` is never layered as an `Extension`; each
-    // handler receives only the storage traits it declares (ADR-0016). The
-    // Leptos `#[server]` functions are wired separately via per-trait contexts
-    // in `provide_app_state_contexts`.
-    let posts_ext = state.posts.clone();
-    let audiences_ext = state.audiences.clone();
-    // The projector's user-tag route resolves a username to a user id via the
-    // user store (see `crate::projector`).
-    let users_ext = state.users.clone();
-    let user_config_ext = state.user_config.clone();
-    let site_config_ext = state.site_config.clone();
-    let media_ext = state.media.clone();
-    let feed_cache_ext = state.feed_cache.clone();
-    let feed_events_ext = state.feed_events.clone();
-    // The `auth::User` extractor (web crate) authenticates the session cookie /
-    // bearer token, so the raw HTTP handlers and the Leptos request `Parts`
-    // need the session store reachable as a request extension.
-    let sessions_ext = state.sessions.clone();
-    let write_scope_ext = state.write_scope.clone();
     let instance_header = instance_id.to_string().parse::<HeaderValue>()?;
-    let serve_assets = ServeEmbed::<StaticAssets>::new();
-    let storage_path_ext = Arc::new(storage_path);
-    let media_content_locks_ext = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path_ext)));
-    let media_manager = build_media_manager(
-        &state,
-        Arc::clone(&media_content_locks_ext),
+    let storage_path = Arc::new(storage_path);
+    let media_content_locks = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path)));
+    let publisher_service = Arc::new(PublisherService::new(
+        (*storage_path).clone(),
+        Arc::clone(&state.publisher),
+        state.write_scope.clone(),
+    ));
+    let media_manager = Arc::new(MediaManager::new(
+        state.media.clone(),
+        state.posts.clone(),
+        state.site_config.clone(),
+        state.write_scope.clone(),
+        Arc::clone(&media_content_locks),
         instance_id,
         media_ownership_resolver,
+    ));
+    let sessions = state.sessions.clone();
+    let write_scope = state.write_scope.clone();
+    let posts = state.posts.clone();
+    let audiences = state.audiences.clone();
+    let users = state.users.clone();
+    let user_config = state.user_config.clone();
+    let site_config = state.site_config.clone();
+    let media = state.media.clone();
+    let feed_cache = state.feed_cache.clone();
+    let feed_events = state.feed_events.clone();
+
+    let provide_server_function_contexts = {
+        let publisher_service = Arc::clone(&publisher_service);
+        let media_content_locks = Arc::clone(&media_content_locks);
+        let media_manager = Arc::clone(&media_manager);
+
+        move || {
+            context::provide_app_state_contexts(&state, &publisher_service);
+            context::provide_media_content_locks_context(&media_content_locks);
+            context::provide_mailer_context(&mailer);
+            context::provide_media_manager_context(&media_manager);
+            provide_context(web::auth::CookieSettings {
+                secure: secure_cookies,
+            });
+        }
+    };
+    let app = build_application_routes(
+        sessions.clone(),
+        write_scope.clone(),
+        provide_server_function_contexts,
     );
-    let server_fn_media_manager = Arc::clone(&media_manager);
-    let server_fn_state = state;
-    let server_fn_mailer = mailer;
-    let server_fn_media_content_locks = Arc::clone(&media_content_locks_ext);
-    let client_telemetry = crate::client_telemetry::router(
-        sessions_ext.clone(),
-        write_scope_ext.clone(),
-        Arc::new(crate::client_telemetry::ClientTelemetryLimiter::new()),
-    );
-    let app = Router::new()
-        .nest_service("/style", serve_assets)
-        .merge(crate::media::router())
-        .merge(crate::atompub::router())
-        .merge(client_telemetry)
-        .route(
-            "/api/{*fn_name}",
-            axum::routing::post(move |req: axum::extract::Request| {
-                let state = server_fn_state.clone();
-                let mailer = server_fn_mailer.clone();
-                let media_manager = Arc::clone(&server_fn_media_manager);
-                let media_content_locks = Arc::clone(&server_fn_media_content_locks);
-                server_fn_response::handle_with_context(
-                    move || {
-                        context::provide_app_state_contexts(&state);
-                        context::provide_media_content_locks_context(&media_content_locks);
-                        context::provide_mailer_context(&mailer);
-                        context::provide_media_manager_context(&media_manager);
-                        provide_context(web::auth::CookieSettings {
-                            secure: secure_cookies,
-                        });
-                    },
-                    req,
-                )
-            }),
-        )
-        .route(
-            "/feed.{ext}",
-            axum::routing::get(crate::feed::handlers::feed_site),
-        )
-        .route(
-            "/tags/{tag}/feed.{ext}",
-            axum::routing::get(crate::feed::handlers::feed_site_tag),
-        )
-        .route(
-            "/~{username}/feed.{ext}",
-            axum::routing::get(crate::feed::handlers::feed_user),
-        )
-        .route(
-            "/~{username}/tags/{tag}/feed.{ext}",
-            axum::routing::get(crate::feed::handlers::feed_user_tag),
-        );
 
     // --- The page path: no reactive render (#180, closes #173). Serve the
     //     embedded CSR site tree (pkg/*, public/*) plus the public projector's
@@ -222,29 +217,31 @@ pub fn create_router_with_media_reference_ownership_resolver(
         // index.html to disk; the server owns it). Non-reactive HTML for the
         // public discoverability routes (the projector, #178) sits ahead of this
         // fallback; everything else boots the CSR client via the shell.
-        let app =
-            crate::projector::register(app, crate::projector::Shell(web::app::SPA_SHELL.into()));
-        app.fallback(site::serve_site)
+        crate::projector::register(app, crate::projector::Shell(web::app::SPA_SHELL.into()))
+            .fallback(site::serve_site)
     };
-
+    // Raw Axum handlers receive only the storage traits they declare
+    // (ADR-0016); server functions receive their separate Leptos contexts.
     let app = app
         .layer(axum::Extension(media_manager))
-        .layer(axum::Extension(media_content_locks_ext))
-        .layer(axum::Extension(storage_path_ext))
-        .layer(axum::Extension(posts_ext))
-        .layer(axum::Extension(audiences_ext))
-        .layer(axum::Extension(users_ext))
-        .layer(axum::Extension(user_config_ext))
-        .layer(axum::Extension(site_config_ext))
-        .layer(axum::Extension(media_ext))
-        .layer(axum::Extension(feed_cache_ext))
-        .layer(axum::Extension(feed_events_ext))
-        .layer(axum::Extension(sessions_ext))
-        .layer(axum::Extension(write_scope_ext))
+        .layer(axum::Extension(media_content_locks))
+        .layer(axum::Extension(storage_path))
+        .layer(axum::Extension(posts))
+        .layer(axum::Extension(audiences))
+        .layer(axum::Extension(users))
+        .layer(axum::Extension(user_config))
+        .layer(axum::Extension(site_config))
+        .layer(axum::Extension(media))
+        .layer(axum::Extension(feed_cache))
+        .layer(axum::Extension(publisher_service))
+        .layer(axum::Extension(feed_events))
+        .layer(axum::Extension(sessions))
+        .layer(axum::Extension(write_scope))
         .layer(axum::middleware::from_fn_with_state(
             secure_cookies,
             retire_session_cookie,
         ));
+
     Ok(crate::observability::with_http_observability(app).layer(
         axum::middleware::from_fn_with_state(instance_header, set_instance_header),
     ))

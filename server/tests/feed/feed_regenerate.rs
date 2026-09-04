@@ -1,15 +1,30 @@
 use common::visibility::AudienceTarget;
-use jaunder::feed::regenerate::feed;
+use jaunder::feed::regenerate::render;
 
 use rstest::*;
 use rstest_reuse::*;
+
 use std::sync::Arc;
 
 use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, fp};
 
+async fn render_feed(
+    state: &Arc<storage::AppState>,
+    feed_path: host::feed::FeedPath,
+) -> storage::FeedCacheRow {
+    let snapshot = state
+        .publisher
+        .snapshot()
+        .await
+        .expect("publisher snapshot");
+    render(&snapshot, state.posts.as_ref(), feed_path)
+        .await
+        .expect("render feed")
+}
+
 #[apply(backends)]
 #[tokio::test]
-async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
+async fn render_user_feed_returns_expected_rss_representation(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let user = SeedUser::new().seed(&state).await;
@@ -17,57 +32,24 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
     SeedRawPost::new(user.user_id).seed(&state).await;
     SeedRawPost::new(user.user_id).seed(&state).await;
 
-    let row = feed(
-        state.site_config.as_ref(),
-        state.posts.as_ref(),
-        Arc::clone(&state.feed_cache),
-        &state.write_scope,
-        fp(&format!("/~{}/feed.rss", user.username)),
-    )
-    .await
-    .expect("regenerate feed");
+    let row = render_feed(&state, fp(&format!("/~{}/feed.rss", user.username))).await;
 
     assert_eq!(
         row.representation().content_type(),
         "application/rss+xml; charset=utf-8",
         "RSS content type"
     );
-
-    let from_cache = state
-        .feed_cache
-        .get(&fp(&format!("/~{}/feed.rss", user.username)))
-        .await
-        .expect("get from cache")
-        .expect("cache entry exists");
-
-    assert_eq!(
-        from_cache.representation().body(),
-        row.representation().body(),
-        "cached body matches returned row"
-    );
-    assert_eq!(
-        from_cache.etag, row.etag,
-        "cached etag matches returned row"
-    );
 }
 
 #[apply(backends)]
 #[tokio::test]
-async fn regenerate_writes_empty_feed_for_user_with_no_posts(#[case] backend: Backend) {
+async fn render_empty_user_feed_returns_representation(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user but no posts
     let user = SeedUser::new().seed(&state).await;
 
-    let row = feed(
-        state.site_config.as_ref(),
-        state.posts.as_ref(),
-        Arc::clone(&state.feed_cache),
-        &state.write_scope,
-        fp(&format!("/~{}/feed.rss", user.username)),
-    )
-    .await
-    .expect("regenerate feed");
+    let row = render_feed(&state, fp(&format!("/~{}/feed.rss", user.username))).await;
 
     assert_eq!(
         row.representation().content_type(),
@@ -78,22 +60,11 @@ async fn regenerate_writes_empty_feed_for_user_with_no_posts(#[case] backend: Ba
         !row.representation().body().is_empty(),
         "empty feed still has valid body"
     );
-    let cached = state
-        .feed_cache
-        .get(&fp(&format!("/~{}/feed.rss", user.username)))
-        .await
-        .expect("get from cache")
-        .expect("cache entry exists");
-    assert_eq!(
-        cached.representation().body(),
-        row.representation().body(),
-        "cached body matches returned body"
-    );
 }
 
 #[apply(backends)]
 #[tokio::test]
-async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend) {
+async fn render_tag_surfaces_returns_representations(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user (posts are not required: the tag-window queries and the
@@ -102,60 +73,30 @@ async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend)
 
     // Site-tag surface exercises the SiteTag canonical_url arm and the
     // window_site_tag storage query.
-    let site_tag = feed(
-        state.site_config.as_ref(),
-        state.posts.as_ref(),
-        Arc::clone(&state.feed_cache),
-        &state.write_scope,
-        fp("/tags/rust/feed.rss"),
-    )
-    .await
-    .expect("regenerate site-tag feed");
+    let site_tag = render_feed(&state, fp("/tags/rust/feed.rss")).await;
     assert_eq!(
         site_tag.representation().content_type(),
         "application/rss+xml; charset=utf-8",
         "site-tag RSS content type"
     );
-    assert!(
-        state
-            .feed_cache
-            .get(&fp("/tags/rust/feed.rss"))
-            .await
-            .expect("get site-tag from cache")
-            .is_some(),
-        "site-tag feed should be cached"
-    );
 
     // User-tag surface exercises the UserTag canonical_url arm and the
     // window_user_tag storage query.
-    let user_tag = feed(
-        state.site_config.as_ref(),
-        state.posts.as_ref(),
-        Arc::clone(&state.feed_cache),
-        &state.write_scope,
+    let user_tag = render_feed(
+        &state,
         fp(&format!("/~{}/tags/rust/feed.rss", user.username)),
     )
-    .await
-    .expect("regenerate user-tag feed");
+    .await;
     assert_eq!(
         user_tag.representation().content_type(),
         "application/rss+xml; charset=utf-8",
         "user-tag RSS content type"
     );
-    assert!(
-        state
-            .feed_cache
-            .get(&fp(&format!("/~{}/tags/rust/feed.rss", user.username)))
-            .await
-            .expect("get user-tag from cache")
-            .is_some(),
-        "user-tag feed should be cached"
-    );
 }
 
 #[apply(backends)]
 #[tokio::test]
-async fn regenerate_writes_each_format(#[case] backend: Backend) {
+async fn render_each_format(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     // Create a user with one post
@@ -180,15 +121,7 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
     ];
 
     for (feed_url, expected_content_type) in &formats {
-        let row = feed(
-            state.site_config.as_ref(),
-            state.posts.as_ref(),
-            Arc::clone(&state.feed_cache),
-            &state.write_scope,
-            fp(feed_url),
-        )
-        .await
-        .unwrap_or_else(|_| panic!("regenerate {feed_url}"));
+        let row = render_feed(&state, fp(feed_url)).await;
         assert_eq!(
             row.representation().content_type(),
             *expected_content_type,
@@ -201,10 +134,10 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
     }
 }
 
-/// Published feeds are public-only (M8): `regenerate::feed` resolves posts as an
+/// Published feeds are public-only (M8): [`render`] resolves posts as an
 /// anonymous viewer, so a mix of Public / Subscribers / Private posts emits ONLY
 /// the Public one. This locks the `ViewerIdentity::Anonymous` intent in
-/// `regenerate::feed` — if a non-anonymous viewer ever leaked in, the
+/// [`render`] — if a non-anonymous viewer ever leaked in, the
 /// Subscribers/Private titles would appear and this test would fail.
 #[apply(backends)]
 #[tokio::test]
@@ -227,15 +160,7 @@ async fn feed_contains_only_public_posts(#[case] backend: Backend) {
         .seed(&state)
         .await;
 
-    let row = feed(
-        state.site_config.as_ref(),
-        state.posts.as_ref(),
-        Arc::clone(&state.feed_cache),
-        &state.write_scope,
-        fp(&format!("/~{}/feed.rss", user.username)),
-    )
-    .await
-    .expect("regenerate feed");
+    let row = render_feed(&state, fp(&format!("/~{}/feed.rss", user.username))).await;
 
     let body = row.representation().body();
     assert!(
@@ -272,15 +197,7 @@ async fn regenerated_json_feed_carries_slug_ordered_tags(#[case] backend: Backen
         .seed(&state)
         .await;
 
-    let row = feed(
-        state.site_config.as_ref(),
-        state.posts.as_ref(),
-        Arc::clone(&state.feed_cache),
-        &state.write_scope,
-        fp(&format!("/~{}/feed.json", user.username)),
-    )
-    .await
-    .expect("regenerate json feed");
+    let row = render_feed(&state, fp(&format!("/~{}/feed.json", user.username))).await;
 
     let body = row.representation().body();
     let v: serde_json::Value = serde_json::from_str(body).expect("feed body is JSON");

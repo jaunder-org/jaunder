@@ -3,6 +3,8 @@ use std::sync::Arc;
 use host::config_key::SiteConfigKey;
 
 use crate::cli::StorageArgs;
+use crate::publisher::PublisherService;
+use common::tagged_url::HubUrl;
 
 use super::support;
 
@@ -18,16 +20,29 @@ pub(super) async fn cmd_site_config_set(
     key.validate(value)?;
     let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime).await?;
-    let site_config = Arc::clone(&state.site_config);
-    let value = value.to_owned();
-    let value_for_set = value.clone();
-    let outcome = state
-        .write_scope
-        .run(move |transaction| {
-            Box::pin(async move { site_config.set(transaction, key, &value_for_set).await })
-        })
-        .await?;
-    support::require_confirmed_mutation(outcome, "site_config set")?;
+    if key == SiteConfigKey::FeedsWebsubHubUrl {
+        let hub = if value.is_empty() {
+            None
+        } else {
+            Some(value.parse::<HubUrl>()?)
+        };
+        let publisher = PublisherService::new(
+            storage.storage_path.clone(),
+            Arc::clone(&state.publisher),
+            state.write_scope.clone(),
+        );
+        publisher.mutate_hub(hub.as_ref()).await?;
+    } else {
+        let site_config = Arc::clone(&state.site_config);
+        let value_for_set = value.to_owned();
+        let outcome = state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { site_config.set(transaction, key, &value_for_set).await })
+            })
+            .await?;
+        support::require_confirmed_mutation(outcome, "site_config set")?;
+    }
     eprintln!("set site_config {key} = {value}");
     Ok(())
 }
@@ -66,6 +81,16 @@ pub(super) async fn cmd_site_config_unset(
 ) -> anyhow::Result<()> {
     let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime).await?;
+    if key == SiteConfigKey::FeedsWebsubHubUrl {
+        let publisher = PublisherService::new(
+            storage.storage_path.clone(),
+            Arc::clone(&state.publisher),
+            state.write_scope.clone(),
+        );
+        publisher.mutate_hub(None).await?;
+        eprintln!("unset site_config {key}");
+        return Ok(());
+    }
     let site_config = Arc::clone(&state.site_config);
     let outcome = state
         .write_scope
@@ -213,6 +238,48 @@ mod tests {
         );
     }
 
+    /// Empty hub input follows the same publisher mutation seam as explicit unset.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn site_config_set_empty_hub_unsets_through_publisher(#[case] backend: Backend) {
+        let base = TempDir::new().expect("temp dir");
+        let (args, _pg) = site_config_args(backend, &base).await;
+
+        cmd_site_config_set(
+            &args,
+            SiteConfigKey::FeedsWebsubHubUrl,
+            "https://hub.example/",
+        )
+        .await
+        .expect("set hub");
+        cmd_site_config_set(&args, SiteConfigKey::FeedsWebsubHubUrl, "")
+            .await
+            .expect("empty hub input unsets through publisher");
+
+        let state = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("reopen");
+        assert_eq!(
+            state
+                .site_config
+                .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
+                .await
+                .unwrap(),
+            None,
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn site_config_set_rejects_malformed_nonempty_hub(#[case] backend: Backend) {
+        let base = TempDir::new().expect("temp dir");
+        let (args, _pg) = site_config_args(backend, &base).await;
+
+        cmd_site_config_set(&args, SiteConfigKey::FeedsWebsubHubUrl, "not a hub URL")
+            .await
+            .expect_err("nonempty malformed hub input is rejected");
+    }
+
     /// A9: list is a faithful dump that judges without hiding.
     #[apply(backends)]
     #[tokio::test]
@@ -342,5 +409,21 @@ mod tests {
 
         // list runs against a populated store (exercises the print path).
         cmd_site_config_list(&storage_args).await.expect("list ok");
+
+        cmd_site_config_unset(&storage_args, SiteConfigKey::FeedsWebsubHubUrl)
+            .await
+            .expect("unset configured hub");
+        assert_eq!(
+            state
+                .site_config
+                .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
+                .await
+                .unwrap(),
+            None,
+            "unset removes the hub",
+        );
+        cmd_site_config_unset(&storage_args, SiteConfigKey::FeedsWebsubHubUrl)
+            .await
+            .expect("unsetting an absent hub is a no-op");
     }
 }
