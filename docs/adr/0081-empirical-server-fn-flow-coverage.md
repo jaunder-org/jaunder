@@ -99,6 +99,18 @@ Concretely:
   derived form remains viable as a human-facing scheme: the OTLP span carries
   `code.namespace`, `code.filepath` and `code.lineno`, which locate a fn more
   precisely than grepping an ambiguous dotted literal.
+
+  > **Annotation (2026-09-04, #948).** The preceding rationale records the
+  > accepted state when this decision was made. It is stale for the current
+  > explicit `web.<vertical>.<ident>` form: `#[macros::server]` now enforces
+  > `web/src/<vertical>/api.rs` and rejects deeper server-function modules, so
+  > that form is unique rather than a lossy key shared by `posts::api` and an
+  > invalid `posts::api::listing` placement. `code.namespace` now defensively
+  > corroborates the explicit name and rejects foreign or malformed evidence; it
+  > remains the load-bearing disambiguator for retained `__server_<ident>` and
+  > bare `<ident>` compatibility forms, which omit the vertical. See the current
+  > [flow-coverage guidance](../observability.md#server-flow-coverage-681).
+
 - The **complementary** signal is the request span's `uri`, resolved through
   each fn's declared endpoint recorded by the enumerator — never by assuming
   `uri == "/api/" + fn_name`. It covers the fns not yet instrumented (#511 owns
