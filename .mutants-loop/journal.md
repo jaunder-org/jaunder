@@ -147,3 +147,7 @@ Append-only. Newest last. One line per event.
   89 mutants worth arguing about. Deleted HANDOFF.md — it described a world
   three corrections out of date, and a stale handoff is worse than none.
   PROTOCOL, queue.md and this journal carry everything a restart needs.
+- 2026-09-04 — killed both `storage/src/audiences.rs` unique-violation guard
+  mutants: dual-backend trigger tests prove create and rename preserve unrelated
+  database failures as storage errors. audiences.rs now 0 missed / 11 caught / 7
+  unviable.

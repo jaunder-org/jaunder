@@ -436,7 +436,7 @@ where
 mod tests {
     use super::{AudienceError, InvalidAudienceTargets, validate_named_audience_targets};
     use crate::sql::QueryStorageExt;
-    use crate::test_support::{Backend, SeedUser, backends};
+    use crate::test_support::{Backend, CloseablePool, SeedUser, backends};
     use common::audience::AudienceName;
     use common::ids::AudienceId;
     use common::test_support::parse_audience_name;
@@ -468,6 +468,120 @@ mod tests {
                 .unwrap(),
             "audience fixture setup",
         )
+    }
+
+    enum BlockedAudienceWrite {
+        Create,
+        Rename,
+    }
+
+    async fn block_audience_write(
+        backend: Backend,
+        pool: &CloseablePool,
+        write: BlockedAudienceWrite,
+    ) {
+        let operation = match write {
+            BlockedAudienceWrite::Create => "INSERT",
+            BlockedAudienceWrite::Rename => "UPDATE",
+        };
+        match backend {
+            Backend::Sqlite => {
+                pool.execute(&format!(
+                    "CREATE TRIGGER block_audience_write \
+                     BEFORE {operation} ON audiences \
+                     BEGIN SELECT RAISE(FAIL, 'blocked'); END"
+                ))
+                .await
+                .unwrap();
+            }
+            Backend::Postgres => {
+                pool.execute(
+                    "CREATE FUNCTION block_audience_write() RETURNS trigger AS $$ \
+                     BEGIN RAISE EXCEPTION 'blocked'; END; $$ LANGUAGE plpgsql",
+                )
+                .await
+                .unwrap();
+                pool.execute(&format!(
+                    "CREATE TRIGGER block_audience_write \
+                     BEFORE {operation} ON audiences \
+                     FOR EACH ROW EXECUTE FUNCTION block_audience_write()"
+                ))
+                .await
+                .unwrap();
+            }
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn create_audience_preserves_non_unique_database_errors(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let author_user_id = SeedUser::new().seed(&env.state).await.user_id;
+        block_audience_write(backend, env.base.pool(), BlockedAudienceWrite::Create).await;
+        let audiences = Arc::clone(&env.state.audiences);
+        let result = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    audiences
+                        .create_audience(
+                            transaction,
+                            author_user_id,
+                            &parse_audience_name("Blocked"),
+                        )
+                        .await
+                })
+            })
+            .await;
+
+        assert!(
+            matches!(
+                &result,
+                Err(crate::WriteScopeError::Operation(AudienceError::Storage(
+                    sqlx::Error::Database(error)
+                ))) if !error.is_unique_violation()
+            ),
+            "expected a non-unique database error to remain a storage error, got {result:?}"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn rename_audience_preserves_non_unique_database_errors(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let author_user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let audience_id =
+            create_audience_confirmed(&env.state, author_user_id, &parse_audience_name("Original"))
+                .await;
+        block_audience_write(backend, env.base.pool(), BlockedAudienceWrite::Rename).await;
+        let audiences = Arc::clone(&env.state.audiences);
+        let result = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    audiences
+                        .rename_audience(
+                            transaction,
+                            author_user_id,
+                            audience_id,
+                            &parse_audience_name("Blocked"),
+                        )
+                        .await
+                })
+            })
+            .await;
+
+        assert!(
+            matches!(
+                &result,
+                Err(crate::WriteScopeError::Operation(AudienceError::Storage(
+                    sqlx::Error::Database(error)
+                ))) if !error.is_unique_violation()
+            ),
+            "expected a non-unique database error to remain a storage error, got {result:?}"
+        );
     }
 
     #[apply(backends)]
