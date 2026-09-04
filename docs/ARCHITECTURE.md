@@ -2880,6 +2880,37 @@ fails if either hermetic boundary drifts from the host definitions
 ([hermetic documentation/code static boundaries](adr/drafts/split-hermetic-static-check-boundaries.md);
 [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
+The two CSR-facing source filters follow resolved target reachability rather
+than crate names. The `.#site`/CSR closure contains workspace manifests, the
+sources reachable from the `csr` target, required shell inputs, and
+deterministic workspace placeholders. The client `wasm-tests` closure
+analogously contains workspace manifests, sources reachable from the `client`
+wasm-test target, and its required inputs/placeholders. `common` and `macros`
+remain in each closure where reachable; unrelated `server`, `storage`, and other
+host-only sources are excluded. The broad product, coverage, and
+workspace-doctest source sets remain broad because their semantics require the
+full product graph.
+
+`cargo xtask nix probe-source` protects these boundaries without building them:
+it applies isolated tracked markers and evaluates the `.drv` identities only. It
+fails closed unless a docs marker changes only `static-docs`; a server marker
+changes `static-code` but neither wasm path; a web marker changes `static-code`
+and site but not wasm tests; and `common`/`macros` markers change every
+dependent checked boundary. CI runs this eval-only drift probe. It neither
+realizes outputs nor claims local/remote cache behavior.
+
+The full `cargo xtask validate` is still the aggregate ship gate: its `--no-e2e`
+prefix builds both static groups and the Nix-backed test checks, then adds all
+four `{sqlite,postgres}×{chromium,firefox}` e2e combinations and server-function
+coverage verification. Reproduce the measured invalidation matrix by running one
+unrecorded `devtool run -- cargo xtask --json validate --no-e2e --allow-dirty`
+warm-up, saving the next warm-baseline stdout JSON, then adding one exact marker
+at a time, saving each stdout JSON, and restoring the marker file's original
+bytes. The marker paths and contents, sidecars, and normalized results are
+recorded in
+`docs/superpowers/research/2026-09-04-issue-1289-nix-invalidation-boundaries.md`;
+the store is not purged between arms.
+
 #### Sandboxed cargo-deny
 
 `cargo-deny` is part of `devtool check --group code --sandbox-cargo` under a

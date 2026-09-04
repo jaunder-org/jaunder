@@ -469,92 +469,46 @@ the question. Focused `test-local` is an accelerator, not a certification gate.
 
 #### Measuring Nix invalidation
 
-Every `cargo xtask` invocation overwrites `.xtask/last-result.json`. A
-Nix-backed successful step has this optional `nix` object; non-Nix steps omit
-it:
+Every `cargo xtask` invocation overwrites `.xtask/last-result.json`. Each
+successful Nix-backed step reports the requested installable, evaluated `.drv`
+identity when observable, conservative local realization state, and duration.
+Compare identities directly; `reused` means the selected outputs were already
+locally valid, while `realized` means they became valid during the build.
+Neither state attributes compilation versus substitution.
 
-```json
-{
-  "name": "nix-static-checks",
-  "duration_ms": 1234,
-  "nix": {
-    "installable": ".#checks.x86_64-linux.static-checks",
-    "derivation": "/nix/store/<hash>-static-checks.drv",
-    "realization": "reused"
-  }
-}
-```
-
-`installable` is the requested flake installable. `derivation`, when present, is
-the evaluated `.drv` identity to compare across records; it is omitted when that
-identity could not be observed. `realization` is deliberately conservative:
-`reused` means every output selected by that installable was already valid in
-the local store before its build; `realized` means one or more selected outputs
-were initially invalid and all were valid after the successful build; `unknown`
-means evaluation, parsing, or local-store probes could not establish either
-result. These states describe local-store availability, not whether Nix compiled
-locally or substituted an output, and they do not depend on Cachix, GitHub, raw
-Nix logs, or a store purge.
-
-To collect comparable invalidation records, work in a **disposable clone** made
-from the same commit as the intended comparison. From the checkout whose
-unrelated work you want to protect, create an unused sibling clone and run all
-remaining commands there:
+For a controlled record, use a disposable checkout at the comparison commit.
+Create `.xtask/measurements`, run this exact command once as an unrecorded
+warm-up, then run it once more and copy the JSON stdout verbatim to
+`post-warm-baseline.json`:
 
 ```bash
-git clone . ../jaunder-nix-reuse-measurement
-cd ../jaunder-nix-reuse-measurement
+devtool run -- cargo xtask --json validate --no-e2e --allow-dirty
 ```
 
-The clone starts from committed `HEAD`, so it does not carry the original
-checkout's uncommitted or untracked work. Do not use a checkout with work you
-need to retain: neither `git restore` below nor an accidental reset is a
-recovery mechanism for unrelated work. Start with the clean disposable tree,
-make the results directory (which is under the ignored `.xtask/` state), run
-this exact gate once to warm its outputs, then run it a second time and save
-only that second sidecar as the warm baseline:
+Do not purge Nix/store caches. Then append **exactly one** marker, rerun that
+same command, copy its JSON stdout verbatim to the corresponding ignored
+sidecar, and remove the marker so the named source file is byte-identical before
+the next arm:
 
-```bash
-mkdir -p .xtask/measurements
-cargo xtask validate --no-e2e --allow-dirty
-cargo xtask validate --no-e2e --allow-dirty
-cp .xtask/last-result.json .xtask/measurements/warm-baseline.json
-```
+| Arm              | Marker file             | Exact marker                                  | Sidecar                      |
+| ---------------- | ----------------------- | --------------------------------------------- | ---------------------------- |
+| docs-only        | `docs/DESIGN.md`        | `<!-- Nix reuse measurement: docs-only. -->`  | `post-docs-only.json`        |
+| web-only         | `web/src/app/render.rs` | `// Nix reuse measurement: web-only.`         | `post-web-only.json`         |
+| high-stack-rust  | `server/src/lib.rs`     | `// Nix reuse measurement: high-stack-rust.`  | `post-high-stack-rust.json`  |
+| low-stack-rust   | `common/src/text.rs`    | `// Nix reuse measurement: low-stack-rust.`   | `post-low-stack-rust.json`   |
+| low-stack-macros | `macros/src/lib.rs`     | `// Nix reuse measurement: low-stack-macros.` | `post-low-stack-macros.json` |
 
-`--allow-dirty` keeps each deliberately uncommitted sample in the disposable
-tree; it does not skip, weaken, or reorder any `validate --no-e2e` gate step.
-With the outputs warmed, one at a time append the listed measurement-only
-marker, run the same command, copy the sidecar before the next run, and restore
-**only** that named file before proceeding:
-
-```bash
-# Docs-only
-printf '\n<!-- Nix reuse measurement: docs-only. -->\n' >> docs/DESIGN.md
-cargo xtask validate --no-e2e --allow-dirty
-cp .xtask/last-result.json .xtask/measurements/docs-only.json
-git restore -- docs/DESIGN.md
-
-# Web-only
-printf '\n// Nix reuse measurement: web-only.\n' >> web/src/app/render.rs
-cargo xtask validate --no-e2e --allow-dirty
-cp .xtask/last-result.json .xtask/measurements/web-only.json
-git restore -- web/src/app/render.rs
-
-# Low-stack Rust only
-printf '\n// Nix reuse measurement: low-stack-rust.\n' >> common/src/text.rs
-cargo xtask validate --no-e2e --allow-dirty
-cp .xtask/last-result.json .xtask/measurements/low-stack-rust.json
-git restore -- common/src/text.rs
-```
-
-The markers are content-only, semantically inert changes in representative
-existing files. Do not combine samples, run another gate between a sample and
-its copy, or purge Nix stores. Compare each record's successful `steps[]`
-entries by `name`, `duration_ms`, `nix.installable`, optional `nix.derivation`,
-and `nix.realization`; compare equal derivation paths directly, and treat a
-missing derivation or `unknown` realization as evidence that the record is not
-classifiable, not as reuse or a build/substitution claim. Keep the four copied
-JSON files as the measurement evidence.
+Preserve a nonzero arm's JSON and its actual `ok` outcome: it is evidence, not a
+reason to rerun or suppress a failure. The expected identity/reuse matrix is
+docs → `static-docs` only; web → `static-code` + `.#site`; server →
+`static-code` only among the static/site/wasm boundaries; common/macros →
+`static-code` + `.#site` + `wasm-tests`. Unrelated Nix checks retain their
+baseline identity and reuse. Normalize every Nix row beside the pre-change
+record in
+`docs/superpowers/research/2026-09-04-issue-1289-nix-invalidation-boundaries.md`.
+`cargo xtask validate --no-e2e` remains the full non-e2e aggregate; full
+`cargo xtask validate` additionally runs all four e2e combinations and
+server-function coverage verification.
 
 #### Prepush parity by failure surface
 
@@ -643,15 +597,15 @@ job. Running every combo in parallel across runners cuts e2e wall-clock;
   `tools-clippy` run through `devtool check <name>` from the host ladder. The
   commands still execute host-local Cargo with the devshell toolchain and
   compile-cache environment, while sharing their argument definitions with the
-  Nix `static-checks` derivation. The product has three distinct clippy
-  surfaces: generic workspace `clippy --all-targets` provides broad,
-  feature-unified host coverage; `web-no-server-clippy` runs `web`'s
-  no-default-feature host tests in isolation, so workspace feature unification
-  cannot enable `web/server`; and `wasm-clippy` lints only wasm library targets.
-  `wasm-clippy` deliberately excludes `--all-targets`, because `web`'s
-  host-oriented test dependencies cannot compile for `wasm32-unknown-unknown`.
-  `web-server-clippy` remains the explicit host check for `web`'s
-  `feature = "server"` paths; workspace `--all-features` is not gate policy.
+  Nix `static-code` derivation. The product has three distinct clippy surfaces:
+  generic workspace `clippy --all-targets` provides broad, feature-unified host
+  coverage; `web-no-server-clippy` runs `web`'s no-default-feature host tests in
+  isolation, so workspace feature unification cannot enable `web/server`; and
+  `wasm-clippy` lints only wasm library targets. `wasm-clippy` deliberately
+  excludes `--all-targets`, because `web`'s host-oriented test dependencies
+  cannot compile for `wasm32-unknown-unknown`. `web-server-clippy` remains the
+  explicit host check for `web`'s `feature = "server"` paths; workspace
+  `--all-features` is not gate policy.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
 - Whole-test budgets are **ambient** — an auto fixture gives every test a scaled
   `DEFAULT_TEST_BUDGET_MS`, which covers the entire suite (#270). Don't set one
@@ -668,10 +622,11 @@ The Emacs client lives in `elisp/` (see [`elisp/README.md`](elisp/README.md)).
 Its ERT suite, formatter, and byte-compilation run in the verify ladder: `ert`,
 `elisp-fmt`, and `byte-compile` (which byte-compiles the package modules with
 warnings promoted to errors) are `cargo xtask check`/`validate` steps that run
-through `devtool check` — the same implementation the `static-checks` Nix check
-runs, so `nix flake check` covers them too, with no duplicated sibling to drift
-(#188). prettier cannot format Emacs Lisp, so `elisp-fmt` uses built-in
-`emacs-lisp-mode` indentation (auto-fix under `check`, verify under `validate`).
+through `devtool check` — the same implementations the `static-code` Nix
+derivation runs, so `nix flake check` covers them too, with no duplicated
+sibling to drift (#188). prettier cannot format Emacs Lisp, so `elisp-fmt` uses
+built-in `emacs-lisp-mode` indentation (auto-fix under `check`, verify under
+`validate`).
 
 `validate --no-e2e` builds `elisp-coverage-producer`, which runs the pure and
 self-booting live ERT populations once in a hermetic VM. Its fixed
@@ -1142,16 +1097,48 @@ even on a dirty tree. The probe runs in CI (the `validate-no-e2e` job) and on
 request; it is deliberately **not** part of per-commit `check`/`validate`
 (#241).
 
+**Nix invalidation-boundary guard (`cargo xtask nix probe-source`).** The
+hermetic static surface is two semantic derivations, not a singular
+`static-checks`: `static-docs` owns Markdown formatting and its configuration;
+`static-code` owns every other hermetic static definition. The CSR/site source
+closure contains workspace manifests, the resolved `csr` target closure, its
+required shell inputs, and deterministic workspace placeholders. The client
+wasm-test closure analogously contains workspace manifests, the resolved
+`client` wasm-test target closure, and its required inputs/placeholders.
+`common` and `macros` remain wherever a resolved target reaches them; unrelated
+`server`, `storage`, and host-only sources are absent from both closures.
+
+`cargo xtask nix probe-source` creates isolated tracked marker perturbations and
+**evaluates** the flake `.drv` identities without realizing outputs. It fails
+closed unless docs changes affect only `static-docs`; server changes affect
+`static-code` but neither wasm path; web changes affect `static-code` and
+`.#site` but not `wasm-tests`; and `common`/`macros` changes affect every
+dependent checked boundary. CI runs this eval-only drift probe. It neither
+builds outputs nor purges the store, and says nothing about remote-cache
+behavior.
+
+To reproduce the controlled measurements, first run one unrecorded
+`devtool run -- cargo xtask --json validate --no-e2e --allow-dirty` warm-up,
+then save the warm baseline JSON. Add exactly one of the markers recorded in
+`docs/superpowers/research/2026-09-04-issue-1289-nix-invalidation-boundaries.md`,
+run that exact command, save stdout JSON, and remove the marker to restore the
+source bytes before the next arm. Do not purge Nix/store caches. The full
+`cargo xtask validate` remains the aggregate ship gate: it retains the
+`--no-e2e` surface and adds all four e2e combinations and server-function
+coverage verification.
+
 ### Nix VM checks
 
 `nix flake check` runs the full Nix-backed validation matrix, including:
 
-- `checks.x86_64-linux.static-checks` — the shared
-  `devtool check --all --sandbox-cargo` surface for formatting, TypeScript,
-  elisp, product clippy, wasm clippy, tools clippy, and cargo-deny's
-  sandbox-safe `bans`/`licenses`/`sources` policy. This is the same command
-  definition surface the host verify ladder uses, but executed hermetically with
-  offline Cargo homes instead of host-local Cargo artifacts (#188, #276).
+- `checks.x86_64-linux.static-docs` — `devtool check --group docs`, the isolated
+  Markdown-formatting and configuration boundary.
+- `checks.x86_64-linux.static-code` —
+  `devtool check --group code --sandbox-cargo`, every remaining shared static
+  definition (including end-to-end formatting, TypeScript, Elisp, Rust/tools
+  compilation and formatting, cargo-deny, clippy, and repository scanners),
+  executed with the same offline Cargo homes as the prior hermetic proof. The
+  host `devtool check --all` aggregate remains the exact, duplicate-free union.
 - `checks.x86_64-linux.wasm-tests` — `wasm-bindgen-test` cases executed in
   headless Nix-store Chromium through the matching Nix-store chromedriver. This
   is behavioral pass/fail execution for irreducible browser code, not wasm line

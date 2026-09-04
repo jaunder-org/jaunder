@@ -79,7 +79,7 @@ Out:
     failed evaluation; the real probe passes against the live flake and proves
     both over-inclusion and missing fan-out fixtures.
 
-- [ ] Task 5: Record post-change evidence and document the final graph
+- [x] Task 5: Record post-change evidence and document the final graph
   - Contract: repeat the warm baseline plus isolated docs, web, server, common,
     and macros arms under Task 1's exact command, markers, and conditions;
     append post-change rows in the same fixed schema plus before/after

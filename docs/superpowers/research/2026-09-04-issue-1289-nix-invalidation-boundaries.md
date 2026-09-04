@@ -1,24 +1,27 @@
-# Issue 1289: pre-change Nix invalidation-boundary measurements
+# Issue 1289: pre- and post-change Nix invalidation-boundary measurements
 
 ## Scope and source material
 
-This is the durable, normalized pre-change record for issue #1289. It is derived
-from the six saved measurement sidecars in `.xtask/measurements/`:
-`warm-baseline`, `docs-only`, `web-only`, `high-stack-rust`, `low-stack-rust`,
-and `low-stack-macros`. Those ignored JSON files remain the source material;
-this report preserves their result rows and failure evidence.
+This is the durable, normalized pre- and post-change record for issue #1289. The
+ignored JSON sidecars in `.xtask/measurements/` are the source material: the
+pre-change `warm-baseline`, `docs-only`, `web-only`, `high-stack-rust`,
+`low-stack-rust`, and `low-stack-macros` arms, followed by identically named
+`post-` arms. This report preserves their result rows and failure evidence.
 
 ## Reproduction metadata
 
 - Date: 2026-09-04.
-- Baseline revision: `168edad2d2ac44bd9662d02787c82e4718101afc` (the
+- Pre-change baseline revision: `168edad2d2ac44bd9662d02787c82e4718101afc` (the
   `origin/main` revision on which this branch was created).
+- Post-change baseline revision: `6cdb765742474ad3a3212eb39a59935ab13a13f9`
+  (committed Task 4 HEAD).
 - System: `x86_64-linux`.
-- Command: `cargo xtask --json validate --no-e2e --allow-dirty`.
-- One warm-up run preceded the saved warm baseline.
-- The Nix store was not purged.
-- Each perturbation was applied and measured one at a time, then restored before
-  the next arm.
+- Pre-change command: `cargo xtask --json validate --no-e2e --allow-dirty`.
+- Post-change command:
+  `devtool run -- cargo xtask --json validate --no-e2e --allow-dirty`.
+- One unrecorded warm-up run preceded each saved warm baseline. The Nix store
+  was not purged. Each perturbation was applied and measured one at a time, then
+  removed to restore the source bytes before the next arm.
 - Marker procedure (exact contents):
   - `docs/DESIGN.md`: `<!-- Nix reuse measurement: docs-only. -->`
   - `web/src/app/render.rs`: `// Nix reuse measurement: web-only.`
@@ -156,4 +159,143 @@ low-stack representative.
 
 ## Post-change evidence
 
-**Pending implementation.** Post-change measurements have not yet been recorded.
+The post-change sequence used the command and marker procedure above after an
+unrecorded warm-up. Every arm completed `ok`; the historical pre-change `common`
+coverage-consumer failure did not recur and is retained above as data. All rows
+below are copied from the six parseable `post-*.json` sidecars.
+
+### Warm baseline
+
+- Marker: None (unmodified committed Task 4 baseline)
+- Overall outcome: **ok**
+- Overall duration: **160112 ms**
+
+| Step                          | Installable                                     | Full derivation path                                                                          | Realization | Duration |
+| ----------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------- | -------- |
+| `nix-static-docs`             | `.#checks.x86_64-linux.static-docs`             | `/nix/store/23pdijyd9hypijriqn9n25i2762mksx1-static-docs.drv`                                 | reused      | 864 ms   |
+| `nix-static-code`             | `.#checks.x86_64-linux.static-code`             | `/nix/store/ffyvm2lj7ga73zql98d6yqd70hhw6f71-static-code.drv`                                 | reused      | 1518 ms  |
+| `wasm-budget`                 | `.#site`                                        | `/nix/store/xc8g35b5d4f54zw8q40gj6i8w7dy1wfr-jaunder-site.drv`                                | reused      | 39131 ms |
+| `wasm-tests`                  | `.#checks.x86_64-linux.wasm-tests`              | `/nix/store/albnqi2635g1k4kg2hspwysy7nbwmfwh-jaunder-wasm-tests-test-0.1.0.drv`               | reused      | 845 ms   |
+| `nix-coverage`                | `.#checks.x86_64-linux.coverage`                | `/nix/store/rl39gi0bmxy30b7l2a70mvrkxl29rkp9-jaunder-coverage-0.1.0.drv`                      | reused      | 648 ms   |
+| `nix-coverage-gate`           | `.#checks.x86_64-linux.coverage-gate`           | `/nix/store/f92hr68dn506ygrqxdy48cg698iqilja-jaunder-coverage-gate.drv`                       | reused      | 560 ms   |
+| `nix-doctests`                | `.#checks.x86_64-linux.doctests`                | `/nix/store/w797wqxvfdgibrrzmnizzpn5im8v1k05-jaunder-doctests-0.1.0.drv`                      | reused      | 502 ms   |
+| `nix-doctests-gate`           | `.#checks.x86_64-linux.doctests-gate`           | `/nix/store/4a97h1zspwpgi5ax63a7wxds3g1pf4l2-jaunder-doctests-gate.drv`                       | reused      | 498 ms   |
+| `nix-elisp-coverage-producer` | `.#checks.x86_64-linux.elisp-coverage-producer` | `/nix/store/ybhdxn1j70kp2lh0d8zfjsww9c19cpgg-vm-test-run-jaunder-elisp-coverage-producer.drv` | reused      | 947 ms   |
+
+### Docs-only marker
+
+- Marker: `docs/DESIGN.md` — `<!-- Nix reuse measurement: docs-only. -->`
+- Overall outcome: **ok**
+- Overall duration: **235607 ms**
+
+| Step                          | Installable                                     | Full derivation path                                                                          | Realization | Duration |
+| ----------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------- | -------- |
+| `nix-static-docs`             | `.#checks.x86_64-linux.static-docs`             | `/nix/store/v25qcsgcxc85miyhs5q5ffkr3b6vwm5z-static-docs.drv`                                 | realized    | 19994 ms |
+| `nix-static-code`             | `.#checks.x86_64-linux.static-code`             | `/nix/store/ffyvm2lj7ga73zql98d6yqd70hhw6f71-static-code.drv`                                 | reused      | 13186 ms |
+| `wasm-budget`                 | `.#site`                                        | `/nix/store/xc8g35b5d4f54zw8q40gj6i8w7dy1wfr-jaunder-site.drv`                                | reused      | 57660 ms |
+| `wasm-tests`                  | `.#checks.x86_64-linux.wasm-tests`              | `/nix/store/albnqi2635g1k4kg2hspwysy7nbwmfwh-jaunder-wasm-tests-test-0.1.0.drv`               | reused      | 5331 ms  |
+| `nix-coverage`                | `.#checks.x86_64-linux.coverage`                | `/nix/store/rl39gi0bmxy30b7l2a70mvrkxl29rkp9-jaunder-coverage-0.1.0.drv`                      | reused      | 3786 ms  |
+| `nix-coverage-gate`           | `.#checks.x86_64-linux.coverage-gate`           | `/nix/store/f92hr68dn506ygrqxdy48cg698iqilja-jaunder-coverage-gate.drv`                       | reused      | 9070 ms  |
+| `nix-doctests`                | `.#checks.x86_64-linux.doctests`                | `/nix/store/w797wqxvfdgibrrzmnizzpn5im8v1k05-jaunder-doctests-0.1.0.drv`                      | reused      | 3241 ms  |
+| `nix-doctests-gate`           | `.#checks.x86_64-linux.doctests-gate`           | `/nix/store/4a97h1zspwpgi5ax63a7wxds3g1pf4l2-jaunder-doctests-gate.drv`                       | reused      | 2809 ms  |
+| `nix-elisp-coverage-producer` | `.#checks.x86_64-linux.elisp-coverage-producer` | `/nix/store/ybhdxn1j70kp2lh0d8zfjsww9c19cpgg-vm-test-run-jaunder-elisp-coverage-producer.drv` | reused      | 8106 ms  |
+
+### Web-only marker
+
+- Marker: `web/src/app/render.rs` — `// Nix reuse measurement: web-only.`
+- Overall outcome: **ok**
+- Overall duration: **1160689 ms**
+
+| Step                          | Installable                                     | Full derivation path                                                                          | Realization | Duration  |
+| ----------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------- | --------- |
+| `nix-static-docs`             | `.#checks.x86_64-linux.static-docs`             | `/nix/store/23pdijyd9hypijriqn9n25i2762mksx1-static-docs.drv`                                 | reused      | 2362 ms   |
+| `nix-static-code`             | `.#checks.x86_64-linux.static-code`             | `/nix/store/pv2m2vqc5zkql3czrlvv3pqhhw1y3fy3-static-code.drv`                                 | realized    | 279192 ms |
+| `wasm-budget`                 | `.#site`                                        | `/nix/store/lp9fmybj6ziyjgwfvp3apj6a13356aan-jaunder-site.drv`                                | realized    | 117031 ms |
+| `wasm-tests`                  | `.#checks.x86_64-linux.wasm-tests`              | `/nix/store/albnqi2635g1k4kg2hspwysy7nbwmfwh-jaunder-wasm-tests-test-0.1.0.drv`               | reused      | 5389 ms   |
+| `nix-coverage`                | `.#checks.x86_64-linux.coverage`                | `/nix/store/7bf6fzmnqr9fbi5mp4425ylgd0mici2m-jaunder-coverage-0.1.0.drv`                      | realized    | 248933 ms |
+| `nix-coverage-gate`           | `.#checks.x86_64-linux.coverage-gate`           | `/nix/store/kcjbgp4nsggjqhdmm6g2iapsc2cm3s2s-jaunder-coverage-gate.drv`                       | realized    | 5688 ms   |
+| `nix-doctests`                | `.#checks.x86_64-linux.doctests`                | `/nix/store/a5jf1mpr4nn0in82078kbz87icfqdnv8-jaunder-doctests-0.1.0.drv`                      | realized    | 117034 ms |
+| `nix-doctests-gate`           | `.#checks.x86_64-linux.doctests-gate`           | `/nix/store/w7ihky7lslf9kqlfzbya876zk0gx4n3g-jaunder-doctests-gate.drv`                       | realized    | 4852 ms   |
+| `nix-elisp-coverage-producer` | `.#checks.x86_64-linux.elisp-coverage-producer` | `/nix/store/sv0j9al5zdrjxd945zcmyw1lpmqffvin-vm-test-run-jaunder-elisp-coverage-producer.drv` | realized    | 271031 ms |
+
+### High-stack Rust marker
+
+- Marker: `server/src/lib.rs` — `// Nix reuse measurement: high-stack-rust.`
+- Overall outcome: **ok**
+- Overall duration: **1122763 ms**
+
+| Step                          | Installable                                     | Full derivation path                                                                          | Realization | Duration  |
+| ----------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------- | --------- |
+| `nix-static-docs`             | `.#checks.x86_64-linux.static-docs`             | `/nix/store/23pdijyd9hypijriqn9n25i2762mksx1-static-docs.drv`                                 | reused      | 2572 ms   |
+| `nix-static-code`             | `.#checks.x86_64-linux.static-code`             | `/nix/store/fvmlz7myknyl1s6pnhgkj7lddhsnj0xg-static-code.drv`                                 | realized    | 331471 ms |
+| `wasm-budget`                 | `.#site`                                        | `/nix/store/xc8g35b5d4f54zw8q40gj6i8w7dy1wfr-jaunder-site.drv`                                | reused      | 49518 ms  |
+| `wasm-tests`                  | `.#checks.x86_64-linux.wasm-tests`              | `/nix/store/albnqi2635g1k4kg2hspwysy7nbwmfwh-jaunder-wasm-tests-test-0.1.0.drv`               | reused      | 6350 ms   |
+| `nix-coverage`                | `.#checks.x86_64-linux.coverage`                | `/nix/store/8mb8hhpjci47kjyqngqhw4f1l08xy5r5-jaunder-coverage-0.1.0.drv`                      | realized    | 253549 ms |
+| `nix-coverage-gate`           | `.#checks.x86_64-linux.coverage-gate`           | `/nix/store/2pbcs7l2vkmi65c9v0ishjm2xqlbdsg2-jaunder-coverage-gate.drv`                       | realized    | 5633 ms   |
+| `nix-doctests`                | `.#checks.x86_64-linux.doctests`                | `/nix/store/ic199f3jxchr23cxn1kipcfii9l37vrg-jaunder-doctests-0.1.0.drv`                      | realized    | 136836 ms |
+| `nix-doctests-gate`           | `.#checks.x86_64-linux.doctests-gate`           | `/nix/store/yp5hb67apwhb9wf1fqfq9nkc60ppv7p7-jaunder-doctests-gate.drv`                       | realized    | 5204 ms   |
+| `nix-elisp-coverage-producer` | `.#checks.x86_64-linux.elisp-coverage-producer` | `/nix/store/pj97ypr5br6bjd512y18n82rwl8a6ld9-vm-test-run-jaunder-elisp-coverage-producer.drv` | realized    | 203527 ms |
+
+### Low-stack Rust marker
+
+- Marker: `common/src/text.rs` — `// Nix reuse measurement: low-stack-rust.`
+- Overall outcome: **ok**
+- Overall duration: **1063105 ms**
+
+| Step                          | Installable                                     | Full derivation path                                                                          | Realization | Duration  |
+| ----------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------- | --------- |
+| `nix-static-docs`             | `.#checks.x86_64-linux.static-docs`             | `/nix/store/23pdijyd9hypijriqn9n25i2762mksx1-static-docs.drv`                                 | reused      | 2211 ms   |
+| `nix-static-code`             | `.#checks.x86_64-linux.static-code`             | `/nix/store/rivhip4byyklpmskcy8shwjlksnj5kmv-static-code.drv`                                 | realized    | 241622 ms |
+| `wasm-budget`                 | `.#site`                                        | `/nix/store/bj6im344khyvyrk4z4xwdg1kb7p691w4-jaunder-site.drv`                                | realized    | 105731 ms |
+| `wasm-tests`                  | `.#checks.x86_64-linux.wasm-tests`              | `/nix/store/h4ix80s6l41v1k3jwl4ksjwddcalhnbr-jaunder-wasm-tests-test-0.1.0.drv`               | realized    | 21681 ms  |
+| `nix-coverage`                | `.#checks.x86_64-linux.coverage`                | `/nix/store/z0zdqwpyc5jm0yq1y0qi4p8zpj9f4acy-jaunder-coverage-0.1.0.drv`                      | realized    | 221778 ms |
+| `nix-coverage-gate`           | `.#checks.x86_64-linux.coverage-gate`           | `/nix/store/5qz0m55slb9wk9ky1x253nih0hr5m210-jaunder-coverage-gate.drv`                       | realized    | 5450 ms   |
+| `nix-doctests`                | `.#checks.x86_64-linux.doctests`                | `/nix/store/qvn3adc10smh9fv46ivmdm8d5r2vak6z-jaunder-doctests-0.1.0.drv`                      | realized    | 108277 ms |
+| `nix-doctests-gate`           | `.#checks.x86_64-linux.doctests-gate`           | `/nix/store/bcnm8j8h264pkf9qsswzda5yrmpw15kb-jaunder-doctests-gate.drv`                       | realized    | 5854 ms   |
+| `nix-elisp-coverage-producer` | `.#checks.x86_64-linux.elisp-coverage-producer` | `/nix/store/365ai0nd8wnks0f78mq80cvkrvp6pdp5-vm-test-run-jaunder-elisp-coverage-producer.drv` | realized    | 238807 ms |
+
+### Low-stack macros marker
+
+- Marker: `macros/src/lib.rs` — `// Nix reuse measurement: low-stack-macros.`
+- Overall outcome: **ok**
+- Overall duration: **1087196 ms**
+
+| Step                          | Installable                                     | Full derivation path                                                                          | Realization | Duration  |
+| ----------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------- | --------- |
+| `nix-static-docs`             | `.#checks.x86_64-linux.static-docs`             | `/nix/store/23pdijyd9hypijriqn9n25i2762mksx1-static-docs.drv`                                 | reused      | 2645 ms   |
+| `nix-static-code`             | `.#checks.x86_64-linux.static-code`             | `/nix/store/7xm1h8flhf4nqpwpx24zw9bg49kpmddy-static-code.drv`                                 | realized    | 253260 ms |
+| `wasm-budget`                 | `.#site`                                        | `/nix/store/b1zj8w28v946asgvan9rpvgq5vir98wc-jaunder-site.drv`                                | realized    | 104718 ms |
+| `wasm-tests`                  | `.#checks.x86_64-linux.wasm-tests`              | `/nix/store/v0c0ncpfyljf85wcbqkbn1waknacs8s3-jaunder-wasm-tests-test-0.1.0.drv`               | realized    | 22495 ms  |
+| `nix-coverage`                | `.#checks.x86_64-linux.coverage`                | `/nix/store/3ypl8vs56whiysaqvyqnr2yprxgdxyap-jaunder-coverage-0.1.0.drv`                      | realized    | 218941 ms |
+| `nix-coverage-gate`           | `.#checks.x86_64-linux.coverage-gate`           | `/nix/store/27ija1h87lpnxkndkgqxca28lcyrzcbb-jaunder-coverage-gate.drv`                       | realized    | 4624 ms   |
+| `nix-doctests`                | `.#checks.x86_64-linux.doctests`                | `/nix/store/1wvybzl0jjdy743z70nxjnf34bhyy3mg-jaunder-doctests-0.1.0.drv`                      | realized    | 103244 ms |
+| `nix-doctests-gate`           | `.#checks.x86_64-linux.doctests-gate`           | `/nix/store/6j8gbxydivj2ddyd6nb5rcr0w4s5gs66-jaunder-doctests-gate.drv`                       | realized    | 5295 ms   |
+| `nix-elisp-coverage-producer` | `.#checks.x86_64-linux.elisp-coverage-producer` | `/nix/store/3cfhbcnidbw3lm83ksyp06xilrlg5k42-vm-test-run-jaunder-elisp-coverage-producer.drv` | realized    | 258187 ms |
+
+## Before/after conclusion
+
+The saved warmed baseline reused every recorded Nix output. Relative to that
+baseline's identities, docs-only changed and realized only `static-docs`;
+`static-code`, `.#site`, `wasm-tests`, and all unrelated Nix checks retained
+their identities and reused outputs. Web-only changed and realized `static-code`
+and `.#site`, while `static-docs` and `wasm-tests` retained their identities and
+reused outputs. High-stack Rust changed and realized `static-code` plus the
+broad product coverage, doctest, and Elisp checks, while `static-docs`,
+`.#site`, and `wasm-tests` retained their identities and reused outputs.
+`common` and `macros` each changed and realized every checked boundary that
+depends on their source — `static-code`, site, wasm tests, coverage, doctests,
+and Elisp — while the independent `static-docs` boundary reused. Thus the
+post-change graph matches the required docs/web/server/low-stack matrix and
+removes the pre-change server-to-site/wasm and web-to-wasm invalidation.
+
+The rejected candidates remain unjustified by the measurements: per-ecosystem
+static fan-out would add at least three Nix evaluations, source-tree staging
+copies, and process boundaries to every validation without a representative
+Elisp-, tools-, or end2end-only observed saving. Splitting coverage would repeat
+some or all of its measured 216.2–354.9-second instrumented compile/test pass
+and require a merged verdict; splitting doctests would duplicate its measured
+93.5–176.4-second compilation or lose workspace feature unification and fence
+reconciliation. Splitting the Elisp producer would add a second NixOS VM boot to
+the measured 201.5–306.9-second combined producer and a second artifact handoff.
+E2E is already split into four backend/browser derivations plus its aggregate,
+so it is not a candidate.
