@@ -132,7 +132,7 @@ fn devtool_check_with_cache(name: &'static str, mode: Mode, cache_rustc: bool) -
         program: "cargo",
         args,
         cache_rustc,
-        markdown_eligible: name == "prettier-markdown",
+        markdown_eligible: matches!(name, "prettier-markdown" | "prettier-end2end"),
     }
 }
 
@@ -280,14 +280,14 @@ mod tests {
     }
 
     #[test]
-    fn markdown_prettier_is_the_only_markdown_eligible_static_check() {
+    fn both_prettier_checks_are_markdown_eligible_in_catalog_order() {
         for mode in [Mode::Check, Mode::Fix] {
             let eligible: Vec<_> = specs(mode)
                 .into_iter()
                 .filter(|spec| spec.markdown_eligible)
                 .map(|spec| spec.name)
                 .collect();
-            assert_eq!(eligible, ["prettier-markdown"]);
+            assert_eq!(eligible, ["prettier-markdown", "prettier-end2end"]);
         }
     }
 

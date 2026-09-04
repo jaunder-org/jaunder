@@ -14,10 +14,38 @@ use anyhow::{Context, Result, bail};
 
 use crate::git;
 use crate::result::StepResult;
-use crate::steps::nix::eval_source_probe_drvpaths;
+use crate::steps::nix;
+use crate::steps::nix::SourceProbeDrvPaths;
 
 const WORKTREE_DIR: &str = ".xtask/nix-source-probe.worktree";
-const BOUNDARY_NAMES: [&str; 4] = ["static-docs", "static-code", "site", "wasm-tests"];
+
+/// A derivation identity that source-probe guards. This catalog is the single
+/// authority for the matrix labels used in policy and diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Boundary {
+    StaticDocs,
+    StaticCode,
+    Site,
+    WasmTests,
+}
+
+impl Boundary {
+    const ALL: [Self; 4] = [
+        Self::StaticDocs,
+        Self::StaticCode,
+        Self::Site,
+        Self::WasmTests,
+    ];
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::StaticDocs => "static-docs",
+            Self::StaticCode => "static-code",
+            Self::Site => "site",
+            Self::WasmTests => "wasm-tests",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arm {
@@ -57,18 +85,38 @@ impl Arm {
         }
     }
 
-    const fn expected_changes(self) -> [bool; 4] {
-        match self {
-            Self::Docs => [true, false, false, false],
-            Self::Server => [false, true, false, false],
-            Self::Web => [false, true, true, false],
-            Self::Common | Self::Macros => [false, true, true, true],
-        }
+    const fn expects_change(self, boundary: Boundary) -> bool {
+        matches!(
+            (self, boundary),
+            (Self::Docs, Boundary::StaticDocs)
+                | (Self::Server, Boundary::StaticCode)
+                | (Self::Web, Boundary::StaticCode | Boundary::Site)
+                | (
+                    Self::Common | Self::Macros,
+                    Boundary::StaticCode | Boundary::Site | Boundary::WasmTests,
+                )
+        )
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DrvPaths([String; 4]);
+pub struct DrvPaths {
+    static_docs: String,
+    static_code: String,
+    site: String,
+    wasm_tests: String,
+}
+
+impl DrvPaths {
+    fn get(&self, boundary: Boundary) -> &str {
+        match boundary {
+            Boundary::StaticDocs => &self.static_docs,
+            Boundary::StaticCode => &self.static_code,
+            Boundary::Site => &self.site,
+            Boundary::WasmTests => &self.wasm_tests,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeError {
@@ -114,22 +162,22 @@ impl std::error::Error for ProbeError {}
 /// Compare one perturbation against the exact boundary matrix. Check required
 /// fan-out before over-inclusion so a dropped source is reported first.
 pub fn compare_arm(base: &DrvPaths, arm: Arm, changed: &DrvPaths) -> Result<(), ProbeError> {
-    for (index, expected_change) in arm.expected_changes().into_iter().enumerate() {
-        if expected_change && changed.0[index] == base.0[index] {
+    for boundary in Boundary::ALL {
+        if arm.expects_change(boundary) && changed.get(boundary) == base.get(boundary) {
             return Err(ProbeError::MissingChange {
                 arm,
-                boundary: BOUNDARY_NAMES[index],
-                drv: base.0[index].clone(),
+                boundary: boundary.name(),
+                drv: base.get(boundary).to_owned(),
             });
         }
     }
-    for (index, expected_change) in arm.expected_changes().into_iter().enumerate() {
-        if !expected_change && changed.0[index] != base.0[index] {
+    for boundary in Boundary::ALL {
+        if !arm.expects_change(boundary) && changed.get(boundary) != base.get(boundary) {
             return Err(ProbeError::UnexpectedChange {
                 arm,
-                boundary: BOUNDARY_NAMES[index],
-                base: base.0[index].clone(),
-                changed: changed.0[index].clone(),
+                boundary: boundary.name(),
+                base: base.get(boundary).to_owned(),
+                changed: changed.get(boundary).to_owned(),
             });
         }
     }
@@ -152,18 +200,18 @@ fn parse_drv_path(boundary: &str, output: &str) -> Result<String> {
     Ok(path.to_owned())
 }
 
-fn eval_paths_with(evaluate: impl FnOnce() -> Result<[String; 4]>) -> Result<DrvPaths> {
-    let [docs, code, site, wasm] = evaluate()?;
-    Ok(DrvPaths([
-        parse_drv_path(BOUNDARY_NAMES[0], &docs)?,
-        parse_drv_path(BOUNDARY_NAMES[1], &code)?,
-        parse_drv_path(BOUNDARY_NAMES[2], &site)?,
-        parse_drv_path(BOUNDARY_NAMES[3], &wasm)?,
-    ]))
+fn eval_paths_with(evaluate: impl FnOnce() -> Result<SourceProbeDrvPaths>) -> Result<DrvPaths> {
+    let paths = evaluate()?;
+    Ok(DrvPaths {
+        static_docs: parse_drv_path(Boundary::StaticDocs.name(), &paths.static_docs)?,
+        static_code: parse_drv_path(Boundary::StaticCode.name(), &paths.static_code)?,
+        site: parse_drv_path(Boundary::Site.name(), &paths.site)?,
+        wasm_tests: parse_drv_path(Boundary::WasmTests.name(), &paths.wasm_tests)?,
+    })
 }
 
 fn eval_paths(dir: &Path) -> Result<DrvPaths> {
-    eval_paths_with(|| eval_source_probe_drvpaths(dir))
+    eval_paths_with(|| nix::eval_source_probe_drvpaths(dir))
 }
 
 type WorktreeRemover<'a> =
@@ -283,19 +331,24 @@ fn run_probe() -> Result<()> {
 mod tests {
     use super::*;
 
-    fn paths(names: [&str; 4]) -> DrvPaths {
-        DrvPaths(names.map(str::to_owned))
+    fn paths(static_docs: &str, static_code: &str, site: &str, wasm_tests: &str) -> DrvPaths {
+        DrvPaths {
+            static_docs: static_docs.to_owned(),
+            static_code: static_code.to_owned(),
+            site: site.to_owned(),
+            wasm_tests: wasm_tests.to_owned(),
+        }
     }
 
     #[test]
     fn matrix_accepts_exact_expected_changes() {
-        let base = paths(["docs", "code", "site", "wasm"]);
+        let base = paths("docs", "code", "site", "wasm");
         for (arm, changed) in [
-            (Arm::Docs, paths(["docs-2", "code", "site", "wasm"])),
-            (Arm::Server, paths(["docs", "code-2", "site", "wasm"])),
-            (Arm::Web, paths(["docs", "code-2", "site-2", "wasm"])),
-            (Arm::Common, paths(["docs", "code-2", "site-2", "wasm-2"])),
-            (Arm::Macros, paths(["docs", "code-2", "site-2", "wasm-2"])),
+            (Arm::Docs, paths("docs-2", "code", "site", "wasm")),
+            (Arm::Server, paths("docs", "code-2", "site", "wasm")),
+            (Arm::Web, paths("docs", "code-2", "site-2", "wasm")),
+            (Arm::Common, paths("docs", "code-2", "site-2", "wasm-2")),
+            (Arm::Macros, paths("docs", "code-2", "site-2", "wasm-2")),
         ] {
             assert_eq!(compare_arm(&base, arm, &changed), Ok(()));
         }
@@ -303,12 +356,12 @@ mod tests {
 
     #[test]
     fn matrix_rejects_missing_required_fan_out() {
-        let base = paths(["docs", "code", "site", "wasm"]);
+        let base = paths("docs", "code", "site", "wasm");
         assert!(matches!(
             compare_arm(
                 &base,
                 Arm::Common,
-                &paths(["docs", "code", "site-2", "wasm-2"])
+                &paths("docs", "code", "site-2", "wasm-2")
             ),
             Err(ProbeError::MissingChange {
                 boundary: "static-code",
@@ -319,12 +372,12 @@ mod tests {
 
     #[test]
     fn matrix_rejects_over_inclusion() {
-        let base = paths(["docs", "code", "site", "wasm"]);
+        let base = paths("docs", "code", "site", "wasm");
         assert!(matches!(
             compare_arm(
                 &base,
                 Arm::Server,
-                &paths(["docs", "code-2", "site-2", "wasm"])
+                &paths("docs", "code-2", "site-2", "wasm")
             ),
             Err(ProbeError::UnexpectedChange {
                 boundary: "site",

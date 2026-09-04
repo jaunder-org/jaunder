@@ -478,33 +478,39 @@ Neither state attributes compilation versus substitution.
 
 For a controlled record, use a disposable checkout at the comparison commit.
 Create `.xtask/measurements`, run this exact command once as an unrecorded
-warm-up, then run it once more and copy the JSON stdout verbatim to
-`post-warm-baseline.json`:
+warm-up, then run it once more:
 
 ```bash
 devtool run -- cargo xtask --json validate --no-e2e --allow-dirty
 ```
 
+`devtool run` prints a wrapper summary on the terminal. From that summary, copy
+the captured child stdout at `stdout.path` — or equivalently copy
+`.xtask/last-result.json` — to the explicitly named sidecar
+`.xtask/measurements/post-warm-baseline.json`. Do **not** copy the wrapper
+summary: the child JSON is the parseable result with `steps[]`.
+
 Do not purge Nix/store caches. Then append **exactly one** marker, rerun that
-same command, copy its JSON stdout verbatim to the corresponding ignored
-sidecar, and remove the marker so the named source file is byte-identical before
-the next arm:
+same command, copy its captured child stdout (`stdout.path`, or
+`.xtask/last-result.json`) to the corresponding explicit sidecar path below, and
+remove the marker so the named source file is byte-identical before the next
+arm:
 
-| Arm              | Marker file             | Exact marker                                  | Sidecar                      |
-| ---------------- | ----------------------- | --------------------------------------------- | ---------------------------- |
-| docs-only        | `docs/DESIGN.md`        | `<!-- Nix reuse measurement: docs-only. -->`  | `post-docs-only.json`        |
-| web-only         | `web/src/app/render.rs` | `// Nix reuse measurement: web-only.`         | `post-web-only.json`         |
-| high-stack-rust  | `server/src/lib.rs`     | `// Nix reuse measurement: high-stack-rust.`  | `post-high-stack-rust.json`  |
-| low-stack-rust   | `common/src/text.rs`    | `// Nix reuse measurement: low-stack-rust.`   | `post-low-stack-rust.json`   |
-| low-stack-macros | `macros/src/lib.rs`     | `// Nix reuse measurement: low-stack-macros.` | `post-low-stack-macros.json` |
+| Arm              | Marker file             | Exact marker                                  | Sidecar path                                     |
+| ---------------- | ----------------------- | --------------------------------------------- | ------------------------------------------------ |
+| docs-only        | `docs/DESIGN.md`        | `<!-- Nix reuse measurement: docs-only. -->`  | `.xtask/measurements/post-docs-only.json`        |
+| web-only         | `web/src/app/render.rs` | `// Nix reuse measurement: web-only.`         | `.xtask/measurements/post-web-only.json`         |
+| high-stack-rust  | `server/src/lib.rs`     | `// Nix reuse measurement: high-stack-rust.`  | `.xtask/measurements/post-high-stack-rust.json`  |
+| low-stack-rust   | `common/src/text.rs`    | `// Nix reuse measurement: low-stack-rust.`   | `.xtask/measurements/post-low-stack-rust.json`   |
+| low-stack-macros | `macros/src/lib.rs`     | `// Nix reuse measurement: low-stack-macros.` | `.xtask/measurements/post-low-stack-macros.json` |
 
-Preserve a nonzero arm's JSON and its actual `ok` outcome: it is evidence, not a
-reason to rerun or suppress a failure. The expected identity/reuse matrix is
-docs → `static-docs` only; web → `static-code` + `.#site`; server →
-`static-code` only among the static/site/wasm boundaries; common/macros →
-`static-code` + `.#site` + `wasm-tests`. Unrelated Nix checks retain their
-baseline identity and reuse. Normalize every Nix row beside the pre-change
-record in
+Preserve a nonzero arm's child-result JSON and its actual `ok` outcome: it is
+evidence, not a reason to rerun or suppress a failure. The expected
+identity/reuse matrix is docs → `static-docs` only; web → `static-code` +
+`.#site`; server → `static-code` only among the static/site/wasm boundaries;
+common/macros → `static-code` + `.#site` + `wasm-tests`. Unrelated Nix checks
+retain their baseline identity and reuse. Normalize every Nix row beside the
+pre-change record in
 `docs/superpowers/research/2026-09-04-issue-1289-nix-invalidation-boundaries.md`.
 `cargo xtask validate --no-e2e` remains the full non-e2e aggregate; full
 `cargo xtask validate` additionally runs all four e2e combinations and
@@ -1117,12 +1123,16 @@ dependent checked boundary. CI runs this eval-only drift probe. It neither
 builds outputs nor purges the store, and says nothing about remote-cache
 behavior.
 
-To reproduce the controlled measurements, first run one unrecorded
+To reproduce the controlled measurements, run one unrecorded
 `devtool run -- cargo xtask --json validate --no-e2e --allow-dirty` warm-up,
-then save the warm baseline JSON. Add exactly one of the markers recorded in
+then run it again and copy the captured child stdout at the wrapper summary's
+`stdout.path` (or `.xtask/last-result.json`) to
+`.xtask/measurements/post-warm-baseline.json`; do not save the wrapper summary.
+Add exactly one marker recorded in
 `docs/superpowers/research/2026-09-04-issue-1289-nix-invalidation-boundaries.md`,
-run that exact command, save stdout JSON, and remove the marker to restore the
-source bytes before the next arm. Do not purge Nix/store caches. The full
+rerun that exact command, copy the child JSON to the corresponding named
+`.xtask/measurements/post-{docs-only,web-only,high-stack-rust,low-stack-rust,low-stack-macros}.json`
+sidecar, and remove the marker to restore the source bytes before the next arm.
 `cargo xtask validate` remains the aggregate ship gate: it retains the
 `--no-e2e` surface and adds all four e2e combinations and server-function
 coverage verification.

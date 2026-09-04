@@ -3,6 +3,7 @@
 //! deliberately extensible: `coverage emit`, `csr-bundle`, and `seed-e2e` exist
 //! today; `pg`-migration of the remaining shell scripts is tracked separately.
 
+use check::CheckGroup;
 use clap::{Parser, Subcommand};
 
 mod check;
@@ -57,7 +58,7 @@ struct CheckArgs {
     name: Option<String>,
     /// Run one stable static check group.
     #[arg(long, conflicts_with_all = ["name", "all"])]
-    group: Option<check::CheckGroup>,
+    group: Option<CheckGroup>,
     /// Run all migrated static checks.
     #[arg(long, conflicts_with = "name")]
     all: bool,
@@ -208,7 +209,7 @@ mod tests {
             docs.command,
             Command::Check(CheckArgs {
                 name: None,
-                group: Some(check::CheckGroup::Docs),
+                group: Some(CheckGroup::Docs),
                 all: false,
                 ..
             })
@@ -218,7 +219,7 @@ mod tests {
         assert!(matches!(
             code.command,
             Command::Check(CheckArgs {
-                group: Some(check::CheckGroup::Code),
+                group: Some(CheckGroup::Code),
                 ..
             })
         ));
