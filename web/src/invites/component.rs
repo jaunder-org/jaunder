@@ -1,21 +1,19 @@
 //! Invites vertical — wasm-only UI (ADR-0070): the invite management page.
 
-use super::{Create, CreateInviteRequest, Info};
+use super::{Create, CreateInviteRequest, Info, PageAccess, resolve_page_access};
+use crate::auth;
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
 use crate::registration;
 use crate::topbar::Topbar;
-use common::{
-    MutationOutcome, email::Email, invite::InviteTtlHours, registration::RegistrationPolicy,
-};
+use common::{MutationOutcome, email::Email, invite::InviteTtlHours};
 use leptos::prelude::*;
 
-/// Invites page — lists invites (metadata only; raw codes are never sent to the client,
-/// #400) and creates new ones, **emailing the invitation link** to a recipient (#433).
-/// A code is never shown here — it reaches the invitee only as the link in the email
-/// (or the `jaunder user invite` CLI URL for manual sharing).
-/// On a non-invite-only site it renders a client-side "Page not found." fallback —
-/// authed routes are static CSR shells, so there is no SSR 404 (ADR-0040/0041/#180).
+/// Invites vertical — creates new invitations, emailing each invitation link to its recipient
+/// (#433). The ledger contains metadata only; raw codes never reach the client (#400).
+///
+/// An unavailable policy or an unauthorized viewer sees the client-side "Page not found."
+/// fallback — authed routes are static CSR shells, so there is no SSR 404 (ADR-0040/0041/#180).
 #[component]
 pub fn InvitesPage() -> impl IntoView {
     let create_action = ServerAction::<Create>::new();
@@ -27,39 +25,36 @@ pub fn InvitesPage() -> impl IntoView {
             successful_creates.update(|version| *version += 1);
         }
     });
-    let policy = Resource::new(|| (), |()| registration::get_policy());
-    let invites = Resource::new(move || successful_creates.get(), |_| super::list());
+    let session = auth::use_session();
+    let access = Resource::new(
+        || (),
+        move |()| {
+            let reconcile = session.reconcile;
+            async move { resolve_page_access(registration::get_policy().await, reconcile.await) }
+        },
+    );
 
     view! {
-        <Topbar title="Invites" sub="Manage codes" />
+        <Topbar title="Invites" sub="Manage invitations" />
         <div class="j-scroll">
             <div class="j-page">
                 <Suspense fallback=|| {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
                     {move || Suspend::new(async move {
-                        if !matches!(
-                            policy.await,
-                            Ok(
-                                RegistrationPolicy::OperatorInvites
-                                | RegistrationPolicy::MemberInvites,
-                            )
-                        ) {
-                            return view! { <p>"Page not found."</p> }.into_any();
-                        }
-                        match invites.await {
-                            Ok(list) => {
+                        match access.await {
+                            Ok(PageAccess::Issuer { show_ledger }) => {
                                 view! {
-                                    <InviteCreateForm action=create_action />
-                                    <InviteCreateOutcome action=create_action />
-                                    <ul>
-                                        {list
-                                            .into_iter()
-                                            .map(|i| render_invite_row(&i))
-                                            .collect::<Vec<_>>()}
-                                    </ul>
+                                    <InviteIssuer
+                                        action=create_action
+                                        successful_creates
+                                        show_ledger
+                                    />
                                 }
                                     .into_any()
+                            }
+                            Ok(PageAccess::Unavailable) => {
+                                view! { <p>"Page not found."</p> }.into_any()
                             }
                             Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                         }
@@ -67,6 +62,47 @@ pub fn InvitesPage() -> impl IntoView {
                 </Suspense>
             </div>
         </div>
+    }
+}
+
+#[component]
+fn InviteIssuer(
+    action: ServerAction<Create>,
+    successful_creates: RwSignal<u32>,
+    show_ledger: bool,
+) -> impl IntoView {
+    view! {
+        <InviteCreateForm action />
+        <InviteCreateOutcome action />
+        {show_ledger.then(|| view! { <InviteLedger successful_creates /> })}
+    }
+}
+
+#[component]
+fn InviteLedger(successful_creates: RwSignal<u32>) -> impl IntoView {
+    let invites = Resource::new(move || successful_creates.get(), |_| super::list());
+
+    view! {
+        <Suspense fallback=|| {
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
+        }>
+            {move || Suspend::new(async move {
+                match invites.await {
+                    Ok(list) => {
+                        view! {
+                            <ul>
+                                {list
+                                    .into_iter()
+                                    .map(|i| render_invite_row(&i))
+                                    .collect::<Vec<_>>()}
+                            </ul>
+                        }
+                            .into_any()
+                    }
+                    Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                }
+            })}
+        </Suspense>
     }
 }
 
@@ -117,11 +153,10 @@ fn InviteCreateForm(action: ServerAction<Create>) -> impl IntoView {
 }
 
 /// The create-invite feedback line: on success a "Invitation emailed to …" note that
-/// echoes the recipient the operator just submitted (read back from the action's own
-/// input, since the server fn returns nothing), on failure the error.
+/// echoes the recipient the issuer just submitted (read back from the action's own input, since
+/// the server fn returns nothing), on failure the error.
 ///
-/// Split out of [`InvitesPage`] (#306) so that page's `view!` carries only the
-/// invite-only / list-loaded decisions.
+/// Split out of [`InvitesPage`] (#306) so that page's `view!` carries only creation feedback.
 #[component]
 fn InviteCreateOutcome(action: ServerAction<Create>) -> impl IntoView {
     view! {

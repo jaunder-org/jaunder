@@ -59,7 +59,7 @@ Out:
     list calls, unauthorized no-side-effect behavior, metadata responses without
     raw codes, mail delivery, and local CLI policy gating.
 
-- [ ] Task 3: Project invitation authority through the CSR interface
+- [x] Task 3: Project invitation authority through the CSR interface
   - Depends on: Tasks 1 and 2.
   - Contract: `/invites` remains the single route. `Closed`/`Open` render it
     unavailable; `OperatorInvites` gives operators the send form plus ledger and

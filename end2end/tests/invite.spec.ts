@@ -12,14 +12,14 @@ import { SEL } from "./selectors";
 import { extractInviteCode } from "./mail";
 import { seedConfigViaTool } from "./seed";
 
-// #433: the invitation round trip. These tests flip `site.registration_policy`
-// to `operator_invites` — a global site-config singleton — so this spec runs in the
-// serial `*-admin` Playwright project (after the parallel main project), exactly
-// like admin-site.spec, and never overlaps specs that register users under the
-// seeded `open` policy. The default is restored in afterAll.
+// #433: the invitation round trip and policy projection. These tests flip
+// `site.registration_policy` — a global site-config singleton — so this spec runs in the
+// serial `*-admin` Playwright project (after the parallel main project), exactly like
+// admin-site.spec, and never overlaps specs that register users under the seeded `open`
+// policy. The default is restored in afterAll.
 test.afterAll(async () => {
-  // Restore both globals this spec mutates so a later serial `-admin` spec can't
-  // inherit them (Test A sets base_url; both tests set the policy).
+  // Restore the globals this spec mutates so a later serial `-admin` spec cannot
+  // inherit them (Test A sets base_url; every case sets the policy).
   await seedConfigViaTool("site.registration_policy", "open");
   await seedConfigViaTool("site.base_url", "");
 });
@@ -43,6 +43,7 @@ test("invite link registration completes end-to-end", async ({
   // we just set).
   await signInAs(page, "testoperator");
   await goto(page, "/invites");
+  await expect(page.locator('a[href="/invites"]')).toBeVisible();
   await page.fill('input[name="recipient_email"]', user.email);
   await page.fill('input[name="expires_in_hours"]', "37");
   await click(page, SEL.submit);
@@ -164,39 +165,91 @@ test("invite creation invalid fields do not dispatch", async ({ page }) => {
   expect(createRequests).toBe(0);
 });
 
-// Test B — no-code guidance: in operator-issued invitation mode, visiting /register with
-// no invite_code shows the guidance text and renders no register submit button.
-test("operator-invites /register with no code shows guidance and no submit button", async ({
+// Test B — no-code guidance: either invitation policy requires an invitation link before
+// registration, so `/register` without one shows guidance rather than a submit button.
+for (const policy of ["operator_invites", "member_invites"]) {
+  test(`invitation-required /register with no code shows guidance under ${policy}`, async ({
+    page,
+  }) => {
+    // Holdout (spec D6): the invitation-required guidance branch for each issuer role.
+    await seedConfigViaTool("site.registration_policy", policy);
+    const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
+
+    await goto(page, "/register", { timeout: firstNav });
+
+    await expect(
+      page.locator('p:has-text("You need an invitation link to register")'),
+    ).toBeVisible();
+    // The guidance branch replaces the whole form — no register submit button.
+    await expect(
+      page.locator('.j-page-narrow button[type="submit"]'),
+    ).toHaveCount(0);
+  });
+}
+
+// Test C — policy guards: unavailable policies hide the navigation link and render the
+// client-side fallback rather than an SSR 404.
+for (const policy of ["closed", "open"]) {
+  test(`invites page is unavailable without navigation under ${policy}`, async ({
+    page,
+  }) => {
+    await seedConfigViaTool("site.registration_policy", policy);
+    const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
+
+    await signInAs(page, "testoperator");
+    await goto(page, "/invites", { timeout: firstNav });
+
+    await expect(page.locator('p:has-text("Page not found.")')).toBeVisible();
+    await expect(page.locator('input[name="recipient_email"]')).toHaveCount(0);
+    await expect(page.locator('a[href="/invites"]')).toHaveCount(0);
+  });
+}
+
+test("operator-invites denies members and hides navigation", async ({
   page,
 }) => {
-  // Holdout (spec D6): the invitation-required guidance branch.
   await seedConfigViaTool("site.registration_policy", "operator_invites");
-  const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
+  await signInAs(page, "testlogin");
 
-  await goto(page, "/register", { timeout: firstNav });
-
-  await expect(
-    page.locator('p:has-text("You need an invitation link to register")'),
-  ).toBeVisible();
-  // The guidance branch replaces the whole form — no register submit button.
-  await expect(
-    page.locator('.j-page-narrow button[type="submit"]'),
-  ).toHaveCount(0);
-});
-
-// Test C — policy guard: on a non-invite-only site the authed /invites page
-// renders the "Page not found." fallback and no create form. Locks the
-// client-side policy-gating (#320 removed the dead SSR set_status 404). Self-sets
-// `open`, so placement is order-independent; the file's afterAll restores `open`.
-test("invites page shows not-found fallback when not invite-only", async ({
-  page,
-}) => {
-  await seedConfigViaTool("site.registration_policy", "open");
-  const firstNav = slowBrowserFirstNavigationTimeoutMs(test.info(), 15_000);
-
-  await signInAs(page, "testoperator");
-  await goto(page, "/invites", { timeout: firstNav });
+  await goto(page, "/invites");
 
   await expect(page.locator('p:has-text("Page not found.")')).toBeVisible();
   await expect(page.locator('input[name="recipient_email"]')).toHaveCount(0);
+  await expect(page.locator('a[href="/invites"]')).toHaveCount(0);
+});
+
+test("member-invites members issue invitations without fetching the ledger", async ({
+  page,
+}) => {
+  await seedConfigViaTool("site.registration_policy", "member_invites");
+  await signInAs(page, "testlogin");
+
+  let listRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/invites/list")) listRequests += 1;
+  });
+  await goto(page, "/invites");
+
+  await waitForSelector(page, 'input[name="recipient_email"]');
+  await expect(page.locator('a[href="/invites"]')).toBeVisible();
+  expect(listRequests).toBe(0);
+  await expect(page.locator(".j-page > ul")).toHaveCount(0);
+});
+
+test("member-invites operators issue invitations and see the ledger", async ({
+  page,
+}) => {
+  await seedConfigViaTool("site.registration_policy", "member_invites");
+  await signInAs(page, "testoperator");
+
+  let listRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/invites/list")) listRequests += 1;
+  });
+  await goto(page, "/invites");
+
+  await waitForSelector(page, 'input[name="recipient_email"]');
+  await expect(page.locator('a[href="/invites"]')).toBeVisible();
+  await expect.poll(() => listRequests).toBe(1);
+  await expect(page.locator(".j-page > ul")).toHaveCount(1);
 });

@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use common::root_relative_url::RootRelativeUrl;
+use common::{registration::RegistrationPolicy, root_relative_url::RootRelativeUrl};
 use maud::html;
 
 use crate::html::Markup;
@@ -17,7 +17,7 @@ pub(super) struct NavItem {
     pub(super) requires_operator: bool,
 }
 
-pub(super) static NAV_ITEMS: LazyLock<[NavItem; 15]> = LazyLock::new(|| {
+pub(super) static NAV_ITEMS: LazyLock<[NavItem; 16]> = LazyLock::new(|| {
     [
         NavItem {
             key: "home",
@@ -120,6 +120,14 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 15]> = LazyLock::new(|| {
             requires_operator: false,
         },
         NavItem {
+            key: "invites",
+            label: "Invites",
+            icon_path: Icons::PLUS,
+            href: Some(root_relative_url("/invites")),
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
             key: "admin-backups",
             label: "Configure Backups",
             icon_path: Icons::SHIELD,
@@ -155,11 +163,16 @@ fn root_relative_url(path: &'static str) -> RootRelativeUrl {
     url
 }
 
-/// Returns linked items visible to an authenticated viewer at the requested privilege.
-pub(super) fn nav_items(is_operator: bool) -> impl Iterator<Item = &'static NavItem> {
-    NAV_ITEMS
-        .iter()
-        .filter(move |item| item.href.is_some() && (!item.requires_operator || is_operator))
+/// Returns linked items visible to an authenticated viewer for the projected policy and role.
+pub(super) fn nav_items(
+    policy: RegistrationPolicy,
+    is_operator: bool,
+) -> impl Iterator<Item = &'static NavItem> {
+    NAV_ITEMS.iter().filter(move |item| {
+        item.href.is_some()
+            && (!item.requires_operator || is_operator)
+            && (item.key != "invites" || policy.may_issue_invitation(is_operator))
+    })
 }
 
 /// The static demo "Sources" rows in the sidebar: `(proto, name, sub)`.
@@ -189,7 +202,7 @@ pub(crate) fn render_sidebar(active_key: &str) -> Markup {
             span class="j-kbd" { "\u{2318}K" }
         }
         nav class="j-nav" {
-            @for item in nav_items(false) {
+            @for item in nav_items(RegistrationPolicy::Closed, false) {
                 @if let Some(href) = &item.href {
                     @if !item.requires_auth {
                         a class={ "j-nav-item" @if item.key == active_key { " is-active" } }
@@ -248,7 +261,7 @@ mod tests {
         assert!(!html.contains(">Drafts<"), "{html}");
         assert!(!html.contains(">Scheduled<"), "{html}");
         assert!(!html.contains(">History<"), "{html}");
-        assert!(!html.contains(">Settings<"), "{html}");
+        assert!(!html.contains(">Invites<"), "{html}");
         assert!(!html.contains(">Configure Backups<"), "{html}");
         assert!(!html.contains(">Site Settings<"), "{html}");
         assert!(!html.contains(">WebSub Recovery<"), "{html}");
@@ -287,6 +300,7 @@ mod tests {
                 ("media", "/media"),
                 ("audiences", "/audiences"),
                 ("settings", "/profile"),
+                ("invites", "/invites"),
                 ("admin-backups", "/admin/backups"),
                 ("admin-site", "/admin/site"),
                 ("admin-websub", "/admin/websub"),
@@ -302,11 +316,13 @@ mod tests {
 
     #[test]
     fn operator_destinations_are_visible_only_to_operators() {
-        let viewer_items = nav_items(false).map(|item| item.key).collect::<Vec<_>>();
+        let viewer_items = nav_items(RegistrationPolicy::Closed, false)
+            .map(|item| item.key)
+            .collect::<Vec<_>>();
         assert!(!viewer_items.contains(&"admin-backups"));
         assert!(!viewer_items.contains(&"admin-site"));
 
-        let operator_items = nav_items(true)
+        let operator_items = nav_items(RegistrationPolicy::Closed, true)
             .map(|item| {
                 let Some(href) = item.href.as_ref() else {
                     unreachable!("nav_items returns linked items");
@@ -323,5 +339,24 @@ mod tests {
             operator_items.contains(&("admin-site", "/admin/site")),
             "{operator_items:?}"
         );
+    }
+
+    #[test]
+    fn invitation_destination_matches_policy_and_role_authority() {
+        let cases = [
+            (RegistrationPolicy::Closed, false, false),
+            (RegistrationPolicy::Closed, true, false),
+            (RegistrationPolicy::OperatorInvites, false, false),
+            (RegistrationPolicy::OperatorInvites, true, true),
+            (RegistrationPolicy::MemberInvites, false, true),
+            (RegistrationPolicy::MemberInvites, true, true),
+            (RegistrationPolicy::Open, false, false),
+            (RegistrationPolicy::Open, true, false),
+        ];
+
+        for (policy, is_operator, expected) in cases {
+            let visible = nav_items(policy, is_operator).any(|item| item.key == "invites");
+            assert_eq!(visible, expected, "{policy:?}, operator={is_operator}");
+        }
     }
 }

@@ -13,10 +13,9 @@ use common::{
 };
 use leptos::prelude::*;
 
-/// Guidance shown on `/register` under an invitation policy when the URL carries
-/// no invite code: the visitor did not follow an invitation link, so a register
-/// form would only fail with "invite code required."
-/// Exercised by the invite e2e (Test B), not host tests.
+/// Guidance shown on `/register` under either invitation policy when the URL carries no invite
+/// code: the visitor did not follow an invitation link, so a register form would only fail with
+/// "invite code required." Exercised by the invite e2e (Test B), not host tests.
 #[component]
 fn InviteLinkRequired() -> impl IntoView {
     view! {
