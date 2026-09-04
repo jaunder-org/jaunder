@@ -17,6 +17,7 @@ import {
 } from "./helpers";
 import { fetchFeedSnapshot } from "./feeds";
 import { navigateInApp } from "./navigate";
+import { openComposerFromSidebar } from "./posts";
 import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 
@@ -32,14 +33,18 @@ import { SEL } from "./selectors";
 // posts), so "cannot see" is asserted as `.error` "Post not found" on the
 // permalink and absence of the title on the timeline.
 
-/** Open the editor, write a titled post, pick a base audience, and publish. */
+/** Open the composer, write a titled post, pick a base audience, and publish. */
 async function publishWithBaseAudience(
   page: Page,
   title: string,
   base: "public" | "subscribers" | "private",
+  openInApp = false,
 ): Promise<string> {
-  await goto(page, "/posts/new");
-  await waitForSelector(page, "#audience-base");
+  if (openInApp) {
+    await openComposerFromSidebar(page);
+  } else {
+    await goto(page, "/posts/new");
+  }
   await page.fill(SEL.postBody, `# ${title}\n\nBody for ${title}`);
   await page.selectOption("#audience-base", base);
   await click(page, SEL.publishButton("true"));
@@ -290,13 +295,8 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
   );
   await page.unroute("**/api/audiences/list_members");
 
-  // Author publishes a post targeted to subscribers + the Friends audience.
-  allowSecondBoot(
-    page,
-    "the app exposes no link to /posts/new anywhere, so the composer cannot be reached by an in-app control",
-  );
-  await goto(page, "/posts/new");
-  await waitForSelector(page, "#audience-base");
+  // The authenticated sidebar is the real in-app route to the full composer.
+  await openComposerFromSidebar(page);
   await page.fill(SEL.postBody, "# Friends Post\n\nBody for Friends Post");
   await page.selectOption("#audience-base", "subscribers");
   await page
@@ -345,11 +345,16 @@ test("Public post is visible to anonymous and appears in the feed; Subscribers p
     "Public Broadcast",
     "public",
   );
-  allowSecondBoot(
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/app"]'), {
+    url: "/app",
+    ready: '.j-topbar h1:has-text("Home")',
+  });
+  await publishWithBaseAudience(
     page,
-    "the second post needs the composer again and the app exposes no link to /posts/new",
+    "Feed Subscribers Only",
+    "subscribers",
+    true,
   );
-  await publishWithBaseAudience(page, "Feed Subscribers Only", "subscribers");
 
   // Anonymous visitor sees the public post on its permalink.
   await expectPostVisible(
