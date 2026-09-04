@@ -53,7 +53,7 @@ fn rejects_test_helper(diagnostic: &str) -> bool {
 
 fn manifest(common: &Path) -> String {
     format!(
-        "[package]\nname = \"rendered-html-boundary-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\ncommon = {{ path = {common:?}, default-features = false }}\n",
+        "[package]\nname = \"rendered-html-boundary-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\ncommon = {{ path = {common:?}, default-features = false }}\n# tinyvec 1.13.0 breaks alloc without std (upstream #225).\n# Jaunder #1362 tracks removal after upstream tinyvec PR #226 ships.\ntinyvec = \"=1.11.0\"\n",
         common = common.display().to_string(),
     )
 }
@@ -153,6 +153,7 @@ mod tests {
         let rendered = manifest(Path::new("/repo/common"));
         assert!(rendered.contains("default-features = false"));
         assert!(rendered.contains("path = \"/repo/common\""));
+        assert!(rendered.contains("tinyvec = \"=1.11.0\""));
     }
 
     #[test]

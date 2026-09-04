@@ -1,5 +1,5 @@
 //! The `e2e-scaffold` static check (#792): forbids committing a non-empty `e2eSalt` in
-//! `flake.nix`.
+//! `nix/checks.nix`.
 //!
 //! The salt exists so an e2e measurement run can be built without nix serving a cached
 //! suite result — see `docs/observability.md` §"#792 — the per-test warmup A/B". Left
@@ -9,7 +9,7 @@
 //!
 //! Deliberately a **host-side** xtask step, never wired into the e2e derivations: a
 //! salted local `nix build`/`traces run` must keep working, since that is the whole
-//! point of the salt. (`flake.nix` excludes `/xtask/` from its source filter, so a
+//! point of the salt. (`nix/packages.nix` excludes `/xtask/` from its source filter, so a
 //! derivation could not invoke this even by accident.)
 //!
 //! Accepted limitation: matching is per-line, so a reformatting that splits a literal across
@@ -20,7 +20,7 @@
 use crate::result::{CommandResult, StepResult};
 
 /// Where the scaffolding literals live.
-const FLAKE: &str = "flake.nix";
+const CHECKS: &str = "nix/checks.nix";
 
 /// The committed (safe) form of the literal, matched against a whitespace-trimmed line.
 const SAFE_SALT: &str = r#"e2eSalt = "";"#;
@@ -31,7 +31,7 @@ const SAFE_SALT: &str = r#"e2eSalt = "";"#;
 const SALT_DECL: &str = "e2eSalt =";
 
 /// The failure detail when the measurement salt is left set, or `None` when it is at its
-/// committed default. Pure given `flake.nix`'s source, so it is unit-tested directly.
+/// committed default. Pure given `nix/checks.nix`'s source, so it is unit-tested directly.
 ///
 /// A literal that is **missing entirely** is a failure, not a pass: renaming or deleting it
 /// must not quietly disable the guard.
@@ -48,7 +48,7 @@ pub fn problems(source: &str) -> Option<String> {
             saw_salt = true;
             if line != SAFE_SALT {
                 lines.push(format!(
-                    "{FLAKE}:{}: `e2eSalt` is set — revert it to `\"\"` before committing. \
+                    "{CHECKS}:{}: `e2eSalt` is set — revert it to `\"\"` before committing. \
                      A non-empty salt changes every e2e derivation hash, so CI rebuilds all \
                      four combos from scratch with no cache hit and nothing fails loudly (#792)",
                     i + 1
@@ -59,7 +59,7 @@ pub fn problems(source: &str) -> Option<String> {
 
     if !saw_salt {
         lines.push(format!(
-            "{FLAKE}: `e2eSalt` declaration not found — the guard cannot verify the #792 \
+            "{CHECKS}: `e2eSalt` declaration not found — the guard cannot verify the #792 \
              measurement salt is unset. If the literal was renamed or removed, update this \
              check rather than leaving it matching nothing"
         ));
@@ -68,11 +68,11 @@ pub fn problems(source: &str) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
-/// Read `flake.nix` and push the result step. An unreadable `flake.nix` is a hard
+/// Read `nix/checks.nix` and push the result step. An unreadable `nix/checks.nix` is a hard
 /// failure, so a moved/renamed file can never quietly disable the guard.
 pub fn run(result: &mut CommandResult) {
-    let step = match std::fs::read_to_string(FLAKE) {
-        Err(e) => StepResult::fail("e2e-scaffold").detail(format!("cannot read {FLAKE}: {e}")),
+    let step = match std::fs::read_to_string(CHECKS) {
+        Err(e) => StepResult::fail("e2e-scaffold").detail(format!("cannot read {CHECKS}: {e}")),
         Ok(source) => match problems(&source) {
             None => StepResult::ok("e2e-scaffold"),
             Some(detail) => StepResult::fail("e2e-scaffold").detail(detail),
@@ -85,7 +85,7 @@ pub fn run(result: &mut CommandResult) {
 mod tests {
     use super::problems;
 
-    /// The literal at its committed value, in the shape `flake.nix` actually uses.
+    /// The literal at its committed value, in the shape `nix/checks.nix` actually uses.
     const CLEAN: &str = r#"
         # Cache-busting salt for e2e measurement runs (#792).
         e2eSalt = "";

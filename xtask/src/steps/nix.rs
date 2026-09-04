@@ -18,7 +18,7 @@ use super::process::Process;
 use crate::nix_build;
 use crate::result::{CommandResult, NixReport, StepResult};
 
-/// The flake checks are Linux-only (`optionalAttrs isLinux` in flake.nix);
+/// The flake checks are Linux-only (`optionalAttrs isLinux` in `nix/checks.nix`);
 /// the project's CI host is x86_64-linux.
 const SYSTEM: &str = "x86_64-linux";
 
@@ -2004,12 +2004,13 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
     }
     #[test]
     fn e2e_vm_captures_report_and_manifest_before_asserting_playwright_status() {
-        let flake = std::fs::read_to_string(
+        let checks = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("..")
-                .join("flake.nix"),
+                .join("nix")
+                .join("checks.nix"),
         )
-        .expect("flake.nix");
+        .expect("nix/checks.nix");
         let report_copy =
             "cp /tmp/e2e/test-results/results.json /tmp/playwright-report-${backend}.json";
         let report_grab = r#"_grab("/tmp/playwright-report-${backend}.json")"#;
@@ -2018,11 +2019,11 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         let manifest_grab = r#"_grab("/tmp/duration-budget-manifest-${backend}.json")"#;
         let assertion = "assert pw_status == 0";
 
-        let report_copy_at = flake.find(report_copy).expect("report is copied");
-        let report_grab_at = flake.find(report_grab).expect("report is lifted");
-        let manifest_copy_at = flake.find(manifest_copy).expect("manifest is copied");
-        let manifest_grab_at = flake.find(manifest_grab).expect("manifest is lifted");
-        let assertion_at = flake
+        let report_copy_at = checks.find(report_copy).expect("report is copied");
+        let report_grab_at = checks.find(report_grab).expect("report is lifted");
+        let manifest_copy_at = checks.find(manifest_copy).expect("manifest is copied");
+        let manifest_grab_at = checks.find(manifest_grab).expect("manifest is lifted");
+        let assertion_at = checks
             .find(assertion)
             .expect("Playwright status is asserted");
 

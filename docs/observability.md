@@ -537,7 +537,7 @@ Each line is one JSON object. Tracing events use the `fmt().json()` shape;
 **panic** records are distinguished by `"kind": "panic"` and carry the literal
 `panicked at <location>` message plus a verbatim `location`. Enabled only when
 `JAUNDER_CAPTURE_DIR` is set (the e2e VMs set it via `captureEnv` in
-`flake.nix`, and the server writes `diag.log` within it — issue #227);
+`nix/nixos.nix`, and the server writes `diag.log` within it — issue #227);
 production leaves it unset, so the feature is inert there.
 
 This is the artifact the **zero-panic gate** (ADR-0032) now reads for
@@ -1005,7 +1005,7 @@ underpowered rather than passed or failed.
 ### Reproducing
 
 ```sh
-# per run: set a distinct e2eSalt in flake.nix, then per browser
+# per run: set a distinct e2eSalt in nix/checks.nix, then per browser
 nix build --print-out-paths --no-link .#packages.x86_64-linux.e2e-sqlite-firefox-single-worker
 tar -xzf <out>/capture-sqlite.tar.gz capture/otel-traces.jsonl
 # then
@@ -2293,7 +2293,7 @@ It was applied identically to both arms anyway, to keep the protocol identical.
 
 ```console
 $ git worktree add <base-dir> --detach wt-base-issue-867
-$ # per run: set flake.nix e2eSalt to a unique string, then
+$ # per run: set nix/checks.nix e2eSalt to a unique string, then
 $ nix build .#e2e-sqlite-firefox-single-worker --print-out-paths --no-link   # deciding
 $ nix build .#checks.x86_64-linux.e2e-sqlite-firefox --print-out-paths --no-link  # confirming
 $ # revert e2eSalt to "" afterwards — the e2e-scaffold check forbids committing it
@@ -2541,7 +2541,7 @@ from the traces entirely, which is its own argument for removing it.
 ### Reproducing
 
 ```sh
-# per run: set e2eSalt (distinct) and e2eWarmup in flake.nix, then
+# at this historical revision: set e2eSalt and e2eWarmup in flake.nix, then
 cargo xtask traces run
 # locate each combo's outputs afterwards (paths differ per salt):
 nix build --print-out-paths --no-link .#checks.x86_64-linux.e2e-sqlite-chromium

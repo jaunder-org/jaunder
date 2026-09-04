@@ -151,8 +151,8 @@ not an error.
   Package-scoped, the whole `#[cfg(feature = "sanitize")]` module of
   `common/src/render.rs` and its ~40 tests are absent from the build. Mutating
   uncompiled code changes nothing, the tests pass, and the mutant is filed as
-  **missed** — 27 false survivors in one file. `flake.nix` already warns about
-  this at the doctests derivation: "`--workspace` is load-bearing, not
+  **missed** — 27 false survivors in one file. `nix/checks.nix` already warns
+  about this at the doctests derivation: "`--workspace` is load-bearing, not
   incidental".
 
 - **`TMPDIR` on the big disk**, which `common.sh` exports. cargo-mutants copies

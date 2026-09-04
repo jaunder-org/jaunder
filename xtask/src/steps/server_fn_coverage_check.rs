@@ -899,22 +899,29 @@ mod tests {
 
     // ── AC16: the committed snapshot must not invalidate the e2e checks ──────────
 
-    /// Every string literal the app source filter (`flake.nix`'s top-level `src`,
-    /// the tree the e2e VM checks build from) matches paths against. Pinned as a
-    /// whole set rather than probed for the absence of "docs": a filter that began
-    /// admitting the coverage snapshot would do it through a *new* literal —
-    /// `".json"`, say — that a search for "docs" would sail straight past.
-    const APP_SRC_FILTER_LITERALS: &[&str] =
-        &["/xtask/", ".sql", ".css", "csr/index.html", "scripts/.*"];
+    /// Every string literal in the app source filter (`nix/packages.nix`'s
+    /// top-level `src`, the tree the e2e VM checks build from). This pins both
+    /// the top-level Nix-assembly exclusion and every path-matching admission
+    /// literal. A filter that began admitting the coverage snapshot through a
+    /// new literal — `".json"`, say — must redden here.
+    const APP_SRC_FILTER_LITERALS: &[&str] = &[
+        "directory",
+        "${toString (craneLib.path ../.)}/nix",
+        "/xtask/",
+        ".sql",
+        ".css",
+        "csr/index.html",
+        "scripts/.*",
+    ];
 
-    /// The `flake.nix` block whose filter decides the app source tree, delimited by
+    /// The `nix/packages.nix` block whose filter decides the app source tree, delimited by
     /// its opening `cleanSourceWith` and the closing brace at that indent.
-    fn app_src_filter_block(flake: &str) -> &str {
-        let (_, rest) = flake
-            .split_once("        src = pkgs.lib.cleanSourceWith {")
-            .expect("flake.nix declares the app source filter");
+    fn app_src_filter_block(packages: &str) -> &str {
+        let (_, rest) = packages
+            .split_once("  src = pkgs.lib.cleanSourceWith {")
+            .expect("nix/packages.nix declares the app source filter");
         let (block, _) = rest
-            .split_once("\n        };")
+            .split_once("\n  };")
             .expect("the filter block closes at its own indent");
         block
     }
@@ -924,7 +931,7 @@ mod tests {
         // AC16: regenerating `docs/coverage/server-fns.json` must leave the four
         // e2e VM checks' input hashes untouched. The app source filter is an
         // allowlist and no `docs/…json` path matches it; `e2ePackage` roots at
-        // `./end2end`, which cannot contain `docs/`.
+        // `../end2end`, which cannot contain `docs/`.
         //
         // This is a PROXY and does not prove AC16. It asserts the *reason* the drv
         // hashes are stable, not the hashes: only comparing
@@ -933,8 +940,9 @@ mod tests {
         // per-commit gate. What it does buy is that no filter edit can quietly widen
         // the admitted set — a new clause reddens here and has to be argued against
         // AC16 explicitly.
-        let flake = std::fs::read_to_string(repo_root().join("flake.nix")).expect("flake.nix");
-        let block = app_src_filter_block(&flake);
+        let packages = std::fs::read_to_string(repo_root().join("nix/packages.nix"))
+            .expect("nix/packages.nix");
+        let block = app_src_filter_block(&packages);
 
         let literals: Vec<&str> = block
             .split('"')
@@ -944,14 +952,14 @@ mod tests {
             .collect();
         assert_eq!(
             literals, APP_SRC_FILTER_LITERALS,
-            "the app source filter's match literals changed — if the new one can \
-             admit a docs/ path, regenerating the coverage snapshot now rebuilds the \
-             four e2e VMs (AC16)"
+            "the app source filter's literals changed — preserve the exact top-level \
+             Nix-assembly exclusion, and ensure no new admission can match a docs/ path \
+             or regenerating the coverage snapshot will rebuild the four e2e VMs (AC16)"
         );
 
         assert!(
-            flake.contains("src = ./end2end;"),
-            "e2ePackage must stay rooted at ./end2end; a wider root could pull in docs/"
+            packages.contains("src = ../end2end;"),
+            "e2ePackage must stay rooted at ../end2end; a wider root could pull in docs/"
         );
     }
 

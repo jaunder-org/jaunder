@@ -9,7 +9,7 @@
 /// Root-workspace directories the `cargo test --workspace --doc` run covers.
 ///
 /// Explicit rather than "every `.rs` in the derivation source": the source also
-/// carries `tools/` (only `xtask/` is filtered out, `flake.nix:272`), which the
+/// carries `tools/` (only `xtask/` is filtered out, `nix/packages.nix`), which the
 /// workspace run does not reach — scanning it there would manufacture `NotRun`
 /// violations for fences that are gated host-side instead.
 pub const WORKSPACE: &[&str] = &[

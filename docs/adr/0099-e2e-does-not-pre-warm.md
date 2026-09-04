@@ -82,7 +82,7 @@ no test uses.
   deleted: #801 needs that isolation.
 - **`e2e.warmup` disappears from the span tree** (#794/ADR-0096). Analyses must
   tolerate its absence; traces captured before this change still contain it.
-- The measurement apparatus that produced this decision — `flake.nix`'s
+- The measurement apparatus that produced this decision — `nix/checks.nix`'s
   `e2eSalt` and the `e2e-scaffold` guard — **stays**, so the next e2e
   performance question can be answered the same way rather than argued from
   stale numbers.

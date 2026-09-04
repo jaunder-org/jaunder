@@ -15,7 +15,7 @@ pub struct FileCoverage {
 
 /// The `.coverage` block of the host result envelope (`.xtask/last-result.json`):
 /// the stateless gate's counts. This is NOT the Nix `status.json` (produced by
-/// `devtool coverage emit` and read by CI/flake.nix) — it is the host's own
+/// `devtool coverage emit` and read by CI/`nix/checks.nix`) — it is the host's own
 /// summary of the post-processing verdict.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct CoverageReport {

@@ -65,7 +65,7 @@ fi
 #     Package-scoped, nothing enables them, so that code is never compiled —
 #     and mutating uncompiled code changes nothing, every test passes, and the
 #     mutant is filed as MISSED. common/src/render.rs reported 27 survivors
-#     package-scoped and 0 workspace-scoped. flake.nix makes the same point
+#     package-scoped and 0 workspace-scoped. nix/checks.nix makes the same point
 #     about its doctests derivation: "--workspace is load-bearing, not
 #     incidental".
 #
