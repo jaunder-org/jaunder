@@ -1,8 +1,8 @@
 use axum::{
     body::Body,
-    http::{Request, StatusCode, header},
+    http::{Method, Request, StatusCode, header},
 };
-use chrono::{Timelike, Utc};
+use chrono::{TimeZone, Utc};
 use common::{tagged_url::HubUrl, test_support::parse_etag, time::UtcInstant};
 use tower::ServiceExt;
 
@@ -308,11 +308,12 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
         Some(etag),
         "cached ETag is preserved"
     );
+    let expected_last_modified = httpdate::fmt_http_date(updated_at.value().into());
     assert_eq!(
         resp.headers()
             .get(header::LAST_MODIFIED)
             .and_then(|value| value.to_str().ok()),
-        Some(updated_at.value().to_rfc2822().as_str()),
+        Some(expected_last_modified.as_str()),
         "cached Last-Modified is preserved"
     );
 
@@ -403,69 +404,146 @@ async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
 
 #[apply(backends)]
 #[tokio::test]
-async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
+async fn routed_conditional_responses_preserve_the_get_head_validator_matrix(
+    #[case] backend: Backend,
+) {
+    struct Case {
+        name: &'static str,
+        method: Method,
+        if_none_match: Option<&'static str>,
+        if_modified_since: Option<&'static str>,
+        status: StatusCode,
+        expected_body: &'static str,
+        has_content_type: bool,
+    }
     let TestEnv { state, base } = backend.setup().await;
     let app = make_app(&state, &base);
-
-    // The stored ETag and the `If-None-Match` header must be the same quoted string.
-    let etag = "\"test-etag-123\"";
-    SeedFeedCache::new(fp("/~charlie/feed.rss"))
-        .body("feed body".to_owned())
+    let feed_path = "/~charlie/feed.rss";
+    let body = "cached feed body";
+    let etag = "\"current-feed-etag\"";
+    let modified_at = UtcInstant::from(
+        Utc.with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+            .single()
+            .expect("fixed HTTP date"),
+    );
+    SeedFeedCache::new(fp(feed_path))
+        .body(body.to_owned())
         .etag(parse_etag(etag))
-        .representation_modified_at(UtcInstant::now())
-        .generated_at(UtcInstant::now())
+        .representation_modified_at(modified_at)
+        .generated_at(modified_at)
         .seed(&state)
         .await;
 
-    let req = Request::builder()
-        .method("GET")
-        .uri("/~charlie/feed.rss")
-        .header(header::IF_NONE_MATCH, etag)
-        .body(Body::empty())
-        .expect("build request");
+    let cases = [
+        Case {
+            name: "nonmatching GET",
+            method: Method::GET,
+            if_none_match: None,
+            if_modified_since: None,
+            status: StatusCode::OK,
+            expected_body: body,
+            has_content_type: true,
+        },
+        Case {
+            name: "nonmatching HEAD",
+            method: Method::HEAD,
+            if_none_match: None,
+            if_modified_since: None,
+            status: StatusCode::OK,
+            expected_body: "",
+            has_content_type: true,
+        },
+        Case {
+            name: "weak matching GET",
+            method: Method::GET,
+            if_none_match: Some("W/\"current-feed-etag\""),
+            if_modified_since: None,
+            status: StatusCode::NOT_MODIFIED,
+            expected_body: "",
+            has_content_type: false,
+        },
+        Case {
+            name: "matching list GET",
+            method: Method::GET,
+            if_none_match: Some("\"other\", W/\"current-feed-etag\""),
+            if_modified_since: None,
+            status: StatusCode::NOT_MODIFIED,
+            expected_body: "",
+            has_content_type: false,
+        },
+        Case {
+            name: "matching wildcard HEAD",
+            method: Method::HEAD,
+            if_none_match: Some("*"),
+            if_modified_since: None,
+            status: StatusCode::NOT_MODIFIED,
+            expected_body: "",
+            has_content_type: false,
+        },
+        Case {
+            name: "nonmatching ETag takes precedence over matching date",
+            method: Method::GET,
+            if_none_match: Some("\"other\""),
+            if_modified_since: Some("Tue, 02 Jan 2024 03:04:05 GMT"),
+            status: StatusCode::OK,
+            expected_body: body,
+            has_content_type: true,
+        },
+    ];
 
-    let resp = app.oneshot(req).await.expect("request");
+    for case in cases {
+        let mut request = Request::builder().method(case.method).uri(feed_path);
+        if let Some(value) = case.if_none_match {
+            request = request.header(header::IF_NONE_MATCH, value);
+        }
+        if let Some(value) = case.if_modified_since {
+            request = request.header(header::IF_MODIFIED_SINCE, value);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::empty()).expect("build request"))
+            .await
+            .expect(case.name);
+        let headers = response.headers();
 
-    assert_eq!(
-        resp.status(),
-        StatusCode::NOT_MODIFIED,
-        "should return 304 when ETag matches"
-    );
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: Backend) {
-    let TestEnv { state, base } = backend.setup().await;
-    let app = make_app(&state, &base);
-
-    // Round to seconds to ensure RFC2822 conversion is lossless
-    let update_time = Utc::now()
-        .with_nanosecond(0)
-        .expect("valid nanosecond value");
-    SeedFeedCache::new(fp("/~dave/feed.rss"))
-        .body("feed body".to_owned())
-        .etag(parse_etag("\"test-etag\""))
-        .representation_modified_at(UtcInstant::from(update_time))
-        .generated_at(UtcInstant::now())
-        .seed(&state)
-        .await;
-
-    // Request with If-Modified-Since set to the same time
-    let req = Request::builder()
-        .method("GET")
-        .uri("/~dave/feed.rss")
-        .header(header::IF_MODIFIED_SINCE, update_time.to_rfc2822())
-        .body(Body::empty())
-        .expect("build request");
-
-    let resp = app.oneshot(req).await.expect("request");
-
-    assert_eq!(
-        resp.status(),
-        StatusCode::NOT_MODIFIED,
-        "should return 304 when If-Modified-Since matches"
-    );
+        assert_eq!(response.status(), case.status, "{}", case.name);
+        assert_eq!(
+            headers
+                .get(header::ETAG)
+                .and_then(|value| value.to_str().ok()),
+            Some(etag),
+            "{} returns the current ETag",
+            case.name
+        );
+        assert_eq!(
+            headers
+                .get(header::LAST_MODIFIED)
+                .and_then(|value| value.to_str().ok()),
+            Some("Tue, 02 Jan 2024 03:04:05 GMT"),
+            "{} returns IMF-fixdate Last-Modified",
+            case.name
+        );
+        assert_eq!(
+            headers
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("public, max-age=300"),
+            "{} returns cache metadata",
+            case.name
+        );
+        assert_eq!(
+            headers.get(header::CONTENT_TYPE).is_some(),
+            case.has_content_type,
+            "{} follows Content-Type policy",
+            case.name
+        );
+        assert_eq!(
+            body_string(response).await,
+            case.expected_body,
+            "{} has the expected body",
+            case.name
+        );
+    }
 }
 
 // Feed extensions soft-parse at every public feed route, so both unknown and

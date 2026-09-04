@@ -45,6 +45,9 @@ struct EntityTagCondition {
 
 impl EntityTagCondition {
     fn empty_element(&mut self) -> Result<(), ()> {
+        if self.saw_wildcard {
+            return Err(());
+        }
         self.ignored_empty_elements += 1;
         (self.ignored_empty_elements <= MAX_IGNORED_EMPTY_ELEMENTS)
             .then_some(())
@@ -201,6 +204,8 @@ mod tests {
         for value in [b"*, \"match\"".as_slice(), b"\"match\", *", b",*"] {
             assert!(!if_none_match_matches(&headers(&[value]), b"\"match\""));
         }
+
+        assert!(!if_none_match_matches(&headers(&[b"*", b""]), b"\"match\""));
     }
 
     #[test]

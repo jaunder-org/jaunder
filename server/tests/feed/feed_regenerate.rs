@@ -1,12 +1,21 @@
-use common::visibility::AudienceTarget;
-use jaunder::feed::regenerate::render;
+use common::{
+    ids::{PostId, UserId},
+    tagged_url::HubUrl,
+    time::UtcInstant,
+    visibility::AudienceTarget,
+};
+use jaunder::{feed::regenerate::render, publisher::PublisherService};
 
+use chrono::{TimeZone, Utc};
 use rstest::*;
 use rstest_reuse::*;
 
 use std::sync::Arc;
 
-use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, fp};
+use storage::{
+    CacheCommitOutcome, FeedCacheRow,
+    test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, confirmed_for, fp},
+};
 
 async fn render_feed(
     state: &Arc<storage::AppState>,
@@ -20,6 +29,69 @@ async fn render_feed(
     render(&snapshot, state.posts.as_ref(), feed_path)
         .await
         .expect("render feed")
+}
+
+fn fixed_instant(day: u32) -> UtcInstant {
+    UtcInstant::from(
+        Utc.with_ymd_and_hms(2024, 1, day, 0, 0, 0)
+            .single()
+            .expect("fixed test instant"),
+    )
+}
+
+async fn render_and_commit(
+    state: &Arc<storage::AppState>,
+    publisher: &PublisherService,
+    feed_path: host::feed::FeedPath,
+    generated_at: UtcInstant,
+) -> FeedCacheRow {
+    let snapshot = publisher.snapshot().await.expect("publisher snapshot");
+    let candidate = render(&snapshot, state.posts.as_ref(), feed_path)
+        .await
+        .expect("render feed");
+    let candidate = FeedCacheRow::new(
+        candidate.feed_path().clone(),
+        candidate.representation().clone(),
+        candidate.etag.clone(),
+        candidate.representation_modified_at,
+        generated_at,
+        candidate.semantic_fingerprint().clone(),
+    )
+    .expect("rendered row has matching feed format");
+    let guard = publisher
+        .finalization_guard()
+        .await
+        .expect("publisher finalization guard");
+
+    match guard
+        .commit_cache(snapshot.generation, candidate)
+        .await
+        .expect("commit cache")
+    {
+        CacheCommitOutcome::Committed(row) => row,
+        CacheCommitOutcome::StaleGeneration => panic!("unchanged generation should commit"),
+    }
+}
+
+async fn delete_post(
+    state: &Arc<storage::AppState>,
+    post_id: PostId,
+    user_id: UserId,
+    deleted_at: UtcInstant,
+) {
+    let posts = Arc::clone(&state.posts);
+    let outcome = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                posts
+                    .soft_delete_post(transaction, post_id, user_id, deleted_at)
+                    .await
+            })
+        })
+        .await
+        .expect("soft-delete post");
+    confirmed_for(outcome, "soft-delete post");
 }
 
 #[apply(backends)]
@@ -212,5 +284,120 @@ async fn regenerated_json_feed_carries_slug_ordered_tags(#[case] backend: Backen
         v["items"][0]["tags"],
         serde_json::json!(["Rust", "web"]),
         "tags slug-ordered in the JSON feed body: {body}",
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn regeneration_preserves_identity_only_for_byte_identical_cached_representations(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base } = backend.setup().await;
+    let publisher = PublisherService::new(
+        base.path().to_path_buf(),
+        Arc::clone(&state.publisher),
+        state.write_scope.clone(),
+    );
+    let user = SeedUser::new().seed(&state).await;
+    let feed_path = fp(&format!("/~{}/feed.rss", user.username));
+
+    let empty = render_and_commit(&state, &publisher, feed_path.clone(), fixed_instant(1)).await;
+    let empty_no_op =
+        render_and_commit(&state, &publisher, feed_path.clone(), fixed_instant(2)).await;
+    assert_eq!(
+        empty_no_op.representation().body(),
+        empty.representation().body(),
+        "empty-feed regeneration preserves the stored body",
+    );
+    assert_eq!(empty_no_op.etag, empty.etag, "empty-feed ETag is stable");
+    assert_eq!(
+        empty_no_op.representation_modified_at, empty.representation_modified_at,
+        "empty-feed representation time is stable",
+    );
+    assert_eq!(
+        empty_no_op.generated_at,
+        fixed_instant(2),
+        "no-op regeneration advances generated_at through the fenced commit",
+    );
+
+    let hub: HubUrl = "https://hub.example.test/".parse().expect("valid hub URL");
+    confirmed_for(
+        publisher
+            .mutate_hub_with_feedback(Some(&hub))
+            .await
+            .expect("set WebSub hub"),
+        "set WebSub hub",
+    );
+    let metadata_changed =
+        render_and_commit(&state, &publisher, feed_path.clone(), fixed_instant(3)).await;
+    assert_ne!(
+        metadata_changed.representation().body(),
+        empty.representation().body(),
+        "metadata-only hub change replaces the serialized representation",
+    );
+    assert_ne!(
+        metadata_changed.etag, empty.etag,
+        "metadata-only hub change replaces representation identity",
+    );
+
+    let first = SeedRawPost::new(user.user_id).seed(&state).await;
+    let from_empty =
+        render_and_commit(&state, &publisher, feed_path.clone(), fixed_instant(4)).await;
+    assert_ne!(
+        from_empty.representation().body(),
+        metadata_changed.representation().body(),
+        "adding the first item transitions from an empty feed",
+    );
+    assert_ne!(
+        from_empty.etag, metadata_changed.etag,
+        "transition from empty changes representation identity",
+    );
+
+    let second = SeedRawPost::new(user.user_id).seed(&state).await;
+    let two_items =
+        render_and_commit(&state, &publisher, feed_path.clone(), fixed_instant(5)).await;
+    delete_post(&state, second.post_id, user.user_id, fixed_instant(6)).await;
+    let one_item = render_and_commit(&state, &publisher, feed_path.clone(), fixed_instant(7)).await;
+    assert_ne!(
+        one_item.representation().body(),
+        two_items.representation().body(),
+        "removing one item replaces the cached representation",
+    );
+    assert_ne!(
+        one_item.etag, two_items.etag,
+        "removing one item changes representation identity",
+    );
+    assert!(
+        one_item
+            .representation()
+            .body()
+            .contains(first.title.as_ref()),
+        "the remaining item survives a removal",
+    );
+    assert!(
+        !one_item
+            .representation()
+            .body()
+            .contains(second.title.as_ref()),
+        "the removed item leaves the representation",
+    );
+
+    delete_post(&state, first.post_id, user.user_id, fixed_instant(8)).await;
+    let to_empty = render_and_commit(&state, &publisher, feed_path, fixed_instant(9)).await;
+    assert_ne!(
+        to_empty.representation().body(),
+        one_item.representation().body(),
+        "removing the final item transitions to an empty feed",
+    );
+    assert_ne!(
+        to_empty.etag, one_item.etag,
+        "transition to empty changes representation identity",
+    );
+    assert!(
+        !to_empty
+            .representation()
+            .body()
+            .contains(first.title.as_ref()),
+        "empty feed has no residual item",
     );
 }
