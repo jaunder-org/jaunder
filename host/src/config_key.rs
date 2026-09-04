@@ -151,6 +151,7 @@ site_config_keys! {
     SiteRegistrationPolicy => "site.registration_policy"  : RegistrationPolicy,           bad: "sideways";
     SiteTitle              => "site.title"                : SiteTitle,                    bad: "";
     SiteBaseUrl            => "site.base_url"             : BaseUrl { optional },         bad: "nonsense://x";
+    MediaUploadsEnabled     => "media.uploads_enabled"     : bool,                         bad: "TRUE";
     MediaMaxFileSizeBytes  => "media.max_file_size_bytes" : MaxFileSize,                  bad: "0";
     MediaUserQuotaBytes    => "media.user_quota_bytes"    : UserQuota,                    bad: "0";
     SmtpHost               => "smtp.host"                 : SmtpHost,                     bad: "";
@@ -256,7 +257,7 @@ mod tests {
             assert_eq!(SiteConfigKey::from_str(dotted).ok().as_ref(), Some(key));
             assert!(dotted.contains('.'), "{dotted} must be namespace.name");
         }
-        assert_eq!(SiteConfigKey::VARIANTS.len(), 20);
+        assert_eq!(SiteConfigKey::VARIANTS.len(), 21);
     }
 
     #[test]
@@ -336,6 +337,17 @@ mod tests {
             let dotted = key.as_ref();
             let got = key.validate(good);
             assert!(got.is_ok(), "{dotted} must accept {good:?}: {got:?}");
+        }
+    }
+
+    #[test]
+    fn media_uploads_enabled_validates_only_rust_boolean_spellings() {
+        let key = SiteConfigKey::MediaUploadsEnabled;
+        for value in ["true", "false"] {
+            assert!(key.validate(value).is_ok(), "{value:?} must validate");
+        }
+        for value in ["TRUE", "False", " true", "false ", "1", ""] {
+            assert!(key.validate(value).is_err(), "{value:?} must reject");
         }
     }
 

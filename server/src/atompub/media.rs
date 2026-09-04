@@ -8,7 +8,6 @@ use axum::extract::Path;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 use common::media::{self, ContentHash, Filename, MediaRef, MediaSource};
 use common::root_relative_url::RootRelativeUrl;
@@ -75,7 +74,9 @@ fn media_link_entry(record: &MediaRecord, base: &BaseUrl, username: &Username) -
 /// for a new resource or `200` when identical content was already stored.
 ///
 /// # Errors
-/// `403` wrong user; `4xx`/`5xx` from the upload pipeline; `500` on storage failure.
+///
+/// Returns `403` for a wrong user or disabled uploads, `4xx`/`5xx` from the upload pipeline,
+/// and `500` on storage failure.
 #[tracing::instrument(name = "atompub.media.collection_post", skip_all)]
 pub async fn collection_post(
     (Extension(media), Extension(site_config), Extension(manager)): CollectionPostExtensions,
@@ -107,16 +108,9 @@ pub async fn collection_post(
             .map_err(|_| HandlerError::Invariant)?
     };
 
-    // Determine whether this exact resource already exists (idempotent re-upload).
-    let sha = ContentHash::from_digest(Sha256::digest(&body).into());
-    let existed = media
-        .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
-        .await?
-        .is_some();
-
     let upload = match super::mutation::confirmed_or_accepted(
         manager
-            .upload_bytes(auth_user.user_id, &filename, content_type, &body)
+            .upload_bytes_with_disposition(auth_user.user_id, &filename, content_type, &body)
             .await?,
     ) {
         Ok(upload) => upload,
@@ -126,8 +120,8 @@ pub async fn collection_post(
     let record = media
         .get_media(
             auth_user.user_id,
-            &upload.sha256,
-            &upload.filename,
+            &upload.media.sha256,
+            &upload.media.filename,
             &MediaSource::Upload,
         )
         .await?
@@ -136,7 +130,7 @@ pub async fn collection_post(
     let base = super::required_base_url(site_config.as_ref()).await?;
     let entry = media_link_entry(&record, &base, &username);
     let xml = atompub::render_media_link_entry(&entry)?;
-    let status = if existed {
+    let status = if upload.already_existed {
         StatusCode::OK
     } else {
         StatusCode::CREATED

@@ -22,6 +22,15 @@ registration only under an invitation-based Registration Policy; it does not
 make the holder an operator. _Avoid_: invitation request (there is no public
 request or approval queue), registration code.
 
+### Media
+
+**Media Upload Capability**: The instance-wide permission to create new Media
+through either the web interface or the AtomPub Media Collection. When disabled,
+existing Media remains readable and deletable, but every new upload is forbidden
+and upload discovery is hidden. It is independent of maximum file size and user
+quota. _Avoid_: upload limit (a byte limit is a quantity, not a capability), web
+uploads (the policy is cross-protocol), magic zero.
+
 ### Publishing
 
 **Post**: A unit of authored content owned by one local user, carrying a body in

@@ -24,6 +24,7 @@ pub type InternalResult<T> = Result<T, InternalError>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
     Auth,
+    Forbidden,
     NotFound,
     Validation,
     Conflict,
@@ -40,6 +41,7 @@ impl ErrorKind {
     fn as_metric_str(self) -> &'static str {
         match self {
             ErrorKind::Auth => "auth",
+            ErrorKind::Forbidden => "forbidden",
             ErrorKind::NotFound => "not_found",
             ErrorKind::Validation => "validation",
             ErrorKind::Conflict => "conflict",
@@ -54,7 +56,7 @@ impl ErrorKind {
 /// boundary's log level) is mechanical rather than guessed from the message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorClass {
-    /// Expected 4xx (validation, not-found, unauthorized) — never alert.
+    /// Expected 4xx (validation, not-found, unauthorized, forbidden) — never alert.
     Client,
     /// Retryable infrastructure failure. Not produced by `web` itself (which
     /// only sees opaque/typed errors); reserved for classification nearer the

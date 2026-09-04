@@ -45,6 +45,8 @@ pub enum MediaError {
     PayloadTooLarge,
     #[error("Insufficient storage")]
     InsufficientStorage,
+    #[error("media uploads are disabled")]
+    UploadsDisabled,
     #[error("Internal server error")]
     Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -79,6 +81,17 @@ impl MediaTemporaryDirectoryError {
 // compiled (`storage` is a `server`-gated `web` dep). `common` is ungated and reachable
 // by storage + web (both targets) + server, so the manager returns it directly with no
 // mapping layer.
+
+/// The manager's completed upload result, including whether its media record was
+/// already present for the user. Protocol adapters use this to select their
+/// creation versus idempotent-reupload response without a pre-admission lookup.
+#[derive(Debug)]
+pub struct ManagedUpload {
+    /// Metadata and URL for the stored media.
+    pub media: UploadedMedia,
+    /// Whether the user's exact media record existed before this upload.
+    pub already_existed: bool,
+}
 
 /// Result of one evidence-bearing media deletion attempt.
 #[derive(Debug)]
@@ -229,7 +242,8 @@ impl MediaManager {
     ///
     /// # Errors
     ///
-    /// Returns `anyhow::Error` on validation failure, quota exhaustion, or I/O error.
+    /// Returns `anyhow::Error` when uploads are disabled, on validation failure, quota
+    /// exhaustion, or I/O error.
     pub async fn upload<S, E>(
         &self,
         user_id: UserId,
@@ -243,7 +257,8 @@ impl MediaManager {
     {
         let result = self
             .upload_inner(user_id, filename, content_type, stream)
-            .await;
+            .await
+            .map(|outcome| outcome.map(|upload| upload.media));
         Self::emit_failure_metric(&result);
         result
     }
@@ -254,11 +269,12 @@ impl MediaManager {
         filename: &Filename,
         content_type: Option<ContentType>,
         stream: S,
-    ) -> anyhow::Result<MutationOutcome<UploadedMedia>>
+    ) -> anyhow::Result<MutationOutcome<ManagedUpload>>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin,
         E: std::error::Error + Send + Sync + 'static,
     {
+        self.ensure_uploads_enabled().await?;
         let (max_file_size, user_quota) = self.get_limits().await?;
 
         let content_type = content_type.unwrap_or_else(|| media::detect_content_type(filename));
@@ -310,7 +326,19 @@ impl MediaManager {
             Some(MediaError::BadRequest(_)) => UploadOutcome::Invalid,
             Some(MediaError::PayloadTooLarge) => UploadOutcome::TooLarge,
             Some(MediaError::InsufficientStorage) => UploadOutcome::QuotaExceeded,
+            Some(MediaError::UploadsDisabled) => UploadOutcome::Disabled,
             Some(MediaError::Internal(_)) | None => UploadOutcome::Error,
+        }
+    }
+
+    /// Captures the media upload capability once at attempt entry. This is
+    /// intentionally separate from limits so an admitted upload cannot be revoked by a
+    /// later settings change.
+    async fn ensure_uploads_enabled(&self) -> anyhow::Result<()> {
+        if self.site_config.get_media_uploads_enabled().await? {
+            Ok(())
+        } else {
+            anyhow::bail!(MediaError::UploadsDisabled);
         }
     }
 
@@ -425,7 +453,7 @@ impl MediaManager {
         tmp_path: PathBuf,
         target_path: PathBuf,
         hash_dir: PathBuf,
-    ) -> anyhow::Result<(TargetDisposition, MutationOutcome<()>)> {
+    ) -> anyhow::Result<(TargetDisposition, MutationOutcome<bool>)> {
         let _content_lock = match self.content_locks.acquire_one(&media_ref.sha256).await {
             Ok(content_lock) => content_lock,
             Err(error) => {
@@ -458,7 +486,8 @@ impl MediaManager {
                         .await
                         .map_err(|error| anyhow::anyhow!(MediaError::Internal(Box::new(error))))?;
                     match media.create_media(transaction, &record).await {
-                        Ok(()) | Err(CreateMediaError::AlreadyExists) => Ok(()),
+                        Ok(()) => Ok(false),
+                        Err(CreateMediaError::AlreadyExists) => Ok(true),
                         Err(CreateMediaError::Internal(error)) => {
                             tracing::error!(error = %error, "create_media failed");
                             Err(anyhow::anyhow!(MediaError::Internal(Box::new(error))))
@@ -490,7 +519,7 @@ impl MediaManager {
         metadata: UploadMetadata,
         tmp_path: &Path,
         user_quota: UserQuota,
-    ) -> anyhow::Result<MutationOutcome<UploadedMedia>> {
+    ) -> anyhow::Result<MutationOutcome<ManagedUpload>> {
         if let Err(error) = self
             .check_quota(user_id, metadata.size_bytes, user_quota)
             .await
@@ -555,16 +584,19 @@ impl MediaManager {
             size_bytes: metadata.size_bytes,
             url,
         };
-        Ok(outcome.map(|()| response))
+        Ok(outcome.map(|already_existed| ManagedUpload {
+            media: response,
+            already_existed,
+        }))
     }
 
-    /// Uploads raw in-memory bytes (e.g. an `AtomPub` media POST), reusing the same
-    /// content-addressing/dedup/quota/DB path. Emits exactly one `media_upload*`.
+    /// Uploads raw in-memory bytes (e.g. an `AtomPub` media POST), reusing the shared
+    /// upload pipeline.
     ///
     /// # Errors
     ///
-    /// Returns `anyhow::Error` on invalid filename, oversized payload, quota
-    /// exhaustion, I/O failure, or DB error.
+    /// Returns `anyhow::Error` when uploads are disabled, on invalid filename, oversized
+    /// payload, quota exhaustion, I/O failure, or DB error.
     pub async fn upload_bytes(
         &self,
         user_id: UserId,
@@ -572,20 +604,38 @@ impl MediaManager {
         content_type: ContentType,
         bytes: &[u8],
     ) -> anyhow::Result<MutationOutcome<UploadedMedia>> {
+        self.upload_bytes_with_disposition(user_id, filename, content_type, bytes)
+            .await
+            .map(|outcome| outcome.map(|upload| upload.media))
+    }
+
+    /// Uploads raw bytes and retains the manager-owned idempotency disposition.
+    ///
+    /// # Errors
+    ///
+    /// Returns `anyhow::Error` when uploads are disabled, on invalid filename, oversized
+    /// payload, quota exhaustion, I/O failure, or DB error.
+    pub async fn upload_bytes_with_disposition(
+        &self,
+        user_id: UserId,
+        filename: &Filename,
+        content_type: ContentType,
+        bytes: &[u8],
+    ) -> anyhow::Result<MutationOutcome<ManagedUpload>> {
         let result = self
             .upload_bytes_inner(user_id, filename, content_type, bytes)
             .await;
         Self::emit_failure_metric(&result);
         result
     }
-
     async fn upload_bytes_inner(
         &self,
         user_id: UserId,
         filename: &Filename,
         content_type: ContentType,
         bytes: &[u8],
-    ) -> anyhow::Result<MutationOutcome<UploadedMedia>> {
+    ) -> anyhow::Result<MutationOutcome<ManagedUpload>> {
+        self.ensure_uploads_enabled().await?;
         let (max_file_size, user_quota) = self.get_limits().await?;
         // `filename` and `content_type` were validated at their respective inbound
         // boundaries, so neither needs revalidation in the persistence seam.
@@ -830,6 +880,8 @@ impl MediaManager {
 #[cfg(test)]
 mod tests {
     use std::fs as std_fs;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::task::Poll;
 
     use super::*;
 
@@ -841,7 +893,7 @@ mod tests {
     };
     use crate::{ForeignEvidenceSink, MediaReferenceOwnershipResolver};
     use common::ids::PostId;
-    use common::media::{MediaRef, UserQuota};
+    use common::media::{MaxFileSize, MediaRef, UserQuota};
     use common::test_support::{
         parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_post_body,
     };
@@ -1318,6 +1370,10 @@ mod tests {
             UploadOutcome::QuotaExceeded
         ));
         assert!(matches!(
+            MediaManager::upload_outcome(Some(&MediaError::UploadsDisabled)),
+            UploadOutcome::Disabled
+        ));
+        assert!(matches!(
             MediaManager::upload_outcome(Some(&MediaError::Internal(Box::new(io::Error::other(
                 "x",
             ))))),
@@ -1329,6 +1385,174 @@ mod tests {
         ));
     }
 
+    // guard:no-backend — a disabled capability must reject before polling the supplied stream
+    // or calling any media storage method.
+    #[tokio::test]
+    async fn disabled_stream_upload_does_not_poll_or_start_downstream_work() {
+        let mut site_config = crate::MockSiteConfigStorage::new();
+        site_config
+            .expect_get_media_uploads_enabled()
+            .times(1)
+            .return_once(|| Ok(false));
+        let temp = TempDir::new().unwrap();
+        let manager = MediaManager::new(
+            Arc::new(crate::MockMediaStorage::new()),
+            no_posts(),
+            Arc::new(site_config),
+            WriteScope::mock(),
+            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            test_instance_id(),
+            no_foreign_resolver(),
+        );
+        let polls = Arc::new(AtomicUsize::new(0));
+        let stream_polls = Arc::clone(&polls);
+        let stream = stream::poll_fn(move |_| {
+            stream_polls.fetch_add(1, Ordering::Relaxed);
+            Poll::Ready(None::<Result<Bytes, io::Error>>)
+        });
+
+        let err = manager
+            .upload(
+                UserId::from(1),
+                &parse_filename("blocked.png"),
+                Some(parse_content_type("image/png")),
+                stream,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err.downcast_ref::<MediaError>(),
+            Some(MediaError::UploadsDisabled)
+        ));
+        assert_eq!(err.to_string(), "media uploads are disabled");
+        assert_eq!(polls.load(Ordering::Relaxed), 0);
+    }
+
+    // guard:no-backend — byte uploads share the same entry policy and do no downstream work.
+    #[tokio::test]
+    async fn disabled_byte_upload_does_not_start_downstream_work() {
+        let mut site_config = crate::MockSiteConfigStorage::new();
+        site_config
+            .expect_get_media_uploads_enabled()
+            .times(1)
+            .return_once(|| Ok(false));
+        let temp = TempDir::new().unwrap();
+        let manager = MediaManager::new(
+            Arc::new(crate::MockMediaStorage::new()),
+            no_posts(),
+            Arc::new(site_config),
+            WriteScope::mock(),
+            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            test_instance_id(),
+            no_foreign_resolver(),
+        );
+
+        let err = manager
+            .upload_bytes(
+                UserId::from(1),
+                &parse_filename("blocked.png"),
+                parse_content_type("image/png"),
+                b"must not be hashed or written",
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err.downcast_ref::<MediaError>(),
+            Some(MediaError::UploadsDisabled)
+        ));
+        assert!(
+            !temp.path().join("media").join("tmp").exists(),
+            "disabled upload must not create a temporary directory"
+        );
+    }
+
+    // guard:no-backend — a capability read failure must not be converted into a policy denial.
+    #[tokio::test]
+    async fn upload_propagates_capability_storage_failure_without_downstream_work() {
+        let mut site_config = crate::MockSiteConfigStorage::new();
+        site_config
+            .expect_get_media_uploads_enabled()
+            .times(1)
+            .return_once(|| Err(sqlx::Error::PoolTimedOut));
+        let temp = TempDir::new().unwrap();
+        let manager = MediaManager::new(
+            Arc::new(crate::MockMediaStorage::new()),
+            no_posts(),
+            Arc::new(site_config),
+            WriteScope::mock(),
+            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            test_instance_id(),
+            no_foreign_resolver(),
+        );
+
+        let err = manager
+            .upload_bytes(
+                UserId::from(1),
+                &parse_filename("unreadable-config.png"),
+                parse_content_type("image/png"),
+                b"must not be written",
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err.downcast_ref::<sqlx::Error>(),
+            Some(sqlx::Error::PoolTimedOut)
+        ));
+        assert!(
+            !temp.path().join("media").join("tmp").exists(),
+            "storage failure must stop before temporary-file work"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn admitted_upload_reads_capability_once(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let enabled = Arc::new(AtomicBool::new(true));
+        let policy_at_entry = Arc::clone(&enabled);
+        let mut site_config = crate::MockSiteConfigStorage::new();
+        site_config
+            .expect_get_media_uploads_enabled()
+            .times(1)
+            .return_once(move || Ok(policy_at_entry.swap(false, Ordering::SeqCst)));
+        site_config
+            .expect_get_media_max_file_size()
+            .times(1)
+            .return_once(|| Ok(MaxFileSize::default()));
+        site_config
+            .expect_get_media_user_quota()
+            .times(1)
+            .return_once(|| Ok(UserQuota::default()));
+        let manager = MediaManager::new(
+            env.state.media.clone(),
+            env.state.posts.clone(),
+            Arc::new(site_config),
+            env.state.write_scope.clone(),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
+        );
+
+        manager
+            .upload_bytes(
+                user_id,
+                &parse_filename("admitted.png"),
+                parse_content_type("image/png"),
+                b"admitted",
+            )
+            .await
+            .unwrap();
+        assert!(
+            !enabled.load(Ordering::SeqCst),
+            "the setting changes after admission without revoking this upload"
+        );
+    }
     #[test]
     fn typed_content_type_is_preserved_and_absent_is_detected_from_filename() {
         assert_eq!("image/png".parse::<ContentType>().unwrap(), "image/png");
@@ -2026,7 +2250,7 @@ mod tests {
         let expected_sha = format!("{:x}", Sha256::digest(bytes));
 
         let first = manager
-            .upload_bytes(
+            .upload_bytes_with_disposition(
                 user_id,
                 &parse_filename("pic.png"),
                 "image/png".parse().unwrap(),
@@ -2034,17 +2258,18 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(first.value().sha256.as_ref(), expected_sha.as_str());
-        assert_eq!(first.value().filename, "pic.png");
-        assert_eq!(first.value().content_type, "image/png");
+        assert!(!first.value().already_existed);
+        assert_eq!(first.value().media.sha256.as_ref(), expected_sha.as_str());
+        assert_eq!(first.value().media.filename, "pic.png");
+        assert_eq!(first.value().media.content_type, "image/png");
         assert_eq!(
-            first.value().size_bytes,
+            first.value().media.size_bytes,
             ByteSize::try_from(i64::try_from(bytes.len()).unwrap()).unwrap()
         );
 
         // Identical re-upload must succeed and dedup to the same record.
         let second = manager
-            .upload_bytes(
+            .upload_bytes_with_disposition(
                 user_id,
                 &parse_filename("pic.png"),
                 "image/png".parse().unwrap(),
@@ -2052,8 +2277,9 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(second.value().sha256, first.value().sha256);
-        assert_eq!(second.value().url, first.value().url);
+        assert!(second.value().already_existed);
+        assert_eq!(second.value().media.sha256, first.value().media.sha256);
+        assert_eq!(second.value().media.url, first.value().media.url);
     }
 
     #[apply(backends)]

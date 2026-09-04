@@ -554,6 +554,7 @@ pub struct SetupBuilder {
     base_url: BaseUrlSeed,
     backup: Option<BackupConfig>,
     media_limits: Option<(MaxFileSize, UserQuota)>,
+    media_uploads_enabled: Option<bool>,
     pristine: bool,
 }
 
@@ -565,6 +566,7 @@ impl SetupBuilder {
             base_url: BaseUrlSeed::Default,
             backup: None,
             media_limits: None,
+            media_uploads_enabled: None,
             pristine: false,
         }
     }
@@ -639,6 +641,21 @@ impl SetupBuilder {
         self
     }
 
+    /// Seeds the site-wide media upload capability.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the capability was already specified or the fixture is pristine.
+    #[must_use]
+    pub fn media_uploads_enabled(mut self, enabled: bool) -> Self {
+        self.assert_can_override("media upload capability");
+        assert!(
+            self.media_uploads_enabled.replace(enabled).is_none(),
+            "fixture configuration specifies media upload capability more than once"
+        );
+        self
+    }
+
     /// Seeds no site-config rows.
     ///
     /// # Panics
@@ -650,7 +667,8 @@ impl SetupBuilder {
             self.registration.is_none()
                 && matches!(self.base_url, BaseUrlSeed::Default)
                 && self.backup.is_none()
-                && self.media_limits.is_none(),
+                && self.media_limits.is_none()
+                && self.media_uploads_enabled.is_none(),
             "fixture configuration cannot combine pristine with overrides"
         );
         assert!(
@@ -677,6 +695,7 @@ impl SetupBuilder {
                 },
                 backup: self.backup,
                 media_limits: self.media_limits,
+                media_uploads_enabled: self.media_uploads_enabled,
             }
         }
     }
@@ -704,6 +723,7 @@ enum SiteConfigSeed {
         base_url: Option<BaseUrl>,
         backup: Option<BackupConfig>,
         media_limits: Option<(MaxFileSize, UserQuota)>,
+        media_uploads_enabled: Option<bool>,
     },
 }
 
@@ -724,6 +744,7 @@ async fn seed_site_config(
         base_url,
         backup,
         media_limits,
+        media_uploads_enabled,
     } = seed
     else {
         return Ok(());
@@ -760,6 +781,11 @@ async fn seed_site_config(
                 if let Some((max_file_size, user_quota)) = media_limits {
                     site_config
                         .set_media_limits(transaction, max_file_size, user_quota)
+                        .await?;
+                }
+                if let Some(enabled) = media_uploads_enabled {
+                    site_config
+                        .set_media_uploads_enabled(transaction, enabled)
                         .await?;
                 }
                 Ok(())
@@ -872,6 +898,7 @@ mod tests {
         BaseUrl,
         Backup,
         MediaLimits,
+        MediaUploadsEnabled,
     }
 
     impl FixtureOverride {
@@ -881,6 +908,7 @@ mod tests {
                 Self::BaseUrl => setup.base_url(Some("https://override.example/".parse().unwrap())),
                 Self::Backup => setup.backup(BackupConfig::default()),
                 Self::MediaLimits => setup.media_limits("5".parse().unwrap(), "6".parse().unwrap()),
+                Self::MediaUploadsEnabled => setup.media_uploads_enabled(false),
             }
         }
     }
@@ -913,6 +941,7 @@ mod tests {
             .base_url(Some(base_url))
             .backup(backup.clone())
             .media_limits(max_file_size, user_quota)
+            .media_uploads_enabled(false)
             .await;
         let storage = &*env.state.site_config;
         assert_eq!(
@@ -929,6 +958,7 @@ mod tests {
             max_file_size
         );
         assert_eq!(storage.get_media_user_quota().await.unwrap(), user_quota);
+        assert!(!storage.get_media_uploads_enabled().await.unwrap());
     }
 
     #[apply(backends)]
@@ -1000,11 +1030,21 @@ mod tests {
             })
             .is_err()
         );
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _ = backend
+                    .setup()
+                    .media_uploads_enabled(true)
+                    .media_uploads_enabled(false);
+            })
+            .is_err()
+        );
         for setup_override in [
             FixtureOverride::Registration,
             FixtureOverride::BaseUrl,
             FixtureOverride::Backup,
             FixtureOverride::MediaLimits,
+            FixtureOverride::MediaUploadsEnabled,
         ] {
             assert!(
                 std::panic::catch_unwind(|| {
@@ -1040,6 +1080,7 @@ mod tests {
                 base_url: Some("https://example.com/".parse().unwrap()),
                 backup: None,
                 media_limits: None,
+                media_uploads_enabled: None,
             },
             SeedFailure::AfterFirst,
         )

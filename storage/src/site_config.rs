@@ -72,6 +72,32 @@ pub trait SiteConfigStorage: Send + Sync {
     /// `Jaunder <noreply@localhost>`).
     async fn get_smtp_config(&self) -> Result<Option<SmtpConfig>>;
 
+    /// Returns whether new media uploads are enabled. Missing configuration preserves
+    /// existing behavior; malformed physical data fails closed. Database read failures
+    /// propagate rather than being mistaken for a disabled capability.
+    async fn get_media_uploads_enabled(&self) -> sqlx::Result<bool> {
+        Ok(
+            match self.get_raw(SiteConfigKey::MediaUploadsEnabled).await? {
+                None => true,
+                Some(value) => value.parse().unwrap_or(false),
+            },
+        )
+    }
+
+    /// Stores the site-wide media upload capability.
+    async fn set_media_uploads_enabled(
+        &self,
+        transaction: &mut WriteTransaction,
+        enabled: bool,
+    ) -> sqlx::Result<()> {
+        self.set(
+            transaction,
+            SiteConfigKey::MediaUploadsEnabled,
+            if enabled { "true" } else { "false" },
+        )
+        .await
+    }
+
     /// Returns the configured media max upload size, falling back to the
     /// [`MaxFileSize`] default (50 MiB) if unset or unparseable (including a stored
     /// `0`/negative, which the positive invariant rejects).
@@ -1410,19 +1436,21 @@ mod tests {
             storage.get_media_max_file_size().await.unwrap(),
             parse_max_file_size("1024")
         );
-        // A stored 0/negative is rejected by the positive invariant → falls back.
         inject_invalid_site_config(&env, SiteConfigKey::MediaMaxFileSizeBytes, "0")
             .await
             .unwrap();
         assert_eq!(
             storage.get_media_max_file_size().await.unwrap(),
-            MaxFileSize::default()
+            MaxFileSize::default(),
+            "zero must remain invalid rather than becoming a feature switch"
         );
     }
 
     #[apply(backends)]
     #[tokio::test]
-    async fn media_user_quota_defaults_overrides_and_rejects_negative(#[case] backend: Backend) {
+    async fn media_user_quota_defaults_overrides_and_rejects_zero_or_negative(
+        #[case] backend: Backend,
+    ) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         assert_eq!(
@@ -1436,13 +1464,54 @@ mod tests {
             storage.get_media_user_quota().await.unwrap(),
             parse_user_quota("2048")
         );
-        inject_invalid_site_config(&env, SiteConfigKey::MediaUserQuotaBytes, "-5")
+        for invalid in ["0", "-5"] {
+            inject_invalid_site_config(&env, SiteConfigKey::MediaUserQuotaBytes, invalid)
+                .await
+                .unwrap();
+            assert_eq!(
+                storage.get_media_user_quota().await.unwrap(),
+                UserQuota::default(),
+                "{invalid} must remain invalid rather than becoming a feature switch"
+            );
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn media_uploads_enabled_defaults_round_trips_and_fails_closed(#[case] backend: Backend) {
+        let env = backend.setup().pristine().await;
+        let storage = &*env.state.site_config;
+        assert!(storage.get_media_uploads_enabled().await.unwrap());
+
+        for enabled in [false, true] {
+            let site_config = Arc::clone(&env.state.site_config);
+            confirmed(
+                env.state
+                    .write_scope
+                    .run(move |transaction| {
+                        Box::pin(async move {
+                            site_config
+                                .set_media_uploads_enabled(transaction, enabled)
+                                .await
+                        })
+                    })
+                    .await
+                    .unwrap(),
+            );
+            assert_eq!(storage.get_media_uploads_enabled().await.unwrap(), enabled);
+            assert_eq!(
+                storage
+                    .get_raw(SiteConfigKey::MediaUploadsEnabled)
+                    .await
+                    .unwrap(),
+                Some(enabled.to_string())
+            );
+        }
+
+        inject_invalid_site_config(&env, SiteConfigKey::MediaUploadsEnabled, "TRUE")
             .await
             .unwrap();
-        assert_eq!(
-            storage.get_media_user_quota().await.unwrap(),
-            UserQuota::default()
-        );
+        assert!(!storage.get_media_uploads_enabled().await.unwrap());
     }
 
     #[apply(backends)]

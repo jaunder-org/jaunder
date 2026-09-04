@@ -10,6 +10,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 use web::media::{Item, MediaDeletion, UsageData};
 
+use common::pagination::{PageOffset, RowLimit};
 use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
@@ -210,7 +211,7 @@ async fn list_my_media_rejects_out_of_range_limit(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
     let session = create_user_and_session(&state).await;
 
     seed_media(&state, session.user_id, "photo.jpg").await;
@@ -265,7 +266,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_nested_request_maps_identity_without_force(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
     let session = create_user_and_session(&state).await;
 
     let media = seed_media(&state, session.user_id, "test.png").await;
@@ -772,6 +773,62 @@ async fn upload_media_rejects_unauthenticated_request(#[case] backend: Backend) 
     // a 500 carrying "unauthorized", not a bare 401.
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("unauthorized"), "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn disabled_upload_is_forbidden_without_media_mutation(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
+    let storage = TempDir::new().unwrap();
+
+    let (status, body) = post_multipart(
+        &state,
+        &storage,
+        <web::media::Upload as ServerFn>::PATH,
+        MultipartFile {
+            filename: "blocked.png",
+            content_type: "image/png",
+            bytes: b"blocked image",
+        },
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN, "body: {body}");
+    assert_eq!(
+        body,
+        r#"{"forbidden":{"message":"media uploads are disabled"}}"#
+    );
+    assert!(
+        std::fs::read_dir(storage.path().join("media").join("tmp"))
+            .unwrap()
+            .next()
+            .is_none(),
+        "disabled upload must not create temporary media"
+    );
+    assert!(
+        std::fs::read_dir(storage.path().join("media").join("upload"))
+            .unwrap()
+            .next()
+            .is_none(),
+        "disabled upload must not create durable media"
+    );
+    assert!(
+        state
+            .media
+            .list_media(
+                session.user_id,
+                None,
+                RowLimit::at_most(100),
+                PageOffset::default(),
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+        "disabled upload must not create a media row"
+    );
 }
 
 #[apply(backends)]

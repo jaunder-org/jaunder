@@ -171,6 +171,11 @@ fn map_media_error(err: anyhow::Error) -> InternalError {
         Some(MediaError::BadRequest(message)) => {
             (ErrorKind::Validation, ErrorClass::Client, message.clone())
         }
+        Some(MediaError::UploadsDisabled) => (
+            ErrorKind::Forbidden,
+            ErrorClass::Client,
+            "media uploads are disabled".to_owned(),
+        ),
         Some(MediaError::PayloadTooLarge) => (
             ErrorKind::Validation,
             ErrorClass::Client,
@@ -318,6 +323,10 @@ mod tests {
         assert_eq!(
             map_media_error(anyhow::anyhow!(MediaError::PayloadTooLarge)).kind(),
             ErrorKind::Validation
+        );
+        assert_eq!(
+            map_media_error(anyhow::anyhow!(MediaError::UploadsDisabled)).kind(),
+            ErrorKind::Forbidden
         );
         assert_eq!(
             map_media_error(anyhow::anyhow!(MediaError::InsufficientStorage)).kind(),

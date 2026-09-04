@@ -48,6 +48,7 @@ where
 pub fn map_error(err: &anyhow::Error) -> StatusCode {
     match err.downcast_ref::<MediaError>() {
         Some(MediaError::BadRequest(_)) => StatusCode::BAD_REQUEST,
+        Some(MediaError::UploadsDisabled) => StatusCode::FORBIDDEN,
         Some(MediaError::PayloadTooLarge) => StatusCode::PAYLOAD_TOO_LARGE,
         Some(MediaError::InsufficientStorage) => StatusCode::INSUFFICIENT_STORAGE,
         Some(MediaError::Internal(_)) | None => StatusCode::INTERNAL_SERVER_ERROR,

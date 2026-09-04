@@ -7,14 +7,14 @@ use axum::{
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+use common::pagination::{PageOffset, RowLimit};
 use common::root_relative_url::RootRelativeUrl;
 use common::test_support::{
     parse_content_hash, parse_filename, parse_post_body, parse_root_relative_url,
 };
 use rstest::*;
 use rstest_reuse::*;
-
-use storage::test_support::{Backend, SeedRawPost, TestEnv, backends, backends_matrix};
+use storage::test_support::{Backend, SeedRawPost, TestEnv, backends, backends_matrix, seed_media};
 
 use crate::helpers::{
     ForeignReferenceResolver, atompub, atompub_at, atompub_get, atompub_location, atompub_upload,
@@ -69,8 +69,53 @@ async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn disabled_upload_is_forbidden_without_media_mutation(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
+    let session = create_user_and_session(&state).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app(&state, &storage);
+
+    let response = app
+        .oneshot(atompub_upload(&session, "blocked.png", PNG))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_string(response).await, "media uploads are disabled");
+    assert!(
+        std::fs::read_dir(storage.path().join("media").join("tmp"))
+            .unwrap()
+            .next()
+            .is_none(),
+        "disabled upload must not create temporary media"
+    );
+    assert!(
+        std::fs::read_dir(storage.path().join("media").join("upload"))
+            .unwrap()
+            .next()
+            .is_none(),
+        "disabled upload must not create durable media"
+    );
+    assert!(
+        state
+            .media
+            .list_media(
+                session.user_id,
+                None,
+                RowLimit::at_most(100),
+                PageOffset::default(),
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+        "disabled upload must not create a media row"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn upload_accepts_pdf_content_type(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(true).await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
@@ -223,6 +268,41 @@ async fn get_media_member_returns_entry(#[case] backend: Backend) {
     assert_eq!(get_resp.status(), StatusCode::OK);
     let body = body_string(get_resp).await;
     assert!(body.contains("rel=\"edit-media\""), "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn disabled_uploads_leave_existing_media_readable_and_deletable(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
+    let session = create_user_and_session(&state).await;
+    let media = seed_media(&state, session.user_id, "existing.png").await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app(&state, &storage);
+    let location = parse_root_relative_url(&format!(
+        "/atompub/{}/media/{}/{}",
+        session.username, media.sha256, media.filename
+    ));
+
+    let get_response = app
+        .clone()
+        .oneshot(
+            atompub_at(&session, Method::GET, &location)
+                .body(Body::empty())
+                .expect("failed to build AtomPub GET request"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::OK);
+
+    let delete_response = app
+        .oneshot(
+            atompub_at(&session, Method::DELETE, &location)
+                .body(Body::empty())
+                .expect("failed to build AtomPub DELETE request"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
 }
 
 #[apply(backends)]

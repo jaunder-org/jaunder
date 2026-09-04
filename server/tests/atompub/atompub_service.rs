@@ -120,6 +120,41 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
         "extension features missing: {body}"
     );
 }
+
+#[apply(backends)]
+#[tokio::test]
+async fn service_document_omits_media_when_uploads_are_disabled(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().media_uploads_enabled(false).await;
+    let session = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+    let uri = parse_root_relative_url("/atompub/service");
+
+    let response = app
+        .oneshot(
+            atompub_at(&session, Method::GET, &uri)
+                .body(Body::empty())
+                .expect("failed to build atompub GET request"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(
+        !body.contains(&format!(
+            "https://example.com/atompub/{}/media",
+            session.username
+        )),
+        "disabled media collection leaked into service document: {body}"
+    );
+    assert!(
+        body.contains(&format!(
+            "https://example.com/atompub/{}/posts",
+            session.username
+        )),
+        "posts collection missing from service document: {body}"
+    );
+}
 #[apply(backends)]
 #[tokio::test]
 async fn explicit_basic_identity_wins_and_expires_simultaneous_cookie(#[case] backend: Backend) {

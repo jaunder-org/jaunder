@@ -80,6 +80,7 @@ pub(super) fn emit_arg_decode_failure(value: &ServerFnErrorErr) {
 pub(crate) fn project(kind: ErrorKind, public_message: &str) -> WebError {
     match kind {
         ErrorKind::Auth => WebError::Unauthorized,
+        ErrorKind::Forbidden => WebError::forbidden(public_message),
         ErrorKind::NotFound => WebError::NotFound {
             message: public_message.to_string(),
         },
@@ -328,6 +329,12 @@ mod tests {
     #[test]
     fn project_is_the_total_kind_to_web_error_map() {
         assert_eq!(project(ErrorKind::Auth, "ignored"), WebError::Unauthorized);
+        assert_eq!(
+            project(ErrorKind::Forbidden, "media uploads are disabled"),
+            WebError::Forbidden {
+                message: "media uploads are disabled".to_string()
+            }
+        );
         assert_eq!(
             project(ErrorKind::NotFound, "x not found"),
             WebError::NotFound {
