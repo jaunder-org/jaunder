@@ -12,21 +12,22 @@ pub trait HasPublishedAt {
 }
 
 impl HybridWindow {
+    /// Returns `None` when the cutoff predates all representable timestamps.
     #[must_use]
-    pub fn cutoff_date(&self, now: DateTime<Utc>) -> DateTime<Utc> {
-        now - Duration::days(i64::from(self.min_days.value()))
+    pub fn cutoff_date(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        now.checked_sub_signed(Duration::days(i64::from(self.min_days.value())))
     }
 
     /// `posts` must be ordered by `published_at DESC`.
-    /// Returns the prefix of posts where, for index `i`,
-    /// `i < min_items` OR `published_at >= cutoff_date`.
+    /// Returns the prefix of posts where, for index `i`, `i < min_items` or
+    /// the cutoff is unrepresentable or `published_at >= cutoff_date`.
     #[must_use]
     pub fn select<'a, P: HasPublishedAt>(&self, posts: &'a [P], now: DateTime<Utc>) -> &'a [P] {
         let cutoff = self.cutoff_date(now);
         let min_items = usize::try_from(self.min_items.value()).unwrap_or(usize::MAX);
         let mut end = 0usize;
         for (i, p) in posts.iter().enumerate() {
-            if i < min_items || p.published_at() >= cutoff {
+            if i < min_items || cutoff.is_none_or(|cutoff| p.published_at() >= cutoff) {
                 end = i + 1;
             } else {
                 break;
@@ -46,6 +47,24 @@ mod tests {
     impl HasPublishedAt for P {
         fn published_at(&self) -> DateTime<Utc> {
             self.0
+        }
+    }
+
+    #[derive(Debug)]
+    struct IdentifiedP {
+        id: u8,
+        published_at: DateTime<Utc>,
+    }
+    impl HasPublishedAt for IdentifiedP {
+        fn published_at(&self) -> DateTime<Utc> {
+            self.published_at
+        }
+    }
+
+    fn identified_at(id: u8, days_ago: i64, now: DateTime<Utc>) -> IdentifiedP {
+        IdentifiedP {
+            id,
+            published_at: now - Duration::days(days_ago),
         }
     }
 
@@ -95,25 +114,54 @@ mod tests {
     }
 
     #[test]
-    fn union_stops_at_first_post_failing_both() {
-        let w = HybridWindow {
-            min_items: parse_feed_min_items("3"),
+    fn union_keeps_minimum_items_and_inclusive_cutoff() {
+        let window = HybridWindow {
+            min_items: parse_feed_min_items("1"),
             min_days: parse_feed_min_days("30"),
         };
         let now = Utc::now();
-        // posts at days_ago = [1, 2, 3, 100, 200] (5 posts)
-        // i=0 (1d ago): i<3 → keep
-        // i=1 (2d):     i<3 → keep
-        // i=2 (3d):     i<3 → keep
-        // i=3 (100d):   i>=3 AND published>=cutoff(30d ago)? 100 days ago < cutoff → drop
         let posts = vec![
-            at(1, now),
-            at(2, now),
-            at(3, now),
-            at(100, now),
-            at(200, now),
+            identified_at(1, 1, now),
+            identified_at(2, 30, now),
+            identified_at(3, 31, now),
+            identified_at(4, 100, now),
         ];
-        let kept = w.select(&posts, now);
-        assert_eq!(kept.len(), 3);
+
+        // The item exactly on the cutoff joins the count-floor item; the next
+        // older item fails both predicates, ending the ordered prefix.
+        let selected = window.select(&posts, now);
+        let actual: Vec<_> = selected
+            .iter()
+            .map(|post| (post.id, post.published_at))
+            .collect();
+        let expected = vec![(1, now - Duration::days(1)), (2, now - Duration::days(30))];
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn unrepresentably_old_cutoff_selects_all_history() {
+        let window = HybridWindow {
+            min_items: parse_feed_min_items("1"),
+            min_days: parse_feed_min_days(&u32::MAX.to_string()),
+        };
+        let now = Utc::now();
+        let posts = vec![
+            identified_at(1, 1, now),
+            identified_at(2, 31, now),
+            identified_at(3, 365, now),
+        ];
+
+        // A valid but unrepresentable cutoff is older than every eligible post.
+        let selected = window.select(&posts, now);
+        let actual: Vec<_> = selected
+            .iter()
+            .map(|post| (post.id, post.published_at))
+            .collect();
+        let expected = vec![
+            (1, now - Duration::days(1)),
+            (2, now - Duration::days(31)),
+            (3, now - Duration::days(365)),
+        ];
+        assert_eq!(actual, expected);
     }
 }

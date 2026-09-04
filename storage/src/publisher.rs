@@ -7,10 +7,11 @@ use common::site::{SiteIdentity, SiteTitle};
 use common::tagged_url::{BaseUrl, HubUrl};
 use common::time::UtcInstant;
 use host::config_key::SiteConfigKey;
-use host::feed::{FeedPath, FeedsConfig};
+use host::feed::{FeedMinDays, FeedMinItems, FeedPath, FeedsConfig};
 use sqlx::{ColumnIndex, Database, Decode, Encode, Error, Executor, FromRow, Pool, Type};
 
 use crate::feed_cache::{FeedCacheError, FeedCacheRow, upsert_on_connection};
+use crate::site_config;
 use crate::site_config::StoredSiteConfigValue;
 use crate::sql::QueryStorageExt;
 use crate::{Backend, WriteTransaction};
@@ -38,6 +39,21 @@ impl PublisherSnapshot {
     pub fn malformed_hub(&self) -> Option<MalformedHubToken> {
         self.malformed_hub.clone()
     }
+}
+
+/// Typed change to one member of the publisher-owned feed-window snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FeedWindowMutation {
+    SetMinItems(FeedMinItems),
+    UnsetMinItems,
+    SetMinDays(FeedMinDays),
+    UnsetMinDays,
+}
+
+/// Result of an accepted feed-window mutation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FeedWindowMutationOutcome {
+    Applied { generation: PublisherGeneration },
 }
 
 /// Whether a hub mutation changed durable publisher state.
@@ -75,6 +91,13 @@ pub trait PublisherStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         hub: Option<HubUrl>,
     ) -> Result<HubMutationOutcome, PublisherStorageError>;
+
+    /// Applies one feed-window change as a new publisher generation.
+    async fn mutate_feed_window(
+        &self,
+        transaction: &mut WriteTransaction,
+        mutation: FeedWindowMutation,
+    ) -> Result<FeedWindowMutationOutcome, PublisherStorageError>;
 
     /// Conditionally repairs exactly the malformed value represented by `token`.
     async fn repair_malformed_hub(
@@ -125,9 +148,9 @@ fn parse_hub(raw: Option<String>) -> Option<HubUrl> {
         .and_then(|value| value.parse().ok())
 }
 
-fn snapshot_from_row(row: SnapshotRow) -> PublisherSnapshot {
-    let min_items = row.min_items.map(StoredSiteConfigValue::into_inner);
-    let min_days = row.min_days.map(StoredSiteConfigValue::into_inner);
+fn snapshot_from_row(row: SnapshotRow) -> Result<PublisherSnapshot, Error> {
+    let min_items = site_config::parse_feed_minimum(SiteConfigKey::FeedsMinItems, row.min_items)?;
+    let min_days = site_config::parse_feed_minimum(SiteConfigKey::FeedsMinDays, row.min_days)?;
     let hub = row.hub.map(StoredSiteConfigValue::into_inner);
     let title = row.title.map(StoredSiteConfigValue::into_inner);
     let base_url = row.base_url.map(StoredSiteConfigValue::into_inner);
@@ -138,14 +161,10 @@ fn snapshot_from_row(row: SnapshotRow) -> PublisherSnapshot {
     let base_url = base_url
         .and_then(|value| (!value.is_empty()).then_some(value))
         .and_then(|value| value.parse::<BaseUrl>().ok());
-    PublisherSnapshot {
+    Ok(PublisherSnapshot {
         feeds: FeedsConfig {
-            min_items: min_items
-                .and_then(|value| value.parse().ok())
-                .unwrap_or_default(),
-            min_days: min_days
-                .and_then(|value| value.parse().ok())
-                .unwrap_or_default(),
+            min_items,
+            min_days,
             websub_hub_url: parse_hub(hub),
         },
         identity: SiteIdentity {
@@ -156,7 +175,7 @@ fn snapshot_from_row(row: SnapshotRow) -> PublisherSnapshot {
         },
         generation: row.generation,
         malformed_hub,
-    }
+    })
 }
 
 #[async_trait]
@@ -195,7 +214,7 @@ where
         )
         .fetch_one(&self.pool)
         .await?;
-        Ok(snapshot_from_row(row))
+        Ok(snapshot_from_row(row)?)
     }
 
     async fn mutate_hub(
@@ -268,6 +287,57 @@ where
             .execute(&mut *connection)
             .await?;
         Ok(HubMutationOutcome::Changed { generation })
+    }
+
+    async fn mutate_feed_window(
+        &self,
+        transaction: &mut WriteTransaction,
+        mutation: FeedWindowMutation,
+    ) -> Result<FeedWindowMutationOutcome, PublisherStorageError> {
+        let connection = DB::write_connection(transaction)?;
+        match mutation {
+            FeedWindowMutation::SetMinItems(value) => {
+                sqlx::query(
+                    "INSERT INTO site_config (key, value) VALUES ($1, $2) \
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                )
+                .bind_storage(SiteConfigKey::FeedsMinItems)
+                .bind_storage(StoredSiteConfigValue::new(value.to_string()))
+                .execute(&mut *connection)
+                .await?;
+            }
+            FeedWindowMutation::UnsetMinItems => {
+                sqlx::query("DELETE FROM site_config WHERE key = $1")
+                    .bind_storage(SiteConfigKey::FeedsMinItems)
+                    .execute(&mut *connection)
+                    .await?;
+            }
+            FeedWindowMutation::SetMinDays(value) => {
+                sqlx::query(
+                    "INSERT INTO site_config (key, value) VALUES ($1, $2) \
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                )
+                .bind_storage(SiteConfigKey::FeedsMinDays)
+                .bind_storage(StoredSiteConfigValue::new(value.to_string()))
+                .execute(&mut *connection)
+                .await?;
+            }
+            FeedWindowMutation::UnsetMinDays => {
+                sqlx::query("DELETE FROM site_config WHERE key = $1")
+                    .bind_storage(SiteConfigKey::FeedsMinDays)
+                    .execute(&mut *connection)
+                    .await?;
+            }
+        }
+        let generation = sqlx::query_scalar::<_, PublisherGeneration>(
+            "UPDATE publisher_state SET generation = generation + 1 WHERE id = 1 RETURNING generation",
+        )
+        .fetch_one(&mut *connection)
+        .await?;
+        sqlx::query("DELETE FROM feed_cache")
+            .execute(&mut *connection)
+            .await?;
+        Ok(FeedWindowMutationOutcome::Applied { generation })
     }
 
     async fn repair_malformed_hub(
@@ -343,12 +413,46 @@ mod tests {
     use super::*;
     use crate::test_support::fp;
     use crate::test_support::{Backend, TestEnv, backends, confirmed, inject_invalid_site_config};
-    use common::test_support::parse_url;
-    use common::{feed::FeedFormat, test_support::parse_etag, time::UtcInstant};
-    use host::feed::SyndicationFeedRepresentation;
-    use host::feed::{FeedMinDays, FeedMinItems};
+    use common::{
+        MutationOutcome,
+        test_support::{parse_etag, parse_url},
+        time::UtcInstant,
+    };
+    use host::feed::{FeedMinDays, FeedMinItems, SyndicationFeedRepresentation};
+    use host::test_support::{parse_feed_min_days, parse_feed_min_items};
     use rstest::*;
     use rstest_reuse::*;
+
+    async fn mutate_feed_window(
+        env: &TestEnv,
+        mutation: FeedWindowMutation,
+    ) -> FeedWindowMutationOutcome {
+        let publisher = Arc::clone(&env.state.publisher);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(
+                        async move { publisher.mutate_feed_window(transaction, mutation).await },
+                    )
+                })
+                .await
+                .expect("mutate feed window"),
+        )
+    }
+
+    async fn seed_cache(env: &TestEnv, row: FeedCacheRow) {
+        let cache = Arc::clone(&env.state.feed_cache);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move { cache.upsert(transaction, row).await })
+                })
+                .await
+                .expect("seed cache"),
+        );
+    }
 
     async fn mutate(env: &TestEnv, hub: Option<&HubUrl>) -> HubMutationOutcome {
         let publisher = Arc::clone(&env.state.publisher);
@@ -365,14 +469,18 @@ mod tests {
     }
 
     fn cache_row() -> FeedCacheRow {
-        let path = fp("/feed.rss");
+        cache_row_at("/feed.rss")
+    }
+
+    fn cache_row_at(path: &str) -> FeedCacheRow {
+        let path = fp(path);
         let (_, format) = path.parts().expect("valid feed path");
         let now = UtcInstant::now();
         FeedCacheRow::new(
             path,
             SyndicationFeedRepresentation::try_from_stored(
                 format,
-                FeedFormat::Rss.content_type(),
+                format.content_type(),
                 "<rss/>".to_owned(),
             )
             .expect("valid representation"),
@@ -402,7 +510,6 @@ mod tests {
             first
         );
     }
-
     #[apply(backends)]
     #[tokio::test]
     async fn snapshot_decodes_defaults_as_one_publisher_value(#[case] backend: Backend) {
@@ -418,6 +525,187 @@ mod tests {
             Some("https://example.com/".to_owned())
         );
         assert_eq!(snapshot.generation, PublisherGeneration(0));
+    }
+
+    /// Each typed mutation changes only its requested minimum; unsetting restores
+    /// that minimum's absent-value default without disturbing its companion.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn feed_window_mutations_retain_companions_and_restore_defaults(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+
+        mutate_feed_window(
+            &env,
+            FeedWindowMutation::SetMinItems(parse_feed_min_items("42")),
+        )
+        .await;
+        let snapshot = env.state.publisher.snapshot().await.unwrap();
+        assert_eq!(snapshot.feeds.min_items, parse_feed_min_items("42"));
+        assert_eq!(snapshot.feeds.min_days, FeedMinDays::default());
+
+        mutate_feed_window(
+            &env,
+            FeedWindowMutation::SetMinDays(parse_feed_min_days("7")),
+        )
+        .await;
+        let snapshot = env.state.publisher.snapshot().await.unwrap();
+        assert_eq!(snapshot.feeds.min_items, parse_feed_min_items("42"));
+        assert_eq!(snapshot.feeds.min_days, parse_feed_min_days("7"));
+
+        mutate_feed_window(&env, FeedWindowMutation::UnsetMinItems).await;
+        let snapshot = env.state.publisher.snapshot().await.unwrap();
+        assert_eq!(snapshot.feeds.min_items, FeedMinItems::default());
+        assert_eq!(snapshot.feeds.min_days, parse_feed_min_days("7"));
+
+        mutate_feed_window(&env, FeedWindowMutation::UnsetMinDays).await;
+        let snapshot = env.state.publisher.snapshot().await.unwrap();
+        assert_eq!(snapshot.feeds.min_items, FeedMinItems::default());
+        assert_eq!(snapshot.feeds.min_days, FeedMinDays::default());
+    }
+
+    /// Even an unchanged request establishes a new generation fence and removes
+    /// every public representation from the cache in the same durable mutation.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn feed_window_noop_advances_generation_and_invalidates_every_cache_path(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        for path in ["/feed.rss", "/feed.atom", "/feed.json"] {
+            seed_cache(&env, cache_row_at(path)).await;
+        }
+        let stale = env.state.publisher.snapshot().await.unwrap().generation;
+
+        let outcome = mutate_feed_window(
+            &env,
+            FeedWindowMutation::SetMinItems(FeedMinItems::default()),
+        )
+        .await;
+        let FeedWindowMutationOutcome::Applied { generation } = outcome;
+        assert!(generation > stale, "accepted no-op must advance generation");
+        for path in ["/feed.rss", "/feed.atom", "/feed.json"] {
+            assert!(
+                env.state.feed_cache.get(&fp(path)).await.unwrap().is_none(),
+                "{path} must be invalidated"
+            );
+        }
+
+        let publisher = Arc::clone(&env.state.publisher);
+        let outcome = confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        publisher
+                            .commit_cache(transaction, stale, cache_row())
+                            .await
+                    })
+                })
+                .await
+                .expect("fence stale cache commit"),
+        );
+        assert_eq!(outcome, CacheCommitOutcome::StaleGeneration);
+    }
+
+    /// A callback failure rolls back configuration, generation, and cache
+    /// invalidation together, leaving the prior publisher snapshot observable.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn failed_feed_window_mutation_preserves_the_prior_coherent_snapshot(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        seed_cache(&env, cache_row()).await;
+        let before = env.state.publisher.snapshot().await.unwrap();
+        let publisher = Arc::clone(&env.state.publisher);
+
+        let error = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    publisher
+                        .mutate_feed_window(
+                            transaction,
+                            FeedWindowMutation::SetMinItems(parse_feed_min_items("42")),
+                        )
+                        .await?;
+                    Err::<(), _>(PublisherStorageError::Db(Error::PoolClosed))
+                })
+            })
+            .await
+            .expect_err("operation error rolls back the enclosing write scope");
+        assert!(matches!(
+            error,
+            crate::WriteScopeError::Operation(PublisherStorageError::Db(Error::PoolClosed))
+        ));
+        assert_eq!(env.state.publisher.snapshot().await.unwrap(), before);
+        assert!(
+            env.state
+                .feed_cache
+                .get(&fp("/feed.rss"))
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// Losing the acknowledgement after the durable mutation never lets callers
+    /// report the new snapshot as confirmed.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn feed_window_commit_acknowledgement_loss_is_indeterminate(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let publisher = Arc::clone(&env.state.publisher);
+        let outcome = env
+            .state
+            .write_scope
+            .with_commit_acknowledgement_loss_after_commit_for_test()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    publisher
+                        .mutate_feed_window(
+                            transaction,
+                            FeedWindowMutation::SetMinDays(parse_feed_min_days("7")),
+                        )
+                        .await
+                })
+            })
+            .await
+            .expect("acknowledgement loss is an outcome");
+        assert!(matches!(
+            outcome,
+            MutationOutcome::CommitIndeterminate(FeedWindowMutationOutcome::Applied { .. })
+        ));
+    }
+
+    /// Publisher work must never begin from a snapshot that silently substituted a default
+    /// for a corrupt feed minimum.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn snapshot_rejects_a_corrupt_feed_minimum(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let corrupt = "corrupt-min-items-value";
+        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinItems, corrupt)
+            .await
+            .expect("seed corrupt feed minimum");
+
+        let err = env.state.publisher.snapshot().await.unwrap_err();
+        let diagnostic = err.to_string();
+        assert!(
+            diagnostic.contains("feeds.min_items"),
+            "publisher snapshot diagnostics must identify the corrupt key",
+        );
+        assert!(
+            diagnostic.contains("invalid"),
+            "publisher snapshot diagnostics must retain the validation reason",
+        );
+        assert!(
+            !diagnostic.contains(corrupt),
+            "publisher snapshot diagnostics must redact the corrupt stored value",
+        );
     }
 
     #[apply(backends)]

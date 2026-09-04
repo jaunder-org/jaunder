@@ -25,6 +25,11 @@ use common::theme::Theme;
 use common::visibility::DefaultAudience;
 use sqlx::{Database, Encode, Executor, Pool, Result, Type};
 
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use tokio::sync::{Notify, RwLock};
+
 /// Async operations on the `site_config` key-value table.
 ///
 /// This trait manages instance-wide settings that are not specific to any
@@ -205,28 +210,28 @@ pub trait SiteConfigStorage: Send + Sync {
         .await
     }
 
-    /// Returns the configured `feeds.min_items` value, falling back to the
-    /// [`FeedMinItems`] default (20) if unset or unparseable (including a stored `0`,
-    /// which the min-1 invariant rejects).
+    /// Returns the configured `feeds.min_items` value, defaulting only when it
+    /// is absent. A malformed stored value is reported as a key-labelled,
+    /// redacted validation error.
     async fn get_feeds_min_items(&self) -> Result<FeedMinItems> {
-        Ok(self
-            .get_raw(SiteConfigKey::FeedsMinItems)
-            .await?
-            .as_deref()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_default())
+        parse_feed_minimum(
+            SiteConfigKey::FeedsMinItems,
+            self.get_raw(SiteConfigKey::FeedsMinItems)
+                .await?
+                .map(StoredSiteConfigValue::new),
+        )
     }
 
-    /// Returns the configured `feeds.min_days` value, falling back to the
-    /// [`FeedMinDays`] default (30) if unset or unparseable (including a stored `0`,
-    /// which the min-1 invariant rejects).
+    /// Returns the configured `feeds.min_days` value, defaulting only when it
+    /// is absent. A malformed stored value is reported as a key-labelled,
+    /// redacted validation error.
     async fn get_feeds_min_days(&self) -> Result<FeedMinDays> {
-        Ok(self
-            .get_raw(SiteConfigKey::FeedsMinDays)
-            .await?
-            .as_deref()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_default())
+        parse_feed_minimum(
+            SiteConfigKey::FeedsMinDays,
+            self.get_raw(SiteConfigKey::FeedsMinDays)
+                .await?
+                .map(StoredSiteConfigValue::new),
+        )
     }
 
     /// Returns the configured `WebSub` hub URL, if any. An empty stored value is
@@ -249,17 +254,13 @@ pub trait SiteConfigStorage: Send + Sync {
         }
     }
 
-    /// Returns the feed-generation configuration as a single group, applying
-    /// the same per-field defaults as the granular getters it delegates to.
-    /// The granular getters remain for single-value callers (e.g. the worker's
-    /// hub-URL read).
-    async fn get_feeds_config(&self) -> Result<FeedsConfig> {
-        Ok(FeedsConfig {
-            min_items: self.get_feeds_min_items().await?,
-            min_days: self.get_feeds_min_days().await?,
-            websub_hub_url: self.get_feeds_websub_hub_url().await?,
-        })
-    }
+    /// Returns the feed-generation configuration from one coherent database
+    /// snapshot. The minimums are validated item-first; the legacy malformed-hub
+    /// repair policy remains unchanged.
+    async fn get_feeds_config(&self) -> Result<FeedsConfig>;
+
+    #[cfg(test)]
+    async fn install_feeds_config_read_gate(&self, gate: Option<Arc<FeedsConfigReadGate>>);
 
     /// Returns the site identity (title and base URL).
     async fn get_identity(&self) -> Result<SiteIdentity> {
@@ -352,33 +353,6 @@ pub trait SiteConfigStorage: Send + Sync {
         )
         .await
     }
-
-    /// Stores feed rendering configuration. The hub has its own publisher seam:
-    /// callers must not combine it with ordinary configuration writes because a
-    /// hub change also advances the durable generation and invalidates cache.
-    async fn set_feeds_config(
-        &self,
-        transaction: &mut WriteTransaction,
-        config: &FeedsConfig,
-    ) -> Result<()> {
-        if config.websub_hub_url.is_some() {
-            return Err(sqlx::Error::Protocol(
-                "feeds.websub_hub_url must be changed through PublisherStorage".to_owned(),
-            ));
-        }
-        self.set(
-            transaction,
-            SiteConfigKey::FeedsMinItems,
-            &config.min_items.to_string(),
-        )
-        .await?;
-        self.set(
-            transaction,
-            SiteConfigKey::FeedsMinDays,
-            &config.min_days.to_string(),
-        )
-        .await
-    }
 }
 
 /// Generic [`SiteConfigStorage`] backed by any [`Backend`] database.
@@ -387,12 +361,18 @@ pub trait SiteConfigStorage: Send + Sync {
 /// once here; see ADR-0019.
 pub struct SiteConfigStore<DB: Database> {
     pool: Pool<DB>,
+    #[cfg(test)]
+    feeds_config_read_gate: RwLock<Option<Arc<FeedsConfigReadGate>>>,
 }
 
 impl<DB: Database> SiteConfigStore<DB> {
     #[must_use]
     pub fn new(pool: Pool<DB>) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            #[cfg(test)]
+            feeds_config_read_gate: RwLock::new(None),
+        }
     }
 }
 
@@ -416,6 +396,70 @@ impl StoredSiteConfigValue {
     pub(crate) fn into_inner(self) -> String {
         self.0
     }
+}
+
+/// Redacted validation reason for a malformed feed setting.
+///
+/// The raw database value is intentionally discarded before constructing this
+/// source, so rendering a `ColumnDecode` cannot expose corrupt configuration.
+#[derive(Debug, thiserror::Error)]
+#[error("invalid stored feed setting: {reason}")]
+pub(crate) struct InvalidFeedSetting {
+    reason: String,
+}
+
+/// Parses an optional feed setting, applying its default only to an absent row.
+///
+/// `ColumnDecode` retains sqlx's existing typed database-error surface while
+/// its index identifies the setting and its source retains only validation text.
+pub(crate) fn parse_feed_minimum<T>(
+    key: SiteConfigKey,
+    value: Option<StoredSiteConfigValue>,
+) -> Result<T>
+where
+    T: Default + std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    value.map_or_else(
+        || Ok(T::default()),
+        |value| {
+            value
+                .0
+                .parse()
+                .map_err(|error: T::Err| sqlx::Error::ColumnDecode {
+                    index: key.as_ref().to_owned(),
+                    source: Box::new(InvalidFeedSetting {
+                        reason: error.to_string(),
+                    }),
+                })
+        },
+    )
+}
+
+/// Test-only barrier after the grouped statement has captured its database snapshot.
+#[cfg(test)]
+#[derive(Default)]
+pub struct FeedsConfigReadGate {
+    captured: Notify,
+    resume: Notify,
+}
+
+#[cfg(test)]
+impl FeedsConfigReadGate {
+    async fn wait_for_snapshot(&self) {
+        self.captured.notified().await;
+    }
+
+    fn resume(&self) {
+        self.resume.notify_one();
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct FeedsConfigRow {
+    min_items: Option<StoredSiteConfigValue>,
+    min_days: Option<StoredSiteConfigValue>,
+    hub: Option<StoredSiteConfigValue>,
 }
 
 /// A physically stored site-config key, including an unknown or orphan key.
@@ -461,6 +505,7 @@ where
     (SmtpHost,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SmtpPort,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SmtpTlsMode,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    FeedsConfigRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (SmtpSender,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SmtpUsername,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SmtpPassword,): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -483,6 +528,52 @@ where
         Ok(row.map(|(value,)| value.into_inner()))
     }
 
+    async fn get_feeds_config(&self) -> Result<FeedsConfig> {
+        let row = sqlx::query_as::<_, FeedsConfigRow>(
+            "SELECT \
+             MAX(CASE WHEN key = 'feeds.min_items' THEN value END) AS min_items, \
+             MAX(CASE WHEN key = 'feeds.min_days' THEN value END) AS min_days, \
+             MAX(CASE WHEN key = 'feeds.websub_hub_url' THEN value END) AS hub \
+             FROM site_config \
+             WHERE key IN ('feeds.min_items', 'feeds.min_days', 'feeds.websub_hub_url')",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        #[cfg(test)]
+        {
+            let gate = self.feeds_config_read_gate.read().await.clone();
+            if let Some(gate) = gate {
+                gate.captured.notify_one();
+                gate.resume.notified().await;
+            }
+        }
+
+        let min_items = parse_feed_minimum(SiteConfigKey::FeedsMinItems, row.min_items)?;
+        let min_days = parse_feed_minimum(SiteConfigKey::FeedsMinDays, row.min_days)?;
+        let websub_hub_url = row
+            .hub
+            .map(StoredSiteConfigValue::into_inner)
+            .and_then(text::non_empty_owned)
+            .and_then(|raw| {
+                if let Ok(url) = raw.parse::<HubUrl>() {
+                    Some(url)
+                } else {
+                    tracing::warn!("ignoring unparseable stored feeds.websub_hub_url");
+                    None
+                }
+            });
+        Ok(FeedsConfig {
+            min_items,
+            min_days,
+            websub_hub_url,
+        })
+    }
+
+    #[cfg(test)]
+    async fn install_feeds_config_read_gate(&self, gate: Option<Arc<FeedsConfigReadGate>>) {
+        *self.feeds_config_read_gate.write().await = gate;
+    }
     #[tracing::instrument(
         name = "storage.site_config.set",
         skip(self, transaction, value),
@@ -494,9 +585,14 @@ where
         key: SiteConfigKey,
         value: &str,
     ) -> Result<()> {
-        if key == SiteConfigKey::FeedsWebsubHubUrl {
+        if matches!(
+            key,
+            SiteConfigKey::FeedsWebsubHubUrl
+                | SiteConfigKey::FeedsMinItems
+                | SiteConfigKey::FeedsMinDays
+        ) {
             return Err(sqlx::Error::Protocol(
-                "feeds.websub_hub_url must be changed through PublisherStorage".to_owned(),
+                "feed settings must be changed through PublisherStorage".to_owned(),
             ));
         }
         set_stored::<DB>(transaction, key, StoredSiteConfigValue(value.to_owned())).await
@@ -576,9 +672,14 @@ where
     }
 
     async fn delete(&self, transaction: &mut WriteTransaction, key: SiteConfigKey) -> Result<bool> {
-        if key == SiteConfigKey::FeedsWebsubHubUrl {
+        if matches!(
+            key,
+            SiteConfigKey::FeedsWebsubHubUrl
+                | SiteConfigKey::FeedsMinItems
+                | SiteConfigKey::FeedsMinDays
+        ) {
             return Err(sqlx::Error::Protocol(
-                "feeds.websub_hub_url must be changed through PublisherStorage".to_owned(),
+                "feed settings must be changed through PublisherStorage".to_owned(),
             ));
         }
         let connection = DB::write_connection(transaction)?;
@@ -624,7 +725,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{SiteConfigKey, SmtpTlsMode};
+    use std::sync::Arc;
+
+    use super::{FeedsConfigReadGate, SiteConfigKey, SmtpTlsMode};
+    use crate::publisher::FeedWindowMutation;
     use crate::test_support::{
         Backend, TestEnv, backends, backends_matrix, confirmed, inject_invalid_site_config,
     };
@@ -638,13 +742,31 @@ mod tests {
     };
     use common::theme::Theme;
     use common::visibility::DefaultAudience;
-    use host::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
     use host::test_support::{parse_feed_min_days, parse_feed_min_items};
     use rstest::*;
     use rstest_reuse::*;
 
     async fn set_config(env: &TestEnv, key: SiteConfigKey, value: &str) -> anyhow::Result<()> {
-        let storage = std::sync::Arc::clone(&env.state.site_config);
+        let mutation = match key {
+            SiteConfigKey::FeedsMinItems => Some(FeedWindowMutation::SetMinItems(value.parse()?)),
+            SiteConfigKey::FeedsMinDays => Some(FeedWindowMutation::SetMinDays(value.parse()?)),
+            _ => None,
+        };
+        if let Some(mutation) = mutation {
+            let publisher = Arc::clone(&env.state.publisher);
+            confirmed(
+                env.state
+                    .write_scope
+                    .run(move |transaction| {
+                        Box::pin(async move {
+                            publisher.mutate_feed_window(transaction, mutation).await
+                        })
+                    })
+                    .await?,
+            );
+            return Ok(());
+        }
+        let storage = Arc::clone(&env.state.site_config);
         let value = value.to_owned();
         confirmed(
             env.state
@@ -684,14 +806,10 @@ mod tests {
             store.get_raw(SiteConfigKey::SiteTitle).await.unwrap(),
             Some("T".to_string())
         );
-        set_config(&env, SiteConfigKey::FeedsMinItems, "9")
-            .await
-            .unwrap();
         assert_eq!(
             store.list().await.unwrap(),
             vec![
                 ("backup.mode".to_string(), "archive".to_string()),
-                ("feeds.min_items".to_string(), "9".to_string()),
                 ("site.title".to_string(), "T".to_string()),
             ],
         );
@@ -771,38 +889,182 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         let config = storage.get_feeds_config().await.unwrap();
-        assert_eq!(config.min_items, FeedMinItems::default());
-        assert_eq!(config.min_days, FeedMinDays::default());
+        assert_eq!(config.min_items, parse_feed_min_items("20"));
+        assert_eq!(config.min_days, parse_feed_min_days("30"));
         assert_eq!(config.websub_hub_url, None);
     }
+
     #[apply(backends)]
     #[tokio::test]
-    async fn set_and_get_feeds_config_round_trips(#[case] backend: Backend) {
+    async fn get_feeds_config_applies_the_existing_hub_read_policy(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        let config = FeedsConfig {
-            min_items: parse_feed_min_items("42"),
-            min_days: parse_feed_min_days("7"),
-            websub_hub_url: None,
-        };
-        let config_storage = std::sync::Arc::clone(&env.state.site_config);
-        let expected = config.clone();
-        confirmed(
-            env.state
-                .write_scope
-                .run(move |transaction| {
-                    Box::pin(
-                        async move { config_storage.set_feeds_config(transaction, &config).await },
-                    )
-                })
-                .await
-                .unwrap(),
+        inject_invalid_site_config(
+            &env,
+            SiteConfigKey::FeedsWebsubHubUrl,
+            "https://hub.example.com/",
+        )
+        .await
+        .unwrap();
+        let config = storage.get_feeds_config().await.unwrap();
+        assert_eq!(
+            config.websub_hub_url,
+            Some(parse_url("https://hub.example.com/"))
         );
-        let loaded = storage.get_feeds_config().await.unwrap();
-        assert_eq!(loaded, expected);
-        // Exercise the derived Clone/Debug so the aggregate struct is covered.
-        assert_eq!(loaded.clone(), expected);
-        assert!(!format!("{expected:?}").is_empty());
+
+        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "not-a-url")
+            .await
+            .unwrap();
+        let config = storage.get_feeds_config().await.unwrap();
+        assert_eq!(config.websub_hub_url, None);
+    }
+    /// Feed-window keys have one publisher-owned mutation boundary; generic
+    /// configuration writes cannot bypass its generation fence or cache invalidation.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn generic_site_config_mutations_reject_feed_window_minimums(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let config = Arc::clone(&env.state.site_config);
+        let error = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    config
+                        .set(transaction, SiteConfigKey::FeedsMinItems, "42")
+                        .await
+                })
+            })
+            .await
+            .expect_err("generic set must not mutate feeds.min_items");
+        assert!(matches!(
+            error,
+            crate::WriteScopeError::Operation(sqlx::Error::Protocol(_))
+        ));
+
+        let config = Arc::clone(&env.state.site_config);
+        let error = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    config
+                        .delete(transaction, SiteConfigKey::FeedsMinDays)
+                        .await
+                })
+            })
+            .await
+            .expect_err("generic delete must not mutate feeds.min_days");
+        assert!(matches!(
+            error,
+            crate::WriteScopeError::Operation(sqlx::Error::Protocol(_))
+        ));
+    }
+
+    /// One grouped read exposes no partial feed configuration: item validation has a stable
+    /// precedence when both stored minimums are corrupt.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_feeds_config_rejects_both_corrupt_minimums_with_items_first(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        let corrupt_items = "corrupt-min-items-value";
+        let corrupt_days = "corrupt-min-days-value";
+        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinItems, corrupt_items)
+            .await
+            .unwrap();
+        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinDays, corrupt_days)
+            .await
+            .unwrap();
+
+        let err = storage.get_feeds_config().await.unwrap_err();
+        assert!(
+            matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "feeds.min_items"),
+            "both-corrupt grouped reads must report feeds.min_items first",
+        );
+        let diagnostic = err.to_string();
+        assert!(
+            diagnostic.contains("invalid"),
+            "the grouped diagnostic must retain the validation reason",
+        );
+        assert!(
+            !diagnostic.contains(corrupt_items) && !diagnostic.contains(corrupt_days),
+            "the grouped diagnostic must redact corrupt stored values",
+        );
+    }
+
+    /// The grouped interface carries both independent defaults and overrides together, so
+    /// callers never assemble a feed window from separate granular reads.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_feeds_config_combines_each_override_with_its_absent_companion_default(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        set_config(&env, SiteConfigKey::FeedsMinItems, "42")
+            .await
+            .unwrap();
+        let config = storage.get_feeds_config().await.unwrap();
+        assert_eq!(config.min_items, parse_feed_min_items("42"));
+        assert_eq!(config.min_days, parse_feed_min_days("30"));
+
+        set_config(&env, SiteConfigKey::FeedsMinDays, "7")
+            .await
+            .unwrap();
+        let config = storage.get_feeds_config().await.unwrap();
+        assert_eq!(config.min_items, parse_feed_min_items("42"));
+        assert_eq!(config.min_days, parse_feed_min_days("7"));
+    }
+
+    /// The read pauses only after its single statement has captured a row. A
+    /// concurrent atomic replacement must therefore be observed entirely before
+    /// or after the returned configuration, never as a mixed pair.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_feeds_config_keeps_one_snapshot_across_a_concurrent_mutation(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        env.base
+            .pool()
+            .execute(
+                "INSERT INTO site_config (key, value) VALUES \
+                 ('feeds.min_items', '3'), ('feeds.min_days', '4') \
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            )
+            .await
+            .unwrap();
+
+        let gate = Arc::new(FeedsConfigReadGate::default());
+        env.state
+            .site_config
+            .install_feeds_config_read_gate(Some(Arc::clone(&gate)))
+            .await;
+        let storage = Arc::clone(&env.state.site_config);
+        let read = tokio::spawn(async move { storage.get_feeds_config().await });
+        gate.wait_for_snapshot().await;
+
+        env.base
+            .pool()
+            .execute(
+                "INSERT INTO site_config (key, value) VALUES \
+                 ('feeds.min_items', '5'), ('feeds.min_days', '6') \
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            )
+            .await
+            .unwrap();
+        env.state
+            .site_config
+            .install_feeds_config_read_gate(None)
+            .await;
+        gate.resume();
+
+        let config = read.await.unwrap().unwrap();
+        assert_eq!(config.min_items, parse_feed_min_items("3"));
+        assert_eq!(config.min_days, parse_feed_min_days("4"));
     }
 
     /// An unset `smtp.host` is how an instance says "no outbound mail" — not an error,
@@ -1029,12 +1291,12 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn feeds_min_items_returns_default_when_unset(#[case] backend: Backend) {
+    async fn feeds_min_items_returns_20_when_unset(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         assert_eq!(
             storage.get_feeds_min_items().await.unwrap(),
-            FeedMinItems::default()
+            parse_feed_min_items("20")
         );
     }
 
@@ -1052,36 +1314,42 @@ mod tests {
         );
     }
 
+    /// A corrupt stored minimum is not absence: the typed read must preserve the key and
+    /// validation reason while withholding the untrusted stored text.
     #[apply(backends)]
     #[tokio::test]
-    async fn feeds_min_items_falls_back_when_invalid_or_zero(#[case] backend: Backend) {
+    async fn feeds_min_items_rejects_a_corrupt_stored_value(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinItems, "not a number")
+        let corrupt = "corrupt-min-items-value";
+        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinItems, corrupt)
             .await
             .unwrap();
-        assert_eq!(
-            storage.get_feeds_min_items().await.unwrap(),
-            FeedMinItems::default()
+
+        let err = storage.get_feeds_min_items().await.unwrap_err();
+        assert!(
+            matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "feeds.min_items"),
+            "the typed diagnostic must identify feeds.min_items",
         );
-        // A stored `0` is rejected by the min-1 invariant and also falls back.
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinItems, "0")
-            .await
-            .unwrap();
-        assert_eq!(
-            storage.get_feeds_min_items().await.unwrap(),
-            FeedMinItems::default()
+        let diagnostic = err.to_string();
+        assert!(
+            diagnostic.contains("invalid"),
+            "the typed diagnostic must retain its validation reason",
+        );
+        assert!(
+            !diagnostic.contains(corrupt),
+            "the typed diagnostic must redact the corrupt stored value",
         );
     }
 
     #[apply(backends)]
     #[tokio::test]
-    async fn feeds_min_days_returns_default_when_unset(#[case] backend: Backend) {
+    async fn feeds_min_days_returns_30_when_unset(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         assert_eq!(
             storage.get_feeds_min_days().await.unwrap(),
-            FeedMinDays::default()
+            parse_feed_min_days("30")
         );
     }
 
@@ -1096,6 +1364,33 @@ mod tests {
         assert_eq!(
             storage.get_feeds_min_days().await.unwrap(),
             parse_feed_min_days("60")
+        );
+    }
+
+    /// The day minimum has the same corruption boundary as the item minimum, independently.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn feeds_min_days_rejects_a_corrupt_stored_value(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        let corrupt = "corrupt-min-days-value";
+        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinDays, corrupt)
+            .await
+            .unwrap();
+
+        let err = storage.get_feeds_min_days().await.unwrap_err();
+        assert!(
+            matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "feeds.min_days"),
+            "the typed diagnostic must identify feeds.min_days",
+        );
+        let diagnostic = err.to_string();
+        assert!(
+            diagnostic.contains("invalid"),
+            "the typed diagnostic must retain its validation reason",
+        );
+        assert!(
+            !diagnostic.contains(corrupt),
+            "the typed diagnostic must redact the corrupt stored value",
         );
     }
 

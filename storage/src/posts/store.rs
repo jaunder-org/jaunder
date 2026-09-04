@@ -1981,7 +1981,7 @@ where
         now: UtcInstant,
         viewer: &ViewerIdentity,
     ) -> Result<Vec<PostRecord>> {
-        let cutoff = UtcInstant::from(window.cutoff_date(now.value()));
+        let cutoff = window.cutoff_date(now.value()).map(UtcInstant::from);
         syndication::list_published_in_window_rows::<DB>(
             &self.pool,
             surface,

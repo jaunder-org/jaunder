@@ -10,8 +10,9 @@ use common::MutationOutcome;
 use common::tagged_url::HubUrl;
 use sqlx::Error;
 use storage::{
-    CacheCommitOutcome, FeedCacheRow, HubMutationOutcome, PublisherGeneration, PublisherSnapshot,
-    PublisherStorage, PublisherStorageError, WriteScope, WriteScopeError,
+    CacheCommitOutcome, FeedCacheRow, FeedWindowMutation, FeedWindowMutationOutcome,
+    HubMutationOutcome, PublisherGeneration, PublisherSnapshot, PublisherStorage,
+    PublisherStorageError, WriteScope, WriteScopeError,
 };
 use web::websub::{WebsubPublisher, WebsubPublisherError};
 ///
@@ -143,6 +144,27 @@ impl PublisherService {
             .map_err(Into::into)
     }
 
+    /// Mutates one feed-window setting while preserving the durable commit
+    /// acknowledgement for the CLI surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the publisher gate cannot be acquired or the write
+    /// scope cannot complete.
+    pub async fn mutate_feed_window_with_feedback(
+        &self,
+        mutation: FeedWindowMutation,
+    ) -> anyhow::Result<MutationOutcome<FeedWindowMutationOutcome>> {
+        let _gate = PublisherGateGuard::acquire(&self.storage_path).await?;
+        let publisher = Arc::clone(&self.publisher);
+        self.write_scope
+            .run(move |transaction| {
+                Box::pin(async move { publisher.mutate_feed_window(transaction, mutation).await })
+            })
+            .await
+            .map_err(Into::into)
+    }
+
     /// Mutates the normalized hub under the same gate used by publication.
     ///
     /// # Errors
@@ -249,7 +271,7 @@ mod tests {
     use rstest_reuse::*;
     use sqlx::Error;
     use storage::{
-        FeedCacheRow, MockPublisherStorage, PublisherStorageError,
+        FeedCacheRow, FeedWindowMutation, MockPublisherStorage, PublisherStorageError,
         test_support::{Backend, backends, inject_invalid_site_config},
     };
 
@@ -324,6 +346,33 @@ mod tests {
                 .expect("confirmed mutation");
 
         assert!(matches!(outcome, MutationOutcome::Confirmed(())));
+    }
+
+    /// The service exposes the publisher mutation outcome directly so an
+    /// acknowledgement loss cannot be mistaken for a confirmed CLI mutation.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn feed_window_service_preserves_the_publisher_mutation_outcome(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let directory = tempfile::tempdir().expect("temporary storage directory");
+        let service = PublisherService::new(
+            directory.path().to_owned(),
+            Arc::clone(&env.state.publisher),
+            env.state.write_scope.clone(),
+        );
+
+        let outcome = service
+            .mutate_feed_window_with_feedback(FeedWindowMutation::SetMinItems(
+                "42".parse().expect("valid feed minimum"),
+            ))
+            .await
+            .expect("mutation outcome");
+        assert!(matches!(
+            outcome,
+            MutationOutcome::Confirmed(FeedWindowMutationOutcome::Applied { .. })
+        ));
     }
 
     #[tokio::test]

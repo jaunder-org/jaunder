@@ -70,7 +70,12 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     ),
     (
         "PublisherStorage",
-        &["mutate_hub", "repair_malformed_hub", "commit_cache"],
+        &[
+            "mutate_hub",
+            "mutate_feed_window",
+            "repair_malformed_hub",
+            "commit_cache",
+        ],
     ),
     (
         "SessionStorage",
@@ -93,7 +98,6 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
             "set_backup_config",
             "set_default_audience",
             "set_theme",
-            "set_feeds_config",
         ],
     ),
     ("SubscriptionStorage", &["subscribe", "unsubscribe"]),
