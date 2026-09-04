@@ -39,7 +39,7 @@ Out:
   - Verification: focused `storage::feed_cache`, post continuation-reporting,
     storage listing, and feed-handler mock tests retain their existing
     assertions and pass on applicable backends.
-- [ ] Task 3: Migrate server feed integration fixtures
+- [x] Task 3: Migrate server feed integration fixtures
   - Contract: handler and worker tests use `seed`; semantic body, ETag,
     updated-at, and generated-at values remain explicit through approved
     setters. Remove superseded local construction/persistence helpers only when
