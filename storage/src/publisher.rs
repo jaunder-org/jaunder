@@ -620,8 +620,14 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let existing = cache_row();
-        seed_cache(&env, existing.clone()).await;
+        seed_cache(&env, cache_row()).await;
+        let existing = env
+            .state
+            .feed_cache
+            .get(&fp("/feed.rss"))
+            .await
+            .unwrap()
+            .expect("seeded cache row");
         let generation = env.state.publisher.snapshot().await.unwrap().generation;
         let publisher = Arc::clone(&env.state.publisher);
         let candidate = FeedCacheRow::new(
