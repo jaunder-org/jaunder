@@ -20,10 +20,61 @@ use {
 };
 
 use crate::error::WebResult;
-// `Username` / `ProfferedPassword` / `RawToken` are ungated: they type the
+// `Username` / `Email` / `ProfferedPassword` / `RawToken` are ungated: they type
 // request wire arguments, so generated inputs reference them on both client and
 // server builds.
+use common::email::Email;
 use common::{MutationOutcome, password::ProfferedPassword, token::RawToken, username::Username};
+use std::str::FromStr;
+
+/// The validated identifier submitted to begin a password reset.
+///
+/// Classification is deliberate: `@` commits input to the email parser, so a
+/// malformed email-looking identifier cannot be accepted as a username.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum PasswordResetIdentifier {
+    Username(Username),
+    Email(Email),
+}
+
+/// Error returned when a password-reset identifier fails its selected parser.
+#[derive(Debug, thiserror::Error)]
+pub enum InvalidPasswordResetIdentifier {
+    #[error(transparent)]
+    Username(#[from] common::username::InvalidUsername),
+    #[error(transparent)]
+    Email(#[from] common::email::InvalidEmail),
+}
+
+impl FromStr for PasswordResetIdentifier {
+    type Err = InvalidPasswordResetIdentifier;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.contains('@') {
+            Ok(Self::Email(value.parse()?))
+        } else {
+            Ok(Self::Username(value.parse()?))
+        }
+    }
+}
+
+impl TryFrom<String> for PasswordResetIdentifier {
+    type Error = InvalidPasswordResetIdentifier;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<PasswordResetIdentifier> for String {
+    fn from(value: PasswordResetIdentifier) -> Self {
+        match value {
+            PasswordResetIdentifier::Username(username) => username.into(),
+            PasswordResetIdentifier::Email(email) => email.into(),
+        }
+    }
+}
 
 #[cfg(feature = "server")]
 fn finalize_password_reset(outcome: &MutationOutcome<common::ids::UserId>) -> MutationOutcome<()> {
@@ -150,16 +201,47 @@ pub async fn confirm(request: ConfirmPasswordResetRequest) -> WebResult<Mutation
     Ok(finalize_password_reset(&outcome))
 }
 
-#[cfg(all(test, feature = "server"))]
+#[cfg(test)]
 mod tests {
-    use super::finalize_password_reset;
-    use common::{MutationOutcome, ids::UserId};
+    use super::{InvalidPasswordResetIdentifier, PasswordResetIdentifier};
+    use common::{email::Email, username::Username};
 
     #[test]
-    fn password_reset_indeterminate_outcome_preserves_uncertainty_and_erases_consumption() {
-        let outcome =
-            finalize_password_reset(&MutationOutcome::CommitIndeterminate(UserId::from(42)));
+    fn password_reset_identifier_classifies_and_canonicalizes_input() {
+        assert_eq!(
+            "Alice".parse::<PasswordResetIdentifier>().unwrap(),
+            PasswordResetIdentifier::Username("alice".parse::<Username>().unwrap())
+        );
+        assert_eq!(
+            "Local.Part@EXAMPLE.COM"
+                .parse::<PasswordResetIdentifier>()
+                .unwrap(),
+            PasswordResetIdentifier::Email("Local.Part@example.com".parse::<Email>().unwrap())
+        );
+    }
 
-        assert!(matches!(outcome, MutationOutcome::CommitIndeterminate(())));
+    #[test]
+    fn password_reset_identifier_rejects_the_selected_invalid_variant() {
+        assert!(matches!(
+            "alice@".parse::<PasswordResetIdentifier>(),
+            Err(InvalidPasswordResetIdentifier::Email(_))
+        ));
+        assert!(matches!(
+            "alice.example".parse::<PasswordResetIdentifier>(),
+            Err(InvalidPasswordResetIdentifier::Username(_))
+        ));
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn password_reset_indeterminate_outcome_preserves_uncertainty_and_erases_consumption() {
+        let outcome = super::finalize_password_reset(
+            &common::MutationOutcome::CommitIndeterminate(common::ids::UserId::from(42)),
+        );
+
+        assert!(matches!(
+            outcome,
+            common::MutationOutcome::CommitIndeterminate(())
+        ));
     }
 }
