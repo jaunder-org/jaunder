@@ -206,6 +206,10 @@ mod tests {
         }
 
         assert!(!if_none_match_matches(&headers(&[b"*", b""]), b"\"match\""));
+        assert!(!if_none_match_matches(
+            &headers(&[b"*", b"\"match\""]),
+            b"\"match\"",
+        ));
     }
 
     #[test]

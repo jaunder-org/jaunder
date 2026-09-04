@@ -104,7 +104,11 @@ async fn serve(
         } else {
             StatusCode::OK
         };
-    match cached_response(row, status) {
+    finish_cached_response(cached_response(row, status))
+}
+
+fn finish_cached_response(result: Result<Response, InternalError>) -> Response {
+    match result {
         Ok(response) => response,
         Err(error) => {
             error.emit_boundary_failure();
@@ -540,6 +544,15 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+    }
+
+    #[test]
+    fn invalid_response_metadata_returns_a_sanitized_internal_error() {
+        let invalid_header = HeaderValue::from_bytes(b"\n").expect_err("newline is invalid");
+        let response =
+            finish_cached_response(Err(map_feed_response_metadata_failure(invalid_header)));
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     // guard:no-backend — mock store
