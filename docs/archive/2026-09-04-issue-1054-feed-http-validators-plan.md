@@ -5,7 +5,7 @@
 > schema, an atomic cache-write contract, and public HTTP conditional semantics.
 
 Authoritative specification:
-`docs/superpowers/specs/2026-09-04-issue-1054-feed-http-validators.md`
+`docs/archive/2026-09-04-issue-1054-feed-http-validators-spec.md`
 
 ## Scope
 
