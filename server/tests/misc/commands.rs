@@ -963,14 +963,6 @@ async fn cmd_restore_rejects_pre_identity_backup(#[case] backend: Backend) {
         })
     ));
     assert_target_unmodified(&target_args).await;
-    assert!(
-        !target_args
-            .storage_path
-            .join("media")
-            .join("avatar.txt")
-            .exists(),
-        "schema rejection must precede media restoration"
-    );
 }
 
 // Backup/restore preserves the fixture's exact microsecond-precision timestamp
@@ -1326,14 +1318,45 @@ async fn cmd_restore_rejects_unsupported_format_before_mutating_target(#[case] b
         })
     ));
     assert_target_unmodified(&target_args).await;
-    assert!(
-        !target_args
-            .storage_path
-            .join("media")
-            .join("avatar.txt")
-            .exists(),
-        "format rejection must precede media restoration"
-    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_classifies_malformed_format_as_invalid_backup(#[case] backend: Backend) {
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let base = &source_env.base;
+    populate_backup_fixture(&source_args).await;
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let manifest_path = backup_path.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read manifest"))
+            .expect("parse manifest");
+    manifest["format_version"] = serde_json::json!("1");
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).expect("serialize malformed manifest"),
+    )
+    .expect("write malformed manifest");
+
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
+    let error = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect_err("malformed format version must be rejected");
+    assert!(matches!(
+        error.downcast_ref::<BackupError>(),
+        Some(BackupError::InvalidBackup(_))
+    ));
+    assert_target_unmodified(&target_args).await;
 }
 
 #[apply(backends)]

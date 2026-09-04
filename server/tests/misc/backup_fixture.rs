@@ -348,8 +348,8 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     );
 }
 
-/// Assert a restore target is untouched — the fixture's operator user is absent —
-/// after a rejected restore rolled back.
+/// Assert a restore target is untouched — neither the fixture's operator user
+/// nor its media file is present — after a rejected restore rolled back.
 pub async fn assert_target_unmodified(args: &StorageArgs) {
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
@@ -363,5 +363,9 @@ pub async fn assert_target_unmodified(args: &StorageArgs) {
             .expect("get user")
             .is_none(),
         "target must be unmodified after a rejected restore"
+    );
+    assert!(
+        !args.storage_path.join("media").join("avatar.txt").exists(),
+        "target media must be unmodified after a rejected restore"
     );
 }

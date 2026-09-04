@@ -12,10 +12,11 @@ use serde_json::{Map, Value};
 
 use super::{BackupMode, error::BackupError};
 
-pub(crate) const CURRENT_BACKUP_FORMAT_VERSION: u32 = 1;
+const LEGACY_BACKUP_FORMAT_VERSION: u32 = 1;
+pub(crate) const CURRENT_BACKUP_FORMAT_VERSION: u32 = LEGACY_BACKUP_FORMAT_VERSION;
 
 const fn legacy_backup_format_version() -> u32 {
-    CURRENT_BACKUP_FORMAT_VERSION
+    LEGACY_BACKUP_FORMAT_VERSION
 }
 
 // Tables deliberately excluded from backup: _sqlx_migrations is schema state and feed_cache is regenerable.
@@ -132,8 +133,13 @@ pub(super) fn read_manifest(source_path: &Path) -> Result<BackupManifest, Backup
         )));
     }
 
-    let file = File::open(manifest_path)?;
-    Ok(serde_json::from_reader(file)?)
+    let file = File::open(&manifest_path)?;
+    serde_json::from_reader(file).map_err(|error| {
+        BackupError::InvalidBackup(format!(
+            "malformed manifest {}: {error}",
+            manifest_path.display()
+        ))
+    })
 }
 
 pub(super) fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupError> {
@@ -324,7 +330,7 @@ mod tests {
         });
         let manifest =
             serde_json::from_value::<BackupManifest>(legacy).expect("legacy v1 manifest");
-        assert_eq!(manifest.format_version, CURRENT_BACKUP_FORMAT_VERSION);
+        assert_eq!(manifest.format_version, 1);
 
         let malformed = serde_json::json!({
             "format_version": "1",
@@ -337,6 +343,19 @@ mod tests {
         });
         serde_json::from_value::<BackupManifest>(malformed)
             .expect_err("malformed explicit format version");
+    }
+
+    #[test]
+    fn read_manifest_classifies_malformed_manifest_as_invalid_backup() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        fs::write(
+            temp.path().join("manifest.json"),
+            r#"{"format_version":"1"}"#,
+        )?;
+
+        let error = read_manifest(temp.path()).expect_err("malformed manifest");
+        assert!(matches!(error, BackupError::InvalidBackup(_)));
+        Ok(())
     }
 
     #[test]
