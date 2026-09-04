@@ -14,6 +14,8 @@ import {
 import { SEL } from "./selectors";
 import { expectVisual } from "./visual";
 import { expectAccessible } from "./accessibility";
+import { navigateInApp } from "./navigate";
+import { openComposerFromSidebar } from "./posts";
 
 test("register page shows form", async ({ page }) => {
   // Holdout (spec D6): proves /register renders.
@@ -286,7 +288,7 @@ test("sidebar reverts to signed-out state after logout", async ({
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
 });
 
-test("sidebar shows only Home nav link when not logged in", async ({
+test("sidebar shows Home only and no Compose link when not logged in", async ({
   page,
   firstNav,
 }) => {
@@ -301,30 +303,85 @@ test("sidebar shows only Home nav link when not logged in", async ({
   const navAnchors = page.locator(".j-nav a");
   await expect(navAnchors).toHaveCount(1);
   await expect(navAnchors.first()).toHaveAttribute("href", "/");
+  await expect(page.locator('.j-nav a[href="/posts/new"]')).toHaveCount(0);
 
   // Sidebar footer must not contain a "Sign in" link.
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
 });
 
-test("sidebar footer shows Sign out link when logged in", async ({
+test("authenticated sidebar orders Compose after Feed", async ({
   registeredPage,
 }) => {
   const page = await registeredPage("/");
   // Wait for the authenticated nav to render from the marker (#181 — synchronous,
   // no Suspense swap).
-  await waitForSelector(page, ".j-nav a[href='/drafts']");
-  await waitForSelector(page, ".j-nav a[href='/scheduled']");
-  // Home, Feed (/app cockpit, #181), Drafts, Scheduled, History, Media,
+  await waitForSelector(page, '.j-nav a[href="/posts/new"]');
+  await waitForSelector(page, '.j-nav a[href="/drafts"]');
+  await waitForSelector(page, '.j-nav a[href="/scheduled"]');
+  // Home, Feed (/app cockpit, #181), Compose, Drafts, Scheduled, History, Media,
   // Audiences, and Settings have hrefs.
-  await waitForSelector(page, ".j-nav a[href='/audiences']");
-  await waitForSelector(page, ".j-nav a[href='/history']");
-  await expect(page.locator(".j-nav a")).toHaveCount(8);
-  // The reactive app does not pass an active key.
-  await expect(page.locator(".j-nav .is-active")).toHaveCount(0);
-  await expect(page.locator(".j-nav div.j-nav-item")).toHaveCount(0);
+  await waitForSelector(page, '.j-nav a[href="/audiences"]');
+  await waitForSelector(page, '.j-nav a[href="/history"]');
+  const navAnchors = page.locator(".j-nav a");
+  await expect(navAnchors).toHaveCount(9);
+  const navHrefs = await navAnchors.evaluateAll((links) =>
+    links.map((link) => link.getAttribute("href")),
+  );
+  expect(navHrefs).toEqual([
+    "/",
+    "/app",
+    "/posts/new",
+    "/drafts",
+    "/scheduled",
+    "/history",
+    "/media",
+    "/audiences",
+    "/profile",
+  ]);
+  await expect(page.locator('.j-nav a[href="/posts/new"]')).toHaveText(
+    "Compose",
+  );
+  await expect(page.locator('.j-nav a[href="/"]')).toHaveClass(/\bis-active\b/);
 
   // Footer has Sign out.
   await expect(page.locator(SEL.logoutLink)).toBeVisible();
   // Footer does NOT have Sign in.
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
+});
+
+test("sidebar active state follows exact in-app destinations", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/");
+  const activeItem = page.locator(".j-nav a.is-active");
+  await waitForSelector(page, '.j-nav a[href="/posts/new"]');
+  await expect(activeItem).toHaveCount(1);
+  await expect(activeItem).toHaveAttribute("href", "/");
+
+  await navigateInApp(page, () => page.click('.j-nav a[href="/app"]'), {
+    url: "/app",
+    ready: SEL.postBody,
+  });
+  await expect(activeItem).toHaveCount(1);
+  await expect(activeItem).toHaveAttribute("href", "/app");
+
+  await openComposerFromSidebar(page);
+  await expect(activeItem).toHaveCount(1);
+  await expect(activeItem).toHaveAttribute("href", "/posts/new");
+
+  await navigateInApp(page, () => page.click('.j-nav a[href="/drafts"]'), {
+    url: "/drafts",
+    ready: '.j-topbar h1:has-text("Drafts")',
+  });
+  await expect(activeItem).toHaveCount(1);
+  await expect(activeItem).toHaveAttribute("href", "/drafts");
+});
+
+test("unmatched route leaves every sidebar item inactive", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/999999999/edit");
+  await waitForSelector(page, '.j-nav a[href="/posts/new"]');
+  await expect(page.locator(SEL.error)).toContainText("Post not found");
+  await expect(page.locator(".j-nav a.is-active")).toHaveCount(0);
 });

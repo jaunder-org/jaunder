@@ -9,4 +9,4 @@ mod markup;
 
 #[cfg(target_arch = "wasm32")]
 pub use component::Sidebar;
-pub(crate) use markup::render_sidebar;
+pub(crate) use markup::{active_key, render_sidebar};

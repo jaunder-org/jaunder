@@ -87,17 +87,28 @@ export async function createPostViaApi(
   );
 }
 
+/** Open the full composer through the authenticated sidebar's Compose link.
+ *
+ * This is the ordinary in-app route to a composer reached after the initial
+ * document entry; direct `goto("/posts/new")` remains for true first entries. */
+export async function openComposerFromSidebar(page: Page): Promise<void> {
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/posts/new"]'), {
+    url: "/posts/new",
+    ready: "#audience-base",
+  });
+}
+
 /** Compose and submit a post through the `/posts/new` UI: fill the body (and the
  *  summary / slug inputs when provided), click publish/save, and wait for the
  *  save-summary panel. Returns the `.j-save-summary` locator for follow-up
  *  assertions. The home-page `.j-composer` flow is a separate path this does not
  *  cover.
  *
- *  **The caller must already be on `/posts/new`** — normally by entering there,
- *  `const page = await registeredPage("/posts/new")`. A `goto` here would cost
- *  a second document load on a page whose entry was already the composer
- *  (#867). Nothing in the app links to `/posts/new` (#896), so reaching it is
- *  always an entry, never an in-app move. */
+ *  **The caller must already be on `/posts/new`** — a cold-entry test normally
+ *  uses `const page = await registeredPage("/posts/new")`; a second-hop flow
+ *  reaches it through the rendered Compose sidebar link with `navigateInApp`.
+ *  This helper does not navigate, avoiding an accidental second document load
+ *  (#867). */
 export async function composePost(
   page: Page,
   opts: {

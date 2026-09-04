@@ -29,6 +29,7 @@ import {
   followPermalink,
   FORMAT_PROBE_BODY,
   openEditor,
+  openComposerFromSidebar,
 } from "./posts";
 import { navigateInApp } from "./navigate";
 import { allowSecondBoot } from "./bootBudget";
@@ -612,13 +613,9 @@ test("edit page pre-selects the post's current audience", async ({
     page.locator(".j-audience-item", { hasText: "Confidants" }),
   ).toBeVisible();
 
-  // Save a draft targeted to Subscribers + the named audience.
-  allowSecondBoot(
-    page,
-    "the app exposes no link to /posts/new anywhere, so the composer cannot be reached by an in-app control",
-  );
-  await goto(page, "/posts/new");
-  await waitForSelector(page, "#audience-base");
+  // Reach the full composer through the authenticated sidebar rather than
+  // taking a second document load after managing the audience.
+  await openComposerFromSidebar(page);
   await expect(page.getByText("No named audiences.")).toHaveCount(0);
   await page.fill(SEL.postBody, "# Targeted Draft\n\nbody for targeted draft");
   await page.selectOption("#audience-base", "subscribers");

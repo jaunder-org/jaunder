@@ -7,6 +7,7 @@ use common::{
     registration::RegistrationPolicy, root_relative_url::RootRelativeUrl, username::Username,
 };
 use leptos::prelude::*;
+use leptos_router::hooks;
 
 /// A single nav item in the sidebar.
 #[component]
@@ -53,11 +54,11 @@ fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> 
     }
 }
 
-/// The left navigation sidebar. Reads theme and current-user from context.
-/// `active`: the key of the currently active nav item (e.g. `"home"`).
+/// The left navigation sidebar. Reads session and current location from context.
 #[component]
-pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
-    let active_key = active.unwrap_or_default();
+pub fn Sidebar() -> impl IntoView {
+    let location = hooks::use_location();
+    let active_for_path = move || markup::active_key(&location.pathname.get()).unwrap_or("");
 
     // The shared session context (#591) is the single source: its `current` signal
     // is marker-seeded (flash-free for BOTH username and operator chrome —
@@ -77,23 +78,25 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
             }
         },
     );
-    let anon_html = markup::render_sidebar(&active_key);
     view! {
         <aside class="j-sidebar">
-            {move || match session.get() {
-                None => {
-                    anon_html
-                        .clone()
-                        .inject_into(leptos::html::div().style("display:contents"))
-                        .into_any()
-                }
-                Some(user) => {
-                    let policy = policy
-                        .get()
-                        .flatten()
-                        .and_then(Result::ok)
-                        .unwrap_or(RegistrationPolicy::Closed);
-                    authed_sidebar(&active_key, &user.username, user.is_operator, policy).into_any()
+            {move || {
+                let active_key = active_for_path();
+                match session.get() {
+                    None => {
+                        markup::render_sidebar(active_key)
+                            .inject_into(leptos::html::div().style("display:contents"))
+                            .into_any()
+                    }
+                    Some(user) => {
+                        let policy = policy
+                            .get()
+                            .flatten()
+                            .and_then(Result::ok)
+                            .unwrap_or(RegistrationPolicy::Closed);
+                        authed_sidebar(active_key, &user.username, user.is_operator, policy)
+                            .into_any()
+                    }
                 }
             }}
         </aside>

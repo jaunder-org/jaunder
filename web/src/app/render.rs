@@ -189,10 +189,14 @@ fn feed_label(surface: &common::feed::FeedSurface) -> String {
 #[must_use]
 pub fn render_shell(presentation: &PublicPresentation<PageSeed>) -> Markup {
     let seed = &presentation.page;
+    let active_key = matches!(seed, PageSeed::SiteTimeline(_))
+        .then_some("/")
+        .and_then(crate::sidebar::active_key)
+        .unwrap_or("");
     Markup::new(html! {
         div class="j-root" data-theme=(presentation.theme.as_ref()) {
             div class="j-shell" {
-                aside class="j-sidebar" { (crate::sidebar::render_sidebar("")) }
+                aside class="j-sidebar" { (crate::sidebar::render_sidebar(active_key)) }
                 div class="j-main-region" {
                     main class="j-main" { (crate::posts::render::body(seed)) }
                 }
@@ -458,6 +462,33 @@ mod tests {
             "{html}"
         );
         assert!(html.ends_with("</main></div></div></div>"), "{html}");
+    }
+
+    #[test]
+    fn shell_marks_home_active_only_for_the_site_timeline() {
+        let root = render_shell(&PublicPresentation {
+            theme: common::theme::Theme::Studio,
+            page: PageSeed::SiteTimeline(one_post_page()),
+        })
+        .into_string();
+        assert!(
+            root.contains("<a class=\"j-nav-item is-active\" href=\"/\">"),
+            "{root}"
+        );
+
+        let non_root = render_shell(&PublicPresentation {
+            theme: common::theme::Theme::Studio,
+            page: PageSeed::Profile {
+                username: parse_username("bob"),
+                page: one_post_page(),
+            },
+        })
+        .into_string();
+        assert!(
+            non_root.contains("<a class=\"j-nav-item\" href=\"/\">"),
+            "{non_root}"
+        );
+        assert!(!non_root.contains("j-nav-item is-active"), "{non_root}");
     }
 
     #[test]

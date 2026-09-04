@@ -17,7 +17,7 @@ pub(super) struct NavItem {
     pub(super) requires_operator: bool,
 }
 
-pub(super) static NAV_ITEMS: LazyLock<[NavItem; 16]> = LazyLock::new(|| {
+pub(super) static NAV_ITEMS: LazyLock<[NavItem; 17]> = LazyLock::new(|| {
     [
         NavItem {
             key: "home",
@@ -36,6 +36,14 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 16]> = LazyLock::new(|| {
             label: "Feed",
             icon_path: Icons::HOME,
             href: Some(root_relative_url("/app")),
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "compose",
+            label: "Compose",
+            icon_path: Icons::EDIT,
+            href: Some(root_relative_url("/posts/new")),
             requires_auth: true,
             requires_operator: false,
         },
@@ -175,6 +183,17 @@ pub(super) fn nav_items(
     })
 }
 
+/// Resolves the sole exact-match sidebar selection from the navigation catalog.
+///
+/// Linked destinations only are selectable: editor and other nested routes
+/// intentionally leave the sidebar inactive rather than inheriting a parent item.
+pub(crate) fn active_key(pathname: &str) -> Option<&'static str> {
+    NAV_ITEMS
+        .iter()
+        .find(|item| item.href.as_deref() == Some(pathname))
+        .map(|item| item.key)
+}
+
 /// The static demo "Sources" rows in the sidebar: `(proto, name, sub)`.
 pub(crate) const SIDEBAR_SOURCES: &[(&str, &str, &str)] = &[
     ("atproto", "Bluesky", "mara.bsky.social"),
@@ -258,6 +277,7 @@ mod tests {
         // Auth-required items and non-link placeholders must NOT appear for the
         // anonymous sidebar.
         assert!(!html.contains(">Feed<"), "{html}");
+        assert!(!html.contains(">Compose<"), "{html}");
         assert!(!html.contains(">Drafts<"), "{html}");
         assert!(!html.contains(">Scheduled<"), "{html}");
         assert!(!html.contains(">History<"), "{html}");
@@ -266,6 +286,14 @@ mod tests {
         assert!(!html.contains(">Site Settings<"), "{html}");
         assert!(!html.contains(">WebSub Recovery<"), "{html}");
         // Sources section + empty footer.
+        let compose = NAV_ITEMS
+            .iter()
+            .find(|item| item.key == "compose")
+            .expect("Compose catalog item");
+        assert_eq!(compose.label, "Compose");
+        assert_eq!(compose.icon_path, Icons::EDIT);
+        assert_eq!(compose.href.as_deref(), Some("/posts/new"));
+
         assert!(
             html.contains("<div class=\"j-source-name\">Bluesky</div>"),
             "{html}"
@@ -284,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn nav_catalog_preserves_destinations_and_non_link_placeholders() {
+    fn nav_catalog_places_compose_after_feed_and_hides_it_from_anonymous_navigation() {
         let destinations = NAV_ITEMS
             .iter()
             .filter_map(|item| item.href.as_deref().map(|href| (item.key, href)))
@@ -294,6 +322,7 @@ mod tests {
             [
                 ("home", "/"),
                 ("app", "/app"),
+                ("compose", "/posts/new"),
                 ("drafts", "/drafts"),
                 ("scheduled", "/scheduled"),
                 ("history", "/history"),
@@ -307,11 +336,26 @@ mod tests {
             ]
         );
 
-        let placeholders = NAV_ITEMS
-            .iter()
-            .filter_map(|item| item.href.is_none().then_some(item.key))
+        let viewer_items = nav_items(RegistrationPolicy::Closed, false)
+            .map(|item| item.key)
             .collect::<Vec<_>>();
-        assert_eq!(placeholders, ["local", "federated", "replies", "bookmarks"]);
+        assert!(viewer_items.contains(&"compose"));
+        let anonymous = render_sidebar("").into_string();
+        assert!(!anonymous.contains(">Compose<"), "{anonymous}");
+    }
+
+    #[test]
+    fn active_key_matches_every_linked_catalog_path_exactly() {
+        for item in NAV_ITEMS.iter().filter(|item| item.href.is_some()) {
+            let Some(href) = item.href.as_deref() else {
+                unreachable!("filter retains only linked catalog items");
+            };
+            assert_eq!(active_key(href), Some(item.key), "{href}");
+        }
+        assert_eq!(active_key("/"), Some("home"));
+        assert_eq!(active_key("/posts/new"), Some("compose"));
+        assert_eq!(active_key("/posts/new/revisions"), None);
+        assert_eq!(active_key("/unknown"), None);
     }
 
     #[test]

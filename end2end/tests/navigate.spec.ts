@@ -39,6 +39,26 @@ test("an in-app move changes route without a document load", async ({
   expect(loads).toBe(0);
 });
 
+test("Compose sidebar navigation reaches the full composer without a document load", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/");
+  let loads = 0;
+  page.on("domcontentloaded", () => {
+    loads += 1;
+  });
+
+  const composeLink = page.locator('a[href="/posts/new"]');
+  await expect(composeLink).toHaveText("Compose");
+  await navigateInApp(page, () => composeLink.click(), {
+    url: "/posts/new",
+    ready: "#audience-base",
+  });
+  await expect(page.locator(SEL.topbarHeading)).toHaveText("New post");
+  await expect(page.locator(".j-topbar")).toContainText("Long-form");
+  expect(loads).toBe(0);
+});
+
 test("it fails loudly when the destination never renders", async ({
   registeredPage,
 }) => {
