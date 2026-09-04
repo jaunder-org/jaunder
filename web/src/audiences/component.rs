@@ -180,7 +180,7 @@ fn CreateAudienceForm() -> impl IntoView {
             </ActionForm>
             // Touched-gated inline validation message (the newtype's own `Display`).
             {forms::validated_error(
-                name.error,
+                name.error(),
                 Signal::derive(move || name.is_touched()),
                 |m| view! { <p class="error">{m}</p> }.into_any(),
             )}
@@ -246,7 +246,7 @@ fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView 
                     "Rename"
                 </button>
                 {forms::validated_error(
-                    name.error,
+                    name.error(),
                     Signal::derive(move || name.is_touched()),
                     |m| view! { <p class="error">{m}</p> }.into_any(),
                 )}

@@ -14,6 +14,10 @@
 - Note: amended 2026-09-03 (#859) — malformed typed-argument decode failures are
   client errors: Jaunder's server-function response normalizer maps them to HTTP
   400 while preserving the public `WebError::ServerFunction` payload
+- Note: amended 2026-09-03 (#907) — `Field<T>` privately owns its input signal
+  and derives a read-only validation memo from it; consumers can no longer
+  desynchronize input, rendered error, and validity by writing reactive
+  primitives independently
 
 ## Context
 
@@ -59,26 +63,27 @@ pre-validation using the same newtype `FromStr` — never a re-implemented rule.
   the pattern working inside the existing leptos `ActionForm`.
 - **Optional fields.** A field whose _empty_ state is valid (e.g. an
   auto-generated `slug_override`) uses `Field::optional()` /
-  `optional_prefilled(initial)`: `error_for` treats empty input as valid
+  `optional_prefilled(initial)`: its derived error treats empty input as valid
   (`None`) and validates non-empty input through the newtype's `FromStr` as
   before. The wire arg is `Option<T>` and the form reads
   `field.parsed() -> Option<T>`. Because empty is valid, `is_valid()` leaves
   submit **enabled** for a blank optional field while still gating a non-empty
   invalid entry. First adopter: `slug_override` (#408).
-- **Rendering: component or direct bind.** _Amended by #568 and #450._ The
-  `<ValidatedInput<T>>` and `<ValidatedTextarea<T>>` components are the default
-  renderers for a standard labelled field (and for `ActionForm` name/value
-  submission); both share one private `Labelled` chrome. A form with a bespoke
-  layout or a programmatic `.dispatch(...)` may still bind the same `Field<T>`
-  in caller-owned chrome, but the repeated input wiring is no longer
-  hand-written at every site: the bare input primitive owns
-  `prop:value=field.value`, the `on:input` update through `Field::set_input`,
-  and `on:blur` → `field.touch()`, while the error primitive owns the
-  touched-gated inline error. That keeps the single validation source without
-  the fixed labelled markup. The backup destination field
-  (`web/src/backup/component.rs`) remains a direct-bind adopter because it needs
-  its backup-specific label/error placement and classes, but its placeholder and
-  input classes are now ordinary props on the bare input primitive.
+- **Rendering: component or direct bind.** _Amended by #568, #450, and #907._
+  The `<ValidatedInput<T>>` and `<ValidatedTextarea<T>>` components are the
+  default renderers for a standard labelled field (and for `ActionForm`
+  name/value submission); both share one private `Labelled` chrome. A form with
+  a bespoke layout or a programmatic `.dispatch(...)` may still render the same
+  `Field<T>` in caller-owned chrome, but the repeated input wiring is no longer
+  hand-written at every site: the bare input primitive alone accesses the
+  private value signal for its `prop:value`, routes `on:input` through
+  `Field::set_value`, and routes `on:blur` through `Field::touch`, while the
+  error primitive receives only the read-only derived error handle. That keeps
+  the single validation source without fixed labelled markup or public signal
+  access. The backup destination field (`web/src/backup/component.rs`) remains a
+  direct-bind adopter because it needs its backup-specific label/error placement
+  and classes, but its placeholder and input classes are ordinary props on the
+  bare input primitive.
 - **Defense-in-depth.** The typed-arg `Deserialize` still validates server-side;
   because legitimate clients pre-validate, the generic-`ServerFunction`-error
   path is only reachable by a malformed/malicious request.

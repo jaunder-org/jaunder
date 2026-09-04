@@ -100,8 +100,7 @@ fn Labelled(
 /// A bare `<input>` bound to a [`Field<T>`], for forms whose chrome/layout stays
 /// caller-owned.
 ///
-/// This is the ADR-0065 direct-bind seam: callers choose labels, surrounding
-/// markup, error placement, and submit gates; the repeated value/error/touch
+/// markup, error placement, and submit gates; the repeated value, validation, and touch
 /// wiring lives here.
 #[component]
 pub fn ValidatedBareInput<T>(
@@ -130,7 +129,7 @@ where
             Some(f) => f(&raw),
             None => raw,
         };
-        field.set_input(&v);
+        field.set_value(&v);
     };
     view! {
         <input
@@ -141,7 +140,7 @@ where
             autocomplete=autocomplete
             placeholder=placeholder
             aria-describedby=aria_describedby
-            prop:value=field.value
+            prop:value=field.value_signal()
             on:input=on_input
             on:blur=move |_| field.touch()
         />
@@ -202,7 +201,7 @@ where
         <Labelled
             label=label
             field_class=field_class
-            error=field.error
+            error=field.error()
             touched=Signal::derive(move || field.is_touched())
             help=help
             help_id=describedby.clone()
@@ -250,10 +249,10 @@ pub fn ValidatedTextarea<T>(
     /// `aria-describedby` (id `{name}-help`).
     #[prop(optional)]
     help: Option<&'static str>,
-    /// Optional callback fired on every input event, **after** the value and error are
-    /// written — so a consumer that reads the field's validity from here sees the new
-    /// state. `ComposerFields` forwards the composer's flash-clearing callback through
-    /// it (#860); every other call site omits it.
+    /// Optional callback fired on every input event, **after** the field is updated — so a
+    /// consumer that reads the field's validity from here sees the new state.
+    /// `ComposerFields` forwards the composer's flash-clearing callback through it (#860);
+    /// every other call site omits it.
     ///
     /// `optional_no_strip` (not the usual `optional`), for the reason [`Labelled`]'s
     /// `help` documents: `ComposerFields` holds its own `on_input` as an `Option` and
@@ -267,7 +266,7 @@ where
     T::Err: Display,
 {
     let handle_input = move |ev| {
-        field.set_input(&event_target_value(&ev));
+        field.set_value(&event_target_value(&ev));
         if let Some(cb) = on_input {
             cb.run(());
         }
@@ -279,7 +278,7 @@ where
         <Labelled
             label=label
             field_class=field_class
-            error=field.error
+            error=field.error()
             touched=Signal::derive(move || field.is_touched())
             help=help
             help_id=describedby.clone()
@@ -290,7 +289,7 @@ where
                 rows=rows
                 placeholder=placeholder
                 aria-describedby=describedby
-                prop:value=field.value
+                prop:value=field.value_signal()
                 on:input=handle_input
                 on:blur=move |_| field.touch()
             ></textarea>

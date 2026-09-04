@@ -106,7 +106,7 @@ fn AppPasswordCreator(create_action: ServerAction<CreateAppPassword>) -> impl In
                 placeholder=Some("Label (e.g. MarsEdit)")
             />
             {forms::validated_error(
-                label_field.error,
+                label_field.error(),
                 Signal::derive(move || label_field.is_touched()),
                 |msg| view! { <p class="error">{msg}</p> }.into_any(),
             )}

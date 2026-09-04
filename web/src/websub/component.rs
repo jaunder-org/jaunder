@@ -76,7 +76,7 @@ fn hub_form(initial: &str, action: ServerAction<UpdateWebsubHub>) -> impl IntoVi
                 />
             </label>
             {forms::validated_error(
-                hub.error,
+                hub.error(),
                 Signal::derive(move || hub.is_touched()),
                 |message| view! { <p class="error">{message}</p> }.into_any(),
             )}

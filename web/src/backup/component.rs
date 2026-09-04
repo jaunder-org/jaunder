@@ -73,7 +73,7 @@ fn backup_destination_field(destination: Field<DestinationPath>) -> impl IntoVie
             />
         </label>
         {forms::validated_error(
-            destination.error,
+            destination.error(),
             Signal::derive(move || destination.is_touched()),
             |msg| view! { <p class="error">{msg}</p> }.into_any(),
         )}
