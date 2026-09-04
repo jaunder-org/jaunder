@@ -165,25 +165,6 @@ impl PublisherService {
             .map_err(Into::into)
     }
 
-    /// Mutates one feed-window setting, rejecting an indeterminate commit
-    /// acknowledgement rather than reporting confirmed success.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the publisher gate cannot be acquired, the mutation
-    /// fails, or the commit acknowledgement is indeterminate.
-    pub async fn mutate_feed_window(
-        &self,
-        mutation: FeedWindowMutation,
-    ) -> anyhow::Result<FeedWindowMutationOutcome> {
-        match self.mutate_feed_window_with_feedback(mutation).await? {
-            MutationOutcome::Confirmed(outcome) => Ok(outcome),
-            MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
-                "feed window mutation commit acknowledgement was indeterminate"
-            )),
-        }
-    }
-
     /// Mutates the normalized hub under the same gate used by publication.
     ///
     /// # Errors

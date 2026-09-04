@@ -43,7 +43,8 @@ pub(super) async fn cmd_site_config_set(
             Arc::clone(&state.publisher),
             state.write_scope.clone(),
         );
-        publisher.mutate_feed_window(mutation).await?;
+        let outcome = publisher.mutate_feed_window_with_feedback(mutation).await?;
+        support::require_confirmed_mutation(outcome, "feed window mutation")?;
     } else {
         let site_config = Arc::clone(&state.site_config);
         let value_for_set = value.to_owned();
@@ -114,7 +115,8 @@ pub(super) async fn cmd_site_config_unset(
             Arc::clone(&state.publisher),
             state.write_scope.clone(),
         );
-        publisher.mutate_feed_window(mutation).await?;
+        let outcome = publisher.mutate_feed_window_with_feedback(mutation).await?;
+        support::require_confirmed_mutation(outcome, "feed window mutation")?;
         eprintln!("unset site_config {key}");
         return Ok(());
     }

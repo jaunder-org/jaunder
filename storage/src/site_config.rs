@@ -893,6 +893,31 @@ mod tests {
         assert_eq!(config.min_days, parse_feed_min_days("30"));
         assert_eq!(config.websub_hub_url, None);
     }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_feeds_config_applies_the_existing_hub_read_policy(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        inject_invalid_site_config(
+            &env,
+            SiteConfigKey::FeedsWebsubHubUrl,
+            "https://hub.example.com/",
+        )
+        .await
+        .unwrap();
+        let config = storage.get_feeds_config().await.unwrap();
+        assert_eq!(
+            config.websub_hub_url,
+            Some(parse_url("https://hub.example.com/"))
+        );
+
+        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "not-a-url")
+            .await
+            .unwrap();
+        let config = storage.get_feeds_config().await.unwrap();
+        assert_eq!(config.websub_hub_url, None);
+    }
     /// Feed-window keys have one publisher-owned mutation boundary; generic
     /// configuration writes cannot bypass its generation fence or cache invalidation.
     #[apply(backends)]
