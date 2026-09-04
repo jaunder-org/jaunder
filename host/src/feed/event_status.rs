@@ -1,7 +1,8 @@
-//! The lifecycle state of a feed-regeneration event.
+//! The claim-lease state of a feed event.
 
-/// Where a `feed_events` row is in the claim-lease cycle: `pending` → `claimed` →
-/// `done` | `failed`.
+/// Where a `feed_events` row is in the claim-lease cycle: `pending` → `claimed`
+/// → `done` | `failed`. The independently retryable recovery stage is carried
+/// separately by [`super::FeedEventPhase`].
 ///
 /// A closed string enum (`#[text_enum]`, ADR-0075 as amended by #746) stored as its
 /// `snake_case` token in the `status` TEXT column, so `sqlx` decodes it as itself and an

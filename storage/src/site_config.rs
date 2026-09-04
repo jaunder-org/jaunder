@@ -353,11 +353,19 @@ pub trait SiteConfigStorage: Send + Sync {
         .await
     }
 
+    /// Stores feed rendering configuration. The hub has its own publisher seam:
+    /// callers must not combine it with ordinary configuration writes because a
+    /// hub change also advances the durable generation and invalidates cache.
     async fn set_feeds_config(
         &self,
         transaction: &mut WriteTransaction,
         config: &FeedsConfig,
     ) -> Result<()> {
+        if config.websub_hub_url.is_some() {
+            return Err(sqlx::Error::Protocol(
+                "feeds.websub_hub_url must be changed through PublisherStorage".to_owned(),
+            ));
+        }
         self.set(
             transaction,
             SiteConfigKey::FeedsMinItems,
@@ -369,14 +377,7 @@ pub trait SiteConfigStorage: Send + Sync {
             SiteConfigKey::FeedsMinDays,
             &config.min_days.to_string(),
         )
-        .await?;
-        self.set(
-            transaction,
-            SiteConfigKey::FeedsWebsubHubUrl,
-            config.websub_hub_url.as_deref().unwrap_or(""),
-        )
-        .await?;
-        Ok(())
+        .await
     }
 }
 
@@ -408,7 +409,11 @@ const SELECT_VALUE_SQL: &str = "SELECT value FROM site_config WHERE key = $1";
 pub(crate) struct StoredSiteConfigValue(String);
 
 impl StoredSiteConfigValue {
-    fn into_inner(self) -> String {
+    pub(crate) fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    pub(crate) fn into_inner(self) -> String {
         self.0
     }
 }
@@ -489,6 +494,11 @@ where
         key: SiteConfigKey,
         value: &str,
     ) -> Result<()> {
+        if key == SiteConfigKey::FeedsWebsubHubUrl {
+            return Err(sqlx::Error::Protocol(
+                "feeds.websub_hub_url must be changed through PublisherStorage".to_owned(),
+            ));
+        }
         set_stored::<DB>(transaction, key, StoredSiteConfigValue(value.to_owned())).await
     }
 
@@ -566,6 +576,11 @@ where
     }
 
     async fn delete(&self, transaction: &mut WriteTransaction, key: SiteConfigKey) -> Result<bool> {
+        if key == SiteConfigKey::FeedsWebsubHubUrl {
+            return Err(sqlx::Error::Protocol(
+                "feeds.websub_hub_url must be changed through PublisherStorage".to_owned(),
+            ));
+        }
         let connection = DB::write_connection(transaction)?;
         // `RETURNING` + `fetch_optional` detects a no-match generically (a `None`),
         // avoiding `rows_affected()` which sqlx exposes only on concrete results
@@ -768,7 +783,7 @@ mod tests {
         let config = FeedsConfig {
             min_items: parse_feed_min_items("42"),
             min_days: parse_feed_min_days("7"),
-            websub_hub_url: Some(parse_url("https://hub.example.com/")),
+            websub_hub_url: None,
         };
         let config_storage = std::sync::Arc::clone(&env.state.site_config);
         let expected = config.clone();
@@ -967,7 +982,7 @@ mod tests {
         set_config(&env, SiteConfigKey::SiteTitle, "T")
             .await
             .unwrap();
-        set_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "https://h/")
+        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "https://h/")
             .await
             .unwrap();
         set_config(&env, SiteConfigKey::BackupMode, "archive")
@@ -1148,7 +1163,7 @@ mod tests {
     async fn feeds_websub_hub_url_returns_some_when_set(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        set_config(
+        inject_invalid_site_config(
             &env,
             SiteConfigKey::FeedsWebsubHubUrl,
             "https://hub.example.com/",
@@ -1169,7 +1184,7 @@ mod tests {
     async fn feeds_websub_hub_url_treats_empty_as_none(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        set_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "")
+        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "")
             .await
             .unwrap();
         assert!(storage.get_feeds_websub_hub_url().await.unwrap().is_none());

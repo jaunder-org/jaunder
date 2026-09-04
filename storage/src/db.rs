@@ -496,6 +496,7 @@ pub(crate) const MIGRATION_SEEDED_TABLES: &[&str] = &[
     "subscription_statuses",
     "target_kinds",
     "instance_identity",
+    "publisher_state",
 ];
 
 /// Returns `true` if the database holds no user data — every table except the

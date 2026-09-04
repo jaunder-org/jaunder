@@ -2,6 +2,7 @@ use common::ids::{PostId, UserId};
 use common::media::MediaSource;
 use common::post_title::PostTitle;
 use common::slug::Slug;
+use common::tagged_url::HubUrl;
 use common::test_support::{
     parse_audience_name, parse_byte_size, parse_content_hash, parse_content_type,
     parse_display_name, parse_filename,
@@ -15,7 +16,8 @@ use jaunder::cli::StorageArgs;
 use std::sync::Arc;
 use storage::test_support::{SeedRawPost, confirmed_for, fp, seed_local_subscription};
 use storage::{
-    AppState, MediaRecord, OperatorStatus, StorageRuntimeConfig, open_existing_database,
+    AppState, HubMutationOutcome, MediaRecord, OperatorStatus, PublisherGeneration,
+    StorageRuntimeConfig, open_existing_database,
 };
 
 /// SHA-256 the media-table fixture row is keyed by; any stable value works, since
@@ -42,6 +44,9 @@ pub struct BackupFixtureIds {
     pub public_post_title: PostTitle,
     /// A post targeted at a `Named` audience the viewer belongs to.
     pub named_post: PostId,
+    /// The publisher generation, advanced from its migration-seeded value to prove
+    /// backup and restore replace the target singleton row.
+    pub publisher_generation: PublisherGeneration,
 }
 
 /// Fixed microsecond-precision publish time: deterministic and safe from
@@ -56,6 +61,24 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
         .expect("open database");
+    let hub: HubUrl = "https://hub.example.test/"
+        .parse()
+        .expect("valid fixture WebSub hub");
+    let publisher = Arc::clone(&state.publisher);
+    let publisher_mutation = confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { publisher.mutate_hub(transaction, Some(hub)).await })
+            })
+            .await
+            .expect("configure fixture WebSub hub"),
+        "configure fixture WebSub hub",
+    );
+    let publisher_generation = match publisher_mutation {
+        HubMutationOutcome::Changed { generation } => generation,
+        HubMutationOutcome::Unchanged { .. } => panic!("initial WebSub hub must change"),
+    };
     let username: Username = "backupuser".parse().expect("valid username");
     let password: Password = "password123".parse().expect("valid password");
     let users = Arc::clone(&state.users);
@@ -99,6 +122,7 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         public_post_slug: public.slug,
         public_post_title: public.title,
         named_post,
+        publisher_generation,
     }
 }
 
@@ -240,6 +264,17 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
         .expect("restored user");
     assert_eq!(user.is_operator, OperatorStatus::OPERATOR);
     assert_eq!(user.display_name.as_deref(), Some("Backup User"));
+
+    assert_eq!(
+        state
+            .publisher
+            .snapshot()
+            .await
+            .expect("read restored publisher state")
+            .generation,
+        ids.publisher_generation,
+        "restore must replace the migration-seeded publisher generation"
+    );
 
     // The public post resolves for its author.
     let post = state

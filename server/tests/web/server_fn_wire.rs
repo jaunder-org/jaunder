@@ -102,6 +102,10 @@ wire_contract! {
     web::subscriptions::Subscribe => "subscriptions" / "subscribe",
     web::subscriptions::Unsubscribe => "subscriptions" / "unsubscribe",
     web::tags::List => "tags" / "list",
+    web::websub::GetWebsubSettings => "websub" / "get_websub_settings",
+    web::websub::ListDeadLetters => "websub" / "list_dead_letters",
+    web::websub::RedriveDeadLetters => "websub" / "redrive_dead_letters",
+    web::websub::UpdateWebsubHub => "websub" / "update_websub_hub",
     // The five timeline listings (#714). Their vertical is the whole reason
     // these assertions exist: nothing in source says `timeline`, only the file
     // path does.

@@ -13,31 +13,54 @@ use common::{
 };
 use host::feed::FeedPath;
 use host::metrics;
-use storage::{FeedCacheStorage, PostStorage, SiteConfigStorage, WriteScope};
+use storage::{CacheCommitOutcome, FeedCacheError, FeedCacheRow, FeedCacheStorage, PostStorage};
 
-use super::regenerate;
+use super::regenerate::{self, RegenerateError};
+use crate::publisher::PublisherService;
 use crate::soft_path::SoftPath;
 use web::error::InternalError;
 
 /// Retains a cache-read failure as the typed source of the sanitized boundary
 /// carrier.
 #[must_use]
-pub fn map_feed_cache_failure(error: storage::FeedCacheError) -> InternalError {
+pub fn map_feed_cache_failure(error: FeedCacheError) -> InternalError {
     InternalError::storage(error).with_context("boundary", "server.feed.cache_read")
 }
 
 /// Retains a regeneration failure as the typed source of the sanitized boundary
 /// carrier.
 #[must_use]
-pub fn map_regeneration_failure(error: super::regenerate::RegenerateError) -> InternalError {
+pub fn map_regeneration_failure(error: RegenerateError) -> InternalError {
     InternalError::storage(error).with_context("boundary", "server.feed.regenerate")
+}
+
+async fn regenerate_cache_miss(
+    publisher: &PublisherService,
+    posts: &dyn PostStorage,
+    feed_path: FeedPath,
+) -> Result<FeedCacheRow, RegenerateError> {
+    loop {
+        let snapshot = publisher
+            .snapshot()
+            .await
+            .map_err(RegenerateError::Publisher)?;
+        let row = regenerate::render(&snapshot, posts, feed_path.clone()).await?;
+        let guard = publisher
+            .finalization_guard()
+            .await
+            .map_err(RegenerateError::Publisher)?;
+        match guard.commit_cache(snapshot.generation, row.clone()).await {
+            Ok(CacheCommitOutcome::Committed) => return Ok(row),
+            Ok(CacheCommitOutcome::StaleGeneration) => {}
+            Err(error) => return Err(RegenerateError::Storage(Box::new(error))),
+        }
+    }
 }
 
 async fn serve(
     feed_cache: Arc<dyn FeedCacheStorage>,
-    site_config: Arc<dyn SiteConfigStorage>,
+    publisher: Arc<PublisherService>,
     posts: Arc<dyn PostStorage>,
-    write_scope: WriteScope,
     headers: HeaderMap,
     surface: FeedSurface,
     format: FeedFormat,
@@ -53,15 +76,9 @@ async fn serve(
             // Cache miss: build the feed inline rather than 404. The background
             // worker only refreshes feeds that have pending events, so a cold or
             // evicted cache entry has no other path back to being populated.
-            match regenerate::feed(
-                site_config.as_ref(),
-                posts.as_ref(),
-                Arc::clone(&feed_cache),
-                &write_scope,
-                feed_path.clone(),
-            )
-            .await
-            {
+            let regeneration =
+                regenerate_cache_miss(publisher.as_ref(), posts.as_ref(), feed_path.clone()).await;
+            match regeneration {
                 Ok(row) => row,
                 Err(error) => {
                     let error = map_regeneration_failure(error);
@@ -116,9 +133,8 @@ async fn serve(
 
 pub async fn feed_site(
     Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    Extension(publisher): Extension<Arc<PublisherService>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(write_scope): Extension<WriteScope>,
     headers: HeaderMap,
     Path(format): Path<SoftPath<FeedFormat>>,
 ) -> Response {
@@ -127,9 +143,8 @@ pub async fn feed_site(
     };
     serve(
         feed_cache,
-        site_config,
+        publisher,
         posts,
-        write_scope,
         headers,
         FeedSurface::Site,
         format,
@@ -139,9 +154,8 @@ pub async fn feed_site(
 
 pub async fn feed_site_tag(
     Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    Extension(publisher): Extension<Arc<PublisherService>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(write_scope): Extension<WriteScope>,
     headers: HeaderMap,
     Path((tag, format)): Path<(SoftPath<Tag>, SoftPath<FeedFormat>)>,
 ) -> Response {
@@ -153,9 +167,8 @@ pub async fn feed_site_tag(
     };
     serve(
         feed_cache,
-        site_config,
+        publisher,
         posts,
-        write_scope,
         headers,
         FeedSurface::SiteTag { tag },
         format,
@@ -165,9 +178,8 @@ pub async fn feed_site_tag(
 
 pub async fn feed_user(
     Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    Extension(publisher): Extension<Arc<PublisherService>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(write_scope): Extension<WriteScope>,
     headers: HeaderMap,
     Path((username, format)): Path<(SoftPath<Username>, SoftPath<FeedFormat>)>,
 ) -> Response {
@@ -179,9 +191,8 @@ pub async fn feed_user(
     };
     serve(
         feed_cache,
-        site_config,
+        publisher,
         posts,
-        write_scope,
         headers,
         FeedSurface::User { username },
         format,
@@ -191,9 +202,8 @@ pub async fn feed_user(
 
 pub async fn feed_user_tag(
     Extension(feed_cache): Extension<Arc<dyn FeedCacheStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    Extension(publisher): Extension<Arc<PublisherService>>,
     Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(write_scope): Extension<WriteScope>,
     headers: HeaderMap,
     Path((username, tag, format)): Path<(SoftPath<Username>, SoftPath<Tag>, SoftPath<FeedFormat>)>,
 ) -> Response {
@@ -205,9 +215,8 @@ pub async fn feed_user_tag(
     };
     serve(
         feed_cache,
-        site_config,
+        publisher,
         posts,
-        write_scope,
         headers,
         FeedSurface::UserTag { username, tag },
         format,
@@ -221,8 +230,11 @@ mod tests {
     use chrono::{Duration, Utc};
     use common::{feed::FeedFormat, test_support::parse_etag, time::UtcInstant};
     use host::feed::SyndicationFeedRepresentation;
-    use storage::{FeedCacheError, FeedCacheRow};
-
+    use sqlx::Error;
+    use storage::{
+        FeedCacheError, FeedCacheRow, MockFeedCacheStorage, MockPostStorage, MockPublisherStorage,
+        PublisherStorageError,
+    };
     fn sample_row(etag: &str, updated_at: UtcInstant) -> FeedCacheRow {
         FeedCacheRow::new(
             "/feed.rss".parse().expect("valid feed path"),
@@ -239,30 +251,36 @@ mod tests {
         .expect("matching cache row formats")
     }
 
-    fn empty_site_config() -> Arc<dyn SiteConfigStorage> {
-        Arc::new(storage::MockSiteConfigStorage::new())
+    fn empty_publisher() -> Arc<PublisherService> {
+        Arc::new(PublisherService::new(
+            std::env::temp_dir(),
+            Arc::new(MockPublisherStorage::new()),
+            storage::test_support::mock_write_scope(),
+        ))
     }
 
     fn empty_posts() -> Arc<dyn PostStorage> {
-        Arc::new(storage::MockPostStorage::new())
+        Arc::new(MockPostStorage::new())
     }
 
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_returns_500_when_regeneration_fails() {
-        let mut cache = storage::MockFeedCacheStorage::new();
+        let mut cache = MockFeedCacheStorage::new();
         cache.expect_get().returning(|_| Ok(None));
-        let mut site_config = storage::MockSiteConfigStorage::new();
-        // A storage failure during regeneration surfaces as a 500.
-        site_config
-            .expect_get_feeds_config()
-            .returning(|| Err(sqlx::Error::PoolClosed));
+        let mut publisher = MockPublisherStorage::new();
+        publisher
+            .expect_snapshot()
+            .returning(|| Err(PublisherStorageError::Db(Error::PoolClosed)));
 
         let resp = serve(
             Arc::new(cache),
-            Arc::new(site_config),
+            Arc::new(PublisherService::new(
+                std::env::temp_dir(),
+                Arc::new(publisher),
+                storage::test_support::mock_write_scope(),
+            )),
             empty_posts(),
-            storage::test_support::mock_write_scope(),
             HeaderMap::new(),
             FeedSurface::Site,
             FeedFormat::Rss,
@@ -274,16 +292,15 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_returns_500_when_cache_get_errors() {
-        let mut cache = storage::MockFeedCacheStorage::new();
+        let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
-            .returning(|_| Err(FeedCacheError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_| Err(FeedCacheError::Db(Error::PoolClosed)));
 
         let resp = serve(
             Arc::new(cache),
-            empty_site_config(),
+            empty_publisher(),
             empty_posts(),
-            storage::test_support::mock_write_scope(),
             HeaderMap::new(),
             FeedSurface::Site,
             FeedFormat::Rss,
@@ -295,7 +312,7 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_returns_304_on_if_none_match() {
-        let mut cache = storage::MockFeedCacheStorage::new();
+        let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
             .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::now()))));
@@ -308,9 +325,8 @@ mod tests {
 
         let resp = serve(
             Arc::new(cache),
-            empty_site_config(),
+            empty_publisher(),
             empty_posts(),
-            storage::test_support::mock_write_scope(),
             headers,
             FeedSurface::Site,
             FeedFormat::Rss,
@@ -322,7 +338,7 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_returns_200_when_if_none_match_does_not_match() {
-        let mut cache = storage::MockFeedCacheStorage::new();
+        let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
             .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::now()))));
@@ -337,9 +353,8 @@ mod tests {
 
         let resp = serve(
             Arc::new(cache),
-            empty_site_config(),
+            empty_publisher(),
             empty_posts(),
-            storage::test_support::mock_write_scope(),
             headers,
             FeedSurface::Site,
             FeedFormat::Rss,
@@ -354,7 +369,7 @@ mod tests {
         // Row updated *after* the client's If-Modified-Since date: the
         // conditional falls through to a 200 rather than returning 304.
         let updated_at = UtcInstant::now();
-        let mut cache = storage::MockFeedCacheStorage::new();
+        let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
             .returning(move |_| Ok(Some(sample_row("\"etag-1\"", updated_at))));
@@ -368,9 +383,8 @@ mod tests {
 
         let resp = serve(
             Arc::new(cache),
-            empty_site_config(),
+            empty_publisher(),
             empty_posts(),
-            storage::test_support::mock_write_scope(),
             headers,
             FeedSurface::Site,
             FeedFormat::Rss,
@@ -383,7 +397,7 @@ mod tests {
     #[tokio::test]
     async fn serve_returns_304_on_if_modified_since() {
         let updated_at = UtcInstant::from(Utc::now() - Duration::days(1));
-        let mut cache = storage::MockFeedCacheStorage::new();
+        let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
             .returning(move |_| Ok(Some(sample_row("\"etag-1\"", updated_at))));
@@ -397,9 +411,8 @@ mod tests {
 
         let resp = serve(
             Arc::new(cache),
-            empty_site_config(),
+            empty_publisher(),
             empty_posts(),
-            storage::test_support::mock_write_scope(),
             headers,
             FeedSurface::Site,
             FeedFormat::Rss,
@@ -412,10 +425,9 @@ mod tests {
     #[tokio::test]
     async fn feed_site_returns_404_on_bad_format() {
         let resp = feed_site(
-            Extension(Arc::new(storage::MockFeedCacheStorage::new()) as Arc<dyn FeedCacheStorage>),
-            Extension(empty_site_config()),
+            Extension(Arc::new(MockFeedCacheStorage::new()) as Arc<dyn FeedCacheStorage>),
+            Extension(empty_publisher()),
             Extension(empty_posts()),
-            Extension(storage::test_support::mock_write_scope()),
             HeaderMap::new(),
             Path(SoftPath::parse("bogus")),
         )
@@ -426,16 +438,15 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn feed_site_delegates_to_serve_on_valid_format() {
-        let mut cache = storage::MockFeedCacheStorage::new();
+        let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
             .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::now()))));
 
         let resp = feed_site(
             Extension(Arc::new(cache) as Arc<dyn FeedCacheStorage>),
-            Extension(empty_site_config()),
+            Extension(empty_publisher()),
             Extension(empty_posts()),
-            Extension(storage::test_support::mock_write_scope()),
             HeaderMap::new(),
             Path(SoftPath::parse("rss")),
         )
@@ -447,10 +458,9 @@ mod tests {
     #[tokio::test]
     async fn feed_site_tag_returns_404_on_bad_ext() {
         let resp = feed_site_tag(
-            Extension(Arc::new(storage::MockFeedCacheStorage::new()) as Arc<dyn FeedCacheStorage>),
-            Extension(empty_site_config()),
+            Extension(Arc::new(MockFeedCacheStorage::new()) as Arc<dyn FeedCacheStorage>),
+            Extension(empty_publisher()),
             Extension(empty_posts()),
-            Extension(storage::test_support::mock_write_scope()),
             HeaderMap::new(),
             Path((SoftPath::parse("rust"), SoftPath::parse("bogus"))),
         )
@@ -462,10 +472,9 @@ mod tests {
     #[tokio::test]
     async fn feed_user_tag_returns_404_on_bad_ext() {
         let resp = feed_user_tag(
-            Extension(Arc::new(storage::MockFeedCacheStorage::new()) as Arc<dyn FeedCacheStorage>),
-            Extension(empty_site_config()),
+            Extension(Arc::new(MockFeedCacheStorage::new()) as Arc<dyn FeedCacheStorage>),
+            Extension(empty_publisher()),
             Extension(empty_posts()),
-            Extension(storage::test_support::mock_write_scope()),
             HeaderMap::new(),
             Path((
                 SoftPath::parse("alice"),
@@ -480,16 +489,15 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn feed_user_tag_delegates_to_serve_on_valid() {
-        let mut cache = storage::MockFeedCacheStorage::new();
+        let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
             .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::now()))));
 
         let resp = feed_user_tag(
             Extension(Arc::new(cache) as Arc<dyn FeedCacheStorage>),
-            Extension(empty_site_config()),
+            Extension(empty_publisher()),
             Extension(empty_posts()),
-            Extension(storage::test_support::mock_write_scope()),
             HeaderMap::new(),
             Path((
                 SoftPath::parse("alice"),

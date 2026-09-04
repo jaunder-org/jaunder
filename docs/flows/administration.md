@@ -6,6 +6,7 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#administration`
 
 - `route:/admin/site`
 - `route:/admin/backups`
+- `route:/admin/websub`
 
 ## Endpoint census
 
@@ -17,11 +18,15 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#administration`
 | `endpoint:/api/backup/is_warning_visible`        | Covered | Drives the soft shell warning when scheduled backups still lack a destination.                     |
 | `endpoint:/api/backup/get_settings`              | Covered | Seeds the backup configuration form with the persisted schedule, destination, retention, and mode. |
 | `endpoint:/api/backup/update_settings`           | Covered | Persists typed backup settings updates from the backups page.                                      |
+| `endpoint:/api/websub/get_websub_settings`       | Covered | Seeds the configured hub form from the coherent publisher snapshot.                                |
+| `endpoint:/api/websub/update_websub_hub`         | Covered | Applies an operator-authorized, generation-fenced hub mutation.                                    |
+| `endpoint:/api/websub/list_dead_letters`         | Covered | Pages regeneration or publication dead letters for operator recovery.                              |
+| `endpoint:/api/websub/redrive_dead_letters`      | Covered | Atomically returns the exact selected dead-letter IDs to the eligible phase.                       |
 
-Administration is split into two direct-entry operator routes: site identity and
-backups. Both pages load the persisted settings first, then submit typed
-direct-bind updates so blank optional fields clear configuration while malformed
-values fail before dispatch.
+Administration is split into three direct-entry operator routes: site identity,
+backups, and `WebSub` recovery. Each page loads persisted state first, then
+submits typed updates. Blank optional settings clear configuration while
+malformed values fail before dispatch.
 
 The warning endpoints belong here even though their banners render in shared
 authenticated chrome. They are soft checks, not authorization challenges:
@@ -29,6 +34,7 @@ non-operators and stale cookie-only sessions simply hide the banners, while
 operators get links into the exact admin page that resolves the warning.
 
 The routes themselves stay narrow. `/admin/site` owns site title and canonical
-base URL, while `/admin/backups` owns storage destination, schedule, retention,
-and backup mode. Execution of backup jobs and protocol behavior that depends on
-the saved base URL live outside this CSR flow.
+base URL, `/admin/backups` owns storage destination, schedule, retention, and
+backup mode, and `/admin/websub` owns the publisher hub plus regeneration and
+publication dead-letter recovery. Execution of backup jobs and publisher
+delivery live outside this CSR flow.

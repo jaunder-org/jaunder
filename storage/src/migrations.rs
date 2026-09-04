@@ -237,7 +237,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            29
+            31
         );
         assert_eq!(
             db.pool
@@ -715,7 +715,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            29
+            31
         );
         assert_eq!(
             db.pool
@@ -813,5 +813,56 @@ mod tests {
                 .unwrap(),
         };
         assert_eq!(retention_index_count, 8);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0030_maps_legacy_feed_event_attempts_to_one_phase(#[case] backend: Backend) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(29).await.unwrap();
+        db.pool.execute(
+            "INSERT INTO feed_events \
+             (feed_url, status, attempts, last_error, next_attempt_at, created_at, regenerated_at, terminal_at) VALUES \
+             ('/pending.rss', 'pending', 3, 'pending error', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL), \
+             ('/regeneration.rss', 'failed', 4, 'regeneration error', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP), \
+             ('/publication.rss', 'failed', 5, 'publication error', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        ).await.unwrap();
+        db.migrate_current().await.unwrap();
+
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM feed_events \
+                 WHERE phase = 'regeneration' AND regeneration_attempts = 3 \
+                   AND publication_attempts = 0 AND status = 'pending'",
+                )
+                .await
+                .unwrap(),
+            1,
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM feed_events \
+                 WHERE phase = 'regeneration' AND regeneration_attempts = 4 \
+                   AND regeneration_diagnostic = 'regeneration error' \
+                   AND publication_attempts = 0 AND publication_diagnostic IS NULL",
+                )
+                .await
+                .unwrap(),
+            1,
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM feed_events \
+                 WHERE phase = 'publication' AND publication_attempts = 5 \
+                   AND publication_diagnostic = 'publication error' \
+                   AND regeneration_attempts = 0 AND regeneration_diagnostic IS NULL",
+                )
+                .await
+                .unwrap(),
+            1,
+        );
     }
 }

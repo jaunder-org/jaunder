@@ -7,8 +7,9 @@ use super::{
     AudienceStorage, AudienceStore, EmailVerificationStorage, EmailVerificationStore,
     FeedCacheStorage, FeedCacheStore, FeedEventStorage, FeedEventStore, InviteStorage, InviteStore,
     MediaStorage, MediaStore, PasswordResetStorage, PasswordResetStore, PostStorage, PostStore,
-    SessionStorage, SessionStore, SiteConfigStorage, SiteConfigStore, SubscriptionStorage,
-    SubscriptionStore, UserConfigStorage, UserConfigStore, UserStorage, UserStore, WriteScope,
+    PublisherStorage, PublisherStore, SessionStorage, SessionStore, SiteConfigStorage,
+    SiteConfigStore, SubscriptionStorage, SubscriptionStore, UserConfigStorage, UserConfigStore,
+    UserStorage, UserStore, WriteScope,
 };
 
 /// Bundle of every storage handle the application needs.
@@ -52,6 +53,8 @@ pub struct AppState {
     pub feed_cache: Arc<dyn FeedCacheStorage>,
     /// Queue of feed-regeneration events drained by the feed worker.
     pub feed_events: Arc<dyn FeedEventStorage>,
+    /// Coherent publisher configuration, hub mutation, and generation-fenced cache writes.
+    pub publisher: Arc<dyn PublisherStorage>,
     /// Factory-minted boundary for composing application storage writes.
     pub write_scope: WriteScope,
 }
@@ -77,6 +80,7 @@ where
     UserConfigStore<DB>: UserConfigStorage,
     FeedCacheStore<DB>: FeedCacheStorage,
     FeedEventStore<DB>: FeedEventStorage,
+    PublisherStore<DB>: PublisherStorage,
 {
     Arc::new(AppState {
         site_config: Arc::new(SiteConfigStore::new(pool.clone())),
@@ -95,6 +99,7 @@ where
         user_config: Arc::new(UserConfigStore::new(pool.clone())),
         feed_cache: Arc::new(FeedCacheStore::new(pool.clone())),
         feed_events: Arc::new(FeedEventStore::new(pool.clone())),
+        publisher: Arc::new(PublisherStore::new(pool.clone())),
         write_scope: DB::write_scope(pool),
     })
 }
@@ -139,6 +144,7 @@ mod tests {
             state.user_config.as_ref(),
             state.feed_cache.as_ref(),
             state.feed_events.as_ref(),
+            state.publisher.as_ref(),
         );
         assert!(
             state

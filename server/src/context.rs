@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use crate::publisher::PublisherService;
 use common::mailer::MailSender;
 use leptos::prelude::provide_context;
 use storage::{
@@ -19,12 +20,13 @@ use storage::{
     SessionStorage, SiteConfigStorage, SubscriptionStorage, UserConfigStorage, UserStorage,
     WriteScope,
 };
+use web::websub::WebsubPublisher;
 
 /// Place every storage handle and the factory-minted write scope in `state` into
 /// the current Leptos context. Server functions fetch exact trait dependencies
 /// with `expect_context::<Arc<dyn FooStorage>>()` and acquire mutations through
 /// `expect_context::<WriteScope>()`.
-pub fn provide_app_state_contexts(state: &Arc<AppState>) {
+pub fn provide_app_state_contexts(state: &Arc<AppState>, publisher: &Arc<PublisherService>) {
     provide_context::<Arc<dyn UserStorage>>(state.users.clone());
     provide_context::<Arc<dyn SessionStorage>>(state.sessions.clone());
     provide_context::<Arc<dyn InviteStorage>>(state.invites.clone());
@@ -38,6 +40,8 @@ pub fn provide_app_state_contexts(state: &Arc<AppState>) {
     provide_context::<Arc<dyn UserConfigStorage>>(state.user_config.clone());
     provide_context::<Arc<dyn SiteConfigStorage>>(state.site_config.clone());
     provide_context::<Arc<dyn FeedEventStorage>>(state.feed_events.clone());
+    provide_context(Arc::clone(publisher));
+    provide_context::<Arc<dyn WebsubPublisher>>(publisher.clone());
 }
 
 /// Places the shared media filesystem coordinator in the current Leptos

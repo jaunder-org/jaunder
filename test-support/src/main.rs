@@ -3,11 +3,11 @@
 
 use clap::{Parser, Subcommand};
 use common::display_name::DisplayName;
-use host::capture;
+use host::{capture, feed::FeedEventPhase};
 use storage::DbConnectOptions;
-
 use test_support::{
-    create_session_for_user, create_user, reset_mail, seed_posts_for_user, seed_user,
+    create_session_for_user, create_user, reset_mail, seed_dead_letters, seed_posts_for_user,
+    seed_user,
 };
 
 #[derive(Parser)]
@@ -39,6 +39,18 @@ enum Commands {
         /// Publish immediately (else the posts are left as drafts).
         #[arg(long)]
         published: bool,
+    },
+    /// Seed terminal `WebSub` feed events through the real storage lifecycle.
+    SeedDeadLetters {
+        /// Database URL (`sqlite:...` or `postgres://...`) — the server's `--db`.
+        #[arg(long, env = "JAUNDER_DB")]
+        db: DbConnectOptions,
+        /// Terminal worker phase (`regeneration` or `publication`).
+        #[arg(long)]
+        phase: FeedEventPhase,
+        /// Number of terminal events to create.
+        #[arg(long)]
+        count: usize,
     },
     /// Create a fixture user through the real storage path.
     CreateUser {
@@ -182,6 +194,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             )
             .await
         }
+        Commands::SeedDeadLetters { db, phase, count } => {
+            let storage_runtime = storage_runtime_config(&db)?;
+            cmd_seed_dead_letters(&db, &storage_runtime, phase, count).await
+        }
         Commands::CreateUser {
             db,
             username,
@@ -263,6 +279,19 @@ async fn cmd_seed_posts(
     let state = storage::open_existing_database(db, runtime).await?;
     let ids = seed_posts_for_user(&state, username, count, published, body_prefix).await?;
     eprintln!("seeded {} posts for {username}", ids.len());
+    Ok(())
+}
+
+/// Seed terminal `WebSub` dead letters through the storage lifecycle.
+async fn cmd_seed_dead_letters(
+    db: &DbConnectOptions,
+    runtime: &storage::StorageRuntimeConfig,
+    phase: FeedEventPhase,
+    count: usize,
+) -> anyhow::Result<()> {
+    let state = storage::open_existing_database(db, runtime).await?;
+    let ids = seed_dead_letters(&state, phase, count).await?;
+    println!("{}", serde_json::to_string(&ids)?);
     Ok(())
 }
 

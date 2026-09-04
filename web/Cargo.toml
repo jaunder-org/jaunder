@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 anyhow = { workspace = true, optional = true }
+async-trait.workspace = true
 leptos.workspace = true
 leptos_dom.workspace = true
 leptos_meta.workspace = true

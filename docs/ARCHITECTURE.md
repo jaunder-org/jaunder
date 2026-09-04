@@ -843,12 +843,13 @@ Ping** names that exact URL as its topic and carries no content. The trigger is
 a protocol-independent change to at least one concrete public feed
 representation. Post mutation and affected-feed events are to commit as a
 transactional outbox; the worker commits the regenerated cache before
-duplicate-safe, at-least-once remote publication. Hub configuration changes are
-to invalidate all cached feeds and work late-binds to one coherent current
-configuration snapshot. Regeneration and publication use separate bounded
-attempt budgets; exhausted regeneration and terminal publication remain
-separately inspectable and redrivable
-([publisher-side WebSub decision](adr/0137-publisher-side-websub.md)).
+duplicate-safe, at-least-once remote publication. Hub configuration changes use
+a coherent snapshot and durable generation, atomically invalidating every cached
+feed on an actual normalized change. A kernel-backed publisher gate serializes
+the final cache-commit/publish region with configuration mutation, without
+holding a database transaction across rendering or HTTP
+([publisher-side WebSub decision](adr/0137-publisher-side-websub.md)); durable
+publisher fencing is recorded in `docs/adr/drafts/publisher-generation-gate.md`.
 
 **Current publisher behavior.** Production pings through
 `WebSubClient::send_publish(&HubUrl, &FeedUrl)`
@@ -857,8 +858,10 @@ separately inspectable and redrivable
 create, update, publish, unpublish, and soft-delete services. Those services
 classify the locked old and new anonymous/Public projection, derive the union of
 affected Site, User, Site Tag, and User Tag paths in every format, and insert
-feed events in the Post mutation's `WriteScope` transaction.
-[Configuration changes do not invalidate caches, worker/regenerator snapshots can differ, configuration access errors can collapse to `NoHub`, HTTP failures retry alike, `Retry-After` is ignored, budgets are shared, and terminal rows lack redrive](https://github.com/jaunder-org/jaunder/issues/1052).
+feed events in the Post mutation's `WriteScope` transaction. Configuration
+changes, cache commits, and publication now use the shared publisher seam;
+remaining recovery policy is tracked by
+[#1052](https://github.com/jaunder-org/jaunder/issues/1052).
 
 The
 [bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)

@@ -681,6 +681,7 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
             "post_revisions",
             "post_tags",
             "posts",
+            "publisher_state",
             "sessions",
             "site_config",
             "subscription_statuses",
@@ -720,7 +721,7 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
         }
     };
     assert_eq!(
-        live_table_count, 27,
+        live_table_count, 28,
         "a table was added or removed — update the golden set and denylist deliberately"
     );
 }
@@ -834,7 +835,7 @@ async fn cmd_restore_rejects_pre_identity_backup(#[case] backend: Backend) {
         error.downcast_ref::<BackupError>(),
         Some(BackupError::SchemaVersionMismatch {
             backup_version: 26,
-            target_version: 29
+            target_version: 31
         })
     ));
 }

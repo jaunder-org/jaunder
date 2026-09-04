@@ -1948,6 +1948,7 @@ dependencies = [
  "futures-util",
  "host",
  "http-body-util",
+ "httpdate",
  "leptos",
  "leptos_axum",
  "lettre",
@@ -5473,6 +5474,7 @@ name = "web"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "chrono",
  "client",

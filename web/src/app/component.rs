@@ -22,6 +22,7 @@ use crate::route_segments::TildeUsername;
 use crate::sessions::SessionsPage;
 use crate::sidebar::Sidebar;
 use crate::site::{SiteBaseUrlBanner, SiteSettingsPage};
+use crate::websub::WebsubPage;
 use common::theme::Theme;
 use leptos::prelude::*;
 use leptos_meta::{Title, provide_meta_context};
@@ -110,6 +111,7 @@ pub fn App() -> impl IntoView {
                         path=(StaticSegment("admin"), StaticSegment("site"))
                         view=SiteSettingsPage
                     />
+                    <Route path=(StaticSegment("admin"), StaticSegment("websub")) view=WebsubPage />
                     <Route
                         path=(StaticSegment("posts"), StaticSegment("new"))
                         view=CreatePostPage

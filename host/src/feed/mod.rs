@@ -13,6 +13,9 @@ pub use feed_path::{FeedPath, InvalidFeedPath, affected_feed_urls, parse};
 pub mod event_status;
 pub use event_status::{FeedEventStatus, InvalidFeedEventStatus};
 
+pub mod event_phase;
+pub use event_phase::{FeedEventPhase, InvalidFeedEventPhase};
+
 pub mod settings;
 pub use settings::{FeedEventClaimLimit, FeedMinDays, FeedMinItems};
 

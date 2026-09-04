@@ -19,6 +19,7 @@ use crate::cli::StorageArgs;
 use crate::feed::worker::FeedWorker;
 use crate::maintenance::{self, DatabaseMaintenance};
 use crate::metrics::{self, SaturationSources};
+use crate::publisher::PublisherService;
 use crate::runtime_file::{self, RuntimeGuard, StartupCheck, StartupLockGuard};
 use crate::scheduled_worker::ScheduledWorkerGuard;
 #[cfg(test)]
@@ -460,11 +461,15 @@ pub async fn prepare_server(
     // also selects the shorter e2e cadence without changing the production policy.
     let websub_capture = capture.map(|paths| paths.websub.clone());
     let feed_interval = feed_worker_interval(websub_capture.is_some());
-    let feed_worker = crate::feed::worker::FeedWorker::new(
-        db.site_config.clone(),
+    let feed_worker = FeedWorker::new(
         db.posts.clone(),
         db.feed_cache.clone(),
         Arc::new(db.write_scope.clone()),
+        Arc::new(PublisherService::new(
+            storage.storage_path.clone(),
+            db.publisher.clone(),
+            db.write_scope.clone(),
+        )),
         db.feed_events.clone(),
         crate::websub::default_client(websub_capture),
     );
@@ -708,10 +713,14 @@ mod tests {
             runtime: StorageRuntimeConfig::default(),
             storage_path: storage.storage_path.clone(),
             feed_worker: FeedWorker::new(
-                state.site_config.clone(),
                 state.posts.clone(),
                 state.feed_cache.clone(),
                 Arc::new(state.write_scope.clone()),
+                Arc::new(PublisherService::new(
+                    storage.storage_path.clone(),
+                    state.publisher.clone(),
+                    state.write_scope.clone(),
+                )),
                 state.feed_events.clone(),
                 crate::websub::default_client(None),
             ),

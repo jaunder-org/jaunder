@@ -16,6 +16,7 @@ use crate::posts::{
     models::{PermalinkDateText, PostPublicationClear},
     tags::TagSlugPrefixPattern,
 };
+use crate::publisher::PublisherGeneration;
 use crate::subscriptions::SubscriptionStatusName;
 use crate::user_config::StoredUserConfigValue;
 use crate::users::{EmailVerified, OperatorStatus};
@@ -50,7 +51,7 @@ use common::username::Username;
 use common::visibility::SubscriberRef;
 use common::visibility::{DefaultAudience, TargetKind};
 use host::config_key::{SiteConfigKey, UserConfigKey};
-use host::feed::{FeedEventClaimLimit, FeedEventStatus, FeedMinItems, FeedPath};
+use host::feed::{FeedEventClaimLimit, FeedEventPhase, FeedEventStatus, FeedMinItems, FeedPath};
 use host::invite::InviteCode;
 use host::stored_password_hash::StoredPasswordHash;
 use sqlx::{
@@ -227,6 +228,7 @@ approve_storage_binds!(
     Username,
     FeedEventClaimLimit,
     FeedEventStatus,
+    FeedEventPhase,
     FeedMinItems,
     InviteCode,
     OperatorStatus,
@@ -257,6 +259,7 @@ approve_storage_binds!(
     SessionLastUsedAt,
     StoredFeedBody,
     StoredFeedDiagnostic,
+    PublisherGeneration,
     StoredSessionLabel,
     StoredSiteConfigValue,
     SerializedPostTags,

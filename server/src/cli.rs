@@ -3,19 +3,23 @@ use std::str::FromStr;
 use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
-use sqlx::postgres::PgConnectOptions;
+use sqlx::{Error, postgres::PgConnectOptions};
 
 use common::backup::BackupMode;
 use common::display_name::DisplayName;
 use common::email::Email;
+use common::ids::FeedEventId;
 use common::invite::InviteTtlHours;
+use common::pagination::PageSize;
 use common::pg_identifier::{InvalidPgDatabaseName, InvalidPgRoleName, PgDatabaseName, PgRoleName};
 use common::pg_role_password::PgRolePassword;
 use common::session_label::SessionLabel;
+use common::time::{InvalidInstant, UtcInstant};
 use common::username::Username;
 use host::config_key::SiteConfigKey;
+use host::feed::FeedEventPhase;
 use host::password::Password;
-use storage::DbConnectOptions;
+use storage::{DbConnectOptions, FeedEventDeadLetterCursor};
 
 #[derive(Parser, Clone)]
 #[command(name = "jaunder", about = "A self-hosted social reader")]
@@ -92,7 +96,7 @@ pub enum InvalidBootstrapDb {
     Scheme(#[from] InvalidPgUrl),
     /// Right scheme, but unparseable.
     #[error("--bootstrap-db must be a PostgreSQL URL: {0}")]
-    Url(#[from] sqlx::Error),
+    Url(#[from] Error),
 }
 
 impl FromStr for BootstrapDb {
@@ -143,7 +147,7 @@ pub enum InvalidAppTarget {
     Scheme(#[from] InvalidPgUrl),
     /// Right scheme, but unparseable.
     #[error("--app-db must be a PostgreSQL URL: {0}")]
-    Url(#[from] sqlx::Error),
+    Url(#[from] Error),
     /// Parseable, but names no database.
     #[error("--app-db must include a PostgreSQL database name")]
     MissingDatabase,
@@ -376,6 +380,14 @@ pub enum Commands {
         #[command(subcommand)]
         action: SiteConfigAction,
     },
+
+    /// Inspect and redrive terminal `WebSub` feed work.
+    ///
+    /// The storage directory must already be initialized via `jaunder init`.
+    Websub {
+        #[command(subcommand)]
+        action: WebsubAction,
+    },
 }
 
 impl Commands {
@@ -434,6 +446,89 @@ pub enum SiteConfigAction {
         /// The `site_config` key to delete.
         key: SiteConfigKey,
     },
+}
+
+/// `websub` actions for operator dead-letter recovery.
+#[derive(Subcommand, Clone)]
+pub enum WebsubAction {
+    /// List or redrive terminal feed events.
+    DeadLetters {
+        #[command(subcommand)]
+        action: DeadLetterAction,
+    },
+}
+
+/// One bounded dead-letter operation.
+#[derive(Subcommand, Clone)]
+pub enum DeadLetterAction {
+    /// Print one JSON page of terminal events for the selected failed phase.
+    List {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// Failed phase to inspect.
+        phase: FeedEventPhase,
+
+        /// Resume from the `next_cursor` emitted by the preceding page.
+        #[arg(long)]
+        cursor: Option<DeadLetterCursor>,
+
+        /// Number of events to return (1 through 50; defaults to 50).
+        #[arg(long, default_value_t = PageSize::default())]
+        page_size: PageSize,
+    },
+
+    /// Atomically requeue the exact terminal event ids.
+    Redrive {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// One or more terminal feed-event ids. Any stale or invalid id rejects all.
+        #[arg(required = true)]
+        ids: Vec<FeedEventId>,
+    },
+}
+
+/// The textual keyset cursor exchanged by `websub dead-letters list`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeadLetterCursor(FeedEventDeadLetterCursor);
+
+impl DeadLetterCursor {
+    #[must_use]
+    pub fn into_inner(self) -> FeedEventDeadLetterCursor {
+        self.0
+    }
+}
+
+/// Why a dead-letter cursor cannot resume a stable keyset page.
+#[derive(Debug, thiserror::Error)]
+pub enum InvalidDeadLetterCursor {
+    /// The cursor does not contain its timestamp and id components.
+    #[error("dead-letter cursor must be RFC 3339 terminal time followed by ',' and event id")]
+    Shape,
+    /// The terminal time is not RFC 3339.
+    #[error("dead-letter cursor has an invalid terminal time: {0}")]
+    TerminalAt(#[from] InvalidInstant),
+    /// The event id is invalid.
+    #[error("dead-letter cursor has an invalid event id: {0}")]
+    Id(#[source] <FeedEventId as FromStr>::Err),
+}
+
+impl FromStr for DeadLetterCursor {
+    type Err = InvalidDeadLetterCursor;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (terminal_at, id) = value
+            .split_once(',')
+            .ok_or(InvalidDeadLetterCursor::Shape)?;
+        if terminal_at.is_empty() || id.is_empty() || id.contains(',') {
+            return Err(InvalidDeadLetterCursor::Shape);
+        }
+        Ok(Self(FeedEventDeadLetterCursor {
+            terminal_at: terminal_at.parse::<UtcInstant>()?,
+            id: id.parse().map_err(InvalidDeadLetterCursor::Id)?,
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -1001,6 +1096,92 @@ mod tests {
     }
 
     // --- site-config ---
+
+    // --- websub dead-letters ---
+
+    #[test]
+    fn websub_dead_letters_list_parses_both_phases_and_a_stable_cursor() {
+        for (phase_arg, expected_phase) in [
+            ("regeneration", FeedEventPhase::Regeneration),
+            ("publication", FeedEventPhase::Publication),
+        ] {
+            let cli = parse(&[
+                "websub",
+                "dead-letters",
+                "list",
+                phase_arg,
+                "--cursor",
+                "2026-09-03T12:00:00Z,42",
+                "--page-size",
+                "2",
+            ]);
+            let Commands::Websub {
+                action:
+                    WebsubAction::DeadLetters {
+                        action:
+                            DeadLetterAction::List {
+                                phase,
+                                cursor,
+                                page_size,
+                                ..
+                            },
+                    },
+            } = cli.command.expect("subcommand")
+            else {
+                unreachable!("parse yields websub dead-letter list")
+            };
+            assert_eq!(phase, expected_phase);
+            assert_eq!(page_size, PageSize::try_from(2).unwrap());
+            assert_eq!(
+                cursor.expect("cursor").into_inner(),
+                FeedEventDeadLetterCursor {
+                    terminal_at: "2026-09-03T12:00:00Z".parse().unwrap(),
+                    id: FeedEventId::from(42),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn websub_dead_letters_list_rejects_invalid_page_size_and_cursor() {
+        for args in [
+            vec![
+                "jaunder",
+                "websub",
+                "dead-letters",
+                "list",
+                "regeneration",
+                "--page-size",
+                "51",
+            ],
+            vec![
+                "jaunder",
+                "websub",
+                "dead-letters",
+                "list",
+                "publication",
+                "--cursor",
+                "not-a-cursor",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
+    fn websub_dead_letters_redrive_parses_exact_ids() {
+        let cli = parse(&["websub", "dead-letters", "redrive", "42", "43"]);
+        let Commands::Websub {
+            action:
+                WebsubAction::DeadLetters {
+                    action: DeadLetterAction::Redrive { ids, .. },
+                },
+        } = cli.command.expect("subcommand")
+        else {
+            unreachable!("parse yields websub dead-letter redrive")
+        };
+        assert_eq!(ids, vec![FeedEventId::from(42), FeedEventId::from(43)]);
+    }
 
     #[test]
     fn site_config_set_parses_positional_key_value() {

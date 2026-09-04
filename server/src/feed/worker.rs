@@ -4,31 +4,35 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::publisher::{PublisherFinalizationGuard, PublisherService};
 use crate::scheduled_worker::{ScheduledWorkerGuard, WorkTracker};
-use crate::websub::WebSubClient;
+use crate::websub::{WebSubClient, WebSubError};
 use chrono::Utc;
 use common::ids::FeedEventId;
-use common::tagged_url::{self, FeedUrl, HubUrl};
+use common::mutation::MutationOutcome;
+use common::tagged_url::{self, FeedUrl};
 use common::time::UtcInstant;
 use host::{
     error::{self, ErrorClass, ErrorKind, SwallowedSource},
-    feed::{self, FeedPath},
+    feed::{self, FeedEventPhase, FeedPath},
     metrics,
 };
 use storage::{
-    FeedCacheStorage, FeedEventError, FeedEventRecord, FeedEventStorage, PostStorage,
-    SiteConfigStorage, WriteScope, WriteTransaction,
+    CacheCommitOutcome, FeedCacheRow, FeedCacheStorage, FeedEventError, FeedEventRecord,
+    FeedEventStorage, PostStorage, PublisherSnapshot, WriteScope, WriteTransaction,
 };
 use tokio::{
     sync::Mutex,
     time::{self, MissedTickBehavior},
 };
 
-use super::regenerate::{self, RegenerateError};
+use super::regenerate;
 
 const BATCH_LIMIT: usize = 200;
 const LEASE_TIMEOUT: Duration = Duration::from_mins(5);
-const BACKOFFS_SECS: &[u64] = &[60, 300, 1800, 7200, 7200, 7200];
+const REGEN_BACKOFFS_SECS: &[u64] = &[60, 300, 1800, 7200, 7200, 7200];
+const PUBLICATION_BACKOFFS_SECS: &[u64] =
+    &[60, 300, 1800, 7200, 14_400, 28_800, 43_200, 86_400, 86_400];
 /// Max URLs per `enqueue_many` transaction: bounds the write-lock hold of a
 /// go-live fan-out (a post-outage catch-up can be arbitrarily large) so
 /// batching #766's churn away can't reintroduce the long-hold failure mode.
@@ -45,27 +49,55 @@ fn report_continuation(
 
 /// Converts a mutation outcome into its confirmed value for a feed operation.
 fn require_confirmed_mutation<T>(
-    outcome: common::mutation::MutationOutcome<T>,
+    outcome: MutationOutcome<T>,
     operation: &str,
 ) -> anyhow::Result<T> {
     match outcome {
-        common::mutation::MutationOutcome::Confirmed(value) => Ok(value),
-        common::mutation::MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
+        MutationOutcome::Confirmed(value) => Ok(value),
+        MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
             "{operation} commit acknowledgement was indeterminate"
         )),
     }
 }
+struct RetryPartition {
+    buckets: HashMap<usize, Vec<FeedEventId>>,
+    exhausted: Vec<FeedEventId>,
+}
 
-/// The background feed worker: the deps it needs to regenerate feeds and ping
-/// the `WebSub` hub, declared explicitly as constructor parameters rather than
-/// reached through a shared bundle (see [ADR-0016]).
+fn partition_retry_attempts(
+    ids: &[FeedEventId],
+    rows: &[FeedEventRecord],
+    attempts: impl Fn(&FeedEventRecord) -> i32,
+    budget_len: usize,
+) -> RetryPartition {
+    let attempts_by_id = rows
+        .iter()
+        .map(|row| (row.id, attempts(row)))
+        .collect::<HashMap<_, _>>();
+    let mut buckets = HashMap::<usize, Vec<FeedEventId>>::new();
+    let mut exhausted = Vec::new();
+    for id in ids {
+        let attempts = attempts_by_id.get(id).copied().unwrap_or_default();
+        let next_index = usize::try_from(attempts).unwrap_or(usize::MAX);
+        if next_index >= budget_len {
+            exhausted.push(*id);
+        } else {
+            buckets.entry(next_index).or_default().push(*id);
+        }
+    }
+    RetryPartition { buckets, exhausted }
+}
+
+/// The background feed worker: the dependencies it needs to regenerate feeds
+/// and ping the `WebSub` hub, declared explicitly as constructor parameters
+/// rather than reached through a shared bundle (see [ADR-0016]).
 ///
 /// [ADR-0016]: ../../../docs/adr/0016-dependency-injection-and-appstate.md
 pub struct FeedWorker {
-    site_config: Arc<dyn SiteConfigStorage>,
     posts: Arc<dyn PostStorage>,
     feed_cache: Arc<dyn FeedCacheStorage>,
     write_scope: Arc<WriteScope>,
+    publisher: Arc<PublisherService>,
     feed_events: Arc<dyn FeedEventStorage>,
     websub: Arc<dyn WebSubClient>,
     /// The instant of the previous [`go_live_pass`](Self::go_live_pass), or
@@ -75,35 +107,28 @@ pub struct FeedWorker {
 }
 
 impl FeedWorker {
-    /// Builds a feed worker from exactly the storage handles, write scope, and
-    /// `WebSub` publisher it uses.
+    /// Builds a feed worker from explicit rendering, publication, event, and
+    /// `WebSub` seams. [`PublisherService`] owns coherent snapshots and finalization.
     #[must_use]
     pub fn new(
-        site_config: Arc<dyn SiteConfigStorage>,
         posts: Arc<dyn PostStorage>,
         feed_cache: Arc<dyn FeedCacheStorage>,
         write_scope: Arc<WriteScope>,
+        publisher: Arc<PublisherService>,
         feed_events: Arc<dyn FeedEventStorage>,
         websub: Arc<dyn WebSubClient>,
     ) -> Self {
         Self {
-            site_config,
             posts,
             feed_cache,
             write_scope,
+            publisher,
             feed_events,
             websub,
             last_tick: Mutex::new(None),
         }
     }
 
-    /// Borrows the site configuration store.
-    #[must_use]
-    pub fn site_config(&self) -> &dyn SiteConfigStorage {
-        self.site_config.as_ref()
-    }
-
-    /// Borrows the post store.
     #[must_use]
     pub fn posts(&self) -> &dyn PostStorage {
         self.posts.as_ref()
@@ -201,327 +226,486 @@ impl FeedWorker {
         Ok(())
     }
 
-    /// Processes a batch of pending feed events: regenerates feeds and pings the
-    /// `WebSub` hub. Groups events by `feed_path` to avoid redundant regeneration.
+    /// Claims rows, then processes each feed surface from exactly one publisher
+    /// snapshot. A snapshot failure is a regeneration failure, never `NoHub`.
     pub async fn tick(&self) {
-        // Enqueue go-live regeneration first so the same tick drains what it
-        // just enqueued. A failure here must not abort the independent queue
-        // drain, but it remains operationally visible.
-        if let Err(e) = self.go_live_pass(UtcInstant::now()).await {
+        if let Err(error) = self.go_live_pass(UtcInstant::now()).await {
             report_continuation(
-                host::error::ErrorKind::Storage,
-                host::error::ErrorClass::Transient,
+                ErrorKind::Storage,
+                ErrorClass::Transient,
                 "server.feed.go_live_pass",
-                e.as_ref(),
+                error.as_ref(),
             );
         }
-
         let claimed = match self.claim_pending_batch().await {
-            Ok(claimed) => claimed,
+            Ok(rows) => rows,
             Err(error) => {
                 report_continuation(
-                    host::error::ErrorKind::Storage,
-                    host::error::ErrorClass::Transient,
+                    ErrorKind::Storage,
+                    ErrorClass::Transient,
                     "server.feed.claim_pending",
                     error.as_ref(),
                 );
                 return;
             }
         };
-        if claimed.is_empty() {
-            return;
-        }
-
-        // Group by feed_path to avoid redundant regeneration
         let mut groups: HashMap<FeedPath, Vec<FeedEventRecord>> = HashMap::new();
-        for rec in claimed {
-            groups.entry(rec.feed_path.clone()).or_default().push(rec);
+        for row in claimed {
+            groups.entry(row.feed_path.clone()).or_default().push(row);
         }
-
-        // Read hub URL and site identity once per tick. Their absence is normal;
-        // a failed read degrades the tick in the same way but must be reported.
-        let hub_url = match self.site_config().get_feeds_websub_hub_url().await {
-            Ok(hub) => hub,
-            Err(error) => {
-                report_continuation(
-                    host::error::ErrorKind::Storage,
-                    host::error::ErrorClass::Transient,
-                    "server.feed.websub_config_read",
-                    &error,
-                );
-                None
-            }
-        };
-        let identity = match self.site_config().get_identity().await {
-            Ok(identity) => Some(identity),
-            Err(error) => {
-                report_continuation(
-                    host::error::ErrorKind::Storage,
-                    host::error::ErrorClass::Transient,
-                    "server.feed.identity_read",
-                    &error,
-                );
-                None
-            }
-        };
-
-        for (feed_path, recs) in groups {
-            self.process_feed_group(feed_path, recs, hub_url.as_ref(), identity.as_ref())
-                .await;
+        for (path, rows) in groups {
+            self.process_feed_group(path, rows).await;
         }
     }
 
-    /// Regenerates one feed surface and reconciles the queued events for it: on
-    /// success, marks them regenerated and pings the hub; on failure, schedules a
-    /// backoff retry or marks the batch exhausted.
-    async fn process_feed_group(
-        &self,
-        feed_path: FeedPath,
-        recs: Vec<FeedEventRecord>,
-        hub_url: Option<&HubUrl>,
-        identity: Option<&common::site::SiteIdentity>,
-    ) {
-        let ids: Vec<FeedEventId> = recs.iter().map(|r| r.id).collect();
-        let started = Instant::now();
-
-        match regenerate::feed(
-            self.site_config(),
-            self.posts(),
-            Arc::clone(&self.feed_cache),
-            self.write_scope.as_ref(),
-            feed_path.clone(),
-        )
-        .await
+    async fn process_feed_group(&self, feed_path: FeedPath, rows: Vec<FeedEventRecord>) {
+        let ids: Vec<_> = rows.iter().map(|row| row.id).collect();
+        let Some(snapshot) = self.snapshot_for_group(&ids, &rows).await else {
+            return;
+        };
+        let regeneration_ids: Vec<_> = rows
+            .iter()
+            .filter(|row| row.phase == FeedEventPhase::Regeneration)
+            .map(|row| row.id)
+            .collect();
+        let Some(row) = self
+            .load_feed_row(&snapshot, &feed_path, &regeneration_ids, &ids, &rows)
+            .await
+        else {
+            return;
+        };
+        let guard = match self.publisher.finalization_guard().await {
+            Ok(guard) => guard,
+            Err(error) => {
+                report_continuation(
+                    ErrorKind::Storage,
+                    ErrorClass::Transient,
+                    "server.feed.finalization_guard",
+                    error.as_ref(),
+                );
+                self.retry_regeneration(&ids, &rows, "publisher finalization unavailable")
+                    .await;
+                return;
+            }
+        };
+        if !self
+            .finalize_feed_group(&guard, &snapshot, row, &regeneration_ids, &ids, &rows)
+            .await
         {
+            return;
+        }
+        self.publish_feed(&guard, &snapshot, &feed_path, &ids, &rows)
+            .await;
+    }
+
+    async fn snapshot_for_group(
+        &self,
+        ids: &[FeedEventId],
+        rows: &[FeedEventRecord],
+    ) -> Option<PublisherSnapshot> {
+        match self.publisher.snapshot().await {
+            Ok(snapshot) => Some(snapshot),
+            Err(error) => {
+                report_continuation(
+                    ErrorKind::Storage,
+                    ErrorClass::Transient,
+                    "server.feed.publisher_snapshot",
+                    error.as_ref(),
+                );
+                self.retry_regeneration(ids, rows, "publisher snapshot read failed")
+                    .await;
+                None
+            }
+        }
+    }
+
+    async fn load_feed_row(
+        &self,
+        snapshot: &PublisherSnapshot,
+        feed_path: &FeedPath,
+        regeneration_ids: &[FeedEventId],
+        ids: &[FeedEventId],
+        rows: &[FeedEventRecord],
+    ) -> Option<FeedCacheRow> {
+        if regeneration_ids.is_empty() {
+            return match self.feed_cache.get(feed_path).await {
+                Ok(Some(row)) => Some(row),
+                Ok(None) => {
+                    self.reset_regeneration(ids).await;
+                    None
+                }
+                Err(error) => {
+                    report_continuation(
+                        ErrorKind::Storage,
+                        ErrorClass::Transient,
+                        "server.feed.publication_cache_read",
+                        &error,
+                    );
+                    self.retry_regeneration(ids, rows, "publication cache read failed")
+                        .await;
+                    None
+                }
+            };
+        }
+        let started = Instant::now();
+        match regenerate::render(snapshot, self.posts(), feed_path.clone()).await {
             Ok(row) => {
                 metrics::feed_regeneration(metrics::RegenResult::Ok);
                 metrics::feed_regen_duration_ms(
                     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 );
-                let feed_events = Arc::clone(&self.feed_events);
-                let regenerated_ids = ids.clone();
-                if let Err(error) = self
-                    .write_event_status(move |transaction| {
-                        Box::pin(async move {
-                            feed_events
-                                .mark_regenerated(transaction, &regenerated_ids)
-                                .await
-                        })
-                    })
-                    .await
-                {
-                    report_continuation(
-                        host::error::ErrorKind::Storage,
-                        host::error::ErrorClass::Transient,
-                        "server.feed.status_write.190",
-                        error.as_ref(),
-                    );
-                }
-                let item_bytes = row.representation().body().len();
-                let duration_ms = started.elapsed().as_millis();
-                tracing::info!(
-                    feed_path = %feed_path,
-                    item_bytes = item_bytes,
-                    duration_ms = duration_ms,
-                    "feed.regen.completed"
-                );
-
-                let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
-                self.ping_websub(&feed_path, &ids, attempt, hub_url, identity)
-                    .await;
+                Some(row)
             }
-            Err(e) => {
+            Err(error) => {
                 report_continuation(
-                    host::error::ErrorKind::Internal,
-                    host::error::ErrorClass::Bug,
+                    ErrorKind::Internal,
+                    ErrorClass::Bug,
                     "server.feed.regenerate",
-                    &e,
+                    &error,
                 );
-                self.on_regen_failure(&feed_path, &ids, &recs, &e).await;
+                self.retry_regeneration(regeneration_ids, rows, &error.to_string())
+                    .await;
+                None
             }
         }
     }
 
-    /// Pings the `WebSub` hub for a freshly regenerated `feed_url`, marking the
-    /// events pinged on success and scheduling a backoff retry (or marking them
-    /// exhausted) on failure. With no hub configured the batch is treated as
-    /// complete.
-    async fn ping_websub(
+    async fn finalize_feed_group(
         &self,
-        feed_url: &FeedPath,
+        guard: &PublisherFinalizationGuard,
+        snapshot: &PublisherSnapshot,
+        row: FeedCacheRow,
+        regeneration_ids: &[FeedEventId],
         ids: &[FeedEventId],
-        attempt: i32,
-        hub_url: Option<&HubUrl>,
-        identity: Option<&common::site::SiteIdentity>,
-    ) {
-        if let Some(hub) = hub_url {
-            // Feeds require site.base_url (#560), and regeneration fails closed without it,
-            // so a reached ping always has a base. Guard defensively; the skip is
-            // unreachable in practice.
-            let Some(base) = identity.and_then(|i| i.base_url.as_ref()) else {
-                // cov:ignore-start
-                tracing::warn!("feed.websub.ping skipped: site.base_url is unset");
-                return;
-                // cov:ignore-stop
-            };
-            // `compose` joins the required base + the feed path into an absolute URL.
-            let absolute: FeedUrl = tagged_url::compose(base, feed_url);
-            tracing::info!(feed_url = %feed_url, hub = %hub, attempt, "feed.websub.ping.attempted");
-
-            let result = self.websub.send_publish(hub, &absolute).await;
-            match result {
-                Ok(()) => {
-                    metrics::websub_ping(metrics::PingOutcome::Success);
-                    tracing::info!(feed_url = %feed_url, hub = %hub, attempt, "feed.websub.ping.succeeded");
-                    self.mark_pinged(ids).await;
+        rows: &[FeedEventRecord],
+    ) -> bool {
+        if regeneration_ids.is_empty() {
+            return match guard.is_current(snapshot.generation).await {
+                Ok(true) => true,
+                Ok(false) => {
+                    self.restart_regeneration(ids).await;
+                    false
                 }
-                Err(e) => {
+                Err(error) => {
                     report_continuation(
-                        host::error::ErrorKind::Internal,
-                        host::error::ErrorClass::External,
-                        "server.feed.websub_ping",
-                        &e,
+                        ErrorKind::Storage,
+                        ErrorClass::Transient,
+                        "server.feed.publication_generation_check",
+                        &error,
                     );
-                    let attempt_usize = usize::try_from(attempt).unwrap_or(0);
-                    let next_attempt_idx = attempt_usize.saturating_sub(1);
-                    let error_message = e.to_string();
-                    if next_attempt_idx >= BACKOFFS_SECS.len() {
-                        metrics::websub_ping(metrics::PingOutcome::Exhausted);
-                        self.mark_exhausted(ids, &error_message).await;
-                    } else {
-                        let delay = chrono::Duration::seconds(
-                            i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
-                        );
-                        let next = UtcInstant::from(Utc::now() + delay);
-                        metrics::websub_ping(metrics::PingOutcome::Failed);
-                        let feed_events = Arc::clone(&self.feed_events);
-                        let ids = ids.to_vec();
-                        if let Err(error) = self
-                            .write_event_status(move |transaction| {
-                                Box::pin(async move {
-                                    feed_events
-                                        .mark_failed(transaction, &ids, &error_message, next)
-                                        .await
-                                })
-                            })
-                            .await
-                        {
-                            report_continuation(
-                                host::error::ErrorKind::Storage,
-                                host::error::ErrorClass::Transient,
-                                "server.feed.status_write.257",
-                                error.as_ref(),
-                            );
-                        }
-                    }
+                    self.retry_regeneration(ids, rows, "publisher generation check failed")
+                        .await;
+                    false
                 }
+            };
+        }
+        match guard.commit_cache(snapshot.generation, row).await {
+            Ok(CacheCommitOutcome::Committed) => self.mark_regenerated(regeneration_ids).await,
+            Ok(CacheCommitOutcome::StaleGeneration) => {
+                self.restart_regeneration(ids).await;
+                false
             }
-        } else {
-            // No hub configured — treat as complete.
+            Err(error) => {
+                report_continuation(
+                    ErrorKind::Storage,
+                    ErrorClass::Transient,
+                    "server.feed.cache_commit",
+                    &error,
+                );
+                self.retry_regeneration(ids, rows, "cache commit failed")
+                    .await;
+                false
+            }
+        }
+    }
+
+    async fn publish_feed(
+        &self,
+        _guard: &PublisherFinalizationGuard,
+        snapshot: &PublisherSnapshot,
+        feed_path: &FeedPath,
+        ids: &[FeedEventId],
+        rows: &[FeedEventRecord],
+    ) {
+        let Some(hub) = snapshot.feeds.websub_hub_url.as_ref() else {
             metrics::websub_ping(metrics::PingOutcome::NoHub);
             self.mark_pinged(ids).await;
+            return;
+        };
+        let Some(base) = snapshot.identity.base_url.as_ref() else {
+            self.retry_regeneration(ids, rows, "site.base_url is unset")
+                .await;
+            return;
+        };
+        let absolute: FeedUrl = tagged_url::compose(base, feed_path);
+        match self.websub.send_publish(hub, &absolute).await {
+            Ok(()) => {
+                metrics::websub_ping(metrics::PingOutcome::Success);
+                self.mark_pinged(ids).await;
+            }
+            Err(WebSubError::Terminal { reason }) => {
+                metrics::websub_ping(metrics::PingOutcome::Terminal);
+                self.dead_letter_publication(ids, &reason.to_string()).await;
+            }
+            Err(WebSubError::Retryable {
+                reason,
+                retry_after,
+            }) => {
+                self.retry_publication(ids, rows, &reason.to_string(), retry_after)
+                    .await;
+            }
+        }
+    }
+
+    async fn mark_regenerated(&self, ids: &[FeedEventId]) -> bool {
+        let events = Arc::clone(&self.feed_events);
+        let ids = ids.to_vec();
+        match self
+            .write_event_status(move |tx| {
+                Box::pin(async move { events.mark_regenerated(tx, &ids).await })
+            })
+            .await
+        {
+            Ok(()) => true,
+            Err(error) => {
+                report_continuation(
+                    ErrorKind::Storage,
+                    ErrorClass::Transient,
+                    "server.feed.status_write.regenerated",
+                    error.as_ref(),
+                );
+                false
+            }
         }
     }
 
     async fn mark_pinged(&self, ids: &[FeedEventId]) {
-        let feed_events = Arc::clone(&self.feed_events);
+        let events = Arc::clone(&self.feed_events);
         let ids = ids.to_vec();
-        let event_count = ids.len();
         let now = UtcInstant::now();
-        if let Err(error) = self
-            .write_event_status(move |transaction| {
-                Box::pin(async move { feed_events.mark_pinged(transaction, &ids, now).await })
+        match self
+            .write_event_status(move |tx| {
+                Box::pin(async move { events.mark_pinged(tx, &ids, now).await })
             })
             .await
         {
-            report_continuation(
+            Ok(()) => tracing::info!(
+                message = "feed.event.terminal",
+                phase = "publication",
+                outcome = "completed"
+            ),
+            Err(error) => report_continuation(
                 ErrorKind::Storage,
                 ErrorClass::Transient,
-                "server.feed.status_write.mark_pinged",
+                "server.feed.status_write.publication_complete",
                 error.as_ref(),
-            );
-        } else {
-            tracing::info!(event_count, outcome = "completed", "feed.event.terminal");
+            ),
         }
     }
 
-    async fn mark_exhausted(&self, ids: &[FeedEventId], error_message: &str) {
-        let feed_events = Arc::clone(&self.feed_events);
+    async fn dead_letter_regeneration(&self, ids: &[FeedEventId], message: &str) {
+        let events = Arc::clone(&self.feed_events);
         let ids = ids.to_vec();
-        let error_message = error_message.to_owned();
-        let event_count = ids.len();
+        let message = message.to_owned();
         let now = UtcInstant::now();
-        if let Err(error) = self
-            .write_event_status(move |transaction| {
+        match self
+            .write_event_status(move |tx| {
                 Box::pin(async move {
-                    feed_events
-                        .mark_exhausted(transaction, &ids, &error_message, now)
+                    events
+                        .dead_letter_regeneration(tx, &ids, &message, now)
                         .await
                 })
             })
             .await
         {
-            report_continuation(
+            Ok(()) => tracing::info!(
+                message = "feed.event.terminal",
+                phase = "regeneration",
+                outcome = "exhausted"
+            ),
+            Err(error) => report_continuation(
                 ErrorKind::Storage,
                 ErrorClass::Transient,
-                "server.feed.status_write.mark_exhausted",
+                "server.feed.status_write.regeneration_dead_letter",
                 error.as_ref(),
-            );
-        } else {
-            tracing::info!(event_count, outcome = "exhausted", "feed.event.terminal");
+            ),
         }
     }
 
-    /// Reconciles the queued events after a failed regeneration: schedules a
-    /// backoff retry, or marks the batch exhausted once the backoff schedule is
-    /// used up.
-    async fn on_regen_failure(
+    async fn dead_letter_publication(&self, ids: &[FeedEventId], message: &str) {
+        let events = Arc::clone(&self.feed_events);
+        let ids = ids.to_vec();
+        let message = message.to_owned();
+        let now = UtcInstant::now();
+        match self
+            .write_event_status(move |tx| {
+                Box::pin(async move {
+                    events
+                        .dead_letter_publication(tx, &ids, &message, now)
+                        .await
+                })
+            })
+            .await
+        {
+            Ok(()) => tracing::info!(
+                message = "feed.event.terminal",
+                phase = "publication",
+                outcome = "exhausted"
+            ),
+            Err(error) => report_continuation(
+                ErrorKind::Storage,
+                ErrorClass::Transient,
+                "server.feed.status_write.publication_dead_letter",
+                error.as_ref(),
+            ),
+        }
+    }
+
+    async fn retry_regeneration(
         &self,
-        _feed_url: &FeedPath,
         ids: &[FeedEventId],
-        recs: &[FeedEventRecord],
-        e: &RegenerateError,
+        rows: &[FeedEventRecord],
+        message: &str,
     ) {
+        let RetryPartition {
+            buckets: retry_buckets,
+            exhausted,
+        } = partition_retry_attempts(
+            ids,
+            rows,
+            |row| row.regeneration_attempts,
+            REGEN_BACKOFFS_SECS.len(),
+        );
+        if !exhausted.is_empty() {
+            metrics::feed_regeneration(metrics::RegenResult::Exhausted);
+            self.dead_letter_regeneration(&exhausted, message).await;
+        }
+        if retry_buckets.is_empty() {
+            return;
+        }
         metrics::feed_regeneration(metrics::RegenResult::Error);
-        let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
-        let attempt_usize = usize::try_from(attempt).unwrap_or(0);
-        let next_attempt_idx = attempt_usize.saturating_sub(1);
-        let error_message = e.to_string();
-        if next_attempt_idx >= BACKOFFS_SECS.len() {
-            self.mark_exhausted(ids, &error_message).await;
-        } else {
+        for (next_index, ids) in retry_buckets {
             let next = UtcInstant::from(
                 Utc::now()
-                    + chrono::Duration::seconds(
-                        i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
-                    ),
+                    + chrono::Duration::from_std(Duration::from_secs(
+                        REGEN_BACKOFFS_SECS[next_index],
+                    ))
+                    .unwrap_or(chrono::Duration::hours(24)),
             );
-            let feed_events = Arc::clone(&self.feed_events);
-            let ids = ids.to_vec();
-            let error_message = e.to_string();
+            let events = Arc::clone(&self.feed_events);
+            let message = message.to_owned();
             if let Err(error) = self
-                .write_event_status(move |transaction| {
-                    Box::pin(async move {
-                        feed_events
-                            .mark_failed(transaction, &ids, &error_message, next)
-                            .await
-                    })
+                .write_event_status(move |tx| {
+                    Box::pin(
+                        async move { events.retry_regeneration(tx, &ids, &message, next).await },
+                    )
                 })
                 .await
             {
                 report_continuation(
-                    host::error::ErrorKind::Storage,
-                    host::error::ErrorClass::Transient,
-                    "server.feed.status_write.295",
+                    ErrorKind::Storage,
+                    ErrorClass::Transient,
+                    "server.feed.status_write.regeneration_retry",
                     error.as_ref(),
                 );
             }
         }
     }
 
+    async fn retry_publication(
+        &self,
+        ids: &[FeedEventId],
+        rows: &[FeedEventRecord],
+        message: &str,
+        retry_after: Option<Duration>,
+    ) {
+        let RetryPartition {
+            buckets: retry_buckets,
+            exhausted,
+        } = partition_retry_attempts(
+            ids,
+            rows,
+            |row| row.publication_attempts,
+            PUBLICATION_BACKOFFS_SECS.len(),
+        );
+        if !exhausted.is_empty() {
+            metrics::websub_ping(metrics::PingOutcome::Exhausted);
+            self.dead_letter_publication(&exhausted, message).await;
+        }
+        if retry_buckets.is_empty() {
+            return;
+        }
+        metrics::websub_ping(metrics::PingOutcome::Failed);
+        for (next_index, ids) in retry_buckets {
+            let delay = retry_after.map_or_else(
+                || Duration::from_secs(PUBLICATION_BACKOFFS_SECS[next_index]),
+                |delay| delay.min(Duration::from_hours(24)),
+            );
+            let next = UtcInstant::from(
+                Utc::now()
+                    + chrono::Duration::from_std(delay).unwrap_or(chrono::Duration::hours(24)),
+            );
+            let events = Arc::clone(&self.feed_events);
+            let message = message.to_owned();
+            if let Err(error) = self
+                .write_event_status(move |tx| {
+                    Box::pin(
+                        async move { events.retry_publication(tx, &ids, &message, next).await },
+                    )
+                })
+                .await
+            {
+                report_continuation(
+                    ErrorKind::Storage,
+                    ErrorClass::Transient,
+                    "server.feed.status_write.publication_retry",
+                    error.as_ref(),
+                );
+            }
+        }
+    }
+
+    async fn restart_regeneration(&self, ids: &[FeedEventId]) {
+        let events = Arc::clone(&self.feed_events);
+        let ids = ids.to_vec();
+        let now = UtcInstant::now();
+        if let Err(error) = self
+            .write_event_status(move |tx| {
+                Box::pin(async move { events.restart_regeneration(tx, &ids, now).await })
+            })
+            .await
+        {
+            report_continuation(
+                ErrorKind::Storage,
+                ErrorClass::Transient,
+                "server.feed.status_write.stale_generation",
+                error.as_ref(),
+            );
+        }
+    }
+
+    async fn reset_regeneration(&self, ids: &[FeedEventId]) {
+        let events = Arc::clone(&self.feed_events);
+        let ids = ids.to_vec();
+        let now = UtcInstant::now();
+        if let Err(error) = self
+            .write_event_status(move |tx| {
+                Box::pin(async move { events.reset_regeneration(tx, &ids, now).await })
+            })
+            .await
+        {
+            report_continuation(
+                ErrorKind::Storage,
+                ErrorClass::Transient,
+                "server.feed.status_write.missing_cache",
+                error.as_ref(),
+            );
+        }
+    }
+
     /// Starts the feed worker scheduler at the cadence selected by the
     /// composition root. Subsecond cadences use one scheduler activation to
-    /// drive a Tokio interval because `tokio-cron-scheduler` stores repeated
+    /// drive a `Tokio` interval because `tokio-cron-scheduler` stores repeated
     /// durations at whole-second precision. The returned guard owns scheduler
     /// admission and drains admitted work during shutdown.
     ///
@@ -582,12 +766,12 @@ fn spawn_tick(worker: Arc<FeedWorker>) -> Pin<Box<dyn Future<Output = ()> + Send
 mod tests {
     use super::*;
     use crate::websub::NoopWebSubClient;
-    use common::site::SiteIdentity;
+    use common::tagged_url::HubUrl;
     use host::feed::FeedEventStatus;
     use sqlx::Error as SqlxError;
     use storage::{
         FeedEventError, FeedEventRecord, MockFeedCacheStorage, MockFeedEventStorage,
-        test_support::mock_write_scope,
+        MockPublisherStorage, test_support::mock_write_scope,
     };
 
     fn event(id: i64, feed_url: &str, attempts: i32) -> FeedEventRecord {
@@ -596,8 +780,11 @@ mod tests {
             id: FeedEventId::from(id),
             feed_path: feed_url.parse().expect("valid feed path in test"),
             status: FeedEventStatus::Claimed,
-            attempts,
-            last_error: None,
+            phase: host::feed::FeedEventPhase::Regeneration,
+            regeneration_attempts: attempts,
+            publication_attempts: 0,
+            regeneration_diagnostic: None,
+            publication_diagnostic: None,
             next_attempt_at: now,
             claimed_at: Some(now),
             terminal_at: None,
@@ -682,23 +869,32 @@ mod tests {
             _hub_url: &HubUrl,
             _feed_url: &FeedUrl,
         ) -> Result<(), crate::websub::WebSubError> {
-            Err(crate::websub::WebSubError::Http(Box::new(
-                std::io::Error::other("worker WebSub transport failure"),
-            )))
+            Err(crate::websub::WebSubError::Retryable {
+                reason: crate::websub::RetryableWebSubError::Transport(Box::new(
+                    std::io::Error::other("worker WebSub transport failure"),
+                )),
+                retry_after: None,
+            })
         }
     }
 
+    fn test_publisher() -> Arc<PublisherService> {
+        Arc::new(PublisherService::new(
+            std::env::temp_dir(),
+            Arc::new(MockPublisherStorage::new()),
+            mock_write_scope(),
+        ))
+    }
     fn worker(
-        site_config: storage::MockSiteConfigStorage,
         posts: storage::MockPostStorage,
         feed_cache: MockFeedCacheStorage,
         feed_events: MockFeedEventStorage,
     ) -> FeedWorker {
         FeedWorker::new(
-            Arc::new(site_config),
             Arc::new(posts),
             Arc::new(feed_cache),
             Arc::new(mock_write_scope()),
+            test_publisher(),
             Arc::new(feed_events),
             Arc::new(NoopWebSubClient),
         )
@@ -709,47 +905,13 @@ mod tests {
         websub: Arc<dyn WebSubClient>,
     ) -> FeedWorker {
         FeedWorker::new(
-            Arc::new(storage::MockSiteConfigStorage::new()),
             Arc::new(storage::MockPostStorage::new()),
             Arc::new(storage::MockFeedCacheStorage::new()),
             Arc::new(mock_write_scope()),
+            test_publisher(),
             Arc::new(feed_events),
             websub,
         )
-    }
-
-    fn test_identity() -> SiteIdentity {
-        SiteIdentity {
-            title: common::test_support::parse_site_title("Jaunder"),
-            base_url: Some(common::test_support::parse_url("https://example.com/")),
-        }
-    }
-
-    fn test_feeds_config() -> host::feed::FeedsConfig {
-        host::feed::FeedsConfig {
-            min_items: host::test_support::parse_feed_min_items("10"),
-            min_days: host::test_support::parse_feed_min_days("30"),
-            websub_hub_url: None,
-        }
-    }
-
-    fn successful_tick_posts() -> storage::MockPostStorage {
-        let mut posts = storage::MockPostStorage::new();
-        posts
-            .expect_feed_urls_needing_catchup()
-            .times(1)
-            .returning(|_| Ok(vec![]));
-        posts
-            .expect_list_published_in_window()
-            .times(1)
-            .returning(|_, _, _, _| Ok(vec![]));
-        posts
-    }
-
-    fn successful_feed_cache() -> storage::MockFeedCacheStorage {
-        let mut cache = storage::MockFeedCacheStorage::new();
-        cache.expect_upsert().times(1).returning(|_, _| Ok(()));
-        cache
     }
 
     fn assert_context_once(trace: &str, context: &str) {
@@ -763,21 +925,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_transition_events_exclude_feed_urls_and_error_text() {
+    async fn terminal_transitions_use_explicit_storage_apis() {
         let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_pinged()
             .times(1)
             .returning(|_, _, _| Ok(()));
         events
-            .expect_mark_exhausted()
+            .expect_dead_letter_publication()
             .times(1)
             .returning(|_, _, _, _| Ok(()));
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
         let (guard, output) = trace_capture();
         worker.mark_pinged(&[FeedEventId::from(7)]).await;
         worker
-            .mark_exhausted(&[FeedEventId::from(8)], "private failure detail")
+            .dead_letter_publication(&[FeedEventId::from(8)], "private failure detail")
             .await;
         drop(guard);
 
@@ -786,143 +948,98 @@ mod tests {
             trace.matches(r#""message":"feed.event.terminal""#).count(),
             2
         );
+        assert!(trace.contains(r#""phase":"publication""#));
         assert!(trace.contains(r#""outcome":"completed""#));
         assert!(trace.contains(r#""outcome":"exhausted""#));
         assert!(!trace.contains("private failure detail"));
         assert!(!trace.contains("/feed"));
     }
 
-    // guard:no-backend — mock stores isolate the config-read continuation.
     #[tokio::test]
-    async fn continuation_reporting_tick_preserves_processing_after_websub_config_read_failure() {
-        let mut site_config = storage::MockSiteConfigStorage::new();
-        site_config
-            .expect_get_feeds_websub_hub_url()
+    async fn snapshot_failure_retries_regeneration_and_reports_once() {
+        let mut publisher_storage = MockPublisherStorage::new();
+        publisher_storage
+            .expect_snapshot()
             .times(1)
-            .returning(|| Err(SqlxError::PoolClosed));
-        site_config
-            .expect_get_identity()
-            .times(2)
-            .returning(|| Ok(test_identity()));
-        site_config
-            .expect_get_feeds_config()
-            .times(1)
-            .returning(|| Ok(test_feeds_config()));
-        let mut events = MockFeedEventStorage::new();
-        events
-            .expect_claim_pending_batch()
-            .times(1)
-            .returning(|_, _, _| Ok(vec![event(1, "/feed.rss", 0)]));
-        events
-            .expect_mark_regenerated()
-            .times(1)
-            .returning(|_, _| Ok(()));
-        events
-            .expect_mark_pinged()
-            .times(1)
-            .returning(|_, _, _| Ok(()));
-        let worker = worker(
-            site_config,
-            successful_tick_posts(),
-            successful_feed_cache(),
-            events,
-        );
-
-        let (guard, output) = trace_capture();
-        worker.tick().await;
-        drop(guard);
-        assert_context_once(&trace_text(&output), "server.feed.websub_config_read");
-    }
-
-    // guard:no-backend — mock stores isolate the identity-read continuation.
-    #[tokio::test]
-    async fn continuation_reporting_tick_preserves_processing_after_identity_read_failure() {
-        let mut site_config = storage::MockSiteConfigStorage::new();
-        site_config
-            .expect_get_feeds_websub_hub_url()
-            .times(1)
-            .returning(|| Ok(None));
-        let identity_reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        site_config
-            .expect_get_identity()
-            .times(2)
-            .returning(move || {
-                if identity_reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
-                    Err(SqlxError::PoolClosed)
-                } else {
-                    Ok(test_identity())
-                }
-            });
-        site_config
-            .expect_get_feeds_config()
-            .times(1)
-            .returning(|| Ok(test_feeds_config()));
-        let mut events = MockFeedEventStorage::new();
-        events
-            .expect_claim_pending_batch()
-            .times(1)
-            .returning(|_, _, _| Ok(vec![event(1, "/feed.rss", 0)]));
-        events
-            .expect_mark_regenerated()
-            .times(1)
-            .returning(|_, _| Ok(()));
-        events
-            .expect_mark_pinged()
-            .times(1)
-            .returning(|_, _, _| Ok(()));
-        let worker = worker(
-            site_config,
-            successful_tick_posts(),
-            successful_feed_cache(),
-            events,
-        );
-
-        let (guard, output) = trace_capture();
-        worker.tick().await;
-        drop(guard);
-        assert_context_once(&trace_text(&output), "server.feed.identity_read");
-    }
-
-    // guard:no-backend — mock stores isolate the regenerated-status continuation.
-    #[tokio::test]
-    async fn continuation_reporting_successful_regeneration_survives_status_write_failure() {
-        let mut site_config = storage::MockSiteConfigStorage::new();
-        site_config
-            .expect_get_feeds_config()
-            .times(1)
-            .returning(|| Ok(test_feeds_config()));
-        site_config
-            .expect_get_identity()
-            .times(1)
-            .returning(|| Ok(test_identity()));
+            .returning(|| Err(storage::PublisherStorageError::Db(SqlxError::PoolClosed)));
+        let publisher = Arc::new(PublisherService::new(
+            std::env::temp_dir(),
+            Arc::new(publisher_storage),
+            mock_write_scope(),
+        ));
         let mut posts = storage::MockPostStorage::new();
         posts
-            .expect_list_published_in_window()
+            .expect_feed_urls_needing_catchup()
             .times(1)
-            .returning(|_, _, _, _| Ok(vec![]));
+            .returning(|_| Ok(vec![]));
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_claim_pending_batch()
+            .times(1)
+            .returning(|_, _, _| Ok(vec![event(1, "/feed.rss", 0)]));
+        events
+            .expect_retry_regeneration()
+            .times(1)
+            .returning(|_, ids, error, _| {
+                assert_eq!(ids, &[FeedEventId::from(1)]);
+                assert_eq!(error, "publisher snapshot read failed");
+                Ok(())
+            });
+        let worker = FeedWorker::new(
+            Arc::new(posts),
+            Arc::new(MockFeedCacheStorage::new()),
+            Arc::new(mock_write_scope()),
+            publisher,
+            Arc::new(events),
+            Arc::new(NoopWebSubClient),
+        );
+
+        let (guard, output) = trace_capture();
+        worker.tick().await;
+        drop(guard);
+        assert_context_once(&trace_text(&output), "server.feed.publisher_snapshot");
+    }
+    #[tokio::test]
+    async fn missing_cache_resets_regeneration_budget_without_retry() {
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_reset_regeneration()
+            .times(1)
+            .returning(|_, ids, _| {
+                assert_eq!(ids, &[FeedEventId::from(1)]);
+                Ok(())
+            });
+        let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
+        worker.reset_regeneration(&[FeedEventId::from(1)]).await;
+    }
+
+    #[tokio::test]
+    async fn stale_generation_restarts_regeneration_without_retry_charge() {
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_restart_regeneration()
+            .times(1)
+            .returning(|_, ids, _| {
+                assert_eq!(ids, &[FeedEventId::from(1)]);
+                Ok(())
+            });
+        let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
+        worker.restart_regeneration(&[FeedEventId::from(1)]).await;
+    }
+
+    #[tokio::test]
+    async fn mark_regenerated_status_failure_is_reported_once() {
         let mut events = MockFeedEventStorage::new();
         events
             .expect_mark_regenerated()
             .times(1)
             .returning(|_, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
-        events
-            .expect_mark_pinged()
-            .times(1)
-            .returning(|_, _, _| Ok(()));
-        let worker = worker(site_config, posts, successful_feed_cache(), events);
-        let identity = test_identity();
+        let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
 
         let (guard, output) = trace_capture();
-        worker
-            .process_feed_group(
-                "/feed.rss".parse().expect("feed path"),
-                vec![event(1, "/feed.rss", 0)],
-                None,
-                Some(&identity),
-            )
-            .await;
+        assert!(!worker.mark_regenerated(&[FeedEventId::from(1)]).await);
         drop(guard);
-        assert_context_once(&trace_text(&output), "server.feed.status_write.190");
+        assert_context_once(&trace_text(&output), "server.feed.status_write.regenerated");
     }
 
     // guard:no-backend — mock status store and successful protocol client.
@@ -934,77 +1051,62 @@ mod tests {
             .times(1)
             .returning(|_, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
-        let hub = "https://hub.example/".parse().expect("hub URL");
-        let identity = test_identity();
 
         let (guard, output) = trace_capture();
-        worker
-            .ping_websub(
-                &"/feed.rss".parse().expect("feed path"),
-                &[FeedEventId::from(1)],
-                1,
-                Some(&hub),
-                Some(&identity),
-            )
-            .await;
+        worker.mark_pinged(&[FeedEventId::from(1)]).await;
         drop(guard);
-        assert_context_once(&trace_text(&output), "server.feed.status_write.mark_pinged");
+        assert_context_once(
+            &trace_text(&output),
+            "server.feed.status_write.publication_complete",
+        );
     }
 
     // guard:no-backend — mock status store and failing protocol client.
     #[tokio::test]
-    async fn continuation_reporting_websub_exhaustion_survives_status_write_failure() {
+    async fn continuation_reporting_publication_dead_letter_survives_status_write_failure() {
         let mut events = MockFeedEventStorage::new();
         events
-            .expect_mark_exhausted()
+            .expect_dead_letter_publication()
             .times(1)
             .returning(|_, _, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(FailingWebSubClient));
-        let hub = "https://hub.example/".parse().expect("hub URL");
-        let identity = test_identity();
 
         let (guard, output) = trace_capture();
         worker
-            .ping_websub(
-                &"/feed.rss".parse().expect("feed path"),
-                &[FeedEventId::from(1)],
-                i32::try_from(BACKOFFS_SECS.len() + 1).expect("small backoff table"),
-                Some(&hub),
-                Some(&identity),
-            )
+            .dead_letter_publication(&[FeedEventId::from(1)], "publication failed")
             .await;
         drop(guard);
-        let trace = trace_text(&output);
-        assert_context_once(&trace, "server.feed.websub_ping");
-        assert_context_once(&trace, "server.feed.status_write.mark_exhausted");
+        assert_context_once(
+            &trace_text(&output),
+            "server.feed.status_write.publication_dead_letter",
+        );
     }
 
-    // guard:no-backend — mock status store and failing protocol client.
+    // guard:no-backend — mock status store isolates the explicit transition.
     #[tokio::test]
-    async fn continuation_reporting_websub_retry_survives_status_write_failure() {
+    async fn continuation_reporting_publication_retry_survives_status_write_failure() {
         let mut events = MockFeedEventStorage::new();
         events
-            .expect_mark_failed()
+            .expect_retry_publication()
             .times(1)
             .returning(|_, _, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(FailingWebSubClient));
-        let hub = "https://hub.example/".parse().expect("hub URL");
-        let identity = test_identity();
+        let row = event(1, "/feed.rss", 0);
 
         let (guard, output) = trace_capture();
         worker
-            .ping_websub(
-                &"/feed.rss".parse().expect("feed path"),
-                &[FeedEventId::from(1)],
-                1,
-                Some(&hub),
-                Some(&identity),
+            .retry_publication(
+                &[row.id],
+                std::slice::from_ref(&row),
+                "publication failed",
+                None,
             )
             .await;
         drop(guard);
-        let trace = trace_text(&output);
-        assert_context_once(&trace, "server.feed.websub_ping");
-        assert_context_once(&trace, "server.feed.status_write.257");
+        assert_context_once(
+            &trace_text(&output),
+            "server.feed.status_write.publication_retry",
+        );
     }
 
     // guard:no-backend — mock status store isolates regeneration retry.
@@ -1012,28 +1114,169 @@ mod tests {
     async fn continuation_reporting_regeneration_retry_survives_status_write_failure() {
         let mut events = MockFeedEventStorage::new();
         events
-            .expect_mark_failed()
+            .expect_retry_regeneration()
             .times(1)
             .returning(|_, _, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
         let record = event(1, "/feed.rss", 0);
-        let error =
-            RegenerateError::Storage(Box::new(std::io::Error::other("regeneration failed")));
 
         let (guard, output) = trace_capture();
         worker
-            .on_regen_failure(
-                &record.feed_path,
+            .retry_regeneration(
                 &[record.id],
                 std::slice::from_ref(&record),
-                &error,
+                "regeneration failed",
             )
             .await;
         drop(guard);
-        assert_context_once(&trace_text(&output), "server.feed.status_write.295");
+        assert_context_once(
+            &trace_text(&output),
+            "server.feed.status_write.regeneration_retry",
+        );
     }
 
     // guard:no-backend — mock store
+    #[tokio::test]
+    async fn grouped_regeneration_attempts_partition_retry_and_dead_letter() {
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_retry_regeneration()
+            .times(1)
+            .returning(|_, ids, error, _| {
+                assert_eq!(ids, &[FeedEventId::from(1)]);
+                assert_eq!(error, "regeneration failed");
+                Ok(())
+            });
+        events
+            .expect_dead_letter_regeneration()
+            .times(1)
+            .returning(|_, ids, error, _| {
+                assert_eq!(ids, &[FeedEventId::from(2)]);
+                assert_eq!(error, "regeneration failed");
+                Ok(())
+            });
+        let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
+        let retry = event(1, "/feed.rss", 0);
+        let exhausted = event(2, "/feed.rss", 6);
+        let ids = [retry.id, exhausted.id];
+
+        worker
+            .retry_regeneration(&ids, &[retry, exhausted], "regeneration failed")
+            .await;
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn grouped_publication_attempts_partition_retry_and_dead_letter() {
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_retry_publication()
+            .times(1)
+            .returning(|_, ids, error, _| {
+                assert_eq!(ids, &[FeedEventId::from(1)]);
+                assert_eq!(error, "publication failed");
+                Ok(())
+            });
+        events
+            .expect_dead_letter_publication()
+            .times(1)
+            .returning(|_, ids, error, _| {
+                assert_eq!(ids, &[FeedEventId::from(2)]);
+                assert_eq!(error, "publication failed");
+                Ok(())
+            });
+        let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
+        let mut retry = event(1, "/feed.rss", 0);
+        retry.phase = host::feed::FeedEventPhase::Publication;
+        let mut exhausted = event(2, "/feed.rss", 0);
+        exhausted.phase = host::feed::FeedEventPhase::Publication;
+        exhausted.publication_attempts = 9;
+
+        worker
+            .retry_publication(
+                &[retry.id, exhausted.id],
+                &[retry, exhausted],
+                "publication failed",
+                None,
+            )
+            .await;
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn regeneration_attempt_seven_is_terminal() {
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_dead_letter_regeneration()
+            .times(1)
+            .returning(|_, ids, error, _| {
+                assert_eq!(ids, &[FeedEventId::from(1)]);
+                assert_eq!(error, "regeneration failed");
+                Ok(())
+            });
+        let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
+        let record = event(1, "/feed.rss", 6);
+
+        worker
+            .retry_regeneration(
+                &[record.id],
+                std::slice::from_ref(&record),
+                "regeneration failed",
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn publication_attempt_ten_is_terminal() {
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_dead_letter_publication()
+            .times(1)
+            .returning(|_, ids, error, _| {
+                assert_eq!(ids, &[FeedEventId::from(1)]);
+                assert_eq!(error, "publication failed");
+                Ok(())
+            });
+        let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
+        let mut record = event(1, "/feed.rss", 0);
+        record.phase = host::feed::FeedEventPhase::Publication;
+        record.publication_attempts = 9;
+
+        worker
+            .retry_publication(
+                &[record.id],
+                std::slice::from_ref(&record),
+                "publication failed",
+                Some(Duration::from_secs(1)),
+            )
+            .await;
+    }
+    #[tokio::test]
+    async fn publication_retry_after_overrides_backoff() {
+        let before = Utc::now();
+        let mut events = MockFeedEventStorage::new();
+        events
+            .expect_retry_publication()
+            .times(1)
+            .returning(move |_, _, _, next| {
+                assert!(next.value() >= before + chrono::Duration::seconds(2));
+                assert!(next.value() <= before + chrono::Duration::seconds(4));
+                Ok(())
+            });
+        let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
+        let mut record = event(1, "/feed.rss", 0);
+        record.phase = host::feed::FeedEventPhase::Publication;
+
+        worker
+            .retry_publication(
+                &[record.id],
+                std::slice::from_ref(&record),
+                "publication failed",
+                Some(Duration::from_secs(3)),
+            )
+            .await;
+    }
+
     #[tokio::test]
     async fn tick_reports_and_returns_when_claim_fails() {
         let mut posts = storage::MockPostStorage::new();
@@ -1048,12 +1291,7 @@ mod tests {
             .returning(|_, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         // No mark_* expectation is set: any call after the claim error would
         // panic as an unexpected call, proving the tick returned early.
-        let w = worker(
-            storage::MockSiteConfigStorage::new(),
-            posts,
-            storage::MockFeedCacheStorage::new(),
-            events,
-        );
+        let w = worker(posts, storage::MockFeedCacheStorage::new(), events);
         let (guard, output) = trace_capture();
         w.tick().await;
         drop(guard);
@@ -1080,12 +1318,7 @@ mod tests {
             .expect_claim_pending_batch()
             .times(1)
             .returning(|_, _, _| Ok(vec![]));
-        let w = worker(
-            storage::MockSiteConfigStorage::new(),
-            posts,
-            storage::MockFeedCacheStorage::new(),
-            events,
-        );
+        let w = worker(posts, storage::MockFeedCacheStorage::new(), events);
         w.tick().await;
     }
 
@@ -1104,12 +1337,7 @@ mod tests {
             .expect_claim_pending_batch()
             .times(1)
             .returning(|_, _, _| Ok(vec![]));
-        let w = worker(
-            storage::MockSiteConfigStorage::new(),
-            posts,
-            storage::MockFeedCacheStorage::new(),
-            events,
-        );
+        let w = worker(posts, storage::MockFeedCacheStorage::new(), events);
         let (guard, output) = trace_capture();
         w.tick().await;
         drop(guard);
@@ -1125,44 +1353,28 @@ mod tests {
 
     // guard:no-backend — mock store and failing protocol client.
     #[tokio::test]
-    async fn websub_transport_failure_reaches_retry_boundary_and_reports_once() {
+    async fn publication_retry_persists_typed_error_message() {
         let mut events = MockFeedEventStorage::new();
         events
-            .expect_mark_failed()
+            .expect_retry_publication()
             .times(1)
             .returning(|_, _, error, _| {
-                assert_eq!(error, "WebSub transport failed");
+                assert_eq!(
+                    error,
+                    "WebSub publish is retryable: WebSub transport failed"
+                );
                 Ok(())
             });
         let worker = worker_with_websub(events, Arc::new(FailingWebSubClient));
-        let hub = "https://hub.example/".parse().expect("hub URL");
-        let identity = SiteIdentity {
-            title: common::test_support::parse_site_title("Jaunder"),
-            base_url: Some(common::test_support::parse_url("https://example.com/")),
-        };
-        let (guard, output) = trace_capture();
+        let row = event(1, "/feed.rss", 0);
         worker
-            .ping_websub(
-                &"/feed.rss".parse().expect("feed path"),
-                &[FeedEventId::from(1)],
-                1,
-                Some(&hub),
-                Some(&identity),
+            .retry_publication(
+                &[row.id],
+                std::slice::from_ref(&row),
+                "WebSub publish is retryable: WebSub transport failed",
+                None,
             )
             .await;
-        drop(guard);
-        let trace = trace_text(&output);
-        assert_eq!(
-            trace
-                .matches(r#""error.context":"server.feed.websub_ping""#)
-                .count(),
-            1,
-            "trace: {trace}"
-        );
-        assert!(
-            trace.contains("worker WebSub transport failure"),
-            "typed source chain was lost: {trace}"
-        );
     }
 
     // guard:no-backend — mock status store.
@@ -1175,20 +1387,12 @@ mod tests {
             .returning(|_, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
         let (guard, output) = trace_capture();
-        worker
-            .ping_websub(
-                &"/feed.rss".parse().expect("feed path"),
-                &[FeedEventId::from(1)],
-                1,
-                None,
-                None,
-            )
-            .await;
+        worker.mark_pinged(&[FeedEventId::from(1)]).await;
         drop(guard);
         let trace = trace_text(&output);
         assert_eq!(
             trace
-                .matches(r#""error.context":"server.feed.status_write.mark_pinged""#)
+                .matches(r#""error.context":"server.feed.status_write.publication_complete""#)
                 .count(),
             1,
             "trace: {trace}"
@@ -1218,12 +1422,7 @@ mod tests {
             .withf(|_, paths| paths.len() == 3)
             .returning(|_, _| Ok(()));
         events.expect_enqueue().times(0);
-        let w = worker(
-            storage::MockSiteConfigStorage::new(),
-            posts,
-            storage::MockFeedCacheStorage::new(),
-            events,
-        );
+        let w = worker(posts, storage::MockFeedCacheStorage::new(), events);
         w.go_live_pass(UtcInstant::now())
             .await
             .expect("catch-up pass");
@@ -1251,12 +1450,7 @@ mod tests {
             .withf(|_, paths| paths.len() <= ENQUEUE_CHUNK)
             .returning(|_, _| Ok(()));
         events.expect_enqueue().times(0);
-        let w = worker(
-            storage::MockSiteConfigStorage::new(),
-            posts,
-            storage::MockFeedCacheStorage::new(),
-            events,
-        );
+        let w = worker(posts, storage::MockFeedCacheStorage::new(), events);
 
         w.go_live_pass(UtcInstant::now())
             .await
@@ -1298,12 +1492,7 @@ mod tests {
             .withf(|_, paths| paths.len() == 9)
             .returning(|_, _| Ok(()));
         events.expect_enqueue().times(0);
-        let w = worker(
-            storage::MockSiteConfigStorage::new(),
-            posts,
-            storage::MockFeedCacheStorage::new(),
-            events,
-        );
+        let w = worker(posts, storage::MockFeedCacheStorage::new(), events);
         w.go_live_pass(UtcInstant::now())
             .await
             .expect("priming pass");
@@ -1312,153 +1501,29 @@ mod tests {
             .expect("windowed pass");
     }
 
-    // guard:no-backend — mock store
     #[tokio::test]
-    async fn tick_regenerates_and_completes_without_hub() {
-        let mut site_config = storage::MockSiteConfigStorage::new();
-        site_config
-            .expect_get_feeds_websub_hub_url()
-            .times(0..)
-            .returning(|| Ok(None));
-        site_config.expect_get_identity().times(0..).returning(|| {
-            Ok(SiteIdentity {
-                title: common::test_support::parse_site_title("Jaunder"),
-                base_url: Some(common::test_support::parse_url("https://example.com/")),
-            })
-        });
-        site_config
-            .expect_get_feeds_config()
-            .times(0..)
-            .returning(|| {
-                Ok(host::feed::FeedsConfig {
-                    min_items: host::test_support::parse_feed_min_items("10"),
-                    min_days: host::test_support::parse_feed_min_days("30"),
-                    websub_hub_url: None,
-                })
-            });
-        let mut posts = storage::MockPostStorage::new();
-        posts
-            .expect_feed_urls_needing_catchup()
-            .times(0..)
-            .returning(|_| Ok(vec![]));
-        posts
-            .expect_list_published_in_window()
-            .times(0..)
-            .returning(|_, _, _, _| Ok(vec![]));
-        let mut cache = storage::MockFeedCacheStorage::new();
-        cache.expect_upsert().times(0..).returning(|_, _| Ok(()));
-        let mut events = storage::MockFeedEventStorage::new();
-        events
-            .expect_claim_pending_batch()
-            .times(1)
-            .returning(|_, _, _| Ok(vec![event(1, "/feed.rss", 0)]));
-        events
-            .expect_mark_regenerated()
-            .times(1)
-            .returning(|_, _| Ok(()));
-        // No hub configured -> the tick treats the event as complete (mark_pinged).
-        events
-            .expect_mark_pinged()
-            .times(1)
-            .returning(|_, _, _| Ok(()));
-        let w = worker(site_config, posts, cache, events);
-        w.tick().await;
-    }
-
-    // guard:no-backend — mock store
-    #[tokio::test]
-    async fn continuation_reporting_tick_regeneration_exhaustion_survives_status_write_failure() {
-        // A FeedPath is always parseable, so regen can only fail on a storage
-        // error: make the first read inside `regenerate::feed` fail. The record's
-        // high attempt count pushes the next attempt past the backoff table, so
-        // the tick marks the events exhausted (terminal failure).
-        let mut site_config = storage::MockSiteConfigStorage::new();
-        site_config
-            .expect_get_feeds_config()
-            .times(1)
-            .returning(|| Err(sqlx::Error::PoolClosed));
-        site_config
-            .expect_get_feeds_websub_hub_url()
-            .times(1)
-            .returning(|| Ok(None));
-        site_config
-            .expect_get_identity()
-            .times(1)
-            .returning(|| Ok(test_identity()));
-        let mut posts = storage::MockPostStorage::new();
-        posts
-            .expect_feed_urls_needing_catchup()
-            .times(1)
-            .returning(|_| Ok(vec![]));
+    async fn regeneration_dead_letter_status_failure_is_reported_once() {
         let mut events = MockFeedEventStorage::new();
         events
-            .expect_claim_pending_batch()
-            .times(1)
-            .returning(|_, _, _| Ok(vec![event(1, "/feed.rss", 10)]));
-        events
-            .expect_mark_exhausted()
+            .expect_dead_letter_regeneration()
             .times(1)
             .returning(|_, _, _, _| Err(FeedEventError::Db(SqlxError::PoolClosed)));
-        let w = worker(
-            site_config,
-            posts,
-            storage::MockFeedCacheStorage::new(),
-            events,
-        );
-        let (guard, output) = trace_capture();
-        w.tick().await;
-        drop(guard);
-        let trace = trace_text(&output);
-        assert_context_once(&trace, "server.feed.regenerate");
-        assert_context_once(&trace, "server.feed.status_write.mark_exhausted");
-        assert_eq!(
-            trace.matches(r#""error.disposition":"swallowed""#).count(),
-            2,
-            "trace: {trace}"
-        );
-    }
+        let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
+        let record = event(1, "/feed.rss", 6);
 
-    // guard:no-backend — mock store
-    #[tokio::test]
-    async fn tick_reschedules_on_regen_failure_within_backoff() {
-        // A bad-URL trigger is unrepresentable (a `FeedPath` is always valid), so
-        // the failure is a valid path plus a forced storage error inside
-        // `regenerate::feed`. attempts = 0 keeps the next attempt inside the backoff
-        // table, so the batch is rescheduled (mark_failed), the cache is never
-        // written, and no hub ping is attempted.
-        let mut site_config = storage::MockSiteConfigStorage::new();
-        site_config
-            .expect_get_feeds_config()
-            .times(0..)
-            .returning(|| Err(sqlx::Error::PoolClosed));
-        site_config
-            .expect_get_feeds_websub_hub_url()
-            .times(0..)
-            .returning(|| Ok(None));
-        site_config.expect_get_identity().times(0..).returning(|| {
-            Ok(SiteIdentity {
-                title: common::test_support::parse_site_title("Jaunder"),
-                base_url: Some(common::test_support::parse_url("https://example.com/")),
-            })
-        });
-        let mut posts = storage::MockPostStorage::new();
-        posts
-            .expect_feed_urls_needing_catchup()
-            .times(0..)
-            .returning(|_| Ok(vec![]));
-        let mut cache = storage::MockFeedCacheStorage::new();
-        cache.expect_upsert().times(0); // no cache row on regen failure
-        let mut events = storage::MockFeedEventStorage::new();
-        events
-            .expect_claim_pending_batch()
-            .times(1)
-            .returning(|_, _, _| Ok(vec![event(1, "/feed.rss", 0)]));
-        events
-            .expect_mark_failed()
-            .times(1)
-            .returning(|_, _, _, _| Ok(()));
-        let w = worker(site_config, posts, cache, events);
-        w.tick().await;
+        let (guard, output) = trace_capture();
+        worker
+            .retry_regeneration(
+                &[record.id],
+                std::slice::from_ref(&record),
+                "regeneration failed",
+            )
+            .await;
+        drop(guard);
+        assert_context_once(
+            &trace_text(&output),
+            "server.feed.status_write.regeneration_dead_letter",
+        );
     }
 
     // guard:no-backend — mock store
@@ -1476,12 +1541,7 @@ mod tests {
             .expect_claim_pending_batch()
             .times(1)
             .returning(|_, _, _| Ok(vec![]));
-        let w = worker(
-            storage::MockSiteConfigStorage::new(),
-            posts,
-            storage::MockFeedCacheStorage::new(),
-            events,
-        );
+        let w = worker(posts, storage::MockFeedCacheStorage::new(), events);
         spawn_tick(Arc::new(w)).await;
     }
 }

@@ -39,7 +39,7 @@ only in that row.
 | `/sessions`                                                                                                                    | [App password management](#app-password-management)                                 |
 | `/audiences`                                                                                                                   | [Audiences, subscriptions, and visibility](#audiences-subscriptions-and-visibility) |
 | `/invites`                                                                                                                     | [Invitation registration](#invitation-registration)                                 |
-| `/admin/backups`, `/admin/site`                                                                                                | [Administration](#administration)                                                   |
+| `/admin/backups`, `/admin/site`, `/admin/websub`                                                                               | [Administration](#administration)                                                   |
 | `/posts/new`, `/drafts`, `/posts/:post_id/edit`, `/history`, `/posts/:post_id/history`, `/posts/:post_id/history/:revision_id` | [Post authoring lifecycle](#post-authoring-lifecycle)                               |
 | `/media`                                                                                                                       | [Media management](#media-management)                                               |
 | `/forgot-password`, `/reset-password?token=...`                                                                                | [Password reset](#password-reset)                                                   |
@@ -150,14 +150,17 @@ invite-code route, and asserts the invite-only policy fallback.
 
 ### Administration
 
-**Paths and entry points:** `/admin/site` and `/admin/backups`; administrator
-shell navigation.
+**Paths and entry points:** `/admin/site`, `/admin/backups`, and
+`/admin/websub`; administrator shell navigation.
 
 **Evidence:**
 [`end2end/tests/admin-site.spec.ts`](../../end2end/tests/admin-site.spec.ts)
 asserts site-setting loads, updates, authorization, and configuration banners.
 [`end2end/tests/backup.spec.ts`](../../end2end/tests/backup.spec.ts) asserts
 backup schedule, mode, retention, destination, and save behavior.
+[`end2end/tests/websub.spec.ts`](../../end2end/tests/websub.spec.ts) asserts hub
+configuration, authorization, phase filtering, pagination, exact redrive, and
+stale-selection rejection.
 
 ### Post authoring lifecycle
 

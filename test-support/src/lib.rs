@@ -14,8 +14,9 @@
 use std::sync::Arc;
 
 use common::display_name::DisplayName;
-use common::ids::{PostId, UserId};
+use common::ids::{FeedEventId, PostId, UserId};
 use common::username::Username;
+use host::feed::{FeedEventPhase, FeedPath};
 use storage::{AppState, OperatorStatus, seed_post_input};
 
 pub mod panic_gate;
@@ -112,6 +113,66 @@ pub async fn seed_posts_for_user(
         .await
         .map_err(|error| anyhow::anyhow!("batch seed of {count} posts failed: {error}"))?;
     confirmed_fixture_outcome(outcome, format_args!("batch seed of {count} posts"))
+}
+
+/// Seed terminal feed events through the same storage lifecycle used by the
+/// worker. This is e2e-only fixture setup; it deliberately avoids queue SQL.
+///
+/// # Errors
+///
+/// Returns an error if a generated feed path or any storage transition fails.
+pub async fn seed_dead_letters(
+    state: &Arc<AppState>,
+    phase: FeedEventPhase,
+    count: usize,
+) -> anyhow::Result<Vec<FeedEventId>> {
+    let mut ids = Vec::with_capacity(count);
+    for index in 0..count {
+        let feed_path = format!("/~websub-fixture-{index}/feed.rss")
+            .parse::<FeedPath>()
+            .map_err(|_| anyhow::anyhow!("generated WebSub fixture feed path was invalid"))?;
+        let feed_events = Arc::clone(&state.feed_events);
+        let diagnostic = format!("fixture {phase:?} failure {index}");
+        let id = confirmed_fixture_outcome(
+            state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        let id = feed_events.enqueue(transaction, &feed_path).await?;
+                        match phase {
+                            FeedEventPhase::Regeneration => {
+                                feed_events
+                                    .dead_letter_regeneration(
+                                        transaction,
+                                        &[id],
+                                        &diagnostic,
+                                        common::time::UtcInstant::now(),
+                                    )
+                                    .await?;
+                            }
+                            FeedEventPhase::Publication => {
+                                feed_events
+                                    .dead_letter_publication(
+                                        transaction,
+                                        &[id],
+                                        &diagnostic,
+                                        common::time::UtcInstant::now(),
+                                    )
+                                    .await?;
+                            }
+                        }
+                        Ok::<FeedEventId, storage::FeedEventError>(id)
+                    })
+                })
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!("atomic WebSub dead-letter fixture failed: {error}")
+                })?,
+            "atomic WebSub dead-letter fixture",
+        )?;
+        ids.push(id);
+    }
+    Ok(ids)
 }
 
 /// Create a fixture user through the real `UserStorage::create_user` path — the

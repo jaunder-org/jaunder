@@ -1,11 +1,18 @@
 use async_trait::async_trait;
-use std::time::Duration;
+use reqwest::{StatusCode, redirect::Policy};
+use std::{
+    collections::HashSet,
+    io,
+    sync::LazyLock,
+    time::{Duration, SystemTime},
+};
 
-use super::{WebSubClient, WebSubError};
+use super::{RetryableWebSubError, TerminalWebSubError, WebSubClient, WebSubError};
 use common::tagged_url::{FeedUrl, HubUrl};
+use url::Url;
 
 pub struct HttpWebSubClient {
-    client: reqwest::Client,
+    client: LazyLock<Result<reqwest::Client, String>>,
     timeout: Duration,
 }
 
@@ -21,9 +28,25 @@ impl HttpWebSubClient {
     #[must_use]
     pub fn with_timeout(timeout: Duration) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: LazyLock::new(Self::build_client),
             timeout,
         }
+    }
+
+    fn build_client() -> Result<reqwest::Client, String> {
+        reqwest::Client::builder()
+            .redirect(Policy::none())
+            .build()
+            .map_err(|error| error.to_string())
+    }
+
+    fn client(&self) -> Result<&reqwest::Client, WebSubError> {
+        self.client
+            .as_ref()
+            .map_err(|error| WebSubError::Retryable {
+                reason: RetryableWebSubError::Transport(Box::new(io::Error::other(error.clone()))),
+                retry_after: None,
+            })
     }
 }
 
@@ -40,40 +63,142 @@ impl WebSubClient for HttpWebSubClient {
         // the ADR-0063 §5 carve-out. `IntoUrl` is sealed and has no impl for our
         // newtype, so `post` needs the `&str` explicitly.
         let form = [("hub.mode", "publish"), ("hub.url", feed_url.as_ref())];
-        let res = self
-            .client
-            .post(hub_url.as_ref())
-            .timeout(self.timeout)
-            .form(&form)
-            .send()
-            .await
-            .map_err(|error| WebSubError::Http(Box::new(error)))?;
-        let status = res.status();
-        if status.is_success() {
-            Ok(())
-        } else {
-            Err(WebSubError::HubRefused {
-                status: status.as_u16(),
-            })
+        let mut target = Url::parse(hub_url.as_ref()).map_err(|source| WebSubError::Retryable {
+            reason: RetryableWebSubError::Transport(Box::new(source)),
+            retry_after: None,
+        })?;
+        let mut visited = HashSet::from([target.clone()]);
+        let mut redirects = 0;
+
+        loop {
+            let response = self
+                .client()?
+                .post(target.clone())
+                .timeout(self.timeout)
+                .form(&form)
+                .send()
+                .await
+                .map_err(|source| WebSubError::Retryable {
+                    reason: RetryableWebSubError::Transport(Box::new(source)),
+                    retry_after: None,
+                })?;
+            let status = response.status();
+
+            if status.is_success() {
+                return Ok(());
+            }
+
+            if status == StatusCode::TEMPORARY_REDIRECT || status == StatusCode::PERMANENT_REDIRECT
+            {
+                if redirects == 3 {
+                    return Err(WebSubError::Terminal {
+                        reason: TerminalWebSubError::TooManyRedirects {
+                            status: status.as_u16(),
+                        },
+                    });
+                }
+                let Some(location) = response.headers().get(reqwest::header::LOCATION) else {
+                    return Err(WebSubError::Terminal {
+                        reason: TerminalWebSubError::MissingLocation {
+                            status: status.as_u16(),
+                        },
+                    });
+                };
+                let Ok(location) = location.to_str() else {
+                    return Err(WebSubError::Terminal {
+                        reason: TerminalWebSubError::InvalidLocation {
+                            status: status.as_u16(),
+                        },
+                    });
+                };
+                let Ok(mut next) = target.join(location) else {
+                    return Err(WebSubError::Terminal {
+                        reason: TerminalWebSubError::InvalidLocation {
+                            status: status.as_u16(),
+                        },
+                    });
+                };
+                if !matches!(next.scheme(), "http" | "https") {
+                    return Err(WebSubError::Terminal {
+                        reason: TerminalWebSubError::UnsupportedLocationScheme {
+                            status: status.as_u16(),
+                        },
+                    });
+                }
+                next.set_fragment(None);
+                if !visited.insert(next.clone()) {
+                    return Err(WebSubError::Terminal {
+                        reason: TerminalWebSubError::RedirectLoop {
+                            status: status.as_u16(),
+                        },
+                    });
+                }
+                target = next;
+                redirects += 1;
+                continue;
+            }
+
+            if status == StatusCode::REQUEST_TIMEOUT
+                || status == StatusCode::TOO_MANY_REQUESTS
+                || status.is_server_error()
+            {
+                return Err(WebSubError::Retryable {
+                    reason: RetryableWebSubError::Http {
+                        status: status.as_u16(),
+                    },
+                    retry_after: retry_after(response.headers()),
+                });
+            }
+
+            return Err(WebSubError::Terminal {
+                reason: TerminalWebSubError::Http {
+                    status: status.as_u16(),
+                },
+            });
         }
     }
+}
+
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    const MAX_RETRY_AFTER: Duration = Duration::from_hours(24);
+
+    let value = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+    let delay = value
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+        .or_else(|| {
+            httpdate::parse_http_date(value)
+                .ok()?
+                .duration_since(SystemTime::now())
+                .ok()
+                .filter(|delay| !delay.is_zero())
+        })?;
+    Some(delay.min(MAX_RETRY_AFTER))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{Router, extract::Form, http::StatusCode, routing::post};
+    use axum::{
+        Router,
+        body::Body,
+        extract::{Form, State},
+        http::{HeaderValue, Uri, header},
+        response::Response,
+        routing::post,
+    };
     use common::test_support::parse_url;
     use serde::Deserialize;
-    use std::net::SocketAddr;
-    use std::sync::Arc;
+    use std::{
+        collections::HashMap,
+        net::SocketAddr,
+        sync::Arc,
+        time::{Duration, SystemTime},
+    };
     use tokio::sync::Mutex;
 
-    // Deliberately `String`, not a `TaggedUrl`: this is the wire decoder on the
-    // test hub, so it must record exactly what was posted. A validating field
-    // would turn a malformed send into an axum form rejection this test never
-    // sees, instead of a readable assertion diff. ADR-0063 §5 (wire decoders).
-    #[derive(Debug, Deserialize, Clone)]
+    #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
     struct HubForm {
         #[serde(rename = "hub.mode")]
         mode: String,
@@ -81,36 +206,92 @@ mod tests {
         url: String,
     }
 
-    /// The spawned hub's publish endpoint.
-    fn hub_at(addr: SocketAddr) -> HubUrl {
-        parse_url(&format!("http://{addr}/"))
+    #[derive(Debug, Clone)]
+    struct HubResponse {
+        status: StatusCode,
+        location: Option<HeaderValue>,
+        retry_after: Option<HeaderValue>,
     }
 
-    /// The feed every test in this module publishes; its value is incidental.
+    impl HubResponse {
+        fn status(status: StatusCode) -> Self {
+            Self {
+                status,
+                location: None,
+                retry_after: None,
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct HubState {
+        received: Arc<Mutex<Vec<(String, HubForm)>>>,
+        responses: HashMap<String, HubResponse>,
+    }
+
+    async fn respond(
+        State(state): State<HubState>,
+        uri: Uri,
+        Form(form): Form<HubForm>,
+    ) -> Response {
+        let path = uri.path().to_owned();
+        state.received.lock().await.push((path.clone(), form));
+        let response = state
+            .responses
+            .get(&path)
+            .unwrap_or_else(|| panic!("unexpected hub request to {path}"));
+        let mut builder = Response::builder().status(response.status);
+        if let Some(location) = &response.location {
+            builder = builder.header(header::LOCATION, location.clone());
+        }
+        if let Some(retry_after) = &response.retry_after {
+            builder = builder.header(header::RETRY_AFTER, retry_after.clone());
+        }
+        builder.body(Body::empty()).expect("response is valid")
+    }
+
+    async fn spawn_hub(
+        responses: impl IntoIterator<Item = (impl Into<String>, HubResponse)>,
+    ) -> (SocketAddr, Arc<Mutex<Vec<(String, HubForm)>>>) {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let state = HubState {
+            received: received.clone(),
+            responses: responses
+                .into_iter()
+                .map(|(path, response)| (path.into(), response))
+                .collect(),
+        };
+        let app = Router::new().fallback(post(respond)).with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("test listener has address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("test hub serves requests");
+        });
+        (addr, received)
+    }
+
+    fn hub_at(addr: SocketAddr, path: &str) -> HubUrl {
+        parse_url(&format!("http://{addr}{path}"))
+    }
+
     fn feed_url() -> FeedUrl {
         parse_url("https://example.com/feed.rss")
     }
 
-    async fn spawn_hub(received: Arc<Mutex<Vec<HubForm>>>, status: StatusCode) -> SocketAddr {
-        let app = Router::new().route(
-            "/",
-            post({
-                let received = received.clone();
-                move |Form(form): Form<HubForm>| {
-                    let received = received.clone();
-                    async move {
-                        received.lock().await.push(form);
-                        status
-                    }
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        }); // cov:ignore
-        addr
+    fn retryable(error: WebSubError) -> (Option<Duration>, RetryableWebSubError) {
+        match error {
+            WebSubError::Retryable {
+                retry_after,
+                reason,
+            } => (retry_after, reason),
+            WebSubError::Terminal { reason } => {
+                panic!("expected retryable failure, got terminal {reason}")
+            }
+        }
     }
 
     #[test]
@@ -118,86 +299,423 @@ mod tests {
         let _ = HttpWebSubClient::default();
     }
 
-    // Scheme rejection is `tagged_url::tests::rejects_non_http_schemes`; the
-    // `WebSubError::Http(_)` arm is `returns_http_error_on_connection_refused`.
-
     #[tokio::test]
-    async fn posts_form_body_to_hub_on_success() {
-        let received = Arc::new(Mutex::new(Vec::new()));
-        let addr = spawn_hub(received.clone(), StatusCode::ACCEPTED).await;
-        let c = HttpWebSubClient::new();
-        c.send_publish(&hub_at(addr), &feed_url()).await.unwrap();
-        let got = received.lock().await.clone();
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].mode, "publish");
-        assert_eq!(got[0].url, "https://example.com/feed.rss");
+    async fn succeeds_for_every_2xx_status() {
+        let responses = (200..300)
+            .map(|status| {
+                (
+                    format!("/{status}"),
+                    HubResponse::status(StatusCode::from_u16(status).expect("2xx status")),
+                )
+            })
+            .collect::<Vec<_>>();
+        let (addr, _) = spawn_hub(responses).await;
+        let client = HttpWebSubClient::new();
+
+        for status in 200..300 {
+            client
+                .send_publish(&hub_at(addr, &format!("/{status}")), &feed_url())
+                .await
+                .unwrap_or_else(|error| panic!("{status} must succeed: {error}"));
+        }
     }
 
     #[tokio::test]
-    async fn returns_hub_refused_on_4xx() {
-        let received = Arc::new(Mutex::new(Vec::new()));
-        let addr = spawn_hub(received.clone(), StatusCode::BAD_REQUEST).await;
-        let c = HttpWebSubClient::new();
-        let err = c
-            .send_publish(&hub_at(addr), &feed_url())
+    async fn classifies_retryable_http_statuses_without_remote_delay() {
+        let statuses = std::iter::once(408)
+            .chain(std::iter::once(429))
+            .chain(500..600)
+            .collect::<Vec<_>>();
+        let responses = statuses.iter().map(|status| {
+            (
+                format!("/{status}"),
+                HubResponse::status(StatusCode::from_u16(*status).expect("retryable status")),
+            )
+        });
+        let (addr, _) = spawn_hub(responses).await;
+        let client = HttpWebSubClient::new();
+
+        for status in statuses {
+            let error = client
+                .send_publish(&hub_at(addr, &format!("/{status}")), &feed_url())
+                .await
+                .expect_err("retryable HTTP response");
+            let (delay, reason) = retryable(error);
+            assert_eq!(delay, None);
+            assert!(
+                matches!(reason, RetryableWebSubError::Http { status: actual } if actual == status)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn classifies_every_other_3xx_and_4xx_status_as_terminal() {
+        let statuses = (300..500)
+            .filter(|status| !matches!(status, 307 | 308 | 408 | 429))
+            .collect::<Vec<_>>();
+        let responses = statuses.iter().map(|status| {
+            (
+                format!("/{status}"),
+                HubResponse::status(StatusCode::from_u16(*status).expect("terminal status")),
+            )
+        });
+        let (addr, _) = spawn_hub(responses).await;
+        let client = HttpWebSubClient::new();
+
+        for status in statuses {
+            let error = client
+                .send_publish(&hub_at(addr, &format!("/{status}")), &feed_url())
+                .await
+                .expect_err("terminal HTTP response");
+            assert!(matches!(
+                error,
+                WebSubError::Terminal {
+                    reason: TerminalWebSubError::Http { status: actual }
+                } if actual == status
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn follows_three_307_and_308_redirects_preserving_post_form() {
+        let responses = [
+            (
+                "/start",
+                HubResponse {
+                    status: StatusCode::TEMPORARY_REDIRECT,
+                    location: Some(HeaderValue::from_static("/first")),
+                    retry_after: None,
+                },
+            ),
+            (
+                "/first",
+                HubResponse {
+                    status: StatusCode::PERMANENT_REDIRECT,
+                    location: Some(HeaderValue::from_static("/second")),
+                    retry_after: None,
+                },
+            ),
+            (
+                "/second",
+                HubResponse {
+                    status: StatusCode::TEMPORARY_REDIRECT,
+                    location: Some(HeaderValue::from_static("/complete")),
+                    retry_after: None,
+                },
+            ),
+            ("/complete", HubResponse::status(StatusCode::NO_CONTENT)),
+        ];
+        let (addr, received) = spawn_hub(responses).await;
+        HttpWebSubClient::new()
+            .send_publish(&hub_at(addr, "/start"), &feed_url())
             .await
-            .unwrap_err();
-        assert!(matches!(err, WebSubError::HubRefused { status: 400 }));
+            .expect("three preserving redirects succeed");
+
+        let received = received.lock().await.clone();
+        assert_eq!(
+            received.iter().map(|(path, _)| path).collect::<Vec<_>>(),
+            vec!["/start", "/first", "/second", "/complete"]
+        );
+        assert!(received.iter().all(|(_, form)| {
+            form == &HubForm {
+                mode: "publish".into(),
+                url: "https://example.com/feed.rss".into(),
+            }
+        }));
     }
 
-    /// A hub that accepts the connection but never replies within a test's
-    /// lifetime, so a short client timeout deterministically fires.
-    async fn spawn_hanging_hub() -> SocketAddr {
-        let app = Router::new().route(
-            "/",
-            post(|| async {
-                tokio::time::sleep(Duration::from_secs(30)).await;
-                StatusCode::ACCEPTED // cov:ignore
-            }),
+    async fn assert_rejected_redirect(start: &str, responses: Vec<(&'static str, HubResponse)>) {
+        let (addr, received) = spawn_hub(responses).await;
+        let error = HttpWebSubClient::new()
+            .send_publish(&hub_at(addr, start), &feed_url())
+            .await
+            .expect_err("disallowed redirect is terminal");
+        let expected_diagnostic = match start {
+            "/missing" => "without Location",
+            "/invalid" | "/bad-url" => "invalid Location",
+            "/non-http" => "non-HTTP(S) Location",
+            "/loop" => "redirect loop",
+            "/fourth" => "redirect limit",
+            _ => unreachable!("known redirect case"),
+        };
+        assert!(error.to_string().contains(expected_diagnostic));
+        assert!(matches!(
+            (start, error),
+            (
+                "/missing",
+                WebSubError::Terminal {
+                    reason: TerminalWebSubError::MissingLocation { status: 307 },
+                },
+            ) | (
+                "/invalid",
+                WebSubError::Terminal {
+                    reason: TerminalWebSubError::InvalidLocation { status: 308 },
+                },
+            ) | (
+                "/bad-url",
+                WebSubError::Terminal {
+                    reason: TerminalWebSubError::InvalidLocation { status: 307 },
+                },
+            ) | (
+                "/non-http",
+                WebSubError::Terminal {
+                    reason: TerminalWebSubError::UnsupportedLocationScheme { status: 307 },
+                },
+            ) | (
+                "/loop",
+                WebSubError::Terminal {
+                    reason: TerminalWebSubError::RedirectLoop { status: 308 },
+                },
+            ) | (
+                "/fourth",
+                WebSubError::Terminal {
+                    reason: TerminalWebSubError::TooManyRedirects { status: 308 },
+                },
+            )
+        ));
+        assert_eq!(
+            received.lock().await.len(),
+            if start == "/fourth" { 4 } else { 1 },
+            "the client must not follow a rejected redirect"
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_missing_invalid_and_non_http_redirect_locations() {
+        for (start, response) in [
+            (
+                "/missing",
+                HubResponse::status(StatusCode::TEMPORARY_REDIRECT),
+            ),
+            (
+                "/invalid",
+                HubResponse {
+                    status: StatusCode::PERMANENT_REDIRECT,
+                    location: Some(HeaderValue::from_bytes(b"\xff").expect("opaque header")),
+                    retry_after: None,
+                },
+            ),
+            (
+                "/bad-url",
+                HubResponse {
+                    status: StatusCode::TEMPORARY_REDIRECT,
+                    location: Some(HeaderValue::from_static("http://[::1")),
+                    retry_after: None,
+                },
+            ),
+            (
+                "/non-http",
+                HubResponse {
+                    status: StatusCode::TEMPORARY_REDIRECT,
+                    location: Some(HeaderValue::from_static("mailto:hub@example.com")),
+                    retry_after: None,
+                },
+            ),
+        ] {
+            assert_rejected_redirect(start, vec![(start, response)]).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_redirect_loops_and_fourth_hop() {
+        assert_rejected_redirect(
+            "/loop",
+            vec![(
+                "/loop",
+                HubResponse {
+                    status: StatusCode::PERMANENT_REDIRECT,
+                    location: Some(HeaderValue::from_static("/loop")),
+                    retry_after: None,
+                },
+            )],
+        )
+        .await;
+        assert_rejected_redirect(
+            "/fourth",
+            vec![
+                (
+                    "/fourth",
+                    HubResponse {
+                        status: StatusCode::TEMPORARY_REDIRECT,
+                        location: Some(HeaderValue::from_static("/one")),
+                        retry_after: None,
+                    },
+                ),
+                (
+                    "/one",
+                    HubResponse {
+                        status: StatusCode::PERMANENT_REDIRECT,
+                        location: Some(HeaderValue::from_static("/two")),
+                        retry_after: None,
+                    },
+                ),
+                (
+                    "/two",
+                    HubResponse {
+                        status: StatusCode::TEMPORARY_REDIRECT,
+                        location: Some(HeaderValue::from_static("/three")),
+                        retry_after: None,
+                    },
+                ),
+                (
+                    "/three",
+                    HubResponse {
+                        status: StatusCode::PERMANENT_REDIRECT,
+                        location: Some(HeaderValue::from_static("/ignored")),
+                        retry_after: None,
+                    },
+                ),
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn parses_and_caps_retry_after_delta_seconds_and_http_dates() {
+        let future = httpdate::fmt_http_date(SystemTime::now() + Duration::from_hours(48));
+        let responses = [
+            (
+                "/delta",
+                HubResponse {
+                    status: StatusCode::TOO_MANY_REQUESTS,
+                    location: None,
+                    retry_after: Some(HeaderValue::from_static("120")),
+                },
+            ),
+            (
+                "/delta-cap",
+                HubResponse {
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                    location: None,
+                    retry_after: Some(HeaderValue::from_static("172800")),
+                },
+            ),
+            (
+                "/date",
+                HubResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                    location: None,
+                    retry_after: Some(HeaderValue::from_str(&future).expect("HTTP date header")),
+                },
+            ),
+        ];
+        let (addr, _) = spawn_hub(responses).await;
+        let client = HttpWebSubClient::new();
+
+        let (delay, _) = retryable(
+            client
+                .send_publish(&hub_at(addr, "/delta"), &feed_url())
+                .await
+                .expect_err("retryable delta response"),
+        );
+        assert_eq!(delay, Some(Duration::from_mins(2)));
+        let (delay, _) = retryable(
+            client
+                .send_publish(&hub_at(addr, "/delta-cap"), &feed_url())
+                .await
+                .expect_err("retryable capped delta response"),
+        );
+        assert_eq!(delay, Some(Duration::from_hours(24)));
+        let (delay, _) = retryable(
+            client
+                .send_publish(&hub_at(addr, "/date"), &feed_url())
+                .await
+                .expect_err("retryable date response"),
+        );
+        assert_eq!(delay, Some(Duration::from_hours(24)));
+    }
+
+    #[tokio::test]
+    async fn ignores_missing_invalid_and_past_retry_after() {
+        let past = httpdate::fmt_http_date(SystemTime::now() - Duration::from_mins(1));
+        let responses = [
+            (
+                "/missing",
+                HubResponse::status(StatusCode::TOO_MANY_REQUESTS),
+            ),
+            (
+                "/invalid",
+                HubResponse {
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                    location: None,
+                    retry_after: Some(HeaderValue::from_static("tomorrow")),
+                },
+            ),
+            (
+                "/past",
+                HubResponse {
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                    location: None,
+                    retry_after: Some(HeaderValue::from_str(&past).expect("HTTP date header")),
+                },
+            ),
+        ];
+        let (addr, _) = spawn_hub(responses).await;
+        let client = HttpWebSubClient::new();
+
+        for path in ["/missing", "/invalid", "/past"] {
+            let (delay, _) = retryable(
+                client
+                    .send_publish(&hub_at(addr, path), &feed_url())
+                    .await
+                    .expect_err("retryable response"),
+            );
+            assert_eq!(delay, None);
+        }
+    }
+
+    async fn spawn_hanging_hub() -> SocketAddr {
+        let app = Router::new().fallback(post(|| async {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            StatusCode::ACCEPTED
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let addr = listener.local_addr().expect("test listener has address");
         tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        }); // cov:ignore
+            axum::serve(listener, app)
+                .await
+                .expect("test hub serves requests");
+        });
         addr
     }
 
     #[tokio::test]
-    async fn returns_http_error_on_connection_refused() {
-        // Bind a port, then drop the listener so nothing is listening: the
-        // connect is refused immediately — a deterministic non-timeout error
-        // (covers the `else` arm of the error mapping).
-        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = probe.local_addr().unwrap();
+    async fn preserves_typed_transport_and_timeout_sources() {
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let refused = probe.local_addr().expect("test listener has address");
         drop(probe);
 
-        let c = HttpWebSubClient::new();
-        let err = c
-            .send_publish(&hub_at(addr), &feed_url())
-            .await
-            .unwrap_err();
-        assert!(matches!(err, WebSubError::Http(_)));
-        let source = std::error::Error::source(&err)
-            .and_then(|error| error.downcast_ref::<reqwest::Error>())
-            .expect("typed reqwest source");
+        let (_, reason) = retryable(
+            HttpWebSubClient::new()
+                .send_publish(&hub_at(refused, "/"), &feed_url())
+                .await
+                .expect_err("refused connection is retryable"),
+        );
+        let RetryableWebSubError::Transport(source) = reason else {
+            panic!("transport failure has typed transport reason");
+        };
+        let source = source
+            .downcast_ref::<reqwest::Error>()
+            .expect("typed reqwest source for refused connection");
         assert!(!source.is_timeout());
-    }
 
-    #[tokio::test]
-    async fn returns_typed_http_error_when_hub_does_not_respond() {
-        // A hub that never replies + a tiny client timeout deterministically
-        // proves timeout transport failures retain the reqwest source.
-        let addr = spawn_hanging_hub().await;
-        let c = HttpWebSubClient::with_timeout(Duration::from_millis(100));
-        let err = c
-            .send_publish(&hub_at(addr), &feed_url())
-            .await
-            .unwrap_err();
-        assert!(matches!(err, WebSubError::Http(_)));
-        let source = std::error::Error::source(&err)
-            .and_then(|error| error.downcast_ref::<reqwest::Error>())
-            .expect("typed reqwest source");
+        let hanging = spawn_hanging_hub().await;
+        let (_, reason) = retryable(
+            HttpWebSubClient::with_timeout(Duration::from_millis(100))
+                .send_publish(&hub_at(hanging, "/"), &feed_url())
+                .await
+                .expect_err("timeout is retryable"),
+        );
+        let RetryableWebSubError::Transport(source) = reason else {
+            panic!("timeout has typed transport reason");
+        };
+        let source = source
+            .downcast_ref::<reqwest::Error>()
+            .expect("typed reqwest source for timeout");
         assert!(source.is_timeout());
     }
 }
