@@ -37,7 +37,7 @@ Out:
     unsupported-format rejection, exact-schema rejection, and ignored
     older/newer package versions.
 
-- [ ] Task 2: Prove restore behavior and backend parity at the contract boundary
+- [x] Task 2: Prove restore behavior and backend parity at the contract boundary
   - Contract: use the public command/restore path and existing backup fixtures;
     both backends must observe identical compatibility, rollback, validation
     report, and media behavior. No storage-crate duplicate round-trip suite.
@@ -49,7 +49,7 @@ Out:
     retain distinct errors and rollback assertions; directory, archive, and
     interop tests remain green.
 
-- [ ] Task 3: Record and project the restore compatibility decision
+- [x] Task 3: Record and project the restore compatibility decision
   - Contract: add proposed draft
     `docs/adr/drafts/backup-format-and-schema-compatibility.md`; cite existing
     numbered ADRs using the tracked-draft link convention. Update the backup

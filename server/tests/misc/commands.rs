@@ -927,6 +927,7 @@ async fn cmd_restore_rejects_pre_identity_backup(#[case] backend: Backend) {
     let source_env = InitializedCommandEnv::new(backend).await;
     let source_args = source_env.args;
     let source_base = &source_env.base;
+    populate_backup_fixture(&source_args).await;
     let backup_path = source_base.path().join("backup");
     cmd_backup(
         &source_args,
@@ -961,6 +962,15 @@ async fn cmd_restore_rejects_pre_identity_backup(#[case] backend: Backend) {
             target_version: 31
         })
     ));
+    assert_target_unmodified(&target_args).await;
+    assert!(
+        !target_args
+            .storage_path
+            .join("media")
+            .join("avatar.txt")
+            .exists(),
+        "schema rejection must precede media restoration"
+    );
 }
 
 // Backup/restore preserves the fixture's exact microsecond-precision timestamp
@@ -1186,9 +1196,151 @@ async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
     assert_backup_fixture_restored(&target_args, &ids).await;
 }
 
+// Legacy manifests predate format_version but are format 1 by definition.
 #[apply(backends)]
 #[tokio::test]
-async fn cmd_restore_reports_invalid_media_filename_without_rolling_back(#[case] backend: Backend) {
+async fn cmd_restore_accepts_manifest_without_format_version(#[case] backend: Backend) {
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let base = &source_env.base;
+    let ids = populate_backup_fixture(&source_args).await;
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let manifest_path = backup_path.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read manifest"))
+            .expect("parse manifest");
+    assert!(
+        manifest
+            .as_object_mut()
+            .expect("manifest object")
+            .remove("format_version")
+            .is_some(),
+        "new exports include their format version"
+    );
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).expect("serialize legacy manifest"),
+    )
+    .expect("write legacy manifest");
+
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
+    let outcome = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore legacy format");
+    assert!(
+        outcome.validation_report.is_empty(),
+        "legacy manifest should not report validation issues: {:?}",
+        outcome.validation_report.issues()
+    );
+    assert_backup_fixture_restored(&target_args, &ids).await;
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_ignores_older_and_newer_package_versions(#[case] backend: Backend) {
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let base = &source_env.base;
+    let ids = populate_backup_fixture(&source_args).await;
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let manifest_path = backup_path.join("manifest.json");
+    let mut manifest: BackupManifest =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read manifest"))
+            .expect("parse manifest");
+    for version in ["0.0.1", "999.0.0"] {
+        manifest.version = version.to_owned();
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        let target_env = InitializedCommandEnv::new(backend).await;
+        let target_args = target_env.args;
+        let outcome = cmd_restore(&target_args, &backup_path)
+            .await
+            .expect("restore package-version-compatible backup");
+        assert!(
+            outcome.validation_report.is_empty(),
+            "package version {version} should not report validation issues: {:?}",
+            outcome.validation_report.issues()
+        );
+        assert_backup_fixture_restored(&target_args, &ids).await;
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_rejects_unsupported_format_before_mutating_target(#[case] backend: Backend) {
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let base = &source_env.base;
+    populate_backup_fixture(&source_args).await;
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let manifest_path = backup_path.join("manifest.json");
+    let mut manifest: BackupManifest =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read manifest"))
+            .expect("parse manifest");
+    manifest.format_version = 2;
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+    )
+    .expect("write manifest");
+
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
+    let error = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect_err("unsupported format must be rejected");
+    assert!(matches!(
+        error.downcast_ref::<BackupError>(),
+        Some(BackupError::UnsupportedFormatVersion {
+            backup_version: 2,
+            current_version: 1
+        })
+    ));
+    assert_target_unmodified(&target_args).await;
+    assert!(
+        !target_args
+            .storage_path
+            .join("media")
+            .join("avatar.txt")
+            .exists(),
+        "format rejection must precede media restoration"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_reports_invalid_media_filename_from_differing_package_version(
+    #[case] backend: Backend,
+) {
     let source_env = InitializedCommandEnv::new(backend).await;
     let source_args = source_env.args;
     let base = &source_env.base;
@@ -1202,6 +1354,16 @@ async fn cmd_restore_reports_invalid_media_filename_without_rolling_back(#[case]
     )
     .await
     .expect("backup");
+    let manifest_path = backup_path.join("manifest.json");
+    let mut manifest: BackupManifest =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read manifest"))
+            .expect("parse manifest");
+    manifest.version = "999.0.0".to_owned();
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+    )
+    .expect("write manifest");
     rewrite_media_filename_in_backup(&backup_path, "my photo.jpg");
     let target_env = InitializedCommandEnv::new(backend).await;
     let target_args = target_env.args;

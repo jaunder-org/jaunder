@@ -289,6 +289,19 @@ revision-specific export path; typed restore validation covers their domain
 fields ([ADR-0136](adr/0136-local-post-lifecycle.md),
 [ADR-0064](adr/0064-backup-target-auto-derivation.md)).
 
+**Compatibility is explicit and independent of package chronology.** The
+manifest format version and exact database schema version are the restore
+authorities: exports identify format 1, and legacy manifests with no
+format-version member are format 1. Package version and the backend-specific
+schema checksum remain provenance only, so older and newer packages restore
+silently when those authorities match. An unsupported format or schema mismatch
+is a typed incompatibility that fails before database or media mutation,
+distinct from malformed backup content and relational constraint failure.
+Typed-domain invariant violations instead retain #725's restore-and-report
+behavior: data and media restore, then the command reports current-domain
+violations. This policy is recorded in the
+[backup format and schema compatibility decision](adr/drafts/backup-format-and-schema-compatibility.md).
+
 Restore is authoritative and order-independent: both backends clear every target
 table in a first pass, then load all rows in a second, with FK enforcement
 suspended for the load — Postgres FKs are `DEFERRABLE` (migration
@@ -302,7 +315,7 @@ cascade with FKs off, but keeps the split anyway so the two restore shapes stay
 identical ([ADR-0115](adr/0115-clear-then-load-restore.md)). Restore refuses any
 target that is not empty (every table except the migration-seeded lookups;
 `storage::database_is_empty`, enforced by `ensure_restore_target_empty` in
-`server/src/commands.rs`) — there is no force-overwrite mode
+`server/src/commands/backup.rs`) — there is no force-overwrite mode
 ([ADR-0064](adr/0064-backup-target-auto-derivation.md)). Failure is
 backend-uniform: a constraint-violating restore returns
 `BackupError::ConstraintViolation` and leaves the target unmodified on both
