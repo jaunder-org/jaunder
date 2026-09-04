@@ -242,6 +242,16 @@ mod tests {
                 "If-None-Match remains authoritative with {if_modified_since:?}",
             );
         }
+
+        let mut headers = headers(&[b"W/\"unterminated"]);
+        headers.insert(
+            header::IF_MODIFIED_SINCE,
+            HeaderValue::from_static("Thu, 01 Jan 1970 00:33:20 GMT"),
+        );
+        assert!(
+            !is_not_modified(&headers, b"\"match\"", last_modified),
+            "a malformed If-None-Match still suppresses matching If-Modified-Since",
+        );
     }
 
     #[test]
