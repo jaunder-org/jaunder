@@ -34,14 +34,18 @@
 //! the candidates from the inventory is what makes a regime change a code update
 //! rather than a silent outage; the per-signal tests are what make it visible.
 //!
-//! **`code.namespace` is the disambiguator, not the name.**
-//! `web.<vertical>.<ident>` takes the module's *first* segment, so `posts::api` and
-//! `posts::api::listing` both render `web.posts.…` — the name alone cannot separate
-//! a same-named fn in each, while `(module, ident)` cannot collide at all, since
-//! Rust forbids two items of one name in one module. `code.namespace` is where
-//! `tracing-opentelemetry` records a span's module; `target` exists only on
-//! *events*, so matching that would find nothing on any span — and would fail
-//! silently in the same way.
+//! **`code.namespace` corroborates the current name and disambiguates compatibility
+//! names.** `#[macros::server]` enforces valid server functions live in
+//! `web/src/<vertical>/api.rs`, so its current `web.<vertical>.<ident>` name is
+//! unique. Matching `code.namespace` remains conservative corroboration: it rejects
+//! foreign or malformed trace evidence without making this extractor depend
+//! indirectly on that compile-time placement rule. The retained
+//! `__server_<ident>` and bare-`<ident>` compatibility names omit the vertical, so
+//! their namespace match remains the load-bearing disambiguator.
+//!
+//! `code.namespace` is where `tracing-opentelemetry` records a span's module;
+//! `target` exists only on *events*, so matching that would find nothing on any span
+//! — and would fail silently in the same way.
 //!
 //! **Attribution is an ancestor walk, not a parent check.** Only the *request*
 //! span carries the test's span id as its parent; an instrument span's parent is
@@ -106,14 +110,16 @@ pub struct Coverage {
 /// know which regime produced the name, and getting that wrong fails silently
 /// (`uri` keeps carrying every hit, so the totals still look right).
 ///
-/// - `web.<vertical>.<ident>` — what `#[macros::server]` derives (#714). The
-///   vertical is the module's first segment, so `posts::api::listing`
-///   and `posts::api` both yield `web.posts.…`; that collapse is why the module
-///   check below, not the name, is what actually disambiguates.
+/// - `web.<vertical>.<ident>` — what `#[macros::server]` derives (#714). Valid
+///   server functions are confined to `web/src/<vertical>/api.rs`, so this current
+///   form is unique. The module check defensively corroborates it, rejecting foreign
+///   or malformed trace evidence without depending on that placement rule.
 /// - `__server_<ident>` — the name `#[tracing::instrument]` *derives* when no
 ///   explicit `name` is given, because `#[server]` relocates the annotated body
 ///   into a generated `__server_<ident>` fn (`server_fn_macro`'s `to_dummy_ident`).
-/// - `<ident>` — what derivation would yield if `#[server]` stopped relocating.
+///   It omits the vertical, so the module check disambiguates it.
+/// - `<ident>` — what derivation would yield if `#[server]` stopped relocating. It
+///   likewise omits the vertical, so the module check disambiguates it.
 // `pub(crate)` for the same reason as [`MODULE_ATTR`]: the seed cross-check must
 // locate a fn by *this* rule, not a paraphrase of it.
 pub(crate) fn candidate_span_names(f: &ServerFn) -> [String; 3] {
@@ -129,8 +135,9 @@ pub(crate) fn candidate_span_names(f: &ServerFn) -> [String; 3] {
 fn identify<'a>(span: &Span, inventory: &'a [ServerFn]) -> Option<&'a ServerFn> {
     // Primary: span name + module. `code.namespace` holds the plain module the fn
     // was declared in (`web::auth::api` for `session`) — verified against a real
-    // capture, not assumed — and it is the disambiguator, since the name alone can
-    // collapse two modules of one vertical.
+    // capture, not assumed. It defensively corroborates the unique current
+    // `web.<vertical>.<ident>` form and disambiguates compatibility forms that omit
+    // the vertical.
     let namespace = crate::traces::parse::get_attr(&span.raw, MODULE_ATTR);
     // An empty namespace cannot be confirmed to be the right module, so it does not
     // count — better to fall through to `uri` than to guess.
@@ -385,9 +392,9 @@ mod tests {
     }
 
     #[test]
-    fn span_name_in_the_wrong_module_is_not_counted() {
-        // A span named `__server_update_post` whose code.namespace is a different
-        // module is a different fn; and it carries no `uri`, so nothing else
+    fn span_name_with_foreign_code_namespace_is_not_counted() {
+        // A span named `__server_update_post` with a foreign code.namespace is not
+        // confirmed as this inventory fn; it carries no `uri`, so nothing else
         // matches it.
         let c = extract(&sample_spans(), &[fnf("update_post", "storage::posts")]);
         assert!(!c.covered.contains_key("storage::update_post"));
@@ -404,7 +411,9 @@ mod tests {
     }
 
     #[test]
-    fn a_span_name_hit_with_no_code_namespace_is_not_counted() {
+    fn span_name_hit_with_missing_code_namespace_is_not_counted() {
+        // A missing namespace leaves this span-name hit unconfirmed, so it must not
+        // count as trace evidence for the inventory fn.
         // One JSON object per line — this is JSONL, so the literal must not wrap.
         let line = concat!(
             r#"{"resourceSpans":[{"scopeSpans":[{"spans":["#,
@@ -418,7 +427,7 @@ mod tests {
         let c = extract(&spans, &[fnf("update_post", "posts::api")]);
         assert!(
             c.covered.is_empty(),
-            "an unconfirmable module must not count"
+            "a missing namespace must not confirm the span-name hit"
         );
     }
 
@@ -452,11 +461,12 @@ mod tests {
     #[test]
     fn every_naming_regime_is_a_hit_given_the_right_module() {
         // The gate must not depend on which naming regime is in force. Today
-        // `#[macros::server]` derives `web.<vertical>.<ident>` (#714); omitting the
-        // explicit name derives `__server_<ident>`; and were `#[server]` to stop
-        // relocating the body, derivation would yield the bare ident. All three
-        // denote the same fn, so all three count — matching one shape only is how
-        // the signal silently died once already.
+        // `#[macros::server]` derives the unique `web.<vertical>.<ident>` form
+        // (#714); omitting the explicit name derives `__server_<ident>`; and were
+        // `#[server]` to stop relocating the body, derivation would yield the bare
+        // ident. The compatibility forms omit the vertical, so every regime still
+        // requires the right module; matching one shape only is how the signal
+        // silently died once already.
         for name in [
             "web.posts.update_post",
             "__server_update_post",
@@ -475,10 +485,11 @@ mod tests {
     }
 
     #[test]
-    fn the_module_not_the_name_is_what_disambiguates() {
-        // `web.<vertical>.<ident>` collapses every module of a vertical
-        // (`posts::api` and `posts::api::listing` both yield `web.posts.…`), so the
-        // name cannot be the discriminator — `code.namespace` is.
+    fn foreign_code_namespace_never_confirms_a_span_name_hit() {
+        // The current `web.<vertical>.<ident>` form is unique for valid server
+        // functions, but a foreign namespace is not trustworthy trace evidence. The
+        // compatibility names omit the vertical, so their namespace match also
+        // remains their disambiguator.
         for name in [
             "web.posts.update_post",
             "__server_update_post",
@@ -490,7 +501,7 @@ mod tests {
             );
             assert!(
                 c.covered.is_empty(),
-                "`{name}` in the wrong module must not count"
+                "`{name}` with a foreign namespace must not count"
             );
         }
     }

@@ -429,11 +429,17 @@ union looked healthy. That is why
 **separately** against the committed capture, asserting each alone covers
 everything the union does.
 
-**`code.namespace` is the disambiguator, not the name.**
-`web.<vertical>.<ident>` uses the module's _first_ segment, so `posts::api` and
-`posts::api::listing` both render `web.posts.…`; the name alone could not
-separate a same-named fn in each. `(module, ident)` cannot collide at all — Rust
-forbids two items of one name in one module.
+**`code.namespace` corroborates the current explicit name and disambiguates
+compatibility names.** For valid current `#[macros::server]` functions,
+`web.<vertical>.<ident>` is unique: the macro requires
+`web/src/<vertical>/api.rs` and rejects deeper server-function modules, so there
+cannot be a current `posts::api::listing` counterpart to `posts::api`. Matching
+`code.namespace` still conservatively rejects foreign or malformed trace
+evidence without making extraction depend indirectly on that compile-time
+placement rule. The retained `__server_<ident>` and bare `<ident>` compatibility
+forms omit the vertical, so `code.namespace` remains their load-bearing
+disambiguator. `(module, ident)` cannot collide — Rust forbids two items of one
+name in one module.
 
 **Two lanes, and neither is sufficient alone.** Traces exist only in the e2e
 lane; fast feedback only in the static one.
