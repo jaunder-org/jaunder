@@ -6,6 +6,7 @@ let
     toolchain
     craneLib
     commonArgs
+    wasmTestSrc
     appOfflineCargoHome
     toolsOfflineCargoHome
     cargoArtifacts
@@ -518,9 +519,15 @@ e2eGateChecks
   wasm-tests = craneLib.cargoTest (
     commonArgs
     // {
+      src = wasmTestSrc;
+    }
+    // {
       cargoArtifacts = craneLib.buildDepsOnly (
         commonArgs
         // leanTestProfile
+        // {
+          src = wasmTestSrc;
+        }
         // {
           CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
           cargoExtraArgs = "-p client";
@@ -587,25 +594,93 @@ e2eGateChecks
     '';
   };
 
-# The static checks (#188/#276), unified behind one `devtool check
-# --all --sandbox-cargo`. The host verify ladder runs the same
-# devtool definitions through host-local lanes, while this derivation
-# proves those definitions hermetically with offline Cargo homes.
-static-checks =
+# `devtool` owns static-check definitions; separate source boundaries
+# let Markdown-only changes avoid realizing the code-static group.
+static-docs =
   let
-    staticCheckSrc = pkgs.lib.cleanSourceWith {
+    staticDocsSrc = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
-      # Rust + end2end/ + elisp/ + tools/ + all *.md + the prettier config.
-      # Exclusion-only; keep the working tree clean when building locally.
       filter =
-        path: _type:
-        !(pkgs.lib.hasInfix "/xtask/" path)
-        && !(pkgs.lib.hasInfix "/node_modules" path)
-        && !(pkgs.lib.hasInfix "/target/" path)
-        && !(pkgs.lib.hasInfix "/.direnv/" path);
+        path: type:
+        let
+          relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+          ignored =
+            relative == "docs/archive"
+            || pkgs.lib.hasPrefix "docs/archive/" relative
+            || relative == ".claude"
+            || pkgs.lib.hasPrefix ".claude/" relative;
+        in
+        !ignored
+        && (
+          type == "directory"
+          || pkgs.lib.hasSuffix ".md" path
+          || pkgs.lib.hasSuffix "/.prettierrc.json" path
+          || pkgs.lib.hasSuffix "/.prettierignore" path
+        );
     };
   in
-  pkgs.runCommand "static-checks"
+  pkgs.runCommand "static-docs"
+    {
+      nativeBuildInputs = [
+        devtoolBin
+        pkgs.prettier
+      ];
+    }
+    ''
+      cp --no-preserve=mode -r ${staticDocsSrc} src
+      cd src
+      devtool check --group docs
+      touch $out
+    '';
+static-code =
+  let
+    staticCodeSrc = pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter =
+        path: type:
+        let
+          isXtask = pkgs.lib.hasSuffix "/xtask" path || pkgs.lib.hasInfix "/xtask/" path;
+        in
+        !isXtask
+        && (
+          type == "directory"
+          || (
+            !(pkgs.lib.hasSuffix ".md" path)
+            && (
+              builtins.any (suffix: pkgs.lib.hasSuffix suffix path) [
+                "/Cargo.toml"
+                "/Cargo.lock"
+                "/rust-toolchain.toml"
+                "/deny.toml"
+                "/clippy.toml"
+                "/.rustfmt.toml"
+                "/.prettierrc.json"
+                "/.prettierignore"
+                "/sgconfig.yml"
+              ]
+              || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) [
+                ".cargo"
+                "ast-grep"
+                "common"
+                "macros"
+                "server"
+                "storage"
+                "web"
+                "client"
+                "csr"
+                "host"
+                "test-support"
+                "public"
+                "tools"
+                "end2end"
+                "elisp"
+              ]
+            )
+          )
+        );
+    };
+  in
+  pkgs.runCommand "static-code"
     {
       nativeBuildInputs = [
         pkgs.stdenv.cc
@@ -635,9 +710,9 @@ static-checks =
     ''
       # Writable copy: `devtool check tsc` provisions end2end/node_modules
       # in-process (#229).
-      cp --no-preserve=mode -r ${staticCheckSrc} src
+      cp --no-preserve=mode -r ${staticCodeSrc} src
       cd src
-      devtool check --all --sandbox-cargo
+      devtool check --group code --sandbox-cargo
       touch $out
     '';
 coverage = craneLib.mkCargoDerivation (

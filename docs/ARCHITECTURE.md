@@ -1519,9 +1519,9 @@ the result of a `.location()` method call chained to `replace`, `assign`,
 location-bearing diagnostic directs callers to `leptos_router`'s
 `use_navigate()` and [#592](https://github.com/jaunder-org/jaunder/issues/592).
 The companion `ast-grep-tests` definition runs the committed native fixtures.
-The host xtask static-check mechanism and Nix `static-checks` derivation invoke
-both definitions (`devtool check --all --sandbox-cargo` in Nix), rather than
-maintaining a host-only source scanner
+The host xtask static-check mechanism and Nix `static-code` derivation invoke
+both definitions (`devtool check --group code --sandbox-cargo` in Nix), rather
+than maintaining a host-only source scanner
 ([proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 The SPA user namespace is `~`-prefixed: the permalink route's leading segment is
 a custom `TildeUsername` route match (`web/src/route_segments.rs:13`, wired at
@@ -2710,7 +2710,7 @@ rather than failing the check, with the JSON report still recording it
 `elisp/` is a first-class, separately-tested subproject
 ([ADR-0031](adr/0031-elisp-separately-tested-subproject.md)): three elisp steps
 — `ert`, `elisp-fmt` and `byte-compile` — run in both `check` (Fix) and
-`validate` (Check), each as a `devtool check` step in the `static-checks`
+`validate` (Check), each as a `devtool check` step in the `static-code`
 derivation ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
 `xtask/src/steps/static_checks.rs:17-18`); one `emacsForCi` toolchain
 (`nix/packages.nix:372-404`) serves both.
@@ -2777,19 +2777,20 @@ The ladder has four local entrypoints, all driven by `xtask`
   `unsupported-index-mode`, then `non-markdown-path`.
 
   The narrow route is a fixed ordered filter over the same production
-  host/static catalogs: Prettier, sequence/identifier collision checks, the ADR
-  bundle, documentation links, flow-document parity, and the error-swallowing
-  inventory. It is not further path-routed: Prettier owns global `end2end` plus
-  `**/*.md` formatting, ADRs project into `docs/README.md` and this document,
-  and document links and flow documents consume repository-wide relationships.
-  The isolated-tree predicate makes those reads and formatter writes represent
-  the staged Markdown state. All other classifications run the existing broad
-  host surface. The after-snapshot and conservative safe-staging reconciliation
-  always run, including after failure: only formatter/check mutations to
-  already-staged tracked paths with no pre-existing unstaged change are
-  restaged; mixed tracked paths, newly-created untracked files, and changed
-  delete/rename state fail closed. Pre-existing delete/rename state and
-  untracked files stay unstaged and tolerated.
+  host/static catalogs: `prettier-markdown`, `prettier-end2end`,
+  sequence/identifier collision checks, the ADR bundle, documentation links,
+  flow-document parity, and the error-swallowing inventory. It is not further
+  path-routed: `prettier-markdown` owns `**/*.md` formatting and
+  `prettier-end2end` owns global `end2end` formatting, ADRs project into
+  `docs/README.md` and this document, and document links and flow documents
+  consume repository-wide relationships. The isolated-tree predicate makes those
+  reads and formatter writes represent the staged Markdown state. All other
+  classifications run the existing broad host surface. The after-snapshot and
+  conservative safe-staging reconciliation always run, including after failure:
+  only formatter/check mutations to already-staged tracked paths with no
+  pre-existing unstaged change are restaged; mixed tracked paths, newly-created
+  untracked files, and changed delete/rename state fail closed. Pre-existing
+  delete/rename state and untracked files stay unstaged and tolerated.
 
 - **`cargo xtask prepush`** is the fast local push-hook entrypoint. It opens
   with the same clean-tree precheck as `validate`, then runs the verify-only
@@ -2879,28 +2880,61 @@ invokes it back ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
 ### What the ladder actually runs
 
 In order, host `static-checks` runs source consistency (`fmt`, `leptosfmt`,
-`prettier`, `elisp-fmt`, `tools-fmt`, `ast-grep-tests`, `no-full-reload`,
-`xtask-fmt`), compile/type checks (`byte-compile`, `tsc`, `cargo-deny`,
-`clippy`, `web-server-clippy`, `web-no-server-clippy`, `wasm-clippy`,
-`tools-clippy`, `xtask-clippy`), then the `ert` runtime check. Both rungs run
-the same host steps (`run_host_gate` in `xtask/src/lib.rs`):
+`prettier-markdown`, `prettier-end2end`, `elisp-fmt`, `tools-fmt`,
+`ast-grep-tests`, `no-full-reload`, `xtask-fmt`), compile/type checks
+(`byte-compile`, `tsc`, `cargo-deny`, `clippy`, `web-server-clippy`,
+`web-no-server-clippy`, `wasm-clippy`, `tools-clippy`, `xtask-clippy`), then the
+`ert` runtime check. Both rungs run the same host steps (`run_host_gate` in
+`xtask/src/lib.rs`):
 
-**Two different things are called `static-checks`, and conflating them is
-easy.** The host _step_ above runs the listed sub-steps through host-local
-lanes. The Nix `static-checks` derivation (`nix/checks.nix:590-642`) runs the
-shared `devtool check --all --sandbox-cargo` definitions hermetically with
-workspace-specific offline Cargo homes, including `ast-grep-tests` for committed
-rule fixtures and the `no-full-reload` repository scan
-([proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
-`validate --no-e2e` builds it as `nix-static-checks` before the Nix test checks,
-so CI fails if the hermetic static-check surface drifts from the host
-definitions.
+The host _step_ above runs the listed sub-steps through host-local lanes. The
+hermetic surface is split at the documentation boundary: `static-docs` runs
+`devtool check --group docs` over Markdown and Prettier configuration, while
+`static-code` runs the remaining shared definitions with
+`devtool check --group code --sandbox-cargo` over non-document inputs and
+workspace-specific offline Cargo homes. `validate --no-e2e` builds
+`nix-static-docs`, then `nix-static-code`, before the Nix test checks, so CI
+fails if either hermetic boundary drifts from the host definitions
+([hermetic documentation/code static boundaries](adr/drafts/split-hermetic-static-check-boundaries.md);
+[proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
+
+The two CSR-facing source filters follow resolved target reachability rather
+than crate names. The `.#site`/CSR closure contains workspace manifests, the
+sources reachable from the `csr` target, required shell inputs, and
+deterministic workspace placeholders. The client `wasm-tests` closure
+analogously contains workspace manifests, sources reachable from the `client`
+wasm-test target, and its required inputs/placeholders. `common` and `macros`
+remain in each closure where reachable; unrelated `server`, `storage`, and other
+host-only sources are excluded. The broad product, coverage, and
+workspace-doctest source sets remain broad because their semantics require the
+full product graph.
+
+`cargo xtask nix probe-source` protects these boundaries without building them:
+it applies isolated tracked markers and evaluates the `.drv` identities only. It
+fails closed unless a docs marker changes only `static-docs`; a server marker
+changes `static-code` but neither wasm path; a web marker changes `static-code`
+and site but not wasm tests; and `common`/`macros` markers change every
+dependent checked boundary. CI runs this eval-only drift probe. It neither
+realizes outputs nor claims local/remote cache behavior.
+
+The full `cargo xtask validate` is still the aggregate ship gate: its `--no-e2e`
+prefix builds both static groups and the Nix-backed test checks, then adds all
+four `{sqlite,postgres}×{chromium,firefox}` e2e combinations and server-function
+coverage verification. Reproduce the measured invalidation matrix by running one
+unrecorded `devtool run -- cargo xtask --json validate --no-e2e --allow-dirty`
+warm-up, saving the next warm-baseline stdout JSON, then adding one exact marker
+at a time, saving each stdout JSON, and restoring the marker file's original
+bytes. The marker paths and contents, sidecars, and normalized results are
+recorded in
+`docs/superpowers/research/2026-09-04-issue-1289-nix-invalidation-boundaries.md`;
+the store is not purged between arms.
 
 #### Sandboxed cargo-deny
 
-`cargo-deny` is part of `devtool check --all --sandbox-cargo` under a documented
-sandbox policy: host mode keeps full `cargo deny check`, while sandbox mode
-skips `advisories` and checks only `bans`, `licenses`, and `sources`
+`cargo-deny` is part of `devtool check --group code --sandbox-cargo` under a
+documented sandbox policy: host mode keeps full `cargo deny check`, while
+sandbox mode skips `advisories` and checks only `bans`, `licenses`, and
+`sources`
 ([Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md)).
 
 #### Devtool-owned static-check definitions
@@ -2921,7 +2955,7 @@ because `web` test dependencies are host-oriented and cannot compile for
 `wasm32-unknown-unknown`. Host xtask lanes execute each definition through their
 existing static-check mechanism while retaining host-local Cargo artifacts and
 sccache for Rust-compiling checks; sandboxed Nix lanes execute the same
-definitions through `devtool check --all --sandbox-cargo` with
+definitions through their `docs` or `code` group, with the code group using
 workspace-specific offline Cargo homes. `xtask-fmt` and `xtask-clippy` remain
 native host checks because `xtask/` is excluded from the flake source.
 
@@ -3158,23 +3192,25 @@ host-side subcommands are therefore chartered, not drift.
   `signal`, `duration_ms`, per-stream `{path, bytes, lines}`), and exits with
   the child's code. `devtoolBin` is exposed in the default devShell for this
   reason ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
-- **`devtool check <name> | --all [--fix] [--sandbox-cargo]`** is the single
-  command-definition surface for the migrated static checks (`fmt`, `leptosfmt`,
-  `prettier`, `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, generic
-  product `clippy`, `web-server-clippy`, isolated host-test
-  `web-no-server-clippy`, wasm-target `wasm-clippy`, `tools-fmt`, tools
-  workspace `tools-clippy`, and ast-grep `ast-grep-tests` plus the
-  `no-full-reload` repository scan — `tools/devtool/src/check.rs`). Both gates
-  invoke the same definitions: the host verify ladder delegates each through its
-  static-check mechanism, preserving host-local Cargo artifacts and sccache for
-  Rust-compiling checks; the Nix `static-checks` `runCommand` runs
-  `devtool check --all --sandbox-cargo` from the prebuilt `devtoolBin` with
-  offline Cargo homes. Cargo-deny keeps a split policy: host mode runs full
-  `cargo deny check`, while sandbox mode skips `advisories`
-  ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
+- **`devtool check <name> | --group <docs|code> | --all [--fix] [--sandbox-cargo]`**
+  is the single command-definition surface for the migrated static checks
+  (`fmt`, `leptosfmt`, `prettier-markdown`, `prettier-end2end`, `tsc`,
+  `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, generic product `clippy`,
+  `web-server-clippy`, isolated host-test `web-no-server-clippy`, wasm-target
+  `wasm-clippy`, `tools-fmt`, tools workspace `tools-clippy`, and ast-grep
+  `ast-grep-tests` plus the `no-full-reload` repository scan —
+  `tools/devtool/src/check.rs`). Both gates invoke the same definitions: the
+  host verify ladder delegates each through its static-check mechanism,
+  preserving host-local Cargo artifacts and sccache for Rust-compiling checks;
+  the Nix `static-docs` and `static-code` `runCommand`s run the `docs` and
+  sandboxed `code` groups respectively from the prebuilt `devtoolBin`. The code
+  group retains workspace-specific offline Cargo homes; Cargo-deny keeps a split
+  policy: host mode runs full `cargo deny check`, while sandbox mode skips
+  `advisories` ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
-  [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
+  [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md),
+  [hermetic documentation/code static boundaries](adr/drafts/split-hermetic-static-check-boundaries.md)).
 
 **xtask is host-only — an enforced invariant.** Nix derivations never invoke
 xtask; the flow is strictly one-directional (host `cargo xtask` → `nix build`).

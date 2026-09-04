@@ -43,7 +43,8 @@ pub fn specs_for_phase(phase: Phase, mode: Mode) -> Vec<StepSpec> {
         Phase::SourceConsistency => vec![
             devtool_check("fmt", mode),
             devtool_check("leptosfmt", mode),
-            devtool_check("prettier", mode),
+            devtool_check("prettier-markdown", mode),
+            devtool_check("prettier-end2end", mode),
             devtool_check("elisp-fmt", mode),
             devtool_check("tools-fmt", mode),
             devtool_check("ast-grep-tests", mode),
@@ -100,8 +101,8 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
 /// A migrated static check: run it through `devtool check <name>` so devtool is
 /// the single source of truth for its tool+args, launched via `cargo run` from
 /// the `tools/` workspace so a local edit is reflected — consistent with
-/// `xtask` itself being rebuilt each run. The nix `static-checks` derivation
-/// runs the same `devtool check` from the prebuilt `devtoolBin`. Fix mode
+/// `xtask` itself being rebuilt each run. The Nix static derivations run the
+/// corresponding devtool check groups from the prebuilt `devtoolBin`. Fix mode
 /// appends `--fix`.
 fn devtool_check(name: &'static str, mode: Mode) -> StepSpec {
     devtool_check_with_cache(name, mode, false)
@@ -131,7 +132,7 @@ fn devtool_check_with_cache(name: &'static str, mode: Mode, cache_rustc: bool) -
         program: "cargo",
         args,
         cache_rustc,
-        markdown_eligible: name == "prettier",
+        markdown_eligible: matches!(name, "prettier-markdown" | "prettier-end2end"),
     }
 }
 
@@ -268,7 +269,7 @@ mod tests {
         );
         assert!(!no_full_reload.cache_rustc);
         let fix_specs = specs(Mode::Fix);
-        let prettier_fix = find(&fix_specs, "prettier");
+        let prettier_fix = find(&fix_specs, "prettier-markdown");
         assert!(
             prettier_fix.args.contains(&"--fix"),
             "fix mode passes --fix: {:?}",
@@ -279,14 +280,14 @@ mod tests {
     }
 
     #[test]
-    fn prettier_is_the_only_markdown_eligible_static_check() {
+    fn both_prettier_checks_are_markdown_eligible_in_catalog_order() {
         for mode in [Mode::Check, Mode::Fix] {
             let eligible: Vec<_> = specs(mode)
                 .into_iter()
                 .filter(|spec| spec.markdown_eligible)
                 .map(|spec| spec.name)
                 .collect();
-            assert_eq!(eligible, ["prettier"]);
+            assert_eq!(eligible, ["prettier-markdown", "prettier-end2end"]);
         }
     }
 
@@ -335,7 +336,8 @@ mod tests {
         let expected = [
             "fmt",
             "leptosfmt",
-            "prettier",
+            "prettier-markdown",
+            "prettier-end2end",
             "elisp-fmt",
             "tools-fmt",
             "ast-grep-tests",
@@ -369,7 +371,8 @@ mod tests {
             [
                 "fmt",
                 "leptosfmt",
-                "prettier",
+                "prettier-markdown",
+                "prettier-end2end",
                 "elisp-fmt",
                 "tools-fmt",
                 "ast-grep-tests",

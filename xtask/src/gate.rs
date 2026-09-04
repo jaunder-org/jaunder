@@ -586,7 +586,8 @@ mod tests {
         assert_eq!(
             markdown_precommit_step_names_for_test(),
             [
-                "prettier",
+                "prettier-markdown",
+                "prettier-end2end",
                 "sequence-check",
                 "adr-filenames",
                 "doc-links",

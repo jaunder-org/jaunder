@@ -1,14 +1,15 @@
 use std::path::Path;
+use std::time::Instant;
 
 use xshell::Shell;
 
 use crate::{
     adr, adr_readme, audit_wasm, census,
     cli::{
-        AdrCommand, Cli, Command, CoverageCommand, PrCommand, ServerFnCoverageCommand,
+        AdrCommand, Cli, Command, CoverageCommand, NixCommand, PrCommand, ServerFnCoverageCommand,
         TracesCommand,
     },
-    coverage, gate, issue, lifecycle, pr,
+    coverage, gate, issue, lifecycle, nix_probe, pr,
     result::{CommandResult, Mode, StepResult},
     server_fn_coverage, steps, traces,
 };
@@ -26,7 +27,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::Check { no_test } => {
             let policy = gate::execution_policy(&Command::Check { no_test });
             let sh = Shell::new()?;
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("check");
             gate::run_host_gate(&sh, Mode::Fix, policy, &mut result);
             if !no_test {
@@ -46,7 +47,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::Prepush => {
             let policy = gate::execution_policy(&Command::Prepush);
             let sh = Shell::new()?;
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("prepush");
             gate::run_prepush_with(
                 &sh,
@@ -67,11 +68,11 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 allow_dirty,
             });
             let sh = Shell::new()?;
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("validate");
             // Clean-tree backstop: refuse a dirty tree so what is measured equals the
             // committed tip (== what CI sees). Fail fast before the expensive steps.
-            let precheck_start = std::time::Instant::now();
+            let precheck_start = Instant::now();
             let precheck =
                 lifecycle::clean_tree_precheck(allow_dirty).with_duration(precheck_start.elapsed());
             let blocked = precheck.is_blocking_failure();
@@ -103,7 +104,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             Ok(result)
         }
         Command::Census => {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("census");
             let report = census::collect(Path::new("."), census::catalog())?;
             let failed = report.has_failed_cells();
@@ -126,9 +127,9 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             breakdown,
             wasm,
         } => {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("audit-wasm");
-            let step_start = std::time::Instant::now();
+            let step_start = Instant::now();
             if breakdown {
                 match audit_wasm::breakdown(wasm.as_deref()) {
                     Ok(report) => {
@@ -172,7 +173,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             Ok(result)
         }
         Command::E2e { backend, browser } => {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let label = format!("e2e-{}-{}", backend.as_str(), browser.as_str());
             let mut result = CommandResult::new(&label);
             steps::nix::e2e_combo(&mut result, backend.as_str(), browser.as_str());
@@ -191,10 +192,18 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
+        Command::Nix(NixCommand::ProbeSource) => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("nix-probe-source");
+            let step_start = Instant::now();
+            result.push(nix_probe::probe_source().with_duration(step_start.elapsed()));
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
         Command::Coverage(CoverageCommand::ProbeSource) => {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("coverage-probe-source");
-            let step_start = std::time::Instant::now();
+            let step_start = Instant::now();
             result.push(coverage::probe::probe_source().with_duration(step_start.elapsed()));
             lifecycle::finalize(&mut result, start);
             Ok(result)
@@ -204,7 +213,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             update_visual_snapshots,
         } => {
             let sh = Shell::new()?;
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("e2e-local");
             steps::e2e_local::run(&sh, &mut result, test.as_deref(), update_visual_snapshots);
             lifecycle::finalize(&mut result, start);
@@ -212,7 +221,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         }
         Command::TestLocal { nextest_args } => {
             let sh = Shell::new()?;
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("test-local");
             steps::test_local::run(&sh, &mut result, &nextest_args);
             lifecycle::finalize(&mut result, start);
@@ -220,32 +229,32 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         }
         Command::BuildCsr { release } => {
             let sh = Shell::new()?;
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("build-csr");
             steps::build_csr::run(&sh, &mut result, release);
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
         Command::Adr(AdrCommand::SyncReadme) => {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("adr-sync-readme");
-            let step_start = std::time::Instant::now();
+            let step_start = Instant::now();
             result.push(adr_readme::sync_readme().with_duration(step_start.elapsed()));
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
         Command::Adr(AdrCommand::Promote) => {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("adr-promote");
-            let step_start = std::time::Instant::now();
+            let step_start = Instant::now();
             result.push(adr::promote().with_duration(step_start.elapsed()));
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
         Command::Adr(AdrCommand::Promoter) => {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("adr-promoter");
-            let step_start = std::time::Instant::now();
+            let step_start = Instant::now();
             result.push(pr::promoter::execute().with_duration(step_start.elapsed()));
             lifecycle::finalize(&mut result, start);
             Ok(result)
@@ -257,7 +266,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             playwright_report,
             files,
         }) => {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("traces-analyze");
             let filters = traces::parse::Filters { trace, project };
             let reported = traces::report::ReportedDurations::from_paths(&playwright_report)?;
@@ -286,7 +295,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             single_worker,
             browser,
         }) => {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("traces-run");
             // `_tmp` guards extracted traces until analysis ends. Collection and
             // Nix failures retain the trace command's top-level error contract.
@@ -319,7 +328,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             Ok(result)
         }
         Command::Traces(TracesCommand::BootPhases { files }) => {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = CommandResult::new("traces-boot-phases");
             let Some(rows) = trace_attribute_owner_result(
                 &mut result,
@@ -341,7 +350,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             Ok(result)
         }
         Command::ServerFnCoverage(sub) => {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             use steps::server_fn_coverage_check::{REGENERATE_STEP, VERIFY_STEP};
             let regenerate = matches!(sub, ServerFnCoverageCommand::Regenerate);
             let mut result = CommandResult::new(if regenerate {
@@ -362,13 +371,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         }
         Command::Issue(sub) => issue::execute(sub),
         Command::Pr(PrCommand::Cleanup { number }) => {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut result = pr::cleanup::execute(number);
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
         Command::Pr(sub) => {
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let (operation, number, cfg) = match sub {
                 PrCommand::Watch {
                     number,

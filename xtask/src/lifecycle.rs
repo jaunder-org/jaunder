@@ -215,7 +215,9 @@ mod tests {
             gate::dispatch_precommit_host_gate_with(
                 class,
                 result,
-                |result| result.push(StepResult::fail("prettier").detail("synthetic failure")),
+                |result| {
+                    result.push(StepResult::fail("prettier-markdown").detail("synthetic failure"));
+                },
                 |_| panic!("staged Markdown must not dispatch to the broad host graph"),
             );
         })
@@ -227,7 +229,11 @@ mod tests {
                 .iter()
                 .map(|step| step.name.as_str())
                 .collect::<Vec<_>>(),
-            ["precommit-routing", "prettier", "precommit-staging"]
+            [
+                "precommit-routing",
+                "prettier-markdown",
+                "precommit-staging"
+            ]
         );
         assert_eq!(
             result

@@ -1,39 +1,62 @@
 //! The migrated static checks. This is the single home of their tool + args:
 //! the host verify ladder runs each check via `cargo run -p devtool -- check
-//! <name>` (so a local `tools/` edit is reflected), and the nix
-//! `static-checks` derivation runs
-//! `devtool check --all --sandbox-cargo` from the prebuilt `devtoolBin`.
-//! `cargo-deny` joins only under its documented sandbox policy; Cargo-backed
-//! checks use separate host and sandbox lanes from this shared definition.
+//! <name>` (so a local `tools/` edit is reflected), while Nix runs the `docs`
+//! and `code` groups from the prebuilt `devtoolBin`. Cargo-backed checks use
+//! separate host and sandbox lanes from this shared definition.
 
 use std::ffi::OsString;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-/// The static checks devtool owns, in the host gate's order.
-///
-/// Kept in sync with the `devtool_check(<name>)` calls in
-/// `xtask/src/steps/static_checks.rs::specs()` (the host mirror — it can't import this
-/// list, being a separate host-only workspace that reaches devtool only over the CLI).
-pub const ALL: &[&str] = &[
-    "fmt",
-    "leptosfmt",
-    "prettier",
-    "elisp-fmt",
-    "tools-fmt",
-    "ast-grep-tests",
-    "no-full-reload",
-    "byte-compile",
-    "tsc",
-    "cargo-deny",
-    "clippy",
-    "web-server-clippy",
-    "web-no-server-clippy",
-    "wasm-clippy",
-    "tools-clippy",
-    "ert",
-];
+/// A stable, closed partition of devtool's static check inventory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+pub enum CheckGroup {
+    /// Markdown formatting only.
+    Docs,
+    /// Every static check outside the documentation group.
+    Code,
+}
+
+impl CheckGroup {
+    fn names(self) -> &'static [&'static str] {
+        match self {
+            Self::Docs => &["prettier-markdown"],
+            Self::Code => &[
+                "fmt",
+                "leptosfmt",
+                "prettier-end2end",
+                "elisp-fmt",
+                "tools-fmt",
+                "ast-grep-tests",
+                "no-full-reload",
+                "byte-compile",
+                "tsc",
+                "cargo-deny",
+                "clippy",
+                "web-server-clippy",
+                "web-no-server-clippy",
+                "wasm-clippy",
+                "tools-clippy",
+                "ert",
+            ],
+        }
+    }
+}
+
+/// The complete static inventory in its prior effective order, without aliases
+/// or duplicates.
+fn all_names() -> Vec<&'static str> {
+    let mut names =
+        Vec::with_capacity(CheckGroup::Docs.names().len() + CheckGroup::Code.names().len());
+    for &name in CheckGroup::Code.names() {
+        if name == "prettier-end2end" {
+            names.extend(CheckGroup::Docs.names());
+        }
+        names.push(name);
+    }
+    names
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CargoWorkspace {
@@ -159,9 +182,10 @@ impl CheckSpec {
     }
 }
 
-/// Pure: the command spec for `name` in the given mode. `fix` makes the five
-/// formatters (`fmt`, `leptosfmt`, `prettier`, `elisp-fmt`, `tools-fmt`) mutate in place;
-/// `ert`/`tsc`/`byte-compile`/`ast-grep-tests`/`no-full-reload` have no autofix and ignore it.
+/// Pure: the command spec for `name` in the given mode. `fix` makes the six
+/// formatters (`fmt`, `leptosfmt`, `prettier-markdown`, `prettier-end2end`,
+/// `elisp-fmt`, `tools-fmt`) mutate in place; `ert`/`tsc`/`byte-compile`/
+/// `ast-grep-tests`/`no-full-reload` have no autofix and ignore it.
 fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
     let owned = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let cargo_check = |workspace, args: &[&str]| {
@@ -187,12 +211,20 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
                 ])
             },
         },
-        "prettier" => CheckSpec::External {
+        "prettier-markdown" => CheckSpec::External {
             program: "prettier",
             args: if fix {
-                owned(&["-w", "end2end", "**/*.md"])
+                owned(&["-w", "**/*.md"])
             } else {
-                owned(&["--check", "end2end", "**/*.md"])
+                owned(&["--check", "**/*.md"])
+            },
+        },
+        "prettier-end2end" => CheckSpec::External {
+            program: "prettier",
+            args: if fix {
+                owned(&["-w", "end2end"])
+            } else {
+                owned(&["--check", "end2end"])
             },
         },
         "tsc" => CheckSpec::External {
@@ -312,7 +344,7 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
             CargoWorkspace::Tools,
             &["clippy", "--all-targets", "--", "-D", "warnings"],
         ),
-        other => bail!("unknown check '{other}' (known: {ALL:?})"),
+        other => bail!("unknown check '{other}' (known: {:?})", all_names()),
     })
 }
 
@@ -338,15 +370,27 @@ pub fn needs_provisioning(name: &str) -> bool {
     name == "tsc"
 }
 
-/// Run one check by name, or all of them (`--all`). `tsc` provisions
+/// Resolve exactly one public check selector without executing commands.
+fn selected_names(name: Option<&str>, group: Option<CheckGroup>, all: bool) -> Result<Vec<&str>> {
+    match (name, group, all) {
+        (Some(name), None, false) => Ok(vec![name]),
+        (None, Some(group), false) => Ok(group.names().to_vec()),
+        (None, None, true) => Ok(all_names()),
+        _ => bail!("pass exactly one of <name>, --group, or --all"),
+    }
+}
+
+/// Run one check by name, a group, or all checks. `tsc` provisions
 /// `end2end/node_modules` (the type-dep closure) first, by calling
 /// [`crate::provision::run`] in-process.
-pub fn run(name: Option<&str>, all: bool, fix: bool, sandbox_cargo: bool) -> Result<()> {
-    let names: Vec<&str> = match (name, all) {
-        (Some(n), false) => vec![n],
-        (None, true) => ALL.to_vec(),
-        _ => bail!("pass exactly one of <name> or --all"),
-    };
+pub fn run(
+    name: Option<&str>,
+    group: Option<CheckGroup>,
+    all: bool,
+    fix: bool,
+    sandbox_cargo: bool,
+) -> Result<()> {
+    let names = selected_names(name, group, all)?;
     let cargo_mode = if sandbox_cargo {
         CargoMode::Sandbox
     } else {
@@ -385,7 +429,7 @@ mod tests {
     #[test]
     fn only_tsc_needs_provisioning() {
         assert!(needs_provisioning("tsc"));
-        for name in ALL.iter().filter(|n| **n != "tsc") {
+        for name in all_names().iter().filter(|n| **n != "tsc") {
             assert!(
                 !needs_provisioning(name),
                 "{name} must not provision end2end/node_modules"
@@ -530,13 +574,31 @@ mod tests {
     }
 
     #[test]
-    fn prettier_covers_end2end_and_markdown() {
-        // The #185 fix: unified prettier checks end2end AND all markdown.
-        let cmd = build_host("prettier", false);
-        assert_eq!(cmd.program, "prettier");
-        assert!(cmd.args.contains(&"--check".to_string()));
-        assert!(cmd.args.contains(&"end2end".to_string()));
-        assert!(cmd.args.contains(&"**/*.md".to_string()));
+    fn prettier_commands_preserve_their_distinct_populations() {
+        assert_eq!(
+            build_host("prettier-markdown", false),
+            BuiltCommand {
+                program: "prettier",
+                args: vec!["--check".into(), "**/*.md".into()],
+                env: Vec::new(),
+            }
+        );
+        assert_eq!(
+            build_host("prettier-end2end", false),
+            BuiltCommand {
+                program: "prettier",
+                args: vec!["--check".into(), "end2end".into()],
+                env: Vec::new(),
+            }
+        );
+        assert_eq!(
+            build_host("prettier-markdown", true).args,
+            vec!["-w", "**/*.md"]
+        );
+        assert_eq!(
+            build_host("prettier-end2end", true).args,
+            vec!["-w", "end2end"]
+        );
     }
 
     #[test]
@@ -932,19 +994,81 @@ mod tests {
     }
 
     #[test]
-    fn inventory_includes_web_no_server_clippy_once_in_clippy_order() {
+    fn groups_are_an_ordered_disjoint_complete_partition() {
+        assert_eq!(CheckGroup::Docs.names(), ["prettier-markdown"]);
         assert_eq!(
-            ALL.iter()
+            CheckGroup::Code.names(),
+            [
+                "fmt",
+                "leptosfmt",
+                "prettier-end2end",
+                "elisp-fmt",
+                "tools-fmt",
+                "ast-grep-tests",
+                "no-full-reload",
+                "byte-compile",
+                "tsc",
+                "cargo-deny",
+                "clippy",
+                "web-server-clippy",
+                "web-no-server-clippy",
+                "wasm-clippy",
+                "tools-clippy",
+                "ert",
+            ]
+        );
+        assert_eq!(
+            all_names(),
+            [
+                "fmt",
+                "leptosfmt",
+                "prettier-markdown",
+                "prettier-end2end",
+                "elisp-fmt",
+                "tools-fmt",
+                "ast-grep-tests",
+                "no-full-reload",
+                "byte-compile",
+                "tsc",
+                "cargo-deny",
+                "clippy",
+                "web-server-clippy",
+                "web-no-server-clippy",
+                "wasm-clippy",
+                "tools-clippy",
+                "ert",
+            ]
+        );
+        assert_eq!(
+            selected_names(None, Some(CheckGroup::Docs), false).unwrap(),
+            CheckGroup::Docs.names().to_vec()
+        );
+        assert_eq!(selected_names(None, None, true).unwrap(), all_names());
+        let selected = all_names();
+        assert_eq!(
+            selected.len(),
+            selected
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        );
+    }
+
+    #[test]
+    fn inventory_includes_web_no_server_clippy_once_in_clippy_order() {
+        let all = all_names();
+        assert_eq!(
+            all.iter()
                 .filter(|name| **name == "web-no-server-clippy")
                 .count(),
             1
         );
-        let clippy_start = ALL
+        let clippy_start = all
             .iter()
             .position(|name| *name == "clippy")
             .expect("generic clippy present");
         assert_eq!(
-            &ALL[clippy_start..=clippy_start + 3],
+            &all[clippy_start..=clippy_start + 3],
             [
                 "clippy",
                 "web-server-clippy",
@@ -957,27 +1081,31 @@ mod tests {
     #[test]
     fn inventory_includes_no_full_reload_once() {
         assert_eq!(
-            ALL.iter().filter(|name| **name == "no-full-reload").count(),
+            all_names()
+                .iter()
+                .filter(|name| **name == "no-full-reload")
+                .count(),
             1
         );
     }
 
     #[test]
     fn inventory_includes_ast_grep_tests_once_before_repository_scan() {
-        let ast_grep_tests = ALL
+        let all = all_names();
+        let ast_grep_tests = all
             .iter()
             .position(|name| *name == "ast-grep-tests")
             .expect("ast-grep tests present");
         assert_eq!(
-            ALL.iter().filter(|name| **name == "ast-grep-tests").count(),
+            all.iter().filter(|name| **name == "ast-grep-tests").count(),
             1
         );
-        assert_eq!(ALL[ast_grep_tests + 1], "no-full-reload");
+        assert_eq!(all[ast_grep_tests + 1], "no-full-reload");
     }
 
     #[test]
     fn all_names_have_specs() {
-        for n in ALL {
+        for n in all_names() {
             assert!(spec(n, false).is_ok(), "{n}");
         }
     }

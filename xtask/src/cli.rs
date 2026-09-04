@@ -174,6 +174,9 @@ pub enum Command {
     /// Coverage tooling — the source-filter drift probe (#241).
     #[command(subcommand)]
     Coverage(CoverageCommand),
+    /// Nix maintenance commands that evaluate repository derivation boundaries.
+    #[command(subcommand)]
+    Nix(NixCommand),
     /// Trace-derived `#[server]` fn flow coverage (#681): which server entry
     /// points the e2e suite actually drives.
     #[command(subcommand)]
@@ -315,6 +318,15 @@ pub enum CoverageCommand {
     #[command(after_help = "EXAMPLES:\n  cargo xtask coverage probe-source")]
     ProbeSource,
 }
+/// `nix` subcommands.
+#[derive(Subcommand)]
+pub enum NixCommand {
+    /// Guard static-docs, static-code, CSR/site, and client wasm-test source
+    /// closures with isolated tracked perturbations. Eval-only (no realization);
+    /// runs in CI and on request, not in per-commit `check`/`validate`.
+    #[command(after_help = "EXAMPLES:\n  cargo xtask nix probe-source")]
+    ProbeSource,
+}
 
 /// `traces` subcommands.
 #[derive(Subcommand)]
@@ -410,6 +422,7 @@ impl Cli {
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
+            Command::Nix(NixCommand::ProbeSource) => "nix-probe-source",
             Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate) => {
                 steps::server_fn_coverage_check::REGENERATE_STEP
             }
@@ -686,6 +699,13 @@ mod tests {
     fn adr_promoter_parses() {
         let cli = Cli::try_parse_from(["xtask", "adr", "promoter"]).unwrap();
         assert_eq!(cli.command_name(), "adr-promoter");
+    }
+
+    #[test]
+    fn nix_probe_source_parses_as_closed_subcommand() {
+        let cli = Cli::try_parse_from(["xtask", "nix", "probe-source"]).unwrap();
+        assert_eq!(cli.command_name(), "nix-probe-source");
+        assert!(matches!(cli.command, Command::Nix(NixCommand::ProbeSource)));
     }
 
     #[test]
