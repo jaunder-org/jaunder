@@ -257,7 +257,7 @@ pub fn execute(sub: IssueCommand) -> Result<CommandResult> {
             into_result("issue-create", IssueReport::Created(report))
         }
     };
-    super::finalize(&mut result, start);
+    crate::lifecycle::finalize(&mut result, start);
     Ok(result)
 }
 

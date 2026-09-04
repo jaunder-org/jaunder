@@ -1576,4 +1576,31 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn git_at_scrubs_repo_redirecting_env() {
+        // Regression guard: without scrubbing these, a git op meant for `dir`
+        // (a throwaway test repo) would be redirected at the hook's repo when run
+        // inside a git hook, corrupting it. `get_envs()` yields `(key, None)` for a
+        // removed var.
+        let cmd = at(std::path::Path::new("/tmp/x"));
+        let removed: std::collections::HashSet<std::ffi::OsString> = cmd
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_owned())
+            .collect();
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_COMMON_DIR",
+            "GIT_NAMESPACE",
+        ] {
+            assert!(
+                removed.contains(std::ffi::OsStr::new(var)),
+                "{var} must be scrubbed so -C wins"
+            );
+        }
+    }
 }
