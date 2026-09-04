@@ -1083,6 +1083,27 @@ pub fn eval_coverage_drvpath(flake_dir: &Path) -> Result<String> {
     )
 }
 
+/// Evaluate the four derivation identities guarded by `nix probe-source`.
+/// This deliberately performs only serial `nix eval` calls: the probe mutates
+/// one isolated worktree between arms, so concurrent evaluation would obscure
+/// which tracked perturbation produced a failed identity.
+pub(crate) fn eval_source_probe_drvpaths(flake_dir: &Path) -> Result<[String; 4]> {
+    [
+        ".#checks.x86_64-linux.static-docs.drvPath",
+        ".#checks.x86_64-linux.static-code.drvPath",
+        ".#site.drvPath",
+        ".#checks.x86_64-linux.wasm-tests.drvPath",
+    ]
+    .map(|installable| nix_eval_raw(Some(flake_dir), installable))
+    .into_iter()
+    .collect::<Result<Vec<_>>>()
+    .and_then(|paths| {
+        paths
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("source-probe installable catalog changed unexpectedly"))
+    })
+}
+
 /// On a failed build, best-effort copy diagnostics from retained outputs.
 /// Returns whether any secondary recovery step failed so the build owner can
 /// aggregate one warning without changing the primary failure.

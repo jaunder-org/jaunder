@@ -6,6 +6,7 @@ let
     toolchain
     craneLib
     commonArgs
+    wasmTestSrc
     appOfflineCargoHome
     toolsOfflineCargoHome
     cargoArtifacts
@@ -518,9 +519,15 @@ e2eGateChecks
   wasm-tests = craneLib.cargoTest (
     commonArgs
     // {
+      src = wasmTestSrc;
+    }
+    // {
       cargoArtifacts = craneLib.buildDepsOnly (
         commonArgs
         // leanTestProfile
+        // {
+          src = wasmTestSrc;
+        }
         // {
           CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
           cargoExtraArgs = "-p client";

@@ -18,6 +18,91 @@ let
   };
 
   craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
+  # Cargo source filters follow target closures. All workspace manifests remain
+  # available for resolution; excluded members receive deterministic placeholder
+  # targets so Cargo can parse them without hashing unrelated source bytes.
+  workspaceMembers = [
+    "client"
+    "common"
+    "csr"
+    "host"
+    "macros"
+    "server"
+    "storage"
+    "test-support"
+    "web"
+  ];
+  cargoWorkspaceInput =
+    path:
+    let
+      relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+    in
+    relative == "Cargo.toml"
+    || relative == "Cargo.lock"
+    || relative == "rust-toolchain.toml"
+    || relative == ".cargo/config.toml"
+    || builtins.any (member: relative == "${member}/Cargo.toml") workspaceMembers;
+  cargoTargetSource =
+    members: path: type:
+    let
+      relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+    in
+    type == "directory"
+    || cargoWorkspaceInput path
+    || builtins.any (
+      member:
+      relative == "${member}/build.rs"
+      || pkgs.lib.hasPrefix "${member}/src/" relative
+    ) members;
+  workspacePlaceholderTargets =
+    member:
+    if member == "server" then
+      [
+        "src/lib.rs"
+        "src/main.rs"
+        "tests/main.rs"
+      ]
+    else if member == "test-support" then
+      [
+        "src/lib.rs"
+        "src/main.rs"
+      ]
+    else
+      [ "src/lib.rs" ];
+  withWorkspacePlaceholders =
+    name: source: excludedMembers:
+    pkgs.runCommand name { } ''
+      cp --no-preserve=mode -r ${source}/. "$out/"
+      ${
+        pkgs.lib.concatMapStringsSep "\n" (
+          member:
+          pkgs.lib.concatMapStringsSep "\n" (
+            target: ''
+              mkdir -p "$out/${member}/$(dirname ${target})"
+              printf '%s\n' '// target-closure placeholder; excluded source remains absent.' > "$out/${member}/${target}"
+            ''
+          ) (workspacePlaceholderTargets member)
+        ) excludedMembers
+      }
+    '';
+  siteSrc = withWorkspacePlaceholders
+    "jaunder-site-cargo-source"
+    (pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter =
+        path: type:
+        cargoTargetSource [ "csr" "web" "client" "common" "macros" ] path type
+        || pkgs.lib.hasSuffix "csr/index.html" path;
+    })
+    [ "host" "server" "storage" "test-support" ];
+  wasmTestSrc = withWorkspacePlaceholders
+    "jaunder-wasm-test-cargo-source"
+    (pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter = cargoTargetSource [ "client" "common" "macros" ];
+    })
+    [ "csr" "host" "server" "storage" "test-support" "web" ];
+
 
   src = pkgs.lib.cleanSourceWith {
     src = craneLib.path ../.;
@@ -313,9 +398,11 @@ let
   csrWasm = craneLib.buildPackage (
     commonArgs
     // {
+      src = siteSrc;
       cargoArtifacts = craneLib.buildDepsOnly (
         commonArgs
         // {
+          src = siteSrc;
           CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
           cargoExtraArgs = "-p csr";
           doCheck = false;
@@ -427,6 +514,7 @@ in
       toolchain
       craneLib
       commonArgs
+      wasmTestSrc
       appOfflineCargoHome
       toolsOfflineCargoHome
       cargoArtifacts

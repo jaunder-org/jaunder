@@ -5,10 +5,10 @@ use xshell::Shell;
 use crate::{
     adr, adr_readme, audit_wasm, census,
     cli::{
-        AdrCommand, Cli, Command, CoverageCommand, PrCommand, ServerFnCoverageCommand,
+        AdrCommand, Cli, Command, CoverageCommand, NixCommand, PrCommand, ServerFnCoverageCommand,
         TracesCommand,
     },
-    coverage, gate, issue, lifecycle, pr,
+    coverage, gate, issue, lifecycle, nix_probe, pr,
     result::{CommandResult, Mode, StepResult},
     server_fn_coverage, steps, traces,
 };
@@ -188,6 +188,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 backend.as_str(),
                 browser.as_str(),
             );
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::Nix(NixCommand::ProbeSource) => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("nix-probe-source");
+            let step_start = std::time::Instant::now();
+            result.push(nix_probe::probe_source().with_duration(step_start.elapsed()));
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }

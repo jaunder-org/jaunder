@@ -16,6 +16,7 @@ pub mod issue;
 mod lifecycle;
 pub mod markers;
 mod nix_build;
+mod nix_probe;
 mod playwright_report;
 pub mod pr;
 mod result;
@@ -74,8 +75,8 @@ mod steps {
 }
 
 pub use cli::{
-    AdrCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser, PrCommand, PrWatchUntil,
-    ServerFnCoverageCommand, TracesCommand,
+    AdrCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser, NixCommand, PrCommand,
+    PrWatchUntil, ServerFnCoverageCommand, TracesCommand,
 };
 pub use dispatch::run;
 pub use lifecycle::ensure_hooks_installed;

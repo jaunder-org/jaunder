@@ -63,7 +63,7 @@ Out:
     attr evaluation, and direct builds of both new checks prove the complete
     hermetic surface.
 
-- [ ] Task 4: Filter wasm source closures and add the drift probe
+- [x] Task 4: Filter wasm source closures and add the drift probe
   - Contract: the CSR/site Cargo source admits workspace manifests and the
     resolved `csr` closure; the client wasm-test source admits manifests and the
     resolved `client` wasm-test closure. Both retain required build scripts and
