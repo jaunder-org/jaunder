@@ -981,7 +981,7 @@ async fn cmd_restore_rejects_pre_identity_backup(#[case] backend: Backend) {
         error.downcast_ref::<BackupError>(),
         Some(BackupError::SchemaVersionMismatch {
             backup_version: 26,
-            target_version: 31
+            target_version: 32
         })
     ));
 }
