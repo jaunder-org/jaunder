@@ -1,10 +1,10 @@
-use super::super::parse::{Span, get_attr};
+use super::super::parse::{self, Span};
 use super::model::{ByProjectRow, E2eTestRow, SlowSpanRow, TraceTotalRow};
 
 /// Parse an `e2e.*` integer-count attribute (`0` when absent/non-numeric),
 /// matching Node's `Number(getAttr(...) || "0")`.
 fn count(raw: &serde_json::Value, key: &str) -> u64 {
-    get_attr(raw, key).parse().unwrap_or(0)
+    parse::get_attr(raw, key).parse().unwrap_or(0)
 }
 
 /// The e2e project label a report groups on: the span's `e2e.project`, or `-`
@@ -19,7 +19,7 @@ fn project_label(project: &str) -> String {
 
 /// The `e2e.test` name for a span, or `-` when unset (Node `getAttr(...) || "-"`).
 fn e2e_test_name(s: &Span) -> String {
-    let t = get_attr(&s.raw, "e2e.test");
+    let t = parse::get_attr(&s.raw, "e2e.test");
     if t.is_empty() { "-".to_string() } else { t }
 }
 

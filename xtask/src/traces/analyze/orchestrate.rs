@@ -20,7 +20,7 @@ pub fn analyze_spans(
     project_filter: Option<String>,
     reported: &ReportedDurations,
 ) -> Result<Analysis> {
-    let coverage = super::span_coverage(&spans, reported);
+    let coverage = span_tree::span_coverage(&spans, reported);
     let coverage_note = span_tree::coverage_note(&spans, reported, &coverage);
     let slowest_spans = summary::slowest_spans(&spans);
     let slowest_e2e_tests = summary::slowest_e2e_tests(&spans);
@@ -67,7 +67,7 @@ pub fn analyze(
     for input in inputs {
         spans.extend(read_spans(input, &filters)?);
     }
-    super::analyze_spans(spans, filters.project, reported)
+    analyze_spans(spans, filters.project, reported)
 }
 
 #[cfg(test)]

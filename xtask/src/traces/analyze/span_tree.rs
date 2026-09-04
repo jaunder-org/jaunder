@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use super::super::{
-    parse::{Span, get_attr, interval_union_ms, span_interval_ms},
+    parse::{self, Span},
     report::{AttemptKey, ReportedDurations},
 };
-use super::model::SpanCoverageRow;
+use super::model::{LIFECYCLE_SPAN_NAME, SpanCoverageRow};
 
 /// The e2e project label a report groups on: the span's `e2e.project`, or `-`
 /// when unset (Node's `getAttr(...) || "-"`).
@@ -51,12 +51,12 @@ pub fn span_coverage(spans: &[Span], reported: &ReportedDurations) -> Vec<SpanCo
 
     let mut rows: Vec<SpanCoverageRow> = spans
         .iter()
-        .filter(|span| span.name == super::LIFECYCLE_SPAN_NAME)
+        .filter(|span| span.name == LIFECYCLE_SPAN_NAME)
         .filter_map(|envelope| {
             let key = AttemptKey {
-                test: get_attr(&envelope.raw, "e2e.test"),
-                project: get_attr(&envelope.raw, "e2e.project"),
-                retry: get_attr(&envelope.raw, "e2e.retry")
+                test: parse::get_attr(&envelope.raw, "e2e.test"),
+                project: parse::get_attr(&envelope.raw, "e2e.project"),
+                retry: parse::get_attr(&envelope.raw, "e2e.retry")
                     .parse::<u64>()
                     .unwrap_or(0),
             };
@@ -67,11 +67,11 @@ pub fn span_coverage(spans: &[Span], reported: &ReportedDurations) -> Vec<SpanCo
                 .get(envelope.span_id.as_str())
                 .map(|kids| {
                     kids.iter()
-                        .filter_map(|kid| span_interval_ms(&kid.raw))
+                        .filter_map(|kid| parse::span_interval_ms(&kid.raw))
                         .collect()
                 })
                 .unwrap_or_default();
-            let covered_ms = interval_union_ms(intervals);
+            let covered_ms = parse::interval_union_ms(intervals);
             // Clamped: clock skew between the Node-side span stamps and
             // Playwright's own timing can put covered marginally above reported,
             // and a negative "uncovered" would read as nonsense.
@@ -111,10 +111,9 @@ pub(super) fn coverage_note(
                 .to_owned(),
         );
     }
-    if !spans.iter().any(|s| s.name == super::LIFECYCLE_SPAN_NAME) {
+    if !spans.iter().any(|s| s.name == LIFECYCLE_SPAN_NAME) {
         return Some(format!(
-            "no `{}` spans in the capture (pre-#794 traces have none)",
-            super::LIFECYCLE_SPAN_NAME
+            "no `{LIFECYCLE_SPAN_NAME}` spans in the capture (pre-#794 traces have none)"
         ));
     }
     Some(format!(

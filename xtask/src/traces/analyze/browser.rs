@@ -2,15 +2,15 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::super::{
-    boot_phases::MIN_BOOT_PHASES,
-    parse::{Span, get_attr, parse_json_attr, to_url_path},
+    boot_phases,
+    parse::{self, Span},
 };
 use super::model::{AssetRow, BootCoverageRow, HotspotRow, LongTaskProjectRow, TargetRow};
 
 /// Parse an `e2e.*` integer-count attribute (`0` when absent/non-numeric),
 /// matching Node's `Number(getAttr(...) || "0")`.
 fn count(raw: &Value, key: &str) -> u64 {
-    get_attr(raw, key).parse().unwrap_or(0)
+    parse::get_attr(raw, key).parse().unwrap_or(0)
 }
 
 /// Read a finite JSON number; malformed and non-finite values are excluded.
@@ -115,7 +115,7 @@ fn entry<'a, V>(groups: &'a mut Vec<(String, V)>, key: &str, init: impl Fn() -> 
 pub(super) fn action_hotspot_rows(spans: &[Span]) -> Result<Vec<HotspotRow>> {
     let mut groups: Vec<(String, Agg)> = Vec::new();
     for s in e2e_tests(spans) {
-        let actions = parse_json_attr(&s.raw, "e2e.action_top_json", &s.source)?;
+        let actions = parse::parse_json_attr(&s.raw, "e2e.action_top_json", &s.source)?;
         let Some(arr) = actions.as_ref().and_then(Value::as_array) else {
             continue;
         };
@@ -156,7 +156,7 @@ pub(super) fn navigation_sections(spans: &[Span]) -> Result<(Vec<HotspotRow>, Ve
     let mut phase_groups: Vec<(String, Agg)> = Vec::new();
     let mut url_groups: Vec<(String, Agg)> = Vec::new();
     for s in navigation_bearing_spans(spans) {
-        let navs = parse_json_attr(&s.raw, "e2e.navigation_top_json", &s.source)?;
+        let navs = parse::parse_json_attr(&s.raw, "e2e.navigation_top_json", &s.source)?;
         let Some(arr) = navs.as_ref().and_then(Value::as_array) else {
             continue;
         };
@@ -168,7 +168,7 @@ pub(super) fn navigation_sections(spans: &[Span]) -> Result<(Vec<HotspotRow>, Ve
                     entry(&mut phase_groups, label, Agg::default).add(v);
                 }
             }
-            let path = to_url_path(nav.get("url").and_then(Value::as_str).unwrap_or(""));
+            let path = parse::to_url_path(nav.get("url").and_then(Value::as_str).unwrap_or(""));
             if path.is_empty() {
                 continue;
             }
@@ -237,7 +237,7 @@ pub(super) fn boot_coverage_rows(spans: &[Span]) -> Result<Vec<BootCoverageRow>>
         };
         let row = &mut rows[idx];
         row.dropped += count(&s.raw, "e2e.navigation_top_dropped");
-        let navs = parse_json_attr(&s.raw, "e2e.navigation_top_json", &s.source)?;
+        let navs = parse::parse_json_attr(&s.raw, "e2e.navigation_top_json", &s.source)?;
         let Some(arr) = navs.as_ref().and_then(Value::as_array) else {
             continue;
         };
@@ -257,7 +257,7 @@ pub(super) fn boot_coverage_rows(spans: &[Span]) -> Result<Vec<BootCoverageRow>>
                 .get("bootPhases")
                 .and_then(Value::as_object)
                 .map_or(0, |phases| phases.len());
-            if phases >= MIN_BOOT_PHASES
+            if phases >= boot_phases::MIN_BOOT_PHASES
                 && field_f64(nav, "wasmInitStartMs").is_some()
                 && field_f64(nav, "wasmInitStartToBootEntryMs").is_some()
             {
@@ -283,7 +283,7 @@ pub(super) fn long_task_sections(
     let mut name_groups: Vec<(String, Agg)> = Vec::new();
     let mut proj_groups: Vec<(String, ProjAgg)> = Vec::new();
     for s in e2e_tests(spans) {
-        let tasks = parse_json_attr(&s.raw, "e2e.long_tasks_json", &s.source)?;
+        let tasks = parse::parse_json_attr(&s.raw, "e2e.long_tasks_json", &s.source)?;
         let Some(arr) = tasks.as_ref().and_then(Value::as_array) else {
             continue;
         };
@@ -340,7 +340,7 @@ pub(super) fn resource_sections(spans: &[Span]) -> Result<(Vec<HotspotRow>, Vec<
     let mut init_groups: Vec<(String, Agg)> = Vec::new();
     let mut asset_groups: Vec<(String, AssetAgg)> = Vec::new();
     for s in e2e_tests(spans) {
-        let summary = parse_json_attr(&s.raw, "e2e.resource_summary_json", &s.source)?;
+        let summary = parse::parse_json_attr(&s.raw, "e2e.resource_summary_json", &s.source)?;
         let Some(items) = summary
             .as_ref()
             .and_then(|value| value.get("topSlow"))
@@ -365,7 +365,7 @@ pub(super) fn resource_sections(spans: &[Span]) -> Result<(Vec<HotspotRow>, Vec<
                 .get("name")
                 .and_then(Value::as_str)
                 .filter(|s| !s.is_empty())
-                .map(to_url_path)
+                .map(parse::to_url_path)
                 .unwrap_or_else(|| "unknown".to_string());
             entry(&mut init_groups, &initiator, Agg::default).add(dur);
             if let Some(idx) = asset_groups.iter().position(|(k, _)| *k == name) {
