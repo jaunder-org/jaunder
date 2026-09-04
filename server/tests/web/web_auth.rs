@@ -657,6 +657,51 @@ async fn register_closed_policy_returns_error(#[case] backend: Backend) {
         "user should not exist on closed registration"
     );
 }
+/// Registration policy governs direct admission and whether an otherwise valid
+/// invitation is redeemed.
+#[apply(backends)]
+#[tokio::test]
+async fn registration_policy_matrix_controls_admission_and_invite_consumption(
+    #[case] backend: Backend,
+) {
+    for (policy, direct_succeeds, invite_succeeds, invite_consumed) in [
+        (RegistrationPolicy::Closed, false, false, false),
+        (RegistrationPolicy::OperatorInvites, false, true, true),
+        (RegistrationPolicy::MemberInvites, false, true, true),
+        (RegistrationPolicy::Open, true, true, false),
+    ] {
+        let TestEnv { state, base: _base } = backend.setup().registration(policy).await;
+        let code = create_registration_invite(&state).await;
+
+        let direct_status = post_register(&state, "direct", None).await;
+        assert_eq!(
+            direct_status == StatusCode::OK,
+            direct_succeeds,
+            "{policy:?} direct registration status: {direct_status}"
+        );
+
+        let invite_status = post_register(&state, "invited", Some(code.as_ref())).await;
+        assert_eq!(
+            invite_status == StatusCode::OK,
+            invite_succeeds,
+            "{policy:?} invite registration status: {invite_status}"
+        );
+
+        let invite = state
+            .invites
+            .list_invites()
+            .await
+            .expect("list fixture invite")
+            .into_iter()
+            .find(|invite| invite.code.as_ref() == code.as_ref())
+            .expect("fixture invite remains listed");
+        assert_eq!(
+            invite.used_at.is_some(),
+            invite_consumed,
+            "{policy:?} invite consumption"
+        );
+    }
+}
 
 // M2.9.12: `login` with correct password sets its cookie-only session.
 #[apply(backends)]

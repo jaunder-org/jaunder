@@ -45,7 +45,7 @@ Out:
     token; repository documentation formatting, links, and ADR bundle checks
     accept the complete projection.
 
-- [ ] Task 2: Enforce registration and invitation authority at hard interfaces
+- [x] Task 2: Enforce registration and invitation authority at hard interfaces
   - Depends on: Task 1 policy interface.
   - Contract: registration rejects every shape under `Closed`, requires and
     consumes a valid invitation under both invitation policies, and under `Open`

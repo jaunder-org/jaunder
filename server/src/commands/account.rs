@@ -169,8 +169,8 @@ pub async fn cmd_app_password_create(
 ///
 /// # Errors
 ///
-/// Returns an error if the database cannot be opened, or if the invitation
-/// cannot be saved.
+/// Returns an error if the database cannot be opened, the active registration policy
+/// forbids issuance, or the invitation cannot be saved.
 pub async fn cmd_user_invite(
     storage: &StorageArgs,
     expires_in: Option<InviteTtlHours>,
@@ -179,6 +179,13 @@ pub async fn cmd_user_invite(
     let state = storage::open_existing_database(&storage.db, &runtime)
         .await
         .context(support::INIT_FIRST_CONTEXT)?;
+
+    let policy = state.site_config().get_registration_policy().await?;
+    if !policy.may_issue_invitation(true) {
+        return Err(anyhow::anyhow!(
+            "invitation issuance is disabled by registration policy '{policy}'"
+        ));
+    }
 
     // The 1..=336 bound lives in `InviteTtlHours` (clap rejects an out-of-range `--expires-in`
     // at parse), so no in-body overflow check is needed.
@@ -262,6 +269,7 @@ mod tests {
     use std::io;
 
     use super::*;
+    use common::registration::RegistrationPolicy;
     use common::smtp_tls_mode::SmtpTlsMode;
     use common::test_support::{parse_email, parse_invite_ttl_hours};
     use host::config_key::SiteConfigKey;
@@ -282,6 +290,23 @@ mod tests {
                 .parse()
                 .expect("valid sender"),
         }
+    }
+
+    async fn set_registration_policy(state: &storage::AppState, policy: RegistrationPolicy) {
+        let site_config = Arc::clone(&state.site_config);
+        confirmed(
+            state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        site_config
+                            .set_registration_policy(transaction, policy)
+                            .await
+                    })
+                })
+                .await
+                .expect("set registration policy"),
+        );
     }
 
     fn transport_build_error() -> lettre::transport::smtp::Error {
@@ -391,6 +416,7 @@ mod tests {
         let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
             .expect("open db");
+        set_registration_policy(&state, RegistrationPolicy::OperatorInvites).await;
 
         let before = common::time::UtcInstant::now();
         cmd_user_invite(&storage_args, Some(parse_invite_ttl_hours("24")))
@@ -415,6 +441,7 @@ mod tests {
         let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
             .expect("open db");
+        set_registration_policy(&state, RegistrationPolicy::MemberInvites).await;
         let config = Arc::clone(&state.site_config);
         confirmed(
             state
@@ -440,5 +467,36 @@ mod tests {
 
         let invites = state.invites.list_invites().await.expect("list invites");
         assert_eq!(invites.len(), 1, "exactly one invite must be created");
+    }
+
+    #[tokio::test]
+    async fn cmd_user_invite_rejects_closed_and_open_before_minting() {
+        for policy in [RegistrationPolicy::Closed, RegistrationPolicy::Open] {
+            let temp = TempDir::new().expect("temp dir");
+            let storage_args = sqlite_storage_args(&temp);
+            let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
+                .await
+                .expect("open db");
+            set_registration_policy(&state, policy).await;
+
+            let error = cmd_user_invite(&storage_args, Some(parse_invite_ttl_hours("24")))
+                .await
+                .expect_err("policy must block CLI invitation issuance");
+            assert!(
+                error
+                    .to_string()
+                    .contains("invitation issuance is disabled by registration policy"),
+                "{policy:?} rejection: {error:#}"
+            );
+            assert!(
+                state
+                    .invites
+                    .list_invites()
+                    .await
+                    .expect("list invites")
+                    .is_empty(),
+                "{policy:?} must reject before minting"
+            );
+        }
     }
 }

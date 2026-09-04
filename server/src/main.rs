@@ -144,6 +144,15 @@ mod tests {
     async fn run_user_invite() {
         let base = TempDir::new().unwrap();
         let storage = initialized_storage(&base).await;
+        run(test_cli(Commands::SiteConfig {
+            action: SiteConfigAction::Set {
+                storage: storage.clone(),
+                key: SiteConfigKey::SiteRegistrationPolicy,
+                value: "operator_invites".to_string(),
+            },
+        }))
+        .await
+        .expect("enable operator-issued invitations");
 
         let cli = test_cli(Commands::UserInvite {
             storage,

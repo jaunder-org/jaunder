@@ -11,7 +11,7 @@ use {
     common::tagged_url::{self, MailConfirmUrl},
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{InviteStorage, RegistrationPolicy, SiteConfigStorage, WriteScope},
+    storage::{InviteStorage, SiteConfigStorage, UserStorage, WriteScope},
 };
 
 use crate::error::WebResult;
@@ -49,10 +49,25 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<MutationOutcome<(
         expires_in_hours,
         recipient_email,
     } = request;
-    let _auth = auth::require_auth().await?;
+    let auth = auth::require_auth().await?;
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let policy = site_config.get_registration_policy().await?;
+    if !policy.requires_invitation() {
+        return Err(InternalError::not_found("invites"));
+    }
+
+    if !policy.may_issue_invitation(false) {
+        let users = expect_context::<Arc<dyn UserStorage>>();
+        let Some(user) = users.get_user(auth.user_id).await? else {
+            return Err(InternalError::unauthorized("user does not exist"));
+        };
+        if !policy.may_issue_invitation(user.is_operator.is_operator()) {
+            return Err(InternalError::unauthorized("invitation authority required"));
+        }
+    }
+
     let write_scope = expect_context::<WriteScope>();
     let invites = expect_context::<Arc<dyn InviteStorage>>();
-    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     let mailer = expect_context::<Arc<dyn MailSender>>();
 
     // Validate the base URL up front, before creating the invite: a failure here
@@ -102,16 +117,14 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<MutationOutcome<(
 /// Returns invite metadata (never the raw codes) under an invitation registration policy.
 #[macros::server]
 pub async fn list() -> WebResult<Vec<Info>> {
-    let _auth = auth::require_auth().await?;
+    auth::require_operator().await?;
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    let invites = expect_context::<Arc<dyn InviteStorage>>();
     let policy = site_config.get_registration_policy().await?;
-    if !matches!(
-        policy,
-        RegistrationPolicy::OperatorInvites | RegistrationPolicy::MemberInvites
-    ) {
+    if !policy.may_list_invitations(true) {
         return Err(InternalError::not_found("invites"));
     }
+
+    let invites = expect_context::<Arc<dyn InviteStorage>>();
     let records = invites.list_invites().await?;
     Ok(records
         .into_iter()
