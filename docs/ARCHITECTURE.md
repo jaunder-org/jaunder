@@ -296,16 +296,10 @@ format-version member are format 1. Package version and the backend-specific
 schema checksum remain provenance only, so older and newer packages restore
 silently when those authorities match. An unsupported format or schema mismatch
 is a typed incompatibility that fails before database or media mutation,
-distinct from malformed backup content and relational constraint failure. The
-host `backup-format-version` gate inventories every representation-defining
-backup source by Git blob identity in `storage/backup-format-sources.json`. Any
-drift requires an explicit compatibility acknowledgement by refreshing that
-inventory; drift that is not readable as the current format must also increment
-the semantic format version. Migration count is not used: schema migrations
-already have their own exact-match authority and do not all change the portable
-backup representation. Typed-domain invariant violations instead retain #725's
-restore-and-report behavior: data and media restore, then the command reports
-current-domain violations. This policy is recorded in the
+distinct from malformed backup content and relational constraint failure.
+Typed-domain invariant violations instead retain #725's restore-and-report
+behavior: data and media restore, then the command reports current-domain
+violations. This policy is recorded in the
 [backup format and schema compatibility decision](adr/drafts/backup-format-and-schema-compatibility.md).
 
 Restore is authoritative and order-independent: both backends clear every target

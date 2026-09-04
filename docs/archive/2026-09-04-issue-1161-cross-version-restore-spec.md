@@ -18,11 +18,6 @@ otherwise compatible data.
 - An unsupported backup format fails before target mutation with a typed
   incompatibility error. Future representation changes that are not readable as
   format 1 must increment this version deliberately.
-- The format version remains a semantic integer rather than a derivative of the
-  database migration count. A fail-closed xtask inventory records the Git blob
-  identity of every representation-defining backup source. Source drift requires
-  an explicit compatibility acknowledgement by refreshing the inventory; an
-  incompatible representation change must also increment `format_version`.
 - Schema compatibility remains exact migration-version equality. A backup from
   an older package with the current schema is compatible; a backup from an older
   schema is not compatible until a separate change defines and tests an explicit
@@ -71,9 +66,6 @@ otherwise compatible data.
   interoperability coverage continues to pass.
 - Documentation states which manifest fields govern compatibility and why
   package version and schema checksum do not.
-- The host gate fails when a representation-defining source drifts from the
-  inventory, the source inventory is incomplete, or its version disagrees with
-  `CURRENT_BACKUP_FORMAT_VERSION`.
 
 ## Boundaries
 

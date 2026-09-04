@@ -34,12 +34,6 @@ Compatibility authorities are the backup format and the database schema version:
 - The manifest carries an explicit integer `format_version`. Version 1 exports
   write `1`; an absent member in historical manifests means legacy format 1.
   Only supported format versions are readable.
-- The format version is deliberately independent of database migration count:
-  migrations already have the separate schema-version authority and do not all
-  alter the portable representation. A fail-closed xtask inventory records the
-  Git blob identity of every representation-defining backup source. Source drift
-  must be acknowledged by refreshing the inventory; incompatible drift must also
-  increment the explicit format version.
 - A restore requires an exact schema-version match. No schema transformation or
   compatibility registry is implied.
 - Producing package version and backend-specific schema checksum are provenance,
@@ -69,7 +63,7 @@ or make compatibility depend on backend-specific incidental representation. It
 also rejects implicit cross-schema restore: supporting one requires a separately
 specified and tested migration path.
 
-The source inventory makes backup-format review unavoidable without pretending
-that source identity can decide semantic compatibility. Compatible refactors may
-refresh hashes at the current version; incompatible representation changes add a
-version and retain the immutable legacy-v1 default.
+A behavioral compatibility corpus independent of the production encoder is
+tracked in [#1380](https://github.com/jaunder-org/jaunder/issues/1380). Until
+then, format changes remain explicit decisions protected by the existing format,
+restore, and interoperability tests.
