@@ -398,14 +398,24 @@ mod tests {
     }
 
     #[test]
-    fn render_project_filter_header() {
-        let a = Analysis {
-            span_count: 1,
-            project_filter: Some("firefox".into()),
-            slowest_spans: vec![slow_row(10.0)],
-            ..Default::default()
+    fn analyze_project_filter_over_fixture_renders_header() {
+        use crate::traces::analyze::analyze_spans;
+        use crate::traces::parse::{Filters, parse_spans};
+
+        const FIXTURE: &str = include_str!("testdata/otel-traces-sample.jsonl");
+        let filters = Filters {
+            trace: None,
+            project: Some("firefox".into()),
         };
-        assert!(render(&a, 25).starts_with("Project filter: firefox"));
+        let spans = parse_spans(FIXTURE, &filters, "sample").unwrap();
+        let analysis = analyze_spans(
+            spans,
+            filters.project,
+            &crate::traces::report::ReportedDurations::default(),
+        )
+        .unwrap();
+
+        assert!(render(&analysis, 25).starts_with("Project filter: firefox"));
     }
 
     #[test]
