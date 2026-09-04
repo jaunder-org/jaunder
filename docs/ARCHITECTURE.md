@@ -1357,28 +1357,36 @@ Wire args are **domain newtypes, validated client-side against the same
 newtype's `FromStr`** ([ADR-0065](adr/0065-client-side-domain-validation.md)) —
 never a re-implemented rule. The chokepoint is the pure `forms::field_error<T>`
 (`web/src/forms/field.rs:11`) driving a parent-owned `Field<T>`
-(`web/src/forms/field.rs:22`). Standard labelled fields render through
-`<ValidatedInput<T>>` / `<ValidatedTextarea<T>>`; bespoke direct-bind layouts
-use the shared bare-input and touched-error primitives so only chrome and
-placement stay caller-owned. The chrome the labelled shells wrap themselves in,
-`Labelled` (`web/src/forms/component.rs:56`), is deliberately **not** generic
-over `T`: it takes the validity as two erased signals (`error`, `touched`)
-rather than a `Field<T>`
-([ADR-0117](adr/0117-labelled-takes-erased-signals.md)), because a generic
-component _with children_ needs its close tag to match the opening generics
-token-for-token at every call site. ADR-0117 records as an open question whether
-that burden alone still justifies the shape. The visible message is gated on a
-`touched` flag; submit is gated disable-until-valid. Typing the arg moves
-validation into arg-**decode**, so a malformed request from a non-browser client
-fails before the fn body — the defense-in-depth path, not the user path.
-Framework `Args`, `MissingArg`, and input-side `Deserialization` failures carry
-an internal structured classification to the `/api` server-function response
-normalizer, which returns HTTP 400 and strips that classification before the
-public boundary. The public `WebError::ServerFunction` payload and message stay
-unchanged; function-body, output-serialization, and other internal failures
-remain HTTP 500. For progressive-enhancement forms the normalizer also removes
-the malformed request's framework-added redirect, while valid redirects remain
-unchanged ([ADR-0065](adr/0065-client-side-domain-validation.md)).
+(`web/src/forms/field.rs:25`). `Field` privately owns its writable input signal
+and derives a read-only validation memo from that current value plus its
+required/optional policy. Consumers receive value snapshots, a value setter, the
+read-only error handle, parsing, validity, touch, and reset operations; only the
+standard form renderer can reach the value signal needed for DOM reactivity. A
+programmatic write therefore cannot desynchronize rendered error, submit
+validity, and parsing.
+
+Standard labelled fields render through `<ValidatedInput<T>>` /
+`<ValidatedTextarea<T>>`; bespoke layouts use the shared bare-input and
+touched-error primitives so only chrome and placement stay caller-owned. The
+chrome the labelled shells wrap themselves in, `Labelled`
+(`web/src/forms/component.rs:56`), is deliberately **not** generic over `T`: it
+takes the validity as two erased signals (`error`, `touched`) rather than a
+`Field<T>` ([ADR-0117](adr/0117-labelled-takes-erased-signals.md)), because a
+generic component _with children_ needs its close tag to match the opening
+generics token-for-token at every call site. ADR-0117 records as an open
+question whether that burden alone still justifies the shape. The visible
+message is gated on a `touched` flag; submit is gated disable-until-valid.
+Typing the arg moves validation into arg-**decode**, so a malformed request from
+a non-browser client fails before the fn body — the defense-in-depth path, not
+the user path. Framework `Args`, `MissingArg`, and input-side `Deserialization`
+failures carry an internal structured classification to the `/api`
+server-function response normalizer, which returns HTTP 400 and strips that
+classification before the public boundary. The public `WebError::ServerFunction`
+payload and message stay unchanged; function-body, output-serialization, and
+other internal failures remain HTTP 500. For progressive-enhancement forms the
+normalizer also removes the malformed request's framework-added redirect, while
+valid redirects remain unchanged
+([ADR-0065](adr/0065-client-side-domain-validation.md)).
 
 [Cohesive request aggregates](adr/0129-request-aggregate-server-function-inputs.md)
 are the server-fn boundary rule: multiple caller-supplied values forming one
@@ -1451,14 +1459,16 @@ than repeated inside each arm. The first instance is
 coverage-measured.
 
 A form control's `disabled` state and the payload it dispatches must come from
-**one call** ([ADR-0113](adr/0113-submit-gate-owns-its-parse.md)): the dispatch
-closure receives an already-validated value and has no error arm to swallow.
+**one authoritative parse source**
+([ADR-0113](adr/0113-submit-gate-owns-its-parse.md)): the dispatch closure
+receives an already-validated submitted value and has no error arm to swallow.
 `posts::compose_state::submit_gate` (`web/src/posts/compose_state.rs:156`) is
 the realization — a plain function, not a component — and it owns the single
-`if let Some(body) = body.parsed()` arm so form authors never write one. Gating
-on `is_valid()` while taking the payload from `parsed()` is two sources and is
-prohibited; the composer's and editor's `slug_override` and `summary` fields are
-the named outstanding debt against that target state (#907).
+`if let Some(body) = body.parsed()` arm so form authors never write one.
+Additional `Field<T>` gates may read `is_valid()` while payload assembly reads
+`parsed()`: both derive from the same private current input, and optional blank
+input is deliberately valid absence. Separately written validity caches,
+proxies, and validation expressions remain prohibited.
 
 Within a live SPA session there are **no full document loads**
 ([ADR-0076](adr/0076-no-full-load-spa-navigation.md)): navigation is

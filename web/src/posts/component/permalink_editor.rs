@@ -203,7 +203,7 @@ pub fn EditPostPage() -> impl IntoView {
                 match post.await {
                     Ok(fetched) => {
                         state.seed_from(&fetched.post);
-                        slug_field.value.set(fetched.post.post.slug.to_string());
+                        slug_field.set_value(fetched.post.post.slug.as_ref());
                         let publication = EditPublicationState::from_loaded(
                             posts::loaded_publication(
                                 fetched.post.post.published_at,

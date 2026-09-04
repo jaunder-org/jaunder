@@ -72,8 +72,9 @@ fn InviteCreateForm(action: ServerAction<Create>) -> impl IntoView {
     let ttl = Field::<InviteTtlHours>::optional();
     let (disabled, submit) = forms::server_action_submit(action, move || {
         let expires_in_hours = ttl
-            .value
-            .with(|value| value.trim().is_empty())
+            .value()
+            .trim()
+            .is_empty()
             .then_some(None)
             .or_else(|| ttl.parsed().map(Some));
         recipient

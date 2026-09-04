@@ -36,13 +36,8 @@ pub fn ProfilePage() -> impl IntoView {
                         match profile.await {
                             Ok(data) => {
                                 dn_field
-                                    .value
-                                    .set(
-                                        data.display_name.as_deref().unwrap_or_default().to_string(),
-                                    );
-                                bio_field
-                                    .value
-                                    .set(data.bio.as_deref().unwrap_or_default().to_string());
+                                    .set_value(data.display_name.as_deref().unwrap_or_default());
+                                bio_field.set_value(data.bio.as_deref().unwrap_or_default());
                                 let submit = move |_| {
                                     update_action
                                         .dispatch(api::Update {

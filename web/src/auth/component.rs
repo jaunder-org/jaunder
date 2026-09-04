@@ -68,7 +68,7 @@ fn LoginForm(action: ServerAction<Login>) -> impl IntoView {
     let (disabled, submit) = forms::server_action_submit(action, move || {
         username
             .parsed()
-            .zip(password.value.get().parse().ok())
+            .zip(password.value().parse().ok())
             .map(|(username, password)| Login {
                 username,
                 password,

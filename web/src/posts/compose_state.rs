@@ -150,12 +150,11 @@ impl ComposeState {
     /// `ComposeOptions`, so the editor sets it at the call site rather than handing
     /// the field in here to be written once.
     pub fn seed_from(&self, fetched: &AuthoredPost) {
-        // `set_input`, not a bare `value.set`: a validated field's error must be written
-        // with its value or the two disagree about the same field (#860, #907).
-        self.body.set_input(&String::from(fetched.body.clone()));
+        // Set through the validated field API so value and validity stay consistent (#860, #907).
+        self.body.set_value(&String::from(fetched.body.clone()));
         self.format.set(fetched.format);
         self.summary_field
-            .set_input(fetched.post.summary.as_deref().unwrap_or_default());
+            .set_value(fetched.post.summary.as_deref().unwrap_or_default());
         self.tags.set(fetched.post.tags.clone());
         self.tags_supplied.set(false);
     }
@@ -189,11 +188,11 @@ impl Default for ComposeState {
 /// so it cannot silently drop a click — which is exactly what #860 reported, on the two
 /// forms whose hand-written predicate had lost its body clause.
 ///
-/// Both outputs read `body.parsed()`. That is deliberate and load-bearing: it is one
-/// call, so "the control is disabled" and "there is no payload" are the same condition.
-/// [`Field::is_valid`] is **not** used — it reads a cached `error` signal that a
-/// programmatic write can leave stale while `parsed()` re-reads `value`, which would
-/// reintroduce the two-source drift under a tidier name (#907).
+/// Both outputs deliberately call `body.parsed()`: the gate couples the
+/// required body payload directly to its disabled state. [`Field::is_valid`]
+/// is also consistent after #907 because it and `parsed()` derive from the same
+/// private current input; callers use it in `also_blocked` for optional fields
+/// whose valid absence is intentionally not a parsed payload.
 ///
 /// `also_blocked` carries the caller's other reasons to disable (an invalid slug or
 /// summary). It is a plain predicate, not another field, because each form blocks on a
@@ -273,7 +272,7 @@ mod tests {
 
             state.seed_from(&crate::posts::render::test_fixtures::sample_post());
 
-            assert_eq!(state.body.value.get(), "raw");
+            assert_eq!(state.body.value(), "raw");
             assert!(state.body.is_valid(), "a seeded body is valid");
             assert!(!state.body.is_touched(), "seeding is not interaction");
             assert!(
@@ -289,12 +288,12 @@ mod tests {
     fn reset_returns_the_body_field_to_pristine() {
         Owner::new().with(|| {
             let state = ComposeState::new();
-            state.body.set_input("some text");
+            state.body.set_value("some text");
             state.body.touch();
 
             state.reset();
 
-            assert_eq!(state.body.value.get(), "");
+            assert_eq!(state.body.value(), "");
             assert!(!state.body.is_touched());
             assert!(!state.body.is_valid(), "an empty body is not a PostBody");
         });
@@ -309,10 +308,10 @@ mod tests {
 
             assert!(disabled.get(), "an empty body blocks");
 
-            body.set_input("   \n\t ");
+            body.set_value("   \n\t ");
             assert!(disabled.get(), "a whitespace-only body blocks");
 
-            body.set_input("real text");
+            body.set_value("real text");
             assert!(!disabled.get(), "a parsing body with nothing else blocking");
         });
     }
@@ -323,7 +322,7 @@ mod tests {
     fn the_gate_blocks_on_the_callers_predicate() {
         Owner::new().with(|| {
             let body = Field::<PostBody>::new();
-            body.set_input("real text");
+            body.set_value("real text");
             let blocked = RwSignal::new(true);
             let (disabled, _) = submit_gate(
                 body,
@@ -345,7 +344,7 @@ mod tests {
     fn the_click_hands_through_a_parsed_body() {
         Owner::new().with(|| {
             let body = Field::<PostBody>::new();
-            body.set_input("real text");
+            body.set_value("real text");
             let seen: RwSignal<Vec<(String, bool)>> = RwSignal::new(Vec::new());
             let (_, on_click) = submit_gate(
                 body,
@@ -386,7 +385,7 @@ mod tests {
             assert_eq!(ran.get(), 0, "an unparseable body dispatches nothing");
             assert!(disabled.get(), "and the control reporting that is disabled");
 
-            body.set_input("real text");
+            body.set_value("real text");
             on_click.run(true);
             assert_eq!(ran.get(), 1);
             assert!(!disabled.get());
@@ -426,7 +425,7 @@ mod tests {
 
             state.seed_from(&fetched);
 
-            assert_eq!(state.body.value.get(), "raw");
+            assert_eq!(state.body.value(), "raw");
             assert_eq!(state.format.get(), PostFormat::Markdown);
             assert_eq!(state.tags.get().len(), 1);
             let inputs = state.inputs(
@@ -439,7 +438,7 @@ mod tests {
                 "loaded tags remain implicit until the author changes them"
             );
             assert_eq!(
-                state.summary_field.value.get(),
+                state.summary_field.value(),
                 "",
                 "a post with no summary seeds an empty field, not the string \"None\""
             );
@@ -484,13 +483,13 @@ mod tests {
             // `default()` here rather than `new()` so the `Default` impl is exercised
             // too; it delegates, so this covers both (the `web::reactive` precedent).
             let state = ComposeState::default();
-            state.body.set_input("draft text");
+            state.body.set_value("draft text");
             state.publish_at.set("2026-01-01T00:00".to_string());
             state.format.set(PostFormat::Org);
 
             state.reset();
 
-            assert_eq!(state.body.value.get(), "");
+            assert_eq!(state.body.value(), "");
             assert_eq!(state.publish_at.get(), "");
             assert!(state.tags.get().is_empty());
             assert_eq!(

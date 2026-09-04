@@ -531,7 +531,7 @@ pub(super) fn SlugOverrideInput(slug_field: Field<Slug>) -> impl IntoView {
                 class=Some("j-field-val")
             />
             {forms::validated_error(
-                slug_field.error,
+                slug_field.error(),
                 Signal::derive(move || slug_field.is_touched()),
                 |msg| view! { <span class="error">{msg}</span> }.into_any(),
             )}

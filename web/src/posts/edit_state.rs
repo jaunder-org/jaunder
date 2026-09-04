@@ -251,7 +251,7 @@ mod tests {
     fn edit_submit_gate_routes_all_loaded_publication_states() {
         Owner::new().with(|| {
             let body = Field::<PostBody>::new();
-            body.set_input("body");
+            body.set_value("body");
             let seen = RwSignal::new(None);
             let draft_schedule = RwSignal::new("2999-02-03T10:15".to_owned());
             let draft = EditPublicationState::from_loaded(LoadedPublication::Draft, draft_schedule);
@@ -353,7 +353,7 @@ mod tests {
             let original = instant("2026-11-01T05:30:00.123456789Z");
             let schedule = ScheduledEditState::new(original, "2026-11-01T01:30".into());
             let body = Field::<PostBody>::new();
-            body.set_input("body");
+            body.set_value("body");
             let seen = RwSignal::new(None);
             let (disabled, schedule_error, click) = scheduled_submit_gate(
                 body,
@@ -376,7 +376,7 @@ mod tests {
                 ScheduledEditState::new(instant("2999-01-01T09:00:00Z"), "2999-01-01T09:00".into());
             schedule.clear();
             let body = Field::<PostBody>::new();
-            body.set_input("body");
+            body.set_value("body");
             let seen = RwSignal::new(None);
             let (disabled, schedule_error, click) = scheduled_submit_gate(
                 body,
@@ -399,7 +399,7 @@ mod tests {
                 ScheduledEditState::new(instant("2999-01-01T09:00:00Z"), "2999-01-01T09:00".into());
             schedule.set_input("not-a-date".into());
             let body = Field::<PostBody>::new();
-            body.set_input("body");
+            body.set_value("body");
             let ran = RwSignal::new(false);
             let (disabled, schedule_error, click) = scheduled_submit_gate(
                 body,
@@ -434,7 +434,7 @@ mod tests {
             click.run(());
             assert_eq!(ran.get(), 0);
 
-            body.set_input("body");
+            body.set_value("body");
             blocked.set(true);
             assert!(disabled.get(), "the caller predicate blocks");
             click.run(());

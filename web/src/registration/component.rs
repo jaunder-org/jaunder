@@ -132,7 +132,7 @@ fn RegistrationForm(
     let (disabled, submit) = forms::server_action_submit(action, move || {
         username
             .parsed()
-            .zip(password.value.get().parse().ok())
+            .zip(password.value().parse().ok())
             .map(|(username, password)| Register {
                 username,
                 password,

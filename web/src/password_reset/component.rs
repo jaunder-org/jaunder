@@ -84,7 +84,7 @@ pub fn ResetPasswordPage() -> impl IntoView {
     let (disabled, submit) = forms::server_action_submit(confirm_action, move || {
         token
             .clone()
-            .zip(new_password.value.get().parse().ok())
+            .zip(new_password.value().parse().ok())
             .map(|(token, new_password)| Confirm {
                 request: ConfirmPasswordResetRequest {
                     token,

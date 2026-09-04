@@ -16,15 +16,18 @@ where
     input.parse::<T>().err().map(|e| e.to_string())
 }
 
-/// A validated form field: its live input value + current validation error, bundled so a
-/// form declares one `Copy` handle per field. `error` always holds the true validity
-/// (`None` = valid); `touched` gates only whether the message is *shown*.
+/// A validated form field whose current error is derived from its live input.
+///
+/// The reactive primitives are private: consumers may replace the input through
+/// [`Self::set_value`] and observe the read-only error through [`Self::error`],
+/// but cannot create a stale value/error pair. `touched` gates only whether the
+/// current message is shown.
 pub struct Field<T: 'static> {
-    pub value: RwSignal<String>,
-    pub error: RwSignal<Option<String>>,
+    value: RwSignal<String>,
+    error: Memo<Option<String>>,
     touched: RwSignal<bool>,
-    // When set, an *empty* input is valid (the field may be omitted, e.g. an
-    // auto-generated slug override). A non-empty value is validated as normal.
+    // Parsing needs the same policy as the error memo: blank optional input is
+    // valid absence even when `T::from_str` itself accepts an empty string.
     optional: bool,
     // `fn() -> T`, not `T`: a phantom marker that owns no `T`, so `Field<T>` is
     // unconditionally `Send`/`Sync`/`Copy` (the reactive closures leptos builds must be
@@ -62,17 +65,11 @@ where
         Self::prefilled("")
     }
 
-    /// Seed `error` from `initial` so a pristine field is already invalid — disable-until-valid
-    /// must gate the empty form.
+    /// A required field seeded from `initial`. Its derived error makes a
+    /// pristine invalid value immediately gate submission.
     #[must_use]
     pub fn prefilled(initial: &str) -> Self {
-        Self {
-            value: RwSignal::new(initial.to_owned()),
-            error: RwSignal::new(field_error::<T>(initial)),
-            touched: RwSignal::new(false),
-            optional: false,
-            _ty: PhantomData,
-        }
+        Self::prefilled_with_optionality(initial, false)
     }
 
     /// An *optional* field: an empty value is valid (the field may be left blank),
@@ -87,30 +84,50 @@ where
     /// An optional field seeded from `initial` (empty ⇒ valid; non-empty validated).
     #[must_use]
     pub fn optional_prefilled(initial: &str) -> Self {
-        let field = Self {
-            value: RwSignal::new(initial.to_owned()),
-            error: RwSignal::new(None),
-            touched: RwSignal::new(false),
-            optional: true,
-            _ty: PhantomData,
-        };
-        // Seed validity through `error_for` (one empty-vs-validate rule, not two).
-        field.error.set(field.error_for(initial));
-        field
+        Self::prefilled_with_optionality(initial, true)
     }
 
-    /// Optionality-aware validation: an empty *optional* field is valid (`None`);
-    /// otherwise the newtype's `FromStr` error via [`field_error`]. The component's
-    /// on-input handler routes through this so rendered validity honors optionality.
-    #[must_use]
-    pub fn error_for(&self, input: &str) -> Option<String> {
-        // Trim before the empty check so a whitespace-only optional field reads as
-        // "not provided" (valid) — matching `common::text::non_empty`.
-        if self.optional && input.trim().is_empty() {
-            None
-        } else {
-            field_error::<T>(input)
+    fn prefilled_with_optionality(initial: &str, optional: bool) -> Self {
+        let value = RwSignal::new(initial.to_owned());
+        let error = Memo::new(move |_| {
+            let input = value.get();
+            // Whitespace-only optional input is "not provided", matching
+            // `common::text::non_empty`; required input still uses the newtype.
+            if optional && input.trim().is_empty() {
+                None
+            } else {
+                field_error::<T>(&input)
+            }
+        });
+        Self {
+            value,
+            error,
+            touched: RwSignal::new(false),
+            optional,
+            _ty: PhantomData,
         }
+    }
+
+    /// A snapshot of the current input value.
+    #[must_use]
+    pub fn value(&self) -> String {
+        self.value_signal().get()
+    }
+
+    /// Replace the current input without marking the field touched.
+    pub fn set_value(&self, input: &str) {
+        self.value.set(input.to_owned());
+    }
+
+    /// The read-only validation error derived from the current input.
+    #[must_use]
+    pub fn error(&self) -> Memo<Option<String>> {
+        self.error
+    }
+
+    /// The private binding handle used by the standard form controls.
+    pub(super) fn value_signal(&self) -> RwSignal<String> {
+        self.value
     }
 
     #[must_use]
@@ -118,31 +135,21 @@ where
         self.error.get().is_none()
     }
 
-    /// The already-parsed value (`None` if invalid), used to assemble request DTOs (#417).
+    /// The current parsed value. Blank optional input is valid absence even
+    /// when `T::from_str` accepts an empty string.
     #[must_use]
     pub fn parsed(&self) -> Option<T> {
-        self.value.get().parse::<T>().ok()
+        let input = self.value.get();
+        if self.optional && input.trim().is_empty() {
+            None
+        } else {
+            input.parse::<T>().ok()
+        }
     }
 
     #[must_use]
     pub fn is_touched(&self) -> bool {
         self.touched.get()
-    }
-
-    /// Write `input` and its validity together — the programmatic counterpart to the
-    /// components' on-input handler, for callers that seed a field from fetched data
-    /// rather than from a keystroke (#860).
-    ///
-    /// Writing `value` alone leaves `error` stale, and `is_valid()` reads `error` while
-    /// [`Self::parsed`] re-reads `value` — so the two then disagree about the same
-    /// field. Seeding is not interaction, so `touched` is deliberately left alone: the
-    /// editor must not flash a validation message on load.
-    ///
-    /// This is a convention, not an enforcement — `value` and `error` are `pub`, so the
-    /// desync stays expressible until they are collapsed into one derived source (#907).
-    pub fn set_input(&self, input: &str) {
-        self.value.set(input.to_owned());
-        self.error.set(self.error_for(input));
     }
 
     pub fn touch(&self) {
@@ -151,7 +158,6 @@ where
 
     pub fn reset(&self) {
         self.value.set(String::new());
-        self.error.set(field_error::<T>(""));
         self.touched.set(false);
     }
 }
@@ -227,10 +233,12 @@ mod tests {
         // Under `Field::optional`, an empty summary is "not provided" (valid → None);
         // a non-empty over-cap value still gates submit.
         Owner::new().with(|| {
-            let f = Field::<PostSummary>::optional();
-            assert_eq!(f.error_for(""), None);
-            assert!(f.error_for(&over).is_some());
-            assert_eq!(f.error_for("A short summary"), None);
+            let field = Field::<PostSummary>::optional();
+            assert_eq!(field.error().get(), None);
+            field.set_value(&over);
+            assert!(field.error().get().is_some());
+            field.set_value("A short summary");
+            assert_eq!(field.error().get(), None);
         });
     }
 
@@ -243,32 +251,32 @@ mod tests {
         // Under `Field::optional`, an empty bio is "not provided" (valid → None);
         // a non-empty over-cap value still gates submit.
         Owner::new().with(|| {
-            let f = Field::<Bio>::optional();
-            assert_eq!(f.error_for(""), None);
-            assert!(f.error_for(&over).is_some());
-            assert_eq!(f.error_for("About me"), None);
+            let field = Field::<Bio>::optional();
+            assert_eq!(field.error().get(), None);
+            field.set_value(&over);
+            assert!(field.error().get().is_some());
+            field.set_value("About me");
+            assert_eq!(field.error().get(), None);
         });
     }
 
     #[test]
-    fn field_seeds_validity_and_tracks_input() {
+    fn programmatic_value_write_recomputes_required_validation() {
         Owner::new().with(|| {
-            let f = Field::<Username>::new();
-            // A pristine empty field is seeded invalid, so disable-until-valid gates the empty form.
-            assert!(!f.is_valid());
-            assert!(!f.is_touched());
-            assert_eq!(f.parsed(), None);
-            // Mimic the component's on:input: set the value, recompute the error.
-            f.value.set("alice".to_owned());
-            f.error.set(field_error::<Username>("alice"));
-            assert!(f.is_valid());
-            assert_eq!(f.parsed(), Some(parse_username("alice")));
-            f.touch();
-            assert!(f.is_touched());
-            f.reset();
-            assert!(!f.is_valid());
-            assert!(!f.is_touched());
-            assert_eq!(f.value.get(), "");
+            let field = Field::<Username>::new();
+
+            assert!(!field.is_valid());
+            assert!(!field.is_touched());
+            assert_eq!(field.parsed(), None);
+
+            field.set_value("alice");
+            assert!(field.is_valid());
+            assert_eq!(field.parsed(), Some(parse_username("alice")));
+            assert!(!field.is_touched());
+
+            field.set_value("not a username");
+            assert!(!field.is_valid());
+            assert_eq!(field.parsed(), None);
         });
     }
 
@@ -277,11 +285,12 @@ mod tests {
         Owner::new().with(|| {
             let f = Field::<Username>::prefilled("alice");
             assert!(f.is_valid());
-            assert_eq!(f.value.get(), "alice");
-            // `Copy` and the hand-written `Clone` both alias the same underlying signals.
+            assert_eq!(f.value(), "alice");
+            // `Copy` and the hand-written `Clone` both alias the same underlying state.
             let c = Clone::clone(&f);
-            c.value.set("bob".to_owned());
-            assert_eq!(f.value.get(), "bob");
+            c.set_value("not a username");
+            assert_eq!(f.value(), "not a username");
+            assert!(!f.is_valid());
         });
     }
 
@@ -300,10 +309,26 @@ mod tests {
         Owner::new().with(|| {
             let f = Field::<Slug>::optional();
             assert!(f.is_valid()); // empty optional ⇒ valid ⇒ submit not gated
-            assert_eq!(f.error_for(""), None); // the optional empty-is-valid branch
-            assert_eq!(f.error_for("   "), None); // whitespace-only ⇒ not provided ⇒ valid
+            assert_eq!(f.error().get(), None);
             assert!(!f.is_touched());
             assert_eq!(f.parsed(), None); // Option<Slug> None for empty
+            f.set_value("   ");
+            assert!(f.is_valid()); // whitespace-only ⇒ not provided ⇒ valid
+            assert_eq!(f.error().get(), None);
+            assert_eq!(f.parsed(), None);
+        });
+    }
+
+    #[test]
+    fn optional_absence_precedes_a_permissive_parser() {
+        Owner::new().with(|| {
+            let field = Field::<String>::optional();
+
+            assert_eq!(field.parsed(), None);
+            field.set_value("   ");
+            assert_eq!(field.parsed(), None);
+            field.set_value("present");
+            assert_eq!(field.parsed(), Some("present".to_owned()));
         });
     }
 
@@ -311,11 +336,9 @@ mod tests {
     fn optional_nonempty_invalid_shows_the_newtypes_message() {
         Owner::new().with(|| {
             let f = Field::<Slug>::optional();
-            // Mimic on:input with a bad slug.
-            f.value.set("Bad Slug!".to_owned());
-            f.error.set(f.error_for("Bad Slug!"));
+            f.set_value("Bad Slug!");
             assert!(!f.is_valid());
-            assert!(f.error.get().is_some()); // exactly InvalidSlug's Display
+            assert!(f.error().get().is_some()); // exactly InvalidSlug's Display
         });
     }
 
@@ -323,8 +346,7 @@ mod tests {
     fn optional_nonempty_valid_parses() {
         Owner::new().with(|| {
             let f = Field::<Slug>::optional();
-            f.value.set("hello".to_owned());
-            f.error.set(f.error_for("hello"));
+            f.set_value("hello");
             assert!(f.is_valid());
             assert_eq!(f.parsed(), "hello".parse::<Slug>().ok());
         });
@@ -335,7 +357,24 @@ mod tests {
         Owner::new().with(|| {
             let f = Field::<Slug>::optional_prefilled("my-post");
             assert!(f.is_valid());
-            assert_eq!(f.value.get(), "my-post");
+            assert_eq!(f.value(), "my-post");
+        });
+    }
+
+    #[test]
+    fn optional_reset_restores_valid_untouched_absence() {
+        Owner::new().with(|| {
+            let field = Field::<Slug>::optional();
+            field.set_value("Bad Slug!");
+            field.touch();
+
+            field.reset();
+
+            assert_eq!(field.value(), "");
+            assert!(field.is_valid());
+            assert_eq!(field.parsed(), None);
+            assert_eq!(field.error().get(), None);
+            assert!(!field.is_touched());
         });
     }
 
@@ -347,49 +386,25 @@ mod tests {
         });
     }
 
-    // `set_input` (#860) is the programmatic counterpart to the components' on-input
-    // handler — the single door a seeding caller uses; the tests above spell that
-    // handler by hand (`value.set` then `error.set`) to pin what it must match.
     #[test]
-    fn set_input_writes_value_and_error_together() {
-        Owner::new().with(|| {
-            let field = Field::<Slug>::new();
-            field.set_input("hello");
-            assert_eq!(field.value.get(), "hello");
-            assert!(field.is_valid(), "a valid slug leaves no error");
-
-            field.set_input("Bad Slug!");
-            assert_eq!(field.value.get(), "Bad Slug!");
-            assert!(!field.is_valid(), "an invalid slug sets the error");
-            assert_eq!(
-                field.is_valid(),
-                field.parsed().is_some(),
-                "is_valid and parsed must agree after a programmatic write"
-            );
-        });
-    }
-
-    #[test]
-    fn set_input_honors_optionality() {
-        // Routes through `error_for`, not `field_error`: an empty *optional* field is
-        // "not provided" (valid), while an empty *required* one is not.
+    fn set_value_honors_optionality() {
         Owner::new().with(|| {
             let optional = Field::<Slug>::optional();
-            optional.set_input("");
+            optional.set_value("");
             assert!(optional.is_valid(), "an empty optional field is valid");
 
             let required = Field::<Slug>::new();
-            required.set_input("");
+            required.set_value("");
             assert!(!required.is_valid(), "an empty required field is not valid");
         });
     }
 
     #[test]
-    fn set_input_does_not_touch_the_field() {
+    fn set_value_does_not_touch_the_field() {
         // Seeding is not interaction: touching here would flash an error on editor load.
         Owner::new().with(|| {
             let field = Field::<Slug>::new();
-            field.set_input("Bad Slug!");
+            field.set_value("Bad Slug!");
             assert!(!field.is_touched());
         });
     }
