@@ -3,7 +3,7 @@
   "sources": {
     "storage/src/backup/archive.rs": "399fbb7beadf1261ce2e6813411517fb3ec8bc96",
     "storage/src/backup/catalog.rs": "5439b4f250cbbb8fb7b4046e1cf8e98bb61a0045",
-    "storage/src/backup/format.rs": "a0494c5e84f1b6ae7103ed9bdf45de51d3120c54",
+    "storage/src/backup/format.rs": "279d26481544cf8975a54afd0d939288f7c5e58b",
     "storage/src/backup/media.rs": "c3e5a55a77658abcb591c30cea75467f11caabfc",
     "storage/src/backup/orchestration.rs": "95d3ac02e193829ba77819a3752aa9a10f2d192c",
     "storage/src/backup/restore_bind.rs": "a71dab11e7f6a006cb19fc7176f8ab102b749994",

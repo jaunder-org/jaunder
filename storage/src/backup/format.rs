@@ -351,7 +351,8 @@ mod tests {
         fs::write(
             temp.path().join("manifest.json"),
             r#"{"format_version":"1"}"#,
-        )?;
+        )
+        .expect("write malformed manifest");
 
         let error = read_manifest(temp.path()).expect_err("malformed manifest");
         assert!(matches!(error, BackupError::InvalidBackup(_)));
