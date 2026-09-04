@@ -430,24 +430,24 @@ mod tests {
             (
                 FeedSurface::Site,
                 "p.published_at <= $1",
-                "(r.rn <= $2 OR r.published_at >= $3)",
+                "(r.rn <= $2 OR $3 IS NULL OR r.published_at >= $3)",
             ),
             (
                 FeedSurface::User {
                     username: username.clone(),
                 },
                 "u.username = $2",
-                "(r.rn <= $3 OR r.published_at >= $4)",
+                "(r.rn <= $3 OR $4 IS NULL OR r.published_at >= $4)",
             ),
             (
                 FeedSurface::SiteTag { tag: tag.clone() },
                 "t.tag_slug = $2",
-                "(r.rn <= $3 OR r.published_at >= $4)",
+                "(r.rn <= $3 OR $4 IS NULL OR r.published_at >= $4)",
             ),
             (
                 FeedSurface::UserTag { username, tag },
                 "u.username = $2",
-                "(r.rn <= $4 OR r.published_at >= $5)",
+                "(r.rn <= $4 OR $5 IS NULL OR r.published_at >= $5)",
             ),
         ];
 
