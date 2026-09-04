@@ -54,15 +54,14 @@ mod tests {
     // build.
     #[test]
     fn scope_newtype_derefs_to_its_invalidator() {
-        let owner = Owner::new();
-        owner.set();
-        let scope = TestScope(Invalidator::new());
-        let copied = scope; // Copy
-        let v0 = scope.track(); // via Deref
-        copied.notify(); // both wrap the same inner signal
-        let v1 = scope.track();
-        drop(owner);
-        assert_ne!(v1, v0, "Deref reaches the inner Invalidator");
+        Owner::new().with(|| {
+            let scope = TestScope(Invalidator::new());
+            let copied = scope; // Copy
+            let v0 = scope.track(); // via Deref
+            copied.notify(); // both wrap the same inner signal
+            let v1 = scope.track();
+            assert_ne!(v1, v0, "Deref reaches the inner Invalidator");
+        });
     }
 
     // The load-bearing property: each `notify` changes the value a `Resource` source
@@ -71,16 +70,15 @@ mod tests {
     // does not run in a host test — so they are exercised by the audiences e2e.)
     #[test]
     fn notify_changes_the_tracked_revision() {
-        let owner = Owner::new();
-        owner.set();
-        let inv = Invalidator::default(); // also covers `new` (Default delegates to it)
-        let v0 = inv.track();
-        inv.notify();
-        let v1 = inv.track();
-        inv.notify();
-        let v2 = inv.track();
-        drop(owner);
-        assert_ne!(v1, v0, "notify must change the tracked revision");
-        assert_ne!(v2, v1, "each notify must change it again");
+        Owner::new().with(|| {
+            let inv = Invalidator::default(); // also covers `new` (Default delegates to it)
+            let v0 = inv.track();
+            inv.notify();
+            let v1 = inv.track();
+            inv.notify();
+            let v2 = inv.track();
+            assert_ne!(v1, v0, "notify must change the tracked revision");
+            assert_ne!(v2, v1, "each notify must change it again");
+        });
     }
 }

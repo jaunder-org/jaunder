@@ -930,38 +930,39 @@ mod tests {
 
     #[test]
     fn create_settlement_classifies_published_and_draft_outcomes() {
-        let owner = Owner::new();
-        owner.set();
-        let publications = RwSignal::new(Vec::new());
-        let success_count = RwSignal::new(0_u8);
-        let on_mutation =
-            Callback::new(move |published| publications.update(|values| values.push(published)));
-        let on_success = Callback::new(move |_created| success_count.update(|count| *count += 1));
-        let published_at = "2026-01-02T00:00:00Z".parse().expect("a real instant");
+        Owner::new().with(|| {
+            let publications = RwSignal::new(Vec::new());
+            let success_count = RwSignal::new(0_u8);
+            let on_mutation = Callback::new(move |published| {
+                publications.update(|values| values.push(published));
+            });
+            let on_success =
+                Callback::new(move |_created| success_count.update(|count| *count += 1));
+            let published_at = "2026-01-02T00:00:00Z".parse().expect("a real instant");
 
-        assert!(notify_create_settlement(
-            MutationOutcome::Confirmed(saved_post(Some(published_at))),
-            Some(on_mutation),
-            on_success,
-        ));
-        assert!(!notify_create_settlement(
-            MutationOutcome::CommitIndeterminate(saved_post(Some(published_at))),
-            Some(on_mutation),
-            on_success,
-        ));
-        assert!(notify_create_settlement(
-            MutationOutcome::Confirmed(saved_post(None)),
-            Some(on_mutation),
-            on_success,
-        ));
-        assert!(!notify_create_settlement(
-            MutationOutcome::CommitIndeterminate(saved_post(None)),
-            Some(on_mutation),
-            on_success,
-        ));
-        assert_eq!(publications.get_untracked(), [true, true, false, false]);
-        assert_eq!(success_count.get_untracked(), 2);
-        drop(owner);
+            assert!(notify_create_settlement(
+                MutationOutcome::Confirmed(saved_post(Some(published_at))),
+                Some(on_mutation),
+                on_success,
+            ));
+            assert!(!notify_create_settlement(
+                MutationOutcome::CommitIndeterminate(saved_post(Some(published_at))),
+                Some(on_mutation),
+                on_success,
+            ));
+            assert!(notify_create_settlement(
+                MutationOutcome::Confirmed(saved_post(None)),
+                Some(on_mutation),
+                on_success,
+            ));
+            assert!(!notify_create_settlement(
+                MutationOutcome::CommitIndeterminate(saved_post(None)),
+                Some(on_mutation),
+                on_success,
+            ));
+            assert_eq!(publications.get_untracked(), [true, true, false, false]);
+            assert_eq!(success_count.get_untracked(), 2);
+        });
     }
 
     #[test]
@@ -1459,16 +1460,6 @@ mod tests {
 
     // --- parent-callback plumbing ---
 
-    /// Run `body` under a fresh reactive `Owner` (the `media::upload_state` /
-    /// `forms::Field` convention), so `RwSignal`s and `Callback`s work host-side
-    /// without a browser.
-    fn with_owner(body: impl FnOnce()) {
-        let owner = Owner::new();
-        owner.set();
-        body();
-        drop(owner);
-    }
-
     fn history_page(
         revisions: Vec<RevisionHistoryMetadata>,
         next_cursor: Option<RevisionHistoryCursor>,
@@ -1495,7 +1486,7 @@ mod tests {
 
     #[test]
     fn history_list_load_transition_appends_rows_and_adopts_paging_state() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let cursor = RevisionHistoryCursor {
                 revision_id: common::ids::RevisionId::from(9),
             };
@@ -1522,7 +1513,7 @@ mod tests {
 
     #[test]
     fn history_list_failure_is_visible_and_reenables_retry() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let cursor = RevisionHistoryCursor {
                 revision_id: common::ids::RevisionId::from(9),
             };
@@ -1554,7 +1545,7 @@ mod tests {
 
     #[test]
     fn notify_runs_a_supplied_callback() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let fired = RwSignal::new(false);
             notify(Some(recorder(fired)));
             assert!(fired.get(), "the callback must actually run");
@@ -1563,7 +1554,7 @@ mod tests {
 
     #[test]
     fn notify_without_a_callback_is_a_no_op() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let fired = RwSignal::new(false);
             // Build the callback a caller WOULD have passed, then pass none: the sink
             // is writable, so an unwritten sink is an observation, not a vacuum.
@@ -1579,7 +1570,7 @@ mod tests {
     fn the_preferred_callback_wins_when_both_are_supplied() {
         // `PostCard`'s unpublish arm: a caller that supplied `on_unpublish` must not
         // also get `on_mutate` — the two are distinct notifications (#592).
-        with_owner(|| {
+        Owner::new().with(|| {
             let preferred = RwSignal::new(false);
             let shared = RwSignal::new(false);
             notify_with_fallback(Some(recorder(preferred)), Some(recorder(shared)));
@@ -1590,7 +1581,7 @@ mod tests {
 
     #[test]
     fn the_shared_callback_runs_when_the_preferred_one_is_absent() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let shared = RwSignal::new(false);
             notify_with_fallback(None, Some(recorder(shared)));
             assert!(
@@ -1602,7 +1593,7 @@ mod tests {
 
     #[test]
     fn a_caller_that_supplied_neither_callback_is_fine() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let never = RwSignal::new(false);
             let unsupplied = Some(recorder(never));
             notify_with_fallback(None, None);

@@ -271,19 +271,9 @@ mod tests {
         }
     }
 
-    /// Run `body` under a fresh reactive `Owner` (the `web::reactive` /
-    /// `forms::Field` / `tags::input_state` convention), so `RwSignal`s work
-    /// host-side without a browser.
-    fn with_owner(body: impl FnOnce()) {
-        let owner = Owner::new();
-        owner.set();
-        body();
-        drop(owner);
-    }
-
     #[test]
     fn default_status_is_never_loaded() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             assert!(state.rows.get().is_empty());
             assert_eq!(state.cursor.get(), None);
@@ -294,7 +284,7 @@ mod tests {
 
     #[test]
     fn adopt_replaces_rows_cursor_and_has_more() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.adopt(page_with(
                 vec![sample_summary()],
@@ -309,7 +299,7 @@ mod tests {
 
     #[test]
     fn adopt_settles_to_idle_and_clears_a_prior_failure() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.fail(WebError::validation("boom"));
             state.adopt(page_with(vec![sample_summary()], None, false));
@@ -324,7 +314,7 @@ mod tests {
 
     #[test]
     fn adopt_seed_adopts_only_when_seeded() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.adopt_seed(None);
             assert!(state.rows.get().is_empty());
@@ -342,7 +332,7 @@ mod tests {
 
     #[test]
     fn apply_ok_adopts_and_apply_err_empties() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.apply(Ok(page_with(
                 vec![sample_summary()],
@@ -368,7 +358,7 @@ mod tests {
 
     #[test]
     fn unidentified_empties_the_timeline_and_marks_the_status() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.adopt(page_with(vec![sample_summary()], None, true));
             state.unidentified();
@@ -383,7 +373,7 @@ mod tests {
     // therefore refetches page 1 forever — cannot pass.
     #[test]
     fn append_ok_extends_rows_and_advances_the_cursor() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.adopt(page_with(
                 vec![sample_summary()],
@@ -414,7 +404,7 @@ mod tests {
     // clears. The asymmetry is deliberate: page 1 succeeded, only page 2 failed.
     #[test]
     fn append_err_marks_the_status_and_retains_the_rows() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.adopt(page_with(
                 vec![sample_summary()],
@@ -443,7 +433,7 @@ mod tests {
 
     #[test]
     fn begin_load_more_guards_then_marks_in_flight() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
 
             state.has_more.set(false);
@@ -472,7 +462,7 @@ mod tests {
 
     #[test]
     fn begin_load_more_without_a_cursor_claims_the_slot_anyway() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.has_more.set(true);
             assert_eq!(
@@ -484,7 +474,7 @@ mod tests {
 
     #[test]
     fn fail_empties_the_timeline_and_records_the_message() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.adopt(page_with(
                 vec![sample_summary()],
@@ -507,7 +497,7 @@ mod tests {
 
     #[test]
     fn paint_reports_failure_on_the_error_axis() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.fail(WebError::validation("boom"));
             assert_eq!(
@@ -521,7 +511,7 @@ mod tests {
 
     #[test]
     fn paint_reports_loading_before_the_first_load() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             assert_eq!(
                 state.paint(Some(TagCtx::SiteWide)),
@@ -533,7 +523,7 @@ mod tests {
 
     #[test]
     fn paint_reports_unidentified_when_the_fetch_found_nobody() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.unidentified();
             assert_eq!(
@@ -551,7 +541,7 @@ mod tests {
 
     #[test]
     fn paint_reports_rows_once_loaded_with_a_context() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.adopt(page_with(vec![sample_summary()], None, false));
             assert_eq!(
@@ -574,7 +564,7 @@ mod tests {
 
     #[test]
     fn paint_reports_unidentified_when_the_route_context_is_absent() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.adopt(page_with(vec![sample_summary()], None, false));
             assert_eq!(state.paint(None), Ok(TimelinePaint::Unidentified));
@@ -592,7 +582,7 @@ mod tests {
     // browser-level backstop.
     #[test]
     fn a_seeded_timeline_paints_rows_immediately_never_loading() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = TimelineState::default();
             state.adopt_seed(Some(page_with(vec![sample_summary()], None, false)));
             assert_eq!(

@@ -106,15 +106,6 @@ mod tests {
     use crate::timeline::LoadStatus;
     use common::test_support::parse_username;
 
-    /// Run `body` under a fresh reactive `Owner` (the `timeline::state` convention),
-    /// so `RwSignal`s work host-side without a browser.
-    fn with_owner(body: impl FnOnce()) {
-        let owner = Owner::new();
-        owner.set();
-        body();
-        drop(owner);
-    }
-
     fn viewer(name: &str) -> SessionUser {
         SessionUser {
             username: parse_username(name),
@@ -204,7 +195,7 @@ mod tests {
 
     #[test]
     fn adopt_username_publishes_and_then_holds_steady() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = CockpitState::default();
             assert_eq!(state.username.get(), None);
 
@@ -221,7 +212,7 @@ mod tests {
 
     #[test]
     fn apply_ok_some_adopts_both_the_identity_and_the_page() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = CockpitState::default();
             state.apply(Ok(Some((parse_username("bob"), page()))));
             assert_eq!(state.username.get(), Some(parse_username("bob")));
@@ -232,7 +223,7 @@ mod tests {
 
     #[test]
     fn apply_ok_none_marks_the_timeline_unidentified_for_the_login_bounce() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = CockpitState::default();
             state.apply(Ok(Some((parse_username("bob"), page()))));
             state.apply(Ok(None));
@@ -248,7 +239,7 @@ mod tests {
 
     #[test]
     fn apply_err_records_the_failure_on_the_timeline() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = CockpitState::default();
             state.apply(Err(WebError::validation("boom")));
             assert_eq!(
@@ -264,7 +255,7 @@ mod tests {
     // bitwise copy would silently split the two views of the same signals.
     #[test]
     fn the_bundle_is_copy_and_both_copies_share_one_signal() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = CockpitState::default();
             let alias = state;
             alias.adopt_username(parse_username("bob"));

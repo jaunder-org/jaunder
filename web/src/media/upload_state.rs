@@ -190,16 +190,6 @@ mod tests {
         parse_root_relative_url,
     };
 
-    /// Run `body` under a fresh reactive `Owner` (the `timeline::state` /
-    /// `forms::Field` / `tags::input_state` convention), so `RwSignal`s and
-    /// `Callback`s work host-side without a browser.
-    fn with_owner(body: impl FnOnce()) {
-        let owner = Owner::new();
-        owner.set();
-        body();
-        drop(owner);
-    }
-
     fn url() -> RootRelativeUrl {
         parse_root_relative_url("/media/upload/abc/cat.png")
     }
@@ -322,7 +312,7 @@ mod tests {
 
     #[test]
     fn notify_fires_only_the_matching_callback() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let sinks = Sinks::new();
             let callbacks = sinks.callbacks();
 
@@ -352,7 +342,7 @@ mod tests {
 
     #[test]
     fn notify_without_callbacks_is_a_no_op_on_both_arms() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let sinks = Sinks::new();
             // First prove the sinks are writable through `notify` itself, so the
             // assertions below distinguish "no callback fired" from "nothing here
@@ -392,7 +382,7 @@ mod tests {
 
     #[test]
     fn notify_reports_an_indeterminate_upload_when_only_on_error_is_supplied() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let sinks = Sinks::new();
             let callbacks = sinks.error_only();
 
@@ -428,7 +418,7 @@ mod tests {
 
     #[test]
     fn a_new_control_is_idle_and_empty() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = UploadState::new(true);
             assert!(!state.uploading.get());
             assert_eq!(state.last_media_url.get(), None);
@@ -438,7 +428,7 @@ mod tests {
 
     #[test]
     fn begin_marks_the_upload_in_flight() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = UploadState::new(false);
             state.begin();
             assert!(state.uploading.get());
@@ -447,7 +437,7 @@ mod tests {
 
     #[test]
     fn settle_clears_the_in_flight_flag_on_every_outcome() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = UploadState::new(false);
             state.begin();
             state.settle(Ok(MutationOutcome::Confirmed(response())), no_callbacks());
@@ -468,7 +458,7 @@ mod tests {
 
     #[test]
     fn settle_records_the_url_and_clears_a_stale_error_when_showing_results() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = UploadState::new(true);
             state.settle(Err(WebError::validation("boom")), no_callbacks());
             assert_eq!(state.error.get(), Some("boom".to_string()));
@@ -486,7 +476,7 @@ mod tests {
 
     #[test]
     fn settle_renders_an_indeterminate_upload_as_reload_and_verify_error() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = UploadState::new(true);
             state.settle(Ok(MutationOutcome::Confirmed(response())), no_callbacks());
             assert_eq!(state.last_media_url.get(), Some(url()));
@@ -512,7 +502,7 @@ mod tests {
 
     #[test]
     fn settle_records_nothing_when_not_showing_results() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let state = UploadState::new(false);
             state.settle(Ok(MutationOutcome::Confirmed(response())), no_callbacks());
             assert_eq!(state.last_media_url.get(), None);
@@ -530,7 +520,7 @@ mod tests {
     // outputs, and `MediaPage` relies on the callback while displaying nothing.
     #[test]
     fn settle_notifies_the_caller_even_when_not_showing_results() {
-        with_owner(|| {
+        Owner::new().with(|| {
             let sinks = Sinks::new();
             let callbacks = sinks.callbacks();
             let state = UploadState::new(false);

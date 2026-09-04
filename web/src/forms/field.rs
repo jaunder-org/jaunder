@@ -226,13 +226,12 @@ mod tests {
         assert_eq!(field_error::<PostSummary>("A short summary"), None);
         // Under `Field::optional`, an empty summary is "not provided" (valid → None);
         // a non-empty over-cap value still gates submit.
-        let owner = Owner::new();
-        owner.set();
-        let f = Field::<PostSummary>::optional();
-        assert_eq!(f.error_for(""), None);
-        assert!(f.error_for(&over).is_some());
-        assert_eq!(f.error_for("A short summary"), None);
-        drop(owner);
+        Owner::new().with(|| {
+            let f = Field::<PostSummary>::optional();
+            assert_eq!(f.error_for(""), None);
+            assert!(f.error_for(&over).is_some());
+            assert_eq!(f.error_for("A short summary"), None);
+        });
     }
 
     #[test]
@@ -243,58 +242,54 @@ mod tests {
         assert_eq!(field_error::<Bio>("About me"), None);
         // Under `Field::optional`, an empty bio is "not provided" (valid → None);
         // a non-empty over-cap value still gates submit.
-        let owner = Owner::new();
-        owner.set();
-        let f = Field::<Bio>::optional();
-        assert_eq!(f.error_for(""), None);
-        assert!(f.error_for(&over).is_some());
-        assert_eq!(f.error_for("About me"), None);
-        drop(owner);
+        Owner::new().with(|| {
+            let f = Field::<Bio>::optional();
+            assert_eq!(f.error_for(""), None);
+            assert!(f.error_for(&over).is_some());
+            assert_eq!(f.error_for("About me"), None);
+        });
     }
 
     #[test]
     fn field_seeds_validity_and_tracks_input() {
-        let owner = Owner::new();
-        owner.set();
-        let f = Field::<Username>::new();
-        // A pristine empty field is seeded invalid, so disable-until-valid gates the empty form.
-        assert!(!f.is_valid());
-        assert!(!f.is_touched());
-        assert_eq!(f.parsed(), None);
-        // Mimic the component's on:input: set the value, recompute the error.
-        f.value.set("alice".to_owned());
-        f.error.set(field_error::<Username>("alice"));
-        assert!(f.is_valid());
-        assert_eq!(f.parsed(), Some(parse_username("alice")));
-        f.touch();
-        assert!(f.is_touched());
-        f.reset();
-        assert!(!f.is_valid());
-        assert!(!f.is_touched());
-        assert_eq!(f.value.get(), "");
-        drop(owner);
+        Owner::new().with(|| {
+            let f = Field::<Username>::new();
+            // A pristine empty field is seeded invalid, so disable-until-valid gates the empty form.
+            assert!(!f.is_valid());
+            assert!(!f.is_touched());
+            assert_eq!(f.parsed(), None);
+            // Mimic the component's on:input: set the value, recompute the error.
+            f.value.set("alice".to_owned());
+            f.error.set(field_error::<Username>("alice"));
+            assert!(f.is_valid());
+            assert_eq!(f.parsed(), Some(parse_username("alice")));
+            f.touch();
+            assert!(f.is_touched());
+            f.reset();
+            assert!(!f.is_valid());
+            assert!(!f.is_touched());
+            assert_eq!(f.value.get(), "");
+        });
     }
 
     #[test]
     fn field_prefilled_seeds_from_initial_and_aliases_on_copy() {
-        let owner = Owner::new();
-        owner.set();
-        let f = Field::<Username>::prefilled("alice");
-        assert!(f.is_valid());
-        assert_eq!(f.value.get(), "alice");
-        // `Copy` and the hand-written `Clone` both alias the same underlying signals.
-        let c = Clone::clone(&f);
-        c.value.set("bob".to_owned());
-        assert_eq!(f.value.get(), "bob");
-        drop(owner);
+        Owner::new().with(|| {
+            let f = Field::<Username>::prefilled("alice");
+            assert!(f.is_valid());
+            assert_eq!(f.value.get(), "alice");
+            // `Copy` and the hand-written `Clone` both alias the same underlying signals.
+            let c = Clone::clone(&f);
+            c.value.set("bob".to_owned());
+            assert_eq!(f.value.get(), "bob");
+        });
     }
 
     #[test]
     fn field_default_matches_new() {
-        let owner = Owner::new();
-        owner.set();
-        assert!(!Field::<Username>::default().is_valid());
-        drop(owner);
+        Owner::new().with(|| {
+            assert!(!Field::<Username>::default().is_valid());
+        });
     }
 
     // Optional fields (#408): empty is *valid* (e.g. an auto-generated slug
@@ -302,59 +297,54 @@ mod tests {
     // non-empty invalid entry still gates it.
     #[test]
     fn optional_empty_field_is_valid_and_submittable() {
-        let owner = Owner::new();
-        owner.set();
-        let f = Field::<Slug>::optional();
-        assert!(f.is_valid()); // empty optional ⇒ valid ⇒ submit not gated
-        assert_eq!(f.error_for(""), None); // the optional empty-is-valid branch
-        assert_eq!(f.error_for("   "), None); // whitespace-only ⇒ not provided ⇒ valid
-        assert!(!f.is_touched());
-        assert_eq!(f.parsed(), None); // Option<Slug> None for empty
-        drop(owner);
+        Owner::new().with(|| {
+            let f = Field::<Slug>::optional();
+            assert!(f.is_valid()); // empty optional ⇒ valid ⇒ submit not gated
+            assert_eq!(f.error_for(""), None); // the optional empty-is-valid branch
+            assert_eq!(f.error_for("   "), None); // whitespace-only ⇒ not provided ⇒ valid
+            assert!(!f.is_touched());
+            assert_eq!(f.parsed(), None); // Option<Slug> None for empty
+        });
     }
 
     #[test]
     fn optional_nonempty_invalid_shows_the_newtypes_message() {
-        let owner = Owner::new();
-        owner.set();
-        let f = Field::<Slug>::optional();
-        // Mimic on:input with a bad slug.
-        f.value.set("Bad Slug!".to_owned());
-        f.error.set(f.error_for("Bad Slug!"));
-        assert!(!f.is_valid());
-        assert!(f.error.get().is_some()); // exactly InvalidSlug's Display
-        drop(owner);
+        Owner::new().with(|| {
+            let f = Field::<Slug>::optional();
+            // Mimic on:input with a bad slug.
+            f.value.set("Bad Slug!".to_owned());
+            f.error.set(f.error_for("Bad Slug!"));
+            assert!(!f.is_valid());
+            assert!(f.error.get().is_some()); // exactly InvalidSlug's Display
+        });
     }
 
     #[test]
     fn optional_nonempty_valid_parses() {
-        let owner = Owner::new();
-        owner.set();
-        let f = Field::<Slug>::optional();
-        f.value.set("hello".to_owned());
-        f.error.set(f.error_for("hello"));
-        assert!(f.is_valid());
-        assert_eq!(f.parsed(), "hello".parse::<Slug>().ok());
-        drop(owner);
+        Owner::new().with(|| {
+            let f = Field::<Slug>::optional();
+            f.value.set("hello".to_owned());
+            f.error.set(f.error_for("hello"));
+            assert!(f.is_valid());
+            assert_eq!(f.parsed(), "hello".parse::<Slug>().ok());
+        });
     }
 
     #[test]
     fn optional_prefilled_seeds_valid_from_existing_slug() {
-        let owner = Owner::new();
-        owner.set();
-        let f = Field::<Slug>::optional_prefilled("my-post");
-        assert!(f.is_valid());
-        assert_eq!(f.value.get(), "my-post");
-        drop(owner);
+        Owner::new().with(|| {
+            let f = Field::<Slug>::optional_prefilled("my-post");
+            assert!(f.is_valid());
+            assert_eq!(f.value.get(), "my-post");
+        });
     }
 
     #[test]
     fn required_new_still_invalid_on_empty() {
         // Regression: the required path is unchanged — an empty `new()` is invalid.
-        let owner = Owner::new();
-        owner.set();
-        assert!(!Field::<Slug>::new().is_valid());
-        drop(owner);
+        Owner::new().with(|| {
+            assert!(!Field::<Slug>::new().is_valid());
+        });
     }
 
     // `set_input` (#860) is the programmatic counterpart to the components' on-input
@@ -362,54 +352,45 @@ mod tests {
     // handler by hand (`value.set` then `error.set`) to pin what it must match.
     #[test]
     fn set_input_writes_value_and_error_together() {
-        let owner = Owner::new();
-        owner.set();
+        Owner::new().with(|| {
+            let field = Field::<Slug>::new();
+            field.set_input("hello");
+            assert_eq!(field.value.get(), "hello");
+            assert!(field.is_valid(), "a valid slug leaves no error");
 
-        let field = Field::<Slug>::new();
-        field.set_input("hello");
-        assert_eq!(field.value.get(), "hello");
-        assert!(field.is_valid(), "a valid slug leaves no error");
-
-        field.set_input("Bad Slug!");
-        assert_eq!(field.value.get(), "Bad Slug!");
-        assert!(!field.is_valid(), "an invalid slug sets the error");
-        assert_eq!(
-            field.is_valid(),
-            field.parsed().is_some(),
-            "is_valid and parsed must agree after a programmatic write"
-        );
-
-        drop(owner);
+            field.set_input("Bad Slug!");
+            assert_eq!(field.value.get(), "Bad Slug!");
+            assert!(!field.is_valid(), "an invalid slug sets the error");
+            assert_eq!(
+                field.is_valid(),
+                field.parsed().is_some(),
+                "is_valid and parsed must agree after a programmatic write"
+            );
+        });
     }
 
     #[test]
     fn set_input_honors_optionality() {
         // Routes through `error_for`, not `field_error`: an empty *optional* field is
         // "not provided" (valid), while an empty *required* one is not.
-        let owner = Owner::new();
-        owner.set();
+        Owner::new().with(|| {
+            let optional = Field::<Slug>::optional();
+            optional.set_input("");
+            assert!(optional.is_valid(), "an empty optional field is valid");
 
-        let optional = Field::<Slug>::optional();
-        optional.set_input("");
-        assert!(optional.is_valid(), "an empty optional field is valid");
-
-        let required = Field::<Slug>::new();
-        required.set_input("");
-        assert!(!required.is_valid(), "an empty required field is not valid");
-
-        drop(owner);
+            let required = Field::<Slug>::new();
+            required.set_input("");
+            assert!(!required.is_valid(), "an empty required field is not valid");
+        });
     }
 
     #[test]
     fn set_input_does_not_touch_the_field() {
         // Seeding is not interaction: touching here would flash an error on editor load.
-        let owner = Owner::new();
-        owner.set();
-
-        let field = Field::<Slug>::new();
-        field.set_input("Bad Slug!");
-        assert!(!field.is_touched());
-
-        drop(owner);
+        Owner::new().with(|| {
+            let field = Field::<Slug>::new();
+            field.set_input("Bad Slug!");
+            assert!(!field.is_touched());
+        });
     }
 }

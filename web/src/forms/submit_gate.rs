@@ -29,31 +29,32 @@ mod tests {
 
     #[test]
     fn one_constructor_controls_gate_and_payload() {
-        let owner = Owner::new();
-        owner.set();
-        let input = RwSignal::new(String::new());
-        let pending = RwSignal::new(false);
-        let seen = RwSignal::new(None::<String>);
-        let (disabled, submit) = request_submit_gate(
-            pending.into(),
-            Callback::new(move |()| input.with(|value| (!value.is_empty()).then(|| value.clone()))),
-            Callback::new(move |value| seen.set(Some(value))),
-        );
+        Owner::new().with(|| {
+            let input = RwSignal::new(String::new());
+            let pending = RwSignal::new(false);
+            let seen = RwSignal::new(None::<String>);
+            let (disabled, submit) = request_submit_gate(
+                pending.into(),
+                Callback::new(move |()| {
+                    input.with(|value| (!value.is_empty()).then(|| value.clone()))
+                }),
+                Callback::new(move |value| seen.set(Some(value))),
+            );
 
-        assert!(disabled.get());
-        submit.run(());
-        assert_eq!(seen.get(), None);
+            assert!(disabled.get());
+            submit.run(());
+            assert_eq!(seen.get(), None);
 
-        input.set("request".to_owned());
-        assert!(!disabled.get());
-        submit.run(());
-        assert_eq!(seen.get().as_deref(), Some("request"));
+            input.set("request".to_owned());
+            assert!(!disabled.get());
+            submit.run(());
+            assert_eq!(seen.get().as_deref(), Some("request"));
 
-        seen.set(None);
-        pending.set(true);
-        assert!(disabled.get());
-        submit.run(());
-        assert_eq!(seen.get(), None);
-        drop(owner);
+            seen.set(None);
+            pending.set(true);
+            assert!(disabled.get());
+            submit.run(());
+            assert_eq!(seen.get(), None);
+        });
     }
 }
