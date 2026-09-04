@@ -262,6 +262,7 @@ mod tests {
             format!("\"sha256-{}\"", "0".repeat(64)).as_str()
         );
     }
+
     #[test]
     fn fingerprint_validates_its_persistent_representation() {
         let value = fingerprint(&metadata(), &[item(1)]);
@@ -274,79 +275,114 @@ mod tests {
         );
         assert!("A".repeat(64).parse::<FeedSemanticFingerprint>().is_err());
     }
-    #[test]
-    fn fingerprint_covers_every_metadata_and_item_member_in_order() {
-        let meta = metadata();
-        let items = vec![item(1), item(2)];
-        let baseline = fingerprint(&meta, &items);
-        let mut changed = metadata();
-        changed.title = "Other".parse().unwrap();
-        assert_ne!(baseline, fingerprint(&changed, &items));
-        changed = metadata();
-        changed.description = None;
-        assert_ne!(baseline, fingerprint(&changed, &items));
-        changed = metadata();
-        changed.canonical_url = parse_url("https://other.example/");
-        assert_ne!(baseline, fingerprint(&changed, &items));
-        changed = metadata();
-        changed.self_url = parse_url("https://example.com/other.atom");
-        assert_ne!(baseline, fingerprint(&changed, &items));
-        changed = metadata();
-        changed.hub_url = None;
-        assert_ne!(baseline, fingerprint(&changed, &items));
-        for mutate in [
-            |item: &mut FeedItem| item.id = PostId::from(9),
-            |item: &mut FeedItem| item.title = None,
-            |item: &mut FeedItem| item.permalink = parse_url("https://example.com/other"),
-            |item: &mut FeedItem| item.summary = None,
-            |item: &mut FeedItem| item.content_html = rendered_html("<p>Other</p>"),
-            |item: &mut FeedItem| item.published_at = time(3),
-            |item: &mut FeedItem| item.updated_at = time(3),
-            |item: &mut FeedItem| item.tags.reverse(),
-        ] {
-            let mut changed_items = items.clone();
-            mutate(&mut changed_items[0]);
-            assert_ne!(baseline, fingerprint(&meta, &changed_items));
-        }
-        let mut reordered = items.clone();
-        reordered.reverse();
-        assert_ne!(baseline, fingerprint(&meta, &reordered));
+
+    fn etag(
+        format: FeedFormat,
+        metadata: &FeedMetadata,
+        items: &[FeedItem],
+        representation_modified_at: DateTime<Utc>,
+    ) -> ETag {
+        feed_etag(
+            &feed_semantic_fingerprint(format, metadata, items),
+            representation_modified_at,
+        )
     }
+
     #[test]
-    fn identity_has_independent_format_revisions_and_excludes_representation_time() {
-        let meta = metadata();
+    fn feed_etag_covers_complete_inputs_for_each_format() {
+        let metadata = metadata();
+        let items = vec![item(1), item(2)];
+        let formats = [FeedFormat::Rss, FeedFormat::Atom, FeedFormat::Json];
+        let metadata_mutations: [fn(&mut FeedMetadata); 5] = [
+            |metadata| metadata.title = "Other".parse().unwrap(),
+            |metadata| metadata.description = None,
+            |metadata| metadata.canonical_url = parse_url("https://other.example/"),
+            |metadata| metadata.self_url = parse_url("https://example.com/other.atom"),
+            |metadata| metadata.hub_url = None,
+        ];
+        let item_mutations: [fn(&mut FeedItem); 8] = [
+            |item| item.id = PostId::from(9),
+            |item| item.title = None,
+            |item| item.permalink = parse_url("https://example.com/other"),
+            |item| item.summary = None,
+            |item| item.content_html = rendered_html("<p>Other</p>"),
+            |item| item.published_at = time(3),
+            |item| item.updated_at = time(3),
+            |item| item.tags.reverse(),
+        ];
+
+        for format in formats {
+            let baseline = etag(format, &metadata, &items, time(1));
+            assert_eq!(
+                baseline,
+                etag(format, &metadata, &items, time(1)),
+                "{format:?} ETag is stable for identical complete inputs",
+            );
+            for mutate in metadata_mutations {
+                let mut changed = metadata.clone();
+                mutate(&mut changed);
+                assert_ne!(
+                    baseline,
+                    etag(format, &changed, &items, time(1)),
+                    "{format:?} ETag changes for metadata",
+                );
+            }
+            for mutate in item_mutations {
+                let mut changed = items.clone();
+                mutate(&mut changed[0]);
+                assert_ne!(
+                    baseline,
+                    etag(format, &metadata, &changed, time(1)),
+                    "{format:?} ETag changes for item data",
+                );
+            }
+            let mut reordered = items.clone();
+            reordered.reverse();
+            assert_ne!(
+                baseline,
+                etag(format, &metadata, &reordered, time(1)),
+                "{format:?} ETag changes for item order",
+            );
+            assert_ne!(
+                baseline,
+                etag(format, &metadata, &items, time(2)),
+                "{format:?} ETag changes for representation modification time",
+            );
+            assert_ne!(
+                baseline,
+                feed_etag(
+                    &semantic_fingerprint_with_revision(
+                        format,
+                        serializer_revision(format) + 1,
+                        &metadata,
+                        &items,
+                    ),
+                    time(1),
+                ),
+                "{format:?} ETag changes for its serializer revision",
+            );
+        }
+
+        assert_ne!(
+            etag(FeedFormat::Rss, &metadata, &items, time(1)),
+            etag(FeedFormat::Atom, &metadata, &items, time(1)),
+        );
+        assert_ne!(
+            etag(FeedFormat::Atom, &metadata, &items, time(1)),
+            etag(FeedFormat::Json, &metadata, &items, time(1)),
+        );
+    }
+
+    #[test]
+    fn semantic_fingerprint_excludes_representation_time() {
+        let metadata = metadata();
+        let mut changed = metadata.clone();
+        changed.representation_modified_at = time(2);
         let items = vec![item(1)];
-        assert_ne!(
-            feed_semantic_fingerprint(FeedFormat::Rss, &meta, &items),
-            feed_semantic_fingerprint(FeedFormat::Atom, &meta, &items)
-        );
-        assert_ne!(
-            feed_semantic_fingerprint(FeedFormat::Atom, &meta, &items),
-            feed_semantic_fingerprint(FeedFormat::Json, &meta, &items)
-        );
-        let baseline = semantic_fingerprint_with_revision(
-            FeedFormat::Atom,
-            ATOM_SERIALIZER_REVISION,
-            &meta,
-            &items,
-        );
-        assert_ne!(
-            baseline,
-            semantic_fingerprint_with_revision(
-                FeedFormat::Atom,
-                ATOM_SERIALIZER_REVISION + 1,
-                &meta,
-                &items,
-            )
-        );
-        assert_eq!(fingerprint(&meta, &items), fingerprint(&meta, &items));
-        assert_ne!(
-            feed_etag(&fingerprint(&meta, &items), time(1)),
-            feed_etag(&fingerprint(&meta, &items), time(2))
-        );
+
         assert_eq!(
-            feed_semantic_fingerprint(FeedFormat::Atom, &meta, &[]),
-            feed_semantic_fingerprint(FeedFormat::Atom, &meta, &[])
+            feed_semantic_fingerprint(FeedFormat::Atom, &metadata, &items),
+            feed_semantic_fingerprint(FeedFormat::Atom, &changed, &items),
         );
     }
 }

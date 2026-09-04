@@ -223,17 +223,59 @@ mod tests {
     }
 
     #[test]
-    fn if_none_match_presence_suppresses_if_modified_since() {
+    fn if_none_match_presence_suppresses_valid_and_invalid_if_modified_since() {
         let last_modified = UNIX_EPOCH + Duration::from_secs(1_000);
-        let mut headers = headers(&[b"\"other\""]);
-        headers.insert(
-            header::IF_MODIFIED_SINCE,
-            HeaderValue::from_static("Thu, 01 Jan 1970 00:33:20 GMT"),
-        );
-        assert!(!is_not_modified(&headers, b"\"match\"", last_modified));
+        for if_modified_since in ["Thu, 01 Jan 1970 00:33:20 GMT", "not an HTTP date"] {
+            let mut headers = headers(&[b"\"other\""]);
+            headers.insert(
+                header::IF_MODIFIED_SINCE,
+                HeaderValue::from_str(if_modified_since).expect("valid header bytes"),
+            );
+            assert!(
+                !is_not_modified(&headers, b"\"match\"", last_modified),
+                "a present nonmatching If-None-Match suppresses {if_modified_since:?}",
+            );
 
-        headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("broken"));
-        assert!(!is_not_modified(&headers, b"\"match\"", last_modified));
+            headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("\"match\""));
+            assert!(
+                is_not_modified(&headers, b"\"match\"", last_modified),
+                "If-None-Match remains authoritative with {if_modified_since:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn if_modified_since_compares_at_one_second_boundaries() {
+        let last_modified = UNIX_EPOCH + Duration::from_secs(1_000);
+        for (request_time, expected, label) in [
+            (
+                last_modified
+                    .checked_sub(Duration::from_secs(1))
+                    .expect("request time after epoch"),
+                false,
+                "one second before",
+            ),
+            (last_modified, true, "equal"),
+            (
+                last_modified
+                    .checked_add(Duration::from_secs(1))
+                    .expect("request time after epoch"),
+                true,
+                "one second after",
+            ),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::IF_MODIFIED_SINCE,
+                HeaderValue::from_str(&httpdate::fmt_http_date(request_time))
+                    .expect("formatted HTTP date"),
+            );
+            assert_eq!(
+                is_not_modified(&headers, b"\"match\"", last_modified),
+                expected,
+                "If-Modified-Since {label}",
+            );
+        }
     }
 
     #[test]
@@ -251,6 +293,12 @@ mod tests {
             );
             assert_eq!(if_modified_since(&headers), Some(expected));
         }
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_MODIFIED_SINCE,
+            HeaderValue::from_static("not an HTTP date"),
+        );
+        assert_eq!(if_modified_since(&headers), None);
 
         let mut headers = HeaderMap::new();
         headers.append(
