@@ -3,8 +3,7 @@ use axum::{
     http::{Request, StatusCode, header},
 };
 use chrono::{Timelike, Utc};
-use common::{feed::FeedFormat, tagged_url::HubUrl, test_support::parse_etag, time::UtcInstant};
-use host::feed::SyndicationFeedRepresentation;
+use common::{tagged_url::HubUrl, test_support::parse_etag, time::UtcInstant};
 use tower::ServiceExt;
 
 use rstest::*;
@@ -14,43 +13,8 @@ use std::sync::Arc;
 
 use crate::helpers::{body_string, make_app};
 use storage::test_support::{
-    Backend, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix, fp,
+    Backend, SeedFeedCache, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix, fp,
 };
-
-fn cache_row(
-    feed_path: &str,
-    body: &str,
-    etag: &str,
-    updated_at: UtcInstant,
-    generated_at: UtcInstant,
-) -> storage::FeedCacheRow {
-    storage::FeedCacheRow::new(
-        fp(feed_path),
-        SyndicationFeedRepresentation::try_from_stored(
-            FeedFormat::Rss,
-            FeedFormat::Rss.content_type(),
-            body.to_owned(),
-        )
-        .expect("matching stored representation metadata"),
-        parse_etag(etag),
-        updated_at,
-        generated_at,
-    )
-    .expect("matching cache row formats")
-}
-
-async fn upsert_cache(state: &Arc<storage::AppState>, row: storage::FeedCacheRow) {
-    let feed_cache = Arc::clone(&state.feed_cache);
-    let outcome = state
-        .write_scope
-        .run(move |transaction| Box::pin(async move { feed_cache.upsert(transaction, row).await }))
-        .await
-        .expect("upsert cache");
-    assert!(matches!(
-        outcome,
-        common::mutation::MutationOutcome::Confirmed(())
-    ));
-}
 
 fn with_feed_cache(
     state: &Arc<storage::AppState>,
@@ -312,14 +276,13 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
     let known_body = "known feed body";
     let etag = "\"known-etag\"";
     let updated_at = UtcInstant::now();
-    let row = cache_row(
-        "/~bob/feed.rss",
-        known_body,
-        etag,
-        updated_at,
-        UtcInstant::now(),
-    );
-    upsert_cache(&state, row).await;
+    SeedFeedCache::new(fp("/~bob/feed.rss"))
+        .body(known_body.to_owned())
+        .etag(parse_etag(etag))
+        .updated_at(updated_at)
+        .generated_at(UtcInstant::now())
+        .seed(&state)
+        .await;
 
     let req = Request::builder()
         .method("GET")
@@ -376,17 +339,13 @@ async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
     let feed_path = format!("/~{}/feed.rss", user.username);
     let cached_body = "corrupt-cache-body";
     let etag = "\"corrupt-cache-etag\"";
-    upsert_cache(
-        &state,
-        cache_row(
-            &feed_path,
-            cached_body,
-            etag,
-            UtcInstant::now(),
-            UtcInstant::now(),
-        ),
-    )
-    .await;
+    SeedFeedCache::new(fp(&feed_path))
+        .body(cached_body.to_owned())
+        .etag(parse_etag(etag))
+        .updated_at(UtcInstant::now())
+        .generated_at(UtcInstant::now())
+        .seed(&state)
+        .await;
 
     // Bypass the invariant-bearing storage API to model a corrupted persisted
     // metadata column while retaining an otherwise coherent cache row.
@@ -450,14 +409,13 @@ async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
 
     // The stored ETag and the `If-None-Match` header must be the same quoted string.
     let etag = "\"test-etag-123\"";
-    let row = cache_row(
-        "/~charlie/feed.rss",
-        "feed body",
-        etag,
-        UtcInstant::now(),
-        UtcInstant::now(),
-    );
-    upsert_cache(&state, row).await;
+    SeedFeedCache::new(fp("/~charlie/feed.rss"))
+        .body("feed body".to_owned())
+        .etag(parse_etag(etag))
+        .updated_at(UtcInstant::now())
+        .generated_at(UtcInstant::now())
+        .seed(&state)
+        .await;
 
     let req = Request::builder()
         .method("GET")
@@ -485,14 +443,13 @@ async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: B
     let update_time = Utc::now()
         .with_nanosecond(0)
         .expect("valid nanosecond value");
-    let row = cache_row(
-        "/~dave/feed.rss",
-        "feed body",
-        "\"test-etag\"",
-        UtcInstant::from(update_time),
-        UtcInstant::now(),
-    );
-    upsert_cache(&state, row).await;
+    SeedFeedCache::new(fp("/~dave/feed.rss"))
+        .body("feed body".to_owned())
+        .etag(parse_etag("\"test-etag\""))
+        .updated_at(UtcInstant::from(update_time))
+        .generated_at(UtcInstant::now())
+        .seed(&state)
+        .await;
 
     // Request with If-Modified-Since set to the same time
     let req = Request::builder()

@@ -4,13 +4,14 @@ use std::sync::Arc;
 use crate::helpers::CapturingWebSubClient;
 use chrono::Utc;
 use common::{
-    feed::FeedFormat, tagged_url::HubUrl, test_support::parse_etag, time::UtcInstant,
-    visibility::AudienceTarget,
+    tagged_url::HubUrl, test_support::parse_etag, time::UtcInstant, visibility::AudienceTarget,
 };
-use host::feed::{FeedPath, SyndicationFeedRepresentation};
+use host::feed::FeedPath;
 use jaunder::feed::worker::FeedWorker;
-use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, confirmed_for, fp};
-use storage::{FeedCacheRow, MockPostStorage};
+use storage::MockPostStorage;
+use storage::test_support::{
+    Backend, SeedFeedCache, SeedRawPost, SeedUser, TestEnv, backends, confirmed_for, fp,
+};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -34,15 +35,6 @@ async fn event_write<T>(
     )
 }
 
-async fn upsert_cache(state: &Arc<storage::AppState>, row: FeedCacheRow) {
-    let feed_cache = Arc::clone(&state.feed_cache);
-    let outcome = state
-        .write_scope
-        .run(move |transaction| Box::pin(async move { feed_cache.upsert(transaction, row).await }))
-        .await
-        .expect("seed cached feed");
-    confirmed_for(outcome, "seed cached feed");
-}
 async fn set_hub(state: &Arc<storage::AppState>, storage_path: &Path) {
     let hub: HubUrl = "https://hub.example.com/".parse().expect("valid hub URL");
     jaunder::publisher::PublisherService::new(
@@ -380,23 +372,13 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
 
     let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
     // A cached site feed generated at t0 (stale).
-    upsert_cache(
-        &state,
-        FeedCacheRow::new(
-            fp("/feed.atom"),
-            SyndicationFeedRepresentation::try_from_stored(
-                FeedFormat::Atom,
-                FeedFormat::Atom.content_type(),
-                "stale".to_string(),
-            )
-            .expect("matching stored representation metadata"),
-            parse_etag("\"etag\""),
-            UtcInstant::from(t0),
-            UtcInstant::from(t0),
-        )
-        .expect("matching cache row formats"),
-    )
-    .await;
+    SeedFeedCache::new(fp("/feed.atom"))
+        .body("stale".to_owned())
+        .etag(parse_etag("\"etag\""))
+        .updated_at(UtcInstant::from(t0))
+        .generated_at(UtcInstant::from(t0))
+        .seed(&state)
+        .await;
 
     // A post that went live at t1 > t0 while the worker was "down".
     let t1 = t0 + Duration::hours(1);
@@ -440,23 +422,13 @@ async fn startup_catchup_ignores_nonpublic_posts(#[case] backend: Backend) {
     );
     let user = SeedUser::new().seed(&state).await;
     let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
-    upsert_cache(
-        &state,
-        FeedCacheRow::new(
-            fp("/feed.atom"),
-            SyndicationFeedRepresentation::try_from_stored(
-                FeedFormat::Atom,
-                FeedFormat::Atom.content_type(),
-                "stale".to_string(),
-            )
-            .expect("matching stored representation metadata"),
-            parse_etag("\"etag\""),
-            UtcInstant::from(t0),
-            UtcInstant::from(t0),
-        )
-        .expect("matching cache row formats"),
-    )
-    .await;
+    SeedFeedCache::new(fp("/feed.atom"))
+        .body("stale".to_owned())
+        .etag(parse_etag("\"etag\""))
+        .updated_at(UtcInstant::from(t0))
+        .generated_at(UtcInstant::from(t0))
+        .seed(&state)
+        .await;
     let go_live = t0 + Duration::hours(1);
     SeedRawPost::new(user.user_id)
         .published_at(UtcInstant::from(go_live))

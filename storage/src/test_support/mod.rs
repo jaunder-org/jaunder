@@ -12,6 +12,7 @@
 #![expect(clippy::unwrap_used, clippy::expect_used)]
 
 mod backend;
+mod feed_cache;
 mod feeds;
 mod mail;
 mod media;
@@ -30,6 +31,7 @@ pub use backend::{
     sqlite_only, sqlite_url, sqlite_write_scope,
 };
 
+pub use feed_cache::SeedFeedCache;
 pub use feeds::fp;
 pub use mail::noop_mailer;
 pub(crate) use media::RawMediaFilename;

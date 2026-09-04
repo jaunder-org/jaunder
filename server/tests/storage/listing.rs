@@ -11,12 +11,12 @@ use common::{
 };
 use std::sync::Arc;
 use storage::test_support::{
-    Backend, SeedRawPost, SeedUser, backends, confirmed_for as confirmed, fp,
+    Backend, SeedFeedCache, SeedRawPost, SeedUser, backends, confirmed_for as confirmed, fp,
     seed_local_subscription,
 };
 use storage::{
-    AppState, FeedCacheRow, GoLivePost, ListByTagError, PostBookkeepingExpectation, PostCursor,
-    PostFormat, PostRecord, RenderedPostContent, create_rendered_post,
+    AppState, GoLivePost, ListByTagError, PostBookkeepingExpectation, PostCursor, PostFormat,
+    PostRecord, RenderedPostContent, create_rendered_post,
 };
 
 use rstest::*;
@@ -43,16 +43,6 @@ async fn soft_delete_post_confirmed(state: &AppState, post_id: PostId, user_id: 
         .await
         .expect("soft_delete_post failed");
     confirmed(outcome, "post deletion");
-}
-
-async fn upsert_cache_confirmed(state: &AppState, row: FeedCacheRow) {
-    let cache = Arc::clone(&state.feed_cache);
-    let outcome = state
-        .write_scope
-        .run(move |transaction| Box::pin(async move { cache.upsert(transaction, row).await }))
-        .await
-        .expect("seed cached feed");
-    confirmed(outcome, "feed-cache fixture");
 }
 
 async fn create_named_audience(state: &AppState, author: UserId, name: &str) -> AudienceId {
@@ -1080,7 +1070,8 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
 async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend) {
     use chrono::{Duration, TimeZone};
     use common::feed::{FeedFormat, FeedSurface};
-    use host::feed::{FeedPath, SyndicationFeedRepresentation};
+    use host::feed::FeedPath;
+
     let env = backend.setup().await;
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
@@ -1136,21 +1127,6 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
         .post_id;
     soft_delete_post_confirmed(state, deleted, bob.user_id).await;
 
-    let mk_row = |feed_url: &str, generated_at: UtcInstant| {
-        FeedCacheRow::new(
-            fp(feed_url),
-            SyndicationFeedRepresentation::try_from_stored(
-                FeedFormat::Atom,
-                FeedFormat::Atom.content_type(),
-                "cached".to_string(),
-            )
-            .expect("matching stored representation metadata"),
-            parse_etag("\"etag\""),
-            generated_at,
-            generated_at,
-        )
-        .expect("matching cache row formats")
-    };
     // The exact feed-url keys for each surface, built the same way the worker
     // does, so the per-surface arms of `max_published_at_for_surface` are all
     // exercised (Site, User, SiteTag, UserTag).
@@ -1165,13 +1141,43 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     );
 
     // Stale (generated before go-live) => must be returned.
-    upsert_cache_confirmed(state, mk_row("/feed.atom", UtcInstant::from(t0))).await;
-    upsert_cache_confirmed(state, mk_row(&site_tag_url, UtcInstant::from(t0))).await;
-    upsert_cache_confirmed(state, mk_row(&user_tag_url, UtcInstant::from(t0))).await;
+    SeedFeedCache::new(fp("/feed.atom"))
+        .body("cached".to_owned())
+        .etag(parse_etag("\"etag\""))
+        .updated_at(UtcInstant::from(t0))
+        .generated_at(UtcInstant::from(t0))
+        .seed(state)
+        .await;
+    SeedFeedCache::new(site_tag_url.clone())
+        .body("cached".to_owned())
+        .etag(parse_etag("\"etag\""))
+        .updated_at(UtcInstant::from(t0))
+        .generated_at(UtcInstant::from(t0))
+        .seed(state)
+        .await;
+    SeedFeedCache::new(user_tag_url.clone())
+        .body("cached".to_owned())
+        .etag(parse_etag("\"etag\""))
+        .updated_at(UtcInstant::from(t0))
+        .generated_at(UtcInstant::from(t0))
+        .seed(state)
+        .await;
     let bob_feed_url = format!("/~{}/feed.atom", bob.username);
-    upsert_cache_confirmed(state, mk_row(&bob_feed_url, UtcInstant::from(t0))).await;
+    SeedFeedCache::new(fp(&bob_feed_url))
+        .body("cached".to_owned())
+        .etag(parse_etag("\"etag\""))
+        .updated_at(UtcInstant::from(t0))
+        .generated_at(UtcInstant::from(t0))
+        .seed(state)
+        .await;
     // Fresh (generated after the newest live post) => must NOT be returned.
-    upsert_cache_confirmed(state, mk_row("/~alice/feed.atom", UtcInstant::from(now))).await;
+    SeedFeedCache::new(fp("/~alice/feed.atom"))
+        .body("cached".to_owned())
+        .etag(parse_etag("\"etag\""))
+        .updated_at(UtcInstant::from(now))
+        .generated_at(UtcInstant::from(now))
+        .seed(state)
+        .await;
 
     let stale = state
         .posts
