@@ -37,7 +37,7 @@ Out:
     verify revision and input metadata against the recorded commands and marker
     procedure; Prettier checks the committed report.
 
-- [ ] Task 2: Partition devtool's static inventory without duplication
+- [x] Task 2: Partition devtool's static inventory without duplication
   - Contract: `devtool check --group docs` and `devtool check --group code` are
     stable selectors, mutually exclusive with positional single-check selection
     and `--all`. `docs` contains Markdown Prettier only; `code` contains every

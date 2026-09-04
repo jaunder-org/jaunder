@@ -53,8 +53,11 @@ enum Command {
 
 #[derive(clap::Args)]
 struct CheckArgs {
-    /// Which check to run (omit and pass `--all` to run every check).
+    /// Which check to run (omit and pass `--group` or `--all` to select a set).
     name: Option<String>,
+    /// Run one stable static check group.
+    #[arg(long, conflicts_with_all = ["name", "all"])]
+    group: Option<check::CheckGroup>,
     /// Run all migrated static checks.
     #[arg(long, conflicts_with = "name")]
     all: bool,
@@ -166,9 +169,13 @@ fn main() -> anyhow::Result<()> {
         Command::Doctests(DoctestsCmd::Emit { out }) => doctests::emit::run(&out),
         Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
         Command::Run(args) => run::run(&args.cmd, args.cwd, args.timeout),
-        Command::Check(args) => {
-            check::run(args.name.as_deref(), args.all, args.fix, args.sandbox_cargo)
-        }
+        Command::Check(args) => check::run(
+            args.name.as_deref(),
+            args.group,
+            args.all,
+            args.fix,
+            args.sandbox_cargo,
+        ),
         Command::CsrBundle(args) => csr_bundle::run(
             &args.wasm,
             &args.out,
@@ -184,5 +191,39 @@ fn main() -> anyhow::Result<()> {
                 provision::StorePaths::resolve(args.types_node_modules, args.playwright_test)?;
             provision::run(&args.root, &paths)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[test]
+    fn check_groups_are_closed_and_mutually_exclusive_selectors() {
+        let docs = Cli::try_parse_from(["devtool", "check", "--group", "docs"])
+            .expect("docs group parses");
+        assert!(matches!(
+            docs.command,
+            Command::Check(CheckArgs {
+                name: None,
+                group: Some(check::CheckGroup::Docs),
+                all: false,
+                ..
+            })
+        ));
+        let code = Cli::try_parse_from(["devtool", "check", "--group", "code"])
+            .expect("code group parses");
+        assert!(matches!(
+            code.command,
+            Command::Check(CheckArgs {
+                group: Some(check::CheckGroup::Code),
+                ..
+            })
+        ));
+        assert!(Cli::try_parse_from(["devtool", "check", "fmt", "--group", "code"]).is_err());
+        assert!(Cli::try_parse_from(["devtool", "check", "--group", "docs", "--all"]).is_err());
+        assert!(Cli::try_parse_from(["devtool", "check", "--group", "unknown"]).is_err());
     }
 }
