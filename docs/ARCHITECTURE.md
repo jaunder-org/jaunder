@@ -918,6 +918,29 @@ the `auth::User` extractor; failures map to unauthorized/internal errors through
 `auth::Rejection` ([ADR-0007](adr/0007-auth-mechanisms.md)). The operator-only
 variant `require_operator()` layers the `is_operator` check on top.
 
+### Registration and invitations
+
+Registration policy separates whether registration requires an invitation from
+who may issue one. The four values and exact configuration spellings are
+`Closed` / `closed` (registration and issuance disabled), `OperatorInvites` /
+`operator_invites` (valid invitation required; operator issuance),
+`MemberInvites` / `member_invites` (valid invitation required; any authenticated
+user issuance), and `Open` / `open` (registration without consuming a supplied
+invitation; issuance disabled). Absent or invalid configuration remains
+`Closed`. The former `InviteOnly` / `invite_only` value is removed rather than
+retained as an ambiguous compatibility spelling
+([registration policy separates invitation authority](adr/drafts/registration-policy-separates-invitation-authority.md)).
+
+Invitation creation and listing enforce the policy at their web server
+boundaries; the local `jaunder user-invite` command acts with operator authority
+and issues only under an invitation policy. The `/invites` route and
+authenticated navigation only project web authority. Under `MemberInvites`,
+ordinary users may send a prospective user the existing invitation-link email
+but cannot read the global invitation metadata ledger. Operators may list
+invitations under either invitation policy, and the ledger never returns raw
+invitation codes. `Closed` also blocks an otherwise valid outstanding
+invitation, while `Open` leaves any supplied invitation unused.
+
 `viewer_identity()` (`web/src/viewer.rs`) applies the optional-auth half of the
 same rule for visibility-filtered reads: it returns a local viewer on successful
 authentication, anonymous for absent or stale cookie-only credentials, and an

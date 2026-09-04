@@ -349,6 +349,17 @@ mod tests {
             assert!(key.validate(token).is_err(), "{token:?} must reject");
         }
     }
+
+    #[test]
+    fn registration_policy_accepts_exact_current_tokens() {
+        let key = SiteConfigKey::SiteRegistrationPolicy;
+        for token in ["closed", "operator_invites", "member_invites", "open"] {
+            assert!(key.validate(token).is_ok(), "{token:?} must validate");
+        }
+        for token in ["invite_only", "operatorinvites", "unknown"] {
+            assert!(key.validate(token).is_err(), "{token:?} must reject");
+        }
+    }
     /// The per-user registry is closed and validates through its declared value type.
     #[test]
     fn user_config_key_validates_its_value() {

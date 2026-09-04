@@ -7,6 +7,7 @@ use axum::{
 use clap::Parser;
 use common::{
     pagination::PageSize,
+    registration::RegistrationPolicy,
     test_support::{parse_email, parse_invite_ttl_hours, parse_session_label},
     time::UtcInstant,
     username::Username,
@@ -99,6 +100,26 @@ fn uninitialized_storage_args(backend: Backend, base: &TempDir) -> StorageArgs {
         }
     };
     StorageArgs { storage_path, db }
+}
+
+async fn enable_cli_invites(args: &StorageArgs) {
+    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("open db");
+    let site_config = Arc::clone(&state.site_config);
+    confirmed(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    site_config
+                        .set_registration_policy(transaction, RegistrationPolicy::OperatorInvites)
+                        .await
+                })
+            })
+            .await
+            .expect("set registration policy"),
+    );
 }
 
 #[apply(backends)]
@@ -735,6 +756,7 @@ async fn cmd_user_create_with_operator_flag_sets_is_operator(#[case] backend: Ba
 async fn cmd_user_invite_creates_retrievable_invite(#[case] backend: Backend) {
     let env = InitializedCommandEnv::new(backend).await;
     let args = env.args;
+    enable_cli_invites(&args).await;
     cmd_user_invite(&args, Some(parse_invite_ttl_hours("48")))
         .await
         .expect("user invite");
@@ -751,6 +773,7 @@ async fn cmd_user_invite_creates_retrievable_invite(#[case] backend: Backend) {
 async fn cmd_user_invite_default_expires_in(#[case] backend: Backend) {
     let env = InitializedCommandEnv::new(backend).await;
     let args = env.args;
+    enable_cli_invites(&args).await;
     cmd_user_invite(&args, None).await.expect("user invite");
 
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())

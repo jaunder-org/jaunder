@@ -405,7 +405,7 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
 async fn create_invite_nested_request_maps_fields(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend
         .setup()
-        .registration(RegistrationPolicy::InviteOnly)
+        .registration(RegistrationPolicy::OperatorInvites)
         .await;
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
@@ -489,11 +489,119 @@ async fn create_invite_unauthorized_returns_error(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+/// Invitation issuance and ledger access follow the policy's role predicates at
+/// the server-function boundary, before either mail or storage side effects.
+#[apply(backends)]
+#[tokio::test]
+async fn invitation_policy_role_matrix_enforces_authority_without_side_effects(
+    #[case] backend: Backend,
+) {
+    for (policy, member_may_create, operator_may_create) in [
+        (RegistrationPolicy::Closed, false, false),
+        (RegistrationPolicy::OperatorInvites, false, true),
+        (RegistrationPolicy::MemberInvites, true, true),
+        (RegistrationPolicy::Open, false, false),
+    ] {
+        let TestEnv { state, base: _base } = backend.setup().registration(policy).await;
+        let member_cookie = create_user_and_session(&state).await.cookie();
+        let operator_cookie = create_operator_and_session(&state).await.cookie();
+        let mailer = Arc::new(CapturingMailSender::new());
+        let request = || web::invites::Create {
+            request: web::invites::CreateInviteRequest {
+                expires_in_hours: None,
+                recipient_email: parse_email("invitee@example.com"),
+            },
+        };
+
+        let (anonymous_status, _) =
+            post_server_fn_with_mailer(&state, &mailer, &request(), None).await;
+        assert_ne!(
+            anonymous_status,
+            StatusCode::OK,
+            "{policy:?} anonymous invitation issuance"
+        );
+
+        let (member_status, _) =
+            post_server_fn_with_mailer(&state, &mailer, &request(), Some(&member_cookie)).await;
+        assert_eq!(
+            member_status == StatusCode::OK,
+            member_may_create,
+            "{policy:?} member invitation issuance status: {member_status}"
+        );
+
+        let (operator_status, _) =
+            post_server_fn_with_mailer(&state, &mailer, &request(), Some(&operator_cookie)).await;
+        assert_eq!(
+            operator_status == StatusCode::OK,
+            operator_may_create,
+            "{policy:?} operator invitation issuance status: {operator_status}"
+        );
+
+        let expected_invites = usize::from(member_may_create) + usize::from(operator_may_create);
+        assert_eq!(
+            state
+                .invites
+                .list_invites()
+                .await
+                .expect("list stored invites")
+                .len(),
+            expected_invites,
+        );
+        assert_eq!(
+            mailer.sent().len(),
+            expected_invites,
+            "{policy:?} unauthorized issuance must not send mail"
+        );
+
+        let (anonymous_list_status, _) =
+            post_form(&state, <web::invites::List as ServerFn>::PATH, "", None).await;
+        assert_ne!(
+            anonymous_list_status,
+            StatusCode::OK,
+            "{policy:?} anonymous invitation listing"
+        );
+
+        let (member_list_status, _) = post_form(
+            &state,
+            <web::invites::List as ServerFn>::PATH,
+            "",
+            Some(&member_cookie),
+        )
+        .await;
+        assert_ne!(
+            member_list_status,
+            StatusCode::OK,
+            "{policy:?} member invitation listing"
+        );
+
+        let (operator_list_status, operator_list_body) = post_form(
+            &state,
+            <web::invites::List as ServerFn>::PATH,
+            "",
+            Some(&operator_cookie),
+        )
+        .await;
+        assert_eq!(
+            operator_list_status == StatusCode::OK,
+            policy.may_list_invitations(true),
+            "{policy:?} operator invitation listing status: {operator_list_status}"
+        );
+        assert!(
+            !operator_list_body.contains("\"code\""),
+            "{policy:?} invitation ledger must not expose raw codes"
+        );
+    }
+}
+
 // create_invite errors when the site base URL is unset — and sends no email (no orphan).
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_without_base_url_errors_and_sends_nothing(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().base_url(None).await;
+    let TestEnv { state, base: _base } = backend
+        .setup()
+        .registration(RegistrationPolicy::OperatorInvites)
+        .base_url(None)
+        .await;
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
@@ -514,6 +622,10 @@ async fn create_invite_without_base_url_errors_and_sends_nothing(#[case] backend
     assert!(
         mailer.sent().is_empty(),
         "no email must be sent when the base URL is unset"
+    );
+    assert!(
+        state.invites.list_invites().await.unwrap().is_empty(),
+        "no invite must be created when the base URL is unset"
     );
 }
 
@@ -551,7 +663,10 @@ async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend)
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_send_failure_returns_error(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = backend
+        .setup()
+        .registration(RegistrationPolicy::OperatorInvites)
+        .await;
     let cookie = create_operator_and_session(&state).await.cookie();
 
     // `post_server_fn` uses the noop mailer, whose `send_email` fails with
@@ -609,7 +724,10 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = backend
+        .setup()
+        .registration(RegistrationPolicy::OperatorInvites)
+        .await;
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
@@ -642,7 +760,10 @@ async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = backend
+        .setup()
+        .registration(RegistrationPolicy::OperatorInvites)
+        .await;
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
@@ -712,14 +833,14 @@ async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
-// list_invites returns error when policy is not InviteOnly.
+// list_invites returns error when no invitation policy is active.
 #[apply(backends)]
 #[tokio::test]
-async fn list_invites_returns_error_when_policy_not_invite_only(#[case] backend: Backend) {
+async fn list_invites_returns_error_when_policy_is_not_invitation_based(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    // The default Open policy is not InviteOnly.
+    // The default Open policy does not permit invitation listing.
 
-    let cookie = create_user_and_session(&state).await.cookie();
+    let cookie = create_operator_and_session(&state).await.cookie();
 
     let (status, _) = post_form(
         &state,
@@ -731,7 +852,7 @@ async fn list_invites_returns_error_when_policy_not_invite_only(#[case] backend:
     assert_ne!(
         status,
         StatusCode::OK,
-        "list_invites should fail when policy is not invite_only"
+        "list_invites should fail when invitations are unavailable"
     );
 }
 

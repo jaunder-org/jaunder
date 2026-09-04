@@ -17,6 +17,7 @@
 use std::sync::{Arc, LazyLock, PoisonError, RwLock};
 
 use crate::retention::{CleanupResult, Domain};
+use common::registration;
 use opentelemetry::metrics::{AsyncInstrument, Counter, Histogram, ObservableGauge};
 use opentelemetry::{KeyValue, global};
 
@@ -33,9 +34,20 @@ macro_rules! enum_attr {
 enum_attr!(LoginOutcome { Success => "success", InvalidCredentials => "invalid_credentials", InternalError => "internal_error" });
 enum_attr!(SessionOutcome { Ok => "ok", InvalidToken => "invalid_token", SessionNotFound => "session_not_found", Internal => "internal" });
 enum_attr!(RegistrationSource { Web => "web", Cli => "cli" });
-enum_attr!(RegistrationPolicy { Open => "open", InviteOnly => "invite_only", Closed => "closed", CliBypass => "cli_bypass" });
+enum_attr!(RegistrationPolicy { Closed => "closed", OperatorInvites => "operator_invites", MemberInvites => "member_invites", Open => "open", CliBypass => "cli_bypass" });
 enum_attr!(RegistrationResult { Ok => "ok", Rejected => "rejected" });
 enum_attr!(InviteEvent { Created => "created", Redeemed => "redeemed" });
+
+impl From<registration::RegistrationPolicy> for RegistrationPolicy {
+    fn from(policy: registration::RegistrationPolicy) -> Self {
+        match policy {
+            registration::RegistrationPolicy::Closed => Self::Closed,
+            registration::RegistrationPolicy::OperatorInvites => Self::OperatorInvites,
+            registration::RegistrationPolicy::MemberInvites => Self::MemberInvites,
+            registration::RegistrationPolicy::Open => Self::Open,
+        }
+    }
+}
 enum_attr!(PasswordResetEvent { Requested => "requested", Completed => "completed" });
 enum_attr!(EmailKind { Verification => "verification", PasswordReset => "password_reset", Invite => "invite" });
 enum_attr!(SendResult { Success => "success", Failure => "failure" });
@@ -447,7 +459,7 @@ mod tests {
         session_validation(SessionOutcome::InvalidToken);
         registration(
             RegistrationSource::Web,
-            RegistrationPolicy::InviteOnly,
+            RegistrationPolicy::OperatorInvites,
             RegistrationResult::Rejected,
         );
         invite(InviteEvent::Redeemed);
@@ -784,9 +796,13 @@ mod tests {
         assert_eq!(RegistrationSource::Web.as_str(), "web");
         assert_eq!(RegistrationSource::Cli.as_str(), "cli");
 
-        assert_eq!(RegistrationPolicy::Open.as_str(), "open");
-        assert_eq!(RegistrationPolicy::InviteOnly.as_str(), "invite_only");
         assert_eq!(RegistrationPolicy::Closed.as_str(), "closed");
+        assert_eq!(
+            RegistrationPolicy::OperatorInvites.as_str(),
+            "operator_invites"
+        );
+        assert_eq!(RegistrationPolicy::MemberInvites.as_str(), "member_invites");
+        assert_eq!(RegistrationPolicy::Open.as_str(), "open");
         assert_eq!(RegistrationPolicy::CliBypass.as_str(), "cli_bypass");
 
         assert_eq!(RegistrationResult::Ok.as_str(), "ok");
@@ -840,6 +856,26 @@ mod tests {
         assert_eq!(IdempotencyEvent::Created.as_str(), "created");
         assert_eq!(IdempotencyEvent::Replayed.as_str(), "replayed");
         assert_eq!(IdempotencyEvent::Expired.as_str(), "expired");
+    }
+
+    #[test]
+    fn registration_policy_mapping_preserves_the_active_policy() {
+        assert!(matches!(
+            RegistrationPolicy::from(common::registration::RegistrationPolicy::Closed),
+            RegistrationPolicy::Closed
+        ));
+        assert!(matches!(
+            RegistrationPolicy::from(common::registration::RegistrationPolicy::OperatorInvites),
+            RegistrationPolicy::OperatorInvites
+        ));
+        assert!(matches!(
+            RegistrationPolicy::from(common::registration::RegistrationPolicy::MemberInvites),
+            RegistrationPolicy::MemberInvites
+        ));
+        assert!(matches!(
+            RegistrationPolicy::from(common::registration::RegistrationPolicy::Open),
+            RegistrationPolicy::Open
+        ));
     }
 
     /// `kv` is the one shared shape-builder: every single-attribute emitter goes

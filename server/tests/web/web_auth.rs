@@ -195,13 +195,13 @@ async fn register_records_decision_determinants_on_the_server_fn_span() {
             .run(move |transaction| {
                 Box::pin(async move {
                     site_config
-                        .set_registration_policy(transaction, RegistrationPolicy::InviteOnly)
+                        .set_registration_policy(transaction, RegistrationPolicy::OperatorInvites)
                         .await
                 })
             })
             .await
             .unwrap(),
-        "set invite-only registration policy",
+        "set operator-invites registration policy",
     );
     let code = create_registration_invite(&state).await;
     assert_eq!(
@@ -241,7 +241,7 @@ async fn register_records_decision_determinants_on_the_server_fn_span() {
     assert!(saw_registration_field(
         &captured,
         "registration.policy",
-        "invite_only"
+        "operator_invites"
     ));
     assert!(saw_registration_field(
         &captured,
@@ -359,14 +359,14 @@ async fn register_duplicate_username_returns_error(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
-// M2.9.9: `register` with InviteOnly + valid code creates user, marks invite used,
-// and establishes the session through the cookie (#533).
+// M2.9.9: `register` with OperatorInvites + valid code creates a user, marks the invite
+// used, and establishes the session through the cookie (#533).
 #[apply(backends)]
 #[tokio::test]
 async fn register_nested_request_maps_invite_code(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend
         .setup()
-        .registration(RegistrationPolicy::InviteOnly)
+        .registration(RegistrationPolicy::OperatorInvites)
         .await;
     let invites = std::sync::Arc::clone(&state.invites);
     let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
@@ -480,7 +480,7 @@ async fn register_open_session_failure_rolls_back_user(#[case] backend: Backend)
 async fn register_invite_session_failure_rolls_back_user_and_invite(#[case] backend: Backend) {
     let TestEnv { state, base } = backend
         .setup()
-        .registration(RegistrationPolicy::InviteOnly)
+        .registration(RegistrationPolicy::OperatorInvites)
         .await;
     let invites = std::sync::Arc::clone(&state.invites);
     let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
@@ -549,13 +549,13 @@ async fn register_invite_session_failure_rolls_back_user_and_invite(#[case] back
     assert!(invite.used_at.is_none());
 }
 
-// M2.9.10: `register` with InviteOnly policy and missing code returns error.
+// M2.9.10: `register` with OperatorInvites policy and missing code returns an error.
 #[apply(backends)]
 #[tokio::test]
-async fn register_invite_only_missing_code_returns_error(#[case] backend: Backend) {
+async fn register_operator_invites_missing_code_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend
         .setup()
-        .registration(RegistrationPolicy::InviteOnly)
+        .registration(RegistrationPolicy::OperatorInvites)
         .await;
 
     let (status, _set_cookie, _body) = post_server_fn_with_secure_flag(
@@ -579,13 +579,13 @@ async fn register_invite_only_missing_code_returns_error(#[case] backend: Backen
     );
 }
 
-// M2.9.15: `register` with InviteOnly policy and invalid code returns error.
+// M2.9.15: `register` with OperatorInvites policy and an invalid code returns an error.
 #[apply(backends)]
 #[tokio::test]
-async fn register_invite_only_invalid_code_returns_error(#[case] backend: Backend) {
+async fn register_operator_invites_invalid_code_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend
         .setup()
-        .registration(RegistrationPolicy::InviteOnly)
+        .registration(RegistrationPolicy::OperatorInvites)
         .await;
 
     let (status, _, _) = post_server_fn_with_secure_flag(
@@ -599,13 +599,13 @@ async fn register_invite_only_invalid_code_returns_error(#[case] backend: Backen
     assert_ne!(status, StatusCode::OK);
 }
 
-// M2.9.16: `register` with InviteOnly policy and expired code returns error.
+// M2.9.16: `register` with OperatorInvites policy and an expired code returns an error.
 #[apply(backends)]
 #[tokio::test]
-async fn register_invite_only_expired_code_returns_error(#[case] backend: Backend) {
+async fn register_operator_invites_expired_code_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend
         .setup()
-        .registration(RegistrationPolicy::InviteOnly)
+        .registration(RegistrationPolicy::OperatorInvites)
         .await;
 
     // Create an already-expired invite.
@@ -656,6 +656,51 @@ async fn register_closed_policy_returns_error(#[case] backend: Backend) {
         user.is_none(),
         "user should not exist on closed registration"
     );
+}
+/// Registration policy governs direct admission and whether an otherwise valid
+/// invitation is redeemed.
+#[apply(backends)]
+#[tokio::test]
+async fn registration_policy_matrix_controls_admission_and_invite_consumption(
+    #[case] backend: Backend,
+) {
+    for (policy, direct_succeeds, invite_succeeds, invite_consumed) in [
+        (RegistrationPolicy::Closed, false, false, false),
+        (RegistrationPolicy::OperatorInvites, false, true, true),
+        (RegistrationPolicy::MemberInvites, false, true, true),
+        (RegistrationPolicy::Open, true, true, false),
+    ] {
+        let TestEnv { state, base: _base } = backend.setup().registration(policy).await;
+        let code = create_registration_invite(&state).await;
+
+        let direct_status = post_register(&state, "direct", None).await;
+        assert_eq!(
+            direct_status == StatusCode::OK,
+            direct_succeeds,
+            "{policy:?} direct registration status: {direct_status}"
+        );
+
+        let invite_status = post_register(&state, "invited", Some(code.as_ref())).await;
+        assert_eq!(
+            invite_status == StatusCode::OK,
+            invite_succeeds,
+            "{policy:?} invite registration status: {invite_status}"
+        );
+
+        let invite = state
+            .invites
+            .list_invites()
+            .await
+            .expect("list fixture invite")
+            .into_iter()
+            .find(|invite| invite.code.as_ref() == code.as_ref())
+            .expect("fixture invite remains listed");
+        assert_eq!(
+            invite.used_at.is_some(),
+            invite_consumed,
+            "{policy:?} invite consumption"
+        );
+    }
 }
 
 // M2.9.12: `login` with correct password sets its cookie-only session.
@@ -1338,13 +1383,13 @@ async fn get_registration_policy_returns_correct_value(#[case] backend: Backend)
             .run(move |transaction| {
                 Box::pin(async move {
                     site_config
-                        .set_registration_policy(transaction, RegistrationPolicy::InviteOnly)
+                        .set_registration_policy(transaction, RegistrationPolicy::OperatorInvites)
                         .await
                 })
             })
             .await
             .unwrap(),
-        "set invite-only registration policy",
+        "set operator-invites registration policy",
     );
 
     // Server functions are POST by default.
@@ -1358,7 +1403,7 @@ async fn get_registration_policy_returns_correct_value(#[case] backend: Backend)
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body.trim(), "\"invite_only\"");
+    assert_eq!(body.trim(), "\"operator_invites\"");
 }
 
 // Shape B — `get_profile()` requires `auth::User`; both an invalid token and a

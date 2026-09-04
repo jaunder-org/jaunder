@@ -1770,9 +1770,10 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         for policy in [
-            RegistrationPolicy::Open,
-            RegistrationPolicy::InviteOnly,
             RegistrationPolicy::Closed,
+            RegistrationPolicy::OperatorInvites,
+            RegistrationPolicy::MemberInvites,
+            RegistrationPolicy::Open,
         ] {
             let config_storage = std::sync::Arc::clone(&env.state.site_config);
             confirmed(
@@ -1794,15 +1795,17 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn registration_policy_falls_back_to_closed_when_garbage(#[case] backend: Backend) {
+    async fn registration_policy_falls_back_to_closed_when_invalid(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        inject_invalid_site_config(&env, SiteConfigKey::SiteRegistrationPolicy, "garbage")
-            .await
-            .unwrap();
-        assert_eq!(
-            storage.get_registration_policy().await.unwrap(),
-            RegistrationPolicy::Closed
-        );
+        for value in ["invite_only", "garbage"] {
+            inject_invalid_site_config(&env, SiteConfigKey::SiteRegistrationPolicy, value)
+                .await
+                .unwrap();
+            assert_eq!(
+                storage.get_registration_policy().await.unwrap(),
+                RegistrationPolicy::Closed
+            );
+        }
     }
 }

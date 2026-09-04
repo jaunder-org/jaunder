@@ -6,6 +6,22 @@ and conversation stay consistent.
 
 ## Language
 
+### Registration
+
+**Registration Policy**: The instance-wide rule for admitting new Users and
+authorizing Invitation issuance. It is exactly `Closed` (nobody registers or
+issues Invitations), `OperatorInvites` (an Invitation is required and only
+operators issue one), `MemberInvites` (an Invitation is required and any
+authenticated User issues one), or `Open` (anyone registers directly and
+Invitations are unavailable). _Avoid_: `InviteOnly`, which hides who may issue
+an Invitation, and using `Closed` to mean operator-issued registration.
+
+**Invitation**: A single-use, expiring capability issued by an authorized User
+and delivered directly to a prospective User. Holding a valid Invitation permits
+registration only under an invitation-based Registration Policy; it does not
+make the holder an operator. _Avoid_: invitation request (there is no public
+request or approval queue), registration code.
+
 ### Publishing
 
 **Post**: A unit of authored content owned by one local user, carrying a body in

@@ -2,8 +2,10 @@ use super::markup;
 use crate::auth;
 use crate::avatar::Avatar;
 use crate::icon::{Icon, Icons};
-use common::root_relative_url::RootRelativeUrl;
-use common::username::Username;
+use crate::registration;
+use common::{
+    registration::RegistrationPolicy, root_relative_url::RootRelativeUrl, username::Username,
+};
 use leptos::prelude::*;
 
 /// A single nav item in the sidebar.
@@ -65,6 +67,16 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     // and the reactive re-render coincide (flash-free). `display:contents` keeps the
     // host wrapper out of the aside's layout.
     let session = auth::use_session().current;
+    let policy = Resource::new(
+        move || session.get().is_some(),
+        |is_authenticated| async move {
+            if is_authenticated {
+                Some(registration::get_policy().await)
+            } else {
+                None
+            }
+        },
+    );
     let anon_html = markup::render_sidebar(&active_key);
     view! {
         <aside class="j-sidebar">
@@ -76,18 +88,28 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
                         .into_any()
                 }
                 Some(user) => {
-                    authed_sidebar(&active_key, &user.username, user.is_operator).into_any()
+                    let policy = policy
+                        .get()
+                        .flatten()
+                        .and_then(Result::ok)
+                        .unwrap_or(RegistrationPolicy::Closed);
+                    authed_sidebar(&active_key, &user.username, user.is_operator, policy).into_any()
                 }
             }}
         </aside>
     }
 }
 
-/// The authenticated sidebar chrome (brand, search, nav + operator admin links,
+/// The authenticated sidebar chrome (brand, search, nav + policy-authorized links,
 /// sources, footer avatar). Shared by the marker-seeded initial render and the
 /// reconciled render (#181) so both are byte-for-byte the same authed markup —
 /// only its inputs change from awaited values to these params.
-fn authed_sidebar(active_key: &str, username: &Username, is_operator: bool) -> impl IntoView {
+fn authed_sidebar(
+    active_key: &str,
+    username: &Username,
+    is_operator: bool,
+    policy: RegistrationPolicy,
+) -> impl IntoView {
     let active_key = active_key.to_string();
     let username = username.clone();
     view! {
@@ -102,7 +124,7 @@ fn authed_sidebar(active_key: &str, username: &Username, is_operator: bool) -> i
                 <span class="j-kbd">"⌘K"</span>
             </div>
             <nav class="j-nav">
-                {markup::nav_items(is_operator)
+                {markup::nav_items(policy, is_operator)
                     .map(|item| {
                         let is_active = item.key == active_key.as_str();
                         view! {

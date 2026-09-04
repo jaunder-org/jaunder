@@ -92,9 +92,7 @@ fn finalize_registration(outcome: MutationOutcome<RawToken>) -> MutationOutcome<
     }
 }
 
-/// Returns the site's current registration policy — one of
-/// [`RegistrationPolicy::Open`], [`RegistrationPolicy::InviteOnly`], or
-/// [`RegistrationPolicy::Closed`].
+/// Returns the site's current registration policy.
 #[macros::server]
 pub async fn get_policy() -> WebResult<RegistrationPolicy> {
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
@@ -140,47 +138,33 @@ pub async fn register(
         .await?;
     span.record("registration.policy", policy.as_ref());
 
-    let metric_policy = match &policy {
-        RegistrationPolicy::Open => host::metrics::RegistrationPolicy::Open,
-        RegistrationPolicy::InviteOnly => host::metrics::RegistrationPolicy::InviteOnly,
-        RegistrationPolicy::Closed => host::metrics::RegistrationPolicy::Closed,
-    };
-    let prepared_password = if matches!(&policy, RegistrationPolicy::Open) {
+    let metric_policy: metrics::RegistrationPolicy = policy.into();
+    if policy == RegistrationPolicy::Closed {
+        span.record("registration.outcome", "closed");
+        metrics::registration(
+            RegistrationSource::Web,
+            metric_policy,
+            RegistrationResult::Rejected,
+        );
+        return Err(InternalError::validation("registration is closed"));
+    }
+
+    let is_invite_registration = policy.requires_invitation();
+    let prepared_password = if is_invite_registration {
+        None
+    } else {
         Some(
             storage::prepare_password(password.clone())
                 .await
                 .map_err(InternalError::storage)?,
         )
-    } else {
-        None
     };
-    let is_invite_registration = matches!(&policy, RegistrationPolicy::InviteOnly);
     let operation_span = span.clone();
     let scope_result = write_scope
         .run(|transaction| {
             Box::pin(async move {
-                let user_id_result: Result<(UserId, Option<UserId>), InternalError> = match policy {
-                    RegistrationPolicy::Open => {
-                        operation_span.record("registration.outcome", "create_user");
-                        let Some(password) = prepared_password.as_ref() else {
-                            unreachable!("open registration always prepares its password");
-                        };
-                        users
-                            .create_user(
-                                transaction,
-                                &username,
-                                password,
-                                None,
-                                OperatorStatus::STANDARD,
-                            )
-                            .instrument(tracing::info_span!(
-                                "web.registration.register.create_user"
-                            ))
-                            .await
-                            .map(|user_id| (user_id, None))
-                            .map_err(Into::into)
-                    }
-                    RegistrationPolicy::InviteOnly => {
+                let user_id_result: Result<(UserId, Option<UserId>), InternalError> =
+                    if is_invite_registration {
                         if let Some(proffered) = invite_code {
                             operation_span
                                 .record("registration.outcome", "create_user_with_invite");
@@ -208,12 +192,26 @@ pub async fn register(
                             operation_span.record("registration.outcome", "invite_required");
                             Err(InternalError::validation("invite code required"))
                         }
-                    }
-                    RegistrationPolicy::Closed => {
-                        operation_span.record("registration.outcome", "closed");
-                        Err(InternalError::validation("registration is closed"))
-                    }
-                };
+                    } else {
+                        operation_span.record("registration.outcome", "create_user");
+                        let Some(password) = prepared_password.as_ref() else {
+                            unreachable!("non-invitation registration prepares its password");
+                        };
+                        users
+                            .create_user(
+                                transaction,
+                                &username,
+                                password,
+                                None,
+                                OperatorStatus::STANDARD,
+                            )
+                            .instrument(tracing::info_span!(
+                                "web.registration.register.create_user"
+                            ))
+                            .await
+                            .map(|user_id| (user_id, None))
+                            .map_err(Into::into)
+                    };
                 let (user_id, invite_consumed) = user_id_result?;
                 let signup_label = SessionLabel::from_lossy("Sign-up session");
                 sessions
