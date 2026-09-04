@@ -49,7 +49,8 @@ pub use parse::{DraftRowDisplay, draft_row_display, parse_permalink_route};
 // Same reason as `parse` above: `page_state`'s only caller is the wasm-only
 // `component`, so without these the host build sees every one of them as `dead_code`.
 pub use page_state::{
-    AuthenticatedHistoryState, HistoryCollectionDisplay, HistoryDisplayRow, HistoryListState,
+    AuthenticatedHistoryState, DraftListPaint, DraftListState, DraftLoadMoreClaim,
+    DraftLoadMorePaint, HistoryCollectionDisplay, HistoryDisplayRow, HistoryListState,
     ListingRoute, NamedAudienceState, authenticated_history_state, current_history_rows,
     load_authenticated_history, notify, notify_create_settlement, notify_with_fallback,
     permalink_destination, public_destination, publish_redirect,

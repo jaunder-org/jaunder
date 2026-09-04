@@ -1475,6 +1475,28 @@ test("TagInput: invalid tag text shows an error", async ({
   await expect(page.locator(".j-tag-chip")).toHaveCount(0);
 });
 
+test("drafts list paginates unpublished posts", async ({ page, firstNav }) => {
+  const username = await signInAsNewUser(page);
+  await seedPostsViaTool(username, 51, "Draft Pagination Post", {
+    published: false,
+  });
+
+  await goto(page, "/drafts", { timeout: firstNav });
+
+  const rows = page.locator("ul.j-draft-list > li");
+  await expect(rows).toHaveCount(50);
+  await expect(rows.first()).toContainText("Draft Pagination Post 50");
+  await expect(page.locator("body")).not.toContainText(
+    "Draft Pagination Post 0",
+  );
+
+  await click(page, '[data-test="drafts-load-more"]');
+
+  await expect(rows).toHaveCount(51);
+  await expect(rows.last()).toContainText("Draft Pagination Post 0");
+  await expect(page.locator('[data-test="drafts-load-more"]')).toHaveCount(0);
+});
+
 test("authenticated user can delete a draft from the drafts page", async ({
   registeredPage,
 }) => {

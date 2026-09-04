@@ -33,7 +33,7 @@ use common::revision_history::{
     RevisionHistoryAudience, RevisionHistoryDetail, RevisionHistoryTag,
 };
 use common::root_relative_url::RootRelativeUrl;
-use common::seed::{AuthoredPost, Page, PageSeed, PublicPresentation, RenderedPost};
+use common::seed::{AuthoredPost, Page, PageCursor, PageSeed, PublicPresentation, RenderedPost};
 use common::tag::Tag;
 use common::theme::Theme;
 use common::username::Username;
@@ -44,7 +44,7 @@ use crate::audiences;
 use crate::error::{WebError, WebResult};
 use crate::posts::{
     CurrentPostHistory, RevisionHistoryCursor, RevisionHistoryMetadata, RevisionHistoryPage,
-    RevisionLifecycle, SavedPost,
+    RevisionLifecycle, SavedPost, UnpublishedPost,
 };
 
 /// Resolution state for the named audiences offered by the post editor.
@@ -629,12 +629,166 @@ impl HistoryListState {
     }
 }
 
+/// A claimed next-page request for the drafts list.
+///
+/// The generation binds a completion to the first page it extended. A first-page
+/// revalidation advances that generation, so an older request cannot append rows
+/// whose membership was computed before a Publish or Delete changed the list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DraftLoadMoreClaim {
+    pub cursor: PageCursor,
+    generation: u64,
+}
+
+/// The complete visible state of the incremental drafts region.
+///
+/// The first-page failure stays on [`WebResult`]'s error axis. A failed next-page
+/// request remains data because the already-painted rows stay usable and retryable.
+/// Keeping the error and control in one closed enum prevents the renderer from
+/// receiving contradictory combinations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DraftLoadMorePaint {
+    /// The server reported the terminal page.
+    Hidden,
+    /// Another page is available and may be requested.
+    Ready,
+    /// The sole next-page request is in flight.
+    Loading,
+    /// The request failed; retained rows and cursor remain available for retry.
+    Failed(WebError),
+}
+
+/// The drafts-list paint decision, excluding initial-page failure.
+///
+/// Initial failure travels on [`WebResult`]'s error axis so this enum names only
+/// successful paints (ADR-0083).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DraftListPaint {
+    Empty,
+    Rows {
+        drafts: Vec<UnpublishedPost>,
+        load_more: DraftLoadMorePaint,
+    },
+}
+
+/// Reactive state and transition logic for the author's cursor-paginated drafts.
+///
+/// The wasm component owns dispatch only; this host-tested bundle owns the
+/// guarded claim, append, retry, and revalidation transitions.
+#[derive(Clone, Copy, Default)]
+pub struct DraftListState {
+    /// All unpublished-post rows loaded from the current first page onward.
+    pub rows: RwSignal<Vec<UnpublishedPost>>,
+    /// Opaque server cursor for the next request.
+    pub cursor: RwSignal<Option<PageCursor>>,
+    /// Whether the current terminal page exposes another cursor page.
+    pub has_more: RwSignal<bool>,
+    /// Whether a claimed next-page request has yet to settle.
+    pub loading_more: RwSignal<bool>,
+    /// The typed next-page failure, retained until its retry begins.
+    pub load_error: RwSignal<Option<WebError>>,
+    /// The typed failure from the current first-page resource.
+    initial_error: RwSignal<Option<WebError>>,
+    generation: RwSignal<u64>,
+}
+
+impl DraftListState {
+    /// Adopt a first-page resource result.
+    ///
+    /// A resource failure belongs on [`WebResult`]'s error axis when [`Self::paint`]
+    /// runs. A later successful first page both clears that failure and establishes a
+    /// new generation, invalidating any next-page completion from the old list.
+    pub fn adopt(self, result: WebResult<Page<UnpublishedPost>>) {
+        let Ok(page) = result else {
+            self.initial_error.set(result.err());
+            return;
+        };
+
+        self.initial_error.set(None);
+        self.generation.update(|generation| *generation += 1);
+        self.rows.set(page.posts);
+        self.cursor.set(page.next_cursor);
+        self.has_more.set(page.has_more);
+        self.loading_more.set(false);
+        self.load_error.set(None);
+    }
+
+    /// Claim the sole next-page slot, returning its opaque cursor for dispatch.
+    #[must_use]
+    pub fn begin_load_more(self) -> Option<DraftLoadMoreClaim> {
+        if self.loading_more.get_untracked() || !self.has_more.get_untracked() {
+            return None;
+        }
+        let cursor = self.cursor.get_untracked()?;
+        self.loading_more.set(true);
+        self.load_error.set(None);
+        Some(DraftLoadMoreClaim {
+            cursor,
+            generation: self.generation.get_untracked(),
+        })
+    }
+
+    /// Settle a claimed next page, ignoring a completion invalidated by revalidation.
+    pub fn finish_load_more(
+        self,
+        claim: DraftLoadMoreClaim,
+        result: WebResult<Page<UnpublishedPost>>,
+    ) {
+        if claim.generation != self.generation.get_untracked() {
+            return;
+        }
+
+        match result {
+            Ok(page) => {
+                self.rows.update(|rows| rows.extend(page.posts));
+                self.cursor.set(page.next_cursor);
+                self.has_more.set(page.has_more);
+            }
+            Err(error) => self.load_error.set(Some(error)),
+        }
+        self.loading_more.set(false);
+    }
+
+    /// Fold the resolved resource and pagination signals into the current paint.
+    ///
+    /// An initial fetch failure outranks all successful shapes and travels on
+    /// [`WebResult`]'s error axis. A load-more failure instead stays in the typed
+    /// success data because the existing rows deliberately remain visible and retryable.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed error from the current first-page resource.
+    pub fn paint(self) -> WebResult<DraftListPaint> {
+        if let Some(error) = self.initial_error.get() {
+            return Err(error);
+        }
+
+        let drafts = self.rows.get();
+        if drafts.is_empty() {
+            return Ok(DraftListPaint::Empty);
+        }
+
+        let load_more = if !self.has_more.get() {
+            DraftLoadMorePaint::Hidden
+        } else if self.loading_more.get() {
+            DraftLoadMorePaint::Loading
+        } else {
+            match self.load_error.get() {
+                Some(error) => DraftLoadMorePaint::Failed(error),
+                None => DraftLoadMorePaint::Ready,
+            }
+        };
+        Ok(DraftListPaint::Rows { drafts, load_more })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
     use std::future::{Ready, ready};
 
     use super::*;
+    use common::ids::PostId;
     use common::test_support::{
         parse_post_body, parse_root_relative_url, parse_slug, parse_tag, parse_tag_label,
         parse_username, parse_utc_instant,
@@ -645,6 +799,39 @@ mod tests {
         Page {
             posts: Vec::new(),
             next_cursor: None,
+            has_more,
+        }
+    }
+
+    fn draft_cursor(post_id: i64) -> PageCursor {
+        PageCursor {
+            created_at: parse_utc_instant("2026-01-01T00:00:00Z"),
+            post_id: PostId::from(post_id),
+        }
+    }
+
+    fn draft(post_id: i64) -> UnpublishedPost {
+        UnpublishedPost {
+            post: SavedPost {
+                post_id: PostId::from(post_id),
+                slug: format!("draft-{post_id}").parse().unwrap(),
+                published_at: None,
+                permalink: parse_root_relative_url(&format!("/~alice/draft-{post_id}")),
+            },
+            title: None,
+            summary_label: format!("Draft {post_id}").parse().unwrap(),
+            edit_url: parse_root_relative_url(&format!("/posts/{post_id}/edit")),
+        }
+    }
+
+    fn draft_page(
+        posts: Vec<UnpublishedPost>,
+        next_cursor: Option<PageCursor>,
+        has_more: bool,
+    ) -> Page<UnpublishedPost> {
+        Page {
+            posts,
+            next_cursor,
             has_more,
         }
     }
@@ -1653,5 +1840,175 @@ mod tests {
             Some(&selection),
             "a successful load must not discard the named choice"
         );
+    }
+    #[test]
+    fn draft_list_adopts_the_first_page() {
+        Owner::new().with(|| {
+            let state = DraftListState::default();
+            state.adopt(Ok(draft_page(vec![draft(1)], Some(draft_cursor(1)), true)));
+
+            assert_eq!(state.rows.get(), vec![draft(1)]);
+            assert_eq!(state.cursor.get(), Some(draft_cursor(1)));
+            assert!(state.has_more.get());
+            assert!(!state.loading_more.get());
+            assert_eq!(state.load_error.get(), None);
+        });
+    }
+
+    #[test]
+    fn draft_list_claims_only_one_available_next_page() {
+        Owner::new().with(|| {
+            let state = DraftListState::default();
+            assert_eq!(state.begin_load_more(), None, "no first-page cursor");
+
+            state.adopt(Ok(draft_page(vec![draft(1)], Some(draft_cursor(1)), true)));
+            let claim = state.begin_load_more().expect("the first next page");
+            assert_eq!(claim.cursor, draft_cursor(1));
+            assert!(state.loading_more.get());
+            assert_eq!(state.begin_load_more(), None, "one in-flight request");
+        });
+    }
+
+    #[test]
+    fn draft_list_appends_in_order_and_removes_the_terminal_control() {
+        Owner::new().with(|| {
+            let state = DraftListState::default();
+            state.adopt(Ok(draft_page(vec![draft(1)], Some(draft_cursor(1)), true)));
+            let claim = state.begin_load_more().expect("next page");
+
+            state.finish_load_more(claim, Ok(draft_page(vec![draft(2)], None, false)));
+
+            assert_eq!(state.rows.get(), vec![draft(1), draft(2)]);
+            assert_eq!(state.cursor.get(), None);
+            assert!(!state.has_more.get());
+            assert!(!state.loading_more.get());
+            assert_eq!(state.begin_load_more(), None, "terminal page cannot fetch");
+        });
+    }
+
+    #[test]
+    fn draft_list_preserves_rows_and_cursor_after_a_typed_error_for_retry() {
+        Owner::new().with(|| {
+            let state = DraftListState::default();
+            state.adopt(Ok(draft_page(vec![draft(1)], Some(draft_cursor(1)), true)));
+            let first_claim = state.begin_load_more().expect("next page");
+            let error = WebError::validation("next page failed");
+
+            state.finish_load_more(first_claim, Err(error.clone()));
+
+            assert_eq!(state.rows.get(), vec![draft(1)]);
+            assert_eq!(state.cursor.get(), Some(draft_cursor(1)));
+            assert_eq!(state.load_error.get(), Some(error));
+            let retry = state.begin_load_more().expect("the cursor stays retryable");
+            assert_eq!(retry.cursor, draft_cursor(1));
+            assert_eq!(state.load_error.get(), None, "retry clears the old error");
+        });
+    }
+
+    #[test]
+    fn draft_list_rejects_a_stale_next_page_after_first_page_revalidation() {
+        Owner::new().with(|| {
+            let state = DraftListState::default();
+            state.adopt(Ok(draft_page(vec![draft(1)], Some(draft_cursor(1)), true)));
+            let stale_claim = state.begin_load_more().expect("next page");
+
+            state.adopt(Ok(draft_page(vec![draft(3)], None, false)));
+            state.finish_load_more(stale_claim, Ok(draft_page(vec![draft(2)], None, false)));
+
+            assert_eq!(state.rows.get(), vec![draft(3)]);
+            assert_eq!(state.cursor.get(), None);
+            assert!(!state.has_more.get());
+            assert!(!state.loading_more.get());
+        });
+    }
+
+    #[test]
+    fn draft_list_paint_keeps_initial_page_failure_on_the_error_axis() {
+        Owner::new().with(|| {
+            let state = DraftListState::default();
+            let error = WebError::validation("first page failed");
+
+            state.adopt(Err(error.clone()));
+
+            assert_eq!(state.paint(), Err(error));
+        });
+    }
+
+    #[test]
+    fn draft_list_paint_distinguishes_an_empty_first_page() {
+        Owner::new().with(|| {
+            let state = DraftListState::default();
+            state.adopt(Ok(draft_page(Vec::new(), None, false)));
+
+            assert_eq!(state.paint(), Ok(DraftListPaint::Empty));
+        });
+    }
+
+    #[test]
+    fn draft_list_paint_exposes_rows_and_a_ready_load_more_control() {
+        Owner::new().with(|| {
+            let state = DraftListState::default();
+            state.adopt(Ok(draft_page(vec![draft(1)], Some(draft_cursor(1)), true)));
+
+            assert_eq!(
+                state.paint(),
+                Ok(DraftListPaint::Rows {
+                    drafts: vec![draft(1)],
+                    load_more: DraftLoadMorePaint::Ready,
+                })
+            );
+        });
+    }
+
+    #[test]
+    fn draft_list_paint_exposes_the_loading_load_more_control() {
+        Owner::new().with(|| {
+            let state = DraftListState::default();
+            state.adopt(Ok(draft_page(vec![draft(1)], Some(draft_cursor(1)), true)));
+            let _claim = state.begin_load_more().expect("next page");
+
+            assert_eq!(
+                state.paint(),
+                Ok(DraftListPaint::Rows {
+                    drafts: vec![draft(1)],
+                    load_more: DraftLoadMorePaint::Loading,
+                })
+            );
+        });
+    }
+
+    #[test]
+    fn draft_list_paint_keeps_rows_with_a_typed_inline_load_more_error() {
+        Owner::new().with(|| {
+            let state = DraftListState::default();
+            state.adopt(Ok(draft_page(vec![draft(1)], Some(draft_cursor(1)), true)));
+            let claim = state.begin_load_more().expect("next page");
+            let error = WebError::validation("next page failed");
+            state.finish_load_more(claim, Err(error.clone()));
+
+            assert_eq!(
+                state.paint(),
+                Ok(DraftListPaint::Rows {
+                    drafts: vec![draft(1)],
+                    load_more: DraftLoadMorePaint::Failed(error),
+                })
+            );
+        });
+    }
+
+    #[test]
+    fn draft_list_paint_hides_load_more_after_the_terminal_page() {
+        Owner::new().with(|| {
+            let state = DraftListState::default();
+            state.adopt(Ok(draft_page(vec![draft(1)], None, false)));
+
+            assert_eq!(
+                state.paint(),
+                Ok(DraftListPaint::Rows {
+                    drafts: vec![draft(1)],
+                    load_more: DraftLoadMorePaint::Hidden,
+                })
+            );
+        });
     }
 }

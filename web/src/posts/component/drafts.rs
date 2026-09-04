@@ -3,7 +3,10 @@ use leptos::prelude::*;
 use crate::auth;
 use crate::error::WebError;
 use crate::posts;
-use crate::posts::{Delete, DraftRowDisplay, Publish, SavedPost, UnpublishedPost};
+use crate::posts::{
+    Delete, DraftListPaint, DraftListState, DraftLoadMorePaint, DraftRowDisplay, Publish,
+    SavedPost, UnpublishedPost,
+};
 use crate::topbar::Topbar;
 use common::{MutationOutcome, pagination::PageSize, seed::Page};
 
@@ -20,6 +23,7 @@ pub fn DraftsPage() -> impl IntoView {
         },
         |_| posts::list_drafts(None, Some(PageSize::default())),
     );
+    let draft_state = DraftListState::default();
 
     view! {
         <Topbar title="Drafts" sub="Unpublished posts" />
@@ -30,8 +34,9 @@ pub fn DraftsPage() -> impl IntoView {
                 }>
                     {move || Suspend::new(async move {
                         view! {
-                            <DraftList
+                            <DraftResource
                                 drafts=drafts.await
+                                state=draft_state
                                 publish_action=publish_action
                                 delete_action=delete_action
                             />
@@ -196,36 +201,94 @@ fn render_scheduled_row(scheduled: UnpublishedPost) -> impl IntoView {
     }
 }
 
-/// The resolved drafts list: the rows, the empty-state line, or the fetch error.
-///
-/// A **subcomponent** rather than a plain view-returning fn, so the branch on the awaited
-/// result stays measured by the thin-component guard instead of hiding in an unmeasured
-/// helper (#306). It takes the already-awaited result, so [`DraftsPage`]'s `Suspense` still
-/// owns the awaiting.
+/// Fold the resolved first-page resource into list state without making
+/// [`DraftsPage`] own another paint decision (ADR-0083).
 #[component]
-fn DraftList(
+fn DraftResource(
     drafts: Result<Page<UnpublishedPost>, WebError>,
+    state: DraftListState,
     publish_action: ServerAction<Publish>,
     delete_action: ServerAction<Delete>,
 ) -> impl IntoView {
-    match drafts {
-        Ok(page) => {
-            if page.posts.is_empty() {
-                view! { <p>"You have no drafts."</p> }.into_any()
-            } else {
-                view! {
-                    <ul class="j-draft-list">
-                        {page
-                            .posts
-                            .into_iter()
-                            .map(|draft| render_draft_row(draft, publish_action, delete_action))
-                            .collect::<Vec<_>>()}
-                    </ul>
+    state.adopt(drafts);
+    view! { <DraftList state publish_action delete_action /> }.into_any()
+}
+
+/// The resolved drafts list, with rows retained in the host-tested pagination state.
+#[component]
+fn DraftList(
+    state: DraftListState,
+    publish_action: ServerAction<Publish>,
+    delete_action: ServerAction<Delete>,
+) -> impl IntoView {
+    let load_more = Callback::new(move |_| {
+        let Some(claim) = state.begin_load_more() else {
+            return;
+        };
+        leptos::task::spawn_local(async move {
+            state.finish_load_more(
+                claim,
+                posts::list_drafts(Some(claim.cursor), Some(PageSize::default())).await,
+            );
+        });
+    });
+    let paint = Memo::new(move |_| state.paint());
+
+    view! {
+        <div data-test="drafts-list">
+            {move || match paint.get() {
+                Err(error) => view! { <p class="error">{error.to_string()}</p> }.into_any(),
+                Ok(DraftListPaint::Empty) => view! { <p>"You have no drafts."</p> }.into_any(),
+                Ok(DraftListPaint::Rows { drafts, load_more: more }) => {
+                    view! {
+                        <ul class="j-draft-list">
+                            {drafts
+                                .into_iter()
+                                .map(|draft| render_draft_row(draft, publish_action, delete_action))
+                                .collect::<Vec<_>>()}
+                        </ul>
+                        {match more {
+                            DraftLoadMorePaint::Hidden => ().into_any(),
+                            DraftLoadMorePaint::Ready => {
+                                draft_load_more_control(None, false, "Load more", load_more)
+                                    .into_any()
+                            }
+                            DraftLoadMorePaint::Loading => {
+                                draft_load_more_control(None, true, "Loading\u{2026}", load_more)
+                                    .into_any()
+                            }
+                            DraftLoadMorePaint::Failed(error) => {
+                                draft_load_more_control(Some(error), false, "Load more", load_more)
+                                    .into_any()
+                            }
+                        }}
+                    }
+                        .into_any()
                 }
-                .into_any()
-            }
-        }
-        Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+            }}
+        </div>
+    }
+}
+
+fn draft_load_more_control(
+    error: Option<WebError>,
+    disabled: bool,
+    label: &'static str,
+    on_load_more: Callback<leptos::ev::MouseEvent>,
+) -> impl IntoView {
+    view! {
+        {error.map(|error| view! { <p class="error">{error.to_string()}</p> })}
+        <p class="j-drafts-load-more">
+            <button
+                type="button"
+                class="j-btn"
+                data-test="drafts-load-more"
+                disabled=disabled
+                on:click=move |event| on_load_more.run(event)
+            >
+                {label}
+            </button>
+        </p>
     }
 }
 
