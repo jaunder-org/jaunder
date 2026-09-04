@@ -1,6 +1,6 @@
 //! Invites vertical — wasm-only UI (ADR-0070): the invite management page.
 
-use super::{Create, CreateInviteRequest, Info, PageAccess, resolve_page_access};
+use super::{Create, CreateInviteRequest, Info, PageAccess};
 use crate::auth;
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
@@ -30,7 +30,7 @@ pub fn InvitesPage() -> impl IntoView {
         || (),
         move |()| {
             let reconcile = session.reconcile;
-            async move { resolve_page_access(registration::get_policy().await, reconcile.await) }
+            async move { super::resolve_page_access(registration::get_policy().await, reconcile.await) }
         },
     );
 
