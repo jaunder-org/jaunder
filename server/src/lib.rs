@@ -41,8 +41,17 @@ use crate::{
 };
 use ::storage::{
     AppState, InstanceId, MediaContentLocks, MediaManager, MediaReferenceOwnershipResolver,
-    SessionStorage, WriteScope,
+    PasswordResetStorage, SessionStorage, SiteConfigStorage, UserStorage, WriteScope,
 };
+
+#[derive(Clone)]
+struct PasswordResetRequestDependencies {
+    users: Arc<dyn UserStorage>,
+    password_resets: Arc<dyn PasswordResetStorage>,
+    write_scope: WriteScope,
+    site_config: Arc<dyn SiteConfigStorage>,
+    mailer: Arc<dyn MailSender>,
+}
 
 async fn retire_session_cookie(
     axum::extract::State(secure): axum::extract::State<bool>,
@@ -137,10 +146,8 @@ where
         )
 }
 
-/// Builds a router with an injected foreign-reference ownership resolver.
-///
-/// This is the narrow test composition seam; production callers use
-/// [`create_router`], which installs the live resolver.
+/// Builds the production-shaped router with an injected foreign-reference
+/// ownership resolver. Tests needing only that seam use this constructor.
 ///
 /// # Errors
 ///
@@ -152,6 +159,58 @@ pub fn create_router_with_media_reference_ownership_resolver(
     secure_cookies: bool,
     storage_path: PathBuf,
     media_ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
+) -> Result<Router, axum::http::header::InvalidHeaderValue> {
+    create_router_with_dependencies(
+        state,
+        instance_id,
+        mailer,
+        secure_cookies,
+        storage_path,
+        media_ownership_resolver,
+        None,
+    )
+}
+
+/// Builds a router whose password-reset server-function dependencies are
+/// explicitly supplied for deterministic integration tests.
+///
+/// # Errors
+///
+/// Returns an error when the persisted instance identity cannot form an HTTP header.
+pub fn create_router_with_password_reset_dependencies_for_test(
+    state: Arc<AppState>,
+    mailer: Arc<dyn MailSender>,
+    storage_path: PathBuf,
+    users: Arc<dyn UserStorage>,
+    password_resets: Arc<dyn PasswordResetStorage>,
+    write_scope: WriteScope,
+    site_config: Arc<dyn SiteConfigStorage>,
+) -> Result<Router, axum::http::header::InvalidHeaderValue> {
+    create_router_with_dependencies(
+        state,
+        InstanceId::new(),
+        Arc::clone(&mailer),
+        false,
+        storage_path,
+        Arc::new(LiveMediaReferenceOwnershipResolver::new()),
+        Some(PasswordResetRequestDependencies {
+            users,
+            password_resets,
+            write_scope,
+            site_config,
+            mailer,
+        }),
+    )
+}
+
+fn create_router_with_dependencies(
+    state: Arc<AppState>,
+    instance_id: InstanceId,
+    mailer: Arc<dyn MailSender>,
+    secure_cookies: bool,
+    storage_path: PathBuf,
+    media_ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
+    password_reset_dependencies: Option<PasswordResetRequestDependencies>,
 ) -> Result<Router, axum::http::header::InvalidHeaderValue> {
     let instance_header = instance_id.to_string().parse::<HeaderValue>()?;
     let storage_path = Arc::new(storage_path);
@@ -185,11 +244,23 @@ pub fn create_router_with_media_reference_ownership_resolver(
         let publisher_service = Arc::clone(&publisher_service);
         let media_content_locks = Arc::clone(&media_content_locks);
         let media_manager = Arc::clone(&media_manager);
+        let password_reset_dependencies = password_reset_dependencies;
 
         move || {
             context::provide_app_state_contexts(&state, &publisher_service);
             context::provide_media_content_locks_context(&media_content_locks);
             context::provide_mailer_context(&mailer);
+            if let Some(dependencies) = &password_reset_dependencies {
+                provide_context::<Arc<dyn UserStorage>>(Arc::clone(&dependencies.users));
+                provide_context::<Arc<dyn PasswordResetStorage>>(Arc::clone(
+                    &dependencies.password_resets,
+                ));
+                provide_context::<WriteScope>(dependencies.write_scope.clone());
+                provide_context::<Arc<dyn SiteConfigStorage>>(Arc::clone(
+                    &dependencies.site_config,
+                ));
+                context::provide_mailer_context(&dependencies.mailer);
+            }
             context::provide_media_manager_context(&media_manager);
             provide_context(web::auth::CookieSettings {
                 secure: secure_cookies,

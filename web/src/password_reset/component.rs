@@ -1,39 +1,38 @@
 //! Password-reset vertical — wasm-only UI (ADR-0070): the forgot-password and
 //! reset-password pages.
 
-use super::{Confirm, ConfirmPasswordResetRequest, Request};
+use super::{Confirm, ConfirmPasswordResetRequest, PasswordResetIdentifier, Request};
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
 use crate::topbar::Topbar;
-use common::{MutationOutcome, password::PasswordShape, token::RawToken, username::Username};
+use common::{MutationOutcome, password::PasswordShape, token::RawToken};
 use leptos::prelude::*;
 use leptos_router::components::Redirect;
 
-/// Username form for requesting a password reset.
+/// Username-or-email form for requesting a password reset.
 ///
-/// On success renders a neutral confirmation message. On error (no verified
-/// email / contact operator) surfaces the error message directly.
+/// On success renders a neutral confirmation message; accepted requests never
+/// await or expose account-dependent delivery work.
 #[component]
 pub fn ForgotPasswordPage() -> impl IntoView {
     let request_action = ServerAction::<Request>::new();
-    let username = Field::<Username>::new();
+    let identifier = Field::<PasswordResetIdentifier>::new();
 
     view! {
         <Topbar title="Forgot Password" sub="Recover access" />
         <div class="j-scroll">
             <div class="j-page">
                 <ActionForm action=request_action>
-                    <ValidatedInput<Username>
-                        label="Username"
-                        name="username"
+                    <ValidatedInput<PasswordResetIdentifier>
+                        label="Username or email"
+                        name="identifier"
                         autocomplete="username"
-                        field=username
-                        transform=str::to_lowercase
+                        field=identifier
                     />
                     <button
                         type="submit"
                         class="j-btn is-primary"
-                        prop:disabled=move || !username.is_valid()
+                        prop:disabled=move || !identifier.is_valid()
                     >
                         "Send reset link"
                     </button>
@@ -42,22 +41,18 @@ pub fn ForgotPasswordPage() -> impl IntoView {
                     request_action
                         .value()
                         .get()
-                        .map(|result: Result<MutationOutcome<()>, WebError>| {
-                            match crate::mutation_feedback::classify(
-                                result,
-                                "The reset link may have been requested, but its status could not be confirmed. Refresh to check.",
-                            ) {
-                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => {
-                                    view! {
-                                        <p>
-                                            "If there is a verified email address on file, a reset link has been sent. Check your email."
-                                        </p>
-                                    }
-                                        .into_any()
+                        .map(|result: Result<(), WebError>| match result {
+                            Ok(()) => {
+                                view! {
+                                    <p>
+                                        "If there is a verified email address on file, a reset link has been sent. Check your email."
+                                    </p>
                                 }
-                                crate::mutation_feedback::MutationFeedback::Error(message) => {
-                                    view! { <p class="error">{message}</p> }.into_any()
-                                }
+                                    .into_any()
+                            }
+                            Err(error) => {
+                                let message = error.to_string();
+                                view! { <p class="error">{message}</p> }.into_any()
                             }
                         })
                 }}

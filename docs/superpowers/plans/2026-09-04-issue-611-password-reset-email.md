@@ -34,7 +34,7 @@ Out:
     `#[apply(backends)]` storage tests prove zero, one, duplicate, verified, and
     unverified rows remain observable to the caller on both backends.
 
-- [ ] Task 2: Cut over the neutral request and detach delivery
+- [x] Task 2: Cut over the neutral request and detach delivery
   - Contract: the existing endpoint, form, and every generated-wire caller move
     atomically to the typed `identifier` field and a `WebResult<()>` response;
     unit means only that a structurally valid request was accepted, never that
