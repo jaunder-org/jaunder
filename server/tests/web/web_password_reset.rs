@@ -436,28 +436,40 @@ async fn request_password_reset_base_url_failure_is_neutral_and_reported_once(
     assert_no_email(&mailer);
 }
 
-// A failed detached Email lookup must leave the public response neutral while
+// A failed detached lookup must leave the public response neutral while
 // reporting through the bounded server channel without exporting the identifier.
 #[apply(backends)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_password_reset_lookup_failure_is_neutral_and_reported_once(
     #[case] backend: Backend,
+    #[values("private-reset", "private-reset@example.test")] raw_identifier: &str,
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
     let (terminal_tx, terminal_rx) = oneshot::channel();
+    let identifier = raw_identifier
+        .parse::<web::password_reset::PasswordResetIdentifier>()
+        .expect("valid reset identifier");
     let mut users = MockUserStorage::new();
-    users.expect_get_users_by_email().return_once(move |_| {
-        terminal_tx.send(()).expect("worker reports lookup failure");
-        Err(sqlx::Error::Io(std::io::Error::other(
-            "lookup failed for private-reset@example.test submitted-identifier",
-        )))
-    });
-    let request = web::password_reset::Request {
-        identifier: web::password_reset::PasswordResetIdentifier::Email(parse_email(
-            "private-reset@example.test",
-        )),
-    };
+    match &identifier {
+        web::password_reset::PasswordResetIdentifier::Username(_) => {
+            users.expect_get_user_by_username().return_once(move |_| {
+                terminal_tx.send(()).expect("worker reports lookup failure");
+                Err(sqlx::Error::Io(std::io::Error::other(
+                    "lookup failed for private submitted identifier",
+                )))
+            });
+        }
+        web::password_reset::PasswordResetIdentifier::Email(_) => {
+            users.expect_get_users_by_email().return_once(move |_| {
+                terminal_tx.send(()).expect("worker reports lookup failure");
+                Err(sqlx::Error::Io(std::io::Error::other(
+                    "lookup failed for private submitted identifier",
+                )))
+            });
+        }
+    }
+    let request = web::password_reset::Request { identifier };
 
     let ((status, _body), event) = crate::assert_error_signal!(
         async {

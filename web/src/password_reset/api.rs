@@ -326,14 +326,28 @@ mod tests {
 
     #[test]
     fn password_reset_identifier_rejects_the_selected_invalid_variant() {
+        let email_error = "alice@"
+            .parse::<PasswordResetIdentifier>()
+            .expect_err("email-shaped invalid input is rejected as Email");
         assert!(matches!(
-            "alice@".parse::<PasswordResetIdentifier>(),
-            Err(InvalidPasswordResetIdentifier::Email(_))
+            email_error,
+            InvalidPasswordResetIdentifier::Email(_)
         ));
+        assert_eq!(email_error.user_message(), "invalid email address");
+        assert_eq!(email_error.telemetry_code(), "invalid_email");
+
+        let username_error = "alice.example"
+            .parse::<PasswordResetIdentifier>()
+            .expect_err("non-email invalid input is rejected as Username");
         assert!(matches!(
-            "alice.example".parse::<PasswordResetIdentifier>(),
-            Err(InvalidPasswordResetIdentifier::Username(_))
+            username_error,
+            InvalidPasswordResetIdentifier::Username(_)
         ));
+        assert_eq!(
+            username_error.user_message(),
+            "username must be non-empty and match [a-z0-9_-]+"
+        );
+        assert_eq!(username_error.telemetry_code(), "invalid_username");
     }
 
     #[cfg(feature = "server")]
