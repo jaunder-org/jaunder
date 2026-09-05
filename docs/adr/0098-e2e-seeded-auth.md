@@ -3,6 +3,11 @@
 - Status: accepted
 - Date: 2026-08-02
 - Issue: [#791](https://github.com/jaunder-org/jaunder/issues/791)
+- Amended: 2026-09-04
+  ([#1233](https://github.com/jaunder-org/jaunder/issues/1233)) — the pinned
+  Playwright 1.61 disposable init-script API replaces the original 1.58
+  companion-cookie workaround; the original constraint remains historical
+  context below.
 
 ## Context
 
@@ -27,11 +32,13 @@ Three constraints shape the alternative.
    written by the register/login flows and read by the pre-paint `<head>`
    script. A session with the cookie but no marker boots visibly anonymous and
    then flips — which is a layout shift, so the CLS specs fail outright.
-3. **Playwright 1.58.2 cannot remove an init script.** `addInitScript` gained a
-   `Disposable` return only in 1.59, and there is still no `removeInitScript`
+3. **Historical constraint.** At this decision's original acceptance, Playwright
+   1.58.2 could not remove an init script. `addInitScript` gained a `Disposable`
+   return in 1.59, although there was still no `removeInitScript`
    ([microsoft/playwright#29499](https://github.com/microsoft/playwright/issues/29499)).
-   Anything injected at context level is injected on _every_ subsequent document
-   load, for the life of the context.
+   Consequently, a context-level script then lived on every subsequent document
+   load for the context's lifetime. The pinned Playwright 1.61.1 API now lets
+   the helper dispose its replacement script directly.
 
 ## Decision
 
@@ -46,11 +53,17 @@ The e2e suite provisions authentication **out of band**, through the
   `common::session_user::encode_marker` — the codec having moved out of
   `web/src/auth/marker.rs` (which becomes a re-export) precisely so a non-leptos
   crate can reach it. Neither is re-spelled in TypeScript.
-- The helper injects the cookie via `context.addCookies` and the marker via a
-  **single, tombstoned init script per context**, whose payload rides in a
-  readable companion cookie the helper can rewrite. The script applies the
-  payload only when it differs from what it last applied, recording that in a
-  tombstone key.
+- The helper injects the cookie via `context.addCookies` and the marker via one
+  **disposable, tombstoned init script per context**. A
+  `WeakMap<BrowserContext, Disposable>` owns at most one seeded-auth script for
+  each context. Before installing a replacement, the helper disposes the mapped
+  script; a disposal failure leaves that entry intact, while successful disposal
+  removes it before installation. An installation failure consequently leaves no
+  entry. The helper immediately records the replacement after successful
+  installation, before injecting the session cookie, so a cookie-injection
+  failure still leaves the replacement owned for the next seed. The replacement
+  bakes the Rust-produced marker key and value plus a fresh per-seed nonce into
+  its payload. There is no readable companion cookie.
 - The helpers are named for what they do: `signInAsNewUser(page)`,
   `signInAsNewUserKnown(page)`, and `signInAs(page, username)`. The old
   `register()` / `registerKnown()` are removed rather than aliased — a
@@ -63,28 +76,29 @@ The e2e suite provisions authentication **out of band**, through the
 
 ### Why the tombstone, and not a fixed payload
 
-Given constraint 3, a fixed-payload init script is wrong in two ways that both
-produce _green-but-lying_ tests:
+The disposable replacement makes an identity switch deterministic: a re-seed
+disposes the prior context script before installing the new one, so no prior
+identity can remain registered. The tombstone remains necessary for logout,
+without any call-site cooperation:
 
-- After a UI logout, the app removes the marker — and the next full document
-  load silently re-injects it, so the page boots
+- After a UI logout, the app removes the marker — and a later full document load
+  must not silently re-inject it, or the page boots
   `html.authed data-user=<stale>`.
-- A second seed on the same context stacks a second script rather than replacing
-  the first, so which identity wins is registration order, not intent.
+- A same-user re-seed needs to reapply the marker after that logout even though
+  the marker value itself is unchanged.
 
-The tombstone fixes both **without any call-site cooperation**, which is the
-property that matters: no test has to remember to call a teardown helper. The
-companion cookie's value is a **per-seed nonce + the marker**, and the tombstone
-compares the whole value — so "same marker, new seed" is distinguishable from
-"same marker, same seed".
+Each replacement compares its baked nonce to the tombstone. It writes its marker
+and records its nonce only when they differ. Thus later loads leave marker
+ownership with the app after logout, while every new seed — including one for
+the same user — is distinguishable by nonce.
 
-| Event                                  | State                      | Effect                                 |
-| -------------------------------------- | -------------------------- | -------------------------------------- |
-| seed, first navigation                 | `applied` unset ≠ cookie   | writes marker + tombstone              |
-| later navigations                      | `applied` == cookie        | no-op; the app owns the marker         |
-| **UI logout**, then navigate           | `applied` == cookie        | no-op — the app's removal is respected |
-| **re-seed as another user**            | `applied` (A) ≠ cookie (B) | writes B's marker + tombstone          |
-| **logout, then re-seed the SAME user** | nonce differs              | re-applies the marker — boots authed   |
+| Event                                  | State                            | Effect                                 |
+| -------------------------------------- | -------------------------------- | -------------------------------------- |
+| seed, first navigation                 | `applied` unset ≠ script nonce   | writes marker + tombstone              |
+| later navigations                      | `applied` == script nonce        | no-op; the app owns the marker         |
+| **UI logout**, then navigate           | `applied` == script nonce        | no-op — the app's removal is respected |
+| **re-seed as another user**            | `applied` (A) ≠ script nonce (B) | writes B's marker + tombstone          |
+| **logout, then re-seed the SAME user** | nonce differs                    | re-applies the marker — boots authed   |
 
 Without the nonce, the last row would no-op (identical marker) and boot
 anonymous pre-paint despite a fresh valid session.
@@ -128,15 +142,10 @@ particular are the sole remaining coverage for `registration::register`,
   `auth.spec.ts:56` still logs in as one through the form.
 - Seeded sessions carry the label `"E2E seed"` (overridable), so they are
   distinguishable from real ones on `/sessions` and in debugging.
-- A readable companion cookie now exists in seeded contexts. It is e2e-only and
-  the server ignores it, but it _is_ sent on every request.
-- This rules out a test-only HTTP endpoint on the shipped server: nothing about
-  e2e seeding reaches the server's route surface, and nothing needs to be
-  feature-gated out of the production binary.
-- If Playwright is bumped to ≥ 1.59, the disposable return from `addInitScript`
-  would let the tombstone be simplified for the identity-switch case — but not
-  for the logout case, which needs no call-site cooperation only because of the
-  tombstone. The bump is filed separately.
+- There is no companion marker cookie. The marker payload exists only in the
+  disposable init script, and the server receives no e2e-only marker artifact.
+- Context closure remains Playwright's resource boundary. The helper adds no
+  close wrapper or explicit context teardown hook.
 - Anything that in future depends on a **third** client-visible auth artifact
   must either be seeded here too or be added to the holdout table. The marker
   was already such a surprise once.

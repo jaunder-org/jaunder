@@ -9,6 +9,8 @@
  * `/login`). The strict empirical layout-shift assertion is the follow-up #202.
  */
 
+import type { BrowserContext } from "@playwright/test";
+
 import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import {
   BASE_URL,
@@ -69,8 +71,8 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
 });
 
 // AC5 (#791): a seeded session — no UI flow — must satisfy the same pre-paint
-// contract as the registerViaUi holdout above. This is what proves D3's
-// tombstoned init script feeds the <head> script.
+// contract as the registerViaUi holdout above. This proves the disposable init
+// script feeds the <head> script.
 test("seeded: pre-paint auth marks html.authed and data-user", async ({
   page,
   firstNav,
@@ -83,9 +85,8 @@ test("seeded: pre-paint auth marks html.authed and data-user", async ({
 });
 
 // D3 (#791): after a UI logout the init script must NOT re-apply the seeded
-// marker — the tombstone (applied == companion cookie) makes it a no-op. The
-// pushState logout tests never re-run an init script, so only a full
-// post-logout navigation pins this.
+// marker — its matching tombstone makes it a no-op. The pushState logout tests
+// never re-run an init script, so only a full post-logout navigation pins this.
 test("seeded: logout survives a full navigation (tombstone respected)", async ({
   page,
   firstNav,
@@ -105,9 +106,8 @@ test("seeded: logout survives a full navigation (tombstone respected)", async ({
   await expect(page.locator(SEL.logoutLink)).toHaveCount(0);
 });
 
-// D3 (#791): the nonce row — seed → logout → re-seed the SAME user. The new
-// seed's companion value differs (fresh nonce), so the init script re-applies
-// the marker and the page boots authed again pre-paint.
+// D3 (#791): seed → logout → re-seed the SAME user. The fresh nonce makes the
+// replacement init script re-apply the marker and boot authenticated again.
 test("seeded: re-seed as the same user after logout boots authed", async ({
   page,
   firstNav,
@@ -126,6 +126,185 @@ test("seeded: re-seed as the same user after logout boots authed", async ({
 
   await expect(page.locator("html")).toHaveClass(/\bauthed\b/);
   await expect(page.locator("html")).toHaveAttribute("data-user", username);
+});
+
+test("seeded helper: replacing a session disposes before installing and injecting", async () => {
+  const events: string[] = [];
+  const live = new Set<number>();
+  let nextHandle = 0;
+  const context = {
+    async addInitScript(script: string) {
+      events.push(`install:${script}`);
+      const handle = ++nextHandle;
+      live.add(handle);
+      return {
+        async dispose() {
+          events.push(`dispose:${handle}`);
+          live.delete(handle);
+        },
+      };
+    },
+    async addCookies() {
+      events.push("cookie");
+    },
+  } as unknown as BrowserContext;
+  const session = {
+    setCookie: "session=token; Path=/; HttpOnly; SameSite=Lax",
+    markerKey: "marker-key",
+    marker: "marker-value",
+  };
+
+  await applySeededSession(context, session);
+  await applySeededSession(context, session);
+
+  expect(events.map((event) => event.split(":")[0])).toEqual([
+    "install",
+    "cookie",
+    "dispose",
+    "install",
+    "cookie",
+  ]);
+  expect(live).toEqual(new Set([2]));
+  expect(events[3]).toContain("marker-key");
+  expect(events[3]).toContain("marker-value");
+  expect(events[3]).not.toContain("document.cookie");
+});
+
+test("seeded helper: a disposal failure retains its handle for retry", async () => {
+  let disposeFails = false;
+  let disposeCalls = 0;
+  let installs = 0;
+  const context = {
+    async addInitScript() {
+      ++installs;
+      return {
+        async dispose() {
+          ++disposeCalls;
+          if (disposeFails) throw new Error("dispose failed");
+        },
+      };
+    },
+    async addCookies() {},
+  } as unknown as BrowserContext;
+  const session = {
+    setCookie: "session=token; Path=/; HttpOnly; SameSite=Lax",
+    markerKey: "marker-key",
+    marker: "marker-value",
+  };
+
+  await applySeededSession(context, session);
+  disposeFails = true;
+  await expect(applySeededSession(context, session)).rejects.toThrow(
+    "dispose failed",
+  );
+  disposeFails = false;
+  await applySeededSession(context, session);
+
+  expect(disposeCalls).toBe(2);
+  expect(installs).toBe(2);
+});
+
+test("seeded helper: an installation failure leaves the context untracked", async () => {
+  let installFails = false;
+  let disposeCalls = 0;
+  let installs = 0;
+  const context = {
+    async addInitScript() {
+      ++installs;
+      if (installFails) throw new Error("install failed");
+      return {
+        async dispose() {
+          ++disposeCalls;
+        },
+      };
+    },
+    async addCookies() {},
+  } as unknown as BrowserContext;
+  const session = {
+    setCookie: "session=token; Path=/; HttpOnly; SameSite=Lax",
+    markerKey: "marker-key",
+    marker: "marker-value",
+  };
+
+  await applySeededSession(context, session);
+  installFails = true;
+  await expect(applySeededSession(context, session)).rejects.toThrow(
+    "install failed",
+  );
+  installFails = false;
+  await applySeededSession(context, session);
+
+  expect(disposeCalls).toBe(1);
+  expect(installs).toBe(3);
+});
+
+test("seeded helper: a cookie failure retains the replacement for retry", async () => {
+  let cookieFails = false;
+  let installs = 0;
+  const disposed: number[] = [];
+  const context = {
+    async addInitScript() {
+      const handle = ++installs;
+      return {
+        async dispose() {
+          disposed.push(handle);
+        },
+      };
+    },
+    async addCookies() {
+      if (cookieFails) throw new Error("cookie failed");
+    },
+  } as unknown as BrowserContext;
+  const session = {
+    setCookie: "session=token; Path=/; HttpOnly; SameSite=Lax",
+    markerKey: "marker-key",
+    marker: "marker-value",
+  };
+
+  await applySeededSession(context, session);
+  cookieFails = true;
+  await expect(applySeededSession(context, session)).rejects.toThrow(
+    "cookie failed",
+  );
+  cookieFails = false;
+  await applySeededSession(context, session);
+
+  expect(disposed).toEqual([1, 2]);
+  expect(installs).toBe(3);
+});
+
+test("seeded: re-seeding replaces the pre-paint identity on existing and new pages", async ({
+  page,
+  firstNav,
+}) => {
+  const firstUser = await signInAsNewUser(page);
+  await goto(page, "/", { timeout: firstNav });
+  await expect(page.locator("html")).toHaveAttribute("data-user", firstUser);
+
+  const replacement = await createSessionViaTool("testlogin");
+  await applySeededSession(page.context(), replacement);
+  allowSecondBoot(
+    page,
+    "the replacement seeded identity is observable only after a later document load",
+  );
+  await goto(page, "/");
+  await expect(page.locator("html")).toHaveClass(/\bauthed\b/);
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-user",
+    replacement.username,
+  );
+
+  const newPage = await page.context().newPage();
+  try {
+    await goto(newPage, "/", { timeout: firstNav });
+    await expect(newPage.locator("html")).toHaveClass(/\bauthed\b/);
+    await expect(newPage.locator("html")).toHaveAttribute(
+      "data-user",
+      replacement.username,
+    );
+  } finally {
+    await newPage.close();
+  }
 });
 
 test(
