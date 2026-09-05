@@ -204,7 +204,7 @@ where
     for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     let mut ordered = desired.to_vec();
     ordered.sort_by_key(TagLabel::slug);

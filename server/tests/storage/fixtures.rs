@@ -5,7 +5,7 @@ use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
 use host::password::Password;
-use sqlx::SqlitePool;
+use sqlx::{AssertSqlSafe, SqlitePool};
 use storage::{AppState, DbConnectOptions};
 use tempfile::TempDir;
 
@@ -82,17 +82,21 @@ pub(super) async fn local_channel_id(backend: Backend, env: &TestEnv) -> Channel
 }
 
 pub(super) async fn channel_id_by_name(backend: Backend, env: &TestEnv, name: &str) -> ChannelId {
-    let sql = format!("SELECT channel_id FROM channels WHERE name = '{name}'");
-    let sql = sql.as_str();
     match backend {
-        Backend::Sqlite => sqlx::query_scalar::<_, ChannelId>(sql)
-            .fetch_one(&open_pool(&env.base).await)
-            .await
-            .unwrap(),
-        Backend::Postgres => sqlx::query_scalar::<_, ChannelId>(sql)
-            .fetch_one(env.base.pool().postgres())
-            .await
-            .unwrap(),
+        Backend::Sqlite => {
+            sqlx::query_scalar::<_, ChannelId>("SELECT channel_id FROM channels WHERE name = $1")
+                .bind(name)
+                .fetch_one(&open_pool(&env.base).await)
+                .await
+                .unwrap()
+        }
+        Backend::Postgres => {
+            sqlx::query_scalar::<_, ChannelId>("SELECT channel_id FROM channels WHERE name = $1")
+                .bind(name)
+                .fetch_one(env.base.pool().postgres())
+                .await
+                .unwrap()
+        }
     }
 }
 
@@ -104,17 +108,15 @@ pub(super) fn password(s: &str) -> Password {
     s.parse().unwrap()
 }
 
-// Run a statement on the FK-enabled pool for `backend`. This small per-backend
-// helper mirrors `open_pool`/`open_pg_pool`: it unwraps. Inlining integer ids via
-// `format!` is safe here (test-only, no untrusted input) and sidesteps the
-// SQLite/Postgres placeholder divergence.
+// Run unrestricted fixture SQL at this sole shared test helper boundary. Callers
+// use this only to set up persistence states unavailable through public stores.
 pub(super) async fn raw_exec(backend: Backend, env: &TestEnv, sql: &str) {
     let result = match backend {
-        Backend::Sqlite => sqlx::query(sql)
+        Backend::Sqlite => sqlx::query(AssertSqlSafe(sql))
             .execute(&open_pool(&env.base).await)
             .await
             .map(|_| ()),
-        Backend::Postgres => sqlx::query(sql)
+        Backend::Postgres => sqlx::query(AssertSqlSafe(sql))
             .execute(env.base.pool().postgres())
             .await
             .map(|_| ()),

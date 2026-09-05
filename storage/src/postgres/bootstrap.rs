@@ -90,23 +90,25 @@ pub async fn create_postgres_database_and_role(
     // `as_ref()` is the *only* place the password leaves its newtype: the `secret`
     // surface has no `Display`/serde/`Deref`/owned-`String`, so any other use of it
     // here would fail to compile.
-    let role_sql = format!(
+    // These utility statements cannot bind identifiers or the password literal.
+    // Their only dynamic fragments are backend-quoted role/database identifiers and password.
+    let role_sql = sqlx::AssertSqlSafe(format!(
         "CREATE ROLE {} WITH LOGIN PASSWORD {}",
         sql::quote_identifier(app_role),
         sql::quote_literal(app_role_password.as_ref()),
-    );
-    if !execute_utility(&mut admin_conn, &role_sql, "42710").await? {
+    ));
+    if !execute_utility(&mut admin_conn, role_sql, "42710").await? {
         return Err(PgBootstrapError::RoleExists(app_role.to_string()));
     }
 
     // CREATE DATABASE ... OWNER ... is another identifier-bearing utility
     // statement, so placeholders are not usable here either.
-    let create_db_sql = format!(
+    let create_db_sql = sqlx::AssertSqlSafe(format!(
         "CREATE DATABASE {} OWNER {}",
         sql::quote_identifier(database_name),
         sql::quote_identifier(app_role),
-    );
-    if !execute_utility(&mut admin_conn, &create_db_sql, "42P04").await? {
+    ));
+    if !execute_utility(&mut admin_conn, create_db_sql, "42P04").await? {
         return Err(PgBootstrapError::DatabaseExists(database_name.to_string()));
     }
 
@@ -118,7 +120,7 @@ pub async fn create_postgres_database_and_role(
 /// `Err` for any other database error.
 async fn execute_utility(
     conn: &mut PgConnection,
-    sql: &str,
+    sql: sqlx::AssertSqlSafe<String>,
     already_exists_code: &str,
 ) -> Result<bool, sqlx::Error> {
     match sqlx::query(sql).execute(&mut *conn).await {
@@ -191,10 +193,10 @@ mod tests {
 
         // Pre-create the target database so the bootstrap's CREATE DATABASE hits
         // the benign already-exists (42P04) path and reports DatabaseExists.
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "CREATE DATABASE {}",
             sql::quote_identifier(&db_name)
-        ))
+        )))
         .execute(&mut admin)
         .await
         .expect("pre-create database");
@@ -210,15 +212,18 @@ mod tests {
 
         // The role is created before the DB step fails, so drop both to leave the
         // shared cluster clean.
-        let _ = sqlx::query(&format!(
+        let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
             "DROP DATABASE {}",
             sql::quote_identifier(&db_name)
-        ))
+        )))
         .execute(&mut admin)
         .await;
-        let _ = sqlx::query(&format!("DROP ROLE {}", sql::quote_identifier(&role_name)))
-            .execute(&mut admin)
-            .await;
+        let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP ROLE {}",
+            sql::quote_identifier(&role_name)
+        )))
+        .execute(&mut admin)
+        .await;
     }
 
     // guard:low-level-db — exercises execute_utility's non-benign error passthrough
@@ -233,7 +238,12 @@ mod tests {
 
         // A syntax error's SQLSTATE (42601) never matches the already-exists code,
         // so execute_utility surfaces it as Err rather than the benign Ok(false).
-        let result = execute_utility(&mut admin, "NOT A VALID STATEMENT", "42710").await;
+        let result = execute_utility(
+            &mut admin,
+            sqlx::AssertSqlSafe("NOT A VALID STATEMENT".to_owned()),
+            "42710",
+        )
+        .await;
         assert!(result.is_err());
     }
 

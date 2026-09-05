@@ -167,11 +167,11 @@ pub trait QueryStorageExt<'q, DB: Database>: Sized {
 /// Adds typed value admission to sqlx's native query builders.
 ///
 /// Import this trait to use [`Self::push_storage_bind`].
-pub trait QueryBuilderStorageExt<'args, DB: Database> {
+pub trait QueryBuilderStorageExt<DB: Database> {
     /// Pushes an approved bind, retaining sqlx's native fluent builder API.
-    fn push_storage_bind<T>(&mut self, value: T) -> &mut Self
+    fn push_storage_bind<'args, T>(&mut self, value: T) -> &mut Self
     where
-        T: StorageBind + 'args + Encode<'args, DB> + Type<DB>;
+        T: StorageBind + Encode<'args, DB> + Type<DB>;
 }
 
 macro_rules! approve_storage_binds {
@@ -318,7 +318,7 @@ impl<T> sealed::StorageBind for [T] where T: StorageBind {}
 impl StorageBind for RowCount {}
 impl sealed::StorageBind for RowCount {}
 
-impl<'q, DB> QueryStorageExt<'q, DB> for Query<'q, DB, DB::Arguments<'q>>
+impl<'q, DB> QueryStorageExt<'q, DB> for Query<'q, DB, DB::Arguments>
 where
     DB: Database,
 {
@@ -330,7 +330,7 @@ where
     }
 }
 
-impl<'q, DB, O> QueryStorageExt<'q, DB> for QueryAs<'q, DB, O, DB::Arguments<'q>>
+impl<'q, DB, O> QueryStorageExt<'q, DB> for QueryAs<'q, DB, O, DB::Arguments>
 where
     DB: Database,
 {
@@ -342,7 +342,7 @@ where
     }
 }
 
-impl<'q, DB, O> QueryStorageExt<'q, DB> for QueryScalar<'q, DB, O, DB::Arguments<'q>>
+impl<'q, DB, O> QueryStorageExt<'q, DB> for QueryScalar<'q, DB, O, DB::Arguments>
 where
     DB: Database,
 {
@@ -354,27 +354,26 @@ where
     }
 }
 
-impl<'args, DB> QueryBuilderStorageExt<'args, DB> for QueryBuilder<'args, DB>
+impl<DB> QueryBuilderStorageExt<DB> for QueryBuilder<DB>
 where
     DB: Database,
 {
-    fn push_storage_bind<T>(&mut self, value: T) -> &mut Self
+    fn push_storage_bind<'args, T>(&mut self, value: T) -> &mut Self
     where
-        T: StorageBind + 'args + Encode<'args, DB> + Type<DB>,
+        T: StorageBind + Encode<'args, DB> + Type<DB>,
     {
         self.push_bind(value)
     }
 }
 
-impl<'qb, 'args, DB, Sep> QueryBuilderStorageExt<'args, DB> for Separated<'qb, 'args, DB, Sep>
+impl<DB, Sep> QueryBuilderStorageExt<DB> for Separated<'_, DB, Sep>
 where
-    'args: 'qb,
     DB: Database,
     Sep: Display,
 {
-    fn push_storage_bind<T>(&mut self, value: T) -> &mut Self
+    fn push_storage_bind<'args, T>(&mut self, value: T) -> &mut Self
     where
-        T: StorageBind + 'args + Encode<'args, DB> + Type<DB>,
+        T: StorageBind + Encode<'args, DB> + Type<DB>,
     {
         self.push_bind(value)
     }

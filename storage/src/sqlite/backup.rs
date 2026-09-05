@@ -2,6 +2,7 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::Path,
+    sync::Arc,
 };
 
 use futures_util::TryStreamExt;
@@ -151,11 +152,15 @@ pub(crate) async fn restore_database(
         let mut validation_report = RestoreValidationReport::default();
         // Clear every table before loading any, keeping the two backends' restore
         // shape identical (docs/adr/0115-clear-then-load-restore.md).
+        // Restore table names originate in the validated catalog and are SQLite-quoted.
         for table in &manifest.tables {
-            sqlx::query(&format!("DELETE FROM {}", sql::quote_identifier(table)))
-                .execute(&mut *connection)
-                .await
-                .map_err(map_restore_error)?;
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {}",
+                sql::quote_identifier(table)
+            )))
+            .execute(&mut *connection)
+            .await
+            .map_err(map_restore_error)?;
         }
         for table in backup::restore_table_order(&manifest.tables) {
             let table_name = CatalogTableName::from(table);
@@ -238,11 +243,12 @@ async fn import_table(
         .filter(|column| rows[0].contains_key(&column.name))
         .map(|column| column.name.clone())
         .collect::<Vec<_>>();
-    let insert = insert_sql(table, &column_names);
+    let insert = Arc::new(insert_sql(table, &column_names));
+    // The validated catalog contributes only quoted table/column names and generated placeholders.
 
     for row in rows {
         backup::validate_restore_row(table, &row, validation_report);
-        let mut query = sqlx::query(&insert);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(Arc::clone(&insert)));
         for column in &column_names {
             let value = row.get(column).ok_or_else(|| {
                 BackupError::InvalidBackup(format!("table {table} row is missing column {column}"))
@@ -275,10 +281,10 @@ fn insert_sql(table: &str, columns: &[String]) -> String {
 }
 
 /// Binds the closed set of backup NDJSON cell roles for `SQLite` restore.
-fn bind_restore_value<'q>(
-    query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
+fn bind_restore_value(
+    query: sqlx::query::Query<'_, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>,
     value: RestoreBindValue,
-) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
+) -> sqlx::query::Query<'_, sqlx::Sqlite, sqlx::sqlite::SqliteArguments> {
     match value {
         RestoreBindValue::Null => query.bind_storage(Option::<RestoreText>::None),
         RestoreBindValue::Boolean(value) => query.bind_storage(value),
@@ -307,11 +313,14 @@ async fn columns(
     connection: &mut SqliteConnection,
     table: &CatalogTableName,
 ) -> Result<Vec<ColumnInfo>, BackupError> {
+    // SQLite accepts no PRAGMA placeholder here, so this validated catalog identifier is quoted.
     let sql = format!(
         "PRAGMA table_info({})",
         sql::quote_identifier(table.as_str())
     );
-    let rows = sqlx::query(&sql).fetch_all(&mut *connection).await?;
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .fetch_all(&mut *connection)
+        .await?;
     rows.into_iter()
         .map(|row| {
             // `ColumnInfo` is a plain struct, so its field types police nothing — the
@@ -337,8 +346,9 @@ async fn export_table(
 ) -> Result<(), BackupError> {
     let file = File::create(destination_path.join("db").join(format!("{table}.ndjson")))?;
     let mut writer = BufWriter::new(file);
+    // JSON export has only backend-quoted catalog identifiers and fixed SQL fragments.
     let select = json_select(table, columns);
-    let mut rows = sqlx::query(&select).fetch(&mut *connection);
+    let mut rows = sqlx::query(sqlx::AssertSqlSafe(select)).fetch(&mut *connection);
 
     while let Some(row) = rows.try_next().await? {
         let json: BackupRowJson = row.try_get(0)?;

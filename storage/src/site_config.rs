@@ -584,7 +584,7 @@ where
     for<'q> String: Encode<'q, DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     async fn get_raw(&self, key: SiteConfigKey) -> Result<Option<String>> {
         let row = sqlx::query_as::<_, (StoredSiteConfigValue,)>(
@@ -841,7 +841,7 @@ where
     StoredSiteConfigValue: Type<DB>,
     for<'q> StoredSiteConfigValue: Encode<'q, DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     let connection = DB::write_connection(transaction)?;
     sqlx::query(

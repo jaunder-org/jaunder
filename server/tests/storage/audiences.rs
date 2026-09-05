@@ -317,14 +317,16 @@ async fn remove_member_confirmed(
 }
 
 async fn raw_scalar_i64(backend: Backend, env: &TestEnv, sql: &str) -> i64 {
+    // This helper intentionally accepts fixture-owned SQL shapes; approving
+    // them here keeps the unrestricted test boundary explicit.
     match backend {
-        Backend::Sqlite => sqlx::query_scalar::<_, i64>(sql)
+        Backend::Sqlite => sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
             .fetch_one(&open_pool(&env.base).await)
             .await
             .unwrap(),
         Backend::Postgres => {
             let pool = env.base.pool().postgres();
-            sqlx::query_scalar::<_, i64>(sql)
+            sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
                 .fetch_one(pool)
                 .await
                 .unwrap()

@@ -759,7 +759,7 @@ where
     for<'q> Option<UtcInstant>: Encode<'q, DB> + Type<DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     #[tracing::instrument(
         name = "storage.posts.create",
@@ -782,7 +782,7 @@ where
              FROM posts p JOIN users u ON p.user_id = u.user_id WHERE p.post_id = $1",
             tags = DB::TAGS_SUBQUERY,
         );
-        let record = sqlx::query_as::<_, PostRecord>(&sql)
+        let record = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
             .bind_storage(post_id)
             .fetch_one(connection)
             .await?;
@@ -903,7 +903,7 @@ where
                AND {resolution}",
             tags = DB::TAGS_SUBQUERY,
         );
-        let query = sqlx::query_as::<_, PostRecord>(&sql).bind_storage(post_id);
+        let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql)).bind_storage(post_id);
         Ok(binds.bind_onto(query).fetch_optional(&self.pool).await?)
     }
 
@@ -1248,7 +1248,7 @@ where
             tags = DB::TAGS_SUBQUERY,
             date_clause = DB::PERMALINK_DATE_CLAUSE,
         );
-        let query = sqlx::query_as::<_, PostRecord>(&sql)
+        let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
             .bind_storage(username)
             .bind_storage(slug)
             .bind_storage(date_text)
@@ -1283,7 +1283,7 @@ where
                AND (p.published_at IS NULL OR p.published_at > $4)
                AND p.deleted_at IS NULL"
         );
-        let row = sqlx::query_as::<_, PostRecord>(&sql)
+        let row = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
             .bind_storage(user_id)
             .bind_storage(slug)
             .bind_storage(date_text)
@@ -1430,7 +1430,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(username)
                 .bind_storage(cursor.created_at)
                 .bind_storage(cursor.created_at)
@@ -1460,7 +1460,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(username)
                 .bind_storage(now);
             binds
@@ -1504,7 +1504,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(cursor.created_at)
                 .bind_storage(cursor.created_at)
                 .bind_storage(cursor.post_id)
@@ -1532,7 +1532,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql).bind_storage(now);
+            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql)).bind_storage(now);
             binds
                 .bind_onto(query)
                 .bind_storage(limit)
@@ -1571,7 +1571,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT $6"
             );
-            sqlx::query_as::<_, PostRecord>(&sql)
+            sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(cursor.created_at)
                 .bind_storage(cursor.created_at)
@@ -1595,7 +1595,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT $3"
             );
-            sqlx::query_as::<_, PostRecord>(&sql)
+            sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(now)
                 .bind_storage(limit)
@@ -1633,7 +1633,7 @@ where
                  ORDER BY p.published_at ASC, p.post_id ASC
                  LIMIT $6"
             );
-            sqlx::query_as::<_, PostRecord>(&sql)
+            sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(cursor.published_at)
                 .bind_storage(cursor.published_at)
@@ -1656,7 +1656,7 @@ where
                  ORDER BY p.published_at ASC, p.post_id ASC
                  LIMIT $3"
             );
-            sqlx::query_as::<_, PostRecord>(&sql)
+            sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(now)
                 .bind_storage(limit)
@@ -1691,7 +1691,7 @@ where
                  ORDER BY p.updated_at DESC, p.post_id DESC
                  LIMIT $4"
             );
-            sqlx::query_as::<_, PostRecord>(&sql)
+            sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(cursor.updated_at)
                 .bind_storage(cursor.post_id)
@@ -1710,7 +1710,7 @@ where
                  ORDER BY p.updated_at DESC, p.post_id DESC
                  LIMIT $2"
             );
-            sqlx::query_as::<_, PostRecord>(&sql)
+            sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(limit)
                 .fetch_all(&self.pool)
@@ -1781,7 +1781,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(tag_slug)
                 .bind_storage(cursor.created_at)
                 .bind_storage(cursor.created_at)
@@ -1813,7 +1813,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(tag_slug)
                 .bind_storage(now);
             binds
@@ -1875,7 +1875,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(tag_slug)
                 .bind_storage(cursor.created_at)
@@ -1909,7 +1909,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(tag_slug)
                 .bind_storage(now);
@@ -4561,31 +4561,26 @@ mod tests {
         let post3_id = mk("deleted-post", true).seed(&env.state).await.post_id;
 
         // Give distinct updated_at (post2 more recent than post1) and soft-delete post3.
-        // ISO-8601 literals inlined so both backends accept the raw statement.
-        let t_older = (now - chrono::Duration::hours(2)).to_rfc3339();
-        let t_newer = (now - chrono::Duration::hours(1)).to_rfc3339();
-        let now_str = now.to_rfc3339();
-        env.base
-            .pool()
-            .execute(&format!(
-                "UPDATE posts SET updated_at = '{t_older}' WHERE post_id = {post1_id}"
-            ))
-            .await
-            .unwrap();
-        env.base
-            .pool()
-            .execute(&format!(
-                "UPDATE posts SET updated_at = '{t_newer}' WHERE post_id = {post2_id}"
-            ))
-            .await
-            .unwrap();
-        env.base
-            .pool()
-            .execute(&format!(
-                "UPDATE posts SET deleted_at = '{now_str}' WHERE post_id = {post3_id}"
-            ))
-            .await
-            .unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE posts SET updated_at = $1 WHERE post_id = $2")
+                .bind_storage(UtcInstant::from(now - chrono::Duration::hours(2)))
+                .bind_storage(post1_id)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE posts SET updated_at = $1 WHERE post_id = $2")
+                .bind_storage(UtcInstant::from(now - chrono::Duration::hours(1)))
+                .bind_storage(post2_id)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
+                .bind_storage(UtcInstant::from(now))
+                .bind_storage(post3_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         let results = env
             .state

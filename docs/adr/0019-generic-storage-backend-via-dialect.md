@@ -49,7 +49,7 @@ full menu (each store uses the subset it needs):
 - `for<'q> DateTime<Utc>: Encode<'q, DB> + Type<DB>` (only if it binds
   timestamps)
 - `for<'c> &'c Pool<DB>: Executor<'c, Database = DB>`
-- `for<'q> DB::Arguments<'q>: IntoArguments<'q, DB>`
+- `DB::Arguments: IntoArguments<DB>`
 - `<RowTuple>: for<'r> FromRow<'r, DB::Row>` (for `query_as`)
 
 A divergent trait's `XDialect` declaration likewise restates the subset its own

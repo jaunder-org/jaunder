@@ -158,8 +158,8 @@ impl ResolutionBinds {
     /// afterward, at the index [`resolution_where`] returned.
     pub(crate) fn bind_onto<'q, DB>(
         &'q self,
-        query: sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments<'q>>,
-    ) -> sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments<'q>>
+        query: sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments>,
+    ) -> sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments>
     where
         DB: Database,
         i64: Encode<'q, DB> + Type<DB>,
@@ -266,7 +266,7 @@ where
     for<'q> Option<AudienceId>: Encode<'q, DB> + Type<DB>,
     for<'q> TargetKind: Encode<'q, DB> + Type<DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     sqlx::query(DB::DELETE_POST_AUDIENCES)
         .bind_storage(post_id)

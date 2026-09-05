@@ -254,7 +254,7 @@ where
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
     for<'r> UtcInstant: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
 {
     #[tracing::instrument(
@@ -488,8 +488,8 @@ mod tests {
             Backend::Sqlite => {
                 pool.execute(&format!(
                     "CREATE TRIGGER block_audience_write \
-                     BEFORE {operation} ON audiences \
-                     BEGIN SELECT RAISE(FAIL, 'blocked'); END"
+                 BEFORE {operation} ON audiences \
+                 BEGIN SELECT RAISE(FAIL, 'blocked'); END"
                 ))
                 .await
                 .unwrap();
@@ -503,8 +503,8 @@ mod tests {
                 .unwrap();
                 pool.execute(&format!(
                     "CREATE TRIGGER block_audience_write \
-                     BEFORE {operation} ON audiences \
-                     FOR EACH ROW EXECUTE FUNCTION block_audience_write()"
+                 BEFORE {operation} ON audiences \
+                 FOR EACH ROW EXECUTE FUNCTION block_audience_write()"
                 ))
                 .await
                 .unwrap();

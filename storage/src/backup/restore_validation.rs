@@ -908,7 +908,8 @@ mod tests {
                 "PRAGMA table_info({})",
                 crate::sql::quote_identifier(&table)
             );
-            let rows = sqlx::query(&pragma)
+            // SQLite accepts no PRAGMA placeholder here; `table_set` supplies a quoted catalog name.
+            let rows = sqlx::query(sqlx::AssertSqlSafe(pragma))
                 .fetch_all(pool)
                 .await
                 .expect("read current SQLite schema columns");

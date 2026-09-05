@@ -253,7 +253,7 @@ pub struct PostMediaReferenceBackfill {
 
 /// Appends a dynamic evidence relation for one ownership decision.
 pub(crate) fn push_media_reference_evidence_cte<'a, DB>(
-    query: &mut QueryBuilder<'a, DB>,
+    query: &mut QueryBuilder<DB>,
     evidence: &'a MediaReferenceEvidence,
 ) where
     DB: Database,
@@ -304,7 +304,7 @@ pub(crate) fn push_media_reference_evidence_cte<'a, DB>(
 }
 
 pub(crate) fn push_live_media_reference_predicate<'a, DB>(
-    query: &mut QueryBuilder<'a, DB>,
+    query: &mut QueryBuilder<DB>,
     current_instance_id: &'a InstanceId,
 ) where
     DB: Database,
@@ -328,7 +328,7 @@ pub(crate) fn push_live_media_reference_predicate<'a, DB>(
 }
 
 pub(crate) fn push_owner_media_reference_from_where<DB>(
-    query: &mut QueryBuilder<'_, DB>,
+    query: &mut QueryBuilder<DB>,
     user_id: UserId,
     media: &MediaRef,
 ) where
@@ -350,7 +350,7 @@ pub(crate) fn push_owner_media_reference_from_where<DB>(
 }
 
 pub(crate) fn push_any_media_reference_from_where<DB>(
-    query: &mut QueryBuilder<'_, DB>,
+    query: &mut QueryBuilder<DB>,
     media: &MediaRef,
 ) where
     DB: Database,
@@ -368,7 +368,7 @@ pub(crate) fn push_any_media_reference_from_where<DB>(
 }
 
 pub(crate) fn push_other_owner_media_reference_from_where<DB>(
-    query: &mut QueryBuilder<'_, DB>,
+    query: &mut QueryBuilder<DB>,
     user_id: UserId,
     media: &MediaRef,
 ) where
@@ -432,7 +432,7 @@ where
     DB: PostDialect,
     (PostId, RenderedHtml): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     let posts: Vec<(PostId, RenderedHtml)> = sqlx::query_as(
         "SELECT p.post_id, p.rendered_html
@@ -471,7 +471,7 @@ where
     for<'q> String: Encode<'q, DB>,
     for<'q> &'q str: Encode<'q, DB> + Type<DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     let rows = media_reference_rows([(post_id, media)]);
     sqlx::query(DB::DELETE_POST_MEDIA)
@@ -492,7 +492,7 @@ where
     for<'q> String: Encode<'q, DB>,
     for<'q> &'q str: Encode<'q, DB> + Type<DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     sqlx::query(
         "DELETE FROM post_media
@@ -595,7 +595,7 @@ mod tests {
         let mut query = QueryBuilder::<sqlx::Sqlite>::new("");
         push_media_reference_evidence_cte(&mut query, &evidence);
         assert!(
-            query.sql().contains("), ("),
+            query.sql().as_str().contains("), ("),
             "multiple proofs must be separate CTE rows"
         );
     }

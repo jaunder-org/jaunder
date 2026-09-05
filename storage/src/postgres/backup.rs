@@ -2,6 +2,7 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::Path,
+    sync::Arc,
 };
 
 use futures_util::TryStreamExt;
@@ -138,11 +139,15 @@ pub(crate) async fn restore_database(
         // Clear every table before loading any: `SET CONSTRAINTS` defers foreign-key
         // *checks*, not `ON DELETE CASCADE` *actions*
         // (docs/adr/0115-clear-then-load-restore.md).
+        // Restore table names originate in the validated catalog and are PostgreSQL-quoted.
         for table in &manifest.tables {
-            sqlx::query(&format!("DELETE FROM {}", sql::quote_identifier(table)))
-                .execute(&mut *connection)
-                .await
-                .map_err(map_restore_error)?;
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {}",
+                sql::quote_identifier(table)
+            )))
+            .execute(&mut *connection)
+            .await
+            .map_err(map_restore_error)?;
         }
         for table in backup::restore_table_order(&manifest.tables) {
             let table_name = CatalogTableName::from(table);
@@ -219,11 +224,12 @@ async fn import_table(
         .filter(|column| rows[0].contains_key(&column.name))
         .cloned()
         .collect::<Vec<_>>();
-    let insert = insert_sql(table, &column_names);
+    let insert = Arc::new(insert_sql(table, &column_names));
+    // The validated catalog contributes only quoted table/column names, generated casts, and placeholders.
 
     for row in rows {
         backup::validate_restore_row(table, &row, validation_report);
-        let mut query = sqlx::query(&insert);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(Arc::clone(&insert)));
         for column in &column_names {
             let value = row.get(&column.name).ok_or_else(|| {
                 BackupError::InvalidBackup(format!(
@@ -319,14 +325,20 @@ async fn repair_sequences(connection: &mut PgConnection) -> Result<(), BackupErr
         let column = row
             .try_get::<CatalogColumnName, _>("column_name")?
             .into_inner();
-        let sql = format!(
+        // Catalog identifiers are quoted in identifier positions; the
+        // `pg_get_serial_sequence` text arguments use PostgreSQL literal quoting.
+        let table_literal = sql::quote_literal(&table);
+        let column_literal = sql::quote_literal(&column);
+        let table = sql::quote_identifier(&table);
+        let column = sql::quote_identifier(&column);
+        let sql = sqlx::AssertSqlSafe(format!(
             "SELECT setval(
-                pg_get_serial_sequence('{table}', '{column}'),
+                pg_get_serial_sequence({table_literal}, {column_literal}),
                 COALESCE((SELECT MAX({column}) FROM {table}), 1),
                 (SELECT COUNT(*) > 0 FROM {table})
             )"
-        );
-        sqlx::query(&sql).execute(&mut *connection).await?;
+        ));
+        sqlx::query(sql).execute(&mut *connection).await?;
     }
     Ok(())
 }
@@ -366,8 +378,9 @@ async fn export_table(
 ) -> Result<(), BackupError> {
     let file = File::create(destination_path.join("db").join(format!("{table}.ndjson")))?;
     let mut writer = BufWriter::new(file);
+    // JSON export has only backend-quoted catalog identifiers and fixed SQL fragments.
     let select = json_select(table, columns);
-    let mut rows = sqlx::query(&select).fetch(&mut *connection);
+    let mut rows = sqlx::query(sqlx::AssertSqlSafe(select)).fetch(&mut *connection);
 
     while let Some(row) = rows.try_next().await? {
         let json: BackupRowJson = row.try_get(0)?;

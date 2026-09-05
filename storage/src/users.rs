@@ -366,7 +366,7 @@ impl<DB: Database> UserStore<DB> {
         for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
         for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
         for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-        for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+        DB::Arguments: sqlx::IntoArguments<DB>,
     {
         let row = sqlx::query_as::<
             _,
@@ -495,7 +495,7 @@ where
     for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     #[tracing::instrument(
         skip(self, transaction, password, display_name),

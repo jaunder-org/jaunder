@@ -48,7 +48,7 @@ pub(crate) async fn ensure<DB>(pool: &Pool<DB>) -> Result<InstanceId>
 where
     DB: Database,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
     for<'q> InstanceId: Encode<'q, DB> + Type<DB>,
     for<'r> InstanceId: Decode<'r, DB> + Type<DB>,

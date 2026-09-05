@@ -479,10 +479,10 @@ mod tests {
             .pool()
             .execute(&format!(
                 "INSERT INTO post_media \
-                 (post_id, source, sha256, filename, reference_kind, reference_form) \
-                 VALUES ({post_id}, 'upload', \
-                 '0000000000000000000000000000000000000000000000000000000000000000', \
-                 'snapshot.jpg', 'legacy', 'legacy')"
+             (post_id, source, sha256, filename, reference_kind, reference_form) \
+             VALUES ({post_id}, 'upload', \
+             '0000000000000000000000000000000000000000000000000000000000000000', \
+             'snapshot.jpg', 'legacy', 'legacy')"
             ))
             .await
             .expect("seed legacy reference row");

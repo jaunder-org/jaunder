@@ -195,11 +195,11 @@ mod tests {
             self.pool
                 .execute(&format!(
                     "INSERT INTO subscriptions \
-                     (subscription_id, author_user_id, channel_id, subscriber_ref, status_id, created_at) \
-                     SELECT 202, 101, channels.channel_id, '{subscriber_ref}', \
-                            subscription_statuses.status_id, CURRENT_TIMESTAMP \
-                     FROM channels CROSS JOIN subscription_statuses \
-                     WHERE channels.name = 'local' AND subscription_statuses.name = 'active'"
+                 (subscription_id, author_user_id, channel_id, subscriber_ref, status_id, created_at) \
+                 SELECT 202, 101, channels.channel_id, '{subscriber_ref}', \
+                        subscription_statuses.status_id, CURRENT_TIMESTAMP \
+                 FROM channels CROSS JOIN subscription_statuses \
+                 WHERE channels.name = 'local' AND subscription_statuses.name = 'active'"
                 ))
                 .await
                 .unwrap();

@@ -169,7 +169,7 @@ pub(crate) fn bridge(spec: &BridgeSpec<'_>) -> TokenStream {
             {
                 fn encode_by_ref(
                     &self,
-                    buf: &mut <DB as ::sqlx::Database>::ArgumentBuffer<'q>,
+                    buf: &mut <DB as ::sqlx::Database>::ArgumentBuffer,
                 ) -> ::core::result::Result<::sqlx::encode::IsNull, ::sqlx::error::BoxDynError>
                 {
                     // The annotated local is load-bearing for the enum caller: it coerces

@@ -1,5 +1,6 @@
 use rstest::*;
 use rstest_reuse::*;
+use sqlx::AssertSqlSafe;
 use storage::test_support::{Backend, TestEnv, backends, seed_users};
 
 use super::fixtures::{open_pool, raw_exec};
@@ -34,9 +35,12 @@ async fn posts_published_at_index_exists(#[case] backend: Backend) {
     assert_eq!(names, vec!["idx_posts_published_at".to_string()]);
 }
 
+// This test's intentional invalid rows must reach SQLx unchanged so it can
+// observe the database constraint failure; approve them at this local fixture
+// execution seam rather than at the assertion call sites.
 async fn raw_try_exec(backend: Backend, env: &TestEnv, sql: &str) -> Result<(), sqlx::Error> {
     match backend {
-        Backend::Sqlite => sqlx::query(sql)
+        Backend::Sqlite => sqlx::query(AssertSqlSafe(sql))
             .execute(&open_pool(&env.base).await)
             .await
             .map(|_| ()),
@@ -45,7 +49,10 @@ async fn raw_try_exec(backend: Backend, env: &TestEnv, sql: &str) -> Result<(), 
             // the state seeded), rather than reconnecting a fresh pool via
             // `recorded_postgres_url`.
             let pool = env.base.pool().postgres();
-            sqlx::query(sql).execute(pool).await.map(|_| ())
+            sqlx::query(AssertSqlSafe(sql))
+                .execute(pool)
+                .await
+                .map(|_| ())
         }
     }
 }

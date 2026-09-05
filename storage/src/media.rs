@@ -313,7 +313,7 @@ where
     usize: sqlx::ColumnIndex<DB::Row>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     #[tracing::instrument(
         name = "storage.media.create",
@@ -796,7 +796,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "DELETE FROM media WHERE user_id = {user} AND source = '{}' \
-                 AND sha256 = '{}' AND filename = '{}'",
+             AND sha256 = '{}' AND filename = '{}'",
                 media.source, media.sha256, media.filename
             ))
             .await
@@ -859,7 +859,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "DELETE FROM media WHERE user_id = {user} AND source = '{}' \
-                 AND sha256 = '{}' AND filename = '{}'",
+             AND sha256 = '{}' AND filename = '{}'",
                 media.source, media.sha256, media.filename
             ))
             .await
@@ -929,7 +929,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "DELETE FROM media WHERE user_id = {user} AND source = '{}' \
-                 AND sha256 = '{}' AND filename = '{}'",
+             AND sha256 = '{}' AND filename = '{}'",
                 media.source, media.sha256, media.filename
             ))
             .await
@@ -1046,7 +1046,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-                 VALUES ({}, '{MEDIA_TEST_SHA256}', '../evil', 'upload', 'image/jpeg', 1)",
+             VALUES ({}, '{MEDIA_TEST_SHA256}', '../evil', 'upload', 'image/jpeg', 1)",
                 i64::from(user_id)
             ))
             .await
@@ -1085,7 +1085,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-                 VALUES ({}, '{MEDIA_TEST_SHA256}', 'photo.jpg', 'upload', 'image/jpeg', -1)",
+             VALUES ({}, '{MEDIA_TEST_SHA256}', 'photo.jpg', 'upload', 'image/jpeg', -1)",
                 i64::from(user_id)
             ))
             .await
@@ -1116,7 +1116,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-                 VALUES ({}, '{MEDIA_TEST_SHA256}', 'photo.jpg', 'upload', 'image/jpeg', -5)",
+             VALUES ({}, '{MEDIA_TEST_SHA256}', 'photo.jpg', 'upload', 'image/jpeg', -5)",
                 i64::from(user_id)
             ))
             .await
@@ -1160,7 +1160,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-                 VALUES ({}, 'not-a-valid-hash', 'bad.jpg', 'upload', 'image/jpeg', 1)",
+             VALUES ({}, 'not-a-valid-hash', 'bad.jpg', 'upload', 'image/jpeg', 1)",
                 i64::from(user_id)
             ))
             .await
@@ -1333,7 +1333,7 @@ mod tests {
             .pool()
             .execute(&format!(
                 "DELETE FROM media WHERE user_id = {user} AND source = '{}' \
-                 AND sha256 = '{}' AND filename = '{}'",
+             AND sha256 = '{}' AND filename = '{}'",
                 media.source, media.sha256, media.filename
             ))
             .await

@@ -61,7 +61,7 @@ where
     String: Type<DB>,
     for<'q> String: Encode<'q, DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     use common::feed::FeedSurface;
     let tags = DB::TAGS_SUBQUERY;
@@ -72,7 +72,7 @@ where
             // uses the last placeholders, so the returned `next` is discarded.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 4);
             let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(now)
                 .bind_storage(min_items)
                 .bind_storage(cutoff);
@@ -83,7 +83,7 @@ where
             // then the variant-sized ranked-CTE resolution fragment from $5.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(now)
                 .bind_storage(username)
                 .bind_storage(min_items)
@@ -95,7 +95,7 @@ where
             // the variant-sized ranked-CTE resolution fragment from $5.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(now)
                 .bind_storage(tag)
                 .bind_storage(min_items)
@@ -108,7 +108,7 @@ where
             // from $6.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 6);
             let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
                 .bind_storage(now)
                 .bind_storage(username)
                 .bind_storage(tag)
@@ -230,7 +230,7 @@ where
     PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     // `published_at > $1 AND published_at <= $2` selects exactly the posts
     // that crossed into "live" within the half-open window `(after, upto]`.
@@ -251,7 +251,7 @@ where
                AND {PUBLIC_AUDIENCE_PREDICATE}
              ORDER BY p.published_at ASC, p.post_id ASC"
     );
-    let rows = sqlx::query_as::<_, PostRecord>(&sql)
+    let rows = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
         .bind_storage(after)
         .bind_storage(upto)
         .fetch_all(pool)
@@ -282,7 +282,7 @@ where
     String: Type<DB>,
     for<'q> String: Encode<'q, DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     // Cached feeds live in the same database, so they are enumerated here
     // and, for each, the newest live post on that surface is compared
@@ -350,38 +350,40 @@ where
     String: Type<DB>,
     for<'q> String: Encode<'q, DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     use common::feed::FeedSurface;
+    // Every branch contains fixed SQL plus the audited static audience predicate;
+    // the surface's username/tag values remain bind parameters.
     let row: Option<(UtcInstant,)> = match surface {
         FeedSurface::Site => {
-            sqlx::query_as(&format!(
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "SELECT p.published_at FROM posts p
                  WHERE p.published_at IS NOT NULL AND p.published_at <= $1
                    AND p.deleted_at IS NULL
                    AND {PUBLIC_AUDIENCE_PREDICATE}
                  ORDER BY p.published_at DESC LIMIT 1"
-            ))
+            )))
             .bind_storage(now)
             .fetch_optional(pool)
             .await?
         }
         FeedSurface::User { username } => {
-            sqlx::query_as(&format!(
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "SELECT p.published_at FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.published_at IS NOT NULL AND p.published_at <= $1
                    AND p.deleted_at IS NULL AND u.username = $2
                    AND {PUBLIC_AUDIENCE_PREDICATE}
                  ORDER BY p.published_at DESC LIMIT 1"
-            ))
+            )))
             .bind_storage(now)
             .bind_storage(username)
             .fetch_optional(pool)
             .await?
         }
         FeedSurface::SiteTag { tag } => {
-            sqlx::query_as(&format!(
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "SELECT p.published_at FROM posts p
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
@@ -389,14 +391,14 @@ where
                    AND p.deleted_at IS NULL AND t.tag_slug = $2
                    AND {PUBLIC_AUDIENCE_PREDICATE}
                  ORDER BY p.published_at DESC LIMIT 1"
-            ))
+            )))
             .bind_storage(now)
             .bind_storage(tag)
             .fetch_optional(pool)
             .await?
         }
         FeedSurface::UserTag { username, tag } => {
-            sqlx::query_as(&format!(
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "SELECT p.published_at FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
@@ -405,7 +407,7 @@ where
                    AND p.deleted_at IS NULL AND u.username = $2 AND t.tag_slug = $3
                    AND {PUBLIC_AUDIENCE_PREDICATE}
                  ORDER BY p.published_at DESC LIMIT 1"
-            ))
+            )))
             .bind_storage(now)
             .bind_storage(username)
             .bind_storage(tag)
