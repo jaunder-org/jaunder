@@ -1,9 +1,9 @@
 use rstest::*;
 use rstest_reuse::*;
-use sqlx::AssertSqlSafe;
-use storage::test_support::{Backend, TestEnv, backends, seed_users};
+use storage::sql::QueryStorageExt;
+use storage::test_support::{Backend, backends, seed_users};
 
-use super::fixtures::{open_pool, raw_exec};
+use super::fixtures::open_pool;
 
 // Scheduled publishing (#70) relies on a standalone `published_at` index for the
 // `published_at <= now` reads and the worker's go-live range scans. This asserts
@@ -35,28 +35,6 @@ async fn posts_published_at_index_exists(#[case] backend: Backend) {
     assert_eq!(names, vec!["idx_posts_published_at".to_string()]);
 }
 
-// This test's intentional invalid rows must reach SQLx unchanged so it can
-// observe the database constraint failure; approve them at this local fixture
-// execution seam rather than at the assertion call sites.
-async fn raw_try_exec(backend: Backend, env: &TestEnv, sql: &str) -> Result<(), sqlx::Error> {
-    match backend {
-        Backend::Sqlite => sqlx::query(AssertSqlSafe(sql))
-            .execute(&open_pool(&env.base).await)
-            .await
-            .map(|_| ()),
-        Backend::Postgres => {
-            // Reuse the pool behind the per-test `AppState` (the same database
-            // the state seeded), rather than reconnecting a fresh pool via
-            // `recorded_postgres_url`.
-            let pool = env.base.pool().postgres();
-            sqlx::query(AssertSqlSafe(sql))
-                .execute(pool)
-                .await
-                .map(|_| ())
-        }
-    }
-}
-
 // The same-owner invariant (an audience and a subscription paired in
 // `audience_members` must belong to the same author) is enforced by the
 // database via two composite FKs that both point at the same `author_user_id`
@@ -73,37 +51,50 @@ async fn composite_fks_reject_cross_author_membership(#[case] backend: Backend) 
     // Users via the already-wired UserStore; audience + subscription via raw SQL.
     let [a, b] = seed_users(state).await;
 
-    raw_exec(
-        backend,
-        &env,
-        &format!("INSERT INTO audiences (author_user_id, name) VALUES ({a}, 'Friends')"),
-    )
-    .await;
-    raw_exec(
-        backend,
-        &env,
-        &format!(
+    let audience_insert = storage::with_closeable_pool!(env.base.pool(), pool, {
+        sqlx::query("INSERT INTO audiences (author_user_id, name) VALUES ($1, 'Friends')")
+            .bind_storage(a)
+            .execute(pool)
+            .await
+            .map(|_| ())
+    });
+    audience_insert.expect("audience fixture setup should succeed");
+
+    let subscriber_ref = b.to_string();
+    let subscription_insert = storage::with_closeable_pool!(env.base.pool(), pool, {
+        sqlx::query(
             "INSERT INTO subscriptions (author_user_id, channel_id, subscriber_ref, status_id) \
-             VALUES ({b}, (SELECT channel_id FROM channels WHERE name='local'), '{b}', \
-                     (SELECT status_id FROM subscription_statuses WHERE name='active'))"
-        ),
-    )
-    .await;
+             VALUES ($1, (SELECT channel_id FROM channels WHERE name = 'local'), $2, \
+                     (SELECT status_id FROM subscription_statuses WHERE name = 'active'))",
+        )
+        .bind_storage(b)
+        .bind(&subscriber_ref)
+        .execute(pool)
+        .await
+        .map(|_| ())
+    });
+    subscription_insert.expect("subscription fixture setup should succeed");
 
     for owner in [a, b] {
-        let res = raw_try_exec(
-            backend,
-            &env,
-            &format!(
-                "INSERT INTO audience_members (audience_id, subscription_id, author_user_id) VALUES (\
-                  (SELECT audience_id FROM audiences WHERE author_user_id={a} AND name='Friends'), \
-                  (SELECT subscription_id FROM subscriptions WHERE author_user_id={b} AND subscriber_ref='{b}'), \
-                  {owner})"
-            ),
-        )
-        .await;
+        let result = storage::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(
+                "INSERT INTO audience_members (audience_id, subscription_id, author_user_id) \
+                 VALUES (\
+                   (SELECT audience_id FROM audiences WHERE author_user_id = $1 AND name = 'Friends'), \
+                   (SELECT subscription_id FROM subscriptions \
+                    WHERE author_user_id = $2 AND subscriber_ref = $3), \
+                   $4)",
+            )
+            .bind_storage(a)
+            .bind_storage(b)
+            .bind(&subscriber_ref)
+            .bind_storage(owner)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        });
         assert!(
-            res.is_err(),
+            result.is_err(),
             "cross-author membership must be rejected by the DB (owner={owner})"
         );
     }

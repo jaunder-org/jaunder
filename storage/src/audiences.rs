@@ -480,34 +480,48 @@ mod tests {
         pool: &CloseablePool,
         write: BlockedAudienceWrite,
     ) {
-        let operation = match write {
-            BlockedAudienceWrite::Create => "INSERT",
-            BlockedAudienceWrite::Rename => "UPDATE",
-        };
-        match backend {
-            Backend::Sqlite => {
-                pool.execute(&format!(
+        match (backend, write) {
+            (Backend::Sqlite, BlockedAudienceWrite::Create) => pool
+                .execute(
                     "CREATE TRIGGER block_audience_write \
-                 BEFORE {operation} ON audiences \
-                 BEGIN SELECT RAISE(FAIL, 'blocked'); END"
-                ))
+                     BEFORE INSERT ON audiences \
+                     BEGIN SELECT RAISE(FAIL, 'blocked'); END",
+                )
                 .await
-                .unwrap();
-            }
-            Backend::Postgres => {
+                .unwrap(),
+            (Backend::Sqlite, BlockedAudienceWrite::Rename) => pool
+                .execute(
+                    "CREATE TRIGGER block_audience_write \
+                     BEFORE UPDATE ON audiences \
+                     BEGIN SELECT RAISE(FAIL, 'blocked'); END",
+                )
+                .await
+                .unwrap(),
+            (Backend::Postgres, write) => {
                 pool.execute(
                     "CREATE FUNCTION block_audience_write() RETURNS trigger AS $$ \
                      BEGIN RAISE EXCEPTION 'blocked'; END; $$ LANGUAGE plpgsql",
                 )
                 .await
                 .unwrap();
-                pool.execute(&format!(
-                    "CREATE TRIGGER block_audience_write \
-                 BEFORE {operation} ON audiences \
-                 FOR EACH ROW EXECUTE FUNCTION block_audience_write()"
-                ))
-                .await
-                .unwrap();
+                match write {
+                    BlockedAudienceWrite::Create => pool
+                        .execute(
+                            "CREATE TRIGGER block_audience_write \
+                             BEFORE INSERT ON audiences \
+                             FOR EACH ROW EXECUTE FUNCTION block_audience_write()",
+                        )
+                        .await
+                        .unwrap(),
+                    BlockedAudienceWrite::Rename => pool
+                        .execute(
+                            "CREATE TRIGGER block_audience_write \
+                             BEFORE UPDATE ON audiences \
+                             FOR EACH ROW EXECUTE FUNCTION block_audience_write()",
+                        )
+                        .await
+                        .unwrap(),
+                }
             }
         }
     }

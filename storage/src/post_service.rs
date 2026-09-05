@@ -2588,15 +2588,34 @@ mod tests {
             vec![AudienceTarget::Public]
         );
         for table in ["posts", "post_audiences", "post_media", "idempotency_keys"] {
-            assert_eq!(
-                env.base
+            let row_count = match table {
+                "posts" => env
+                    .base
                     .pool()
-                    .scalar_i64(&format!("SELECT COUNT(*) FROM {table}"))
+                    .scalar_i64("SELECT COUNT(*) FROM posts")
                     .await
                     .unwrap(),
-                1,
-                "the conflicting create left a row in {table}"
-            );
+                "post_audiences" => env
+                    .base
+                    .pool()
+                    .scalar_i64("SELECT COUNT(*) FROM post_audiences")
+                    .await
+                    .unwrap(),
+                "post_media" => env
+                    .base
+                    .pool()
+                    .scalar_i64("SELECT COUNT(*) FROM post_media")
+                    .await
+                    .unwrap(),
+                "idempotency_keys" => env
+                    .base
+                    .pool()
+                    .scalar_i64("SELECT COUNT(*) FROM idempotency_keys")
+                    .await
+                    .unwrap(),
+                _ => unreachable!("fixed table set"),
+            };
+            assert_eq!(row_count, 1, "the conflicting create left a row in {table}");
         }
     }
 

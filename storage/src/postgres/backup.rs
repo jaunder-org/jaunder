@@ -319,26 +319,25 @@ async fn repair_sequences(connection: &mut PgConnection) -> Result<(), BackupErr
     .fetch_all(&mut *connection)
     .await?;
     for row in serial_columns {
-        let table = row
-            .try_get::<CatalogTableName, _>("table_name")?
-            .into_inner();
-        let column = row
-            .try_get::<CatalogColumnName, _>("column_name")?
-            .into_inner();
-        // Catalog identifiers are quoted in identifier positions; the
-        // `pg_get_serial_sequence` text arguments use PostgreSQL literal quoting.
-        let table_literal = sql::quote_literal(&table);
-        let column_literal = sql::quote_literal(&column);
-        let table = sql::quote_identifier(&table);
-        let column = sql::quote_identifier(&column);
+        let table = row.try_get::<CatalogTableName, _>("table_name")?;
+        let column = row.try_get::<CatalogColumnName, _>("column_name")?;
+        // Catalog names are bound as text when passed to
+        // `pg_get_serial_sequence`; only their uses as table/column identifiers
+        // require PostgreSQL identifier quoting.
+        let table_identifier = sql::quote_identifier(table.as_str());
+        let column_identifier = sql::quote_identifier(column.as_str());
         let sql = AssertSqlSafe(format!(
             "SELECT setval(
-                pg_get_serial_sequence({table_literal}, {column_literal}),
-                COALESCE((SELECT MAX({column}) FROM {table}), 1),
-                (SELECT COUNT(*) > 0 FROM {table})
+                pg_get_serial_sequence($1, $2),
+                COALESCE((SELECT MAX({column_identifier}) FROM {table_identifier}), 1),
+                (SELECT COUNT(*) > 0 FROM {table_identifier})
             )"
         ));
-        sqlx::query(sql).execute(&mut *connection).await?;
+        sqlx::query(sql)
+            .bind_storage(table)
+            .bind_storage(column)
+            .execute(&mut *connection)
+            .await?;
     }
     Ok(())
 }
@@ -600,6 +599,36 @@ mod tests {
         .try_get::<RestoreText, _>("value")?;
         assert_eq!(json.as_str(), r#"{"items":[1,true]}"#);
 
+        Ok(())
+    }
+
+    // reason: executes the catalog-driven sequence repair on a live PostgreSQL
+    // table after an explicit-id insert, proving the next generated value advances.
+    #[apply(postgres_only)]
+    #[tokio::test]
+    async fn repair_sequences_advances_sequence_after_explicit_id(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let env = backend.setup().await;
+        let CloseablePool::Postgres(pool) = env.base.pool() else {
+            unreachable!("postgres_only yields a Postgres pool")
+        };
+        sqlx::query("CREATE TABLE sequence_repair_probe (post_id BIGSERIAL)")
+            .execute(pool)
+            .await?;
+        sqlx::query("INSERT INTO sequence_repair_probe (post_id) VALUES ($1)")
+            .bind_storage(common::ids::PostId::from(41))
+            .execute(pool)
+            .await?;
+
+        let mut connection = pool.acquire().await?;
+        repair_sequences(&mut connection).await?;
+        let next: common::ids::PostId = sqlx::query_scalar(
+            "INSERT INTO sequence_repair_probe DEFAULT VALUES RETURNING post_id",
+        )
+        .fetch_one(&mut *connection)
+        .await?;
+        assert_eq!(next, common::ids::PostId::from(42));
         Ok(())
     }
 

@@ -3,7 +3,8 @@
 use std::fmt::Display;
 
 use crate::backup::{
-    CatalogTableName, RestoreBoolean, RestoreInteger, RestoreJson, RestoreReal, RestoreText,
+    CatalogColumnName, CatalogTableName, RestoreBoolean, RestoreInteger, RestoreJson, RestoreReal,
+    RestoreText,
 };
 use crate::feed_cache::{
     FeedCacheGeneratedAt, FeedCacheRepresentationModifiedAt, StoredFeedBody,
@@ -241,6 +242,7 @@ approve_storage_binds!(
     StoredPasswordHash,
     SubscriberRef,
     UserConfigKey,
+    CatalogColumnName,
     CatalogTableName,
     RestoreBoolean,
     RestoreInteger,
@@ -276,13 +278,20 @@ use crate::email::CorruptEmailAddress;
 #[cfg(test)]
 use crate::invites::CorruptInviteCode;
 #[cfg(test)]
-use crate::posts::store::{CorruptPostFormat, CorruptPostSlug, CorruptTagSlug};
+use crate::posts::store::{
+    CorruptPostBody, CorruptPostFormat, CorruptPostSlug, CorruptPostSummary, CorruptPostTitle,
+    CorruptTagSlug,
+};
 #[cfg(test)]
 use crate::sessions::CorruptSessionTokenHash;
 #[cfg(any(test, feature = "test-support"))]
+use crate::subscriptions::CorruptSubscriberRef;
+#[cfg(any(test, feature = "test-support"))]
 use crate::test_support::{RawMediaFilename, TemplateDatabaseLockKey, TemplateDatabaseName};
 #[cfg(test)]
-use crate::users::CorruptUsername;
+use crate::users::{
+    CorruptBio, CorruptDisplayName, CorruptEmail, CorruptStoredPasswordHash, CorruptUsername,
+};
 
 #[cfg(any(test, feature = "test-support"))]
 approve_storage_binds!(
@@ -293,15 +302,24 @@ approve_storage_binds!(
 
 #[cfg(test)]
 approve_storage_binds!(
+    CorruptBio,
+    CorruptDisplayName,
+    CorruptEmail,
     CorruptEmailAddress,
     CorruptInviteCode,
+    CorruptPostBody,
     CorruptPostFormat,
     CorruptPostSlug,
+    CorruptPostSummary,
+    CorruptPostTitle,
     CorruptSessionTokenHash,
     CorruptTagSlug,
+    CorruptStoredPasswordHash,
     CorruptUsername,
     CatalogDatabaseName,
 );
+#[cfg(any(test, feature = "test-support"))]
+approve_storage_binds!(CorruptSubscriberRef,);
 
 impl<T> StorageBind for Option<T> where T: StorageBind {}
 impl<T> sealed::StorageBind for Option<T> where T: StorageBind {}

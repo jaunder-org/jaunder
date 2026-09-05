@@ -2,8 +2,9 @@
 //! database it owns, using superuser (bootstrap) credentials.
 //!
 //! These are DDL utility statements (`CREATE ROLE`, `CREATE DATABASE`) whose
-//! identifiers and password literals cannot be supplied through bind
-//! placeholders, so the SQL is assembled with explicit quoting helpers.
+//! identifiers and password literal cannot be supplied through bind
+//! placeholders. `PostgreSQL` escape-string syntax makes the password literal
+//! independent of the session's `standard_conforming_strings` setting.
 
 use common::pg_identifier::{PgDatabaseName, PgRoleName};
 use common::pg_role_password::PgRolePassword;
@@ -84,8 +85,8 @@ pub async fn create_postgres_database_and_role(
     let mut admin_conn = PgConnection::connect_with(bootstrap).await?;
 
     // The role name is an identifier and the password appears in a utility
-    // statement, so this SQL must be assembled with the quoting helpers rather
-    // than query placeholders.
+    // statement, so this SQL must be assembled with backend-owned quoting
+    // rather than query placeholders.
     //
     // `as_ref()` is the *only* place the password leaves its newtype: the `secret`
     // surface has no `Display`/serde/`Deref`/owned-`String`, so any other use of it
@@ -95,7 +96,7 @@ pub async fn create_postgres_database_and_role(
     let role_sql = AssertSqlSafe(format!(
         "CREATE ROLE {} WITH LOGIN PASSWORD {}",
         sql::quote_identifier(app_role),
-        sql::quote_literal(app_role_password.as_ref()),
+        quote_postgres_utility_literal(app_role_password.as_ref()),
     ));
     if !execute_utility(&mut admin_conn, role_sql, "42710").await? {
         return Err(PgBootstrapError::RoleExists(app_role.to_string()));
@@ -113,6 +114,16 @@ pub async fn create_postgres_database_and_role(
     }
 
     Ok(())
+}
+
+/// Quotes text for a `PostgreSQL` utility-statement literal.
+///
+/// `CREATE ROLE ... PASSWORD` does not accept a bind parameter. The `E` prefix
+/// selects `PostgreSQL`'s escape-string grammar regardless of
+/// `standard_conforming_strings`, so both a literal backslash and an apostrophe
+/// are represented unambiguously.
+fn quote_postgres_utility_literal(value: &str) -> String {
+    format!("E'{}'", value.replace('\\', "\\\\").replace('\'', "''"))
 }
 
 /// Runs a utility statement. Returns `Ok(true)` on success, `Ok(false)` when it
@@ -136,6 +147,18 @@ async fn execute_utility(
 
 fn pg_error_code_matches(code: Option<&str>, expected: &str) -> bool {
     code == Some(expected)
+}
+
+/// The database role reported by `PostgreSQL` after a bootstrap-created login.
+#[cfg(test)]
+#[derive(Debug, macros::SqlxBridge)]
+struct BootstrapCurrentRole(String);
+
+#[cfg(test)]
+impl BootstrapCurrentRole {
+    fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +198,61 @@ mod tests {
             create_postgres_database_and_role(&bootstrap, &app_role, &password, &app_db),
         )
         .await;
+    }
+
+    // guard:low-level-db — verifies PostgreSQL utility-literal escaping against
+    // a live server with standard_conforming_strings disabled; no SQLite analog.
+    #[tokio::test]
+    async fn create_postgres_database_and_role_preserves_delimiters_with_scs_off() {
+        let config = PostgresTestConfig::from_env();
+        let bootstrap: PgConnectOptions = config.bootstrap_url().parse().expect("bootstrap url");
+        let scs_off_bootstrap = bootstrap
+            .clone()
+            .options([("standard_conforming_strings", "off")]);
+        let suffix = unique_suffix();
+        let db_name = format!("cov_bootstrap_db_'\\_{suffix}");
+        let role_name = format!("cov_bootstrap_role_'\\_{suffix}");
+        let password = "secret'\\password";
+        let app_role: PgRoleName = role_name.parse().expect("role name");
+        let app_password: PgRolePassword = password.parse().expect("password");
+        let app_db: PgDatabaseName = db_name.parse().expect("database name");
+
+        create_postgres_database_and_role(&scs_off_bootstrap, &app_role, &app_password, &app_db)
+            .await
+            .expect("bootstrap succeeds with delimiter-bearing values and SCS off");
+
+        let app_options = bootstrap
+            .clone()
+            .username(&role_name)
+            .password(password)
+            .database(&db_name);
+        let mut app_connection = PgConnection::connect_with(&app_options)
+            .await
+            .expect("created role accepts the exact password");
+        let current_user: BootstrapCurrentRole = sqlx::query_scalar("SELECT current_user")
+            .fetch_one(&mut app_connection)
+            .await
+            .expect("created role can connect to its database");
+        assert_eq!(current_user.as_str(), role_name);
+        drop(app_connection);
+
+        let mut admin = PgConnection::connect_with(&bootstrap)
+            .await
+            .expect("admin connect");
+        sqlx::query(AssertSqlSafe(format!(
+            "DROP DATABASE {}",
+            sql::quote_identifier(&db_name)
+        )))
+        .execute(&mut admin)
+        .await
+        .expect("drop test database");
+        sqlx::query(AssertSqlSafe(format!(
+            "DROP ROLE {}",
+            sql::quote_identifier(&role_name)
+        )))
+        .execute(&mut admin)
+        .await
+        .expect("drop test role");
     }
 
     // guard:low-level-db — exercises the DatabaseExists arm of admin CREATE DATABASE

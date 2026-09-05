@@ -2036,6 +2036,20 @@ pub(crate) struct CorruptPostSlug(String);
 #[cfg(test)]
 #[derive(macros::SqlxBridge)]
 pub(crate) struct CorruptPostFormat(String);
+/// Test-only invalid `posts.summary` column value.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptPostSummary(String);
+
+/// Test-only invalid `posts.title` column value.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptPostTitle(String);
+
+/// Test-only invalid `posts.body` column value.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptPostBody(String);
 
 #[cfg(test)]
 mod tests {
@@ -4078,13 +4092,17 @@ mod tests {
             unpublish_post_scoped(&env.state, post_id, owner).await,
             Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
-        let publication_rows = format!(
-            "SELECT COUNT(*) FROM posts WHERE post_id = {} AND published_at IS NOT NULL",
-            i64::from(post_id)
-        );
+        let publication_rows = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM posts WHERE post_id = $1 AND published_at IS NOT NULL",
+            )
+            .bind_storage(post_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        });
         assert_eq!(
-            env.base.pool().scalar_i64(&publication_rows).await.unwrap(),
-            1,
+            publication_rows, 1,
             "the deleted rejection must not clear publication"
         );
     }
@@ -4454,11 +4472,14 @@ mod tests {
             .post_id;
 
         let overlong = "a".repeat(common::post_summary::MAX_POST_SUMMARY_CHARS + 1);
-        let sql = format!(
-            "UPDATE posts SET summary='{overlong}' WHERE post_id={}",
-            i64::from(post_id)
-        );
-        env.base.pool().execute(sql.as_str()).await.unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE posts SET summary = $1 WHERE post_id = $2")
+                .bind_storage(CorruptPostSummary(overlong))
+                .bind_storage(post_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         let result = posts
             .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
@@ -4488,11 +4509,14 @@ mod tests {
             .await
             .post_id;
 
-        let sql = format!(
-            "UPDATE posts SET title='' WHERE post_id={}",
-            i64::from(post_id)
-        );
-        env.base.pool().execute(sql.as_str()).await.unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE posts SET title = $1 WHERE post_id = $2")
+                .bind_storage(CorruptPostTitle(String::new()))
+                .bind_storage(post_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         let result = posts
             .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
@@ -4519,11 +4543,14 @@ mod tests {
             .await
             .post_id;
 
-        let sql = format!(
-            "UPDATE posts SET body='   ' WHERE post_id={}",
-            i64::from(post_id)
-        );
-        env.base.pool().execute(sql.as_str()).await.unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE posts SET body = $1 WHERE post_id = $2")
+                .bind_storage(CorruptPostBody("   ".to_owned()))
+                .bind_storage(post_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         let result = posts
             .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
