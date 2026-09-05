@@ -58,6 +58,8 @@
     "site::is_base_url_warning_visible",
     "site::update_identity",
     "site::update_media_uploads_enabled",
+    "smtp::get_settings",
+    "smtp::update_settings",
     "subscriptions::is_subscribed",
     "subscriptions::subscribe",
     "subscriptions::unsubscribe",

@@ -187,8 +187,9 @@ mod tests {
     use common::email::Email;
     use common::smtp_port::SmtpPort;
     use common::smtp_tls_mode::SmtpTlsMode;
-    use common::test_support::{parse_smtp_password, parse_smtp_username};
+    use common::test_support::parse_smtp_username;
     use host::smtp_config::SmtpConfig;
+    use host::test_support::parse_smtp_password;
     use std::str::FromStr;
 
     use super::*;

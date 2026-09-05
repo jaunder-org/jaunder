@@ -1228,10 +1228,11 @@ that.
 ### The size budget
 
 `cargo xtask validate` now fails when raw `pkg/jaunder.wasm` exceeds
-`WASM_RAW_CEILING_BYTES` (2 340 000 — 3.2% over the achieved size). The headroom
-is bounded on both sides: it absorbs an innocent dependency bump, but sits
-_below_ what `-Os` and `-O2` produce, so a downgrade of the optimisation level
-fails the gate. `audit-wasm` also now errors outright if the shipped wasm
+`WASM_RAW_CEILING_BYTES`. The SMTP relay operator UI (#638) remeasured the `-Oz`
+artifact at 2 700 875 bytes and recalibrated the ceiling to 2 785 000 (3.1%
+headroom). That headroom remains below the same bundle's measured `-Os` (2
+824 602) and `-O2` (2 864 716) outputs, so a downgrade of the optimisation level
+still fails the gate. `audit-wasm` also errors outright if the shipped wasm
 carries a name section, guarding the 1.28 MiB strip.
 
 Rejected: `panic = "abort"`. `rustc --print cfg --target wasm32-unknown-unknown`

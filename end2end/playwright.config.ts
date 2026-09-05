@@ -71,18 +71,19 @@ export default defineConfig({
     screenshot: "only-on-failure",
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
-  // admin-site, theme, media, and invite mutate global site-config singletons
-  // (site.title/base_url/theme; media.uploads_enabled; site.registration_policy, #433).
-  // Playwright's `fullyParallel: false` is only intra-file, so the mutating files live
-  // in dependent projects to prevent cross-file overlap under workers=2. Each gated
-  // browser runs its zero-retry visual contracts first, the parallel ordinary tests
-  // second, then admin-site/theme/media, then invite. Reciprocal tag filters keep each
-  // behavioral test in exactly one project. At workers=1 the ordinary/admin
-  // serialization is inert. WebKit is host-only and excludes visual tests.
+  // admin-site, SMTP, theme, media, and invite mutate global site-config
+  // singletons (site.title/base_url/theme; SMTP settings; media.uploads_enabled;
+  // site.registration_policy, #433). Playwright's `fullyParallel: false` is only
+  // intra-file, so the mutating files live in dependent projects to prevent cross-file
+  // overlap under workers=2. Each gated browser runs its zero-retry visual contracts
+  // first, the parallel ordinary tests second, then the serial admin-settings group,
+  // then invite. Reciprocal tag filters keep each behavioral test in exactly one
+  // project. At workers=1 the ordinary/admin serialization is inert. WebKit is
+  // host-only and excludes visual tests.
   projects: [
     {
       name: "chromium-visual",
-      testIgnore: /(admin-site|invite|media)\.spec\.ts/,
+      testIgnore: /(admin-site|smtp|invite|media)\.spec\.ts/,
       grep: visualTag,
       retries: 0,
       use: {
@@ -92,7 +93,7 @@ export default defineConfig({
     },
     {
       name: "chromium",
-      testIgnore: /(admin-site|theme|invite|media)\.spec\.ts/,
+      testIgnore: /(admin-site|smtp|theme|invite|media)\.spec\.ts/,
       grepInvert: visualTag,
       dependencies: ["chromium-visual"],
       use: {
@@ -102,7 +103,7 @@ export default defineConfig({
     },
     {
       name: "chromium-admin-site",
-      testMatch: /(admin-site|theme|media)\.spec\.ts/,
+      testMatch: /(admin-site|smtp|theme|media)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
@@ -125,7 +126,7 @@ export default defineConfig({
     },
     {
       name: "firefox-visual",
-      testIgnore: /(admin-site|invite|media)\.spec\.ts/,
+      testIgnore: /(admin-site|smtp|invite|media)\.spec\.ts/,
       grep: visualTag,
       retries: 0,
       use: {
@@ -135,7 +136,7 @@ export default defineConfig({
     },
     {
       name: "firefox",
-      testIgnore: /(admin-site|theme|invite|media)\.spec\.ts/,
+      testIgnore: /(admin-site|smtp|theme|invite|media)\.spec\.ts/,
       grepInvert: visualTag,
       dependencies: ["firefox-visual"],
       use: {
@@ -145,7 +146,7 @@ export default defineConfig({
     },
     {
       name: "firefox-admin-site",
-      testMatch: /(admin-site|theme|media)\.spec\.ts/,
+      testMatch: /(admin-site|smtp|theme|media)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
@@ -168,13 +169,13 @@ export default defineConfig({
     },
     {
       name: "webkit",
-      testIgnore: /(admin-site|theme|invite|media)\.spec\.ts/,
+      testIgnore: /(admin-site|smtp|theme|invite|media)\.spec\.ts/,
       grepInvert: visualTag,
       use: { ...devices["Desktop Safari"] },
     },
     {
       name: "webkit-theme",
-      testMatch: /(theme|media)\.spec\.ts/,
+      testMatch: /(smtp|theme|media)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,

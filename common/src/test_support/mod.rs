@@ -7,8 +7,7 @@ mod identity;
 
 pub use identity::{
     parse_audience_name, parse_bio, parse_display_name, parse_email, parse_raw_token,
-    parse_session_label, parse_smtp_password, parse_smtp_username, parse_token_hash,
-    parse_username,
+    parse_session_label, parse_smtp_username, parse_token_hash, parse_username,
 };
 
 mod content;

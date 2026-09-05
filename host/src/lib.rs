@@ -28,6 +28,7 @@ pub mod password;
 pub mod render;
 pub mod retention;
 pub mod smtp_config;
+pub mod smtp_password;
 pub mod stored_password_hash;
 pub mod telemetry;
 #[cfg(any(test, feature = "test-support"))]

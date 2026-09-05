@@ -17,7 +17,7 @@ pub(super) struct NavItem {
     pub(super) requires_operator: bool,
 }
 
-pub(super) static NAV_ITEMS: LazyLock<[NavItem; 17]> = LazyLock::new(|| {
+pub(super) static NAV_ITEMS: LazyLock<[NavItem; 18]> = LazyLock::new(|| {
     [
         NavItem {
             key: "home",
@@ -148,6 +148,14 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 17]> = LazyLock::new(|| {
             label: "Site Settings",
             icon_path: Icons::SHIELD,
             href: Some(root_relative_url("/admin/site")),
+            requires_auth: true,
+            requires_operator: true,
+        },
+        NavItem {
+            key: "admin-smtp",
+            label: "SMTP Relay",
+            icon_path: Icons::SHIELD,
+            href: Some(root_relative_url("/admin/smtp")),
             requires_auth: true,
             requires_operator: true,
         },
@@ -332,6 +340,7 @@ mod tests {
                 ("invites", "/invites"),
                 ("admin-backups", "/admin/backups"),
                 ("admin-site", "/admin/site"),
+                ("admin-smtp", "/admin/smtp"),
                 ("admin-websub", "/admin/websub"),
             ]
         );
@@ -365,6 +374,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(!viewer_items.contains(&"admin-backups"));
         assert!(!viewer_items.contains(&"admin-site"));
+        assert!(!viewer_items.contains(&"admin-smtp"));
 
         let operator_items = nav_items(RegistrationPolicy::Closed, true)
             .map(|item| {
@@ -381,6 +391,10 @@ mod tests {
         );
         assert!(
             operator_items.contains(&("admin-site", "/admin/site")),
+            "{operator_items:?}"
+        );
+        assert!(
+            operator_items.contains(&("admin-smtp", "/admin/smtp")),
             "{operator_items:?}"
         );
     }

@@ -11,7 +11,7 @@ use thiserror::Error;
 /// be rendered, serialised, logged, or value-compared (ADR-0011). The `macros` crate is
 /// the authoritative list of what `secret` emits.
 ///
-/// Unlike [`SmtpPassword`](crate::smtp_password::SmtpPassword) this is **not** a stored
+/// Unlike the host-only `SmtpPassword`, this is **not** a stored
 /// secret: it arrives as a clap argument and is consumed once during bootstrap, never
 /// written to or decoded from a column, so it takes no `sqlx` bridge.
 ///

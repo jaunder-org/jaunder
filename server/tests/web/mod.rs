@@ -10,5 +10,6 @@ mod web_media;
 mod web_password_reset;
 mod web_sessions;
 mod web_site;
+mod web_smtp;
 mod web_subscriptions;
 mod web_tags;

@@ -99,6 +99,7 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
             "set_backup_config",
             "set_default_audience",
             "set_theme",
+            "update_smtp_config",
         ],
     ),
     ("SubscriptionStorage", &["subscribe", "unsubscribe"]),
@@ -503,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_forty_eight_method_census_passes() {
+    fn exact_sixty_one_method_census_passes() {
         let source = complete_census().replacen(
             "trait MediaStorage {",
             "trait MediaStorage { async fn media_entry_is_reclaimable(&self, transaction: &mut WriteTransaction);",

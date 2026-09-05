@@ -91,7 +91,8 @@ mod tests {
     use common::smtp_port::SmtpPort;
     use common::smtp_sender::SmtpSender;
     use common::smtp_tls_mode::SmtpTlsMode;
-    use common::test_support::{parse_smtp_password, parse_smtp_username};
+    use common::test_support::parse_smtp_username;
+    use host::test_support::parse_smtp_password;
     use rstest::*;
     use rstest_reuse::*;
 

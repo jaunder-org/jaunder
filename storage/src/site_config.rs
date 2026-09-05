@@ -8,14 +8,13 @@ use common::media::{MaxFileSize, UserQuota};
 use common::text;
 use host::config_key::SiteConfigKey;
 use host::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
-use host::smtp_config::SmtpConfig;
+use host::smtp_config::{SmtpConfig, SmtpConfigUpdate, SmtpCredentialsUpdate};
 // Re-exported so `storage::RegistrationPolicy` keeps resolving for call sites, and
 // used by `get_registration_policy` below (the typed config accessor, #607).
 use crate::WriteTransaction;
 pub use common::registration::RegistrationPolicy;
 use common::site::{SiteIdentity, SiteTitle};
 use common::smtp_host::SmtpHost;
-use common::smtp_password::SmtpPassword;
 use common::smtp_port::SmtpPort;
 use common::smtp_sender::SmtpSender;
 use common::smtp_tls_mode::SmtpTlsMode;
@@ -23,7 +22,9 @@ use common::smtp_username::SmtpUsername;
 use common::tagged_url::{BaseUrl, HubUrl};
 use common::theme::Theme;
 use common::visibility::DefaultAudience;
+use host::smtp_password::SmtpPassword;
 use sqlx::{Database, Encode, Executor, Pool, Result, Type};
+use thiserror::Error;
 
 #[cfg(test)]
 use std::sync::Arc;
@@ -71,6 +72,14 @@ pub trait SiteConfigStorage: Send + Sync {
     /// ([`SmtpPort`] 587, [`SmtpTlsMode::StartTls`], [`SmtpSender`]
     /// `Jaunder <noreply@localhost>`).
     async fn get_smtp_config(&self) -> Result<Option<SmtpConfig>>;
+
+    /// Applies one authoritative SMTP aggregate update in the caller-owned
+    /// write transaction.
+    async fn update_smtp_config(
+        &self,
+        transaction: &mut WriteTransaction,
+        update: &SmtpConfigUpdate,
+    ) -> std::result::Result<(), SmtpConfigUpdateError>;
 
     /// Returns whether new media uploads are enabled. Missing configuration preserves
     /// existing behavior; malformed physical data fails closed. Database read failures
@@ -402,13 +411,18 @@ impl<DB: Database> SiteConfigStore<DB> {
     }
 }
 
-/// The one-row read behind every typed site-config value.
-///
-/// Named once, then written out per value type in [`SiteConfigStorage::get_smtp_config`]:
-/// neither a generic helper (`query_as::<_, (T,)>`) nor a macro can carry the decode
-/// target in a form the `sqlx-newtype-decode` gate can resolve, and six repetitions the
-/// gate reads are worth more than one abstraction it cannot.
-const SELECT_VALUE_SQL: &str = "SELECT value FROM site_config WHERE key = $1";
+const SMTP_CONFIG_KEYS: [SiteConfigKey; 6] = [
+    SiteConfigKey::SmtpHost,
+    SiteConfigKey::SmtpPort,
+    SiteConfigKey::SmtpTlsMode,
+    SiteConfigKey::SmtpSender,
+    SiteConfigKey::SmtpUsername,
+    SiteConfigKey::SmtpPassword,
+];
+
+fn is_smtp_config_key(key: SiteConfigKey) -> bool {
+    SMTP_CONFIG_KEYS.contains(&key)
+}
 
 /// A site-config value preserved exactly until its key-specific read policy parses it.
 #[derive(Debug, macros::SqlxBridge)]
@@ -481,6 +495,62 @@ impl FeedsConfigReadGate {
     }
 }
 
+/// One coherent, key-labelled typed snapshot of all SMTP rows.
+#[derive(sqlx::FromRow)]
+struct SmtpConfigRow {
+    #[sqlx(rename = "smtp.host")]
+    host: Option<SmtpHost>,
+    #[sqlx(rename = "smtp.port")]
+    port: Option<SmtpPort>,
+    #[sqlx(rename = "smtp.tls_mode")]
+    tls_mode: Option<SmtpTlsMode>,
+    #[sqlx(rename = "smtp.sender")]
+    sender: Option<SmtpSender>,
+    #[sqlx(rename = "smtp.username")]
+    username: Option<SmtpUsername>,
+    #[sqlx(rename = "smtp.password")]
+    password: Option<SmtpPassword>,
+}
+
+/// A stale password-preserving update cannot construct an authenticated pair.
+#[derive(Debug, Error)]
+pub enum SmtpConfigUpdateError {
+    /// The requested `Keep` has no stored password in this transaction.
+    #[error("SMTP password is no longer configured")]
+    MissingStoredPassword,
+    /// The aggregate operation's database failure.
+    #[error("SMTP configuration database error")]
+    Database(#[from] sqlx::Error),
+}
+fn label_smtp_decode_error(error: sqlx::Error) -> sqlx::Error {
+    match error {
+        sqlx::Error::ColumnDecode { index, source } => sqlx::Error::ColumnDecode {
+            index: index.trim_matches('"').to_owned(),
+            source,
+        },
+        error => error,
+    }
+}
+
+/// Serializes every mutation that can change the SMTP aggregate.
+///
+/// `SQLite`'s write scope already owns its `BEGIN IMMEDIATE` writer gate. `PostgreSQL`
+/// needs this transaction-scoped advisory lock because generic key mutations and
+/// aggregate updates otherwise have no shared row to lock.
+async fn lock_smtp_config<DB>(connection: &mut DB::Connection) -> Result<()>
+where
+    DB: Backend,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    if DB::DB_SYSTEM == "postgres" {
+        sqlx::query("SELECT pg_advisory_xact_lock(638)")
+            .execute(connection)
+            .await?;
+    }
+    Ok(())
+}
+
 #[derive(sqlx::FromRow)]
 struct FeedsConfigRow {
     min_items: Option<StoredSiteConfigValue>,
@@ -500,24 +570,6 @@ impl StoredSiteConfigKey {
 
 type SiteConfigExportRow = (StoredSiteConfigKey, StoredSiteConfigValue);
 
-/// Re-labels a decode failure with the **key** it came from.
-///
-/// sqlx names the column by its position (`0`), which for six single-column reads of the
-/// same table says nothing. The key is what makes a corrupt row actionable, and it is what
-/// [`crate::load_smtp_config`] reads back to tell a credential failure (whose value is
-/// never echoed) from a plain value one.
-fn label_decode_error(key: SiteConfigKey, error: sqlx::Error) -> sqlx::Error {
-    let sqlx::Error::ColumnDecode { source, .. } = error else {
-        // A non-decode failure (pool closed, connection lost) has no key to add and passes
-        // through unchanged; reaching it needs fault injection.
-        return error; // cov:ignore
-    };
-    sqlx::Error::ColumnDecode {
-        index: key.as_ref().to_owned(),
-        source,
-    }
-}
-
 #[async_trait]
 impl<DB> SiteConfigStorage for SiteConfigStore<DB>
 where
@@ -525,19 +577,9 @@ where
     (StoredSiteConfigValue,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (StoredSiteConfigKey,): for<'r> sqlx::FromRow<'r, DB::Row>,
     SiteConfigExportRow: for<'r> sqlx::FromRow<'r, DB::Row>,
-    // The SMTP value types decode from the `value` column via their validating sqlx
-    // bridges (#438, #687); these bounds make the bridges available on the generic
-    // backend.
-    (SmtpHost,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (SmtpPort,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (SmtpTlsMode,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    SmtpConfigRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     FeedsConfigRow: for<'r> sqlx::FromRow<'r, DB::Row>,
-    (SmtpSender,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (SmtpUsername,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (SmtpPassword,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> &'q str: Encode<'q, DB> + Type<DB>,
-    // `SiteConfigKey`'s sqlx bridge reports `String` as its type (the token is bound as
-    // borrowed text), so binding a key directly needs `String: Type<DB>` in scope.
     String: Type<DB>,
     for<'q> String: Encode<'q, DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
@@ -600,9 +642,11 @@ where
     async fn install_feeds_config_read_gate(&self, gate: Option<Arc<FeedsConfigReadGate>>) {
         *self.feeds_config_read_gate.write().await = gate;
     }
+
     #[tracing::instrument(
         name = "storage.site_config.set",
         skip(self, transaction, value),
+
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn set(
@@ -621,68 +665,127 @@ where
                 "feed settings must be changed through PublisherStorage".to_owned(),
             ));
         }
+        if is_smtp_config_key(key) {
+            let connection = DB::write_connection(transaction)?;
+            lock_smtp_config::<DB>(&mut *connection).await?;
+        }
         set_stored::<DB>(transaction, key, StoredSiteConfigValue(value.to_owned())).await
     }
 
     async fn get_smtp_config(&self) -> Result<Option<SmtpConfig>> {
-        // Six direct reads, each decoding the `value` column straight into its newtype via
-        // that type's sqlx bridge: a garbage stored value fails `FromStr` and surfaces as a
-        // `ColumnDecode` labelled with the key (see `read_value`), never as a silently
-        // coerced default.
-        let host = sqlx::query_as::<_, (SmtpHost,)>(SELECT_VALUE_SQL)
-            .bind_storage(SiteConfigKey::SmtpHost)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| label_decode_error(SiteConfigKey::SmtpHost, e))?
-            .map(|(host,)| host);
-        let Some(host) = host else {
-            // No host is not a misconfiguration: it is how an instance says "no SMTP".
+        let row = sqlx::query_as::<_, SmtpConfigRow>(
+            "SELECT \
+             MAX(CASE WHEN key = 'smtp.host' THEN value END) AS \"smtp.host\", \
+             MAX(CASE WHEN key = 'smtp.port' THEN value END) AS \"smtp.port\", \
+             MAX(CASE WHEN key = 'smtp.tls_mode' THEN value END) AS \"smtp.tls_mode\", \
+             MAX(CASE WHEN key = 'smtp.sender' THEN value END) AS \"smtp.sender\", \
+             MAX(CASE WHEN key = 'smtp.username' THEN value END) AS \"smtp.username\", \
+             MAX(CASE WHEN key = 'smtp.password' THEN value END) AS \"smtp.password\" \
+             FROM site_config \
+             WHERE key IN ('smtp.host', 'smtp.port', 'smtp.tls_mode', 'smtp.sender', \
+                           'smtp.username', 'smtp.password')",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(label_smtp_decode_error)?;
+        let Some(host) = row.host else {
             return Ok(None);
         };
-
-        let port = sqlx::query_as::<_, (SmtpPort,)>(SELECT_VALUE_SQL)
-            .bind_storage(SiteConfigKey::SmtpPort)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| label_decode_error(SiteConfigKey::SmtpPort, e))?
-            .map_or_else(SmtpPort::default, |(port,)| port);
-
-        let tls_mode = sqlx::query_as::<_, (SmtpTlsMode,)>(SELECT_VALUE_SQL)
-            .bind_storage(SiteConfigKey::SmtpTlsMode)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| label_decode_error(SiteConfigKey::SmtpTlsMode, e))?
-            .map_or_else(SmtpTlsMode::default, |(tls_mode,)| tls_mode);
-
-        let sender = sqlx::query_as::<_, (SmtpSender,)>(SELECT_VALUE_SQL)
-            .bind_storage(SiteConfigKey::SmtpSender)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| label_decode_error(SiteConfigKey::SmtpSender, e))?
-            .map_or_else(SmtpSender::default, |(sender,)| sender);
-
-        let username = sqlx::query_as::<_, (SmtpUsername,)>(SELECT_VALUE_SQL)
-            .bind_storage(SiteConfigKey::SmtpUsername)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| label_decode_error(SiteConfigKey::SmtpUsername, e))?
-            .map(|(username,)| username);
-
-        let password = sqlx::query_as::<_, (SmtpPassword,)>(SELECT_VALUE_SQL)
-            .bind_storage(SiteConfigKey::SmtpPassword)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| label_decode_error(SiteConfigKey::SmtpPassword, e))?
-            .map(|(password,)| password);
-
         Ok(Some(SmtpConfig {
             host,
-            port,
-            tls_mode,
-            username,
-            password,
-            sender,
+            port: row.port.unwrap_or_default(),
+            tls_mode: row.tls_mode.unwrap_or_default(),
+            username: row.username,
+            password: row.password,
+            sender: row.sender.unwrap_or_default(),
         }))
+    }
+
+    async fn update_smtp_config(
+        &self,
+        transaction: &mut WriteTransaction,
+        update: &SmtpConfigUpdate,
+    ) -> std::result::Result<(), SmtpConfigUpdateError> {
+        let connection = DB::write_connection(transaction)?;
+        lock_smtp_config::<DB>(&mut *connection).await?;
+
+        match update {
+            SmtpConfigUpdate::Disabled => {
+                for key in SMTP_CONFIG_KEYS {
+                    delete_stored::<DB>(&mut *connection, key).await?;
+                }
+            }
+            SmtpConfigUpdate::Enabled {
+                host,
+                port,
+                tls_mode,
+                sender,
+                credentials,
+            } => {
+                let password_exists = sqlx::query_as::<_, (StoredSiteConfigValue,)>(
+                    "SELECT value FROM site_config WHERE key = 'smtp.password'",
+                )
+                .fetch_optional(&mut *connection)
+                .await?
+                .is_some();
+                if matches!(credentials, SmtpCredentialsUpdate::Keep { .. }) && !password_exists {
+                    return Err(SmtpConfigUpdateError::MissingStoredPassword);
+                }
+                set_stored_on::<DB>(
+                    &mut *connection,
+                    SiteConfigKey::SmtpHost,
+                    StoredSiteConfigValue(host.as_ref().to_owned()),
+                )
+                .await?;
+                set_stored_on::<DB>(
+                    &mut *connection,
+                    SiteConfigKey::SmtpPort,
+                    StoredSiteConfigValue(port.to_string()),
+                )
+                .await?;
+                set_stored_on::<DB>(
+                    &mut *connection,
+                    SiteConfigKey::SmtpTlsMode,
+                    StoredSiteConfigValue(tls_mode.as_ref().to_owned()),
+                )
+                .await?;
+                set_stored_on::<DB>(
+                    &mut *connection,
+                    SiteConfigKey::SmtpSender,
+                    StoredSiteConfigValue(sender.as_ref().to_owned()),
+                )
+                .await?;
+                match credentials {
+                    SmtpCredentialsUpdate::Unauthenticated => {
+                        delete_stored::<DB>(&mut *connection, SiteConfigKey::SmtpUsername).await?;
+                        delete_stored::<DB>(&mut *connection, SiteConfigKey::SmtpPassword).await?;
+                    }
+                    SmtpCredentialsUpdate::Keep { username } => {
+                        set_stored_on::<DB>(
+                            &mut *connection,
+                            SiteConfigKey::SmtpUsername,
+                            StoredSiteConfigValue(username.as_ref().to_owned()),
+                        )
+                        .await?;
+                    }
+                    SmtpCredentialsUpdate::Replace { username, password } => {
+                        set_stored_on::<DB>(
+                            &mut *connection,
+                            SiteConfigKey::SmtpUsername,
+                            StoredSiteConfigValue(username.as_ref().to_owned()),
+                        )
+                        .await?;
+                        set_stored_on::<DB>(
+                            &mut *connection,
+                            SiteConfigKey::SmtpPassword,
+                            StoredSiteConfigValue(password.as_ref().to_owned()),
+                        )
+                        .await?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn list(&self) -> Result<Vec<(String, String)>> {
@@ -709,6 +812,9 @@ where
             ));
         }
         let connection = DB::write_connection(transaction)?;
+        if is_smtp_config_key(key) {
+            lock_smtp_config::<DB>(&mut *connection).await?;
+        }
         // `RETURNING` + `fetch_optional` detects a no-match generically (a `None`),
         // avoiding `rows_affected()` which sqlx exposes only on concrete results
         // (mirrors `audiences::rename_audience`). Both backends support RETURNING.
@@ -749,18 +855,62 @@ where
     Ok(())
 }
 
+async fn set_stored_on<DB>(
+    connection: &mut DB::Connection,
+    key: SiteConfigKey,
+    value: StoredSiteConfigValue,
+) -> Result<()>
+where
+    DB: Database,
+    SiteConfigKey: Type<DB>,
+    for<'q> SiteConfigKey: Encode<'q, DB>,
+    StoredSiteConfigValue: Type<DB>,
+    for<'q> StoredSiteConfigValue: Encode<'q, DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    sqlx::query(
+        "INSERT INTO site_config (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    )
+    .bind_storage(key)
+    .bind_storage(value)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+async fn delete_stored<DB>(connection: &mut DB::Connection, key: SiteConfigKey) -> Result<()>
+where
+    DB: Database,
+    SiteConfigKey: Type<DB>,
+    for<'q> SiteConfigKey: Encode<'q, DB>,
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    sqlx::query("DELETE FROM site_config WHERE key = $1")
+        .bind_storage(key)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::publisher::FeedWindowMutation;
     use std::sync::Arc;
 
-    use super::{FeedsConfigReadGate, SiteConfigKey, SmtpTlsMode};
-    use crate::publisher::FeedWindowMutation;
+    use super::{FeedsConfigReadGate, SMTP_CONFIG_KEYS, SiteConfigKey, SmtpConfigUpdateError};
     use crate::test_support::{
         Backend, TestEnv, backends, backends_matrix, confirmed, inject_invalid_site_config,
     };
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::media::{MaxFileSize, UserQuota};
     use common::registration::RegistrationPolicy;
+    use common::smtp_host::SmtpHost;
+    use common::smtp_port::SmtpPort;
+    use common::smtp_sender::SmtpSender;
+    use common::smtp_tls_mode::SmtpTlsMode;
     use common::tagged_url::HubUrl;
     use common::test_support::{
         parse_destination_path, parse_max_file_size, parse_retention_count, parse_site_title,
@@ -768,9 +918,21 @@ mod tests {
     };
     use common::theme::Theme;
     use common::visibility::DefaultAudience;
+    use host::smtp_config::{SmtpConfigUpdate, SmtpCredentialsUpdate};
+    use host::test_support::parse_smtp_password;
     use host::test_support::{parse_feed_min_days, parse_feed_min_items};
     use rstest::*;
     use rstest_reuse::*;
+    use std::time::Duration;
+    use tokio::sync::Notify;
+
+    #[test]
+    fn smtp_decode_label_leaves_non_decode_errors_unchanged() {
+        assert!(matches!(
+            super::label_smtp_decode_error(sqlx::Error::RowNotFound),
+            sqlx::Error::RowNotFound
+        ));
+    }
 
     async fn set_config(env: &TestEnv, key: SiteConfigKey, value: &str) -> anyhow::Result<()> {
         let mutation = match key {
@@ -815,6 +977,19 @@ mod tests {
                 })
                 .await?,
         ))
+    }
+
+    async fn update_smtp_config(env: &TestEnv, update: SmtpConfigUpdate) -> anyhow::Result<()> {
+        let storage = Arc::clone(&env.state.site_config);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move { storage.update_smtp_config(transaction, &update).await })
+                })
+                .await?,
+        );
+        Ok(())
     }
 
     #[apply(backends)]
@@ -1876,5 +2051,375 @@ mod tests {
                 RegistrationPolicy::Closed
             );
         }
+    }
+    fn enabled_smtp(credentials: SmtpCredentialsUpdate) -> SmtpConfigUpdate {
+        SmtpConfigUpdate::Enabled {
+            host: "mail.example.com".parse::<SmtpHost>().unwrap(),
+            port: "2525".parse::<SmtpPort>().unwrap(),
+            tls_mode: SmtpTlsMode::StartTls,
+            sender: "Jaunder <noreply@example.com>"
+                .parse::<SmtpSender>()
+                .unwrap(),
+            credentials,
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn smtp_update_replaces_and_clears_credentials(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        update_smtp_config(
+            &env,
+            enabled_smtp(SmtpCredentialsUpdate::Replace {
+                username: parse_smtp_username("relay-user"),
+                password: parse_smtp_password("secret"),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            env.state
+                .site_config
+                .get_raw(SiteConfigKey::SmtpPassword)
+                .await
+                .unwrap(),
+            Some("secret".to_owned())
+        );
+        update_smtp_config(&env, enabled_smtp(SmtpCredentialsUpdate::Unauthenticated))
+            .await
+            .unwrap();
+        assert_eq!(
+            env.state
+                .site_config
+                .get_raw(SiteConfigKey::SmtpUsername)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            env.state
+                .site_config
+                .get_raw(SiteConfigKey::SmtpPassword)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn smtp_disable_deletes_all_six_keys(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        update_smtp_config(
+            &env,
+            enabled_smtp(SmtpCredentialsUpdate::Replace {
+                username: parse_smtp_username("relay-user"),
+                password: parse_smtp_password("secret"),
+            }),
+        )
+        .await
+        .unwrap();
+        update_smtp_config(&env, SmtpConfigUpdate::Disabled)
+            .await
+            .unwrap();
+        for key in SMTP_CONFIG_KEYS {
+            assert_eq!(env.state.site_config.get_raw(key).await.unwrap(), None);
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn smtp_password_keep_fails_before_writing_without_a_stored_password(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let storage = Arc::clone(&env.state.site_config);
+        let error = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    storage
+                        .update_smtp_config(
+                            transaction,
+                            &enabled_smtp(SmtpCredentialsUpdate::Keep {
+                                username: parse_smtp_username("relay-user"),
+                            }),
+                        )
+                        .await
+                })
+            })
+            .await
+            .expect_err("stale password keep must roll back");
+        assert!(matches!(
+            error,
+            crate::WriteScopeError::Operation(SmtpConfigUpdateError::MissingStoredPassword)
+        ));
+        assert_eq!(
+            env.state
+                .site_config
+                .get_raw(SiteConfigKey::SmtpHost)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn smtp_update_rolls_back_the_entire_aggregate(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = Arc::clone(&env.state.site_config);
+        let error = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    storage
+                        .update_smtp_config(
+                            transaction,
+                            &enabled_smtp(SmtpCredentialsUpdate::Replace {
+                                username: parse_smtp_username("relay-user"),
+                                password: parse_smtp_password("secret"),
+                            }),
+                        )
+                        .await?;
+                    Err::<(), SmtpConfigUpdateError>(SmtpConfigUpdateError::MissingStoredPassword)
+                })
+            })
+            .await
+            .expect_err("the enclosing scope must roll back");
+        assert!(matches!(
+            error,
+            crate::WriteScopeError::Operation(SmtpConfigUpdateError::MissingStoredPassword)
+        ));
+        for key in SMTP_CONFIG_KEYS {
+            assert_eq!(env.state.site_config.get_raw(key).await.unwrap(), None);
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn smtp_writers_serialize_through_scope_completion(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let first_holds_lock = Arc::new(Notify::new());
+        let finish_first = Arc::new(Notify::new());
+        let first_scope = env.state.write_scope.clone();
+        let first_storage = Arc::clone(&env.state.site_config);
+        let first_holds_lock_in_task = Arc::clone(&first_holds_lock);
+        let finish_first_in_task = Arc::clone(&finish_first);
+        let first = tokio::spawn(async move {
+            confirmed(
+                first_scope
+                    .run(move |transaction| {
+                        Box::pin(async move {
+                            first_storage
+                                .update_smtp_config(
+                                    transaction,
+                                    &enabled_smtp(SmtpCredentialsUpdate::Replace {
+                                        username: parse_smtp_username("first"),
+                                        password: parse_smtp_password("first-secret"),
+                                    }),
+                                )
+                                .await?;
+                            first_holds_lock_in_task.notify_one();
+                            finish_first_in_task.notified().await;
+                            Ok::<(), SmtpConfigUpdateError>(())
+                        })
+                    })
+                    .await
+                    .unwrap(),
+            );
+        });
+        first_holds_lock.notified().await;
+        let second_scope = env.state.write_scope.clone();
+        let second_storage = Arc::clone(&env.state.site_config);
+        let mut second = tokio::spawn(async move {
+            confirmed(
+                second_scope
+                    .run(move |transaction| {
+                        Box::pin(async move {
+                            second_storage
+                                .update_smtp_config(transaction, &SmtpConfigUpdate::Disabled)
+                                .await
+                        })
+                    })
+                    .await
+                    .unwrap(),
+            );
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut second)
+                .await
+                .is_err()
+        );
+        finish_first.notify_one();
+        first.await.unwrap();
+        second.await.unwrap();
+        assert!(
+            env.state
+                .site_config
+                .get_smtp_config()
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn generic_password_deletion_serializes_before_a_stale_aggregate_keep(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        update_smtp_config(
+            &env,
+            enabled_smtp(SmtpCredentialsUpdate::Replace {
+                username: parse_smtp_username("original-user"),
+                password: parse_smtp_password("original-secret"),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let deletion_holds_lock = Arc::new(Notify::new());
+        let commit_deletion = Arc::new(Notify::new());
+        let delete_scope = env.state.write_scope.clone();
+        let delete_storage = Arc::clone(&env.state.site_config);
+        let deletion_holds_lock_in_task = Arc::clone(&deletion_holds_lock);
+        let commit_deletion_in_task = Arc::clone(&commit_deletion);
+        let delete = tokio::spawn(async move {
+            confirmed(
+                delete_scope
+                    .run(move |transaction| {
+                        Box::pin(async move {
+                            delete_storage
+                                .delete(transaction, SiteConfigKey::SmtpPassword)
+                                .await?;
+                            deletion_holds_lock_in_task.notify_one();
+                            commit_deletion_in_task.notified().await;
+                            Ok::<(), sqlx::Error>(())
+                        })
+                    })
+                    .await
+                    .unwrap(),
+            );
+        });
+        deletion_holds_lock.notified().await;
+
+        let keep_scope = env.state.write_scope.clone();
+        let keep_storage = Arc::clone(&env.state.site_config);
+        let mut keep = tokio::spawn(async move {
+            keep_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        keep_storage
+                            .update_smtp_config(
+                                transaction,
+                                &enabled_smtp(SmtpCredentialsUpdate::Keep {
+                                    username: parse_smtp_username("kept-user"),
+                                }),
+                            )
+                            .await
+                    })
+                })
+                .await
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut keep)
+                .await
+                .is_err(),
+            "the aggregate Keep must wait for the generic password deletion"
+        );
+
+        commit_deletion.notify_one();
+        delete.await.unwrap();
+        let error = keep
+            .await
+            .unwrap()
+            .expect_err("the serialized Keep is stale");
+        assert!(matches!(
+            error,
+            crate::WriteScopeError::Operation(SmtpConfigUpdateError::MissingStoredPassword)
+        ));
+        assert_eq!(
+            env.state
+                .site_config
+                .get_raw(SiteConfigKey::SmtpUsername)
+                .await
+                .unwrap(),
+            Some("original-user".to_owned()),
+            "a stale Keep must not write its username after the password disappears"
+        );
+        assert_eq!(
+            env.state
+                .site_config
+                .get_raw(SiteConfigKey::SmtpPassword)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn smtp_reader_sees_before_and_after_a_concurrent_aggregate_commit(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        update_smtp_config(
+            &env,
+            enabled_smtp(SmtpCredentialsUpdate::Replace {
+                username: parse_smtp_username("relay-user"),
+                password: parse_smtp_password("secret"),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let update_is_uncommitted = Arc::new(Notify::new());
+        let commit_update = Arc::new(Notify::new());
+        let writer_scope = env.state.write_scope.clone();
+        let writer_storage = Arc::clone(&env.state.site_config);
+        let update_is_uncommitted_in_task = Arc::clone(&update_is_uncommitted);
+        let commit_update_in_task = Arc::clone(&commit_update);
+        let writer = tokio::spawn(async move {
+            confirmed(
+                writer_scope
+                    .run(move |transaction| {
+                        Box::pin(async move {
+                            writer_storage
+                                .update_smtp_config(transaction, &SmtpConfigUpdate::Disabled)
+                                .await?;
+                            update_is_uncommitted_in_task.notify_one();
+                            commit_update_in_task.notified().await;
+                            Ok::<(), SmtpConfigUpdateError>(())
+                        })
+                    })
+                    .await
+                    .unwrap(),
+            );
+        });
+
+        update_is_uncommitted.notified().await;
+        let before = env
+            .state
+            .site_config
+            .get_smtp_config()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.host.as_ref(), "mail.example.com");
+        assert_eq!(before.port, "2525".parse::<SmtpPort>().unwrap());
+
+        commit_update.notify_one();
+        writer.await.unwrap();
+        assert!(
+            env.state
+                .site_config
+                .get_smtp_config()
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

@@ -9,7 +9,6 @@ use crate::bio::Bio;
 use crate::display_name::DisplayName;
 use crate::email::Email;
 use crate::session_label::SessionLabel;
-use crate::smtp_password::SmtpPassword;
 use crate::smtp_username::SmtpUsername;
 use crate::token::{RawToken, TokenHash};
 use crate::username::Username;
@@ -110,18 +109,6 @@ pub fn parse_username(name: &str) -> Username {
 #[must_use]
 pub fn parse_token_hash(s: &str) -> TokenHash {
     s.parse().expect("valid test token hash")
-}
-
-/// Parse `s` into a valid [`SmtpPassword`] for tests — the single place a test
-/// SMTP-password literal is parsed, so an empty fixture fails loudly and the
-/// validating `FromStr` isn't re-spelled at every `SmtpConfig` fixture.
-///
-/// # Panics
-///
-/// Panics if `s` is empty.
-#[must_use]
-pub fn parse_smtp_password(s: &str) -> SmtpPassword {
-    s.parse().expect("valid test SMTP password")
 }
 
 /// Parse `s` into a valid [`SmtpUsername`] for tests — the single place a test

@@ -31,6 +31,19 @@ pub struct InvalidSmtpSender {
     /// The mailbox parser's own rejection reason.
     reason: String,
 }
+impl InvalidSmtpSender {
+    /// Safe client-facing summary that never echoes the submitted value.
+    #[must_use]
+    pub fn user_message(&self) -> &'static str {
+        "invalid SMTP sender"
+    }
+
+    /// Stable low-cardinality telemetry classification.
+    #[must_use]
+    pub fn telemetry_code(&self) -> &'static str {
+        "invalid_smtp_sender"
+    }
+}
 
 /// The fallback `From:` address used when `smtp.sender` is unset.
 pub const DEFAULT_SMTP_SENDER: &str = "Jaunder <noreply@localhost>";
@@ -87,6 +100,21 @@ mod tests {
             "the error must echo the offending value: {err}"
         );
         assert!("".parse::<SmtpSender>().is_err());
+    }
+
+    #[test]
+    fn safe_error_surfaces_do_not_echo_the_rejected_value() {
+        let error = "secret-like-invalid-sender"
+            .parse::<SmtpSender>()
+            .unwrap_err();
+        assert_eq!(error.user_message(), "invalid SMTP sender");
+        assert_eq!(error.telemetry_code(), "invalid_smtp_sender");
+        assert!(!error.user_message().contains("secret-like-invalid-sender"));
+        assert!(
+            !error
+                .telemetry_code()
+                .contains("secret-like-invalid-sender")
+        );
     }
 
     #[test]

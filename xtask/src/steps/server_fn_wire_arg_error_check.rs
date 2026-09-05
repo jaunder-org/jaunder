@@ -1033,6 +1033,22 @@ mod tests {
     }
 
     #[test]
+    fn smtp_update_request_fields_are_wire_leaves() {
+        let inputs = wire_inputs(
+            &web(
+                "pub struct UpdateSettingsRequest { pub port: SmtpPort, pub password: Option<ProfferedSmtpPassword> }\n\
+                 #[macros::server(skip_all)]\npub async fn update_settings(request: UpdateSettingsRequest) -> R { todo!() }",
+            ),
+            &[],
+        )
+        .expect("wire inputs");
+
+        assert_eq!(tys(&inputs), vec!["ProfferedSmtpPassword", "SmtpPort"]);
+        assert_eq!(inputs[0].field_path, vec!["password"]);
+        assert_eq!(inputs[1].field_path, vec!["port"]);
+    }
+
+    #[test]
     fn aggregate_expansion_does_not_depend_on_request_suffix() {
         let inputs = wire_inputs(
             &web("pub struct PostInputs { pub title: PostTitle }\n\
@@ -1124,6 +1140,27 @@ mod tests {
                    }
                }"#,
             "ProfferedPassword",
+        );
+
+        assert_eq!(class, DisplayClass::TelemetrySafe);
+    }
+
+    #[test]
+    fn valueless_smtp_password_error_display_is_telemetry_safe() {
+        let class = class_for(
+            r#"#[derive(thiserror::Error, Debug)]
+               pub enum InvalidSmtpPassword {
+                   #[error("SMTP password must be between 8 and 128 characters")]
+                   Invalid,
+               }
+               pub struct ProfferedSmtpPassword(String);
+               impl std::str::FromStr for ProfferedSmtpPassword {
+                   type Err = InvalidSmtpPassword;
+                   fn from_str(_: &str) -> Result<Self, Self::Err> {
+                       Err(InvalidSmtpPassword::Invalid)
+                   }
+               }"#,
+            "ProfferedSmtpPassword",
         );
 
         assert_eq!(class, DisplayClass::TelemetrySafe);

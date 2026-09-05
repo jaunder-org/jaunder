@@ -8,6 +8,7 @@ use std::str::FromStr;
 use thiserror::Error;
 
 use crate::feed::{FeedMinDays, FeedMinItems};
+use crate::smtp_password::SmtpPassword;
 use common::{
     backup::{BackupMode, BackupSchedule, DestinationPath, RetentionCount},
     media::{MaxFileSize, UserQuota},
@@ -15,7 +16,6 @@ use common::{
     render::PostFormat,
     site::SiteTitle,
     smtp_host::SmtpHost,
-    smtp_password::SmtpPassword,
     smtp_port::SmtpPort,
     smtp_sender::SmtpSender,
     smtp_tls_mode::SmtpTlsMode,
