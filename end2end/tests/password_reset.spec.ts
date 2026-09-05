@@ -127,14 +127,54 @@ test("reset confirmation pending prevents duplicate dispatch", async ({
   await page.waitForURL("**/login");
 });
 
-// M3.11.15: /forgot-password for a user with no verified email shows the
-// "contact operator" error.
-test("forgot-password for user without verified email shows contact operator error", async ({
+test("password reset by email preserves input casing and completes successfully", async ({
+  page,
+  verifiedUser,
+  mailbox,
+}) => {
+  await goto(page, "/forgot-password");
+  const identifier = page.getByLabel("Username or email");
+  await expect(identifier).toBeVisible();
+
+  // Email parsing owns local-part case: the form must not lower it before the
+  // typed boundary has classified the input.
+  const mixedCaseEmail = verifiedUser.email.replace(
+    /^[^@]+/,
+    (localPart) => `MiXeD${localPart}`,
+  );
+  await identifier.fill(mixedCaseEmail);
+  await expect(identifier).toHaveValue(mixedCaseEmail);
+
+  // The matching canonical address is this verified user's actual address.
+  // The recipient-scoped mailbox cursor proves this request caused the message.
+  await identifier.fill(verifiedUser.email);
+  await click(page, SEL.submit);
+  await expect(page.locator("p")).toHaveText(
+    "If there is a verified email address on file, a reset link has been sent. Check your email.",
+  );
+
+  const email = await mailbox.waitForNewEmail();
+  await followEmailLink(page, email, "/reset-password");
+  await page.fill(SEL.newPassword, "emailresetpassword789");
+  await click(page, SEL.submit);
+  await page.waitForURL("**/login");
+
+  await waitForSelector(page, SEL.username);
+  await fillLoginForm(page, verifiedUser.username, verifiedUser.password);
+  await expect(page.locator(SEL.error)).toBeVisible();
+
+  await page.fill(SEL.username, "");
+  await page.fill(SEL.password, "");
+  await fillLoginForm(page, verifiedUser.username, "emailresetpassword789");
+  await waitForSelector(page, SEL.logoutLink, { timeout: 10_000 });
+});
+
+test("forgot-password without a verified email stays neutral", async ({
   page,
   user,
 }) => {
-  // A freshly-registered user exists but has no verified email.
   await requestPasswordReset(page, user.username);
-  await waitForSelector(page, SEL.error);
-  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page.locator("p")).toHaveText(
+    "If there is a verified email address on file, a reset link has been sent. Check your email.",
+  );
 });

@@ -188,6 +188,12 @@ pub fn report_swallowed(
         SwallowedSource::Redacted => "redacted".to_owned(),
     };
     let span_trace = SpanTrace::capture();
+    record_error(
+        kind,
+        class,
+        ErrorDisposition::Swallowed,
+        TelemetryOrigin::Server,
+    );
     tracing::warn!(
         error.kind = kind.as_metric_str(), // cov:ignore
         error.class = class.as_metric_str(), // cov:ignore
@@ -197,12 +203,6 @@ pub fn report_swallowed(
         error.source = %source,
         error.span_trace = %span_trace,
         "error swallowed after reporting",
-    );
-    record_error(
-        kind,
-        class,
-        ErrorDisposition::Swallowed,
-        TelemetryOrigin::Server,
     );
 }
 fn client_source_kind_as_str(source_kind: ClientSourceKind) -> &'static str {

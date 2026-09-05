@@ -21,8 +21,8 @@ pub mod site;
 mod soft_path;
 pub mod websub;
 
-#[cfg(test)]
-mod test_support;
+#[doc(hidden)]
+pub mod test_support;
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -33,7 +33,7 @@ use axum::{
 };
 use axum_embed::ServeEmbed;
 use common::mailer::MailSender;
-use leptos::prelude::*;
+use leptos::prelude;
 
 use crate::{
     assets::StaticAssets, feed::handlers, media_ownership::LiveMediaReferenceOwnershipResolver,
@@ -137,10 +137,8 @@ where
         )
 }
 
-/// Builds a router with an injected foreign-reference ownership resolver.
-///
-/// This is the narrow test composition seam; production callers use
-/// [`create_router`], which installs the live resolver.
+/// Builds the production-shaped router with an injected foreign-reference
+/// ownership resolver. Tests needing only that seam use this constructor.
 ///
 /// # Errors
 ///
@@ -153,6 +151,29 @@ pub fn create_router_with_media_reference_ownership_resolver(
     storage_path: PathBuf,
     media_ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
 ) -> Result<Router, axum::http::header::InvalidHeaderValue> {
+    create_router_with_dependencies(
+        state,
+        instance_id,
+        mailer,
+        secure_cookies,
+        storage_path,
+        media_ownership_resolver,
+        || {},
+    )
+}
+
+fn create_router_with_dependencies<F>(
+    state: Arc<AppState>,
+    instance_id: InstanceId,
+    mailer: Arc<dyn MailSender>,
+    secure_cookies: bool,
+    storage_path: PathBuf,
+    media_ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
+    provide_additional_contexts: F,
+) -> Result<Router, axum::http::header::InvalidHeaderValue>
+where
+    F: Fn() + Clone + Send + Sync + 'static,
+{
     let instance_header = instance_id.to_string().parse::<HeaderValue>()?;
     let storage_path = Arc::new(storage_path);
     let media_content_locks = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path)));
@@ -190,8 +211,9 @@ pub fn create_router_with_media_reference_ownership_resolver(
             context::provide_app_state_contexts(&state, &publisher_service);
             context::provide_media_content_locks_context(&media_content_locks);
             context::provide_mailer_context(&mailer);
+            provide_additional_contexts();
             context::provide_media_manager_context(&media_manager);
-            provide_context(web::auth::CookieSettings {
+            prelude::provide_context(web::auth::CookieSettings {
                 secure: secure_cookies,
             });
         }

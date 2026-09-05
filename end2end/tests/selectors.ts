@@ -40,6 +40,8 @@ export const SEL = {
   username: 'input[name="username"]',
   /** Login/register password field. */
   password: 'input[name="password"]',
+  /** Forgot-password username-or-email field. */
+  passwordResetIdentifier: 'input[name="identifier"]',
   /** Reset-password new-password field. */
   newPassword: 'input[name="new_password"]',
   /** Top-bar page heading. */

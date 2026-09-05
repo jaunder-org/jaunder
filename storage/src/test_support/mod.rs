@@ -22,14 +22,14 @@ mod posts;
 mod subscriptions;
 mod users;
 
-#[cfg(any(test, feature = "test-utils"))]
-pub use backend::mock_write_scope;
 pub use backend::{
     Backend, CloseablePool, MediaReferenceWriteLock, PostWriteLock, SetupBuilder, TestBase,
     TestEnv, backends, backends_matrix, confirmed, confirmed_for, fixture_media_content_locks,
     inject_invalid_site_config, postgres_only, set_post_tags_confirmed, set_site_config,
     sqlite_only, sqlite_url, sqlite_write_scope,
 };
+#[cfg(any(test, feature = "test-utils"))]
+pub use backend::{mock_write_scope, mock_write_scope_with_commit_acknowledgement_loss};
 
 pub use feed_cache::SeedFeedCache;
 pub use feeds::fp;

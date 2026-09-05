@@ -36,6 +36,7 @@ serde_json = { workspace = true }
 strum.workspace = true
 thiserror.workspace = true
 tracing = { workspace = true }
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["test-support", "test-utils"] }
@@ -66,6 +67,7 @@ server = [
     "dep:axum",
     "dep:chrono",
     "dep:storage",
+    "dep:tokio",
 ]
 
 [lints.clippy]

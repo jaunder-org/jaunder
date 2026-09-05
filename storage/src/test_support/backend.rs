@@ -39,6 +39,16 @@ pub fn mock_write_scope() -> WriteScope {
     WriteScope::mock()
 }
 
+/// Creates a mock scope that reports an injected lost commit acknowledgement.
+///
+/// This is confined to the test composition root: downstream tests can exercise
+/// the indeterminate outcome without constructing a backend scope themselves.
+#[cfg(any(test, feature = "test-utils"))]
+#[must_use]
+pub fn mock_write_scope_with_commit_acknowledgement_loss() -> WriteScope {
+    WriteScope::mock().with_commit_acknowledgement_loss_after_commit_for_test()
+}
+
 /// Mints a SQLite-backed write scope for a test fixture that owns its pool.
 #[must_use]
 pub fn sqlite_write_scope(pool: SqlitePool) -> WriteScope {

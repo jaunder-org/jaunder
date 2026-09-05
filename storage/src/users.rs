@@ -286,6 +286,12 @@ pub trait UserStorage: Send + Sync {
     /// Fetches a user record by their username.
     async fn get_user_by_username(&self, username: &Username) -> Result<Option<UserRecord>>;
 
+    /// Fetches every user record whose canonical email matches exactly.
+    ///
+    /// Email addresses are not unique; callers inspect [`EmailVerified`] to
+    /// select eligible records for their operation.
+    async fn get_users_by_email(&self, email: &Email) -> Result<Vec<UserRecord>>;
+
     /// Updates the display name and/or bio for a user.
     // Explicit `'a` for `mockall::automock` — see
     // `PostStorage::list_published_by_user`.
@@ -590,6 +596,17 @@ where
         .await
     }
 
+    async fn get_users_by_email(&self, email: &Email) -> Result<Vec<UserRecord>> {
+        sqlx::query_as::<_, UserRecord>(
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
+                    email, email_verified, is_operator
+             FROM users WHERE email = $1",
+        )
+        .bind_storage(email)
+        .fetch_all(&self.pool)
+        .await
+    }
+
     async fn update_profile<'a>(
         &self,
         transaction: &mut WriteTransaction,
@@ -678,6 +695,27 @@ mod tests {
             .await
             .expect("user fixture setup should succeed");
         crate::test_support::confirmed_for(outcome, "user fixture setup")
+    }
+
+    async fn set_email(
+        state: &Arc<crate::AppState>,
+        user_id: UserId,
+        email: Email,
+        verified: EmailVerified,
+    ) {
+        let users = Arc::clone(&state.users);
+        let outcome = state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    users
+                        .set_email(transaction, user_id, Some(&email), verified)
+                        .await
+                })
+            })
+            .await
+            .expect("email fixture setup should succeed");
+        crate::test_support::confirmed_for(outcome, "email fixture setup");
     }
 
     async fn authenticate(
@@ -771,6 +809,64 @@ mod tests {
             .unwrap();
         assert_eq!(authenticated.email_verified, EmailVerified::VERIFIED);
         assert_eq!(authenticated.is_operator, OperatorStatus::OPERATOR);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn users_by_email_returns_every_exact_canonical_match(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let email = parse_email("shared@example.com");
+
+        assert!(
+            env.state
+                .users
+                .get_users_by_email(&email)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let alice = SeedUser::new().seed(&env.state).await;
+        set_email(
+            &env.state,
+            alice.user_id,
+            email.clone(),
+            EmailVerified::VERIFIED,
+        )
+        .await;
+        let one_match = env.state.users.get_users_by_email(&email).await.unwrap();
+        assert_eq!(one_match.len(), 1);
+        assert_eq!(one_match[0].user_id, alice.user_id);
+        assert_eq!(one_match[0].email_verified, EmailVerified::VERIFIED);
+
+        let bob = SeedUser::new().seed(&env.state).await;
+        let carol = SeedUser::new().seed(&env.state).await;
+        set_email(
+            &env.state,
+            bob.user_id,
+            email.clone(),
+            EmailVerified::UNVERIFIED,
+        )
+        .await;
+        set_email(
+            &env.state,
+            carol.user_id,
+            email.clone(),
+            EmailVerified::VERIFIED,
+        )
+        .await;
+
+        let matches = env.state.users.get_users_by_email(&email).await.unwrap();
+        assert_eq!(matches.len(), 3);
+        assert!(matches.iter().any(|user| {
+            user.user_id == alice.user_id && user.email_verified == EmailVerified::VERIFIED
+        }));
+        assert!(matches.iter().any(|user| {
+            user.user_id == bob.user_id && user.email_verified == EmailVerified::UNVERIFIED
+        }));
+        assert!(matches.iter().any(|user| {
+            user.user_id == carol.user_id && user.email_verified == EmailVerified::VERIFIED
+        }));
     }
 
     #[apply(backends)]

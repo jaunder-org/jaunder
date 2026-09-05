@@ -57,7 +57,7 @@ impl<E: std::error::Error + 'static> std::error::Error for WriteScopeError<E> {
 #[derive(Clone)]
 pub struct WriteScope {
     backend: ScopeBackend,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     lose_commit_acknowledgement_after_commit: bool,
 }
 
@@ -130,7 +130,7 @@ impl WriteScope {
     pub(crate) fn sqlite(pool: SqlitePool) -> Self {
         Self {
             backend: ScopeBackend::Sqlite(pool),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             lose_commit_acknowledgement_after_commit: false,
         }
     }
@@ -138,12 +138,13 @@ impl WriteScope {
     pub(crate) fn postgres(pool: PgPool) -> Self {
         Self {
             backend: ScopeBackend::Postgres(pool),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             lose_commit_acknowledgement_after_commit: false,
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
     pub(crate) fn with_commit_acknowledgement_loss_after_commit_for_test(&self) -> Self {
         Self {
             backend: self.backend.clone(),
@@ -155,7 +156,7 @@ impl WriteScope {
     pub(crate) fn mock() -> Self {
         Self {
             backend: ScopeBackend::Mock,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             lose_commit_acknowledgement_after_commit: false,
         }
     }
@@ -216,9 +217,18 @@ impl WriteScope {
                 HeldTransaction::Mock => Ok(()),
             };
             let outcome = classify_commit_result(commit, value);
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             let outcome = match (self.lose_commit_acknowledgement_after_commit, outcome) {
                 (true, MutationOutcome::Confirmed(value)) => {
+                    let error = sqlx::Error::Io(std::io::Error::other(
+                        "test-injected commit acknowledgement loss",
+                    ));
+                    host::error::report_swallowed(
+                        host::error::ErrorKind::Storage,
+                        host::error::ErrorClass::Transient,
+                        "storage.write_scope.commit_acknowledgement",
+                        host::error::SwallowedSource::Error(&error),
+                    );
                     MutationOutcome::CommitIndeterminate(value)
                 }
                 (_, outcome) => outcome,
