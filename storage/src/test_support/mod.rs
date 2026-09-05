@@ -47,6 +47,8 @@ pub use postgres::{
     recorded_postgres_url, template_postgres_url, unique_postgres_url,
 };
 pub(crate) use postgres::{TemplateDatabaseLockKey, TemplateDatabaseName};
+#[cfg(test)]
+pub(crate) use posts::count_post_revisions;
 pub use posts::{
     SeedPost, SeedRawPost, SeededPost, UpdateRawPost, create_posts_confirmed, seed_posts,
 };

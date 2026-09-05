@@ -1,6 +1,8 @@
 //! Post fixture builders and batch seed helpers. It owns direct storage-layer inputs
 //! and production-rendered seed records; service-path fixtures live in [`super::post_service`].
 
+#[cfg(test)]
+use super::TestEnv;
 use super::{confirmed_for, fixture_media_content_locks};
 use crate::AppState;
 use crate::posts::{
@@ -10,6 +12,8 @@ use crate::posts::{
         UpdatePostInput,
     },
 };
+#[cfg(test)]
+use crate::sql::QueryStorageExt;
 
 use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
@@ -516,6 +520,25 @@ impl UpdateRawPost {
             expectations: PostBookkeepingExpectation::default(),
         }
     }
+}
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+struct PostRevisionCount(i64);
+
+#[cfg(test)]
+pub(crate) async fn count_post_revisions(
+    env: &TestEnv,
+    post_id: PostId,
+) -> Result<i64, sqlx::Error> {
+    crate::with_closeable_pool!(env.base.pool(), pool, {
+        sqlx::query_scalar::<_, PostRevisionCount>(
+            "SELECT COUNT(*) FROM post_revisions WHERE post_id = $1",
+        )
+        .bind_storage(post_id)
+        .fetch_one(pool)
+        .await
+        .map(|count| count.0)
+    })
 }
 
 #[cfg(test)]

@@ -2634,15 +2634,9 @@ mod tests {
         captured_at: UtcInstant,
     ) -> RevisionId {
         assert_eq!(
-            crate::with_closeable_pool!(env.base.pool(), pool, {
-                sqlx::query_scalar::<_, i64>(
-                    "SELECT COUNT(*) FROM post_revisions WHERE post_id = $1",
-                )
-                .bind_storage(post_id)
-                .fetch_one(pool)
+            crate::test_support::count_post_revisions(env, post_id)
                 .await
-            })
-            .expect("count post revisions"),
+                .expect("count post revisions"),
             1,
             "one meaningful mutation creates exactly one revision"
         );
