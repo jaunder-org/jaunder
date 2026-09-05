@@ -19,8 +19,9 @@ use tokio::sync::oneshot;
 
 use crate::helpers::{
     SeededSession, assert_no_email, assert_one_absolute_link_email, create_session_for,
-    create_user_and_session, post_form_with_mailer, post_password_reset_request_with_dependencies,
-    post_server_fn_request_fixture_with_mailer, post_server_fn_with_mailer,
+    create_user_and_session, post_form_with_mailer, post_password_reset_form_with_dependencies,
+    post_password_reset_request_with_dependencies, post_server_fn_request_fixture_with_mailer,
+    post_server_fn_with_mailer,
 };
 use storage::test_support::{Backend, SeedUser, TestEnv, backends, mock_write_scope};
 
@@ -40,6 +41,43 @@ async fn await_sent_count(mailer: &CapturingMailSender, expected: usize) {
     })
     .await
     .expect("detached password-reset delivery should finish");
+}
+
+fn reset_token_from_message(message: &EmailMessage) -> common::token::RawToken {
+    let token = message
+        .body_text
+        .lines()
+        .find_map(|line| line.strip_prefix("https://example.com/reset-password?token="))
+        .expect("password-reset email contains an absolute reset link");
+    parse_raw_token(token)
+}
+
+async fn assert_invalid_reset_identifier_does_not_start_worker(
+    state: &Arc<AppState>,
+    identifier: &str,
+) {
+    let mailer = Arc::new(CapturingMailSender::new());
+    let mut users = MockUserStorage::new();
+    users.expect_get_user_by_username().never();
+    users.expect_get_users_by_email().never();
+    let mut password_resets = MockPasswordResetStorage::new();
+    password_resets.expect_create_password_reset().never();
+    let mut site_config = MockSiteConfigStorage::new();
+    site_config.expect_get_identity().never();
+
+    let (status, _) = post_password_reset_form_with_dependencies(
+        state,
+        mailer.clone(),
+        format!("identifier={identifier}"),
+        Arc::new(users),
+        Arc::new(password_resets),
+        mock_write_scope(),
+        Arc::new(site_config),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_no_email(&mailer);
 }
 use rstest_reuse::*;
 
@@ -131,12 +169,12 @@ fn reset_site_config() -> MockSiteConfigStorage {
     site_config
 }
 
-// A held lookup proves the routed server function completes before any
-// account-dependent work. The mailer's terminal signal makes the post-release
-// assertion deterministic rather than scheduler-dependent.
+// Held lookup and token issuance prove the routed server function returns before
+// either account-dependent phase. The mailer's terminal signal makes the
+// post-release assertion deterministic rather than scheduler-dependent.
 #[apply(backends)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_password_reset_returns_before_gated_lookup_then_delivers(
+async fn request_password_reset_returns_before_gated_lookup_and_token_then_delivers(
     #[case] backend: Backend,
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
@@ -147,23 +185,38 @@ async fn request_password_reset_returns_before_gated_lookup_then_delivers(
         .await
         .expect("load seeded user")
         .expect("seeded user exists");
-    let (entered_tx, entered_rx) = channel();
-    let (release_tx, release_rx): (Sender<()>, Receiver<()>) = channel();
-    let release_rx = Arc::new(Mutex::new(release_rx));
+    let (lookup_entered_tx, lookup_entered_rx) = channel();
+    let (lookup_release_tx, lookup_release_rx): (Sender<()>, Receiver<()>) = channel();
+    let lookup_release_rx = Arc::new(Mutex::new(lookup_release_rx));
     let mut users = MockUserStorage::new();
     users.expect_get_user_by_username().return_once(move |_| {
-        entered_tx.send(()).expect("worker reports lookup entry");
-        release_rx
+        lookup_entered_tx
+            .send(())
+            .expect("worker reports lookup entry");
+        lookup_release_rx
             .lock()
-            .expect("release mutex")
+            .expect("lookup release mutex")
             .recv()
             .expect("test releases lookup");
         Ok(Some(user))
     });
+    let (token_entered_tx, token_entered_rx) = channel();
+    let (token_release_tx, token_release_rx): (Sender<()>, Receiver<()>) = channel();
+    let token_release_rx = Arc::new(Mutex::new(token_release_rx));
     let mut password_resets = MockPasswordResetStorage::new();
     password_resets
         .expect_create_password_reset()
-        .return_once(|_, _, _| Ok(parse_raw_token("token")));
+        .return_once(move |_, _, _| {
+            token_entered_tx
+                .send(())
+                .expect("worker reports token issuance entry");
+            token_release_rx
+                .lock()
+                .expect("token release mutex")
+                .recv()
+                .expect("test releases token issuance");
+            Ok(parse_raw_token("token"))
+        });
     let (terminal_tx, terminal_rx) = channel();
     let mailer: Arc<dyn MailSender> = Arc::new(TerminalMailer {
         terminal: terminal_tx,
@@ -183,13 +236,19 @@ async fn request_password_reset_returns_before_gated_lookup_then_delivers(
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    entered_rx
+    lookup_entered_rx
         .recv()
         .expect("lookup enters after public response");
-    release_tx.send(()).expect("release detached lookup");
+    lookup_release_tx.send(()).expect("release detached lookup");
+    token_entered_rx
+        .recv()
+        .expect("token issuance enters after lookup release");
+    token_release_tx
+        .send(())
+        .expect("release detached token issuance");
     terminal_rx
         .recv()
-        .expect("worker delivers after lookup release");
+        .expect("worker delivers after token release");
 }
 
 // A structurally valid request is accepted before detached account lookup and
@@ -224,8 +283,8 @@ async fn request_password_reset_accepts_and_eventually_sends_for_verified_user(
 async fn request_password_reset_email_fans_out_only_to_verified_users(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
-    create_user_with_verified_email(&state, "shared@example.com").await;
-    create_user_with_verified_email(&state, "shared@example.com").await;
+    let first = create_user_with_verified_email(&state, "shared@example.com").await;
+    let second = create_user_with_verified_email(&state, "shared@example.com").await;
     let unverified = SeedUser::new().seed(&state).await;
     let email = parse_email("shared@example.com");
     let users = Arc::clone(&state.users);
@@ -258,12 +317,59 @@ async fn request_password_reset_email_fans_out_only_to_verified_users(#[case] ba
 
     assert_eq!(status, StatusCode::OK);
     await_sent_count(&mailer, 2).await;
+    let messages = mailer.sent();
     assert!(
-        mailer
-            .sent()
+        messages
             .iter()
             .all(|message| message.to == vec![parse_email("shared@example.com")])
     );
+
+    let first_token = reset_token_from_message(&messages[0]);
+    let second_token = reset_token_from_message(&messages[1]);
+    assert_ne!(
+        first_token.as_ref(),
+        second_token.as_ref(),
+        "each User receives a distinct token"
+    );
+    for (token, new_password) in [
+        (first_token, "first-reset-password"),
+        (second_token, "second-reset-password"),
+    ] {
+        let (status, _body) = post_server_fn_with_mailer(
+            &state,
+            &mailer,
+            &web::password_reset::Confirm {
+                request: web::password_reset::ConfirmPasswordResetRequest {
+                    token,
+                    new_password: new_password.parse().expect("valid test password"),
+                },
+            },
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    for (session, password) in [
+        (first, "first-reset-password"),
+        (second, "second-reset-password"),
+    ] {
+        let users = Arc::clone(&state.users);
+        let authentication = users
+            .prepare_authentication(
+                &session.username,
+                &password.parse().expect("valid password"),
+            )
+            .await
+            .expect("reset password authenticates its User");
+        let outcome = state
+            .write_scope
+            .run(|transaction| {
+                Box::pin(async move { users.authenticate(transaction, authentication).await })
+            })
+            .await
+            .expect("authenticate reset password");
+        assert!(matches!(outcome, MutationOutcome::Confirmed(_)));
+    }
 }
 
 // Missing delivery configuration is detached operational failure, not a public
@@ -775,19 +881,11 @@ async fn request_password_reset_mails_commit_indeterminate_token_once_reported_b
 
 #[apply(backends)]
 #[tokio::test]
-async fn request_password_reset_invalid_identifier_returns_error(#[case] backend: Backend) {
+async fn request_password_reset_invalid_identifier_does_not_start_worker(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, _) = post_form_with_mailer(
-        &state,
-        &mailer,
-        <web::password_reset::Request as ServerFn>::PATH,
-        "identifier=invalid username",
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_invalid_reset_identifier_does_not_start_worker(&state, "invalid username").await;
+    assert_invalid_reset_identifier_does_not_start_worker(&state, "invalid%40").await;
 }
 
 // Unknown identifiers have the same accepted response as eligible identifiers.
@@ -796,12 +894,29 @@ async fn request_password_reset_invalid_identifier_returns_error(#[case] backend
 async fn request_password_reset_is_neutral_for_unknown_username(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
+    let (entered_tx, entered_rx) = channel();
+    let (release_tx, release_rx): (Sender<()>, Receiver<()>) = channel();
     let (terminal_tx, terminal_rx) = channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
     let mut users = MockUserStorage::new();
     users.expect_get_user_by_username().return_once(move |_| {
-        terminal_tx.send(()).expect("worker reports unknown lookup");
+        entered_tx
+            .send(())
+            .expect("worker reports unknown lookup entry");
+        release_rx
+            .lock()
+            .expect("unknown lookup release mutex")
+            .recv()
+            .expect("test releases unknown lookup");
+        terminal_tx
+            .send(())
+            .expect("worker reports unknown lookup completion");
         Ok(None)
     });
+    let mut password_resets = MockPasswordResetStorage::new();
+    password_resets.expect_create_password_reset().never();
+    let mut site_config = MockSiteConfigStorage::new();
+    site_config.expect_get_identity().never();
     let request = web::password_reset::Request {
         identifier: web::password_reset::PasswordResetIdentifier::Username(
             common::test_support::parse_username("nobody"),
@@ -813,16 +928,65 @@ async fn request_password_reset_is_neutral_for_unknown_username(#[case] backend:
         mailer.clone(),
         &request,
         Arc::new(users),
-        state.password_resets.clone(),
-        state.write_scope.clone(),
-        state.site_config.clone(),
+        Arc::new(password_resets),
+        mock_write_scope(),
+        Arc::new(site_config),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    entered_rx
+        .recv()
+        .expect("unknown lookup enters after public response");
+    release_tx
+        .send(())
+        .expect("release unknown detached lookup");
+    terminal_rx
+        .recv()
+        .expect("worker completes after unknown lookup release");
+    assert_no_email(&mailer);
+}
+
+// Unknown Email lookup is neutral and does not resolve configuration, issue a
+// token, or send mail.
+#[apply(backends)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_password_reset_is_neutral_for_unknown_email(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let mailer = Arc::new(CapturingMailSender::new());
+    let (terminal_tx, terminal_rx) = channel();
+    let mut users = MockUserStorage::new();
+    users.expect_get_users_by_email().return_once(move |_| {
+        terminal_tx
+            .send(())
+            .expect("worker reports unknown Email lookup completion");
+        Ok(Vec::new())
+    });
+    let mut password_resets = MockPasswordResetStorage::new();
+    password_resets.expect_create_password_reset().never();
+    let mut site_config = MockSiteConfigStorage::new();
+    site_config.expect_get_identity().never();
+    let request = web::password_reset::Request {
+        identifier: web::password_reset::PasswordResetIdentifier::Email(parse_email(
+            "nobody@example.com",
+        )),
+    };
+
+    let (status, _body) = post_password_reset_request_with_dependencies(
+        &state,
+        mailer.clone(),
+        &request,
+        Arc::new(users),
+        Arc::new(password_resets),
+        mock_write_scope(),
+        Arc::new(site_config),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
     terminal_rx
         .recv()
-        .expect("worker terminates after unknown lookup");
+        .expect("worker completes unknown Email lookup after public response");
     assert_no_email(&mailer);
 }
 

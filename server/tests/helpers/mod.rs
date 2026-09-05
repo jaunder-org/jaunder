@@ -30,11 +30,11 @@ pub use http::{
     ForeignReferenceResolver, MultipartFile, TestHttpResponse, body_string, confirmed_mutation,
     get_asset, make_app, make_app_with_media_ownership_resolver, post_form, post_form_with_bearer,
     post_form_with_credentials, post_form_with_mailer, post_form_with_secure_flag, post_json,
-    post_json_with_credentials, post_multipart, post_password_reset_request_with_dependencies,
-    post_server_fn, post_server_fn_request_fixture, post_server_fn_request_fixture_with_mailer,
-    post_server_fn_request_fixture_with_secure_flag, post_server_fn_with_mailer,
-    post_server_fn_with_media_ownership_resolver, post_server_fn_with_secure_flag,
-    post_server_fn_with_ua,
+    post_json_with_credentials, post_multipart, post_password_reset_form_with_dependencies,
+    post_password_reset_request_with_dependencies, post_server_fn, post_server_fn_request_fixture,
+    post_server_fn_request_fixture_with_mailer, post_server_fn_request_fixture_with_secure_flag,
+    post_server_fn_with_mailer, post_server_fn_with_media_ownership_resolver,
+    post_server_fn_with_secure_flag, post_server_fn_with_ua,
 };
 pub use posts::{create_post_json, update_post_json};
 pub use registrar::{REGISTERED_SERVER_FN_COUNT, ensure_server_fns_registered};

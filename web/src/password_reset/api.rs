@@ -3,10 +3,7 @@
 
 #[cfg(feature = "server")]
 use {
-    crate::error::{
-        InternalError, SwallowedSource, from_write_scope_error as map_write_scope_error,
-        report_swallowed,
-    },
+    crate::error::{self, InternalError, SwallowedSource},
     crate::mail,
     chrono::Duration,
     common::mailer::{EmailMessage, MailSender},
@@ -23,7 +20,7 @@ use {
         PasswordResetStorage, SessionStorage, SiteConfigStorage, UserStorage, WriteScope,
         account_mutations,
     },
-    tracing::instrument::WithSubscriber as _,
+    tracing::instrument::WithSubscriber,
 };
 
 use crate::error::WebResult;
@@ -123,7 +120,7 @@ fn finalize_password_reset(outcome: &MutationOutcome<common::ids::UserId>) -> Mu
 /// token, or mail address into exported telemetry.
 #[cfg(feature = "server")]
 fn report_request_failure(error: &InternalError) {
-    report_swallowed(
+    error::report_swallowed(
         error.kind(),
         error.class(),
         "web.password_reset.request",
@@ -134,7 +131,7 @@ fn report_request_failure(error: &InternalError) {
 /// Reports a detached storage lookup that has no reviewed safe source chain.
 #[cfg(feature = "server")]
 fn report_request_storage_failure() {
-    report_swallowed(
+    error::report_swallowed(
         ErrorKind::Storage,
         ErrorClass::Bug,
         "web.password_reset.request",
@@ -212,7 +209,7 @@ async fn deliver_reset_messages(
         {
             Ok(outcome) => outcome,
             Err(error) => {
-                report_request_failure(&map_write_scope_error(error));
+                report_request_failure(&error::from_write_scope_error(error));
                 continue;
             }
         };
@@ -304,7 +301,7 @@ pub async fn confirm(request: ConfirmPasswordResetRequest) -> WebResult<Mutation
             })
         })
         .await
-        .map_err(map_write_scope_error)?;
+        .map_err(error::from_write_scope_error)?;
     Ok(finalize_password_reset(&outcome))
 }
 

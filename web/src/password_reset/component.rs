@@ -1,7 +1,7 @@
 //! Password-reset vertical — wasm-only UI (ADR-0070): the forgot-password and
 //! reset-password pages.
 
-use super::{Confirm, ConfirmPasswordResetRequest, PasswordResetIdentifier, Request};
+use super::api::{Confirm, ConfirmPasswordResetRequest, PasswordResetIdentifier, Request};
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedInput};
 use crate::topbar::Topbar;

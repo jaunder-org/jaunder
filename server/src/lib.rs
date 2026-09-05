@@ -33,7 +33,7 @@ use axum::{
 };
 use axum_embed::ServeEmbed;
 use common::mailer::MailSender;
-use leptos::prelude::*;
+use leptos::prelude;
 
 use crate::{
     assets::StaticAssets, feed::handlers, media_ownership::LiveMediaReferenceOwnershipResolver,
@@ -251,18 +251,18 @@ fn create_router_with_dependencies(
             context::provide_media_content_locks_context(&media_content_locks);
             context::provide_mailer_context(&mailer);
             if let Some(dependencies) = &password_reset_dependencies {
-                provide_context::<Arc<dyn UserStorage>>(Arc::clone(&dependencies.users));
-                provide_context::<Arc<dyn PasswordResetStorage>>(Arc::clone(
+                prelude::provide_context::<Arc<dyn UserStorage>>(Arc::clone(&dependencies.users));
+                prelude::provide_context::<Arc<dyn PasswordResetStorage>>(Arc::clone(
                     &dependencies.password_resets,
                 ));
-                provide_context::<WriteScope>(dependencies.write_scope.clone());
-                provide_context::<Arc<dyn SiteConfigStorage>>(Arc::clone(
+                prelude::provide_context::<WriteScope>(dependencies.write_scope.clone());
+                prelude::provide_context::<Arc<dyn SiteConfigStorage>>(Arc::clone(
                     &dependencies.site_config,
                 ));
                 context::provide_mailer_context(&dependencies.mailer);
             }
             context::provide_media_manager_context(&media_manager);
-            provide_context(web::auth::CookieSettings {
+            prelude::provide_context(web::auth::CookieSettings {
                 secure: secure_cookies,
             });
         }
