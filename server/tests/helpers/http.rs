@@ -386,7 +386,7 @@ pub async fn post_password_reset_form_with_dependencies(
     site_config: Arc<dyn SiteConfigStorage>,
 ) -> (StatusCode, String) {
     let storage = TempDir::new().expect("test storage directory");
-    let app = jaunder::create_router_with_password_reset_dependencies_for_test(
+    let app = jaunder::test_support::create_router_with_password_reset_dependencies(
         Arc::clone(state),
         mailer,
         storage.path().to_path_buf(),
