@@ -7,10 +7,13 @@ mod tests {
 
     use crate::DbConnectOptions;
     use crate::posts::media;
+    use crate::sql::QueryStorageExt;
+    use crate::subscriptions::CorruptSubscriberRef;
     use crate::test_support::{
         Backend, CloseablePool, PostgresDbGuard, PostgresTestConfig, backends, sqlite_url,
         unique_postgres_url,
     };
+    use common::visibility::SubscriberRef;
 
     use rstest::*;
     use rstest_reuse::*;
@@ -177,7 +180,7 @@ mod tests {
                 .expect("post media rows query succeeds")
         }
 
-        async fn seed_subscription_graph(&self, subscriber_ref: &str) {
+        async fn seed_subscription_graph(&self, subscriber_ref: Option<&SubscriberRef>) {
             let insert_user = match &self.pool {
                 CloseablePool::Sqlite(_) => {
                     "INSERT INTO users \
@@ -192,17 +195,35 @@ mod tests {
                 }
             };
             self.pool.execute(insert_user).await.unwrap();
-            self.pool
-                .execute(&format!(
-                    "INSERT INTO subscriptions \
-                     (subscription_id, author_user_id, channel_id, subscriber_ref, status_id, created_at) \
-                     SELECT 202, 101, channels.channel_id, '{subscriber_ref}', \
-                            subscription_statuses.status_id, CURRENT_TIMESTAMP \
-                     FROM channels CROSS JOIN subscription_statuses \
-                     WHERE channels.name = 'local' AND subscription_statuses.name = 'active'"
-                ))
-                .await
+            if let Some(subscriber_ref) = subscriber_ref {
+                crate::with_closeable_pool!(&self.pool, pool, {
+                    sqlx::query(
+                        "INSERT INTO subscriptions \
+                         (subscription_id, author_user_id, channel_id, subscriber_ref, status_id, created_at) \
+                         SELECT 202, 101, channels.channel_id, $1, \
+                                subscription_statuses.status_id, CURRENT_TIMESTAMP \
+                         FROM channels CROSS JOIN subscription_statuses \
+                         WHERE channels.name = 'local' AND subscription_statuses.name = 'active'",
+                    )
+                    .bind_storage(subscriber_ref)
+                    .execute(pool)
+                    .await
+                    .map(|_| ())
+                })
                 .unwrap();
+            } else {
+                self.pool
+                    .execute(
+                        "INSERT INTO subscriptions \
+                         (subscription_id, author_user_id, channel_id, subscriber_ref, status_id, created_at) \
+                         SELECT 202, 101, channels.channel_id, '', \
+                                subscription_statuses.status_id, CURRENT_TIMESTAMP \
+                         FROM channels CROSS JOIN subscription_statuses \
+                         WHERE channels.name = 'local' AND subscription_statuses.name = 'active'",
+                    )
+                    .await
+                    .unwrap();
+            }
             self.pool
                 .execute(
                     "INSERT INTO audiences (audience_id, author_user_id, name, created_at) \
@@ -451,7 +472,8 @@ mod tests {
     ) {
         let db = MigrationDatabase::new(backend).await;
         db.migrate_to(25).await.unwrap();
-        db.seed_subscription_graph("opaque-ref").await;
+        let subscriber_ref: SubscriberRef = "opaque-ref".parse().unwrap();
+        db.seed_subscription_graph(Some(&subscriber_ref)).await;
 
         db.migrate_to(26).await.unwrap();
 
@@ -462,16 +484,19 @@ mod tests {
                 .unwrap(),
             26
         );
+        let preserved_subscriber = crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM subscriptions \
+                 WHERE subscription_id = 202 AND author_user_id = 101 \
+                   AND subscriber_ref = $1 AND created_at IS NOT NULL",
+            )
+            .bind_storage(&subscriber_ref)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        });
         assert_eq!(
-            db.pool
-                .scalar_i64(
-                    "SELECT COUNT(*) FROM subscriptions \
-                     WHERE subscription_id = 202 AND author_user_id = 101 \
-                       AND subscriber_ref = 'opaque-ref' AND created_at IS NOT NULL",
-                )
-                .await
-                .unwrap(),
-            1,
+            preserved_subscriber, 1,
             "the rebuild must preserve the subscription ID and stored values"
         );
         assert_eq!(
@@ -486,17 +511,20 @@ mod tests {
             "the rebuild must preserve dependent audience membership"
         );
 
-        let empty_error = db
-            .pool
-            .execute(
+        let empty_error = crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query(
                 "INSERT INTO subscriptions \
                  (subscription_id, author_user_id, channel_id, subscriber_ref, status_id) \
-                 SELECT 203, 101, channels.channel_id, '', subscription_statuses.status_id \
+                 SELECT 203, 101, channels.channel_id, $1, subscription_statuses.status_id \
                  FROM channels CROSS JOIN subscription_statuses \
                  WHERE channels.name = 'local' AND subscription_statuses.name = 'active'",
             )
+            .bind_storage(CorruptSubscriberRef(String::new()))
+            .execute(pool)
             .await
-            .expect_err("migration 0026 must reject a zero-length subscriber reference");
+            .map(|_| ())
+        })
+        .expect_err("migration 0026 must reject a zero-length subscriber reference");
         assert!(
             empty_error
                 .as_database_error()
@@ -520,55 +548,68 @@ mod tests {
             Some(sqlx::error::ErrorKind::NotNullViolation)
         ));
 
-        db.pool
-            .execute(
+        crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query(
                 "INSERT INTO subscriptions \
                  (subscription_id, author_user_id, channel_id, subscriber_ref, status_id) \
-                 SELECT 203, 101, channels.channel_id, '   ', subscription_statuses.status_id \
+                 SELECT 203, 101, channels.channel_id, $1, subscription_statuses.status_id \
                  FROM channels CROSS JOIN subscription_statuses \
                  WHERE channels.name = 'local' AND subscription_statuses.name = 'active'",
             )
+            .bind_storage(CorruptSubscriberRef("   ".to_owned()))
+            .execute(pool)
             .await
             .unwrap();
+        });
+        let whitespace_subscriber = crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM subscriptions \
+                 WHERE subscription_id = 203 AND subscriber_ref = $1 \
+                   AND created_at IS NOT NULL",
+            )
+            .bind_storage(CorruptSubscriberRef("   ".to_owned()))
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        });
         assert_eq!(
-            db.pool
-                .scalar_i64(
-                    "SELECT COUNT(*) FROM subscriptions \
-                     WHERE subscription_id = 203 AND subscriber_ref = '   ' \
-                       AND created_at IS NOT NULL",
-                )
-                .await
-                .unwrap(),
-            1,
+            whitespace_subscriber, 1,
             "the portable schema subset rejects only zero length and retains the timestamp default"
         );
 
-        let duplicate_error = db
-            .pool
-            .execute(
+        let duplicate_error = crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query(
                 "INSERT INTO subscriptions \
                  (subscription_id, author_user_id, channel_id, subscriber_ref, status_id) \
-                 SELECT 204, 101, channels.channel_id, 'opaque-ref', subscription_statuses.status_id \
+                 SELECT 204, 101, channels.channel_id, $1, subscription_statuses.status_id \
                  FROM channels CROSS JOIN subscription_statuses \
                  WHERE channels.name = 'local' AND subscription_statuses.name = 'active'",
             )
+            .bind_storage(&subscriber_ref)
+            .execute(pool)
             .await
-            .expect_err("the identity UNIQUE constraint must survive migration 0026");
+            .map(|_| ())
+        })
+        .expect_err("the identity UNIQUE constraint must survive migration 0026");
         assert!(
             duplicate_error
                 .as_database_error()
                 .is_some_and(sqlx::error::DatabaseError::is_unique_violation)
         );
 
-        let foreign_key_error = db
-            .pool
-            .execute(
+        let missing_parents: SubscriberRef = "missing-parents".parse().unwrap();
+        let foreign_key_error = crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query(
                 "INSERT INTO subscriptions \
                  (subscription_id, author_user_id, channel_id, subscriber_ref, status_id) \
-                 VALUES (204, 999, 999, 'missing-parents', 999)",
+                 VALUES (204, 999, 999, $1, 999)",
             )
+            .bind_storage(missing_parents)
+            .execute(pool)
             .await
-            .expect_err("subscription foreign keys must survive migration 0026");
+            .map(|_| ())
+        })
+        .expect_err("subscription foreign keys must survive migration 0026");
         assert!(
             foreign_key_error
                 .as_database_error()
@@ -649,7 +690,7 @@ mod tests {
     ) {
         let db = MigrationDatabase::new(backend).await;
         db.migrate_to(25).await.unwrap();
-        db.seed_subscription_graph("").await;
+        db.seed_subscription_graph(None).await;
 
         db.migrate_to(26)
             .await
@@ -663,15 +704,18 @@ mod tests {
             25,
             "the failed migration must not be recorded"
         );
+        let invalid_subscriber = crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM subscriptions \
+                 WHERE subscription_id = 202 AND author_user_id = 101 AND subscriber_ref = $1",
+            )
+            .bind_storage(CorruptSubscriberRef(String::new()))
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        });
         assert_eq!(
-            db.pool
-                .scalar_i64(
-                    "SELECT COUNT(*) FROM subscriptions \
-                     WHERE subscription_id = 202 AND author_user_id = 101 AND subscriber_ref = ''",
-                )
-                .await
-                .unwrap(),
-            1,
+            invalid_subscriber, 1,
             "the invalid pre-upgrade subscription must remain untouched for operator repair"
         );
         assert_eq!(

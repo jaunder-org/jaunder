@@ -3,7 +3,8 @@
 use std::fmt::Display;
 
 use crate::backup::{
-    CatalogTableName, RestoreBoolean, RestoreInteger, RestoreJson, RestoreReal, RestoreText,
+    CatalogColumnName, CatalogTableName, RestoreBoolean, RestoreInteger, RestoreJson, RestoreReal,
+    RestoreText,
 };
 use crate::feed_cache::{
     FeedCacheGeneratedAt, FeedCacheRepresentationModifiedAt, StoredFeedBody,
@@ -167,11 +168,11 @@ pub trait QueryStorageExt<'q, DB: Database>: Sized {
 /// Adds typed value admission to sqlx's native query builders.
 ///
 /// Import this trait to use [`Self::push_storage_bind`].
-pub trait QueryBuilderStorageExt<'args, DB: Database> {
+pub trait QueryBuilderStorageExt<DB: Database> {
     /// Pushes an approved bind, retaining sqlx's native fluent builder API.
-    fn push_storage_bind<T>(&mut self, value: T) -> &mut Self
+    fn push_storage_bind<'args, T>(&mut self, value: T) -> &mut Self
     where
-        T: StorageBind + 'args + Encode<'args, DB> + Type<DB>;
+        T: StorageBind + Encode<'args, DB> + Type<DB>;
 }
 
 macro_rules! approve_storage_binds {
@@ -241,6 +242,7 @@ approve_storage_binds!(
     StoredPasswordHash,
     SubscriberRef,
     UserConfigKey,
+    CatalogColumnName,
     CatalogTableName,
     RestoreBoolean,
     RestoreInteger,
@@ -276,13 +278,20 @@ use crate::email::CorruptEmailAddress;
 #[cfg(test)]
 use crate::invites::CorruptInviteCode;
 #[cfg(test)]
-use crate::posts::store::{CorruptPostFormat, CorruptPostSlug, CorruptTagSlug};
+use crate::posts::store::{
+    CorruptPostBody, CorruptPostFormat, CorruptPostSlug, CorruptPostSummary, CorruptPostTitle,
+    CorruptTagSlug,
+};
 #[cfg(test)]
 use crate::sessions::CorruptSessionTokenHash;
 #[cfg(any(test, feature = "test-support"))]
+use crate::subscriptions::CorruptSubscriberRef;
+#[cfg(any(test, feature = "test-support"))]
 use crate::test_support::{RawMediaFilename, TemplateDatabaseLockKey, TemplateDatabaseName};
 #[cfg(test)]
-use crate::users::CorruptUsername;
+use crate::users::{
+    CorruptBio, CorruptDisplayName, CorruptEmail, CorruptStoredPasswordHash, CorruptUsername,
+};
 
 #[cfg(any(test, feature = "test-support"))]
 approve_storage_binds!(
@@ -293,15 +302,24 @@ approve_storage_binds!(
 
 #[cfg(test)]
 approve_storage_binds!(
+    CorruptBio,
+    CorruptDisplayName,
+    CorruptEmail,
     CorruptEmailAddress,
     CorruptInviteCode,
+    CorruptPostBody,
     CorruptPostFormat,
     CorruptPostSlug,
+    CorruptPostSummary,
+    CorruptPostTitle,
     CorruptSessionTokenHash,
     CorruptTagSlug,
+    CorruptStoredPasswordHash,
     CorruptUsername,
     CatalogDatabaseName,
 );
+#[cfg(any(test, feature = "test-support"))]
+approve_storage_binds!(CorruptSubscriberRef,);
 
 impl<T> StorageBind for Option<T> where T: StorageBind {}
 impl<T> sealed::StorageBind for Option<T> where T: StorageBind {}
@@ -318,7 +336,7 @@ impl<T> sealed::StorageBind for [T] where T: StorageBind {}
 impl StorageBind for RowCount {}
 impl sealed::StorageBind for RowCount {}
 
-impl<'q, DB> QueryStorageExt<'q, DB> for Query<'q, DB, DB::Arguments<'q>>
+impl<'q, DB> QueryStorageExt<'q, DB> for Query<'q, DB, DB::Arguments>
 where
     DB: Database,
 {
@@ -330,7 +348,7 @@ where
     }
 }
 
-impl<'q, DB, O> QueryStorageExt<'q, DB> for QueryAs<'q, DB, O, DB::Arguments<'q>>
+impl<'q, DB, O> QueryStorageExt<'q, DB> for QueryAs<'q, DB, O, DB::Arguments>
 where
     DB: Database,
 {
@@ -342,7 +360,7 @@ where
     }
 }
 
-impl<'q, DB, O> QueryStorageExt<'q, DB> for QueryScalar<'q, DB, O, DB::Arguments<'q>>
+impl<'q, DB, O> QueryStorageExt<'q, DB> for QueryScalar<'q, DB, O, DB::Arguments>
 where
     DB: Database,
 {
@@ -354,27 +372,26 @@ where
     }
 }
 
-impl<'args, DB> QueryBuilderStorageExt<'args, DB> for QueryBuilder<'args, DB>
+impl<DB> QueryBuilderStorageExt<DB> for QueryBuilder<DB>
 where
     DB: Database,
 {
-    fn push_storage_bind<T>(&mut self, value: T) -> &mut Self
+    fn push_storage_bind<'args, T>(&mut self, value: T) -> &mut Self
     where
-        T: StorageBind + 'args + Encode<'args, DB> + Type<DB>,
+        T: StorageBind + Encode<'args, DB> + Type<DB>,
     {
         self.push_bind(value)
     }
 }
 
-impl<'qb, 'args, DB, Sep> QueryBuilderStorageExt<'args, DB> for Separated<'qb, 'args, DB, Sep>
+impl<DB, Sep> QueryBuilderStorageExt<DB> for Separated<'_, DB, Sep>
 where
-    'args: 'qb,
     DB: Database,
     Sep: Display,
 {
-    fn push_storage_bind<T>(&mut self, value: T) -> &mut Self
+    fn push_storage_bind<'args, T>(&mut self, value: T) -> &mut Self
     where
-        T: StorageBind + 'args + Encode<'args, DB> + Type<DB>,
+        T: StorageBind + Encode<'args, DB> + Type<DB>,
     {
         self.push_bind(value)
     }

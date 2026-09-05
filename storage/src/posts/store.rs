@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use sqlx::{Database, Decode, Encode, Executor, Pool, Result, Type};
+use sqlx::{AssertSqlSafe, Database, Decode, Encode, Executor, Pool, Result, Type};
 
 use crate::InstanceId;
 use crate::backend::Backend;
@@ -759,7 +759,7 @@ where
     for<'q> Option<UtcInstant>: Encode<'q, DB> + Type<DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     #[tracing::instrument(
         name = "storage.posts.create",
@@ -782,7 +782,7 @@ where
              FROM posts p JOIN users u ON p.user_id = u.user_id WHERE p.post_id = $1",
             tags = DB::TAGS_SUBQUERY,
         );
-        let record = sqlx::query_as::<_, PostRecord>(&sql)
+        let record = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
             .bind_storage(post_id)
             .fetch_one(connection)
             .await?;
@@ -903,7 +903,7 @@ where
                AND {resolution}",
             tags = DB::TAGS_SUBQUERY,
         );
-        let query = sqlx::query_as::<_, PostRecord>(&sql).bind_storage(post_id);
+        let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql)).bind_storage(post_id);
         Ok(binds.bind_onto(query).fetch_optional(&self.pool).await?)
     }
 
@@ -1248,7 +1248,7 @@ where
             tags = DB::TAGS_SUBQUERY,
             date_clause = DB::PERMALINK_DATE_CLAUSE,
         );
-        let query = sqlx::query_as::<_, PostRecord>(&sql)
+        let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
             .bind_storage(username)
             .bind_storage(slug)
             .bind_storage(date_text)
@@ -1283,7 +1283,7 @@ where
                AND (p.published_at IS NULL OR p.published_at > $4)
                AND p.deleted_at IS NULL"
         );
-        let row = sqlx::query_as::<_, PostRecord>(&sql)
+        let row = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
             .bind_storage(user_id)
             .bind_storage(slug)
             .bind_storage(date_text)
@@ -1430,7 +1430,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(username)
                 .bind_storage(cursor.created_at)
                 .bind_storage(cursor.created_at)
@@ -1460,7 +1460,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(username)
                 .bind_storage(now);
             binds
@@ -1504,7 +1504,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(cursor.created_at)
                 .bind_storage(cursor.created_at)
                 .bind_storage(cursor.post_id)
@@ -1532,7 +1532,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql).bind_storage(now);
+            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql)).bind_storage(now);
             binds
                 .bind_onto(query)
                 .bind_storage(limit)
@@ -1571,7 +1571,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT $6"
             );
-            sqlx::query_as::<_, PostRecord>(&sql)
+            sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(cursor.created_at)
                 .bind_storage(cursor.created_at)
@@ -1595,7 +1595,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT $3"
             );
-            sqlx::query_as::<_, PostRecord>(&sql)
+            sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(now)
                 .bind_storage(limit)
@@ -1633,7 +1633,7 @@ where
                  ORDER BY p.published_at ASC, p.post_id ASC
                  LIMIT $6"
             );
-            sqlx::query_as::<_, PostRecord>(&sql)
+            sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(cursor.published_at)
                 .bind_storage(cursor.published_at)
@@ -1656,7 +1656,7 @@ where
                  ORDER BY p.published_at ASC, p.post_id ASC
                  LIMIT $3"
             );
-            sqlx::query_as::<_, PostRecord>(&sql)
+            sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(now)
                 .bind_storage(limit)
@@ -1691,7 +1691,7 @@ where
                  ORDER BY p.updated_at DESC, p.post_id DESC
                  LIMIT $4"
             );
-            sqlx::query_as::<_, PostRecord>(&sql)
+            sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(cursor.updated_at)
                 .bind_storage(cursor.post_id)
@@ -1710,7 +1710,7 @@ where
                  ORDER BY p.updated_at DESC, p.post_id DESC
                  LIMIT $2"
             );
-            sqlx::query_as::<_, PostRecord>(&sql)
+            sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(limit)
                 .fetch_all(&self.pool)
@@ -1781,7 +1781,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(tag_slug)
                 .bind_storage(cursor.created_at)
                 .bind_storage(cursor.created_at)
@@ -1813,7 +1813,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(tag_slug)
                 .bind_storage(now);
             binds
@@ -1875,7 +1875,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(tag_slug)
                 .bind_storage(cursor.created_at)
@@ -1909,7 +1909,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRecord>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
                 .bind_storage(user_id)
                 .bind_storage(tag_slug)
                 .bind_storage(now);
@@ -2036,10 +2036,25 @@ pub(crate) struct CorruptPostSlug(String);
 #[cfg(test)]
 #[derive(macros::SqlxBridge)]
 pub(crate) struct CorruptPostFormat(String);
+/// Test-only invalid `posts.summary` column value.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptPostSummary(String);
+
+/// Test-only invalid `posts.title` column value.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptPostTitle(String);
+
+/// Test-only invalid `posts.body` column value.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptPostBody(String);
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::posts::media::PersistedMediaSubjectKind;
     use crate::posts::models::{PostBookkeepingExpectation, RenderedHtml};
     use crate::test_support::{
         Backend, CloseablePool, MEDIA_TEST_SHA256, SeedFeedCache, SeedRawPost, SeedUser, TestEnv,
@@ -2578,33 +2593,36 @@ mod tests {
     async fn media_for_subject(
         env: &TestEnv,
         post_id: PostId,
-        subject_kind: &str,
+        subject_kind: PersistedMediaSubjectKind,
         revision_id: RevisionId,
     ) -> Vec<(MediaRef, MediaReferenceKind, MediaReferenceForm)> {
-        env.base
-            .pool()
-            .string_quintuples(&format!(
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_as::<_, (String, String, String, String, String)>(
                 "SELECT source, sha256, filename, reference_kind, reference_form
                  FROM post_media
-                 WHERE post_id = {post_id} AND subject_kind = '{subject_kind}'
-                   AND revision_id = {revision_id}
-                 ORDER BY source, sha256, filename, reference_kind, reference_form"
-            ))
+                 WHERE post_id = $1 AND subject_kind = $2 AND revision_id = $3
+                 ORDER BY source, sha256, filename, reference_kind, reference_form",
+            )
+            .bind_storage(post_id)
+            .bind_storage(subject_kind)
+            .bind_storage(revision_id)
+            .fetch_all(pool)
             .await
-            .expect("read post media subject")
-            .into_iter()
-            .map(|(source, sha256, filename, kind, form)| {
-                (
-                    MediaRef {
-                        source: source.parse().expect("valid media source"),
-                        sha256: sha256.parse().expect("valid media hash"),
-                        filename: filename.parse().expect("valid media filename"),
-                    },
-                    kind.parse().expect("valid media reference kind"),
-                    form.parse().expect("valid media reference form"),
-                )
-            })
-            .collect()
+        })
+        .expect("read post media subject")
+        .into_iter()
+        .map(|(source, sha256, filename, kind, form)| {
+            (
+                MediaRef {
+                    source: source.parse().expect("valid media source"),
+                    sha256: sha256.parse().expect("valid media hash"),
+                    filename: filename.parse().expect("valid media filename"),
+                },
+                kind.parse().expect("valid media reference kind"),
+                form.parse().expect("valid media reference form"),
+            )
+        })
+        .collect()
     }
 
     async fn assert_complete_prior_revision(
@@ -2616,11 +2634,7 @@ mod tests {
         captured_at: UtcInstant,
     ) -> RevisionId {
         assert_eq!(
-            env.base
-                .pool()
-                .scalar_i64(&format!(
-                    "SELECT COUNT(*) FROM post_revisions WHERE post_id = {post_id}"
-                ))
+            crate::test_support::count_post_revisions(env, post_id)
                 .await
                 .expect("count post revisions"),
             1,
@@ -2642,15 +2656,16 @@ mod tests {
         assert_eq!(revision.deleted_at, prior.deleted_at);
         assert_eq!(revision.captured_at, captured_at);
 
-        let tags = env
-            .base
-            .pool()
-            .string_quintuples(&format!(
+        let tags = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_as::<_, (String, String, String, String, String)>(
                 "SELECT tag_slug, tag_display, '', '', ''
-                 FROM post_revision_tags WHERE revision_id = {revision_id} ORDER BY tag_slug"
-            ))
+                 FROM post_revision_tags WHERE revision_id = $1 ORDER BY tag_slug",
+            )
+            .bind_storage(revision_id)
+            .fetch_all(pool)
             .await
-            .expect("read revision tags");
+        })
+        .expect("read revision tags");
         assert_eq!(
             tags.into_iter()
                 .map(|(slug, display, _, _, _)| (slug, display))
@@ -2662,16 +2677,17 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        let audiences = env
-            .base
-            .pool()
-            .string_quintuples(&format!(
+        let audiences = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_as::<_, (String, String, String, String, String)>(
                 "SELECT target_kind, COALESCE(CAST(audience_id AS TEXT), ''), '', '', ''
                  FROM post_revision_audiences
-                 WHERE revision_id = {revision_id} ORDER BY target_kind, audience_id"
-            ))
+                 WHERE revision_id = $1 ORDER BY target_kind, audience_id",
+            )
+            .bind_storage(revision_id)
+            .fetch_all(pool)
             .await
-            .expect("read revision audiences");
+        })
+        .expect("read revision audiences");
         assert_eq!(
             audiences
                 .into_iter()
@@ -2689,7 +2705,13 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(
-            media_for_subject(env, post_id, "revision", revision_id).await,
+            media_for_subject(
+                env,
+                post_id,
+                PersistedMediaSubjectKind::Revision,
+                revision_id
+            )
+            .await,
             prior_media,
             "a revision copies the exact current media references rather than extracting anew"
         );
@@ -3162,7 +3184,13 @@ mod tests {
             .get_post_audiences(post_id)
             .await
             .expect("read prior audiences");
-        let prior_media = media_for_subject(&env, post_id, "current", RevisionId::from(0)).await;
+        let prior_media = media_for_subject(
+            &env,
+            post_id,
+            PersistedMediaSubjectKind::Current,
+            RevisionId::from(0),
+        )
+        .await;
         assert_eq!(
             prior_media,
             vec![(
@@ -3205,7 +3233,13 @@ mod tests {
         )
         .await;
         assert_eq!(
-            media_for_subject(&env, post_id, "current", RevisionId::from(0)).await,
+            media_for_subject(
+                &env,
+                post_id,
+                PersistedMediaSubjectKind::Current,
+                RevisionId::from(0),
+            )
+            .await,
             vec![(
                 new_media,
                 MediaReferenceKind::Local,
@@ -3216,14 +3250,17 @@ mod tests {
             "the current subject is replaced while the revision retains the prior form"
         );
         assert_eq!(
-            env.base
-                .pool()
-                .scalar_i64(&format!(
-                    "SELECT COUNT(*) FROM post_media WHERE post_id = {post_id}
-                 AND subject_kind = 'revision' AND revision_id = {revision_id}"
-                ))
+            crate::with_closeable_pool!(env.base.pool(), pool, {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM post_media
+                     WHERE post_id = $1 AND subject_kind = 'revision' AND revision_id = $2",
+                )
+                .bind_storage(post_id)
+                .bind_storage(revision_id)
+                .fetch_one(pool)
                 .await
-                .expect("count revision media"),
+            })
+            .expect("count revision media"),
             1,
             "the copied row carries the revision subject key"
         );
@@ -3257,7 +3294,13 @@ mod tests {
             .unwrap()
             .unwrap();
         let audiences = env.state.posts.get_post_audiences(post_id).await.unwrap();
-        let media = media_for_subject(&env, post_id, "current", RevisionId::from(0)).await;
+        let media = media_for_subject(
+            &env,
+            post_id,
+            PersistedMediaSubjectKind::Current,
+            RevisionId::from(0),
+        )
+        .await;
         let clock = parse_utc_instant("2026-08-27T12:01:00Z");
 
         update_post_confirmed(
@@ -3286,7 +3329,13 @@ mod tests {
             audiences
         );
         assert_eq!(
-            media_for_subject(&env, post_id, "current", RevisionId::from(0)).await,
+            media_for_subject(
+                &env,
+                post_id,
+                PersistedMediaSubjectKind::Current,
+                RevisionId::from(0),
+            )
+            .await,
             media
         );
     }
@@ -3320,7 +3369,13 @@ mod tests {
             .unwrap()
             .unwrap();
         let audiences = env.state.posts.get_post_audiences(post_id).await.unwrap();
-        let media = media_for_subject(&env, post_id, "current", RevisionId::from(0)).await;
+        let media = media_for_subject(
+            &env,
+            post_id,
+            PersistedMediaSubjectKind::Current,
+            RevisionId::from(0),
+        )
+        .await;
         let clock = parse_utc_instant("2026-08-27T12:02:00Z");
 
         update_post_confirmed(
@@ -3349,7 +3404,13 @@ mod tests {
             vec![AudienceTarget::Public]
         );
         assert_eq!(
-            media_for_subject(&env, post_id, "current", RevisionId::from(0)).await,
+            media_for_subject(
+                &env,
+                post_id,
+                PersistedMediaSubjectKind::Current,
+                RevisionId::from(0),
+            )
+            .await,
             media
         );
     }
@@ -3384,7 +3445,13 @@ mod tests {
             .unwrap()
             .unwrap();
         let audiences = env.state.posts.get_post_audiences(post_id).await.unwrap();
-        let media = media_for_subject(&env, post_id, "current", RevisionId::from(0)).await;
+        let media = media_for_subject(
+            &env,
+            post_id,
+            PersistedMediaSubjectKind::Current,
+            RevisionId::from(0),
+        )
+        .await;
         let clock = parse_utc_instant("2026-08-27T12:03:00Z");
 
         update_post_confirmed(
@@ -3416,7 +3483,13 @@ mod tests {
             audiences
         );
         assert_eq!(
-            media_for_subject(&env, post_id, "current", RevisionId::from(0)).await,
+            media_for_subject(
+                &env,
+                post_id,
+                PersistedMediaSubjectKind::Current,
+                RevisionId::from(0),
+            )
+            .await,
             vec![(
                 current_media,
                 MediaReferenceKind::Local,
@@ -3574,24 +3647,27 @@ mod tests {
             "{error:?}"
         );
         assert_eq!(
-            env.base
-                .pool()
-                .scalar_i64(&format!(
-                    "SELECT COUNT(*) FROM posts
-                     WHERE post_id = {post_id} AND published_at IS NULL"
-                ))
+            crate::with_closeable_pool!(env.base.pool(), pool, {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM posts WHERE post_id = $1 AND published_at IS NULL",
+                )
+                .bind_storage(post_id)
+                .fetch_one(pool)
                 .await
-                .expect("read publication state"),
+            })
+            .expect("read publication state"),
             1
         );
         assert_eq!(
-            env.base
-                .pool()
-                .scalar_i64(&format!(
-                    "SELECT COUNT(*) FROM post_revisions WHERE post_id = {post_id}"
-                ))
+            crate::with_closeable_pool!(env.base.pool(), pool, {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM post_revisions WHERE post_id = $1",
+                )
+                .bind_storage(post_id)
+                .fetch_one(pool)
                 .await
-                .expect("count rolled-back revisions"),
+            })
+            .expect("count rolled-back revisions"),
             1
         );
     }
@@ -4010,13 +4086,17 @@ mod tests {
             unpublish_post_scoped(&env.state, post_id, owner).await,
             Err(crate::WriteScopeError::Operation(UpdatePostError::NotFound))
         ));
-        let publication_rows = format!(
-            "SELECT COUNT(*) FROM posts WHERE post_id = {} AND published_at IS NOT NULL",
-            i64::from(post_id)
-        );
+        let publication_rows = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM posts WHERE post_id = $1 AND published_at IS NOT NULL",
+            )
+            .bind_storage(post_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        });
         assert_eq!(
-            env.base.pool().scalar_i64(&publication_rows).await.unwrap(),
-            1,
+            publication_rows, 1,
             "the deleted rejection must not clear publication"
         );
     }
@@ -4386,11 +4466,14 @@ mod tests {
             .post_id;
 
         let overlong = "a".repeat(common::post_summary::MAX_POST_SUMMARY_CHARS + 1);
-        let sql = format!(
-            "UPDATE posts SET summary='{overlong}' WHERE post_id={}",
-            i64::from(post_id)
-        );
-        env.base.pool().execute(sql.as_str()).await.unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE posts SET summary = $1 WHERE post_id = $2")
+                .bind_storage(CorruptPostSummary(overlong))
+                .bind_storage(post_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         let result = posts
             .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
@@ -4420,11 +4503,14 @@ mod tests {
             .await
             .post_id;
 
-        let sql = format!(
-            "UPDATE posts SET title='' WHERE post_id={}",
-            i64::from(post_id)
-        );
-        env.base.pool().execute(sql.as_str()).await.unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE posts SET title = $1 WHERE post_id = $2")
+                .bind_storage(CorruptPostTitle(String::new()))
+                .bind_storage(post_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         let result = posts
             .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
@@ -4451,11 +4537,14 @@ mod tests {
             .await
             .post_id;
 
-        let sql = format!(
-            "UPDATE posts SET body='   ' WHERE post_id={}",
-            i64::from(post_id)
-        );
-        env.base.pool().execute(sql.as_str()).await.unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE posts SET body = $1 WHERE post_id = $2")
+                .bind_storage(CorruptPostBody("   ".to_owned()))
+                .bind_storage(post_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         let result = posts
             .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
@@ -4561,31 +4650,26 @@ mod tests {
         let post3_id = mk("deleted-post", true).seed(&env.state).await.post_id;
 
         // Give distinct updated_at (post2 more recent than post1) and soft-delete post3.
-        // ISO-8601 literals inlined so both backends accept the raw statement.
-        let t_older = (now - chrono::Duration::hours(2)).to_rfc3339();
-        let t_newer = (now - chrono::Duration::hours(1)).to_rfc3339();
-        let now_str = now.to_rfc3339();
-        env.base
-            .pool()
-            .execute(&format!(
-                "UPDATE posts SET updated_at = '{t_older}' WHERE post_id = {post1_id}"
-            ))
-            .await
-            .unwrap();
-        env.base
-            .pool()
-            .execute(&format!(
-                "UPDATE posts SET updated_at = '{t_newer}' WHERE post_id = {post2_id}"
-            ))
-            .await
-            .unwrap();
-        env.base
-            .pool()
-            .execute(&format!(
-                "UPDATE posts SET deleted_at = '{now_str}' WHERE post_id = {post3_id}"
-            ))
-            .await
-            .unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE posts SET updated_at = $1 WHERE post_id = $2")
+                .bind_storage(UtcInstant::from(now - chrono::Duration::hours(2)))
+                .bind_storage(post1_id)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE posts SET updated_at = $1 WHERE post_id = $2")
+                .bind_storage(UtcInstant::from(now - chrono::Duration::hours(1)))
+                .bind_storage(post2_id)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
+                .bind_storage(UtcInstant::from(now))
+                .bind_storage(post3_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         let results = env
             .state

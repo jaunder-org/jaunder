@@ -165,7 +165,10 @@ fn drop_test_database(db_name: &str, bootstrap_url: &str) {
                 };
                 let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), async {
                     let mut conn = sqlx::PgConnection::connect_with(&options).await?;
-                    let dropped = sqlx::query(&statement).execute(&mut conn).await.map(|_| ());
+                    let dropped = sqlx::query(sqlx::AssertSqlSafe(statement))
+                        .execute(&mut conn)
+                        .await
+                        .map(|_| ());
                     let _ = conn.close().await;
                     dropped
                 })
@@ -241,11 +244,11 @@ pub async fn unique_postgres_url(
     );
 
     let mut admin_conn = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE DATABASE {} OWNER {}",
         quote_identifier(&db_name),
         quote_identifier(owner),
-    ))
+    )))
     .execute(&mut admin_conn)
     .await
     .unwrap();
@@ -311,11 +314,11 @@ async fn ensure_template_db(config: &PostgresTestConfig, template: &TemplateData
             unreachable!("PostgreSQL test URL always yields PostgreSQL options")
         };
         let owner = options.get_username();
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "CREATE DATABASE {} OWNER {}",
             quote_identifier(template.as_str()),
             quote_identifier(owner),
-        ))
+        )))
         .execute(&mut admin)
         .await
         .unwrap();
@@ -361,12 +364,12 @@ pub async fn template_postgres_url(
 
     let bootstrap: sqlx::postgres::PgConnectOptions = config.bootstrap_url().parse().unwrap();
     let mut admin = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE DATABASE {} OWNER {} TEMPLATE {}",
         quote_identifier(&db_name),
         quote_identifier(owner),
         quote_identifier(template.as_str()),
-    ))
+    )))
     .execute(&mut admin)
     .await
     .unwrap();

@@ -798,6 +798,7 @@ pub async fn perform_post_creation_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sql::QueryStorageExt;
     #[cfg(feature = "test-utils")]
     use crate::test_support::mock_write_scope;
     use crate::test_support::{
@@ -2587,15 +2588,34 @@ mod tests {
             vec![AudienceTarget::Public]
         );
         for table in ["posts", "post_audiences", "post_media", "idempotency_keys"] {
-            assert_eq!(
-                env.base
+            let row_count = match table {
+                "posts" => env
+                    .base
                     .pool()
-                    .scalar_i64(&format!("SELECT COUNT(*) FROM {table}"))
+                    .scalar_i64("SELECT COUNT(*) FROM posts")
                     .await
                     .unwrap(),
-                1,
-                "the conflicting create left a row in {table}"
-            );
+                "post_audiences" => env
+                    .base
+                    .pool()
+                    .scalar_i64("SELECT COUNT(*) FROM post_audiences")
+                    .await
+                    .unwrap(),
+                "post_media" => env
+                    .base
+                    .pool()
+                    .scalar_i64("SELECT COUNT(*) FROM post_media")
+                    .await
+                    .unwrap(),
+                "idempotency_keys" => env
+                    .base
+                    .pool()
+                    .scalar_i64("SELECT COUNT(*) FROM idempotency_keys")
+                    .await
+                    .unwrap(),
+                _ => unreachable!("fixed table set"),
+            };
+            assert_eq!(row_count, 1, "the conflicting create left a row in {table}");
         }
     }
 
@@ -2819,14 +2839,14 @@ mod tests {
                 .expect("pre-cutoff lookup"),
             Some(first.post_id)
         );
-        env.base
-            .pool()
-            .execute(&format!(
-                "UPDATE posts SET deleted_at = created_at WHERE post_id = {}",
-                i64::from(first.post_id)
-            ))
-            .await
-            .expect("soft-delete original Post");
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE posts SET deleted_at = created_at WHERE post_id = $1")
+                .bind_storage(first.post_id)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        })
+        .expect("soft-delete original Post");
         assert_eq!(
             storage
                 .post_id_for_idempotency_key(user_id, &key, cutoff)
@@ -2849,14 +2869,15 @@ mod tests {
         );
         assert_ne!(replacement.post_id, first.post_id);
         assert_eq!(
-            env.base
-                .pool()
-                .scalar_i64(&format!(
-                    "SELECT COUNT(*) FROM posts WHERE post_id = {} AND deleted_at IS NOT NULL",
-                    i64::from(first.post_id)
-                ))
+            crate::with_closeable_pool!(env.base.pool(), pool, {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM posts WHERE post_id = $1 AND deleted_at IS NOT NULL",
+                )
+                .bind_storage(first.post_id)
+                .fetch_one(pool)
                 .await
-                .expect("inspect original Post tombstone"),
+            })
+            .expect("inspect original Post tombstone"),
             1,
             "idempotency expiry must not alter a Deleted Post"
         );

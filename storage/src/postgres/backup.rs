@@ -2,11 +2,12 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::Path,
+    sync::Arc,
 };
 
 use futures_util::TryStreamExt;
 use sha2::{Digest, Sha256};
-use sqlx::{Error, PgConnection, PgPool, Postgres, Row, query::Query};
+use sqlx::{AssertSqlSafe, Error, PgConnection, PgPool, Postgres, Row, query::Query};
 
 use crate::backup::{
     self, BackupError, BackupManifest, BackupMode, BackupRowJson, CatalogColumnName,
@@ -138,11 +139,15 @@ pub(crate) async fn restore_database(
         // Clear every table before loading any: `SET CONSTRAINTS` defers foreign-key
         // *checks*, not `ON DELETE CASCADE` *actions*
         // (docs/adr/0115-clear-then-load-restore.md).
+        // Restore table names originate in the validated catalog and are PostgreSQL-quoted.
         for table in &manifest.tables {
-            sqlx::query(&format!("DELETE FROM {}", sql::quote_identifier(table)))
-                .execute(&mut *connection)
-                .await
-                .map_err(map_restore_error)?;
+            sqlx::query(AssertSqlSafe(format!(
+                "DELETE FROM {}",
+                sql::quote_identifier(table)
+            )))
+            .execute(&mut *connection)
+            .await
+            .map_err(map_restore_error)?;
         }
         for table in backup::restore_table_order(&manifest.tables) {
             let table_name = CatalogTableName::from(table);
@@ -219,11 +224,12 @@ async fn import_table(
         .filter(|column| rows[0].contains_key(&column.name))
         .cloned()
         .collect::<Vec<_>>();
-    let insert = insert_sql(table, &column_names);
+    let insert = Arc::new(insert_sql(table, &column_names));
+    // The validated catalog contributes only quoted table/column names, generated casts, and placeholders.
 
     for row in rows {
         backup::validate_restore_row(table, &row, validation_report);
-        let mut query = sqlx::query(&insert);
+        let mut query = sqlx::query(AssertSqlSafe(Arc::clone(&insert)));
         for column in &column_names {
             let value = row.get(&column.name).ok_or_else(|| {
                 BackupError::InvalidBackup(format!(
@@ -313,20 +319,25 @@ async fn repair_sequences(connection: &mut PgConnection) -> Result<(), BackupErr
     .fetch_all(&mut *connection)
     .await?;
     for row in serial_columns {
-        let table = row
-            .try_get::<CatalogTableName, _>("table_name")?
-            .into_inner();
-        let column = row
-            .try_get::<CatalogColumnName, _>("column_name")?
-            .into_inner();
-        let sql = format!(
+        let table = row.try_get::<CatalogTableName, _>("table_name")?;
+        let column = row.try_get::<CatalogColumnName, _>("column_name")?;
+        // Catalog names are bound as text when passed to
+        // `pg_get_serial_sequence`; only their uses as table/column identifiers
+        // require PostgreSQL identifier quoting.
+        let table_identifier = sql::quote_identifier(table.as_str());
+        let column_identifier = sql::quote_identifier(column.as_str());
+        let sql = AssertSqlSafe(format!(
             "SELECT setval(
-                pg_get_serial_sequence('{table}', '{column}'),
-                COALESCE((SELECT MAX({column}) FROM {table}), 1),
-                (SELECT COUNT(*) > 0 FROM {table})
+                pg_get_serial_sequence($1, $2),
+                COALESCE((SELECT MAX({column_identifier}) FROM {table_identifier}), 1),
+                (SELECT COUNT(*) > 0 FROM {table_identifier})
             )"
-        );
-        sqlx::query(&sql).execute(&mut *connection).await?;
+        ));
+        sqlx::query(sql)
+            .bind_storage(table)
+            .bind_storage(column)
+            .execute(&mut *connection)
+            .await?;
     }
     Ok(())
 }
@@ -366,8 +377,9 @@ async fn export_table(
 ) -> Result<(), BackupError> {
     let file = File::create(destination_path.join("db").join(format!("{table}.ndjson")))?;
     let mut writer = BufWriter::new(file);
+    // JSON export has only backend-quoted catalog identifiers and fixed SQL fragments.
     let select = json_select(table, columns);
-    let mut rows = sqlx::query(&select).fetch(&mut *connection);
+    let mut rows = sqlx::query(AssertSqlSafe(select)).fetch(&mut *connection);
 
     while let Some(row) = rows.try_next().await? {
         let json: BackupRowJson = row.try_get(0)?;
@@ -587,6 +599,36 @@ mod tests {
         .try_get::<RestoreText, _>("value")?;
         assert_eq!(json.as_str(), r#"{"items":[1,true]}"#);
 
+        Ok(())
+    }
+
+    // reason: executes the catalog-driven sequence repair on a live PostgreSQL
+    // table after an explicit-id insert, proving the next generated value advances.
+    #[apply(postgres_only)]
+    #[tokio::test]
+    async fn repair_sequences_advances_sequence_after_explicit_id(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let env = backend.setup().await;
+        let CloseablePool::Postgres(pool) = env.base.pool() else {
+            unreachable!("postgres_only yields a Postgres pool")
+        };
+        sqlx::query("CREATE TABLE sequence_repair_probe (post_id BIGSERIAL)")
+            .execute(pool)
+            .await?;
+        sqlx::query("INSERT INTO sequence_repair_probe (post_id) VALUES ($1)")
+            .bind_storage(common::ids::PostId::from(41))
+            .execute(pool)
+            .await?;
+
+        let mut connection = pool.acquire().await?;
+        repair_sequences(&mut connection).await?;
+        let next: common::ids::PostId = sqlx::query_scalar(
+            "INSERT INTO sequence_repair_probe DEFAULT VALUES RETURNING post_id",
+        )
+        .fetch_one(&mut *connection)
+        .await?;
+        assert_eq!(next, common::ids::PostId::from(42));
         Ok(())
     }
 

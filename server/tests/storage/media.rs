@@ -7,6 +7,8 @@ use common::test_support::{
 use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
+use sqlx::query;
+use storage::sql::QueryStorageExt;
 use storage::test_support::{Backend, SeedUser, backends, confirmed_for, seed_users};
 use storage::{
     AppState, CreateMediaError, DeleteMediaError, MediaDeleteMode, MediaRecord,
@@ -135,17 +137,19 @@ async fn media_row_with_an_invalid_source_url_fails_to_decode(#[case] backend: B
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    env.base
-        .pool()
-        .execute(&format!(
+    let insert = storage::with_closeable_pool!(env.base.pool(), pool, {
+        query(
             "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, \
-             source_url) VALUES ({}, \
+             source_url) VALUES ($1, \
              'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'c.png', \
              'cached', 'image/png', 10, 'not a url')",
-            i64::from(user_id),
-        ))
+        )
+        .bind_storage(user_id)
+        .execute(pool)
         .await
-        .expect("raw insert should succeed — the database has no opinion on the text");
+        .map(|_| ())
+    });
+    insert.expect("raw insert should succeed — the database has no opinion on the text");
 
     let fetched = state
         .media
@@ -178,16 +182,18 @@ async fn list_media_skips_rows_that_fail_to_decode(#[case] backend: Backend) {
     // bypass the validating `create_media` (the `Filename` type makes an un-sanitized
     // name unconstructible in Rust). `media_record_from_row` fails to decode it.
     // created_at/source_url are omitted so both backends' column defaults apply.
-    env.base
-        .pool()
-        .execute(&format!(
+    let insert = storage::with_closeable_pool!(env.base.pool(), pool, {
+        query(
             "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-             VALUES ({}, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', \
+             VALUES ($1, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', \
              '../escape', 'upload', 'image/png', 10)",
-            i64::from(user_id),
-        ))
+        )
+        .bind_storage(user_id)
+        .execute(pool)
         .await
-        .unwrap();
+        .map(|_| ())
+    });
+    insert.unwrap();
 
     // list_media returns the decodable row and silently skips the corrupt one, rather
     // than failing the whole query (which would hide the user's valid media too).

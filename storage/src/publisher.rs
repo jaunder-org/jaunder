@@ -198,7 +198,7 @@ where
     StoredFeedCacheRow: for<'r> FromRow<'r, DB::Row>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     async fn snapshot(&self) -> Result<PublisherSnapshot, PublisherStorageError> {
         let row = sqlx::query_as::<_, SnapshotRow>(

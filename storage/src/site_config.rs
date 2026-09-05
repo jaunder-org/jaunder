@@ -541,7 +541,7 @@ async fn lock_smtp_config<DB>(connection: &mut DB::Connection) -> Result<()>
 where
     DB: Backend,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     if DB::DB_SYSTEM == "postgres" {
         sqlx::query("SELECT pg_advisory_xact_lock(638)")
@@ -584,7 +584,7 @@ where
     for<'q> String: Encode<'q, DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     async fn get_raw(&self, key: SiteConfigKey) -> Result<Option<String>> {
         let row = sqlx::query_as::<_, (StoredSiteConfigValue,)>(
@@ -841,7 +841,7 @@ where
     StoredSiteConfigValue: Type<DB>,
     for<'q> StoredSiteConfigValue: Encode<'q, DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     let connection = DB::write_connection(transaction)?;
     sqlx::query(
@@ -867,7 +867,7 @@ where
     StoredSiteConfigValue: Type<DB>,
     for<'q> StoredSiteConfigValue: Encode<'q, DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     sqlx::query(
         "INSERT INTO site_config (key, value) VALUES ($1, $2)
@@ -886,7 +886,7 @@ where
     SiteConfigKey: Type<DB>,
     for<'q> SiteConfigKey: Encode<'q, DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     sqlx::query("DELETE FROM site_config WHERE key = $1")
         .bind_storage(key)

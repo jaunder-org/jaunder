@@ -4,6 +4,7 @@ use axum::{
 };
 use chrono::{TimeZone, Utc};
 use common::{tagged_url::HubUrl, test_support::parse_etag, time::UtcInstant};
+use sqlx::{query, query_as};
 use tower::ServiceExt;
 
 use rstest::*;
@@ -12,6 +13,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 use crate::helpers::{body_string, make_app};
+use storage::sql::QueryStorageExt;
 use storage::test_support::{
     Backend, SeedFeedCache, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix, fp,
 };
@@ -338,9 +340,10 @@ async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
     SeedRawPost::new(user.user_id).seed(&state).await;
 
     let feed_path = format!("/~{}/feed.rss", user.username);
+    let persisted_feed_path = fp(&feed_path);
     let cached_body = "corrupt-cache-body";
     let etag = "\"corrupt-cache-etag\"";
-    SeedFeedCache::new(fp(&feed_path))
+    SeedFeedCache::new(persisted_feed_path.clone())
         .body(cached_body.to_owned())
         .etag(parse_etag(etag))
         .representation_modified_at(UtcInstant::now())
@@ -349,14 +352,19 @@ async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
         .await;
 
     // Bypass the invariant-bearing storage API to model a corrupted persisted
-    // metadata column while retaining an otherwise coherent cache row.
-    base.pool()
-        .execute(&format!(
+    // metadata column while retaining an otherwise coherent cache row. The
+    // cache path remains ordinary data and is bound, not embedded in the SQL.
+    let update = storage::with_closeable_pool!(base.pool(), pool, {
+        query(
             "UPDATE feed_cache SET content_type = 'application/atom+xml; charset=utf-8' \
-             WHERE feed_url = '{feed_path}'"
-        ))
+               WHERE feed_url = $1",
+        )
+        .bind_storage(&persisted_feed_path)
+        .execute(pool)
         .await
-        .expect("corrupt stored content type");
+        .map(|_| ())
+    });
+    update.expect("corrupt stored content type");
 
     let request = Request::builder()
         .method("GET")
@@ -381,14 +389,16 @@ async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
         "corrupt cache hits must not serve the cached body: {response_body:?}"
     );
 
-    let raw_rows = base
-        .pool()
-        .string_quintuples(&format!(
+    let raw_rows = storage::with_closeable_pool!(base.pool(), pool, {
+        query_as::<_, (String, String, String, String, String)>(
             "SELECT feed_url, body, etag, content_type, CAST(generated_at AS TEXT) \
-             FROM feed_cache WHERE feed_url = '{feed_path}'"
-        ))
+             FROM feed_cache WHERE feed_url = $1",
+        )
+        .bind_storage(&persisted_feed_path)
+        .fetch_all(pool)
         .await
-        .expect("inspect raw cache row after request");
+    })
+    .expect("inspect raw cache row after request");
     let [(stored_path, stored_body, stored_etag, stored_content_type, _)] = raw_rows.as_slice()
     else {
         panic!("expected exactly one raw cache row, got {raw_rows:?}");

@@ -8,13 +8,15 @@ use common::visibility::{
 };
 use rstest::*;
 use rstest_reuse::*;
+use storage::sql::QueryStorageExt;
 use storage::test_support::{Backend, SeedUser, backends, confirmed_for as confirmed, seed_users};
 use storage::{
-    PostgresSubscriptionStorage, SqliteSubscriptionStorage, SubscriptionStorage, WriteScope,
+    CorruptSubscriberRef, PostgresSubscriptionStorage, SqliteSubscriptionStorage,
+    SubscriptionStorage, WriteScope,
 };
 
 use super::fixtures::{
-    channel_id_by_name, local_channel_id, open_pool, raw_exec, update_subscription_created_at,
+    activitypub_channel_id, local_channel_id, open_pool, raw_exec, update_subscription_created_at,
 };
 
 #[apply(backends)]
@@ -157,7 +159,7 @@ async fn list_subscriber_summaries_resolves_labels_on_both_dialects(#[case] back
         "INSERT INTO channels (name) VALUES ('activitypub')",
     )
     .await;
-    let remote = channel_id_by_name(backend, &env, "activitypub").await;
+    let remote = activitypub_channel_id(backend, &env).await;
 
     let resolved = subscribe_confirmed(
         &state.write_scope,
@@ -217,13 +219,21 @@ async fn subscriber_bulk_reads_skip_unicode_blank_stored_refs(#[case] backend: B
     )
     .await;
 
-    let sql = format!(
-        "INSERT INTO subscriptions \
-         (author_user_id, channel_id, subscriber_ref, status_id) \
-         VALUES ({author}, {local}, '\u{2003}', \
-         (SELECT status_id FROM subscription_statuses WHERE name = 'active'))"
-    );
-    raw_exec(backend, &env, &sql).await;
+    let malformed_subscription = storage::with_closeable_pool!(env.base.pool(), pool, {
+        sqlx::query(
+            "INSERT INTO subscriptions \
+             (author_user_id, channel_id, subscriber_ref, status_id) \
+             VALUES ($1, $2, $3, \
+             (SELECT status_id FROM subscription_statuses WHERE name = 'active'))",
+        )
+        .bind_storage(author)
+        .bind_storage(local)
+        .bind_storage(CorruptSubscriberRef("\u{2003}".to_owned()))
+        .execute(pool)
+        .await
+        .map(|_| ())
+    });
+    malformed_subscription.expect("malformed subscriber fixture setup should succeed");
 
     let listing = state
         .subscriptions
@@ -263,7 +273,7 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
         "INSERT INTO channels (name) VALUES ('activitypub')",
     )
     .await;
-    let remote = channel_id_by_name(backend, &env, "activitypub").await;
+    let remote = activitypub_channel_id(backend, &env).await;
 
     let actor = "https://remote.example/users/alice";
     subscribe_confirmed(

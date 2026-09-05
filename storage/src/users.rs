@@ -147,6 +147,25 @@ impl CorruptUsername {
         Self("bad name".to_owned())
     }
 }
+/// Test-only invalid `users.bio` column value.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptBio(String);
+
+/// Test-only invalid `users.password_hash` column value.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptStoredPasswordHash(String);
+
+/// Test-only invalid `users.email` column value.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptEmail(String);
+
+/// Test-only invalid `users.display_name` column value.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct CorruptDisplayName(String);
 /// A successfully verified login ready to record its authentication timestamp.
 ///
 /// Password verification and the account lookup happen before the write scope;
@@ -366,7 +385,7 @@ impl<DB: Database> UserStore<DB> {
         for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
         for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
         for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-        for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+        DB::Arguments: sqlx::IntoArguments<DB>,
     {
         let row = sqlx::query_as::<
             _,
@@ -495,7 +514,7 @@ where
     for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     #[tracing::instrument(
         skip(self, transaction, password, display_name),
@@ -1025,11 +1044,14 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let overlong = "a".repeat(common::bio::MAX_BIO_CHARS + 1);
-        let sql = format!(
-            "UPDATE users SET bio='{overlong}' WHERE user_id={}",
-            i64::from(user_id)
-        );
-        env.base.pool().execute(sql.as_str()).await.unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE users SET bio = $1 WHERE user_id = $2")
+                .bind_storage(CorruptBio(overlong))
+                .bind_storage(user_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
         let err = env.state.users.get_user(user_id).await.unwrap_err();
         assert!(
             matches!(err, sqlx::Error::ColumnDecode { .. }),
@@ -1067,11 +1089,14 @@ mod tests {
     async fn authenticate_with_corrupted_hash_returns_internal_error(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user = SeedUser::new().seed(&env.state).await;
-        let sql = format!(
-            "UPDATE users SET password_hash='not-a-bcrypt-hash' WHERE username='{}'",
-            user.username
-        );
-        env.base.pool().execute(sql.as_str()).await.unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE users SET password_hash = $1 WHERE username = $2")
+                .bind_storage(CorruptStoredPasswordHash("not-a-bcrypt-hash".to_owned()))
+                .bind_storage(&user.username)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
         let result = authenticate(
             &env.state,
             user.username,
@@ -1093,11 +1118,14 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let user = SeedUser::new().seed(&env.state).await;
-        let sql = format!(
-            "UPDATE users SET email='not-an-email' WHERE username='{}'",
-            user.username
-        );
-        env.base.pool().execute(sql.as_str()).await.unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE users SET email = $1 WHERE username = $2")
+                .bind_storage(CorruptEmail("not-an-email".to_owned()))
+                .bind_storage(&user.username)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
         let result = authenticate(
             &env.state,
             user.username,
@@ -1124,11 +1152,14 @@ mod tests {
         let env = backend.setup().await;
         let user = SeedUser::new().seed(&env.state).await;
         let overlong = "a".repeat(common::display_name::MAX_DISPLAY_NAME_CHARS + 1);
-        let sql = format!(
-            "UPDATE users SET display_name='{overlong}' WHERE username='{}'",
-            user.username
-        );
-        env.base.pool().execute(sql.as_str()).await.unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE users SET display_name = $1 WHERE username = $2")
+                .bind_storage(CorruptDisplayName(overlong))
+                .bind_storage(&user.username)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
         let result = authenticate(
             &env.state,
             user.username,

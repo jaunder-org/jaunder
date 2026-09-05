@@ -596,7 +596,7 @@ where
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
     (FeedEventId,): for<'r> sqlx::FromRow<'r, DB::Row>,
 {
     #[tracing::instrument(
@@ -610,8 +610,9 @@ where
         feed_path: &FeedPath,
     ) -> Result<FeedEventId, FeedEventError> {
         let connection = DB::write_connection(transaction)?;
-        let sql = format!("{INSERT_FEED_EVENT} RETURNING id");
-        let id = sqlx::query_scalar::<_, FeedEventId>(&sql)
+        // The only dynamic fragment is this fixed `RETURNING` clause; feed data stays bound.
+        let sql = sqlx::AssertSqlSafe(format!("{INSERT_FEED_EVENT} RETURNING id"));
+        let id = sqlx::query_scalar::<_, FeedEventId>(sql)
             .bind_storage(feed_path)
             .fetch_one(&mut *connection)
             .await?;

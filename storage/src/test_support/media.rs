@@ -210,27 +210,30 @@ pub async fn fetch_post_media(
     base: &TestBase,
     post_id: PostId,
 ) -> Vec<(MediaRef, MediaReferenceKind, MediaReferenceForm)> {
-    base.pool()
-        .string_quintuples(&format!(
-            "SELECT source, sha256, filename, reference_kind, reference_form FROM post_media \
-             WHERE post_id = {post_id} AND subject_kind = 'current' AND revision_id = 0 \
-             ORDER BY source, sha256, filename, reference_kind, reference_form"
-        ))
+    crate::with_closeable_pool!(base.pool(), pool, {
+        sqlx::query_as::<_, (String, String, String, String, String)>(
+            "SELECT source, sha256, filename, reference_kind, reference_form FROM post_media
+             WHERE post_id = $1 AND subject_kind = 'current' AND revision_id = 0
+             ORDER BY source, sha256, filename, reference_kind, reference_form",
+        )
+        .bind_storage(post_id)
+        .fetch_all(pool)
         .await
-        .expect("post_media query should succeed")
-        .into_iter()
-        .map(|(source, sha256, filename, kind, form)| {
-            (
-                MediaRef {
-                    source: source.parse().expect("valid media source"),
-                    sha256: sha256.parse().expect("valid content hash"),
-                    filename: filename.parse().expect("valid filename"),
-                },
-                kind.parse().expect("valid media reference kind"),
-                form.parse().expect("valid media reference form"),
-            )
-        })
-        .collect()
+    })
+    .expect("post_media query should succeed")
+    .into_iter()
+    .map(|(source, sha256, filename, kind, form)| {
+        (
+            MediaRef {
+                source: source.parse().expect("valid media source"),
+                sha256: sha256.parse().expect("valid content hash"),
+                filename: filename.parse().expect("valid filename"),
+            },
+            kind.parse().expect("valid media reference kind"),
+            form.parse().expect("valid media reference form"),
+        )
+    })
+    .collect()
 }
 
 #[cfg(test)]

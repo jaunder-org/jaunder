@@ -254,7 +254,7 @@ where
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
     for<'r> UtcInstant: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
 {
     #[tracing::instrument(
@@ -480,34 +480,48 @@ mod tests {
         pool: &CloseablePool,
         write: BlockedAudienceWrite,
     ) {
-        let operation = match write {
-            BlockedAudienceWrite::Create => "INSERT",
-            BlockedAudienceWrite::Rename => "UPDATE",
-        };
-        match backend {
-            Backend::Sqlite => {
-                pool.execute(&format!(
+        match (backend, write) {
+            (Backend::Sqlite, BlockedAudienceWrite::Create) => pool
+                .execute(
                     "CREATE TRIGGER block_audience_write \
-                     BEFORE {operation} ON audiences \
-                     BEGIN SELECT RAISE(FAIL, 'blocked'); END"
-                ))
+                     BEFORE INSERT ON audiences \
+                     BEGIN SELECT RAISE(FAIL, 'blocked'); END",
+                )
                 .await
-                .unwrap();
-            }
-            Backend::Postgres => {
+                .unwrap(),
+            (Backend::Sqlite, BlockedAudienceWrite::Rename) => pool
+                .execute(
+                    "CREATE TRIGGER block_audience_write \
+                     BEFORE UPDATE ON audiences \
+                     BEGIN SELECT RAISE(FAIL, 'blocked'); END",
+                )
+                .await
+                .unwrap(),
+            (Backend::Postgres, write) => {
                 pool.execute(
                     "CREATE FUNCTION block_audience_write() RETURNS trigger AS $$ \
                      BEGIN RAISE EXCEPTION 'blocked'; END; $$ LANGUAGE plpgsql",
                 )
                 .await
                 .unwrap();
-                pool.execute(&format!(
-                    "CREATE TRIGGER block_audience_write \
-                     BEFORE {operation} ON audiences \
-                     FOR EACH ROW EXECUTE FUNCTION block_audience_write()"
-                ))
-                .await
-                .unwrap();
+                match write {
+                    BlockedAudienceWrite::Create => pool
+                        .execute(
+                            "CREATE TRIGGER block_audience_write \
+                             BEFORE INSERT ON audiences \
+                             FOR EACH ROW EXECUTE FUNCTION block_audience_write()",
+                        )
+                        .await
+                        .unwrap(),
+                    BlockedAudienceWrite::Rename => pool
+                        .execute(
+                            "CREATE TRIGGER block_audience_write \
+                             BEFORE UPDATE ON audiences \
+                             FOR EACH ROW EXECUTE FUNCTION block_audience_write()",
+                        )
+                        .await
+                        .unwrap(),
+                }
             }
         }
     }
@@ -631,14 +645,14 @@ mod tests {
         // A whitespace-only name bypasses `AudienceName` validation (which
         // `create_audience` enforces) — only reachable via DB tampering. The
         // validating bridge `Decode` rejects it on read as a column-decode error.
-        env.base
-            .pool()
-            .execute(&format!(
-                "INSERT INTO audiences (author_user_id, name) VALUES ({}, '   ')",
-                i64::from(author)
-            ))
-            .await
-            .unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("INSERT INTO audiences (author_user_id, name) VALUES ($1, '   ')")
+                .bind_storage(author)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        })
+        .unwrap();
         let err = env
             .state
             .audiences

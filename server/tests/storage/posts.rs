@@ -13,6 +13,8 @@ use common::time::UtcInstant;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use rstest::*;
 use rstest_reuse::*;
+use sqlx::{AssertSqlSafe, query};
+use storage::sql::QueryStorageExt;
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends, confirmed, confirmed_for,
     media_url_for,
@@ -376,7 +378,9 @@ async fn post_audience_rows(
                WHERE pa.post_id = $1 \
                ORDER BY tk.name, pa.audience_id";
     match backend {
-        Backend::Sqlite => sqlx::query_as(&sql.replace("$1", "?"))
+        // Only the fixed placeholder syntax changes for SQLite; the query text
+        // remains structurally identical to the static PostgreSQL statement.
+        Backend::Sqlite => sqlx::query_as(AssertSqlSafe(sql.replace("$1", "?")))
             .bind(post_id)
             .fetch_all(&open_pool(&env.base).await)
             .await
@@ -937,16 +941,18 @@ async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media
         vec![common::media::parse_media_url(&media_url).unwrap()]
     );
 
-    env.base
-        .pool()
-        .execute(&format!(
+    let update = storage::with_closeable_pool!(env.base.pool(), pool, {
+        query(
             "UPDATE post_media SET reference_form = 'invalid media form'
-             WHERE post_id = {post_id} AND subject_kind = 'revision'
-               AND revision_id = {}",
-            revision.revision_id
-        ))
+             WHERE post_id = $1 AND subject_kind = 'revision' AND revision_id = $2",
+        )
+        .bind_storage(post_id)
+        .bind_storage(revision.revision_id)
+        .execute(pool)
         .await
-        .unwrap();
+        .map(|_| ())
+    });
+    update.unwrap();
     let error = state
         .posts
         .get_post_revision_detail(owner, post_id, revision.revision_id)

@@ -54,10 +54,11 @@ pub(crate) async fn database_is_empty(
         if crate::db::MIGRATION_SEEDED_TABLES.contains(&table.as_str()) {
             continue;
         }
-        let has_row = sqlx::query_scalar::<_, Exists>(&format!(
+        // Catalog table names are backend-quoted before entering this structural query.
+        let has_row = sqlx::query_scalar::<_, Exists>(sqlx::AssertSqlSafe(format!(
             "SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)",
             crate::sql::quote_identifier(table.as_str())
-        ))
+        )))
         .fetch_one(&pool)
         .await?
         .into_bool();

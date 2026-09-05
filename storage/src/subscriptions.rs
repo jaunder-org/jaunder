@@ -28,6 +28,15 @@ use crate::sql::QueryStorageExt;
 pub(crate) struct SubscriptionStatusName(String);
 
 use crate::sql::Exists;
+/// Test-only invalid `subscriptions.subscriber_ref` column value.
+///
+/// This role deliberately bypasses `SubscriberRef` validation for fixtures that
+/// verify strict database/read boundaries without admitting arbitrary text to
+/// production persistence.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(macros::SqlxBridge)]
+pub struct CorruptSubscriberRef(pub String);
+
 /// A subscription row returned by [`SubscriptionStorage::list_subscribers`].
 #[derive(Clone, Debug)]
 pub struct SubscriptionRecord {
@@ -212,7 +221,7 @@ where
     for<'q> String: Encode<'q, DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     async fn subscribe(
         &self,

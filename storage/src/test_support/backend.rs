@@ -169,43 +169,50 @@ impl CloseablePool {
         crate::with_closeable_pool!(self, pool, { pool.close().await });
     }
 
-    /// Runs a raw statement against whichever backend this env uses — the seed
     /// counterpart to [`close`](CloseablePool::close), dispatched internally so
-    /// callers stay backend-agnostic. (The SQL string may still be dialect-specific.)
+    /// callers stay backend-agnostic. Its `'static` SQL permits only fixed fixture
+    /// structure at this boundary; ordinary fixture values use a local typed query
+    /// and [`QueryStorageExt::bind_storage`](crate::sql::QueryStorageExt::bind_storage).
     ///
     /// # Errors
     ///
     /// Returns the `sqlx::Error` if the statement fails to execute.
-    pub async fn execute(&self, sql: &str) -> Result<(), sqlx::Error> {
+    pub async fn execute(&self, sql: &'static str) -> Result<(), sqlx::Error> {
         crate::with_closeable_pool!(self, pool, {
-            sqlx::query(sql).execute(pool).await?;
+            sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await?;
         });
         Ok(())
     }
 
-    /// Fetches a single `i64` scalar (e.g. a `COUNT(*)`) — the inspect
     /// counterpart to [`execute`](CloseablePool::execute), dispatched per backend
-    /// so callers stay backend-agnostic.
-    ///
+    /// so callers stay backend-agnostic. Its `'static` SQL is fixed fixture
+    /// structure; a query carrying values belongs at a local typed bind seam.
     /// # Errors
     ///
     /// Returns the `sqlx::Error` if the query fails.
-    pub async fn scalar_i64(&self, sql: &str) -> Result<i64, sqlx::Error> {
+    pub async fn scalar_i64(&self, sql: &'static str) -> Result<i64, sqlx::Error> {
         crate::with_closeable_pool!(self, pool, {
-            sqlx::query_scalar(sql).fetch_one(pool).await
+            sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+                .fetch_one(pool)
+                .await
         })
     }
 
-    /// Fetches every row of a five-`TEXT`-column query.
+    /// Fetches every row of a five-`TEXT`-column fixed fixture query. Its
+    /// `'static` structural SQL is approved at this test-only boundary.
     ///
     /// # Errors
     ///
     /// Returns the `sqlx::Error` if the query fails.
     pub async fn string_quintuples(
         &self,
-        sql: &str,
+        sql: &'static str,
     ) -> Result<Vec<(String, String, String, String, String)>, sqlx::Error> {
-        crate::with_closeable_pool!(self, pool, { sqlx::query_as(sql).fetch_all(pool).await })
+        crate::with_closeable_pool!(self, pool, {
+            sqlx::query_as(sqlx::AssertSqlSafe(sql))
+                .fetch_all(pool)
+                .await
+        })
     }
 
     /// Takes the same write lock `set_post_tags` takes and holds it until the

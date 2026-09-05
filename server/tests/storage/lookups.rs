@@ -1,7 +1,7 @@
 use common::visibility::{Channel, SubscriptionStatus, TargetKind};
 use rstest::*;
 use rstest_reuse::*;
-use sqlx::PgPool;
+use sqlx::{AssertSqlSafe, PgPool};
 use storage::test_support::{
     Backend, PostgresDbGuard, PostgresTestConfig, TestEnv, backends, template_postgres_url,
 };
@@ -16,18 +16,33 @@ async fn open_pg_pool() -> (PgPool, PostgresDbGuard) {
     (pool, guard)
 }
 
+// `table` is selected only by the fixed lookup-table call sites below. Quote it
+// before assembling the structural SQL so an identifier delimiter cannot alter
+// the statement.
+fn quote_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
 async fn lookup_names(backend: Backend, env: &TestEnv, table: &str) -> Vec<String> {
-    let sql = format!("SELECT name FROM {table} ORDER BY name");
+    let sql = AssertSqlSafe(format!(
+        "SELECT name FROM {} ORDER BY name",
+        quote_identifier(table)
+    ));
     match backend {
-        Backend::Sqlite => sqlx::query_scalar(&sql)
+        Backend::Sqlite => sqlx::query_scalar(sql)
             .fetch_all(&open_pool(&env.base).await)
             .await
             .unwrap(),
         Backend::Postgres => {
             let (pool, _pg) = open_pg_pool().await;
-            sqlx::query_scalar(&sql).fetch_all(&pool).await.unwrap()
+            sqlx::query_scalar(sql).fetch_all(&pool).await.unwrap()
         }
     }
+}
+
+#[test]
+fn quote_identifier_doubles_delimiters() {
+    assert_eq!(quote_identifier("lookup\"table"), "\"lookup\"\"table\"");
 }
 
 #[apply(backends)]

@@ -4,13 +4,11 @@ use common::MutationOutcome;
 use common::test_support::parse_audience_name;
 use rstest::*;
 use rstest_reuse::*;
+use storage::sql::QueryStorageExt;
 use storage::test_support::{
-    Backend, SeedUser, TestEnv, backends, confirmed_for as confirmed, seed_local_subscription,
-    seed_users,
+    Backend, SeedUser, backends, confirmed_for as confirmed, seed_local_subscription, seed_users,
 };
 use storage::{AppState, AudienceError, WriteScopeError};
-
-use super::fixtures::open_pool;
 
 #[apply(backends)]
 #[tokio::test]
@@ -170,14 +168,25 @@ async fn audience_delete_cascades_memberships(#[case] backend: Backend) {
     let audience = create_audience_confirmed(state, alice, parse_audience_name("Friends")).await;
     add_member_confirmed(state, alice, audience, sub).await;
 
-    let members_sql =
-        format!("SELECT COUNT(*) FROM audience_members WHERE audience_id = {audience}");
-    assert_eq!(raw_scalar_i64(backend, &env, &members_sql).await, 1);
+    let member_count = storage::with_closeable_pool!(env.base.pool(), pool, {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM audience_members WHERE audience_id = $1")
+            .bind_storage(audience)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    });
+    assert_eq!(member_count, 1);
 
     delete_audience_confirmed(state, alice, audience).await;
+    let remaining_member_count = storage::with_closeable_pool!(env.base.pool(), pool, {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM audience_members WHERE audience_id = $1")
+            .bind_storage(audience)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    });
     assert_eq!(
-        raw_scalar_i64(backend, &env, &members_sql).await,
-        0,
+        remaining_member_count, 0,
         "delete_audience must cascade-remove its membership rows"
     );
 }
@@ -314,20 +323,4 @@ async fn remove_member_confirmed(
         .await
         .expect("audience membership removal should succeed");
     confirmed(outcome, "audience membership removal");
-}
-
-async fn raw_scalar_i64(backend: Backend, env: &TestEnv, sql: &str) -> i64 {
-    match backend {
-        Backend::Sqlite => sqlx::query_scalar::<_, i64>(sql)
-            .fetch_one(&open_pool(&env.base).await)
-            .await
-            .unwrap(),
-        Backend::Postgres => {
-            let pool = env.base.pool().postgres();
-            sqlx::query_scalar::<_, i64>(sql)
-                .fetch_one(pool)
-                .await
-                .unwrap()
-        }
-    }
 }

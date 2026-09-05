@@ -4,7 +4,7 @@ use common::ids::FeedEventId;
 use common::pagination::RowLimit;
 use common::time::UtcInstant;
 use host::feed::{FeedEventClaimLimit, FeedEventPhase};
-use sqlx::{Error, Pool, Sqlite, SqliteConnection};
+use sqlx::{AssertSqlSafe, Error, Pool, Sqlite, SqliteConnection};
 
 use crate::feed_events::{
     self, ClaimedFeedEventRow, ClaimedRow, DeadLetterRow, FeedEventDeadLetterCursor,
@@ -17,6 +17,8 @@ use crate::sql::RowCount;
 /// SQLite-backed feed-event storage.
 pub type SqliteFeedEventStorage = FeedEventStore<Sqlite>;
 
+// Every caller interpolates only this locally generated sequence of `?`
+// placeholders; event data is bound through `bind_storage` below.
 fn placeholders(n: usize) -> String {
     std::iter::repeat_n("?", n).collect::<Vec<_>>().join(",")
 }
@@ -39,7 +41,7 @@ async fn purge_corrupt(
         .await?;
     let ph = placeholders(ids.len());
     let sql = format!("DELETE FROM feed_events WHERE id IN ({ph})");
-    let mut query = sqlx::query(&sql);
+    let mut query = sqlx::query(AssertSqlSafe(sql));
     for id in ids {
         query = query.bind_storage(*id);
     }
@@ -145,12 +147,15 @@ impl FeedEventDialect for Sqlite {
         now: UtcInstant,
         failed_cutoff: UtcInstant,
     ) -> Result<bool, FeedEventRedriveError> {
+        // The placeholder list is generated solely from the slice length; all
+        // event IDs and timestamps remain bound values.
         let ph = placeholders(ids.len());
         let count_sql = format!(
             "SELECT COUNT(*) FROM feed_events \
              WHERE status = 'failed' AND terminal_at > ? AND id IN ({ph})"
         );
-        let mut count = sqlx::query_scalar::<_, RowCount>(&count_sql).bind_storage(failed_cutoff);
+        let mut count =
+            sqlx::query_scalar::<_, RowCount>(AssertSqlSafe(count_sql)).bind_storage(failed_cutoff);
         for id in ids {
             count = count.bind_storage(*id);
         }
@@ -165,7 +170,7 @@ impl FeedEventDialect for Sqlite {
              publication_diagnostic = CASE WHEN phase = 'publication' THEN NULL ELSE publication_diagnostic END, \
              terminal_at = NULL, claimed_at = NULL, next_attempt_at = ? WHERE id IN ({ph})"
         );
-        let mut update = sqlx::query(&sql).bind_storage(now);
+        let mut update = sqlx::query(AssertSqlSafe(sql)).bind_storage(now);
         for id in ids {
             update = update.bind_storage(*id);
         }
@@ -182,7 +187,7 @@ impl FeedEventDialect for Sqlite {
         let sql = format!(
             "UPDATE feed_events SET regenerated_at = ?, phase = 'publication' WHERE id IN ({ph})"
         );
-        let mut q = sqlx::query(&sql).bind_storage(now);
+        let mut q = sqlx::query(AssertSqlSafe(sql)).bind_storage(now);
         for id in ids {
             q = q.bind_storage(*id);
         }
@@ -199,7 +204,9 @@ impl FeedEventDialect for Sqlite {
         let sql = format!(
             "UPDATE feed_events SET status = 'done', pinged_at = ?, terminal_at = ? WHERE id IN ({ph})"
         );
-        let mut q = sqlx::query(&sql).bind_storage(now).bind_storage(now);
+        let mut q = sqlx::query(AssertSqlSafe(sql))
+            .bind_storage(now)
+            .bind_storage(now);
         for id in ids {
             q = q.bind_storage(*id);
         }
@@ -219,7 +226,7 @@ impl FeedEventDialect for Sqlite {
              regeneration_attempts = regeneration_attempts + 1, regeneration_diagnostic = ?, \
              terminal_at = NULL, claimed_at = NULL, next_attempt_at = ? WHERE id IN ({ph})"
         );
-        let mut q = sqlx::query(&sql)
+        let mut q = sqlx::query(AssertSqlSafe(sql))
             .bind_storage(error)
             .bind_storage(next_attempt_at);
         for id in ids {
@@ -241,7 +248,9 @@ impl FeedEventDialect for Sqlite {
              regeneration_attempts = regeneration_attempts + 1, regeneration_diagnostic = ?, \
              terminal_at = ?, claimed_at = NULL WHERE id IN ({ph})"
         );
-        let mut q = sqlx::query(&sql).bind_storage(error).bind_storage(now);
+        let mut q = sqlx::query(AssertSqlSafe(sql))
+            .bind_storage(error)
+            .bind_storage(now);
         for id in ids {
             q = q.bind_storage(*id);
         }
@@ -261,7 +270,7 @@ impl FeedEventDialect for Sqlite {
              publication_attempts = publication_attempts + 1, publication_diagnostic = ?, \
              terminal_at = NULL, claimed_at = NULL, next_attempt_at = ? WHERE id IN ({ph})"
         );
-        let mut q = sqlx::query(&sql)
+        let mut q = sqlx::query(AssertSqlSafe(sql))
             .bind_storage(error)
             .bind_storage(next_attempt_at);
         for id in ids {
@@ -283,7 +292,9 @@ impl FeedEventDialect for Sqlite {
              publication_attempts = publication_attempts + 1, publication_diagnostic = ?, \
              terminal_at = ?, claimed_at = NULL WHERE id IN ({ph})"
         );
-        let mut q = sqlx::query(&sql).bind_storage(error).bind_storage(now);
+        let mut q = sqlx::query(AssertSqlSafe(sql))
+            .bind_storage(error)
+            .bind_storage(now);
         for id in ids {
             q = q.bind_storage(*id);
         }
@@ -302,7 +313,7 @@ impl FeedEventDialect for Sqlite {
              regeneration_attempts = 0, regeneration_diagnostic = NULL, terminal_at = NULL, \
              claimed_at = NULL, next_attempt_at = ? WHERE id IN ({ph})"
         );
-        let mut q = sqlx::query(&sql).bind_storage(now);
+        let mut q = sqlx::query(AssertSqlSafe(sql)).bind_storage(now);
         for id in ids {
             q = q.bind_storage(*id);
         }
@@ -321,7 +332,7 @@ impl FeedEventDialect for Sqlite {
              regeneration_attempts = 0, regeneration_diagnostic = NULL, terminal_at = NULL, \
              claimed_at = NULL, next_attempt_at = ? WHERE id IN ({ph})"
         );
-        let mut q = sqlx::query(&sql).bind_storage(now);
+        let mut q = sqlx::query(AssertSqlSafe(sql)).bind_storage(now);
         for id in ids {
             q = q.bind_storage(*id);
         }

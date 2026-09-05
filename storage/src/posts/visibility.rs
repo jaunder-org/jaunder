@@ -8,6 +8,26 @@ use crate::sql::QueryStorageExt;
 use common::ids::{AudienceId, ChannelId, PostId, UserId};
 use common::visibility::{self, AudienceTarget, SubscriberRef, TargetKind, ViewerIdentity};
 
+/// A visibility predicate generated exclusively by [`resolution_where`].
+///
+/// The SQL text is intentionally opaque outside this module: callers may splice
+/// the generated predicate into a larger fixed query, but cannot manufacture a
+/// value accepted by narrow query constructors.
+pub(crate) struct ResolutionWhere(String);
+
+impl std::fmt::Display for ResolutionWhere {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+#[cfg(test)]
+impl ResolutionWhere {
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// The viewer-resolution binds folded into a read query's `WHERE`, in the exact
 /// left-to-right order their placeholders appear in [`resolution_where`]'s
 /// fragment. `subref` (and, where it is bound at all, `channel`) repeats —
@@ -78,11 +98,13 @@ pub(crate) enum ResolutionBinds {
 /// so the binds are positional on both backends (`SQLite` accepts `$n` and binds
 /// by position; see ADR-0019) — which is why the returned [`ResolutionBinds`]
 /// carries `subref` once but the caller binds it **twice**. Returns
-/// `(sql, binds, next)` where `next` is the first free index after the fragment.
+/// `(predicate, binds, next)` where `next` is the first free index after the
+/// fragment. `predicate` is an opaque generated structural fragment; only this
+/// function can construct it.
 pub(crate) fn resolution_where(
     viewer: &ViewerIdentity,
     start: usize,
-) -> (String, ResolutionBinds, usize) {
+) -> (ResolutionWhere, ResolutionBinds, usize) {
     /// The seeded `local` channel, resolved in SQL rather than bound — see the
     /// doc above and ADR-0020.
     const LOCAL_CHANNEL: &str = "(SELECT channel_id FROM channels WHERE name = 'local')";
@@ -146,7 +168,7 @@ pub(crate) fn resolution_where(
   ))
 )"
     );
-    (sql, binds, next)
+    (ResolutionWhere(sql), binds, next)
 }
 
 impl ResolutionBinds {
@@ -158,8 +180,8 @@ impl ResolutionBinds {
     /// afterward, at the index [`resolution_where`] returned.
     pub(crate) fn bind_onto<'q, DB>(
         &'q self,
-        query: sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments<'q>>,
-    ) -> sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments<'q>>
+        query: sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments>,
+    ) -> sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments>
     where
         DB: Database,
         i64: Encode<'q, DB> + Type<DB>,
@@ -266,7 +288,7 @@ where
     for<'q> Option<AudienceId>: Encode<'q, DB> + Type<DB>,
     for<'q> TargetKind: Encode<'q, DB> + Type<DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     sqlx::query(DB::DELETE_POST_AUDIENCES)
         .bind_storage(post_id)
@@ -303,6 +325,7 @@ mod tests {
         };
         let (sql, binds, next) = resolution_where(&viewer, 2);
         assert!(matches!(binds, ResolutionBinds::Local { .. }));
+        let sql = sql.as_str();
         assert_eq!(next, 5, "three placeholders consumed from $2: {sql}");
         assert_eq!(
             sql.matches("(SELECT channel_id FROM channels WHERE name = 'local')")
@@ -333,6 +356,7 @@ mod tests {
     })]
     fn resolution_where_binds_the_channel_for_a_non_local_viewer(#[case] viewer: ViewerIdentity) {
         let (sql, _binds, next) = resolution_where(&viewer, 2);
+        let sql = sql.as_str();
         assert_eq!(next, 7, "five placeholders consumed from $2: {sql}");
         assert!(
             !sql.contains("name = 'local'"),

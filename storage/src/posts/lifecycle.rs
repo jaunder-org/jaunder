@@ -2,7 +2,7 @@
 
 use chrono::Duration;
 use sha2::{Digest, Sha256};
-use sqlx::{Database, Decode, Encode, Executor, Pool, Result, Row, Type};
+use sqlx::{AssertSqlSafe, Database, Decode, Encode, Executor, Pool, Result, Row, Type};
 
 use crate::posts::cursors::PostRevisionCursor;
 use crate::posts::errors::{CreatePostError, UpdatePostError};
@@ -69,7 +69,7 @@ where
     for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     let connection = DB::write_connection(transaction)?;
     let state = sqlx::query_as::<_, (UserId, Option<UtcInstant>, Option<UtcInstant>)>(
@@ -333,7 +333,7 @@ where
     for<'q> PostId: Encode<'q, DB> + Type<DB>,
     for<'q> RevisionId: Encode<'q, DB> + Type<DB>,
     for<'q> RowLimit: Encode<'q, DB> + Type<DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
     RevisionMetadataRow: DecodeRawRow<DB>,
 {
     let sql = if post_id.is_some() {
@@ -351,9 +351,10 @@ where
          WHERE r.user_id = $1 AND r.revision_id < $2
          ORDER BY r.revision_id DESC LIMIT $3"
     };
+    // This branch selects one of two fixed query shapes solely to preserve bind positions.
     let after = cursor.map_or(RevisionId::from(i64::MAX), |cursor| cursor.revision_id);
     let rows = if let Some(post_id) = post_id {
-        sqlx::query(sql)
+        sqlx::query(AssertSqlSafe(sql))
             .bind_storage(user_id)
             .bind_storage(post_id)
             .bind_storage(after)
@@ -361,7 +362,7 @@ where
             .fetch_all(pool)
             .await?
     } else {
-        sqlx::query(sql)
+        sqlx::query(AssertSqlSafe(sql))
             .bind_storage(user_id)
             .bind_storage(after)
             .bind_storage(limit)
@@ -501,7 +502,7 @@ where
     (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     usize: sqlx::ColumnIndex<DB::Row>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     DB::lock_media_references(conn, &media::media_lock_set(input.rendered.media())).await?;
 
@@ -598,7 +599,7 @@ where
     for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     let revision_id = sqlx::query_scalar::<_, RevisionId>(INSERT_COMPLETE_POST_REVISION)
         .bind_storage(captured_at)

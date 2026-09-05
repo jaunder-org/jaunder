@@ -171,7 +171,7 @@ where
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'q> String: Encode<'q, DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     #[tracing::instrument(
         name = "storage.user_config.get",
@@ -248,7 +248,7 @@ where
     StoredUserConfigValue: Type<DB>,
     for<'q> StoredUserConfigValue: Encode<'q, DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
-    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
 {
     let connection = DB::write_connection(transaction)?;
     sqlx::query(

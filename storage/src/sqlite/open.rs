@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use log::LevelFilter;
 use sqlx::{
-    ConnectOptions, SqlitePool,
+    AssertSqlSafe, ConnectOptions, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode},
 };
 
@@ -74,13 +74,16 @@ pub(crate) async fn database_is_empty(
         if crate::db::MIGRATION_SEEDED_TABLES.contains(&table.as_str()) {
             continue;
         }
-        let has_row = sqlx::query_scalar::<_, Exists>(&format!(
+        // Catalog names are quoted as SQLite identifiers, so the constructed
+        // structural query cannot reinterpret a table name as SQL syntax.
+        let sql = format!(
             "SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)",
             crate::sql::quote_identifier(table.as_str())
-        ))
-        .fetch_one(&pool)
-        .await?
-        .into_bool();
+        );
+        let has_row = sqlx::query_scalar::<_, Exists>(AssertSqlSafe(sql))
+            .fetch_one(&pool)
+            .await?
+            .into_bool();
         if has_row {
             return Ok(false);
         }

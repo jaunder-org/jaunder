@@ -2,10 +2,25 @@ use host::telemetry::{TelemetryConfig, TelemetryRawConfig};
 
 use jaunder::cli::StorageArgs;
 use jaunder::commands::{ServeCapturePaths, cmd_create_pg_db, cmd_init, prepare_server};
-use sqlx::Connection;
+use sqlx::{AssertSqlSafe, Connection};
 use tempfile::TempDir;
 
 use storage::test_support::{PostgresTestConfig, nonexistent_postgres_url};
+
+// These test-generated database and role names become PostgreSQL identifiers,
+// not values. Double-quote them at the construction seam before approving the
+// resulting structural utility statement.
+fn quote_postgres_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+#[test]
+fn quote_postgres_identifier_doubles_delimiters() {
+    assert_eq!(
+        quote_postgres_identifier("jaunder\"role"),
+        "\"jaunder\"\"role\""
+    );
+}
 
 fn test_host_config() -> (TelemetryConfig, Option<ServeCapturePaths>) {
     let telemetry = TelemetryConfig::from_raw(
@@ -39,14 +54,20 @@ async fn cmd_create_pg_db_provisions_role_and_database() {
     let app = format!("postgres://{role_name}@{authority}/{db_name}");
 
     let mut admin_conn = sqlx::PgConnection::connect(bootstrap).await.unwrap();
-    sqlx::query(&format!("DROP DATABASE IF EXISTS \"{db_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
-    sqlx::query(&format!("DROP ROLE IF EXISTS \"{role_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
+    sqlx::query(AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {}",
+        quote_postgres_identifier(&db_name)
+    )))
+    .execute(&mut admin_conn)
+    .await
+    .unwrap();
+    sqlx::query(AssertSqlSafe(format!(
+        "DROP ROLE IF EXISTS {}",
+        quote_postgres_identifier(&role_name)
+    )))
+    .execute(&mut admin_conn)
+    .await
+    .unwrap();
 
     cmd_create_pg_db(
         &bootstrap.parse().unwrap(),
@@ -84,14 +105,20 @@ async fn cmd_create_pg_db_provisions_role_and_database() {
     };
     cmd_init(&args, false).await.unwrap();
 
-    sqlx::query(&format!("DROP DATABASE IF EXISTS \"{db_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
-    sqlx::query(&format!("DROP ROLE IF EXISTS \"{role_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
+    sqlx::query(AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {}",
+        quote_postgres_identifier(&db_name)
+    )))
+    .execute(&mut admin_conn)
+    .await
+    .unwrap();
+    sqlx::query(AssertSqlSafe(format!(
+        "DROP ROLE IF EXISTS {}",
+        quote_postgres_identifier(&role_name)
+    )))
+    .execute(&mut admin_conn)
+    .await
+    .unwrap();
 }
 
 // guard:low-level-db — provisions a Postgres role/database via bootstrap admin; no standard backend fixture
@@ -110,18 +137,27 @@ async fn cmd_create_pg_db_fails_if_role_already_exists() {
     let app = format!("postgres://{role_name}@{authority}/{db_name}");
 
     let mut admin_conn = sqlx::PgConnection::connect(bootstrap).await.unwrap();
-    sqlx::query(&format!("DROP DATABASE IF EXISTS \"{db_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
-    sqlx::query(&format!("DROP ROLE IF EXISTS \"{role_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
-    sqlx::query(&format!("CREATE ROLE \"{role_name}\" LOGIN"))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
+    sqlx::query(AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {}",
+        quote_postgres_identifier(&db_name)
+    )))
+    .execute(&mut admin_conn)
+    .await
+    .unwrap();
+    sqlx::query(AssertSqlSafe(format!(
+        "DROP ROLE IF EXISTS {}",
+        quote_postgres_identifier(&role_name)
+    )))
+    .execute(&mut admin_conn)
+    .await
+    .unwrap();
+    sqlx::query(AssertSqlSafe(format!(
+        "CREATE ROLE {} LOGIN",
+        quote_postgres_identifier(&role_name)
+    )))
+    .execute(&mut admin_conn)
+    .await
+    .unwrap();
 
     let err = cmd_create_pg_db(
         &bootstrap.parse().unwrap(),
@@ -141,10 +177,13 @@ async fn cmd_create_pg_db_fails_if_role_already_exists() {
     .unwrap();
     assert!(!db_exists);
 
-    sqlx::query(&format!("DROP ROLE IF EXISTS \"{role_name}\""))
-        .execute(&mut admin_conn)
-        .await
-        .unwrap();
+    sqlx::query(AssertSqlSafe(format!(
+        "DROP ROLE IF EXISTS {}",
+        quote_postgres_identifier(&role_name)
+    )))
+    .execute(&mut admin_conn)
+    .await
+    .unwrap();
 }
 
 // guard:low-level-db — verifies PostgreSQL startup classification against a real missing database
