@@ -67,36 +67,36 @@ pub(super) async fn open_pool(base: &TempDir) -> SqlitePool {
     pool
 }
 
-// Sibling of `lookup_names`: a raw SELECT of the seeded `local` channel id.
-// The `local` channel is a lookup row present in every clone, so reading it via
-// the per-test recorded URL (Postgres) or the same DB file (SQLite) both work;
-// we use the established same-DB helpers for consistency — deliberately not the
-// trait method `local_channel_id()`, which is what the test below asserts
-// against, so it cannot also be the source of the expectation.
-//
-// Reads a `channels` row's id by name, on the FK-enabled pool for `backend`.
-// Generalizes `local_channel_id` so a test can also reach a channel it seeded
-// itself (e.g. the non-local `activitypub` row the impostor viewer sits on).
+// These fixed lookups deliberately avoid `ChannelStorage::local_channel_id`,
+// which is what their callers are asserting independently.
 pub(super) async fn local_channel_id(backend: Backend, env: &TestEnv) -> ChannelId {
-    channel_id_by_name(backend, env, "local").await
+    channel_id_by_fixed_name(
+        backend,
+        env,
+        "SELECT channel_id FROM channels WHERE name = 'local'",
+    )
+    .await
 }
 
-pub(super) async fn channel_id_by_name(backend: Backend, env: &TestEnv, name: &str) -> ChannelId {
+pub(super) async fn activitypub_channel_id(backend: Backend, env: &TestEnv) -> ChannelId {
+    channel_id_by_fixed_name(
+        backend,
+        env,
+        "SELECT channel_id FROM channels WHERE name = 'activitypub'",
+    )
+    .await
+}
+
+async fn channel_id_by_fixed_name(backend: Backend, env: &TestEnv, sql: &'static str) -> ChannelId {
     match backend {
-        Backend::Sqlite => {
-            sqlx::query_scalar::<_, ChannelId>("SELECT channel_id FROM channels WHERE name = $1")
-                .bind(name)
-                .fetch_one(&open_pool(&env.base).await)
-                .await
-                .unwrap()
-        }
-        Backend::Postgres => {
-            sqlx::query_scalar::<_, ChannelId>("SELECT channel_id FROM channels WHERE name = $1")
-                .bind(name)
-                .fetch_one(env.base.pool().postgres())
-                .await
-                .unwrap()
-        }
+        Backend::Sqlite => sqlx::query_scalar::<_, ChannelId>(sql)
+            .fetch_one(&open_pool(&env.base).await)
+            .await
+            .unwrap(),
+        Backend::Postgres => sqlx::query_scalar::<_, ChannelId>(sql)
+            .fetch_one(env.base.pool().postgres())
+            .await
+            .unwrap(),
     }
 }
 

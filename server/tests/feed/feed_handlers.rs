@@ -13,6 +13,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 use crate::helpers::{body_string, make_app};
+use storage::sql::QueryStorageExt;
 use storage::test_support::{
     Backend, SeedFeedCache, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix, fp,
 };
@@ -339,9 +340,10 @@ async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
     SeedRawPost::new(user.user_id).seed(&state).await;
 
     let feed_path = format!("/~{}/feed.rss", user.username);
+    let persisted_feed_path = fp(&feed_path);
     let cached_body = "corrupt-cache-body";
     let etag = "\"corrupt-cache-etag\"";
-    SeedFeedCache::new(fp(&feed_path))
+    SeedFeedCache::new(persisted_feed_path.clone())
         .body(cached_body.to_owned())
         .etag(parse_etag(etag))
         .representation_modified_at(UtcInstant::now())
@@ -357,7 +359,7 @@ async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
             "UPDATE feed_cache SET content_type = 'application/atom+xml; charset=utf-8' \
                WHERE feed_url = $1",
         )
-        .bind(&feed_path)
+        .bind_storage(&persisted_feed_path)
         .execute(pool)
         .await
         .map(|_| ())
@@ -392,7 +394,7 @@ async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
             "SELECT feed_url, body, etag, content_type, CAST(generated_at AS TEXT) \
              FROM feed_cache WHERE feed_url = $1",
         )
-        .bind(&feed_path)
+        .bind_storage(&persisted_feed_path)
         .fetch_all(pool)
         .await
     })
