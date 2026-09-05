@@ -33,6 +33,14 @@ struct ConfirmPasswordResetDecodeFixture<'a> {
 
 use rstest::*;
 
+#[test]
+fn password_reset_request_keeps_its_route() {
+    assert_eq!(
+        <web::password_reset::Request as ServerFn>::PATH,
+        "/api/password_reset/request"
+    );
+}
+
 async fn await_sent_count(mailer: &CapturingMailSender, expected: usize) {
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         while mailer.sent().len() != expected {

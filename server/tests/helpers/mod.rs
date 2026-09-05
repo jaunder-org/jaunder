@@ -9,6 +9,7 @@
 // what they need directly from `storage::test_support`.
 
 mod atompub;
+pub(crate) mod error_signal;
 mod http;
 mod posts;
 mod registrar;

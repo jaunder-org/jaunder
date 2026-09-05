@@ -361,29 +361,16 @@ pub async fn post_password_reset_request_with_dependencies(
     write_scope: WriteScope,
     site_config: Arc<dyn SiteConfigStorage>,
 ) -> (StatusCode, String) {
-    let storage = TempDir::new().expect("test storage directory");
-    let app = jaunder::create_router_with_password_reset_dependencies_for_test(
-        Arc::clone(state),
+    post_password_reset_form_with_dependencies(
+        state,
         mailer,
-        storage.path().to_path_buf(),
+        serde_qs::to_string(input).expect("server function input encodes"),
         users,
         password_resets,
         write_scope,
         site_config,
     )
-    .expect("canonical instance identity is an HTTP header");
-    let request = Request::builder()
-        .method("POST")
-        .uri(<web::password_reset::Request as server_fn::ServerFn>::PATH)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(
-            serde_qs::to_string(input).expect("server function input encodes"),
-        ))
-        .expect("server function request builds");
-    let response = app.oneshot(request).await.expect("router request succeeds");
-    let status = response.status();
-    let body = body_string(response).await;
-    (status, body)
+    .await
 }
 
 /// Posts a raw password-reset request form through the production router with
