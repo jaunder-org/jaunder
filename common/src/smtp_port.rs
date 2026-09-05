@@ -2,6 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use macros::SqlxBridge;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
 /// The TCP port of the outbound SMTP relay.
@@ -27,7 +28,7 @@ pub struct SmtpPort(u16);
 /// load-bearing at the decode seam: a bad `smtp.port` row reaches the operator as a
 /// `ColumnDecode` whose message is this one, and "invalid digit found in string" without
 /// the digits is not an actionable report. A port is a configuration value, never a
-/// secret — unlike [`crate::smtp_password::SmtpPassword`], whose error stays valueless.
+/// secret — unlike the host-only SMTP password, whose error stays valueless.
 #[derive(Debug, Error)]
 #[error("SMTP port {value:?} must be a number in 1..=65535: {reason}")]
 pub struct InvalidSmtpPort {
@@ -35,6 +36,19 @@ pub struct InvalidSmtpPort {
     value: String,
     /// The parser's own rejection reason.
     reason: String,
+}
+impl InvalidSmtpPort {
+    /// Safe client-facing summary that never echoes the submitted value.
+    #[must_use]
+    pub fn user_message(&self) -> &'static str {
+        "invalid SMTP port"
+    }
+
+    /// Stable low-cardinality telemetry classification.
+    #[must_use]
+    pub fn telemetry_code(&self) -> &'static str {
+        "invalid_smtp_port"
+    }
 }
 
 /// The IANA submission port — the default when `smtp.port` is unset.
@@ -73,6 +87,25 @@ impl FromStr for SmtpPort {
     }
 }
 
+impl Serialize for SmtpPort {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u16(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SmtpPort {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let port = u16::deserialize(deserializer)?;
+        port.to_string().parse().map_err(serde::de::Error::custom)
+    }
+}
+
 impl fmt::Display for SmtpPort {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -101,6 +134,15 @@ mod tests {
             "the error must echo the offending value: {err}"
         );
         assert!("".parse::<SmtpPort>().is_err());
+    }
+
+    #[test]
+    fn safe_error_surfaces_do_not_echo_the_rejected_value() {
+        let error = "secret-like-invalid-port".parse::<SmtpPort>().unwrap_err();
+        assert_eq!(error.user_message(), "invalid SMTP port");
+        assert_eq!(error.telemetry_code(), "invalid_smtp_port");
+        assert!(!error.user_message().contains("secret-like-invalid-port"));
+        assert!(!error.telemetry_code().contains("secret-like-invalid-port"));
     }
 
     #[test]

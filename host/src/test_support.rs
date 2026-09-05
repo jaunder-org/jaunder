@@ -2,6 +2,7 @@
 
 use super::feed::{FeedMinDays, FeedMinItems};
 use super::password::Password;
+use super::smtp_password::SmtpPassword;
 
 /// Parses `s` into a valid [`Password`] for tests.
 ///
@@ -13,6 +14,19 @@ pub fn parse_password(s: &str) -> Password {
     match s.parse() {
         Ok(password) => password,
         Err(error) => panic!("valid test password: {error}"),
+    }
+}
+
+/// Parses `s` into a valid [`SmtpPassword`] for tests.
+///
+/// # Panics
+///
+/// Panics if `s` is empty.
+#[must_use]
+pub fn parse_smtp_password(s: &str) -> SmtpPassword {
+    match s.parse() {
+        Ok(password) => password,
+        Err(error) => panic!("valid test SMTP password: {error}"),
     }
 }
 
@@ -50,6 +64,12 @@ mod tests {
     #[should_panic(expected = "valid test password")]
     fn parse_password_rejects_an_invalid_fixture() {
         let _ = parse_password("short");
+    }
+
+    #[test]
+    #[should_panic(expected = "valid test SMTP password")]
+    fn parse_smtp_password_rejects_an_invalid_fixture() {
+        let _ = parse_smtp_password("");
     }
 
     #[test]

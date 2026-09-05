@@ -40,6 +40,7 @@ pub mod route_segments;
 pub mod sessions;
 pub mod sidebar;
 pub mod site;
+pub mod smtp;
 pub mod subscriptions;
 pub mod taglist;
 pub mod tags;

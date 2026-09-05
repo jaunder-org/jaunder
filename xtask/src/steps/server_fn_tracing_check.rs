@@ -338,6 +338,15 @@ mod tests {
     }
 
     #[test]
+    fn smtp_update_request_uses_skip_all() {
+        let s = src(
+            "smtp",
+            "#[macros::server(skip_all)]\npub async fn update_settings(request: UpdateSettingsRequest) -> R {}\n",
+        );
+        assert_eq!(problems(&s), None);
+    }
+
+    #[test]
     fn passes_a_conforming_zero_arg_fn() {
         // Nothing is left to demand of a zero-arg fn: the macro emits the span and
         // its name, so the bare attribute is complete.

@@ -1,7 +1,8 @@
 //! The `proffered-secret` static check (#400, #315): pins each **inbound-secret**
-//! newtype — `common::invite::ProfferedInviteCode` and
-//! `common::password::ProfferedPassword` — to `#[macros::server]` function
-//! **parameter** positions, including fields of a request aggregate that is itself
+//! newtype — `common::invite::ProfferedInviteCode`,
+//! `common::password::ProfferedPassword`, and
+//! `common::smtp_password::ProfferedSmtpPassword` — to `#[macros::server]`
+//! function **parameter** positions, including fields of a request aggregate that is itself
 //! such a parameter. Wasm-only `web` component files may parse or field-stage the
 //! inbound value long enough to assemble that request; they cannot define a server
 //! response.
@@ -43,14 +44,18 @@ const POLICED_TYPES: &[PolicedType] = &[
         name: "ProfferedPassword",
         owner_files: &["common/src/password.rs", "host/src/password.rs"],
     },
+    PolicedType {
+        name: "ProfferedSmtpPassword",
+        owner_files: &["common/src/smtp_password.rs", "host/src/smtp_password.rs"],
+    },
 ];
 
-/// Source roots scanned recursively for `.rs` files. Must cover **every** crate
 /// that can name an inbound-secret type — i.e. anything depending on `common`
-/// (defines `ProfferedInviteCode` / `ProfferedPassword`) or `web` (where they are
-/// consumed) — so a leak can't hide in an unscanned member. The client bundle
-/// (`csr`) and the `test-support` binary are easy to overlook: both pull in
-/// `common`/`web` and would otherwise be blind spots.
+/// (defines `ProfferedInviteCode`, `ProfferedPassword`, or
+/// `ProfferedSmtpPassword`) or `web` (where they are consumed) — so a leak can't
+/// hide in an unscanned member. The client bundle (`csr`) and the `test-support`
+/// binary are easy to overlook: both pull in `common`/`web` and would otherwise be
+/// blind spots.
 const POLICED_ROOTS: &[&str] = &[
     "common/src",
     "host/src",
@@ -232,6 +237,7 @@ pub async fn register(
     username: Username,
     password: ProfferedPassword,
     invite_code: Option<ProfferedInviteCode>,
+    smtp_password: ProfferedSmtpPassword,
 ) -> WebResult<String> {
     todo!()
 }
@@ -245,6 +251,13 @@ pub async fn mint() -> WebResult<ProfferedInviteCode> {
     const PASSWORD_RETURN: &str = "\
 #[macros::server]
 pub async fn echo() -> WebResult<ProfferedPassword> {
+    todo!()
+}
+";
+
+    const SMTP_PASSWORD_RETURN: &str = "\
+#[macros::server]
+pub async fn echo() -> WebResult<ProfferedSmtpPassword> {
     todo!()
 }
 ";
@@ -265,6 +278,7 @@ use common::invite::ProfferedInviteCode;
     fn server_fn_parameter_is_clean() {
         assert!(violations(SERVER_PARAM, "ProfferedInviteCode").is_empty());
         assert!(violations(SERVER_PARAM, "ProfferedPassword").is_empty());
+        assert!(violations(SERVER_PARAM, "ProfferedSmtpPassword").is_empty());
     }
 
     /// Only `#[macros::server]` arms the parameter region (#714). A fn still wearing
@@ -287,6 +301,10 @@ use common::invite::ProfferedInviteCode;
     fn server_fn_return_is_flagged() {
         assert_eq!(violations(SERVER_RETURN, "ProfferedInviteCode"), vec![2]);
         assert_eq!(violations(PASSWORD_RETURN, "ProfferedPassword"), vec![2]);
+        assert_eq!(
+            violations(SMTP_PASSWORD_RETURN, "ProfferedSmtpPassword"),
+            vec![2]
+        );
     }
 
     #[test]
@@ -304,6 +322,18 @@ pub struct LoginRequest {
 pub async fn login(request: LoginRequest) -> WebResult<()> { todo!() }
 ";
         assert!(violations(source, "ProfferedPassword").is_empty());
+    }
+
+    #[test]
+    fn aggregate_server_request_allows_smtp_password_field() {
+        let source = "\
+pub struct UpdateSettingsRequest {
+    pub password: ProfferedSmtpPassword,
+}
+#[macros::server(skip_all)]
+pub async fn update_settings(request: UpdateSettingsRequest) -> WebResult<()> { todo!() }
+";
+        assert!(violations(source, "ProfferedSmtpPassword").is_empty());
     }
 
     #[test]
@@ -404,6 +434,23 @@ pub struct Dto {
             )]),
             None
         );
+        for owner_file in ["common/src/smtp_password.rs", "host/src/smtp_password.rs"] {
+            assert_eq!(
+                problems(&[(owner_file.to_string(), SMTP_PASSWORD_RETURN.to_string())]),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn smtp_password_is_rejected_outside_its_owners_or_a_server_request() {
+        let detail = problems(&[(
+            "web/src/smtp/api.rs".to_string(),
+            SMTP_PASSWORD_RETURN.to_string(),
+        )])
+        .expect("a forbidden SMTP password return");
+        assert!(detail.contains("web/src/smtp/api.rs:2"), "{detail}");
+        assert!(detail.contains("`ProfferedSmtpPassword`"), "{detail}");
     }
 
     #[test]

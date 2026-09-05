@@ -1,7 +1,7 @@
 //! Host-side outbound SMTP relay configuration.
 
+use crate::smtp_password::SmtpPassword;
 use common::smtp_host::SmtpHost;
-use common::smtp_password::SmtpPassword;
 use common::smtp_port::SmtpPort;
 use common::smtp_sender::SmtpSender;
 use common::smtp_tls_mode::SmtpTlsMode;
@@ -26,4 +26,33 @@ pub struct SmtpConfig {
     pub password: Option<SmtpPassword>,
     /// Sender address (e.g. `"Jaunder <noreply@example.com>"`).
     pub sender: SmtpSender,
+}
+
+/// An authoritative SMTP relay configuration update.
+#[derive(Clone, Debug)]
+pub enum SmtpConfigUpdate {
+    /// Remove every SMTP setting.
+    Disabled,
+    /// Persist the enabled relay's complete effective configuration.
+    Enabled {
+        host: SmtpHost,
+        port: SmtpPort,
+        tls_mode: SmtpTlsMode,
+        sender: SmtpSender,
+        credentials: SmtpCredentialsUpdate,
+    },
+}
+
+/// Credential intent within an enabled SMTP relay update.
+#[derive(Clone, Debug)]
+pub enum SmtpCredentialsUpdate {
+    /// Remove both credential rows.
+    Unauthenticated,
+    /// Retain the current password while replacing the username.
+    Keep { username: SmtpUsername },
+    /// Replace both credentials.
+    Replace {
+        username: SmtpUsername,
+        password: SmtpPassword,
+    },
 }

@@ -101,6 +101,8 @@ wire_contract! {
     web::site::IsBaseUrlWarningVisible => "site" / "is_base_url_warning_visible",
     web::site::UpdateIdentity => "site" / "update_identity",
     web::site::UpdateMediaUploadsEnabled => "site" / "update_media_uploads_enabled",
+    web::smtp::GetSettings => "smtp" / "get_settings",
+    web::smtp::UpdateSettings => "smtp" / "update_settings",
     web::subscriptions::IsSubscribed => "subscriptions" / "is_subscribed",
     web::subscriptions::Subscribe => "subscriptions" / "subscribe",
     web::subscriptions::Unsubscribe => "subscriptions" / "unsubscribe",

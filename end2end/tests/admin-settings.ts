@@ -20,6 +20,12 @@ const ADMIN_SETTINGS_TARGETS = {
     ready: 'input[name="destination_path"]',
     intermediate: "site",
   },
+  smtp: {
+    link: 'a.j-nav-item[href="/admin/smtp"]',
+    url: "/admin/smtp",
+    ready: 'input[name="host"]',
+    intermediate: "site",
+  },
 } as const;
 
 type AdminSettingsTarget = keyof typeof ADMIN_SETTINGS_TARGETS;
