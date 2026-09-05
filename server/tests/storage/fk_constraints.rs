@@ -1,3 +1,4 @@
+use common::visibility::SubscriberRef;
 use rstest::*;
 use rstest_reuse::*;
 use storage::sql::QueryStorageExt;
@@ -60,7 +61,10 @@ async fn composite_fks_reject_cross_author_membership(#[case] backend: Backend) 
     });
     audience_insert.expect("audience fixture setup should succeed");
 
-    let subscriber_ref = b.to_string();
+    let subscriber_ref: SubscriberRef = b
+        .to_string()
+        .parse()
+        .expect("local user ID is a valid subscriber reference");
     let subscription_insert = storage::with_closeable_pool!(env.base.pool(), pool, {
         sqlx::query(
             "INSERT INTO subscriptions (author_user_id, channel_id, subscriber_ref, status_id) \
@@ -68,7 +72,7 @@ async fn composite_fks_reject_cross_author_membership(#[case] backend: Backend) 
                      (SELECT status_id FROM subscription_statuses WHERE name = 'active'))",
         )
         .bind_storage(b)
-        .bind(&subscriber_ref)
+        .bind_storage(&subscriber_ref)
         .execute(pool)
         .await
         .map(|_| ())
@@ -87,7 +91,7 @@ async fn composite_fks_reject_cross_author_membership(#[case] backend: Backend) 
             )
             .bind_storage(a)
             .bind_storage(b)
-            .bind(&subscriber_ref)
+            .bind_storage(&subscriber_ref)
             .bind_storage(owner)
             .execute(pool)
             .await
