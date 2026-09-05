@@ -7,7 +7,7 @@ use std::{
 
 use futures_util::TryStreamExt;
 use sha2::{Digest, Sha256};
-use sqlx::{Error, PgConnection, PgPool, Postgres, Row, query::Query};
+use sqlx::{AssertSqlSafe, Error, PgConnection, PgPool, Postgres, Row, query::Query};
 
 use crate::backup::{
     self, BackupError, BackupManifest, BackupMode, BackupRowJson, CatalogColumnName,
@@ -141,7 +141,7 @@ pub(crate) async fn restore_database(
         // (docs/adr/0115-clear-then-load-restore.md).
         // Restore table names originate in the validated catalog and are PostgreSQL-quoted.
         for table in &manifest.tables {
-            sqlx::query(sqlx::AssertSqlSafe(format!(
+            sqlx::query(AssertSqlSafe(format!(
                 "DELETE FROM {}",
                 sql::quote_identifier(table)
             )))
@@ -229,7 +229,7 @@ async fn import_table(
 
     for row in rows {
         backup::validate_restore_row(table, &row, validation_report);
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(Arc::clone(&insert)));
+        let mut query = sqlx::query(AssertSqlSafe(Arc::clone(&insert)));
         for column in &column_names {
             let value = row.get(&column.name).ok_or_else(|| {
                 BackupError::InvalidBackup(format!(
@@ -331,7 +331,7 @@ async fn repair_sequences(connection: &mut PgConnection) -> Result<(), BackupErr
         let column_literal = sql::quote_literal(&column);
         let table = sql::quote_identifier(&table);
         let column = sql::quote_identifier(&column);
-        let sql = sqlx::AssertSqlSafe(format!(
+        let sql = AssertSqlSafe(format!(
             "SELECT setval(
                 pg_get_serial_sequence({table_literal}, {column_literal}),
                 COALESCE((SELECT MAX({column}) FROM {table}), 1),
@@ -380,7 +380,7 @@ async fn export_table(
     let mut writer = BufWriter::new(file);
     // JSON export has only backend-quoted catalog identifiers and fixed SQL fragments.
     let select = json_select(table, columns);
-    let mut rows = sqlx::query(sqlx::AssertSqlSafe(select)).fetch(&mut *connection);
+    let mut rows = sqlx::query(AssertSqlSafe(select)).fetch(&mut *connection);
 
     while let Some(row) = rows.try_next().await? {
         let json: BackupRowJson = row.try_get(0)?;

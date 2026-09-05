@@ -464,6 +464,7 @@ impl PostDialect for Sqlite {
 mod tests {
     use super::*;
     use crate::posts::media::PostMediaReferenceBackfill;
+    use crate::sql::QueryStorageExt;
     use crate::test_support::{Backend, CloseablePool, SeedRawPost, SeedUser, sqlite_only};
     use rstest::*;
     use rstest_reuse::*;
@@ -475,17 +476,20 @@ mod tests {
         let env = backend.setup().await;
         let user = SeedUser::new().seed(&env.state).await.user_id;
         let post_id = SeedRawPost::new(user).seed(&env.state).await.post_id;
-        env.base
-            .pool()
-            .execute(&format!(
-                "INSERT INTO post_media \
-             (post_id, source, sha256, filename, reference_kind, reference_form) \
-             VALUES ({post_id}, 'upload', \
-             '0000000000000000000000000000000000000000000000000000000000000000', \
-             'snapshot.jpg', 'legacy', 'legacy')"
-            ))
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(
+                "INSERT INTO post_media
+                 (post_id, source, sha256, filename, reference_kind, reference_form)
+                 VALUES ($1, 'upload',
+                 '0000000000000000000000000000000000000000000000000000000000000000',
+                 'snapshot.jpg', 'legacy', 'legacy')",
+            )
+            .bind_storage(post_id)
+            .execute(pool)
             .await
-            .expect("seed legacy reference row");
+            .map(|_| ())
+        })
+        .expect("seed legacy reference row");
         let CloseablePool::Sqlite(pool) = env.base.pool() else {
             unreachable!("SQLite setup yields a SQLite pool")
         };

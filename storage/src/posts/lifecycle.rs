@@ -2,7 +2,7 @@
 
 use chrono::Duration;
 use sha2::{Digest, Sha256};
-use sqlx::{Database, Decode, Encode, Executor, Pool, Result, Row, Type};
+use sqlx::{AssertSqlSafe, Database, Decode, Encode, Executor, Pool, Result, Row, Type};
 
 use crate::posts::cursors::PostRevisionCursor;
 use crate::posts::errors::{CreatePostError, UpdatePostError};
@@ -354,7 +354,7 @@ where
     // This branch selects one of two fixed query shapes solely to preserve bind positions.
     let after = cursor.map_or(RevisionId::from(i64::MAX), |cursor| cursor.revision_id);
     let rows = if let Some(post_id) = post_id {
-        sqlx::query(sqlx::AssertSqlSafe(sql))
+        sqlx::query(AssertSqlSafe(sql))
             .bind_storage(user_id)
             .bind_storage(post_id)
             .bind_storage(after)
@@ -362,7 +362,7 @@ where
             .fetch_all(pool)
             .await?
     } else {
-        sqlx::query(sqlx::AssertSqlSafe(sql))
+        sqlx::query(AssertSqlSafe(sql))
             .bind_storage(user_id)
             .bind_storage(after)
             .bind_storage(limit)

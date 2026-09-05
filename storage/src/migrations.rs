@@ -7,10 +7,12 @@ mod tests {
 
     use crate::DbConnectOptions;
     use crate::posts::media;
+    use crate::sql::QueryStorageExt;
     use crate::test_support::{
         Backend, CloseablePool, PostgresDbGuard, PostgresTestConfig, backends, sqlite_url,
         unique_postgres_url,
     };
+    use common::visibility::SubscriberRef;
 
     use rstest::*;
     use rstest_reuse::*;
@@ -177,7 +179,7 @@ mod tests {
                 .expect("post media rows query succeeds")
         }
 
-        async fn seed_subscription_graph(&self, subscriber_ref: &str) {
+        async fn seed_subscription_graph(&self, subscriber_ref: Option<&SubscriberRef>) {
             let insert_user = match &self.pool {
                 CloseablePool::Sqlite(_) => {
                     "INSERT INTO users \
@@ -192,17 +194,35 @@ mod tests {
                 }
             };
             self.pool.execute(insert_user).await.unwrap();
-            self.pool
-                .execute(&format!(
-                    "INSERT INTO subscriptions \
-                 (subscription_id, author_user_id, channel_id, subscriber_ref, status_id, created_at) \
-                 SELECT 202, 101, channels.channel_id, '{subscriber_ref}', \
-                        subscription_statuses.status_id, CURRENT_TIMESTAMP \
-                 FROM channels CROSS JOIN subscription_statuses \
-                 WHERE channels.name = 'local' AND subscription_statuses.name = 'active'"
-                ))
-                .await
+            if let Some(subscriber_ref) = subscriber_ref {
+                crate::with_closeable_pool!(&self.pool, pool, {
+                    sqlx::query(
+                        "INSERT INTO subscriptions \
+                         (subscription_id, author_user_id, channel_id, subscriber_ref, status_id, created_at) \
+                         SELECT 202, 101, channels.channel_id, $1, \
+                                subscription_statuses.status_id, CURRENT_TIMESTAMP \
+                         FROM channels CROSS JOIN subscription_statuses \
+                         WHERE channels.name = 'local' AND subscription_statuses.name = 'active'",
+                    )
+                    .bind_storage(subscriber_ref)
+                    .execute(pool)
+                    .await
+                    .map(|_| ())
+                })
                 .unwrap();
+            } else {
+                self.pool
+                    .execute(
+                        "INSERT INTO subscriptions \
+                         (subscription_id, author_user_id, channel_id, subscriber_ref, status_id, created_at) \
+                         SELECT 202, 101, channels.channel_id, '', \
+                                subscription_statuses.status_id, CURRENT_TIMESTAMP \
+                         FROM channels CROSS JOIN subscription_statuses \
+                         WHERE channels.name = 'local' AND subscription_statuses.name = 'active'",
+                    )
+                    .await
+                    .unwrap();
+            }
             self.pool
                 .execute(
                     "INSERT INTO audiences (audience_id, author_user_id, name, created_at) \
@@ -451,7 +471,8 @@ mod tests {
     ) {
         let db = MigrationDatabase::new(backend).await;
         db.migrate_to(25).await.unwrap();
-        db.seed_subscription_graph("opaque-ref").await;
+        let subscriber_ref: SubscriberRef = "opaque-ref".parse().unwrap();
+        db.seed_subscription_graph(Some(&subscriber_ref)).await;
 
         db.migrate_to(26).await.unwrap();
 
@@ -649,7 +670,7 @@ mod tests {
     ) {
         let db = MigrationDatabase::new(backend).await;
         db.migrate_to(25).await.unwrap();
-        db.seed_subscription_graph("").await;
+        db.seed_subscription_graph(None).await;
 
         db.migrate_to(26)
             .await

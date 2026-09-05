@@ -631,14 +631,14 @@ mod tests {
         // A whitespace-only name bypasses `AudienceName` validation (which
         // `create_audience` enforces) — only reachable via DB tampering. The
         // validating bridge `Decode` rejects it on read as a column-decode error.
-        env.base
-            .pool()
-            .execute(&format!(
-                "INSERT INTO audiences (author_user_id, name) VALUES ({}, '   ')",
-                i64::from(author)
-            ))
-            .await
-            .unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("INSERT INTO audiences (author_user_id, name) VALUES ($1, '   ')")
+                .bind_storage(author)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        })
+        .unwrap();
         let err = env
             .state
             .audiences

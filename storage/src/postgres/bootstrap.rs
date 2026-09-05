@@ -8,7 +8,7 @@
 use common::pg_identifier::{PgDatabaseName, PgRoleName};
 use common::pg_role_password::PgRolePassword;
 use sqlx::postgres::PgConnectOptions;
-use sqlx::{Connection, PgConnection};
+use sqlx::{AssertSqlSafe, Connection, PgConnection};
 
 use crate::sql;
 
@@ -92,7 +92,7 @@ pub async fn create_postgres_database_and_role(
     // here would fail to compile.
     // These utility statements cannot bind identifiers or the password literal.
     // Their only dynamic fragments are backend-quoted role/database identifiers and password.
-    let role_sql = sqlx::AssertSqlSafe(format!(
+    let role_sql = AssertSqlSafe(format!(
         "CREATE ROLE {} WITH LOGIN PASSWORD {}",
         sql::quote_identifier(app_role),
         sql::quote_literal(app_role_password.as_ref()),
@@ -103,7 +103,7 @@ pub async fn create_postgres_database_and_role(
 
     // CREATE DATABASE ... OWNER ... is another identifier-bearing utility
     // statement, so placeholders are not usable here either.
-    let create_db_sql = sqlx::AssertSqlSafe(format!(
+    let create_db_sql = AssertSqlSafe(format!(
         "CREATE DATABASE {} OWNER {}",
         sql::quote_identifier(database_name),
         sql::quote_identifier(app_role),
@@ -188,12 +188,11 @@ mod tests {
             .expect("admin connect");
 
         let suffix = unique_suffix();
-        let db_name = format!("cov_bootstrap_db_{suffix}");
-        let role_name = format!("cov_bootstrap_role_{suffix}");
-
+        let db_name = format!("cov_bootstrap_db_\"quote_{suffix}");
+        let role_name = format!("cov_bootstrap_role_\"quote_{suffix}");
         // Pre-create the target database so the bootstrap's CREATE DATABASE hits
         // the benign already-exists (42P04) path and reports DatabaseExists.
-        sqlx::query(sqlx::AssertSqlSafe(format!(
+        sqlx::query(AssertSqlSafe(format!(
             "CREATE DATABASE {}",
             sql::quote_identifier(&db_name)
         )))
@@ -202,7 +201,7 @@ mod tests {
         .expect("pre-create database");
 
         let app_role: PgRoleName = role_name.parse().expect("role name");
-        let password: PgRolePassword = "secret".parse().expect("password");
+        let password: PgRolePassword = "secret'quote".parse().expect("password");
         let app_db: PgDatabaseName = db_name.parse().expect("database name");
 
         let error = create_postgres_database_and_role(&bootstrap, &app_role, &password, &app_db)
@@ -212,13 +211,13 @@ mod tests {
 
         // The role is created before the DB step fails, so drop both to leave the
         // shared cluster clean.
-        let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
+        let _ = sqlx::query(AssertSqlSafe(format!(
             "DROP DATABASE {}",
             sql::quote_identifier(&db_name)
         )))
         .execute(&mut admin)
         .await;
-        let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
+        let _ = sqlx::query(AssertSqlSafe(format!(
             "DROP ROLE {}",
             sql::quote_identifier(&role_name)
         )))
@@ -240,7 +239,7 @@ mod tests {
         // so execute_utility surfaces it as Err rather than the benign Ok(false).
         let result = execute_utility(
             &mut admin,
-            sqlx::AssertSqlSafe("NOT A VALID STATEMENT".to_owned()),
+            AssertSqlSafe("NOT A VALID STATEMENT".to_owned()),
             "42710",
         )
         .await;

@@ -565,6 +565,7 @@ impl PostDialect for Postgres {
 
 #[cfg(test)]
 mod tests {
+    use crate::sql::QueryStorageExt;
     use crate::test_support::{
         Backend, SeedUser, create_post_via_service, media_ref_for, media_url_for,
         set_post_tags_confirmed,
@@ -624,13 +625,15 @@ mod tests {
             .expect("tag update task panicked")
             .expect("tag update failed after lock release");
         assert_eq!(
-            env.base
-                .pool()
-                .scalar_i64(&format!(
-                    "SELECT COUNT(*) FROM post_revisions WHERE post_id = {post}"
-                ))
+            crate::with_closeable_pool!(env.base.pool(), pool, {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM post_revisions WHERE post_id = $1",
+                )
+                .bind_storage(post)
+                .fetch_one(pool)
                 .await
-                .expect("count captured revisions"),
+            })
+            .expect("count captured revisions"),
             1,
             "the deferred tag mutation captures exactly one prior-state revision"
         );

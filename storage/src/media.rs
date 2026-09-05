@@ -605,6 +605,41 @@ mod tests {
         confirmed(outcome);
     }
 
+    async fn delete_media_accounting_row(
+        env: &TestEnv,
+        user_id: UserId,
+        media: &MediaRef,
+    ) -> Result<(), sqlx::Error> {
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(
+                "DELETE FROM media WHERE user_id = $1 AND source = $2 AND sha256 = $3 AND filename = $4",
+            )
+            .bind_storage(user_id)
+            .bind_storage(media.source)
+            .bind_storage(&media.sha256)
+            .bind_storage(&media.filename)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        })
+    }
+
+    async fn insert_corrupt_media(
+        env: &TestEnv,
+        user_id: UserId,
+        sql: &'static str,
+    ) -> Result<(), sqlx::Error> {
+        let sha256 = parse_content_hash(MEDIA_TEST_SHA256);
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(sql)
+                .bind_storage(user_id)
+                .bind_storage(&sha256)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        })
+    }
+
     async fn try_delete_media_scoped(
         state: &Arc<crate::AppState>,
         user_id: UserId,
@@ -792,13 +827,7 @@ mod tests {
         let env = backend.setup().await;
         let [user] = seed_users::<1>(&env.state).await;
         let media = seed_media(&env.state, user, "reclaim-lock.jpg").await;
-        env.base
-            .pool()
-            .execute(&format!(
-                "DELETE FROM media WHERE user_id = {user} AND source = '{}' \
-             AND sha256 = '{}' AND filename = '{}'",
-                media.source, media.sha256, media.filename
-            ))
+        delete_media_accounting_row(&env, user, &media)
             .await
             .expect("remove the only accounting row");
 
@@ -855,13 +884,7 @@ mod tests {
         let env = backend.setup().await;
         let [user] = seed_users::<1>(&env.state).await;
         let media = seed_media(&env.state, user, "reclaim-unlink-lock.jpg").await;
-        env.base
-            .pool()
-            .execute(&format!(
-                "DELETE FROM media WHERE user_id = {user} AND source = '{}' \
-             AND sha256 = '{}' AND filename = '{}'",
-                media.source, media.sha256, media.filename
-            ))
+        delete_media_accounting_row(&env, user, &media)
             .await
             .expect("remove the only accounting row");
         let form: MediaReferenceForm = media_url_for("reclaim-unlink-lock.jpg")
@@ -925,13 +948,7 @@ mod tests {
         let env = backend.setup().await;
         let [user] = seed_users::<1>(&env.state).await;
         let media = seed_media(&env.state, user, "create-reclaim-lock.jpg").await;
-        env.base
-            .pool()
-            .execute(&format!(
-                "DELETE FROM media WHERE user_id = {user} AND source = '{}' \
-             AND sha256 = '{}' AND filename = '{}'",
-                media.source, media.sha256, media.filename
-            ))
+        delete_media_accounting_row(&env, user, &media)
             .await
             .expect("remove the only accounting row");
         let record = MediaRecord {
@@ -1042,15 +1059,14 @@ mod tests {
         // reachable via DB tampering. The `sha256`/`source` keys stay valid so the row
         // is found; the validating bridge `Decode` then rejects the `filename` column
         // on read as a column-decode error (`find_by_hash` is strict, unlike `list_media`).
-        env.base
-            .pool()
-            .execute(&format!(
-                "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-             VALUES ({}, '{MEDIA_TEST_SHA256}', '../evil', 'upload', 'image/jpeg', 1)",
-                i64::from(user_id)
-            ))
-            .await
-            .unwrap();
+        insert_corrupt_media(
+            &env,
+            user_id,
+            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
+             VALUES ($1, $2, '../evil', 'upload', 'image/jpeg', 1)",
+        )
+        .await
+        .unwrap();
         let err = env
             .state
             .media
@@ -1081,15 +1097,14 @@ mod tests {
         // A negative `size_bytes` bypasses `ByteSize` validation — only reachable via DB
         // tampering. On read, `MediaRecord::from_row` decodes the column through the
         // validating `ByteSize` bridge, which rejects it as a column-decode error.
-        env.base
-            .pool()
-            .execute(&format!(
-                "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-             VALUES ({}, '{MEDIA_TEST_SHA256}', 'photo.jpg', 'upload', 'image/jpeg', -1)",
-                i64::from(user_id)
-            ))
-            .await
-            .unwrap();
+        insert_corrupt_media(
+            &env,
+            user_id,
+            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
+             VALUES ($1, $2, 'photo.jpg', 'upload', 'image/jpeg', -1)",
+        )
+        .await
+        .unwrap();
         let err = env
             .state
             .media
@@ -1112,15 +1127,14 @@ mod tests {
         // A negative `size_bytes` upload row (DB tampering) makes `SUM(size_bytes)` negative;
         // the sum decodes into `ByteSize`, whose bound-checking `Decode` rejects the negative
         // total as a column-decode error.
-        env.base
-            .pool()
-            .execute(&format!(
-                "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-             VALUES ({}, '{MEDIA_TEST_SHA256}', 'photo.jpg', 'upload', 'image/jpeg', -5)",
-                i64::from(user_id)
-            ))
-            .await
-            .unwrap();
+        insert_corrupt_media(
+            &env,
+            user_id,
+            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
+             VALUES ($1, $2, 'photo.jpg', 'upload', 'image/jpeg', -5)",
+        )
+        .await
+        .unwrap();
         let err = env
             .state
             .media
@@ -1156,15 +1170,17 @@ mod tests {
         // `list_media`'s per-row skip: the validating bridge `Decode` rejects the
         // non-canonical hash and the row is dropped rather than surfaced (mirrors the
         // `filename` decode handling; #438). The skip *is* the proof `Decode` rejected it.
-        env.base
-            .pool()
-            .execute(&format!(
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(
                 "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-             VALUES ({}, 'not-a-valid-hash', 'bad.jpg', 'upload', 'image/jpeg', 1)",
-                i64::from(user_id)
-            ))
+                 VALUES ($1, 'not-a-valid-hash', 'bad.jpg', 'upload', 'image/jpeg', 1)",
+            )
+            .bind_storage(user_id)
+            .execute(pool)
             .await
-            .unwrap();
+            .map(|_| ())
+        })
+        .unwrap();
         let listed = env
             .state
             .media
@@ -1329,13 +1345,7 @@ mod tests {
             parse_post_body(&format!("<img src=\"{form}\">")),
         )
         .await;
-        env.base
-            .pool()
-            .execute(&format!(
-                "DELETE FROM media WHERE user_id = {user} AND source = '{}' \
-             AND sha256 = '{}' AND filename = '{}'",
-                media.source, media.sha256, media.filename
-            ))
+        delete_media_accounting_row(&env, user, &media)
             .await
             .expect("remove accounting row");
 

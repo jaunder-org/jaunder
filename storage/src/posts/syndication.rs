@@ -1,6 +1,6 @@
 //! Syndication-window reads and feed catch-up projections for posts.
 
-use sqlx::{Encode, Executor, Pool, Result, Row, Type};
+use sqlx::{AssertSqlSafe, Encode, Executor, Pool, Result, Row, Type};
 
 use crate::posts::models::PostRecord;
 use crate::posts::store::PostDialect;
@@ -72,7 +72,7 @@ where
             // uses the last placeholders, so the returned `next` is discarded.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 4);
             let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
+            let query = sqlx::query_as::<_, PostRecord>(sql)
                 .bind_storage(now)
                 .bind_storage(min_items)
                 .bind_storage(cutoff);
@@ -83,7 +83,7 @@ where
             // then the variant-sized ranked-CTE resolution fragment from $5.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
+            let query = sqlx::query_as::<_, PostRecord>(sql)
                 .bind_storage(now)
                 .bind_storage(username)
                 .bind_storage(min_items)
@@ -95,7 +95,7 @@ where
             // the variant-sized ranked-CTE resolution fragment from $5.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
+            let query = sqlx::query_as::<_, PostRecord>(sql)
                 .bind_storage(now)
                 .bind_storage(tag)
                 .bind_storage(min_items)
@@ -108,7 +108,7 @@ where
             // from $6.
             let (resolution, binds, _) = visibility::resolution_where(viewer, 6);
             let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
+            let query = sqlx::query_as::<_, PostRecord>(sql)
                 .bind_storage(now)
                 .bind_storage(username)
                 .bind_storage(tag)
@@ -127,9 +127,13 @@ where
 /// generic `where`-clause, per-surface bind list, and execution. `tags` supplies
 /// the JSON tag aggregation ([`PostDialect::TAGS_SUBQUERY`]) and `resolution` the
 /// audience-resolution predicate.
-fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str) -> String {
+fn window_sql(
+    surface: &common::feed::FeedSurface,
+    tags: &str,
+    resolution: &str,
+) -> AssertSqlSafe<String> {
     use common::feed::FeedSurface;
-    match surface {
+    AssertSqlSafe(match surface {
         FeedSurface::Site => format!(
             "WITH ranked AS (
      SELECT p.post_id, p.published_at,
@@ -216,7 +220,7 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
  WHERE (r.rn <= $4 OR $5 IS NULL OR r.published_at >= $5)
  ORDER BY p.published_at DESC, p.post_id DESC"
         ),
-    }
+    })
 }
 
 /// Returns the projections needed by the steady-state go-live pass.
@@ -251,7 +255,7 @@ where
                AND {PUBLIC_AUDIENCE_PREDICATE}
              ORDER BY p.published_at ASC, p.post_id ASC"
     );
-    let rows = sqlx::query_as::<_, PostRecord>(sqlx::AssertSqlSafe(sql))
+    let rows = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
         .bind_storage(after)
         .bind_storage(upto)
         .fetch_all(pool)
@@ -357,7 +361,7 @@ where
     // the surface's username/tag values remain bind parameters.
     let row: Option<(UtcInstant,)> = match surface {
         FeedSurface::Site => {
-            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            sqlx::query_as(AssertSqlSafe(format!(
                 "SELECT p.published_at FROM posts p
                  WHERE p.published_at IS NOT NULL AND p.published_at <= $1
                    AND p.deleted_at IS NULL
@@ -369,7 +373,7 @@ where
             .await?
         }
         FeedSurface::User { username } => {
-            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            sqlx::query_as(AssertSqlSafe(format!(
                 "SELECT p.published_at FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  WHERE p.published_at IS NOT NULL AND p.published_at <= $1
@@ -383,7 +387,7 @@ where
             .await?
         }
         FeedSurface::SiteTag { tag } => {
-            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            sqlx::query_as(AssertSqlSafe(format!(
                 "SELECT p.published_at FROM posts p
                  JOIN post_tags pt ON p.post_id = pt.post_id
                  JOIN tags t ON pt.tag_id = t.tag_id
@@ -398,7 +402,7 @@ where
             .await?
         }
         FeedSurface::UserTag { username, tag } => {
-            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            sqlx::query_as(AssertSqlSafe(format!(
                 "SELECT p.published_at FROM posts p
                  JOIN users u ON p.user_id = u.user_id
                  JOIN post_tags pt ON p.post_id = pt.post_id
@@ -456,19 +460,19 @@ mod tests {
         for (surface, source_bind, window_binds) in cases {
             let sql = window_sql(&surface, "tag_json", "visible");
             assert!(
-                sql.contains(source_bind),
+                sql.0.contains(source_bind),
                 "{surface:?}: source bind changed"
             );
             assert!(
-                sql.contains(window_binds),
+                sql.0.contains(window_binds),
                 "{surface:?}: window bind order changed"
             );
             assert!(
-                sql.contains("tag_json AS tags"),
+                sql.0.contains("tag_json AS tags"),
                 "{surface:?}: tag projection"
             );
             assert!(
-                sql.contains("AND visible"),
+                sql.0.contains("AND visible"),
                 "{surface:?}: resolution predicate"
             );
         }

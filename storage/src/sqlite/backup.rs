@@ -7,7 +7,7 @@ use std::{
 
 use futures_util::TryStreamExt;
 use sha2::{Digest, Sha256};
-use sqlx::{Row, SqliteConnection, SqlitePool, error::ErrorKind};
+use sqlx::{AssertSqlSafe, Row, SqliteConnection, SqlitePool, error::ErrorKind};
 
 use crate::backup::{
     self, BackupError, BackupManifest, BackupMode, BackupRowJson, CatalogColumnName,
@@ -154,7 +154,7 @@ pub(crate) async fn restore_database(
         // shape identical (docs/adr/0115-clear-then-load-restore.md).
         // Restore table names originate in the validated catalog and are SQLite-quoted.
         for table in &manifest.tables {
-            sqlx::query(sqlx::AssertSqlSafe(format!(
+            sqlx::query(AssertSqlSafe(format!(
                 "DELETE FROM {}",
                 sql::quote_identifier(table)
             )))
@@ -248,7 +248,7 @@ async fn import_table(
 
     for row in rows {
         backup::validate_restore_row(table, &row, validation_report);
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(Arc::clone(&insert)));
+        let mut query = sqlx::query(AssertSqlSafe(Arc::clone(&insert)));
         for column in &column_names {
             let value = row.get(column).ok_or_else(|| {
                 BackupError::InvalidBackup(format!("table {table} row is missing column {column}"))
@@ -318,7 +318,7 @@ async fn columns(
         "PRAGMA table_info({})",
         sql::quote_identifier(table.as_str())
     );
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let rows = sqlx::query(AssertSqlSafe(sql))
         .fetch_all(&mut *connection)
         .await?;
     rows.into_iter()
@@ -348,7 +348,7 @@ async fn export_table(
     let mut writer = BufWriter::new(file);
     // JSON export has only backend-quoted catalog identifiers and fixed SQL fragments.
     let select = json_select(table, columns);
-    let mut rows = sqlx::query(sqlx::AssertSqlSafe(select)).fetch(&mut *connection);
+    let mut rows = sqlx::query(AssertSqlSafe(select)).fetch(&mut *connection);
 
     while let Some(row) = rows.try_next().await? {
         let json: BackupRowJson = row.try_get(0)?;
@@ -542,6 +542,36 @@ mod tests {
             sql,
             "INSERT INTO \"users\" (\"user_id\", \"username\", \"is_operator\") VALUES ($1, $2, $3)"
         );
+    }
+
+    // reason: SQLite executes the generated dialect SQL against quote-bearing identifiers.
+    #[apply(sqlite_only)]
+    #[tokio::test]
+    async fn insert_sql_executes_with_quote_bearing_identifiers(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let CloseablePool::Sqlite(pool) = env.base.pool() else {
+            unreachable!("sqlite_only yields a SQLite pool")
+        };
+        sqlx::query("CREATE TABLE \"quoted\"\"table\" (\"value\"\"column\" TEXT NOT NULL)")
+            .execute(pool)
+            .await
+            .expect("create quote-bearing fixture table");
+
+        let insert = insert_sql("quoted\"table", &["value\"column".to_owned()]);
+        bind_restore_value(
+            sqlx::query(AssertSqlSafe(insert)),
+            RestoreBindValue::from_json(&serde_json::json!("stored")),
+        )
+        .execute(pool)
+        .await
+        .expect("insert through quote-bearing structural SQL");
+
+        let stored: RestoreText =
+            sqlx::query_scalar("SELECT \"value\"\"column\" FROM \"quoted\"\"table\"")
+                .fetch_one(pool)
+                .await
+                .expect("read quote-bearing fixture row");
+        assert_eq!(stored.as_str(), "stored");
     }
 
     #[test]
