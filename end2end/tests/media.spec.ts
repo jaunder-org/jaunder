@@ -14,6 +14,7 @@ import {
 import { createPostViaApi } from "./posts";
 import { navigateInApp } from "./navigate";
 import type { Page } from "@playwright/test";
+import { seedConfigViaTool } from "./seed";
 
 type UploadedMedia = { url: string; filename: string };
 
@@ -40,19 +41,24 @@ async function uploadMedia(
 }
 
 function countMediaRequests(page: Page): {
+  capabilityRequests: () => number;
   deleteRequests: () => number;
   listRequests: () => number;
   usageRequests: () => number;
 } {
+  let capabilityRequests = 0;
   let deleteRequests = 0;
   let listRequests = 0;
   let usageRequests = 0;
   page.on("request", (request) => {
+    if (request.url().includes("/api/media/get_uploads_enabled"))
+      capabilityRequests += 1;
     if (request.url().includes("/api/media/delete")) deleteRequests += 1;
     if (request.url().includes("/api/media/list_mine")) listRequests += 1;
     if (request.url().includes("/api/media/get_usage")) usageRequests += 1;
   });
   return {
+    capabilityRequests: () => capabilityRequests,
     deleteRequests: () => deleteRequests,
     listRequests: () => listRequests,
     usageRequests: () => usageRequests,
@@ -258,6 +264,90 @@ test.describe("Media upload and serving", () => {
       .waitFor({ state: "visible", timeout: 10000 });
     const url = await page.locator(".j-composer input[readonly]").inputValue();
     expect(url).toContain("/media/upload/");
+  });
+});
+
+test.describe("Media upload capability", () => {
+  test.afterEach(async () => {
+    await seedConfigViaTool("media.uploads_enabled", "true");
+  });
+
+  test("disabled media page remains usable for existing media while uploads are rejected", async ({
+    page,
+  }) => {
+    await seedConfigViaTool("media.uploads_enabled", "true");
+    await signInAsNewUser(page);
+
+    const existing = await uploadMedia(
+      page,
+      "read-only-media.jpg",
+      Buffer.from("media remains available while uploads are disabled"),
+    );
+    await seedConfigViaTool("media.uploads_enabled", "false");
+
+    await goto(page, "/");
+    const counts = countMediaRequests(page);
+
+    await navigateInApp(page, () => click(page, "a[href='/media']"), {
+      url: "/media",
+      ready: "text=Media uploads are disabled by the site operator.",
+    });
+    await expect.poll(counts.capabilityRequests).toBe(1);
+    await expect(
+      page.getByText("Media uploads are disabled by the site operator.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Attach media" }),
+    ).toHaveCount(0);
+    await expect(page.locator("input[type='file']")).toHaveCount(0);
+
+    await expect(
+      page.getByRole("link", { name: "read-only-media.jpg" }),
+    ).toBeVisible();
+    const retrieval = await page.request.get(BASE_URL + existing.url);
+    expect(retrieval.status()).toBe(200);
+
+    const rejected = await page.request.post(BASE_URL + "/api/media/upload", {
+      multipart: {
+        file: {
+          name: "rejected.jpg",
+          mimeType: "image/jpeg",
+          buffer: Buffer.from("manager must reject this direct upload"),
+        },
+      },
+    });
+    expect(rejected.status()).toBe(403);
+    expect(await rejected.text()).toContain("media uploads are disabled");
+
+    page.on("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(
+      page.getByText("Media deleted.", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "read-only-media.jpg" }),
+    ).toHaveCount(0);
+  });
+
+  test("enabled media page retains its upload control", async ({ page }) => {
+    await seedConfigViaTool("media.uploads_enabled", "true");
+    await signInAsNewUser(page);
+    await goto(page, "/");
+    await openMediaLibrary(page);
+
+    const fileInput = page.locator("input[type='file']");
+    await expect(fileInput).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "Attach media" }),
+    ).toBeVisible();
+    await fileInput.setInputFiles({
+      name: "enabled-media.jpg",
+      mimeType: "image/jpeg",
+      buffer: Buffer.from("enabled uploads still use the existing widget"),
+    });
+    await expect(page.locator("input[readonly]")).toBeVisible();
   });
 });
 

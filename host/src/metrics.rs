@@ -51,7 +51,7 @@ impl From<registration::RegistrationPolicy> for RegistrationPolicy {
 enum_attr!(PasswordResetEvent { Requested => "requested", Completed => "completed" });
 enum_attr!(EmailKind { Verification => "verification", PasswordReset => "password_reset", Invite => "invite" });
 enum_attr!(SendResult { Success => "success", Failure => "failure" });
-enum_attr!(UploadOutcome { Stored => "stored", Deduplicated => "deduplicated", QuotaExceeded => "quota_exceeded", TooLarge => "too_large", Invalid => "invalid", Error => "error" });
+enum_attr!(UploadOutcome { Stored => "stored", Deduplicated => "deduplicated", QuotaExceeded => "quota_exceeded", TooLarge => "too_large", Invalid => "invalid", Disabled => "disabled", Error => "error" });
 enum_attr!(RegenResult { Ok => "ok", Error => "error", Exhausted => "exhausted" });
 enum_attr!(PingOutcome { Success => "success", Failed => "failed", Exhausted => "exhausted", Terminal => "terminal", NoHub => "no_hub" });
 enum_attr!(CacheResult { Hit => "hit", Miss => "miss" });
@@ -826,6 +826,7 @@ mod tests {
         assert_eq!(UploadOutcome::QuotaExceeded.as_str(), "quota_exceeded");
         assert_eq!(UploadOutcome::TooLarge.as_str(), "too_large");
         assert_eq!(UploadOutcome::Invalid.as_str(), "invalid");
+        assert_eq!(UploadOutcome::Disabled.as_str(), "disabled");
         assert_eq!(UploadOutcome::Error.as_str(), "error");
 
         assert_eq!(RegenResult::Ok.as_str(), "ok");

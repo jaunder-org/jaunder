@@ -53,17 +53,18 @@ pub struct ServiceDocument {
     pub workspace_title: WorkspaceTitle,
     /// The entries/posts collection.
     pub posts_collection: CollectionDecl,
-    /// The media collection.
-    pub media_collection: CollectionDecl,
+    /// The media collection when media uploads are discoverable.
+    pub media_collection: Option<CollectionDecl>,
 }
 
 /// Serializes a [`ServiceDocument`] to XML suitable for `AtomPub` discovery.
 ///
 /// Emits an `app:service` document (root) with `xmlns="ATOM_NS"` and `xmlns:app="APP_NS"`,
-/// containing one `app:workspace` with an `atom:title`, containing two `app:collection` elements
-/// (posts and media). Each collection has an `href` attribute, an `atom:title` child,
-/// one `app:accept` element per accept media type, and — when `categories` is non-empty —
-/// an `app:categories fixed="no"` element with one inline `atom:category term="..."` per term.
+/// containing one `app:workspace` with an `atom:title`, containing the posts collection and,
+/// when media uploads are discoverable, a media collection. Each collection has an `href`
+/// attribute, an `atom:title` child, one `app:accept` element per accept media type, and — when
+/// `categories` is non-empty — an `app:categories fixed="no"` element with one inline
+/// `atom:category term="..."` per term.
 ///
 /// Writes into an in-memory buffer, so it is infallible.
 #[must_use]
@@ -90,7 +91,9 @@ pub fn render_service_document(doc: &ServiceDocument) -> String {
     let _ = writer.write_event(Event::Empty(ext));
 
     write_collection(&mut writer, &doc.posts_collection);
-    write_collection(&mut writer, &doc.media_collection);
+    if let Some(media_collection) = &doc.media_collection {
+        write_collection(&mut writer, media_collection);
+    }
 
     let _ = writer.write_event(Event::End(BytesEnd::new("app:workspace")));
     let _ = writer.write_event(Event::End(BytesEnd::new("app:service")));
@@ -140,12 +143,12 @@ mod tests {
                 accept: vec![CollectionAccept::AtomEntry],
                 categories: vec!["rust".parse().unwrap(), "leptos".parse().unwrap()],
             },
-            media_collection: CollectionDecl {
+            media_collection: Some(CollectionDecl {
                 href: parse_url("https://h/atompub/alice/media"),
                 title: CollectionTitle::media(),
                 accept: vec![CollectionAccept::AnyMediaType],
                 categories: vec![],
-            },
+            }),
         }
     }
 
@@ -181,8 +184,23 @@ mod tests {
         assert!(!media.contains("image/"), "media collection: {media}");
         assert!(posts.contains("app:categories"));
         assert!(posts.contains("fixed=\"no\""));
+
         assert!(posts.contains(r#"term="rust""#));
         assert!(posts.contains(r#"term="leptos""#));
+    }
+
+    #[test]
+    fn service_document_omits_media_collection_when_not_discoverable() {
+        let mut doc = sample_doc();
+        doc.media_collection = None;
+
+        let out = render_service_document(&doc);
+
+        assert!(
+            !out.contains(r#"href="https://h/atompub/alice/media""#),
+            "out: {out}"
+        );
+        assert!(out.contains(r#"href="https://h/atompub/alice/posts""#));
     }
 
     #[test]

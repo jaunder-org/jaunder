@@ -10,6 +10,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 use web::media::{Item, MediaDeletion, UsageData};
 
+use common::pagination::{PageOffset, RowLimit};
 use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
@@ -114,6 +115,40 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
     assert_eq!(usage.max_file_size_bytes, MaxFileSize::default());
 }
 
+// ─── get_uploads_enabled ──────────────────────────────────────
+
+#[apply(backends)]
+#[tokio::test]
+async fn get_uploads_enabled_defaults_to_true_for_authenticated_user(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+
+    let (status, body) =
+        post_server_fn(&state, &web::media::GetUploadsEnabled {}, Some(&cookie)).await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(
+        serde_json::from_str::<bool>(&body).expect("response should be a boolean"),
+        "an absent media-upload setting defaults to enabled"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn get_uploads_enabled_reports_an_explicitly_disabled_capability(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
+    let cookie = create_user_and_session(&state).await.cookie();
+
+    let (status, body) =
+        post_server_fn(&state, &web::media::GetUploadsEnabled {}, Some(&cookie)).await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(
+        !serde_json::from_str::<bool>(&body).expect("response should be a boolean"),
+        "the authenticated media page receives the disabled upload capability as an advisory read"
+    );
+}
+
 // Shape B — every media server-fn refuses an unauthenticated request the same
 // way (Leptos server fn → INTERNAL_SERVER_ERROR + "unauthorized"). Typed inputs
 // keep this gate test independent of hand-encoded transport syntax.
@@ -123,6 +158,9 @@ async fn media_endpoints_reject_unauthenticated_requests(#[case] backend: Backen
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (usage_status, usage_body) = post_server_fn(&state, &web::media::GetUsage {}, None).await;
+    let (uploads_enabled_status, uploads_enabled_body) =
+        post_server_fn(&state, &web::media::GetUploadsEnabled {}, None).await;
+
     let (list_status, list_body) = post_server_fn(
         &state,
         &web::media::ListMine {
@@ -151,6 +189,11 @@ async fn media_endpoints_reject_unauthenticated_requests(#[case] backend: Backen
 
     for (endpoint, status, body) in [
         ("get_usage", usage_status, usage_body),
+        (
+            "get_uploads_enabled",
+            uploads_enabled_status,
+            uploads_enabled_body,
+        ),
         ("list_mine", list_status, list_body),
         ("delete", delete_status, delete_body),
     ] {
@@ -210,7 +253,7 @@ async fn list_my_media_rejects_out_of_range_limit(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
     let session = create_user_and_session(&state).await;
 
     seed_media(&state, session.user_id, "photo.jpg").await;
@@ -265,7 +308,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_nested_request_maps_identity_without_force(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
     let session = create_user_and_session(&state).await;
 
     let media = seed_media(&state, session.user_id, "test.png").await;
@@ -772,6 +815,61 @@ async fn upload_media_rejects_unauthenticated_request(#[case] backend: Backend) 
     // a 500 carrying "unauthorized", not a bare 401.
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("unauthorized"), "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn disabled_upload_is_forbidden_without_media_mutation(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().media_uploads_enabled(false).await;
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
+    let storage = TempDir::new().unwrap();
+    let (status, body) = post_multipart(
+        &state,
+        &storage,
+        <web::media::Upload as ServerFn>::PATH,
+        MultipartFile {
+            filename: "blocked.png",
+            content_type: "image/png",
+            bytes: b"blocked image",
+        },
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN, "body: {body}");
+    assert_eq!(
+        body,
+        r#"{"forbidden":{"message":"media uploads are disabled"}}"#
+    );
+    assert!(
+        std::fs::read_dir(storage.path().join("media").join("tmp"))
+            .unwrap()
+            .next()
+            .is_none(),
+        "disabled upload must not create temporary media"
+    );
+    assert!(
+        std::fs::read_dir(storage.path().join("media").join("upload"))
+            .unwrap()
+            .next()
+            .is_none(),
+        "disabled upload must not create durable media"
+    );
+    assert!(
+        state
+            .media
+            .list_media(
+                session.user_id,
+                None,
+                RowLimit::at_most(100),
+                PageOffset::default(),
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+        "disabled upload must not create a media row"
+    );
 }
 
 #[apply(backends)]

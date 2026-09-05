@@ -28,6 +28,7 @@ pub async fn service_document(
     auth_user: auth::User,
 ) -> Result<Response, HandlerError> {
     let base = super::required_base_url(site_config.as_ref()).await?;
+    let uploads_enabled = site_config.get_media_uploads_enabled().await?;
     let username = &auth_user.username;
 
     // A flat cap on the service-document category list, not a page — there is no
@@ -40,7 +41,15 @@ pub async fn service_document(
         .collect();
 
     let posts_path = format!("/atompub/{username}/posts");
-    let media_path = format!("/atompub/{username}/media");
+    let media_collection = uploads_enabled.then(|| {
+        let media_path = format!("/atompub/{username}/media");
+        CollectionDecl {
+            href: tagged_url::compose::<CollectionHref>(&base, &media_path),
+            title: CollectionTitle::media(),
+            accept: vec![CollectionAccept::AnyMediaType],
+            categories: Vec::new(),
+        }
+    });
     let doc = ServiceDocument {
         workspace_title: WorkspaceTitle::for_user(username),
         posts_collection: CollectionDecl {
@@ -51,12 +60,7 @@ pub async fn service_document(
             accept: vec![CollectionAccept::AtomEntry],
             categories,
         },
-        media_collection: CollectionDecl {
-            href: tagged_url::compose::<CollectionHref>(&base, &media_path),
-            title: CollectionTitle::media(),
-            accept: vec![CollectionAccept::AnyMediaType],
-            categories: Vec::new(),
-        },
+        media_collection,
     };
 
     let xml = atompub::render_service_document(&doc);

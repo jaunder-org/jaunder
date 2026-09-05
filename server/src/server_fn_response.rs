@@ -1,9 +1,9 @@
 //! Owns the HTTP policy for Leptos server-function responses.
 //!
 //! `server_fn` encodes every application error as HTTP 500, including typed
-//! argument decode failures. This adapter consumes `WebError`'s private decode
-//! classification at the single `/api` seam, emits the stable public error body
-//! with HTTP 400, and removes redirects that Leptos adds to malformed
+//! argument decode and forbidden-operation errors. This adapter consumes `WebError`'s
+//! classifications at the single `/api` seam, emits the stable public error body with the
+//! matching HTTP status, and removes redirects that Leptos adds to malformed
 //! progressive-enhancement requests. It inspects only exact-sized, already
 //! buffered framework error bodies; successful and streaming responses pass
 //! through untouched.
@@ -41,12 +41,23 @@ pub(crate) async fn normalize(response: impl IntoResponse) -> Response {
     let Ok(body) = body::to_bytes(body, limit).await else {
         unreachable!("server_fn constructs error responses from in-memory bytes");
     };
-    let Some(body) = WebError::normalize_server_fn_error_body(body.clone()) else {
+    let status = WebError::server_fn_error_status(&body);
+    let body = WebError::normalize_server_fn_error_body(body.clone()).unwrap_or(body);
+    let Some(status) = status else {
         return Response::from_parts(parts, Body::from(body));
     };
 
-    parts.status = StatusCode::BAD_REQUEST;
-    parts.headers.remove(header::LOCATION);
+    let (status, remove_location) = match status {
+        400 => (StatusCode::BAD_REQUEST, true),
+        403 => (StatusCode::FORBIDDEN, false),
+        // `WebError::server_fn_error_status` only returns `Some(400)`, `Some(403)`, or
+        // `None`; the preceding `let Some` has already excluded `None`.
+        _ => return Response::from_parts(parts, Body::from(body)), // cov:ignore
+    };
+    parts.status = status;
+    if remove_location {
+        parts.headers.remove(header::LOCATION);
+    }
     Response::from_parts(parts, Body::from(body))
 }
 
@@ -91,6 +102,22 @@ mod tests {
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             assert_eq!(WebError::de(body), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn forbidden_application_error_becomes_forbidden_without_rewriting_body() {
+        let expected = WebError::forbidden("media uploads are disabled");
+        let response = Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(SERVER_FN_ERROR_HEADER, "/api/test/error")
+            .body(Body::from(expected.clone().ser()))
+            .unwrap();
+
+        let response = normalize(response).await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(WebError::de(body), expected);
     }
 
     #[tokio::test]

@@ -3,6 +3,7 @@ import { test, expect } from "./fixtures";
 import { goto, signInAs, waitForSelector } from "./helpers";
 import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
+import { seedConfigViaTool } from "./seed";
 
 // M8.5: Site settings admin page allows operators to configure site identity.
 test("admin site settings page loads and allows updating title and base_url", async ({
@@ -39,6 +40,78 @@ test("admin site settings page loads and allows updating title and base_url", as
   await expect(page.locator('input[name="base_url"]')).toHaveValue(
     "https://example.com/",
   );
+});
+
+// #552: media uploads are a separately saved site capability. Toggling it must
+// not submit or overwrite the independently persisted site identity.
+test.describe("Media upload capability", () => {
+  test.afterEach(async () => {
+    await seedConfigViaTool("media.uploads_enabled", "true");
+  });
+
+  test("toggles independently of site identity", async ({ page }) => {
+    await signInAs(page, "testoperator");
+    await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.url().includes("/api/site/get_media_uploads_enabled") &&
+          response.request().method() === "POST",
+      ),
+      goto(page, "/admin/site"),
+    ]);
+
+    await waitForSelector(page, 'input[name="title"]');
+    await waitForSelector(page, 'input[name="base_url"]');
+    await waitForSelector(page, 'input[name="uploads_enabled"]');
+
+    const title = page.locator('input[name="title"]');
+    const baseUrl = page.locator('input[name="base_url"]');
+    const uploadsEnabled = page.locator('input[name="uploads_enabled"]');
+    const saveUploads = page.locator('button:has-text("Save Media Uploads")');
+    const initialTitle = await title.inputValue();
+    const initialBaseUrl = await baseUrl.inputValue();
+
+    await expect(uploadsEnabled).toBeChecked();
+    await uploadsEnabled.uncheck();
+    await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.url().includes("/api/site/update_media_uploads_enabled") &&
+          response.request().method() === "POST",
+      ),
+      saveUploads.click(),
+    ]);
+    await waitForSelector(
+      page,
+      'p.j-settings-saved:has-text("Media upload settings saved.")',
+    );
+
+    await reenterAdminSettings(page, "site");
+    await waitForSelector(page, 'input[name="uploads_enabled"]');
+    await expect(uploadsEnabled).not.toBeChecked();
+    await expect(title).toHaveValue(initialTitle);
+    await expect(baseUrl).toHaveValue(initialBaseUrl);
+
+    await uploadsEnabled.check();
+    await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.url().includes("/api/site/update_media_uploads_enabled") &&
+          response.request().method() === "POST",
+      ),
+      saveUploads.click(),
+    ]);
+    await waitForSelector(
+      page,
+      'p.j-settings-saved:has-text("Media upload settings saved.")',
+    );
+
+    await reenterAdminSettings(page, "site");
+    await waitForSelector(page, 'input[name="uploads_enabled"]');
+    await expect(uploadsEnabled).toBeChecked();
+    await expect(title).toHaveValue(initialTitle);
+    await expect(baseUrl).toHaveValue(initialBaseUrl);
+  });
 });
 
 // #448: the base URL is a typed `Option<BaseUrl>` wire arg — a valid value
@@ -95,9 +168,12 @@ test("non-operator user is denied access to /admin/site", async ({ page }) => {
   // Try to navigate to site settings page
   await goto(page, "/admin/site");
 
-  // The page should show an error or redirect
-  // Expect to see an error message or be redirected
-  await expect(page.locator(SEL.error)).toBeVisible({ timeout: 5_000 });
+  // Identity and media capability load through separate operator-gated reads, so
+  // a denied member sees one real authorization error for each card.
+  const errors = page.locator(SEL.error);
+  await expect(errors).toHaveCount(2, { timeout: 5_000 });
+  await expect(errors.nth(0)).toContainText("unauthorized");
+  await expect(errors.nth(1)).toContainText("unauthorized");
 });
 
 // #575: the site base-URL warning banner appears in the authed admin chrome when

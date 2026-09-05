@@ -193,10 +193,14 @@ single `Arc<MediaManager>` from explicit media, Post, site-configuration, write
 scope, content-lock, instance-identity, and ownership-resolver dependencies,
 then injects that same manager independently into Axum extensions and Leptos
 context. AtomPub and web upload/delete entry points supply only transport policy
-and input. For deletion, the manager loads one bounded global reference
-snapshot, resolves ownership before acquiring the content lock, and carries the
-same immutable evidence through guarded deletion, file reclamation, and
-owner-reference reporting
+and input. The proposed site-wide
+[Media Upload Capability](adr/drafts/media-upload-capability-is-site-wide.md) is
+checked once by this shared manager before an upload starts, so both transports
+reject disabled creation identically while retrieval, deletion, and
+already-admitted transfers remain unaffected. For deletion, the manager loads
+one bounded global reference snapshot, resolves ownership before acquiring the
+content lock, and carries the same immutable evidence through guarded deletion,
+file reclamation, and owner-reference reporting
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md),
 [ADR-0154](adr/0154-media-reference-live-ownership.md)).
 
@@ -807,9 +811,13 @@ Document, so clients feature-detect once and degrade gracefully.
 `CollectionDecl::accept` models Service Document discovery ranges with the
 closed `CollectionAccept` type, separately from concrete uploaded-media
 `common::media::ContentType` values. The Posts Collection advertises exactly
-`application/atom+xml;type=entry`; the Media Collection advertises exactly
-`*/*`. The wildcard therefore exists only at the AtomPub discovery boundary and
-can never enter media request parsing or storage.
+`application/atom+xml;type=entry`; when the proposed site-wide
+[Media Upload Capability](adr/drafts/media-upload-capability-is-site-wide.md) is
+enabled, the Media Collection advertises exactly `*/*`, and when disabled the
+Service Document omits that collection. The wildcard therefore exists only at
+the AtomPub discovery boundary and can never enter media request parsing or
+storage. Direct collection requests still reach the manager's authoritative
+capability check.
 
 Atom document I/O remains upstream's, not ours
 ([ADR-0089](adr/0089-upstream-atom-document-io.md)): parsing is
@@ -1942,6 +1950,13 @@ carries the validator that `set` runs before any row is written
 every stored row, flagging keys outside the registry as `UNKNOWN KEY` and
 recognised keys holding unparseable values as `INVALID`, so legacy rows stay
 visible.
+
+`media.uploads_enabled` is the proposed site-wide
+[Media Upload Capability](adr/drafts/media-upload-capability-is-site-wide.md).
+Its absent default is enabled; malformed physical data reads as disabled, and
+storage failures propagate. Operators change the same closed-registry value
+through either `site-config` or an independently saved Media Uploads card on
+`/admin/site`; neither byte limits nor quotas carry capability semantics.
 
 `posts.default_audience` declares that `DefaultAudience` type directly in the
 same registry. `SiteConfigStorage` exposes the closed type at its getter/setter

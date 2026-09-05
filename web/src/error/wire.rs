@@ -15,6 +15,8 @@ pub enum WebError {
     #[error("unauthorized")]
     Unauthorized,
     #[error("{message}")]
+    Forbidden { message: String },
+    #[error("{message}")]
     NotFound { message: String },
     #[error("{message}")]
     Validation { message: String },
@@ -35,6 +37,12 @@ impl WebError {
     pub fn not_found(resource: impl Into<String>) -> Self {
         Self::NotFound {
             message: format!("{} not found", resource.into()),
+        }
+    }
+
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::Forbidden {
+            message: message.into(),
         }
     }
 
@@ -69,6 +77,18 @@ impl WebError {
             return None;
         };
         <JsonEncoding as Encodes<Self>>::encode(&Self::server_function(message)).ok()
+    }
+
+    /// Returns the HTTP status that the `/api` adapter must project for a typed
+    /// application error encoded by the server-function framework.
+    #[cfg(feature = "server")]
+    pub fn server_fn_error_status(body: &Bytes) -> Option<u16> {
+        let error = <JsonEncoding as Decodes<Self>>::decode(body.clone()).ok()?;
+        match error {
+            Self::ServerFunctionInput { .. } => Some(400),
+            Self::Forbidden { .. } => Some(403),
+            _ => None,
+        }
     }
 }
 

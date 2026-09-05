@@ -11,12 +11,13 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#media-management`
 
 ## Endpoint census
 
-| Endpoint                        | Status  | Surface                                                                                                  |
-| ------------------------------- | ------- | -------------------------------------------------------------------------------------------------------- |
-| `endpoint:/api/media/list_mine` | Covered | Fills the `/media` library table with the authenticated user's uploaded files.                           |
-| `endpoint:/api/media/get_usage` | Covered | Reports quota, used bytes, and max-file-size limits for the storage panel.                               |
-| `endpoint:/api/media/upload`    | Covered | Handles the shared upload widget used on `/media`, the cockpit composer, and the full-page post editors. |
-| `endpoint:/api/media/delete`    | Covered | Deletes media from the library, or refuses with referencing post ids until the user force-deletes.       |
+| Endpoint                                  | Status  | Surface                                                                                                            |
+| ----------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
+| `endpoint:/api/media/list_mine`           | Covered | Fills the `/media` library table with the authenticated user's uploaded files.                                     |
+| `endpoint:/api/media/get_usage`           | Covered | Reports quota, used bytes, and max-file-size limits for the storage panel.                                         |
+| `endpoint:/api/media/get_uploads_enabled` | Covered | Advises the `/media` upload panel whether to show controls; inventory and deletion remain available when disabled. |
+| `endpoint:/api/media/upload`              | Covered | Handles the shared upload widget used on `/media`, the cockpit composer, and the full-page post editors.           |
+| `endpoint:/api/media/delete`              | Covered | Deletes media from the library, or refuses with referencing post ids until the user force-deletes.                 |
 
 `/media` is the inventory and cleanup surface: upload a file, inspect current
 storage usage, and review every owned upload in one table. Successful uploads

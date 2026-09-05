@@ -19,6 +19,9 @@ pub enum HandlerError {
     /// The caller may not act on another user's resources. `403`.
     #[error("forbidden")]
     Forbidden,
+    /// New media creation is disabled site-wide. `403`.
+    #[error("media uploads are disabled")]
+    UploadsDisabled,
     /// The addressed resource is missing, deleted, or hidden from this user. `404`.
     #[error("not found")]
     NotFound,
@@ -41,21 +44,23 @@ pub enum HandlerError {
 
 impl IntoResponse for HandlerError {
     fn into_response(self) -> Response {
-        let status = match self {
-            HandlerError::BadRequest => StatusCode::BAD_REQUEST,
-            HandlerError::Forbidden => StatusCode::FORBIDDEN,
-            HandlerError::NotFound => StatusCode::NOT_FOUND,
-            HandlerError::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
-            HandlerError::Status(code) => code,
+        match self {
+            HandlerError::UploadsDisabled => {
+                (StatusCode::FORBIDDEN, "media uploads are disabled").into_response()
+            }
+            HandlerError::BadRequest => StatusCode::BAD_REQUEST.into_response(),
+            HandlerError::Forbidden => StatusCode::FORBIDDEN.into_response(),
+            HandlerError::NotFound => StatusCode::NOT_FOUND.into_response(),
+            HandlerError::PreconditionFailed => StatusCode::PRECONDITION_FAILED.into_response(),
+            HandlerError::Status(code) => code.into_response(),
             HandlerError::BaseUrlRequired => {
                 tracing::error!("AtomPub requires site.base_url to be configured");
-                StatusCode::INTERNAL_SERVER_ERROR
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
             HandlerError::Internal(_) | HandlerError::Invariant => {
-                StatusCode::INTERNAL_SERVER_ERROR
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
-        };
-        status.into_response()
+        }
     }
 }
 
@@ -176,9 +181,17 @@ impl From<storage::DeleteMediaError> for HandlerError {
 impl From<anyhow::Error> for HandlerError {
     /// The media upload pipeline (`MediaManager::upload_bytes`) reports failures as
     /// `anyhow::Error`; `media::map_error` decides the client-facing status
-    /// (e.g. `413` for an oversized payload). Log the underlying error — it is
-    /// infrastructure detail, not user content — then pass the mapped status through.
+    /// (e.g. `413` for an oversized payload). Expected typed client outcomes keep
+    /// their bounded public classification; remaining failures are logged before their
+    /// mapped status is passed through.
     fn from(err: anyhow::Error) -> Self {
+        if matches!(
+            err.downcast_ref::<storage::MediaError>(),
+            Some(storage::MediaError::UploadsDisabled)
+        ) {
+            return HandlerError::UploadsDisabled;
+        }
+
         tracing::error!(error = %err, "AtomPub media upload failed");
         HandlerError::Status(crate::media::map_error(&err))
     }
@@ -218,6 +231,12 @@ mod tests {
         // media::map_error; a generic error yields a non-success status.
         let code = status(anyhow::anyhow!("upload boom").into());
         assert!(code.is_client_error() || code.is_server_error());
+    }
+
+    #[test]
+    fn disabled_upload_error_is_forbidden() {
+        let error = anyhow::anyhow!(storage::MediaError::UploadsDisabled);
+        assert_eq!(status(error.into()), StatusCode::FORBIDDEN);
     }
 
     #[test]

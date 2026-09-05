@@ -70,7 +70,7 @@ pub use invites::*;
 pub use media::*;
 pub use media_content_locks::MediaContentLocks;
 pub use media_manager::{
-    MediaDeletionResult, MediaError, MediaManager, MediaTemporaryDirectoryError,
+    ManagedUpload, MediaDeletionResult, MediaError, MediaManager, MediaTemporaryDirectoryError,
 };
 pub use media_ownership::*;
 pub use password::*;
