@@ -54,7 +54,7 @@ Out:
     a bounded `swallowed/server` report with no Email, token, password, or
     secret fields and never change the public result.
 
-- [ ] Task 3: Prove the end-to-end path and update current-truth docs
+- [x] Task 3: Prove the end-to-end path and update current-truth docs
   - Contract: no legacy username request field remains. `docs/ARCHITECTURE.md`
     and `docs/flows/password-reset.md` describe the username-or-email form,
     neutral detached request boundary, best-effort delivery, and retained

@@ -1150,8 +1150,8 @@ registration and forgot-password under
 [#407](https://github.com/jaunder-org/jaunder/issues/407);
 [#67](https://github.com/jaunder-org/jaunder/issues/67) had identified the
 redundancy and was later closed as already resolved. What remains is a
-client-side convenience — the login, registration, and password-reset forms
-lowercase live input for display, not for validation.
+client-side convenience — the login and registration forms lowercase live input
+for display, not for validation.
 
 The canonical value is stored, compared, serialized, displayed, and used in
 URLs. Direct equality is therefore case-insensitive in effect:
@@ -1159,6 +1159,29 @@ URLs. Direct equality is therefore case-insensitive in effect:
 app-password client may vary ASCII case without changing identity. Unicode and
 case-preserving username identities are deliberately excluded
 ([lowercase-canonical usernames](adr/0134-lowercase-canonical-usernames.md)).
+
+### Password-reset request boundary
+
+The direct-entry `/forgot-password` form has one `Username or email` control.
+Its typed password-reset identifier classifies input containing `@` as Email and
+all other input as Username. Username parsing retains its lowercase canonical
+boundary; Email parsing lowercases only the DNS domain and preserves the local
+part, so the form never lowercases raw input.
+
+Every structurally valid request immediately receives the same neutral
+confirmation, whether or not it matches an eligible account. The request moves
+lookup, verified-Email filtering, reset-token creation, absolute-link
+construction, and mail delivery into detached best-effort work. That work owns
+its dependencies, is not awaited by the public server-function response, and may
+be lost if the process terminates before it finishes; there is no durable
+outbox, retry policy, or delivery status.
+
+A Username selects its matching User. An Email selects every User with that
+exact canonical Email whose address is verified; each selected User is handled
+independently, so a token or mail failure for one duplicate Email match does not
+stop the others. The existing reset-confirmation boundary is unchanged: the
+emailed absolute link supplies a token, and confirmation atomically claims that
+token, replaces the password, and revokes the User's sessions.
 
 ## Web frontend
 

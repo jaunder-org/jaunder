@@ -390,7 +390,7 @@ export async function setAndVerifyEmail(
 }
 
 /**
- * Submit `/forgot-password` for `username`.
+ * Submit `/forgot-password` for a username-or-email identifier.
  *
  * Deliberately makes no assertion about the response: callers assert different
  * things about it — the happy path expects a neutral confirmation that does not
@@ -402,11 +402,11 @@ export async function setAndVerifyEmail(
  */
 export async function requestPasswordReset(
   page: Page,
-  username: string,
+  identifier: string,
 ): Promise<void> {
   await withTimedAction(page, "flow.request_password_reset", async () => {
     await goto(page, "/forgot-password");
-    await page.fill(SEL.username, username);
+    await page.fill(SEL.passwordResetIdentifier, identifier);
     await click(page, SEL.submit);
   });
 }
