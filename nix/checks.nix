@@ -8,6 +8,7 @@ let
     commonArgs
     hostArgs
     wasmTestSrc
+    siteSrc
     appOfflineCargoHome
     toolsOfflineCargoHome
     cargoArtifacts
@@ -22,6 +23,7 @@ let
     leptosfmt
     csrWasmBundle
     e2ePackage
+    diagnosticJaunderBin
     emacsSrc
     emacsForCi
     ;
@@ -495,6 +497,218 @@ e2eSingleWorkerPackages = pkgs.lib.listToAttrs (
     );
   }) e2eCombos
 );
+
+wasmCoverageInitialize = pkgs.writeText "wasm-coverage-initialize.py" ''
+  import hashlib
+  import json
+  import os
+  import pathlib
+  import shutil
+
+  csr = pathlib.Path(os.environ["JAUNDER_WASM_COVERAGE_CSR"])
+  root = pathlib.Path("/var/lib/jaunder/wasm-coverage")
+  root.mkdir(parents=True, exist_ok=True)
+  module = root / "module/jaunder.wasm"
+  diagnostics = root / "diagnostics/capture.log"
+  module.parent.mkdir(exist_ok=True)
+  diagnostics.parent.mkdir(exist_ok=True)
+  shutil.copyfile(csr / "pkg/jaunder.wasm", module)
+  diagnostics.write_text("Playwright has not started\n")
+
+  def artifact(path):
+      return {
+          "path": str(path.relative_to(root)),
+          "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+      }
+
+  try:
+      csr_status = json.loads((csr / "status.json").read_text())
+      expected = csr_status["served_module"]["sha256"]
+      structural = (
+          {"outcome": "passed", "blocker": None}
+          if csr_status["outcome"] == "succeeded" and artifact(module)["sha256"] == expected
+          else {"outcome": "failed", "blocker": "diagnostic CSR status or served module digest is invalid"}
+      )
+  except Exception as error:
+      structural = {"outcome": "failed", "blocker": str(error)}
+  status = {
+      "version": "v1",
+      "requested_browser": os.environ["JAUNDER_WASM_COVERAGE_BROWSER"],
+      "actual_browser": "not-started",
+      "csr_structural": structural,
+      "diagnostic_export": {"outcome": "not-run", "blocker": None},
+      "source_mapping": {"outcome": "not-run", "blocker": None},
+      "module_signature": None,
+      "toolchain_identity": None,
+      "artifacts": {"module": artifact(module), "diagnostics": artifact(diagnostics)},
+  }
+  (root / "status.json").write_text(json.dumps(status, indent=2) + "\n")
+'';
+
+wasmCoverageMap = pkgs.writeText "wasm-coverage-map.py" ''
+  import hashlib
+  import json
+  import os
+  import pathlib
+  import shutil
+  import re
+  import subprocess
+
+  root = pathlib.Path("/var/lib/jaunder/wasm-coverage")
+  status_path = root / "status.json"
+  status = json.loads(status_path.read_text())
+
+  diagnostics = root / "diagnostics"
+  diagnostics.mkdir(exist_ok=True)
+  mapping_log = diagnostics / "mapping.log"
+
+  def artifact(relative):
+      path = root / relative
+      return {
+          "path": relative,
+          "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+      }
+
+  def fail(detail):
+      report = root / "mapped/llvm-cov.txt"
+      excerpt = (
+          "\n--- llvm-cov report ---\n" + report.read_text()
+          if report.is_file()
+          else ""
+      )
+      mapping_log.write_text(f"{detail}\n{excerpt}")
+      shutil.rmtree(root / "mapped", ignore_errors=True)
+      status["source_mapping"] = {"outcome": "failed", "blocker": detail}
+      status["artifacts"]["mapping_diagnostics"] = artifact("diagnostics/mapping.log")
+      status_path.write_text(json.dumps(status, indent=2) + "\n")
+      raise SystemExit(1)
+  def skip(detail):
+      mapping_log.write_text(f"{detail}\n")
+      status["source_mapping"] = {"outcome": "not-run", "blocker": detail}
+      status["artifacts"]["mapping_diagnostics"] = artifact("diagnostics/mapping.log")
+      status_path.write_text(json.dumps(status, indent=2) + "\n")
+      raise SystemExit(0)
+
+
+  if status["diagnostic_export"]["outcome"] != "passed":
+      skip(status["diagnostic_export"]["blocker"] or "diagnostic export did not produce a profile")
+  if os.environ["JAUNDER_WASM_COVERAGE_INJECT_FAILURE"] == "mapping":
+      fail("injected mapping failure")
+
+  csr = pathlib.Path(os.environ["JAUNDER_WASM_COVERAGE_CSR"])
+  identity = json.loads((csr / "source-identity.json").read_text())
+  compiled = identity["compilation_directory"]
+  mapped = root / "mapped"
+  mapped.mkdir()
+  profile = mapped / "browser.profdata"
+  report = mapped / "llvm-cov.txt"
+  try:
+      profdata = subprocess.run(
+          [str(csr / "tools/llvm-profdata"), "merge", "-sparse", str(root / "profiles/browser.profraw"), "-o", str(profile)],
+          check=True,
+          text=True,
+          capture_output=True,
+      )
+      with report.open("w") as output:
+          coverage = subprocess.run(
+              [
+                  str(csr / "tools/llvm-cov"),
+                  "show",
+                  str(csr / "instrumented/csr.wasm"),
+                  f"-instr-profile={profile}",
+                  f"-path-equivalence={compiled},${siteSrc}",
+              ],
+              check=True,
+              text=True,
+              stdout=output,
+              stderr=subprocess.PIPE,
+          )
+      mapping_log.write_text(profdata.stderr + coverage.stderr)
+      report_text = report.read_text()
+      if re.search(r"^\s*\d+\|\s*[1-9]\d*\|", report_text, re.MULTILINE) is None:
+          fail("llvm-cov report has no executed original Rust source line")
+  except subprocess.CalledProcessError as error:
+      fail((error.stderr or str(error)).strip())
+
+  status["source_mapping"] = {"outcome": "passed", "blocker": None}
+  status["artifacts"]["profile_data"] = artifact("mapped/browser.profdata")
+  status["artifacts"]["mapped_report"] = artifact("mapped/llvm-cov.txt")
+  status["artifacts"]["mapping_diagnostics"] = artifact("diagnostics/mapping.log")
+  status_path.write_text(json.dumps(status, indent=2) + "\n")
+'';
+
+# Each producer owns one browser and one SQLite VM.  They deliberately are
+# separate derivations: evaluating Chromium must neither short-circuit Firefox
+# nor share an artifact directory with it.
+mkWasmCoverageProducer =
+  {
+    browser,
+    failure ? "",
+  }:
+  pkgs.testers.nixosTest {
+    name = "jaunder-wasm-coverage-${browser}${pkgs.lib.optionalString (failure != "") "-${failure}-failure"}";
+    nodes.machine = { lib, ... }: {
+      imports = [ self.nixosModules.jaunder ];
+      environment.systemPackages = [
+        pkgs.sqlite
+        testSupportBin
+        diagnosticJaunderBin
+        pkgs.python3
+      ];
+      services.jaunder.enable = true;
+      services.jaunder.db = "sqlite:/var/lib/jaunder/data/jaunder.db";
+      services.jaunder.bind = "127.0.0.1:3000";
+      systemd.services.jaunder.wantedBy = lib.mkForce [ ];
+      systemd.services.jaunder.preStart = lib.mkForce ''
+        ${diagnosticJaunderBin}/bin/jaunder init --db "$JAUNDER_DB" --skip-if-exists
+      '';
+      systemd.services.jaunder.serviceConfig.ExecStart = lib.mkForce "${diagnosticJaunderBin}/bin/jaunder serve";
+    };
+    testScript = ''
+      machine.start()
+      machine.succeed("systemctl start jaunder.service")
+      machine.succeed(
+        "JAUNDER_WASM_COVERAGE_CSR=${self.packages.${system}.wasm-coverage-csr}"
+        + " JAUNDER_WASM_COVERAGE_BROWSER=${browser}"
+        + " ${pkgs.python3}/bin/python3 ${wasmCoverageInitialize}"
+      )
+      machine.wait_for_unit("jaunder.service", timeout=60)
+      machine.wait_for_open_port(3000, timeout=30)
+      machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
+      status, output = machine.execute(
+        "cd /tmp/e2e"
+        + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
+        + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+        + " JAUNDER_DB=sqlite:/var/lib/jaunder/data/jaunder.db"
+        + " FONTCONFIG_FILE=${visualFontConfig}"
+        + " JAUNDER_WASM_COVERAGE_INJECT_FAILURE=${failure}"
+        + " JAUNDER_WASM_COVERAGE_CSR=${self.packages.${system}.wasm-coverage-csr}"
+        + " JAUNDER_WASM_COVERAGE_OUT=/var/lib/jaunder/wasm-coverage"
+        + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
+        + " tests/wasm-coverage.spec.ts --config playwright.config.ts --project ${browser}",
+        timeout=300,
+      )
+      print(output)
+      # The browser helper writes a v1 result before surfacing any capture
+      map_status, map_output = machine.execute(
+        "JAUNDER_WASM_COVERAGE_CSR=${self.packages.${system}.wasm-coverage-csr}"
+        + " JAUNDER_WASM_COVERAGE_INJECT_FAILURE=${failure}"
+        + " ${pkgs.python3}/bin/python3 ${wasmCoverageMap}",
+        timeout=120,
+      )
+      print(map_output)
+      # failure.  An early Playwright/VM failure gets an equally explicit,
+      # retained fallback rather than disappearing as an absent producer.
+      machine.execute(
+        "if [ ! -f /var/lib/jaunder/wasm-coverage/status.json ]; then"
+        + " mkdir -p /var/lib/jaunder/wasm-coverage/diagnostics"
+        + " && printf '%s\\n' '{\"version\":\"v1\",\"requested_browser\":\"${browser}\",\"actual_browser\":\"unknown\",\"csr_structural\":{\"outcome\":\"failed\",\"blocker\":\"Playwright exited before status capture\"},\"diagnostic_export\":{\"outcome\":\"not-run\",\"blocker\":null},\"source_mapping\":{\"outcome\":\"not-run\",\"blocker\":null},\"module_signature\":null,\"toolchain_identity\":null,\"artifacts\":{}}' > /var/lib/jaunder/wasm-coverage/status.json;"
+        + " fi"
+      )
+      machine.succeed("tar czf /tmp/wasm-coverage-${browser}.tar.gz -C /var/lib/jaunder wasm-coverage")
+      machine.copy_from_machine("/tmp/wasm-coverage-${browser}.tar.gz", "")
+    '';
+  };
 in
 {
   packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
@@ -510,6 +724,16 @@ e2e-checks = pkgs.symlinkJoin {
   paths = builtins.attrValues (
     pkgs.lib.filterAttrs (name: _: pkgs.lib.hasPrefix "e2e-" name) self.checks.${system}
   );
+};
+wasm-coverage-chromium = mkWasmCoverageProducer { browser = "chromium"; };
+wasm-coverage-firefox = mkWasmCoverageProducer { browser = "firefox"; };
+wasm-coverage-chromium-export-failure = mkWasmCoverageProducer {
+  browser = "chromium";
+  failure = "export";
+};
+wasm-coverage-firefox-mapping-failure = mkWasmCoverageProducer {
+  browser = "firefox";
+  failure = "mapping";
 };
     }
     // e2eSingleWorkerPackages

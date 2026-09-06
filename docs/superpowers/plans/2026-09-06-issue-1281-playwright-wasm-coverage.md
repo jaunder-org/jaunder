@@ -43,7 +43,7 @@ Out:
     production-equivalent `wasm-bindgen`/`wasm-opt` processing preserved the
     required coverage metadata.
 
-- [ ] Task 2: Capture independent Chromium and Firefox profiles from one real
+- [x] Task 2: Capture independent Chromium and Firefox profiles from one real
       CSR flow.
   - Contract: add one focused diagnostic Playwright spec loaded by
     `end2end/playwright.config.ts`; its driver supplies SQLite, browser,

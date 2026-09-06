@@ -745,6 +745,21 @@ let
       PY
     '';
 
+  # The diagnostic browser probe must serve the same instrumented bundle that
+  # it later records.  Keep this derivative separate from the release binary:
+  # only the probe VM selects it through an explicit service override.
+  diagnosticJaunderBin = craneLib.buildPackage (
+    commonArgs
+    // {
+      inherit cargoArtifacts;
+      pname = "jaunder-diagnostic-wasm-coverage";
+      cargoExtraArgs = "-p jaunder";
+      JAUNDER_CSR_BUNDLE_DIR = "${diagnosticCsrWasmBundle}/pkg";
+      JAUNDER_PUBLIC_DIR = "${../public}";
+      doCheck = false;
+    }
+  );
+
   e2ePackage = pkgs.buildNpmPackage {
     name = "jaunder-e2e";
     src = ../end2end;
@@ -824,12 +839,14 @@ in
       commonArgs
       hostArgs
       wasmTestSrc
+      siteSrc
       appOfflineCargoHome
       toolsOfflineCargoHome
       cargoArtifacts
       leanTestProfile
       leanDevAndTestProfile
       jaunderBin
+      diagnosticJaunderBin
       testSupportBin
       devtoolBin
       cargo-crap
@@ -837,6 +854,7 @@ in
       wasmTestWebdriverConfig
       leptosfmt
       csrWasmBundle
+      e2ePackage
       ;
   };
 }

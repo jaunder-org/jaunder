@@ -36,6 +36,12 @@ const chromiumLaunchOptions = {
   args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
 };
 const visualTag = /@visual/;
+const diagnosticCoverage = Boolean(process.env.JAUNDER_WASM_COVERAGE_OUT);
+const diagnosticCoverageSpec = /wasm-coverage\.spec\.ts/;
+const ignoreDiagnosticCoverage = (pattern: RegExp) =>
+  diagnosticCoverage
+    ? pattern
+    : new RegExp(`${pattern.source}|${diagnosticCoverageSpec.source}`);
 
 export default defineConfig({
   testDir: "./tests",
@@ -83,7 +89,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium-visual",
-      testIgnore: /(admin-site|smtp|invite|media)\.spec\.ts/,
+      testIgnore: ignoreDiagnosticCoverage(/(admin-site|smtp|invite|media)\.spec\.ts/),
       grep: visualTag,
       retries: 0,
       use: {
@@ -93,9 +99,13 @@ export default defineConfig({
     },
     {
       name: "chromium",
-      testIgnore: /(admin-site|smtp|theme|invite|media)\.spec\.ts/,
+      testIgnore: ignoreDiagnosticCoverage(
+        /(admin-site|smtp|theme|invite|media)\.spec\.ts/,
+      ),
       grepInvert: visualTag,
-      dependencies: ["chromium-visual"],
+      ...(diagnosticCoverage
+        ? { testMatch: diagnosticCoverageSpec, dependencies: [] }
+        : { dependencies: ["chromium-visual"] }),
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: chromiumLaunchOptions,
@@ -126,7 +136,7 @@ export default defineConfig({
     },
     {
       name: "firefox-visual",
-      testIgnore: /(admin-site|smtp|invite|media)\.spec\.ts/,
+      testIgnore: ignoreDiagnosticCoverage(/(admin-site|smtp|invite|media)\.spec\.ts/),
       grep: visualTag,
       retries: 0,
       use: {
@@ -136,9 +146,13 @@ export default defineConfig({
     },
     {
       name: "firefox",
-      testIgnore: /(admin-site|smtp|theme|invite|media)\.spec\.ts/,
+      testIgnore: ignoreDiagnosticCoverage(
+        /(admin-site|smtp|theme|invite|media)\.spec\.ts/,
+      ),
       grepInvert: visualTag,
-      dependencies: ["firefox-visual"],
+      ...(diagnosticCoverage
+        ? { testMatch: diagnosticCoverageSpec, dependencies: [] }
+        : { dependencies: ["firefox-visual"] }),
       use: {
         ...devices["Desktop Firefox"],
         launchOptions: firefoxLaunchOptions,
@@ -169,7 +183,9 @@ export default defineConfig({
     },
     {
       name: "webkit",
-      testIgnore: /(admin-site|smtp|theme|invite|media)\.spec\.ts/,
+      testIgnore: ignoreDiagnosticCoverage(
+        /(admin-site|smtp|theme|invite|media)\.spec\.ts/,
+      ),
       grepInvert: visualTag,
       use: { ...devices["Desktop Safari"] },
     },
