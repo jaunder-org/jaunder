@@ -2,6 +2,7 @@ use std::{
     collections::BTreeSet,
     fs,
     io::{self, Read},
+    ops::Range,
     path::{Component, Path, PathBuf},
 };
 
@@ -111,7 +112,8 @@ impl BackupCorpus {
     }
 
     /// Verifies the immutable fixture before copying it to `destination` and
-    /// substituting the target schema version in that temporary manifest.
+    /// substituting only the target schema-version value bytes in that temporary
+    /// manifest.
     pub(crate) fn materialize(
         &self,
         entry: &CorpusEntry,
@@ -127,19 +129,14 @@ impl BackupCorpus {
         }
         copy_regular_tree(&self.root.join(&entry.fixture), destination)?;
         let manifest_path = destination.join("manifest.json");
-        let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
-        let Some(object) = manifest.as_object_mut() else {
-            return Err(BackupCorpusError::InvalidIndex(
-                "fixture manifest must be a JSON object".to_owned(),
-            ));
-        };
-        let Some(schema_version) = object.get_mut("schema_version") else {
-            return Err(BackupCorpusError::InvalidIndex(
-                "fixture manifest must contain schema_version".to_owned(),
-            ));
-        };
-        *schema_version = Value::from(target_schema_version);
-        fs::write(manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+        let manifest = fs::read(&manifest_path)?;
+        let schema_version = schema_version_value_span(&manifest)?;
+        let mut materialized =
+            Vec::with_capacity(manifest.len() - (schema_version.end - schema_version.start) + 20);
+        materialized.extend_from_slice(&manifest[..schema_version.start]);
+        materialized.extend_from_slice(target_schema_version.to_string().as_bytes());
+        materialized.extend_from_slice(&manifest[schema_version.end..]);
+        fs::write(manifest_path, materialized)?;
         Ok(())
     }
 
@@ -155,6 +152,144 @@ impl BackupCorpus {
         archive.append_dir_all(".", source)?;
         archive.into_inner()?.finish()?;
         Ok(())
+    }
+}
+
+/// Locates the source bytes occupied by the top-level `schema_version` value
+/// after validating that the manifest is a JSON object with an integer version.
+fn schema_version_value_span(manifest: &[u8]) -> Result<Range<usize>, BackupCorpusError> {
+    let value: Value = serde_json::from_slice(manifest)?;
+    let Some(object) = value.as_object() else {
+        return Err(BackupCorpusError::InvalidIndex(
+            "fixture manifest must be a JSON object".to_owned(),
+        ));
+    };
+    if object
+        .get("schema_version")
+        .and_then(Value::as_i64)
+        .is_none()
+    {
+        return Err(BackupCorpusError::InvalidIndex(
+            "fixture manifest must contain an integer schema_version".to_owned(),
+        ));
+    }
+
+    let mut cursor = skip_json_whitespace(manifest, 0);
+    if manifest.get(cursor) != Some(&b'{') {
+        return Err(BackupCorpusError::InvalidIndex(
+            "fixture manifest must be a JSON object".to_owned(),
+        ));
+    }
+    cursor += 1;
+    loop {
+        cursor = skip_json_whitespace(manifest, cursor);
+        if manifest.get(cursor) == Some(&b'}') {
+            break;
+        }
+        let key_start = cursor;
+        cursor = json_string_end(manifest, cursor)?;
+        let key: String = serde_json::from_slice(&manifest[key_start..cursor])?;
+        cursor = skip_json_whitespace(manifest, cursor);
+        if manifest.get(cursor) != Some(&b':') {
+            return Err(BackupCorpusError::InvalidIndex(
+                "fixture manifest has an invalid member separator".to_owned(),
+            ));
+        }
+        cursor = skip_json_whitespace(manifest, cursor + 1);
+        let value_start = cursor;
+        cursor = json_value_end(manifest, cursor)?;
+        if key == "schema_version" {
+            return Ok(value_start..cursor);
+        }
+        cursor = skip_json_whitespace(manifest, cursor);
+        match manifest.get(cursor) {
+            Some(b',') => cursor += 1,
+            Some(b'}') => break,
+            _ => {
+                return Err(BackupCorpusError::InvalidIndex(
+                    "fixture manifest has an invalid member separator".to_owned(),
+                ));
+            }
+        }
+    }
+    Err(BackupCorpusError::InvalidIndex(
+        "fixture manifest must contain schema_version".to_owned(),
+    ))
+}
+
+fn skip_json_whitespace(bytes: &[u8], mut cursor: usize) -> usize {
+    while bytes
+        .get(cursor)
+        .is_some_and(|byte| matches!(byte, b' ' | b'\n' | b'\r' | b'\t'))
+    {
+        cursor += 1;
+    }
+    cursor
+}
+
+fn json_string_end(bytes: &[u8], start: usize) -> Result<usize, BackupCorpusError> {
+    if bytes.get(start) != Some(&b'"') {
+        return Err(BackupCorpusError::InvalidIndex(
+            "fixture manifest has an invalid object key".to_owned(),
+        ));
+    }
+    let mut cursor = start + 1;
+    while let Some(byte) = bytes.get(cursor) {
+        match byte {
+            b'\\' => cursor += 2,
+            b'"' => return Ok(cursor + 1),
+            _ => cursor += 1,
+        }
+    }
+    Err(BackupCorpusError::InvalidIndex(
+        "fixture manifest has an unterminated string".to_owned(),
+    ))
+}
+
+fn json_value_end(bytes: &[u8], start: usize) -> Result<usize, BackupCorpusError> {
+    match bytes.get(start) {
+        Some(b'"') => json_string_end(bytes, start),
+        Some(b'{' | b'[') => {
+            let mut cursor = start;
+            let mut depth = 0;
+            while let Some(byte) = bytes.get(cursor) {
+                match byte {
+                    b'"' => cursor = json_string_end(bytes, cursor)?,
+                    b'{' | b'[' => {
+                        depth += 1;
+                        cursor += 1;
+                    }
+                    b'}' | b']' => {
+                        depth -= 1;
+                        cursor += 1;
+                        if depth == 0 {
+                            return Ok(cursor);
+                        }
+                    }
+                    _ => cursor += 1,
+                }
+            }
+            Err(BackupCorpusError::InvalidIndex(
+                "fixture manifest has an unterminated compound value".to_owned(),
+            ))
+        }
+        Some(_) => {
+            let mut cursor = start;
+            while bytes.get(cursor).is_some_and(|byte| {
+                !matches!(byte, b',' | b'}' | b']' | b' ' | b'\n' | b'\r' | b'\t')
+            }) {
+                cursor += 1;
+            }
+            if cursor == start {
+                return Err(BackupCorpusError::InvalidIndex(
+                    "fixture manifest has an invalid value".to_owned(),
+                ));
+            }
+            Ok(cursor)
+        }
+        None => Err(BackupCorpusError::InvalidIndex(
+            "fixture manifest has a missing value".to_owned(),
+        )),
     }
 }
 
@@ -491,20 +626,32 @@ mod tests {
             .expect("materialize fixture");
         assert_eq!(tree_bytes(&corpus.root.join(&entry.fixture)), source_before);
 
-        let source_manifest: Value =
-            serde_json::from_slice(&source_before["manifest.json"]).expect("parse source manifest");
-        let materialized_manifest: Value = serde_json::from_slice(
-            &fs::read(destination.join("manifest.json")).expect("read materialized manifest"),
-        )
-        .expect("parse materialized manifest");
-        let mut expected = source_manifest;
-        expected["schema_version"] = Value::from(target_schema_version);
-        assert_eq!(materialized_manifest, expected);
+        let source_manifest = &source_before["manifest.json"];
+        let materialized_manifest =
+            fs::read(destination.join("manifest.json")).expect("read materialized manifest");
+        assert_eq!(
+            normalize_schema_version_value(source_manifest),
+            normalize_schema_version_value(&materialized_manifest),
+            "materialization must preserve every manifest byte other than schema_version"
+        );
+        let parsed: Value =
+            serde_json::from_slice(&materialized_manifest).expect("parse materialized manifest");
+        assert_eq!(parsed["schema_version"], target_schema_version);
+
         let mut materialized = tree_bytes(&destination);
         materialized.remove("manifest.json");
         let mut source = source_before;
         source.remove("manifest.json");
         assert_eq!(materialized, source);
+    }
+
+    fn normalize_schema_version_value(manifest: &[u8]) -> Vec<u8> {
+        let value = schema_version_value_span(manifest).expect("locate schema version");
+        let mut normalized = Vec::with_capacity(manifest.len());
+        normalized.extend_from_slice(&manifest[..value.start]);
+        normalized.extend_from_slice(b"<schema-version>");
+        normalized.extend_from_slice(&manifest[value.end..]);
+        normalized
     }
 
     fn ndjson_row(root: &Path, table: &str) -> Value {
@@ -526,7 +673,79 @@ mod tests {
 }
 
 #[cfg(test)]
+struct InitializedCommandEnv {
+    args: jaunder::cli::StorageArgs,
+    base: tempfile::TempDir,
+    _postgres: Option<storage::test_support::PostgresDbGuard>,
+}
+
+#[cfg(test)]
+impl InitializedCommandEnv {
+    async fn new(backend: storage::test_support::Backend) -> Self {
+        use storage::test_support::{PostgresTestConfig, sqlite_url, unique_postgres_url};
+
+        let base = tempfile::TempDir::new().expect("create command environment");
+        let (db, postgres) = match backend {
+            storage::test_support::Backend::Sqlite => (sqlite_url(&base), None),
+            storage::test_support::Backend::Postgres => {
+                let config = PostgresTestConfig::from_env();
+                let (db, guard) = unique_postgres_url(&config).await;
+                (db, Some(guard))
+            }
+        };
+        let args = jaunder::cli::StorageArgs {
+            storage_path: base.path().join("storage"),
+            db,
+        };
+        jaunder::commands::cmd_init(&args, false)
+            .await
+            .expect("initialize target");
+        Self {
+            args,
+            base,
+            _postgres: postgres,
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+enum CorpusIoMode {
+    Directory,
+    Archive,
+}
+
+#[cfg(test)]
+impl CorpusIoMode {
+    const ALL: [Self; 2] = [Self::Directory, Self::Archive];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Directory => "directory",
+            Self::Archive => "archive",
+        }
+    }
+
+    fn backup_mode(self) -> storage::BackupMode {
+        match self {
+            Self::Directory => storage::BackupMode::Directory,
+            Self::Archive => storage::BackupMode::Archive,
+        }
+    }
+}
+
+#[cfg(test)]
+const FORMAT_BUMP_DIAGNOSTIC: &str = "add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history";
+
+#[cfg(test)]
+fn format_compatibility_diagnostic(detail: impl std::fmt::Display) -> String {
+    format!("backup format compatibility: {detail}; {FORMAT_BUMP_DIAGNOSTIC}")
+}
+
+#[cfg(test)]
 mod reader_tests {
+    use std::{collections::BTreeMap, path::Path};
+
     use common::{
         ids::{PostId, UserId},
         media::MediaSource,
@@ -537,65 +756,50 @@ mod reader_tests {
     };
     use jaunder::{
         cli::StorageArgs,
-        commands::{cmd_backup, cmd_init, cmd_restore},
+        commands::{cmd_backup, cmd_restore},
     };
     use rstest::*;
     use rstest_reuse::apply;
     use storage::{
         BackupError, BackupMode, EmailVerified, StorageRuntimeConfig, open_existing_database,
-        test_support::{
-            Backend, PostgresDbGuard, PostgresTestConfig, backends, sqlite_url, unique_postgres_url,
-        },
+        test_support::{Backend, backends},
     };
-    use tempfile::TempDir;
 
-    use super::{BackupCorpus, CorpusEntry, SupportState};
-
-    struct InitializedCommandEnv {
-        args: StorageArgs,
-        base: TempDir,
-        _postgres: Option<PostgresDbGuard>,
+    use super::{BackupCorpus, CorpusEntry, CorpusIoMode, InitializedCommandEnv, SupportState};
+    macro_rules! assert_eq {
+        ($left:expr, $right:expr $(,)?) => {
+            ::std::assert_eq!(
+                $left,
+                $right,
+                "{}",
+                super::format_compatibility_diagnostic("reader contract value differs")
+            )
+        };
+        ($left:expr, $right:expr, $($message:tt)+) => {
+            ::std::assert_eq!(
+                $left,
+                $right,
+                "{}",
+                super::format_compatibility_diagnostic(format_args!($($message)+))
+            )
+        };
     }
 
-    impl InitializedCommandEnv {
-        async fn new(backend: Backend) -> Self {
-            let base = TempDir::new().expect("create command environment");
-            let (db, postgres) = match backend {
-                Backend::Sqlite => (sqlite_url(&base), None),
-                Backend::Postgres => {
-                    let config = PostgresTestConfig::from_env();
-                    let (db, guard) = unique_postgres_url(&config).await;
-                    (db, Some(guard))
-                }
-            };
-            let args = StorageArgs {
-                storage_path: base.path().join("storage"),
-                db,
-            };
-            cmd_init(&args, false).await.expect("initialize target");
-            Self {
-                args,
-                base,
-                _postgres: postgres,
-            }
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    enum RestoreInput {
-        Directory,
-        Archive,
-    }
-
-    impl RestoreInput {
-        const ALL: [Self; 2] = [Self::Directory, Self::Archive];
-
-        fn name(self) -> &'static str {
-            match self {
-                Self::Directory => "directory",
-                Self::Archive => "archive",
-            }
-        }
+    macro_rules! assert {
+        ($condition:expr $(,)?) => {
+            ::std::assert!(
+                $condition,
+                "{}",
+                super::format_compatibility_diagnostic("reader contract assertion failed")
+            )
+        };
+        ($condition:expr, $($message:tt)+) => {
+            ::std::assert!(
+                $condition,
+                "{}",
+                super::format_compatibility_diagnostic(format_args!($($message)+))
+            )
+        };
     }
 
     #[derive(Debug, PartialEq, Eq)]
@@ -620,7 +824,7 @@ mod reader_tests {
     async fn historical_corpus_entries_restore_through_each_public_input(#[case] backend: Backend) {
         let corpus = BackupCorpus::checked_in().expect("load corpus");
         for entry in corpus.entries() {
-            for input in RestoreInput::ALL {
+            for input in CorpusIoMode::ALL {
                 let target = InitializedCommandEnv::new(backend).await;
                 let schema_version = current_schema_version(&target).await;
                 let materialized = target.base.path().join("materialized");
@@ -628,8 +832,8 @@ mod reader_tests {
                     .materialize(entry, &materialized, schema_version)
                     .expect("materialize verified historical fixture");
                 let restore_path = match input {
-                    RestoreInput::Directory => materialized,
-                    RestoreInput::Archive => {
+                    CorpusIoMode::Directory => materialized,
+                    CorpusIoMode::Archive => {
                         let archive = target.base.path().join("fixture.tar.gz");
                         BackupCorpus::package_archive(&materialized, &archive)
                             .expect("independently package fixture archive");
@@ -651,6 +855,8 @@ mod reader_tests {
                         assert_reader_inventory(&target.args).await;
                     }
                     RestoreExpectation::TypedUnsupportedFormat => {
+                        let before =
+                            snapshot_target_state(&target, "before-rejected-restore").await;
                         let error = cmd_restore(&target.args, &restore_path)
                             .await
                             .expect_err("retired format must be rejected");
@@ -659,7 +865,7 @@ mod reader_tests {
                             Some(BackupError::UnsupportedFormatVersion { backup_version, .. })
                                 if *backup_version == entry.format_version
                         ));
-                        assert_target_unmodified(&target.args).await;
+                        assert_target_unmodified(&target, &before).await;
                     }
                 }
             }
@@ -758,24 +964,39 @@ mod reader_tests {
             b"legacy media\n"
         );
     }
-    async fn assert_target_unmodified(args: &StorageArgs) {
-        let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
+    async fn assert_target_unmodified(
+        target: &InitializedCommandEnv,
+        before: &BTreeMap<String, Vec<u8>>,
+    ) {
+        let after = snapshot_target_state(target, "after-rejected-restore").await;
+        assert_eq!(
+            after, *before,
+            "unsupported format must not mutate any database-table NDJSON or media bytes"
+        );
+    }
+
+    async fn snapshot_target_state(
+        target: &InitializedCommandEnv,
+        name: &str,
+    ) -> BTreeMap<String, Vec<u8>> {
+        let backup = target.base.path().join(name);
+        cmd_backup(&target.args, BackupMode::Directory, Some(backup.clone()))
             .await
-            .expect("open rejected restore target");
-        let username: Username = "legacyuser".parse().expect("fixture username");
-        assert!(
-            state
-                .users
-                .get_user_by_username(&username)
-                .await
-                .expect("read rejected target")
-                .is_none(),
-            "unsupported format must not mutate database"
-        );
-        assert!(
-            !args.storage_path.join("media").join("avatar.txt").exists(),
-            "unsupported format must not mutate media"
-        );
+            .expect("snapshot restore target");
+        let mut files = Vec::new();
+        super::collect_regular_files(&backup, Path::new(""), &mut files)
+            .expect("collect target snapshot");
+        files
+            .into_iter()
+            .filter_map(|(path, file)| {
+                (path.starts_with("db/") || path.starts_with("media/")).then(|| {
+                    (
+                        path,
+                        std::fs::read(file).expect("read target snapshot entry"),
+                    )
+                })
+            })
+            .collect()
     }
 
     #[test]
@@ -803,24 +1024,53 @@ mod writer_tests {
     };
 
     use flate2::read::GzDecoder;
-    use jaunder::{
-        cli::StorageArgs,
-        commands::{cmd_backup, cmd_init},
-    };
+    use jaunder::commands::cmd_backup;
     use rstest::*;
     use rstest_reuse::apply;
     use serde_json::Value;
-    use storage::{
-        BackupMode,
-        test_support::{
-            Backend, PostgresDbGuard, PostgresTestConfig, backends, sqlite_url, unique_postgres_url,
-        },
-    };
-    use tempfile::TempDir;
+    use storage::test_support::{Backend, backends};
 
     use crate::misc::backup_fixture::{BackupFixtureIds, populate_backup_fixture};
 
-    use super::{BackupCorpus, SupportState};
+    use super::{
+        BackupCorpus, CorpusIoMode, InitializedCommandEnv, SupportState,
+        format_compatibility_diagnostic,
+    };
+    macro_rules! assert_eq {
+        ($left:expr, $right:expr $(,)?) => {
+            ::std::assert_eq!(
+                $left,
+                $right,
+                "{}",
+                super::format_compatibility_diagnostic("writer contract value differs")
+            )
+        };
+        ($left:expr, $right:expr, $($message:tt)+) => {
+            ::std::assert_eq!(
+                $left,
+                $right,
+                "{}",
+                super::format_compatibility_diagnostic(format_args!($($message)+))
+            )
+        };
+    }
+
+    macro_rules! assert {
+        ($condition:expr $(,)?) => {
+            ::std::assert!(
+                $condition,
+                "{}",
+                super::format_compatibility_diagnostic("writer contract assertion failed")
+            )
+        };
+        ($condition:expr, $($message:tt)+) => {
+            ::std::assert!(
+                $condition,
+                "{}",
+                super::format_compatibility_diagnostic(format_args!($($message)+))
+            )
+        };
+    }
 
     const V1_TABLES: &[&str] = &[
         "audience_members",
@@ -897,76 +1147,22 @@ mod writer_tests {
         ),
     ];
 
-    struct InitializedCommandEnv {
-        args: StorageArgs,
-        base: TempDir,
-        _postgres: Option<PostgresDbGuard>,
-    }
-
-    impl InitializedCommandEnv {
-        async fn new(backend: Backend) -> Self {
-            let base = TempDir::new().expect("create command environment");
-            let (db, postgres) = match backend {
-                Backend::Sqlite => (sqlite_url(&base), None),
-                Backend::Postgres => {
-                    let config = PostgresTestConfig::from_env();
-                    let (db, guard) = unique_postgres_url(&config).await;
-                    (db, Some(guard))
-                }
-            };
-            let args = StorageArgs {
-                storage_path: base.path().join("storage"),
-                db,
-            };
-            cmd_init(&args, false).await.expect("initialize target");
-            Self {
-                args,
-                base,
-                _postgres: postgres,
-            }
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    enum BackupOutput {
-        Directory,
-        Archive,
-    }
-
-    impl BackupOutput {
-        const ALL: [Self; 2] = [Self::Directory, Self::Archive];
-
-        fn mode(self) -> BackupMode {
-            match self {
-                Self::Directory => BackupMode::Directory,
-                Self::Archive => BackupMode::Archive,
-            }
-        }
-
-        fn name(self) -> &'static str {
-            match self {
-                Self::Directory => "directory",
-                Self::Archive => "archive",
-            }
-        }
-    }
-
     #[apply(backends)]
     #[tokio::test]
     async fn current_writer_satisfies_independent_v1_raw_wire_oracle(#[case] backend: Backend) {
-        for output in BackupOutput::ALL {
+        for output in CorpusIoMode::ALL {
             let source = InitializedCommandEnv::new(backend).await;
             let ids = populate_backup_fixture(&source.args).await;
             let written = source.base.path().join(match output {
-                BackupOutput::Directory => "backup",
-                BackupOutput::Archive => "backup.tar.gz",
+                CorpusIoMode::Directory => "backup",
+                CorpusIoMode::Archive => "backup.tar.gz",
             });
-            let written_path = cmd_backup(&source.args, output.mode(), Some(written))
+            let written_path = cmd_backup(&source.args, output.backup_mode(), Some(written))
                 .await
                 .unwrap_or_else(|error| panic!("write {} backup: {error:#}", output.name()));
             let extracted = match output {
-                BackupOutput::Directory => written_path,
-                BackupOutput::Archive => {
+                CorpusIoMode::Directory => written_path,
+                CorpusIoMode::Archive => {
                     let destination = source.base.path().join("extracted");
                     extract_archive(&written_path, &destination);
                     destination
@@ -995,14 +1191,19 @@ mod writer_tests {
         assert_eq!(
             matches.len(),
             1,
-            "backup format compatibility: writer emitted format version {version}, which must resolve to exactly one supported fixture/oracle entry; add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history"
+            "{}",
+            format_compatibility_diagnostic(
+                "writer emitted a format version that does not resolve to exactly one supported fixture and oracle"
+            )
         );
         assert_eq!(
-            version, 1,
-            "backup format compatibility: format-1 oracle is the sole current writer oracle; add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history"
+            version,
+            1,
+            "{}",
+            format_compatibility_diagnostic("format-1 is the sole current writer oracle")
         );
     }
-    fn assert_v1_raw_wire_oracle(export: &Path, output: BackupOutput, ids: &BackupFixtureIds) {
+    fn assert_v1_raw_wire_oracle(export: &Path, output: CorpusIoMode, ids: &BackupFixtureIds) {
         assert_inventory_is_complete();
         let manifest = read_manifest(export);
         let members = manifest
@@ -1020,20 +1221,47 @@ mod writer_tests {
         assert_eq!(
             members.keys().map(String::as_str).collect::<BTreeSet<_>>(),
             expected_members,
-            "backup format compatibility: manifest members changed; add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history"
+            "{}",
+            format_compatibility_diagnostic("manifest members changed")
         );
-        assert_eq!(manifest["format_version"], Value::from(1));
-        assert!(manifest["version"].is_string());
-        assert!(manifest["schema_version"].is_i64() || manifest["schema_version"].is_u64());
-        assert!(manifest["schema_checksum"].is_string());
-        assert!(manifest["timestamp"].is_string());
+        assert_eq!(
+            manifest["format_version"],
+            Value::from(1),
+            "{}",
+            format_compatibility_diagnostic("writer format_version changed")
+        );
+        assert!(
+            manifest["version"].is_string(),
+            "{}",
+            format_compatibility_diagnostic("manifest version must be a string")
+        );
+        assert!(
+            manifest["schema_version"].is_i64() || manifest["schema_version"].is_u64(),
+            "{}",
+            format_compatibility_diagnostic("manifest schema_version must be an integer")
+        );
+        assert!(
+            manifest["schema_checksum"].is_string(),
+            "{}",
+            format_compatibility_diagnostic("manifest schema_checksum must be a string")
+        );
+        assert!(
+            manifest["timestamp"].is_string(),
+            "{}",
+            format_compatibility_diagnostic("manifest timestamp must be a string")
+        );
         assert_eq!(
             manifest["mode"],
             Value::from(match output {
-                BackupOutput::Directory => "directory",
-                BackupOutput::Archive => "archive",
-            })
+                CorpusIoMode::Directory => "directory",
+                CorpusIoMode::Archive => "archive",
+            }),
+            "{}",
+            format_compatibility_diagnostic(
+                "manifest mode does not match the requested corpus I/O mode"
+            )
         );
+
         assert_eq!(
             manifest["tables"]
                 .as_array()
@@ -1042,7 +1270,8 @@ mod writer_tests {
                 .iter()
                 .map(|table| Value::from(*table))
                 .collect::<Vec<_>>(),
-            "backup format compatibility: manifest tables must be alphabetical and exact; add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history"
+            "{}",
+            format_compatibility_diagnostic("manifest tables must be alphabetical and exact")
         );
 
         let paths = regular_file_bytes(export);
@@ -1053,9 +1282,15 @@ mod writer_tests {
         assert_eq!(
             paths.keys().cloned().collect::<BTreeSet<_>>(),
             expected_paths,
-            "backup format compatibility: export path set changed; add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history"
+            "{}",
+            format_compatibility_diagnostic("export path set changed")
         );
-        assert_eq!(paths["media/avatar.txt"], b"media");
+        assert_eq!(
+            paths["media/avatar.txt"],
+            b"media",
+            "{}",
+            format_compatibility_diagnostic("media bytes changed")
+        );
 
         let rows = parse_ndjson_tables(&paths);
         assert_writer_roles(&rows, ids);
@@ -1140,6 +1375,8 @@ mod writer_tests {
     fn assert_writer_roles(rows: &BTreeMap<String, Vec<Value>>, ids: &BackupFixtureIds) {
         let author = ids.author.to_string();
         let viewer = ids.viewer.to_string();
+        let audience = ids.audience.to_string();
+        let subscription = ids.subscription.to_string();
         assert!(
             rows["users"].iter().any(|row| {
                 row_id_is(row, "user_id", &author)
@@ -1187,18 +1424,35 @@ mod writer_tests {
             "backup format compatibility: public post must retain its author relationship"
         );
         assert!(
-            rows["audience_members"]
-                .iter()
-                .any(|row| row_id_is(row, "author_user_id", &author)),
-            "backup format compatibility: named-audience membership must retain its author relationship"
+            rows["audiences"].iter().any(|row| {
+                row_id_is(row, "audience_id", &audience)
+                    && row_id_is(row, "author_user_id", &author)
+            }),
+            "{}",
+            format_compatibility_diagnostic(
+                "named audience must retain its exact audience and author IDs"
+            )
         );
         assert!(
-            rows["post_audiences"].iter().any(|row| row_id_is(
-                row,
-                "post_id",
-                &ids.named_post.to_string()
-            )),
-            "backup format compatibility: named post must retain its audience relationship"
+            rows["audience_members"].iter().any(|row| {
+                row_id_is(row, "audience_id", &audience)
+                    && row_id_is(row, "author_user_id", &author)
+                    && row_id_is(row, "subscription_id", &subscription)
+            }),
+            "{}",
+            format_compatibility_diagnostic(
+                "named-audience membership must retain exact audience, author, and member subscription IDs"
+            )
+        );
+        assert!(
+            rows["post_audiences"].iter().any(|row| {
+                row_id_is(row, "post_id", &ids.named_post.to_string())
+                    && row_id_is(row, "audience_id", &audience)
+            }),
+            "{}",
+            format_compatibility_diagnostic(
+                "named post must retain its exact post and audience IDs"
+            )
         );
     }
 
