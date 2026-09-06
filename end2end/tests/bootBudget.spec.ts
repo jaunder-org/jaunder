@@ -12,7 +12,7 @@ import {
   takeBudgetFailures,
   trackBoots,
 } from "./bootBudget";
-import { test } from "./fixtures";
+import { test, testWithoutAutoPerf } from "./fixtures";
 import { BASE_URL, goto } from "./helpers";
 
 test("one real document load counts one boot", async ({ page }) => {
@@ -39,13 +39,17 @@ test("a raw page.goto is counted by the page listener", async ({ page }) => {
   expect(takeBudgetFailures()).toHaveLength(1);
 });
 
-test("a declaration arms a page after its entry load", async ({ page }) => {
-  // No trackBoots: the declaration itself arms the page and counts its entry.
-  await goto(page, "/");
-  allowSecondBoot(page, "arming happens at declaration time here");
-  await goto(page, "/login");
-  expect(new URL(page.url()).pathname).toBe("/login");
-});
+testWithoutAutoPerf(
+  "a declaration arms a page after its entry load",
+  async ({ page }) => {
+    // Automatic arming is disabled for this test: the declaration must observe
+    // and record the page's already-completed entry load itself.
+    await goto(page, "/");
+    allowSecondBoot(page, "arming happens at declaration time here");
+    await goto(page, "/login");
+    expect(new URL(page.url()).pathname).toBe("/login");
+  },
+);
 
 // `registeredPage` is the fixture form of the rule: it owns the first entry and
 // rejects a second request rather than relying on callers to coordinate one.
@@ -92,4 +96,6 @@ test("an undeclared raw second load reaches the teardown sweep", async ({
   const failures = takeBudgetFailures();
   expect(failures).toHaveLength(1);
   expect(failures[0]).toContain("undeclared second load");
+  expect(failures[0]).toContain(`${BASE_URL}/login`);
+  expect(takeBudgetFailures()).toEqual([]);
 });

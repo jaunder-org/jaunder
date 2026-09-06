@@ -71,17 +71,18 @@ const test = base.extend<{
 /**
  * The project fixture surface without browser-backed performance setup.
  *
- * Pure accounting tests retain timeout and lifecycle policy while deliberately
- * overriding the only automatic fixture that requests `page`.
+ * Tests retain timeout and lifecycle policy while deliberately overriding the
+ * only automatic fixture that requests `page`. A test may still request a real
+ * page explicitly when the contract requires one without automatic arming.
  */
-const nonBrowserTest = test.extend({
+const testWithoutAutoPerf = test.extend({
   _autoPerfSpan: async ({}, use) => {
     await use();
   },
 });
 setTestInfoAccessor(() => test.info());
 
-export { expect, nonBrowserTest, test };
+export { expect, test, testWithoutAutoPerf };
 export {
   applyTestTraceparent,
   browserDiagnosticSpanProjectionFor,

@@ -1,10 +1,10 @@
-import { expect, nonBrowserTest } from "./fixtures";
+import { expect, testWithoutAutoPerf } from "./fixtures";
 import { BootBudgetAccounting } from "./bootBudget";
 
 const ENTRY = "http://127.0.0.1:3000/";
 const LOGIN = "http://127.0.0.1:3000/login";
 
-nonBrowserTest(
+testWithoutAutoPerf(
   "an exact allowance covers one further document load only",
   () => {
     const budget = new BootBudgetAccounting();
@@ -22,7 +22,7 @@ nonBrowserTest(
   },
 );
 
-nonBrowserTest(
+testWithoutAutoPerf(
   "a scoped allowance matches its pathname before an exact allowance",
   () => {
     const budget = new BootBudgetAccounting();
@@ -37,7 +37,7 @@ nonBrowserTest(
   },
 );
 
-nonBrowserTest("a scoped allowance is inert for another pathname", () => {
+testWithoutAutoPerf("a scoped allowance is inert for another pathname", () => {
   const budget = new BootBudgetAccounting();
   budget.recordDocumentLoad(ENTRY);
   budget.allowEngineDependentBoot(
@@ -53,7 +53,7 @@ nonBrowserTest("a scoped allowance is inert for another pathname", () => {
   expect(failures[0]).toContain("allowSecondBoot");
 });
 
-nonBrowserTest("both allowance forms require a non-empty reason", () => {
+testWithoutAutoPerf("both allowance forms require a non-empty reason", () => {
   const budget = new BootBudgetAccounting();
 
   expect(() => budget.allowSecondBoot("   ")).toThrow(
@@ -64,7 +64,7 @@ nonBrowserTest("both allowance forms require a non-empty reason", () => {
   );
 });
 
-nonBrowserTest(
+testWithoutAutoPerf(
   "failure collection reports route-bearing orphan reasons and clears them",
   () => {
     const budget = new BootBudgetAccounting();
@@ -79,7 +79,7 @@ nonBrowserTest(
   },
 );
 
-nonBrowserTest(
+testWithoutAutoPerf(
   "an unconsumed engine-dependent allowance is not an orphan",
   () => {
     const budget = new BootBudgetAccounting();

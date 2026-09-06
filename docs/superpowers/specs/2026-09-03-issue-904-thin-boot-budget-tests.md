@@ -141,8 +141,8 @@ samples.
 | Chromium |     1 |            -19 |         -6090 |         -6401 |
 | Chromium |     2 |            -19 |        -21795 |        -22210 |
 | Chromium |     3 |            -19 |        -31009 |        -31691 |
-| Firefox  |     1 |            -19 |        -31033 |        -30524 |
-| Firefox  |     2 |            -19 |        -60535 |        -62024 |
+| Firefox  |     1 |            -19 |        -31033 |        -30523 |
+| Firefox  |     2 |            -19 |        -60535 |        -62023 |
 | Firefox  |     3 |            -19 |         -8460 |         -9022 |
 
 ### Gate-settings confirming runs
@@ -171,8 +171,8 @@ samples.
 
 | Browser  | Round | Document delta | Body delta ms | Wall delta ms |
 | -------- | ----: | -------------: | ------------: | ------------: |
-| Chromium |     1 |            -19 |        -26492 |        -13599 |
-| Chromium |     2 |            -19 |        -20725 |        -10354 |
+| Chromium |     1 |            -19 |        -26492 |        -13598 |
+| Chromium |     2 |            -19 |        -20725 |        -10355 |
 | Chromium |     3 |            -19 |        -21546 |        -10545 |
 | Firefox  |     1 |            -19 |        -45546 |        -23685 |
 | Firefox  |     2 |            -19 |        -23831 |         -9717 |
