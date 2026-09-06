@@ -51,10 +51,10 @@ Out:
 
 - [x] Task 3: Record and project the restore compatibility decision
   - Contract: add proposed draft
-    `docs/adr/drafts/backup-format-and-schema-compatibility.md`; cite existing
+    `docs/adr/0174-backup-format-and-schema-compatibility.md`; cite existing
     numbered ADRs using the tracked-draft link convention. Update the backup
     section of `docs/ARCHITECTURE.md` with descriptive link text citing
-    `docs/adr/drafts/backup-format-and-schema-compatibility.md` and the
+    `docs/adr/0174-backup-format-and-schema-compatibility.md` and the
     implemented format/schema/package/checksum authorities and failure taxonomy.
     Do not edit generated `docs/README.md` or `CONTEXT.md`.
   - Verification: documentation gates resolve every draft citation and the

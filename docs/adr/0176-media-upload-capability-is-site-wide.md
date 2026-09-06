@@ -1,6 +1,6 @@
-# ADR-DRAFT: Media Upload Capability Is Site-Wide
+# ADR-0176: Media Upload Capability Is Site-Wide
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-04
 - Issue: [#552](https://github.com/jaunder-org/jaunder/issues/552)
 

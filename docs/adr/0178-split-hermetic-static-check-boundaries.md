@@ -1,6 +1,6 @@
-# ADR-DRAFT: Split hermetic static checks at the documentation boundary
+# ADR-0178: Split hermetic static checks at the documentation boundary
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-04
 - Issue: [#1289](https://github.com/jaunder-org/jaunder/issues/1289)
 
@@ -13,11 +13,11 @@ measurement for #1289 recorded that otherwise isolated documentation change as a
 292.4-second realization. The command definitions already belong solely to
 `devtool`; the unnecessary coupling is the singular Nix derivation boundary.
 
-[ADR-0052](../0052-devtool-unifies-static-checks.md) requires one Nix
+[ADR-0052](0052-devtool-unifies-static-checks.md) requires one Nix
 `static-checks` runCommand, and
-[ADR-0146](../0146-devtool-owns-compiling-static-check-definitions.md) requires
-its singular installable and `nix-static-checks` validation step. Those clauses
-now prevent the measured boundary from being expressed.
+[ADR-0146](0146-devtool-owns-compiling-static-check-definitions.md) requires its
+singular installable and `nix-static-checks` validation step. Those clauses now
+prevent the measured boundary from being expressed.
 
 ## Decision
 

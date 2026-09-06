@@ -1,6 +1,6 @@
-# ADR-DRAFT: The CSR bundle manifest owns content-addressed asset identity
+# ADR-0175: The CSR bundle manifest owns content-addressed asset identity
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-03
 - Issue: [#869](https://github.com/jaunder-org/jaunder/issues/869)
 

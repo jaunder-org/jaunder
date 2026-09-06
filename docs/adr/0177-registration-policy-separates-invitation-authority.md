@@ -1,6 +1,6 @@
-# ADR-DRAFT: Registration Policy Separates Invitation Authority
+# ADR-0177: Registration Policy Separates Invitation Authority
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-03
 - Issue: [#444](https://github.com/jaunder-org/jaunder/issues/444)
 

@@ -41,7 +41,7 @@ and AtomPub upload attempts clearly.
   `site-config set media.uploads_enabled false` disables uploads and `true`
   enables them.
 - The durable cross-protocol policy is recorded in
-  `docs/adr/drafts/media-upload-capability-is-site-wide.md`.
+  `docs/adr/0176-media-upload-capability-is-site-wide.md`.
 
 ## Acceptance
 
