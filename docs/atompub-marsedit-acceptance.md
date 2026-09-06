@@ -22,8 +22,12 @@ covers real-client behaviour that the suite cannot.
       AtomPub service document.
 - [ ] If autodiscovery fails, set the API endpoint manually to
       `https://host/atompub/service` (System API: **Atom**).
-- [ ] Authenticate with the **username** and the **app password** (not the
-      account password). A wrong username for the token must be rejected (401).
+- [ ] Begin without saved MarsEdit credentials and confirm the unauthenticated
+      AtomPub connection receives an HTTP Basic challenge that prompts for
+      credentials.
+- [ ] At the prompt, authenticate with the **username** and the **app password**
+      (not the account password); confirm the connection succeeds. A wrong
+      username for the token must be rejected (401).
 
 ## List & read
 

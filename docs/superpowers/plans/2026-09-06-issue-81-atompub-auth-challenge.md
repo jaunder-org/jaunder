@@ -40,7 +40,7 @@ Out:
   - Verification: focused dual-backend AtomPub integration tests plus the narrow
     host checks selected by `jaunder-iterate`.
 
-- [ ] Task 2: Carry the challenge contract through running-application and
+- [x] Task 2: Carry the challenge contract through running-application and
       human-client acceptance surfaces.
   - Contract: the revoked-App-Password Playwright flow asserts the exact
     challenge; the MarsEdit checklist instructs a human to observe the

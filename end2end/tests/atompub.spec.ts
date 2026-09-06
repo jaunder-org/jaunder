@@ -111,6 +111,9 @@ test("an app password can be revoked from the sessions page", async ({
   });
   expect(response.ok()).toBeFalsy();
   expect(response.status()).toBe(401);
+  expect(response.headers()["www-authenticate"]).toBe(
+    'Basic realm="Jaunder AtomPub"',
+  );
 });
 
 test("full AtomPub Org publishing flow over HTTP with an app password", async ({
