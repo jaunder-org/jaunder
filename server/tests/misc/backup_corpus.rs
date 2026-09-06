@@ -5,6 +5,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use flate2::{Compression, write::GzEncoder};
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -139,6 +140,20 @@ impl BackupCorpus {
         };
         *schema_version = Value::from(target_schema_version);
         fs::write(manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+        Ok(())
+    }
+
+    /// Packages a verified, materialized corpus directory with test-owned tar
+    /// and gzip code so archive-reader coverage cannot share production helpers.
+    pub(crate) fn package_archive(
+        source: &Path,
+        destination: &Path,
+    ) -> Result<(), BackupCorpusError> {
+        let output = fs::File::create(destination)?;
+        let encoder = GzEncoder::new(output, Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        archive.append_dir_all(".", source)?;
+        archive.into_inner()?.finish()?;
         Ok(())
     }
 }
@@ -507,5 +522,273 @@ mod tests {
             .into_iter()
             .map(|(path, file)| (path, fs::read(file).expect("read fixture file")))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod reader_tests {
+    use common::{
+        ids::{PostId, UserId},
+        media::MediaSource,
+        pagination::PageSize,
+        test_support::{parse_content_hash, parse_filename},
+        username::Username,
+        visibility::ViewerIdentity,
+    };
+    use jaunder::{
+        cli::StorageArgs,
+        commands::{cmd_backup, cmd_init, cmd_restore},
+    };
+    use rstest::*;
+    use rstest_reuse::apply;
+    use storage::{
+        BackupError, BackupMode, EmailVerified, StorageRuntimeConfig, open_existing_database,
+        test_support::{
+            Backend, PostgresDbGuard, PostgresTestConfig, backends, sqlite_url, unique_postgres_url,
+        },
+    };
+    use tempfile::TempDir;
+
+    use super::{BackupCorpus, CorpusEntry, SupportState};
+
+    struct InitializedCommandEnv {
+        args: StorageArgs,
+        base: TempDir,
+        _postgres: Option<PostgresDbGuard>,
+    }
+
+    impl InitializedCommandEnv {
+        async fn new(backend: Backend) -> Self {
+            let base = TempDir::new().expect("create command environment");
+            let (db, postgres) = match backend {
+                Backend::Sqlite => (sqlite_url(&base), None),
+                Backend::Postgres => {
+                    let config = PostgresTestConfig::from_env();
+                    let (db, guard) = unique_postgres_url(&config).await;
+                    (db, Some(guard))
+                }
+            };
+            let args = StorageArgs {
+                storage_path: base.path().join("storage"),
+                db,
+            };
+            cmd_init(&args, false).await.expect("initialize target");
+            Self {
+                args,
+                base,
+                _postgres: postgres,
+            }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum RestoreInput {
+        Directory,
+        Archive,
+    }
+
+    impl RestoreInput {
+        const ALL: [Self; 2] = [Self::Directory, Self::Archive];
+
+        fn name(self) -> &'static str {
+            match self {
+                Self::Directory => "directory",
+                Self::Archive => "archive",
+            }
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum RestoreExpectation {
+        Succeeds,
+        TypedUnsupportedFormat,
+    }
+
+    // The checked-in index currently has no retired production format, so the
+    // classification test below covers that index contract while commands.rs
+    // retains executable typed-error coverage for the production reader.
+
+    fn expected_restore(entry: &CorpusEntry) -> RestoreExpectation {
+        match entry.support {
+            SupportState::Supported => RestoreExpectation::Succeeds,
+            SupportState::Retired => RestoreExpectation::TypedUnsupportedFormat,
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn historical_corpus_entries_restore_through_each_public_input(#[case] backend: Backend) {
+        let corpus = BackupCorpus::checked_in().expect("load corpus");
+        for entry in corpus.entries() {
+            for input in RestoreInput::ALL {
+                let target = InitializedCommandEnv::new(backend).await;
+                let schema_version = current_schema_version(&target).await;
+                let materialized = target.base.path().join("materialized");
+                corpus
+                    .materialize(entry, &materialized, schema_version)
+                    .expect("materialize verified historical fixture");
+                let restore_path = match input {
+                    RestoreInput::Directory => materialized,
+                    RestoreInput::Archive => {
+                        let archive = target.base.path().join("fixture.tar.gz");
+                        BackupCorpus::package_archive(&materialized, &archive)
+                            .expect("independently package fixture archive");
+                        archive
+                    }
+                };
+
+                match expected_restore(entry) {
+                    RestoreExpectation::Succeeds => {
+                        cmd_restore(&target.args, &restore_path)
+                            .await
+                            .unwrap_or_else(|error| {
+                                panic!(
+                                    "restore supported format {} from {}: {error:#}",
+                                    entry.format_version,
+                                    input.name()
+                                )
+                            });
+                        assert_reader_inventory(&target.args).await;
+                    }
+                    RestoreExpectation::TypedUnsupportedFormat => {
+                        let error = cmd_restore(&target.args, &restore_path)
+                            .await
+                            .expect_err("retired format must be rejected");
+                        assert!(matches!(
+                            error.downcast_ref::<BackupError>(),
+                            Some(BackupError::UnsupportedFormatVersion { backup_version, .. })
+                                if *backup_version == entry.format_version
+                        ));
+                        assert_target_unmodified(&target.args).await;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn current_schema_version(target: &InitializedCommandEnv) -> i64 {
+        let probe = target.base.path().join("schema-version-probe");
+        cmd_backup(&target.args, BackupMode::Directory, Some(probe.clone()))
+            .await
+            .expect("export empty target to observe its schema version");
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(probe.join("manifest.json")).expect("read probe"),
+        )
+        .expect("parse probe manifest");
+        manifest["schema_version"]
+            .as_i64()
+            .expect("backup manifest schema version")
+    }
+
+    async fn assert_reader_inventory(args: &StorageArgs) {
+        let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open restored database");
+        let user_id = UserId::from(41);
+        let post_id = PostId::from(71);
+        let username: Username = "legacyuser".parse().expect("fixture username");
+        let user = state
+            .users
+            .get_user_by_username(&username)
+            .await
+            .expect("read restored user")
+            .expect("fixture user exists");
+        assert_eq!(user.user_id, user_id);
+        assert_eq!(user.display_name, None);
+        assert_eq!(user.email_verified, EmailVerified::UNVERIFIED);
+        assert_eq!(user.is_operator, storage::OperatorStatus::OPERATOR);
+
+        let post = state
+            .posts
+            .get_post_by_id(post_id, &ViewerIdentity::local(user_id))
+            .await
+            .expect("read restored post")
+            .expect("fixture post exists");
+        assert_eq!(post.user_id, user_id);
+        assert_eq!(post.title.as_deref(), Some("Legacy wire roles"));
+        assert_eq!(post.body.as_ref(), "legacy body");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(post.rendered_html.as_ref())
+                .expect("structured JSON survives semantically"),
+            serde_json::json!({"kind": "structured", "items": [1, true]})
+        );
+        assert_eq!(post.published_at, None);
+
+        let history = state
+            .posts
+            .list_post_revision_history(user_id, post_id, None, PageSize::default())
+            .await
+            .expect("read restored revision history")
+            .expect("fixture post history exists");
+        assert_eq!(history.revisions.len(), 1);
+        let revision = state
+            .posts
+            .get_post_revision_detail(user_id, post_id, history.revisions[0].revision_id)
+            .await
+            .expect("read restored revision")
+            .expect("fixture revision exists")
+            .revision;
+        assert_eq!(revision.post_id, post_id);
+        assert_eq!(revision.user_id, user_id);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(revision.rendered_html.as_ref())
+                .expect("real JSON survives semantically"),
+            serde_json::json!(1.25)
+        );
+
+        let media = state
+            .media
+            .get_media(
+                user_id,
+                &parse_content_hash(
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                ),
+                &parse_filename("avatar.txt"),
+                &MediaSource::Upload,
+            )
+            .await
+            .expect("read restored media")
+            .expect("fixture media exists");
+        assert_eq!(media.user_id, user_id);
+        assert_eq!(media.size_bytes.to_string(), "13");
+        assert_eq!(media.source_url, None);
+        assert_eq!(
+            std::fs::read(args.storage_path.join("media").join("avatar.txt"))
+                .expect("read restored media bytes"),
+            b"legacy media\n"
+        );
+    }
+    async fn assert_target_unmodified(args: &StorageArgs) {
+        let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open rejected restore target");
+        let username: Username = "legacyuser".parse().expect("fixture username");
+        assert!(
+            state
+                .users
+                .get_user_by_username(&username)
+                .await
+                .expect("read rejected target")
+                .is_none(),
+            "unsupported format must not mutate database"
+        );
+        assert!(
+            !args.storage_path.join("media").join("avatar.txt").exists(),
+            "unsupported format must not mutate media"
+        );
+    }
+
+    #[test]
+    fn support_state_classifies_retired_entries_as_typed_unsupported_formats() {
+        let retired = CorpusEntry {
+            fixture: "retired-format".to_owned(),
+            format_version: 2,
+            support: SupportState::Retired,
+            digest: "0".repeat(64),
+        };
+        assert_eq!(
+            expected_restore(&retired),
+            RestoreExpectation::TypedUnsupportedFormat
+        );
     }
 }

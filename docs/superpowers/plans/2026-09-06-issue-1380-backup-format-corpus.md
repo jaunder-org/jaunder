@@ -54,7 +54,7 @@ Out:
     digest sensitivity, unambiguous framing, entry-kind rejection, sentinel
     preservation, and the sole permitted materialization delta.
 
-- [ ] Task 2: Prove historical reader compatibility through every public restore
+- [x] Task 2: Prove historical reader compatibility through every public restore
       path.
   - Contract: the Task 1 interface independently packages archive input; public
     `cmd_restore` consumes both directory and archive forms on SQLite and
