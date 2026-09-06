@@ -67,7 +67,7 @@ Out:
     plus index-wide dispatch assertions covering every entry's declared support
     state.
 
-- [ ] Task 3: Prove current writer compatibility with the independent raw-wire
+- [x] Task 3: Prove current writer compatibility with the independent raw-wire
       oracle.
   - Contract: production `cmd_backup` directory and archive outputs from both
     backends are inspected without production format or archive helpers;

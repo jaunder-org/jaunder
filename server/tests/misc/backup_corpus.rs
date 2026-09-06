@@ -792,3 +792,495 @@ mod reader_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod writer_tests {
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fs,
+        io::Read,
+        path::Path,
+    };
+
+    use flate2::read::GzDecoder;
+    use jaunder::{
+        cli::StorageArgs,
+        commands::{cmd_backup, cmd_init},
+    };
+    use rstest::*;
+    use rstest_reuse::apply;
+    use serde_json::Value;
+    use storage::{
+        BackupMode,
+        test_support::{
+            Backend, PostgresDbGuard, PostgresTestConfig, backends, sqlite_url, unique_postgres_url,
+        },
+    };
+    use tempfile::TempDir;
+
+    use crate::misc::backup_fixture::{BackupFixtureIds, populate_backup_fixture};
+
+    use super::{BackupCorpus, SupportState};
+
+    const V1_TABLES: &[&str] = &[
+        "audience_members",
+        "audiences",
+        "channels",
+        "email_verifications",
+        "feed_events",
+        "idempotency_keys",
+        "instance_identity",
+        "invites",
+        "media",
+        "password_resets",
+        "post_audiences",
+        "post_media",
+        "post_revision_audiences",
+        "post_revision_tags",
+        "post_revisions",
+        "post_tags",
+        "posts",
+        "publisher_state",
+        "sessions",
+        "site_config",
+        "subscription_statuses",
+        "subscriptions",
+        "tags",
+        "target_kinds",
+        "user_config",
+        "users",
+    ];
+
+    struct WriterRole {
+        name: &'static str,
+        seeded_source: &'static str,
+    }
+
+    const WRITER_ROLE_INVENTORY: &[WriterRole] = &[
+        WriterRole {
+            name: "null",
+            seeded_source: "MediaRecord::source_url = None",
+        },
+        WriterRole {
+            name: "boolean",
+            seeded_source: "author User::is_operator = true and viewer User::is_operator = false",
+        },
+        WriterRole {
+            name: "integer",
+            seeded_source: "MediaRecord::size_bytes = 4",
+        },
+        WriterRole {
+            name: "text",
+            seeded_source: "author User::display_name = Backup User and UserConfig::DefaultPostFormat = org",
+        },
+        WriterRole {
+            name: "relationships",
+            seeded_source: "SeedRawPost author, named audience membership, and post audience assignment",
+        },
+        WriterRole {
+            name: "media bytes",
+            seeded_source: "storage/media/avatar.txt = media",
+        },
+    ];
+
+    /// Reader fixture roles that the current storage API cannot emit. Keeping
+    /// these reasons next to the writer oracle makes omitted raw-wire roles a
+    /// deliberate compatibility boundary rather than accidental test coverage.
+    const READER_ONLY_WRITER_INAPPLICABILITIES: &[(&str, &str)] = &[
+        (
+            "real",
+            "the current public storage APIs expose no persisted real-valued backup column",
+        ),
+        (
+            "structured JSON",
+            "the current public storage APIs expose structured JSON only as text payloads, not JSON-valued backup columns",
+        ),
+    ];
+
+    struct InitializedCommandEnv {
+        args: StorageArgs,
+        base: TempDir,
+        _postgres: Option<PostgresDbGuard>,
+    }
+
+    impl InitializedCommandEnv {
+        async fn new(backend: Backend) -> Self {
+            let base = TempDir::new().expect("create command environment");
+            let (db, postgres) = match backend {
+                Backend::Sqlite => (sqlite_url(&base), None),
+                Backend::Postgres => {
+                    let config = PostgresTestConfig::from_env();
+                    let (db, guard) = unique_postgres_url(&config).await;
+                    (db, Some(guard))
+                }
+            };
+            let args = StorageArgs {
+                storage_path: base.path().join("storage"),
+                db,
+            };
+            cmd_init(&args, false).await.expect("initialize target");
+            Self {
+                args,
+                base,
+                _postgres: postgres,
+            }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum BackupOutput {
+        Directory,
+        Archive,
+    }
+
+    impl BackupOutput {
+        const ALL: [Self; 2] = [Self::Directory, Self::Archive];
+
+        fn mode(self) -> BackupMode {
+            match self {
+                Self::Directory => BackupMode::Directory,
+                Self::Archive => BackupMode::Archive,
+            }
+        }
+
+        fn name(self) -> &'static str {
+            match self {
+                Self::Directory => "directory",
+                Self::Archive => "archive",
+            }
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn current_writer_satisfies_independent_v1_raw_wire_oracle(#[case] backend: Backend) {
+        for output in BackupOutput::ALL {
+            let source = InitializedCommandEnv::new(backend).await;
+            let ids = populate_backup_fixture(&source.args).await;
+            let written = source.base.path().join(match output {
+                BackupOutput::Directory => "backup",
+                BackupOutput::Archive => "backup.tar.gz",
+            });
+            let written_path = cmd_backup(&source.args, output.mode(), Some(written))
+                .await
+                .unwrap_or_else(|error| panic!("write {} backup: {error:#}", output.name()));
+            let extracted = match output {
+                BackupOutput::Directory => written_path,
+                BackupOutput::Archive => {
+                    let destination = source.base.path().join("extracted");
+                    extract_archive(&written_path, &destination);
+                    destination
+                }
+            };
+
+            assert_writer_version_is_uniquely_supported(&extracted);
+            assert_v1_raw_wire_oracle(&extracted, output, &ids);
+        }
+    }
+
+    fn assert_writer_version_is_uniquely_supported(export: &Path) {
+        let manifest = read_manifest(export);
+        let version = manifest["format_version"]
+            .as_u64()
+            .expect("backup format compatibility: writer format_version must be an integer");
+        let corpus = BackupCorpus::checked_in().expect("load backup format compatibility corpus");
+        let matches = corpus
+            .entries()
+            .iter()
+            .filter(|entry| {
+                u64::from(entry.format_version) == version
+                    && entry.support == SupportState::Supported
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            matches.len(),
+            1,
+            "backup format compatibility: writer emitted format version {version}, which must resolve to exactly one supported fixture/oracle entry; add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history"
+        );
+        assert_eq!(
+            version, 1,
+            "backup format compatibility: format-1 oracle is the sole current writer oracle; add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history"
+        );
+    }
+    fn assert_v1_raw_wire_oracle(export: &Path, output: BackupOutput, ids: &BackupFixtureIds) {
+        assert_inventory_is_complete();
+        let manifest = read_manifest(export);
+        let members = manifest
+            .as_object()
+            .expect("backup format compatibility: manifest must be an object");
+        let expected_members = BTreeSet::from([
+            "format_version",
+            "mode",
+            "schema_checksum",
+            "schema_version",
+            "tables",
+            "timestamp",
+            "version",
+        ]);
+        assert_eq!(
+            members.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            expected_members,
+            "backup format compatibility: manifest members changed; add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history"
+        );
+        assert_eq!(manifest["format_version"], Value::from(1));
+        assert!(manifest["version"].is_string());
+        assert!(manifest["schema_version"].is_i64() || manifest["schema_version"].is_u64());
+        assert!(manifest["schema_checksum"].is_string());
+        assert!(manifest["timestamp"].is_string());
+        assert_eq!(
+            manifest["mode"],
+            Value::from(match output {
+                BackupOutput::Directory => "directory",
+                BackupOutput::Archive => "archive",
+            })
+        );
+        assert_eq!(
+            manifest["tables"]
+                .as_array()
+                .expect("manifest tables array"),
+            &V1_TABLES
+                .iter()
+                .map(|table| Value::from(*table))
+                .collect::<Vec<_>>(),
+            "backup format compatibility: manifest tables must be alphabetical and exact; add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history"
+        );
+
+        let paths = regular_file_bytes(export);
+        let expected_paths = std::iter::once("manifest.json".to_owned())
+            .chain(V1_TABLES.iter().map(|table| format!("db/{table}.ndjson")))
+            .chain(std::iter::once("media/avatar.txt".to_owned()))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            paths.keys().cloned().collect::<BTreeSet<_>>(),
+            expected_paths,
+            "backup format compatibility: export path set changed; add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history"
+        );
+        assert_eq!(paths["media/avatar.txt"], b"media");
+
+        let rows = parse_ndjson_tables(&paths);
+        assert_writer_roles(&rows, ids);
+    }
+
+    fn read_manifest(export: &Path) -> Value {
+        serde_json::from_slice(
+            &fs::read(export.join("manifest.json"))
+                .expect("backup format compatibility: read manifest"),
+        )
+        .expect("backup format compatibility: parse manifest JSON")
+    }
+
+    fn regular_file_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
+        fn visit(root: &Path, directory: &Path, files: &mut BTreeMap<String, Vec<u8>>) {
+            for entry in fs::read_dir(directory).expect("read backup output directory") {
+                let entry = entry.expect("read backup output entry");
+                let path = entry.path();
+                let metadata = fs::symlink_metadata(&path).expect("inspect backup output entry");
+                if metadata.file_type().is_dir() {
+                    visit(root, &path, files);
+                } else {
+                    assert!(
+                        metadata.file_type().is_file(),
+                        "backup format compatibility: output contains a special entry"
+                    );
+                    let relative = path
+                        .strip_prefix(root)
+                        .expect("backup output child")
+                        .to_str()
+                        .expect("UTF-8 backup output path")
+                        .replace('\\', "/");
+                    files.insert(relative, fs::read(path).expect("read backup output file"));
+                }
+            }
+        }
+
+        let mut files = BTreeMap::new();
+        visit(root, root, &mut files);
+        files
+    }
+
+    fn parse_ndjson_tables(files: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, Vec<Value>> {
+        V1_TABLES
+            .iter()
+            .map(|table| {
+                let path = format!("db/{table}.ndjson");
+                let bytes = &files[&path];
+                let rows = if bytes.is_empty() {
+                    Vec::new()
+                } else {
+                    assert!(
+                        bytes.ends_with(b"\n"),
+                        "backup format compatibility: {path} must end with one LF-delimited JSON object per line"
+                    );
+                    bytes[..bytes.len() - 1]
+                        .split(|byte| *byte == b'\n')
+                        .map(|line| {
+                            assert!(
+                                !line.is_empty(),
+                                "backup format compatibility: {path} has an empty NDJSON line"
+                            );
+                            let row: Value =
+                                serde_json::from_slice(line).unwrap_or_else(|error| {
+                                    panic!(
+                                        "backup format compatibility: {path} has invalid NDJSON: {error}"
+                                    )
+                                });
+                            assert!(
+                                row.is_object(),
+                                "backup format compatibility: {path} has a non-object NDJSON line; add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history"
+                            );
+                            row
+                        })
+                        .collect()
+                };
+                ((*table).to_owned(), rows)
+            })
+            .collect()
+    }
+
+    fn assert_writer_roles(rows: &BTreeMap<String, Vec<Value>>, ids: &BackupFixtureIds) {
+        let author = ids.author.to_string();
+        let viewer = ids.viewer.to_string();
+        assert!(
+            rows["users"].iter().any(|row| {
+                row_id_is(row, "user_id", &author)
+                    && row["username"] == "backupuser"
+                    && row["display_name"] == "Backup User"
+                    && row["is_operator"] == true
+            }),
+            "backup format compatibility: author seed must emit its exact boolean and text values"
+        );
+        assert!(
+            rows["users"].iter().any(|row| {
+                row_id_is(row, "user_id", &viewer)
+                    && row["username"] == "viewer"
+                    && row["display_name"] == "Viewer"
+                    && row["is_operator"] == false
+            }),
+            "backup format compatibility: viewer seed must emit its exact boolean and text values"
+        );
+        assert!(
+            rows["media"].iter().any(|row| {
+                row_id_is(row, "user_id", &author)
+                    && row["sha256"]
+                        == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    && row["filename"] == "my%20photo.jpg"
+                    && row["source"] == "upload"
+                    && row["content_type"] == "image/jpeg"
+                    && numeric_is(row, "size_bytes", 4)
+                    && row["source_url"].is_null()
+            }),
+            "backup format compatibility: media seed must emit exact null, integer, and text values"
+        );
+        assert!(
+            rows["user_config"].iter().any(|row| {
+                row_id_is(row, "user_id", &author)
+                    && row["key"] == "posts.default_format"
+                    && row["value"] == "org"
+            }),
+            "backup format compatibility: user-config seed must emit its exact text value"
+        );
+        assert!(
+            rows["posts"].iter().any(|row| {
+                row_id_is(row, "post_id", &ids.public_post.to_string())
+                    && row_id_is(row, "user_id", &author)
+            }),
+            "backup format compatibility: public post must retain its author relationship"
+        );
+        assert!(
+            rows["audience_members"]
+                .iter()
+                .any(|row| row_id_is(row, "author_user_id", &author)),
+            "backup format compatibility: named-audience membership must retain its author relationship"
+        );
+        assert!(
+            rows["post_audiences"].iter().any(|row| row_id_is(
+                row,
+                "post_id",
+                &ids.named_post.to_string()
+            )),
+            "backup format compatibility: named post must retain its audience relationship"
+        );
+    }
+
+    fn assert_inventory_is_complete() {
+        assert_eq!(
+            WRITER_ROLE_INVENTORY
+                .iter()
+                .map(|role| role.name)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "boolean",
+                "integer",
+                "media bytes",
+                "null",
+                "relationships",
+                "text",
+            ]),
+            "backup format compatibility: writer inventory must name every applicable seeded wire role"
+        );
+        assert!(
+            WRITER_ROLE_INVENTORY
+                .iter()
+                .all(|role| !role.seeded_source.is_empty())
+        );
+        assert_eq!(
+            READER_ONLY_WRITER_INAPPLICABILITIES
+                .iter()
+                .map(|(role, _)| *role)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["real", "structured JSON"]),
+            "backup format compatibility: reader-only inventory must explicitly account for real and structured JSON"
+        );
+        assert!(
+            READER_ONLY_WRITER_INAPPLICABILITIES
+                .iter()
+                .all(|(_, rationale)| !rationale.is_empty())
+        );
+    }
+
+    fn numeric_is(row: &Value, key: &str, expected: u64) -> bool {
+        row[key].as_u64().is_some_and(|value| value == expected)
+            || row[key]
+                .as_str()
+                .is_some_and(|value| value == expected.to_string())
+    }
+
+    fn row_id_is(row: &Value, key: &str, expected: &str) -> bool {
+        row[key].as_str().map_or_else(
+            || {
+                row[key]
+                    .as_u64()
+                    .is_some_and(|value| value.to_string() == expected)
+            },
+            |value| value == expected,
+        )
+    }
+
+    fn extract_archive(source: &Path, destination: &Path) {
+        fs::create_dir(destination).expect("create archive extraction directory");
+        let input = fs::File::open(source).expect("open production archive");
+        let decoder = GzDecoder::new(input);
+        let mut archive = tar::Archive::new(decoder);
+        for entry in archive.entries().expect("read archive entries") {
+            let mut entry = entry.expect("read archive entry");
+            let relative = entry.path().expect("read archive entry path").into_owned();
+            let destination_path = destination.join(&relative);
+            if entry.header().entry_type().is_dir() {
+                fs::create_dir_all(destination_path).expect("create extracted archive directory");
+            } else {
+                assert!(
+                    entry.header().entry_type().is_file(),
+                    "backup format compatibility: archive contains a non-file entry"
+                );
+                if let Some(parent) = destination_path.parent() {
+                    fs::create_dir_all(parent).expect("create extracted archive parent");
+                }
+                let mut bytes = Vec::new();
+                entry
+                    .read_to_end(&mut bytes)
+                    .expect("read archive entry bytes");
+                fs::write(destination_path, bytes).expect("write extracted archive entry");
+            }
+        }
+    }
+}
