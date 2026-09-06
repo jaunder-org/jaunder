@@ -112,6 +112,18 @@ rejected by the pre-registered host-load checks before the retained runs below.
 The load column records first precheck, second precheck, run-start, and run-end
 samples.
 
+A post-collection review found that the late-arming test at the measured
+treatment SHA was pre-armed by `_autoPerfSpan`. The final browser-test
+implementation at `c6971ae39298a0cad1e442443e539598234f7cc5` separates
+automatic budget arming from tracing, exercises that path on an actually
+unarmed page, and restores two public teardown assertions. Those corrections
+preserve the same nine browser tests, the same navigation sequence, normal
+tracing, one `trackBoots` call per default page, and the deterministic removal
+of 19 document loads. At the user's explicit direction, the multi-hour campaign
+was not repeated. The timing results below are therefore representative
+evidence for the unchanged load reduction, not exact-SHA certification of the
+final fixture arrangement.
+
 ### Single-worker deciding runs
 
 | Round | Order | Arm       | Browser  | Salt                                        | Load                | Documents | Body ms | Wall ms |
