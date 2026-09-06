@@ -128,16 +128,23 @@ export async function expectNoShiftAcrossMount(
   probe: MountShiftProbe,
 ): Promise<void> {
   const tol = probe.tolerancePx ?? 0;
-  const WASM = "**/pkg/jaunder*.wasm";
+  const MANIFEST_ASSETS = "**/pkg/**";
 
-  // Hold the wasm so `init()` can't complete → the projector first paint stays
-  // frozen while we sample. NOTE: `page.route` also disables Playwright's HTTP cache
-  // for this URL, forcing a fresh, holdable request even though the wasm was already
-  // warmed by an earlier navigation. Do not remove — it is what makes the pre-mount
-  // sample deterministic rather than a race with a cached, instant mount.
+  // Hold the manifest-backed WASM fetch so `init()` can't complete → the projector
+  // first paint stays frozen while we sample. The glue module is a `script`; the
+  // manifest-selected WASM request is the bundle's `fetch`, so this remains stable
+  // across content-addressed filenames without rediscovering names by suffix.
+  // NOTE: `page.route` also disables Playwright's HTTP cache for this URL, forcing
+  // a fresh, holdable request even though the WASM was already warmed by an earlier
+  // navigation. Do not remove — it is what makes the pre-mount sample deterministic
+  // rather than a race with a cached, instant mount.
   let releaseWasm!: () => void;
   const held = new Promise<void>((resolve) => (releaseWasm = resolve));
-  await page.route(WASM, async (route) => {
+  await page.route(MANIFEST_ASSETS, async (route) => {
+    if (route.request().resourceType() !== "fetch") {
+      await route.continue();
+      return;
+    }
     await held;
     await route.continue();
   });
@@ -177,6 +184,6 @@ export async function expectNoShiftAcrossMount(
       );
     });
   } finally {
-    await page.unroute(WASM);
+    await page.unroute(MANIFEST_ASSETS);
   }
 }

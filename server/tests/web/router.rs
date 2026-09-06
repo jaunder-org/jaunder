@@ -67,9 +67,8 @@ async fn home_route_returns_ok(#[case] backend: Backend) {
 async fn spa_fallback_serves_embedded_shell_without_disk_index_html(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let instance_id = base.instance_id().clone();
-    // No index.html exists on disk (the host reality, #239); the server owns the
-    // embedded shell. The SPA fallback must still serve it — 200, text/html,
-    // boots wasm.
+    // With no declared bundle in a host test, the explicit non-production shell
+    // keeps router construction possible without guessing final asset names.
     ensure_server_fns_registered();
     let app = jaunder::create_router(state, instance_id, noop_mailer(), true, tmp_storage_path())
         .expect("canonical instance identity is an HTTP header");
@@ -89,29 +88,7 @@ async fn spa_fallback_serves_embedded_shell_without_disk_index_html(#[case] back
         "text/html; charset=utf-8"
     );
     let body = body_string(response).await;
-    let init = format!(
-        r#"initMeasured(window.__jaunderWasmFetch ?? "{}")"#,
-        web::app::WASM_URL
-    );
-    assert!(
-        body.contains(&init),
-        "SPA fallback consumes the early request with an explicit wasm fallback: {body}"
-    );
-    let prepaint = body
-        .find(web::app::PREPAINT_SCRIPT)
-        .expect("SPA fallback pre-paint script");
-    let starter = body
-        .find(web::app::EARLY_WASM_FETCH_SCRIPT)
-        .expect("SPA fallback early wasm starter");
-    let stylesheet = body
-        .find(r#"<link rel="stylesheet" href="/style/jaunder.css" />"#)
-        .expect("SPA fallback stylesheet");
-    assert!(
-        prepaint < starter && starter < stylesheet,
-        "SPA fallback must keep prepaint → starter → stylesheet order: {body}"
-    );
-    assert!(!body.contains("modulepreload"), "{body}");
-    assert!(!body.contains(r#"rel="preload""#), "{body}");
+    assert!(body.starts_with("<!doctype html>"), "{body}");
 }
 
 #[apply(backends)]

@@ -38,9 +38,9 @@ enum Command {
     Run(RunArgs),
     /// Run the migrated static checks (#188/#276): one by name, or `--all`.
     Check(CheckArgs),
-    /// Post-process a built `csr.wasm` into the served CSR bundle
-    /// (`pkg/jaunder.{js,wasm}`): wasm-bindgen + rename + js wasm-ref fix. Shared
-    /// by the host build and the Nix `csrWasmBundle` derivation (#236).
+    /// Post-process a built `csr.wasm` into a verified CSR bundle root
+    /// (`manifest.json`, rendered `index.html`, and content-addressed `pkg/**`).
+    /// Shared by the host build and the Nix `csrWasmBundle` derivation (#236/#869).
     CsrBundle(CsrBundleArgs),
     /// Seed the canonical e2e fixtures (users + site-config + mail-reset) by
     /// shelling out to `test-support`. The single fixture list shared by the
@@ -75,7 +75,7 @@ struct CsrBundleArgs {
     /// Path to the built `csr.wasm` (crane output or `target/.../csr.wasm`).
     #[arg(long)]
     wasm: std::path::PathBuf,
-    /// Output directory for the bundle (the site `pkg` dir).
+    /// Output directory for the bundle root (`manifest.json`, `index.html`, `pkg/**`).
     #[arg(long)]
     out: std::path::PathBuf,
     /// Optional experiment arm label embedded in the direct wasm-init trace detail.

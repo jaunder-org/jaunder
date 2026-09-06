@@ -39,9 +39,9 @@ async fn permalink_projects_cacheable_crawlable_html(#[case] backend: Backend) {
         html.contains(rendered_html.as_ref()),
         "rendered post body injected raw"
     );
-    // The seed blob + CSR boot are embedded for the client to adopt.
+    // The seed blob remains embedded for client adoption; final CSR URLs are
+    // build-generated and intentionally absent from this host no-bundle test.
     assert!(html.contains(r#"id="jaunder-seed""#), "data blob present");
-    assert!(html.contains("/pkg/jaunder.js"), "CSR boot script present");
 
     // Byte-identical on repeat — no per-request variation, so CDN-cacheable.
     let body2 = axum::body::to_bytes(

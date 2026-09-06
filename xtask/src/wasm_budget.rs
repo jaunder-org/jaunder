@@ -9,8 +9,8 @@
 
 use serde::Serialize;
 
-/// Raw bytes of `pkg/jaunder.wasm` achieved after the SMTP relay operator UI
-/// landed (#638), still using `wasm-opt -Oz`.
+/// Raw bytes of the manifest-selected WASM identity artifact achieved after the
+/// owner Post Revision history UI landed (#1055), still using `wasm-opt -Oz`.
 ///
 /// `validate` reports observed size as a drift against this. **A drift of a few
 /// bytes is build noise, not erosion**: the artifact is not bit-reproducible
@@ -60,7 +60,7 @@ pub fn check(actual: u64, ceiling: u64) -> BudgetVerdict {
 /// is to shrink the bundle or to move the line.
 pub fn failure_message(v: &BudgetVerdict) -> String {
     format!(
-        "raw pkg/jaunder.wasm is {} bytes, over the {} byte ceiling by {}.\n\
+        "raw manifest-selected WASM identity artifact is {} bytes, over the {} byte ceiling by {}.\n\
          This budget is on RAW bytes, not brotli: raw is what the wasm compiler \
          reads, and compile time is what dominates the boot gap (#818).\n\
          If the growth is intended, raise WASM_RAW_CEILING_BYTES in \

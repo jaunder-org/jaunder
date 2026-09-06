@@ -20,3 +20,9 @@ brotli = "8"
 flate2 = "1"
 processkit = "3.3.4"
 tokio = { version = "1", features = ["rt-multi-thread"] }
+csr_bundle = { path = "../csr_bundle" }
+oxc_allocator = "0.146.0"
+oxc_ast = "0.146.0"
+oxc_ast_visit = "0.146.0"
+oxc_parser = "0.146.0"
+oxc_span = "0.146.0"

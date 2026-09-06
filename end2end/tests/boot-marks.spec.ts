@@ -538,7 +538,8 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
   // exercised here.
   const wasmRequests: string[] = [];
   page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/pkg/jaunder.wasm") {
+    const { pathname } = new URL(request.url());
+    if (pathname.startsWith("/pkg/") && pathname.endsWith(".wasm")) {
       wasmRequests.push(request.url());
     }
   });
@@ -552,7 +553,7 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
   // mode differs from wasm-bindgen's fetch can download the bundle twice.
   expect(
     wasmRequests.length,
-    `expected exactly one /pkg/jaunder.wasm request, got ${wasmRequests.length}: ${wasmRequests.join(", ")}`,
+    `expected exactly one content-addressed WASM request, got ${wasmRequests.length}: ${wasmRequests.join(", ")}`,
   ).toBe(1);
 
   // `init_done` is emitted after the fire-and-forget initializer's promise
@@ -674,7 +675,7 @@ test("initializer records buffered after MIME-rejected streaming and restores AP
     scope.__jaunderOriginalStreaming = WebAssembly.instantiateStreaming;
     scope.__jaunderOriginalInstantiate = WebAssembly.instantiate;
   });
-  await page.route("**/pkg/jaunder.wasm", async (route) => {
+  await page.route("**/pkg/*.wasm", async (route) => {
     const response = await route.fetch();
     await route.fulfill({
       response,

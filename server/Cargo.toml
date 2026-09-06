@@ -68,6 +68,9 @@ percent-encoding.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 url = { workspace = true }
 
+[build-dependencies]
+csr_bundle = { path = "../tools/csr_bundle" }
+
 [dev-dependencies]
 axum = { workspace = true }
 base64 = { workspace = true }
@@ -76,6 +79,7 @@ base64 = { workspace = true }
 common = { workspace = true, features = ["test-utils", "test-support"] }
 host = { workspace = true, features = ["test-support", "test-utils"] }
 storage = { workspace = true, features = ["test-utils", "test-support"] }
+csr_bundle = { path = "../tools/csr_bundle" }
 maik = "0.2.0"
 nix = { version = "0.29", features = ["signal"] }
 rstest = { workspace = true }

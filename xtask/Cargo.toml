@@ -26,6 +26,7 @@ flate2 = "1"
 tar = "0.4"
 brotli = "7"
 coverage = { path = "../tools/coverage" }
+csr_bundle = { path = "../tools/csr_bundle" }
 doctests = { path = "../tools/doctests" }
 tabled = "0.21.0"
 url = "2.5.8"
