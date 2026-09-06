@@ -74,6 +74,8 @@ pub fn main() {
     // First statement: `BOOT_ENTRY` is the wasm's own "I am running" timestamp, and
     // the harness derives fetch/compile/instantiate from the gap before it.
     perf::mark(perf::BOOT_ENTRY);
+    #[cfg(feature = "diagnostic-coverage")]
+    client::diagnostic_coverage::install();
     _ = console_log::init_with_level(log::Level::Debug);
     console_error_panic_hook::set_once();
     mount();

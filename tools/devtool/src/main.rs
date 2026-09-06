@@ -3,6 +3,9 @@
 //! deliberately extensible: `coverage emit`, `csr-bundle`, and `seed-e2e` exist
 //! today; `pg`-migration of the remaining shell scripts is tracked separately.
 
+use std::path::PathBuf;
+
+use anyhow::Result;
 use check::CheckGroup;
 use clap::{Parser, Subcommand};
 
@@ -74,10 +77,10 @@ struct CheckArgs {
 struct CsrBundleArgs {
     /// Path to the built `csr.wasm` (crane output or `target/.../csr.wasm`).
     #[arg(long)]
-    wasm: std::path::PathBuf,
+    wasm: PathBuf,
     /// Output directory for the bundle root (`manifest.json`, `index.html`, `pkg/**`).
     #[arg(long)]
-    out: std::path::PathBuf,
+    out: PathBuf,
     /// Optional experiment arm label embedded in the direct wasm-init trace detail.
     #[arg(long)]
     wasm_experiment_arm: Option<String>,
@@ -87,6 +90,16 @@ struct CsrBundleArgs {
     /// Number of same-named shape custom sections to append.
     #[arg(long, default_value_t = 1)]
     wasm_shape_section_count: u32,
+    /// Write a truthful before/after LLVM coverage-section status for the
+    /// diagnostic bundle. Requires the companion identity output and minicov pin.
+    #[arg(long, requires_all = ["diagnostic_toolchain_identity", "diagnostic_minicov_version"])]
+    diagnostic_coverage_metadata: Option<PathBuf>,
+    /// Write exact compiler, LLVM, wasm-bindgen, wasm-opt, and minicov identities.
+    #[arg(long, requires_all = ["diagnostic_coverage_metadata", "diagnostic_minicov_version"])]
+    diagnostic_toolchain_identity: Option<PathBuf>,
+    /// Exact minicov crate version selected by the diagnostic Cargo feature.
+    #[arg(long, requires_all = ["diagnostic_coverage_metadata", "diagnostic_toolchain_identity"])]
+    diagnostic_minicov_version: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -97,12 +110,12 @@ struct SeedE2eArgs {
     /// Path to the `test-support` binary — the on-PATH name on the VM guest, the
     /// built `target/debug/test-support` on the host.
     #[arg(long)]
-    test_support_bin: std::path::PathBuf,
+    test_support_bin: PathBuf,
     /// Path to the real `jaunder` binary (runs the `site-config set` steps). Bare
     /// `jaunder` on the VM guest (systemPackages), the built
     /// `target/debug/jaunder` on the host. Must be a non-cheap-kdf build.
     #[arg(long)]
-    jaunder_bin: std::path::PathBuf,
+    jaunder_bin: PathBuf,
 }
 
 #[derive(clap::Args)]
@@ -110,21 +123,21 @@ struct ProvisionNodeModulesArgs {
     /// The tsc type-dep closure to symlink. Defaults to $E2E_TYPES_NODE_MODULES,
     /// exported by the Nix devShell.
     #[arg(long)]
-    types_node_modules: Option<std::path::PathBuf>,
+    types_node_modules: Option<PathBuf>,
     /// The nix-matched @playwright/test to pin. Defaults to $E2E_PLAYWRIGHT_TEST,
     /// exported by the Nix devShell.
     #[arg(long)]
-    playwright_test: Option<std::path::PathBuf>,
+    playwright_test: Option<PathBuf>,
     /// Repo or worktree root; provisions <root>/end2end/node_modules.
     #[arg(long, default_value = ".")]
-    root: std::path::PathBuf,
+    root: PathBuf,
 }
 
 #[derive(clap::Args)]
 struct RunArgs {
     /// Working directory for the command (defaults to the current directory).
     #[arg(long)]
-    cwd: Option<std::path::PathBuf>,
+    cwd: Option<PathBuf>,
     /// Kill the command after this many seconds (default: no limit).
     #[arg(long)]
     timeout: Option<u64>,
@@ -163,7 +176,7 @@ enum PgCmd {
     },
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Coverage(CoverageCmd::Emit { out }) => coverage::emit::run(&out),
@@ -177,13 +190,33 @@ fn main() -> anyhow::Result<()> {
             args.fix,
             args.sandbox_cargo,
         ),
-        Command::CsrBundle(args) => csr_bundle::run(
-            &args.wasm,
-            &args.out,
-            args.wasm_experiment_arm.as_deref(),
-            args.wasm_shape_section.as_deref(),
-            args.wasm_shape_section_count,
-        ),
+        Command::CsrBundle(args) => {
+            let diagnostic_artifacts = match (
+                args.diagnostic_coverage_metadata.as_deref(),
+                args.diagnostic_toolchain_identity.as_deref(),
+                args.diagnostic_minicov_version.as_deref(),
+            ) {
+                (Some(metadata_status), Some(toolchain_identity), Some(minicov_version)) => {
+                    Some(csr_bundle::DiagnosticArtifacts {
+                        metadata_status,
+                        toolchain_identity,
+                        minicov_version,
+                    })
+                }
+                (None, None, None) => None,
+                _ => anyhow::bail!(
+                    "diagnostic CSR bundle arguments must select metadata, toolchain identity, and minicov together"
+                ),
+            };
+            csr_bundle::run(
+                &args.wasm,
+                &args.out,
+                args.wasm_experiment_arm.as_deref(),
+                args.wasm_shape_section.as_deref(),
+                args.wasm_shape_section_count,
+                diagnostic_artifacts.as_ref(),
+            )
+        }
         Command::SeedE2e(args) => {
             seed_e2e::run(&args.db, &args.test_support_bin, &args.jaunder_bin)
         }
@@ -200,6 +233,40 @@ mod tests {
     use clap::Parser;
 
     use super::*;
+
+    #[test]
+    fn diagnostic_bundle_artifacts_are_an_all_or_nothing_contract() {
+        assert!(
+            Cli::try_parse_from([
+                "devtool",
+                "csr-bundle",
+                "--wasm",
+                "csr.wasm",
+                "--out",
+                "pkg",
+                "--diagnostic-coverage-metadata",
+                "metadata.json",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "devtool",
+                "csr-bundle",
+                "--wasm",
+                "csr.wasm",
+                "--out",
+                "pkg",
+                "--diagnostic-coverage-metadata",
+                "metadata.json",
+                "--diagnostic-toolchain-identity",
+                "toolchain.json",
+                "--diagnostic-minicov-version",
+                "0.3.8",
+            ])
+            .is_ok()
+        );
+    }
 
     #[test]
     fn check_groups_are_closed_and_mutually_exclusive_selectors() {

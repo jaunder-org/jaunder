@@ -18,6 +18,43 @@ let
   };
 
   craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
+  # wasm-bindgen #5268 identifies nightly-2026-08-05 as the last LLVM 22
+  # nightly; this earlier dated pin stays in that compatible range.  It must
+  # never track Fenix `latest`: LLVM coverage data, minicov's C runtime, and
+  # the manual Clang link are one version-sensitive unit.
+  diagnosticNightlyName = "nightly-2026-07-27";
+  diagnosticNightlySha256 = "sha256-e0NxVNFY345jKKjY/QdZiWrqKmDRBvmohTt4ZuKwx1A=";
+  diagnosticNightly = fenix.packages.${system}.fromToolchainName {
+    name = diagnosticNightlyName;
+    sha256 = diagnosticNightlySha256;
+  };
+  diagnosticToolchain = fenix.packages.${system}.combine [
+    (diagnosticNightly.withComponents [
+      "cargo"
+      "llvm-tools-preview"
+      "rust-std"
+      "rustc"
+    ])
+    (fenix.packages.${system}.targets.wasm32-unknown-unknown.fromToolchainName {
+      name = diagnosticNightlyName;
+      sha256 = diagnosticNightlySha256;
+    }).rust-std
+  ];
+  # minicov builds compiler-rt C for wasm.  The unwrapped Clang avoids Nix's
+  # host cc-wrapper injecting non-wasm sysroot and hardening flags.
+  diagnosticClang = pkgs.llvmPackages_22.clang-unwrapped;
+  # This source is an input only of the diagnostic derivative. The production
+  # workspace lock, vendor source, `csrWasm`, and `csrWasmBundle` never name it.
+  diagnosticMinicov = pkgs.fetchCrate {
+    pname = "minicov";
+    version = "0.3.8";
+    hash = "sha256-MAyEaF1M9mPr0rQRjG21XJaWgxwvOWZrObjCeFidgoA=";
+  };
+  # `llvm-tools-preview` installs profile tools below rustlib rather than the
+  # cargo/rustc bin directory.  Keep this path explicit so every diagnostic
+  # identity and exported analyzer symlink names the compiler-matched tools.
+  diagnosticLlvmTools =
+    "${diagnosticToolchain}/lib/rustlib/${pkgs.stdenv.hostPlatform.config}/bin";
   # Cargo source filters follow target closures. All workspace manifests remain
   # available for resolution; excluded members receive deterministic placeholder
   # targets so Cargo can parse them without hashing unrelated source bytes.
@@ -479,6 +516,235 @@ let
         devtool csr-bundle --wasm ${csrWasm}/lib/csr.wasm --out $out${pkgs.lib.optionalString (wasmExperimentArm != "") " --wasm-experiment-arm ${wasmExperimentArm}"}${pkgs.lib.optionalString (wasmShapeSection != "") " --wasm-shape-section ${wasmShapeSection} --wasm-shape-section-count ${toString wasmShapeSectionCount}"}
       '';
 
+  # Separately instrumented CSR producer for the Playwright/WASM coverage probe.
+  #
+  # Cargo is deliberately only an LLVM-IR producer here.  Its ordinary final
+  # wasm link cannot supply minicov's profiler archive, and treating that failed
+  # link as the diagnostic artifact would lose the exact source-mappable module.
+  # The pinned nightly emits every target crate's IR without a root link; LLVM
+  # 22 Clang compiles that exact closed graph and links it with minicov's archive.
+  # This derivative is not an input to `site` or `jaunderBin`.
+  diagnosticCsrWasmBundle = pkgs.runCommand "jaunder-diagnostic-csr-wasm-bundle"
+    {
+      nativeBuildInputs = [
+        # Cargo build scripts are host programs and require Nix's ordinary
+        # `cc`; the target-specific CC/CFLAGS below still force minicov's C
+        # profiler runtime through unwrapped LLVM 22 Clang.
+        pkgs.stdenv.cc
+        diagnosticToolchain
+        diagnosticClang
+        devtoolBin
+        pkgs.binaryen
+        pkgs.python3
+        wasm-bindgen-cli
+      ];
+    }
+    ''
+      mkdir -p $out/{instrumented/ir,tools}
+      ln -s ${diagnosticLlvmTools}/llvm-cov $out/tools/llvm-cov
+      ln -s ${diagnosticLlvmTools}/llvm-profdata $out/tools/llvm-profdata
+      export PATH=${diagnosticToolchain}/bin:${diagnosticLlvmTools}:${diagnosticClang}/bin:$PATH
+      rustc -Vv > $out/toolchain-rustc-vv.txt
+      clang --version > $out/toolchain-clang-version.txt
+      ${diagnosticLlvmTools}/llvm-profdata --version > $out/toolchain-llvm-profdata-version.txt
+      ${diagnosticLlvmTools}/llvm-cov --version > $out/toolchain-llvm-cov-version.txt
+      cat > $out/build-configuration.json <<'EOF'
+      {"version":5,"nightly":"${diagnosticNightlyName} (rustc 1.99.0-nightly dc3f85158; LLVM 22.1.8)","nightly_source_sha256":"${diagnosticNightlySha256}","instrumented_first_party_crates":["csr"],"omitted_first_party_crates":["client","common","macros","web"],"producer":"Cargo emits only CSR LLVM IR and an rlink without a final link; pinned rustc -Zlink-only recreates its complete Cargo/sysroot/minicov link graph.","rustflags":["-Cinstrument-coverage","-Zno-profiler-runtime","--emit=llvm-ir","-C link-arg=--no-gc-sections","-Zno-link"],"linker":"pinned rustc -Zlink-only","c_compiler":"llvmPackages_22.clang-unwrapped","diagnostic_runtime":{"wrapper_crate":"diagnostic-coverage-runtime","crate":"minicov","version":"0.3.8","source_sha256":"4869b6a491569605d66d3952bcdf03df789e5b536e5f0cf7758a7f08a55ae24d"}}
+      EOF
+      work="$TMPDIR/wasm-coverage-csr"
+      mkdir -p "$work"
+      cp -r ${siteSrc}/. "$work/source"
+      chmod -R u+w "$work/source"
+      python3 - "$work/source" "${diagnosticMinicov}" "${../tools/diagnostic-coverage-runtime}" <<'PY'
+      import pathlib
+      import sys
+
+      source, minicov, runtime = map(pathlib.Path, sys.argv[1:])
+      root_manifest = source / "Cargo.toml"
+      root = root_manifest.read_text()
+      root = root.replace(
+          "[patch.crates-io]\n",
+          f'[patch.crates-io]\nminicov = {{ path = "{minicov}" }}\n',
+          1,
+      )
+      root_manifest.write_text(root)
+      client_manifest = source / "client/Cargo.toml"
+      client = client_manifest.read_text()
+      client = client.replace(
+          "diagnostic-coverage = []",
+          'diagnostic-coverage = ["dep:diagnostic-coverage-runtime"]',
+          1,
+      )
+      client += f'\n[target.\'cfg(target_arch = "wasm32")\'.dependencies]\ndiagnostic-coverage-runtime = {{ path = "{runtime}", optional = true }}\n'
+      client_manifest.write_text(client)
+      PY
+      python3 - "$out/source-identity.json" "$work/source" "${siteSrc}" <<'PY'
+      import json
+      import pathlib
+      import sys
+
+      output, compilation_directory, nix_source = map(pathlib.Path, sys.argv[1:])
+      output.write_text(json.dumps({
+          "version": 1,
+          "source_identity": {
+              "kind": "nix-store-source",
+              "value": str(nix_source),
+          },
+          "compilation_directory": str(compilation_directory.resolve()),
+          "path_equivalence": {
+              "compiled_source_prefix": str(compilation_directory.resolve()),
+              "retained_source_mappable_module": "instrumented/csr.wasm",
+              "relationship": "The retained module is linked from LLVM IR compiled below compiled_source_prefix; the content-addressed wasm selected by pkg/manifest.json is its wasm-bindgen/wasm-opt derivative.",
+          },
+      }, indent=2) + "\n")
+      PY
+
+      set +e
+      (
+        set -e
+        python3 - "$out/toolchain-rustc-vv.txt" "$out/toolchain-clang-version.txt" <<'PY'
+      import pathlib
+      import re
+      import sys
+
+      rustc, clang = (pathlib.Path(path).read_text() for path in sys.argv[1:])
+      rust_llvm = re.search(r"^LLVM version: ([0-9]+)", rustc, re.MULTILINE)
+      clang_llvm = re.search(r"clang version ([0-9]+)", clang)
+      if rust_llvm is None or clang_llvm is None:
+          raise SystemExit("could not establish Rust and Clang LLVM major versions")
+      if {rust_llvm.group(1), clang_llvm.group(1)} != {"22"}:
+          raise SystemExit(f"coverage pipeline requires LLVM 22; rustc={rust_llvm.group(1)} clang={clang_llvm.group(1)}")
+      PY
+        cd "$work/source"
+        export CARGO_HOME=${appOfflineCargoHome}
+        export CARGO_TARGET_DIR="$work/target"
+        export CARGO_BUILD_TARGET=wasm32-unknown-unknown
+        export CC_wasm32_unknown_unknown=clang
+        export CFLAGS_wasm32_unknown_unknown="--target=wasm32-unknown-unknown"
+        cargo rustc -p csr --features diagnostic-coverage --target wasm32-unknown-unknown --release --lib --message-format=json-render-diagnostics -- -Cinstrument-coverage -Zno-profiler-runtime --emit=llvm-ir -C link-arg=--no-gc-sections -Zno-link > "$work/cargo-artifacts.jsonl"
+        cp "$work/cargo-artifacts.jsonl" "$out/instrumented/cargo-artifacts.jsonl"
+        python3 - "$work/target/wasm32-unknown-unknown/release" "$work/root-ir" "$work/root-rlink" "$out/instrumented/ir-manifest.json" <<'PY'
+      import json
+      import pathlib
+      import sys
+
+      target_release, ir_output, rlink_output, manifest = map(pathlib.Path, sys.argv[1:])
+      target_release = target_release.resolve()
+      search_roots = (target_release, target_release / "deps")
+      root_ir = sorted(
+          path for directory in search_roots for path in directory.glob("csr*.ll") if path.is_file()
+      )
+      root_rlink = sorted(
+          path for directory in search_roots for path in directory.glob("csr*.rlink") if path.is_file()
+      )
+      if len(root_ir) != 1 or len(root_rlink) != 1:
+          raise SystemExit(f"expected one fresh csr LLVM IR and rlink; ir={root_ir}, rlink={root_rlink}")
+      ir_output.write_text(f"{root_ir[0]}\n")
+      rlink_output.write_text(f"{root_rlink[0]}\n")
+      manifest.write_text(json.dumps({
+          "version": 4,
+          "root_ir_selection": ["release/csr*.ll", "release/deps/csr*.ll"],
+          "root_rlink_selection": ["release/csr*.rlink", "release/deps/csr*.rlink"],
+          "instrumented_root_ir": str(root_ir[0]),
+          "rustc_link_metadata": str(root_rlink[0]),
+          "cargo_artifacts": "cargo-artifacts.jsonl",
+      }, indent=2) + "\n")
+      PY
+        root_ir="$(cat "$work/root-ir")"
+        root_rlink="$(cat "$work/root-rlink")"
+        cp "$root_ir" "$out/instrumented/csr.ll"
+        cp "$root_rlink" "$out/instrumented/csr.rlink"
+        rustc --target wasm32-unknown-unknown -Zlink-only "$out/instrumented/csr.rlink"
+        python3 - "$work/target/wasm32-unknown-unknown/release" "$out/instrumented/ir-manifest.json" "$out/instrumented/csr.wasm" <<'PY'
+      import json
+      import pathlib
+      import shutil
+      import sys
+
+      target_release, manifest_path, retained_wasm = map(pathlib.Path, sys.argv[1:])
+      candidates = sorted(
+          path
+          for directory in (target_release, target_release / "deps")
+          for path in directory.glob("csr*.wasm")
+          if path.is_file()
+      )
+      if len(candidates) != 1:
+          raise SystemExit(f"expected exactly one fresh CSR wasm after rustc -Zlink-only; found {candidates}")
+      shutil.copyfile(candidates[0], retained_wasm)
+      manifest = json.loads(manifest_path.read_text())
+      manifest["linked_wasm_selection"] = ["release/csr*.wasm", "release/deps/csr*.wasm"]
+      manifest["linked_wasm"] = str(candidates[0])
+      manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+      PY
+        devtool csr-bundle \
+          --wasm "$out/instrumented/csr.wasm" \
+          --out "$out/pkg" \
+          --diagnostic-coverage-metadata "$out/coverage-metadata.json" \
+          --diagnostic-toolchain-identity "$out/toolchain-identity.json" \
+          --diagnostic-minicov-version 0.3.8
+        python3 - "$out/coverage-metadata.json" <<'PY'
+      import json
+      import pathlib
+      import sys
+
+      metadata = json.loads(pathlib.Path(sys.argv[1]).read_text())
+      if metadata["result"] != "preserved":
+          raise SystemExit(f"coverage metadata was not retained: {metadata['result']}")
+      if not metadata["input"]["wasm_bindgen_metadata"]:
+          raise SystemExit("manual link omitted __wasm_bindgen_unstable before wasm-bindgen")
+      PY
+      ) > "$out/pipeline.log" 2>&1
+      pipeline_exit=$?
+      set -e
+
+      python3 - "$out/status.json" "$pipeline_exit" <<'PY'
+      import hashlib
+      import json
+      import pathlib
+      import sys
+
+      status_path = pathlib.Path(sys.argv[1])
+      pipeline_exit = int(sys.argv[2])
+      root = status_path.parent
+      succeeded = pipeline_exit == 0
+
+      def sha256(relative_path):
+          path = root / relative_path
+          if not path.is_file():
+              return None
+          return hashlib.sha256(path.read_bytes()).hexdigest()
+
+      retained_module = "instrumented/csr.wasm"
+      served_module = None
+      if succeeded:
+          manifest = json.loads((root / "pkg/manifest.json").read_text())
+          wasm = next(asset for asset in manifest["assets"] if asset["role"] == "wasm")
+          served_module = f"pkg/{wasm['path']}"
+      status = {
+          "version": 3,
+          "outcome": "succeeded" if succeeded else "failed",
+          "pipeline_exit": pipeline_exit,
+          "module": retained_module if succeeded else None,
+          "bundle": served_module if succeeded else None,
+          "served_module": {
+              "path": served_module,
+              "sha256": sha256(served_module),
+          } if succeeded else None,
+          "source_mappable_module": {
+              "path": retained_module,
+              "sha256": sha256(retained_module),
+              "relationship_to_served_module": "input to wasm-bindgen and wasm-opt that produced the content-addressed module selected by pkg/manifest.json",
+          } if succeeded else None,
+          "source_identity": "source-identity.json",
+          "coverage_metadata": "coverage-metadata.json" if (root / "coverage-metadata.json").is_file() else None,
+          "toolchain_identity": "toolchain-identity.json" if (root / "toolchain-identity.json").is_file() else None,
+          "ir_manifest": "instrumented/ir-manifest.json" if (root / "instrumented/ir-manifest.json").is_file() else None,
+          "diagnostic_log": "pipeline.log",
+      }
+      status_path.write_text(json.dumps(status, indent=2) + "\n")
+      PY
+    '';
+
   e2ePackage = pkgs.buildNpmPackage {
     name = "jaunder-e2e";
     src = ../end2end;
@@ -542,6 +808,10 @@ in
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,
     # never in the prod artifact or the NixOS module.
+    # The manually linked diagnostic module and its retained IR/link evidence.
+    # A failed producer still exposes its durable `status.json` and `pipeline.log`
+    # for the later browser producer; no independent blocker derivation masks it.
+    wasm-coverage-csr = diagnosticCsrWasmBundle;
     test-support = testSupportBin;
   };
 
@@ -549,6 +819,7 @@ in
     inherit
       visualFontConfig
       toolchain
+      diagnosticToolchain
       craneLib
       commonArgs
       hostArgs
@@ -566,9 +837,6 @@ in
       wasmTestWebdriverConfig
       leptosfmt
       csrWasmBundle
-      e2ePackage
-      emacsSrc
-      emacsForCi
       ;
   };
 }
