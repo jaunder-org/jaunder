@@ -27,24 +27,26 @@ This decision amends ADR-0090 decisions 5 and 8, ADR-0154's shared-lock/delete
 contract, and ADR-0136's retained-media consequence. Other decisions continue.
 
 A **Media Record** is one persistent per-user record for one exact `MediaRef`.
-Upload or an active Post content create/update can create it; deleting
-references or Posts cannot. A pre-write resolver consumes only
-`RenderOutput`-derived `MediaReference` forms and returns capability-only
-`ProvenLocalMediaRefs`, whose exact identities are not caller-constructible.
-Relative references qualify intrinsically. Absolute and scheme-relative
-references qualify only after ADR-0154 exact live-instance proof. Foreign,
-unknown, ambiguous, malformed, and unproven forms create no record.
+Upload or a Post content create/update (including draft and scheduled states)
+can create it; deleting references or Posts cannot. A pre-write resolver
+consumes only `RenderOutput`-derived `MediaReference` forms and returns
+capability-only `ProvenLocalMediaRefs`, whose exact identities are not
+caller-constructible. Relative references qualify intrinsically. Absolute and
+scheme-relative references qualify only after ADR-0154 exact live-instance
+proof. Foreign, unknown, ambiguous, malformed, and unproven forms create no
+record.
 
 Post service carries `ProvenLocalMediaRefs`—not caller-supplied references,
 `PersistedMediaReference` rows, or `PostId` evidence—through
-`perform_post_creation`/`perform_post_update` into both `PostStorage`
-transactions. For a qualifying identity, the transaction idempotently inserts
-its author's record only from the canonical exact source row: earliest
-`created_at`, breaking ties by lowest `user_id`. It copies that row's `source`,
-`content_type`, `size_bytes`, `source_url`, and `created_at` unchanged; these
-fields are observable and must be tested. Missing source rows leave the Post
-write successful, with no invented record or metadata. Publication-only writes
-do not materialize, and existing Posts/reference rows are not backfilled.
+`perform_post_creation_with_media_ownership`/
+`perform_post_update_with_media_ownership` into both `PostStorage` transactions.
+For a qualifying identity, the transaction idempotently inserts its author's
+record only from the canonical exact source row: earliest `created_at`, breaking
+ties by lowest `user_id`. It copies that row's `source`, `content_type`,
+`size_bytes`, `source_url`, and `created_at` unchanged; these fields are
+observable and must be tested. Missing source rows leave the Post write
+successful, with no invented record or metadata. Publication-only writes do not
+materialize, and existing Posts/reference rows are not backfilled.
 
 The record is independent: a qualifying cross-user reference creates the
 referencing author's record and never pins, claims, or blocks deletion of the

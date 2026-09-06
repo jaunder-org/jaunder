@@ -28,8 +28,8 @@ use host::etag;
 use host::metrics::{self, IdempotencyEvent};
 use storage::{
     AudienceStorage, CollectionCursor, FeedEventStorage, InvalidAudienceTargets, MediaContentLocks,
-    PerformCreationError, PostCreation, PostRecord, PostStorage, PublishUpdate, SiteConfigStorage,
-    UserConfigStorage, WriteScope,
+    PerformCreationError, PostCreation, PostMediaOwnership, PostRecord, PostStorage, PublishUpdate,
+    SiteConfigStorage, UserConfigStorage, WriteScope,
 };
 use web::auth;
 
@@ -52,6 +52,7 @@ pub struct PostServices {
     user_config: Arc<dyn UserConfigStorage>,
     site_config: Arc<dyn SiteConfigStorage>,
     content_locks: Arc<MediaContentLocks>,
+    media_ownership: PostMediaOwnership,
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for PostServices {
@@ -72,6 +73,9 @@ impl<S: Send + Sync> FromRequestParts<S> for PostServices {
                 .await?
                 .0,
             content_locks: Extension::<Arc<MediaContentLocks>>::from_request_parts(parts, state)
+                .await?
+                .0,
+            media_ownership: Extension::<PostMediaOwnership>::from_request_parts(parts, state)
                 .await?
                 .0,
         })
@@ -107,6 +111,11 @@ impl PostServices {
     #[must_use]
     pub fn content_locks(&self) -> &MediaContentLocks {
         self.content_locks.as_ref()
+    }
+
+    #[must_use]
+    pub fn media_ownership(&self) -> &PostMediaOwnership {
+        &self.media_ownership
     }
 }
 
@@ -512,11 +521,12 @@ pub async fn collection_post(
     };
     let idempotency_key = idempotency_key_from_headers(&headers);
 
-    let created = storage::perform_post_creation_at(
+    let created = storage::perform_post_creation_with_media_ownership(
         &write_scope,
         services.content_locks(),
         Arc::clone(&posts),
         Arc::clone(&feed_events),
+        services.media_ownership(),
         request_clock,
         PostCreation {
             user_id: auth_user.user_id,
@@ -648,11 +658,12 @@ pub async fn member_put(
         Presence::Present(audiences) => audiences,
         Presence::Absent => posts.get_post_audiences(post_id).await?,
     };
-    let update_outcome = storage::perform_post_update(
+    let update_outcome = storage::perform_post_update_with_media_ownership(
         &write_scope,
         services.content_locks(),
         Arc::clone(&posts),
         Arc::clone(&feed_events),
+        services.media_ownership(),
         storage::PostUpdate {
             post_id,
             editor_user_id: auth_user.user_id,

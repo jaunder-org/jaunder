@@ -343,7 +343,7 @@ fn MediaDeleteOutcome(
                         view! { <p class="success">"Media deleted."</p> }.into_any()
                     }
                     Ok(
-                        MutationOutcome::Confirmed(MediaDeletion::RefusedReferenced { post_ids }),
+                        MutationOutcome::Confirmed(MediaDeletion::OwnerRetainedHistory { post_ids }),
                     ) => {
                         let ids = post_ids
                             .iter()
@@ -353,7 +353,7 @@ fn MediaDeleteOutcome(
                         view! {
                             <p class="error">
                                 {format!(
-                                    "Cannot delete: referenced in post(s) {ids}. Use force delete to remove anyway.",
+                                    "Cannot delete: referenced in retained post(s) {ids}. Use force delete to remove anyway.",
                                 )}
                             </p>
                             {move || {
@@ -363,6 +363,17 @@ fn MediaDeleteOutcome(
                             }}
                         }
                             .into_any()
+                    }
+                    Ok(MutationOutcome::Confirmed(MediaDeletion::GlobalSafety)) => {
+                        view! {
+                            <p class="error">
+                                "Cannot delete: Jaunder cannot prove that this media is safe to remove."
+                            </p>
+                        }
+                            .into_any()
+                    }
+                    Ok(MutationOutcome::Confirmed(MediaDeletion::Missing)) => {
+                        view! { <p class="error">"Media no longer exists."</p> }.into_any()
                     }
                     Ok(MutationOutcome::CommitIndeterminate(_)) => {
                         view! {

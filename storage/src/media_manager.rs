@@ -2,7 +2,6 @@
 //! deduplicated paths, enforces file and user limits, and owns the evidence-bearing
 //! deletion sequence.
 
-use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,8 +13,11 @@ use thiserror::Error;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
+#[cfg(any(test, feature = "test-utils"))]
+use tokio::sync::Notify;
+
 use crate::InstanceId;
-use common::ids::{PostId, UserId};
+use common::ids::UserId;
 use common::media::{
     self, ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaRef, MediaSource,
     UploadedMedia, UserQuota,
@@ -24,9 +26,6 @@ use common::time::UtcInstant;
 use host::metrics::{self, UploadOutcome};
 
 use crate::media_ownership::resolve_media_reference_ownership;
-use crate::posts::media::{
-    MediaReferenceEvidence, MediaReferenceSnapshot, PersistedMediaReference,
-};
 use crate::{
     CreateMediaError, MediaContentLocks, MediaDeleteMode, MediaRecord,
     MediaReferenceOwnershipResolver, MediaStorage, PostStorage, SiteConfigStorage,
@@ -97,51 +96,74 @@ pub struct ManagedUpload {
 #[derive(Debug)]
 pub struct MediaDeletionResult {
     outcome: MutationOutcome<TryDeleteOutcome>,
-    references: MediaReferenceSnapshot,
-    evidence: MediaReferenceEvidence,
 }
 
 impl MediaDeletionResult {
-    fn new(
-        outcome: MutationOutcome<TryDeleteOutcome>,
-        references: MediaReferenceSnapshot,
-        evidence: MediaReferenceEvidence,
-    ) -> Self {
-        Self {
-            outcome,
-            references,
-            evidence,
-        }
+    fn new(outcome: MutationOutcome<TryDeleteOutcome>) -> Self {
+        Self { outcome }
     }
 
-    /// Borrow the guarded storage outcome.
-    #[must_use]
-    pub fn outcome(&self) -> &MutationOutcome<TryDeleteOutcome> {
-        &self.outcome
-    }
-
-    /// Consume the evidence wrapper and return the guarded storage outcome.
+    /// Consume the guarded storage outcome.
     #[must_use]
     pub fn into_outcome(self) -> MutationOutcome<TryDeleteOutcome> {
         self.outcome
     }
 
-    /// Return owner-scoped Posts that explain a retained-reference refusal.
+    /// Borrow the locked storage classification.
     #[must_use]
-    pub fn referenced_post_ids(&self, user_id: UserId) -> Vec<PostId> {
-        if !matches!(self.outcome.value(), TryDeleteOutcome::RefusedReferenced) {
-            return Vec::new();
+    pub fn outcome(&self) -> &MutationOutcome<TryDeleteOutcome> {
+        &self.outcome
+    }
+}
+
+/// Per-manager coordination point that pauses reclamation immediately before the
+/// manager removes the canonical file.
+///
+/// This is test-only: it proves the storage-issued reclaim guard remains live
+/// while the manager owns the filesystem mutation.
+#[cfg(any(test, feature = "test-utils"))]
+pub struct ReclaimUnlinkGate {
+    arrived: Notify,
+    resume: Notify,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl ReclaimUnlinkGate {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            arrived: Notify::new(),
+            resume: Notify::new(),
         }
-        self.references
-            .references()
-            .iter()
-            .filter(|reference| {
-                reference.owner_id() == Some(user_id) && !self.evidence.proves_foreign(reference)
-            })
-            .map(PersistedMediaReference::post_id)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
+    }
+
+    pub async fn wait_until_unlink(&self) {
+        self.arrived.notified().await;
+    }
+
+    pub fn release(&self) {
+        self.resume.notify_one();
+    }
+
+    async fn pause(&self) {
+        self.arrived.notify_one();
+        self.resume.notified().await;
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl Default for ReclaimUnlinkGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl std::fmt::Debug for ReclaimUnlinkGate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ReclaimUnlinkGate")
+            .finish_non_exhaustive()
     }
 }
 
@@ -154,6 +176,8 @@ pub struct MediaManager {
     content_locks: Arc<MediaContentLocks>,
     instance_id: InstanceId,
     ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
+    #[cfg(any(test, feature = "test-utils"))]
+    reclaim_unlink_gate: Option<Arc<ReclaimUnlinkGate>>,
 }
 
 /// File metadata for upload finalization.
@@ -203,7 +227,17 @@ impl MediaManager {
             content_locks,
             instance_id,
             ownership_resolver,
+            #[cfg(any(test, feature = "test-utils"))]
+            reclaim_unlink_gate: None,
         }
+    }
+
+    /// Installs a per-manager test gate immediately before filesystem reclaim.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn with_reclaim_unlink_gate_for_test(mut self, gate: Arc<ReclaimUnlinkGate>) -> Self {
+        self.reclaim_unlink_gate = Some(gate);
+        self
     }
 
     /// Removes crash-orphaned upload artifacts and recreates `media/tmp` empty.
@@ -661,18 +695,14 @@ impl MediaManager {
             .await
     }
 
-    /// Deletes a media row and reclaims the on-disk entry when no remaining row
-    /// or live Post names the same canonical media address.
+    /// Deletes a media row and, under a storage-issued reclaim lease, unlinks its
+    /// content-addressed file only after no row or live reference can name it.
     ///
-    /// Ownership resolution uses one global reference snapshot and completes
-    /// before the content lock serializes the guarded storage decision with upload
-    /// placement. Confirmed reclamation removes the file only after the database
-    /// scope completes.
     /// # Errors
     ///
-    /// Returns identity/reference reads, write-scope acquisition, or operation
-    /// errors. Reclaim failures are reported diagnostically without changing a
-    /// confirmed database outcome.
+    /// Returns an error when identity/reference loading, media locking, or the
+    /// guarded storage transaction fails. A filesystem unlink failure is
+    /// reported while preserving the already-committed deletion outcome.
     pub async fn delete_media(
         &self,
         user_id: UserId,
@@ -717,7 +747,8 @@ impl MediaManager {
             })
             .await
             .map_err(Self::scope_error)?;
-        let outcome = if matches!(
+
+        if matches!(
             outcome,
             MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
         ) {
@@ -725,85 +756,50 @@ impl MediaManager {
             let media_for_reclaim = media.clone();
             let instance_for_reclaim = self.instance_id.clone();
             let evidence_for_reclaim = evidence.clone();
-            let reclaimability = self
+            let storage_path = Arc::clone(&self.storage_path);
+            #[cfg(any(test, feature = "test-utils"))]
+            let reclaim_unlink_gate = self.reclaim_unlink_gate.clone();
+            let reclaim = self
                 .write_scope
                 .run(move |transaction| {
                     Box::pin(async move {
-                        Self::deleted_media_file_is_reclaimable(
-                            storage.as_ref(),
-                            transaction,
-                            &media_for_reclaim,
-                            &instance_for_reclaim,
-                            &evidence_for_reclaim,
-                        )
-                        .await
+                        if let Some(guard) = storage
+                            .reclaim_guard(
+                                transaction,
+                                &media_for_reclaim,
+                                &instance_for_reclaim,
+                                &evidence_for_reclaim,
+                            )
+                            .await?
+                        {
+                            #[cfg(any(test, feature = "test-utils"))]
+                            if let Some(gate) = reclaim_unlink_gate {
+                                gate.pause().await;
+                            }
+                            let unlink =
+                                Self::remove_media_file(&storage_path, &media_for_reclaim).await;
+                            guard.finalize();
+                            if let Err(error) = unlink {
+                                host::error::report_swallowed(
+                                    host::error::ErrorKind::Internal,
+                                    host::error::ErrorClass::Transient,
+                                    "storage.media.reclaim_failure",
+                                    host::error::SwallowedSource::Error(error.as_ref()),
+                                );
+                            }
+                        }
+                        Ok::<(), anyhow::Error>(())
                     })
                 })
                 .await;
-            let reclaim =
-                Self::reclaim_file_after_scope(self.storage_path.as_ref(), media, reclaimability)
-                    .await;
-            Self::finish_reclaim(outcome, reclaim)
-        } else {
-            outcome
-        };
-        Ok(MediaDeletionResult::new(outcome, references, evidence))
-    }
-
-    fn reclaimable_from_scope(
-        reclaimability: Result<MutationOutcome<bool>, WriteScopeError<anyhow::Error>>,
-    ) -> anyhow::Result<bool> {
-        match reclaimability {
-            Ok(MutationOutcome::Confirmed(reclaimable)) => Ok(reclaimable),
-            Ok(MutationOutcome::CommitIndeterminate(_)) => Ok(false),
-            Err(error) => Err(Self::scope_error(error)),
+            if let Err(error) = reclaim {
+                return Err(Self::scope_error(error));
+            }
         }
+        Ok(MediaDeletionResult::new(outcome))
     }
 
-    async fn reclaim_file_after_scope(
-        storage_path: &Path,
-        media: &MediaRef,
-        reclaimability: Result<MutationOutcome<bool>, WriteScopeError<anyhow::Error>>,
-    ) -> anyhow::Result<()> {
-        if Self::reclaimable_from_scope(reclaimability)? {
-            Self::remove_media_file(storage_path, media).await
-        } else {
-            Ok(())
-        }
-    }
-
-    fn finish_reclaim<T>(primary: T, reclaim: anyhow::Result<()>) -> T {
-        if let Err(error) = reclaim {
-            host::error::report_swallowed(
-                host::error::ErrorKind::Internal,
-                host::error::ErrorClass::Transient,
-                "storage.media.reclaim_failure",
-                host::error::SwallowedSource::Error(error.as_ref()),
-            );
-        }
-        primary
-    }
-
-    /// Checks whether an already-deleted media row's canonical entry is no
-    /// longer named by any remaining row or live Post.
-    async fn deleted_media_file_is_reclaimable(
-        media_storage: &dyn MediaStorage,
-        transaction: &mut crate::WriteTransaction,
-        media: &MediaRef,
-        current_instance_id: &InstanceId,
-        evidence: &MediaReferenceEvidence,
-    ) -> anyhow::Result<bool> {
-        media_storage
-            .lock_media_reference(transaction, media)
-            .await?;
-        media_storage
-            .media_entry_is_reclaimable(transaction, media, current_instance_id, evidence)
-            .await
-            .map_err(anyhow::Error::from)
-    }
-
-    /// Removes a confirmed-reclaimable canonical media file after its database
-    /// scope has completed.
+    /// Removes a reclaimed canonical media file while its storage guard remains live.
     async fn remove_media_file(storage_path: &Path, media: &MediaRef) -> anyhow::Result<()> {
         let file_path = storage_path.join("media").join(media::path(
             &media.source,
@@ -888,7 +884,7 @@ mod tests {
     use super::*;
 
     use crate::posts::media::{
-        MediaReferenceSnapshot, PersistedMediaReference, ProvenForeignReference,
+        MediaReferenceEvidence, MediaReferenceSnapshot, PersistedMediaReference,
     };
     use crate::test_support::{
         Backend, SeedUser, backends, create_post_via_service, media_row_exists, media_url_for,
@@ -915,6 +911,16 @@ mod tests {
             foreign: ForeignEvidenceSink,
         ) -> MediaReferenceEvidence {
             foreign.finish()
+        }
+
+        async fn resolve_local(
+            &self,
+            _references: &[common::media::MediaReference],
+            _instance_id: &InstanceId,
+            _base_url: Option<&common::tagged_url::BaseUrl>,
+            local: crate::LocalMediaSink,
+        ) -> crate::ProvenLocalMediaRefs {
+            local.finish()
         }
     }
 
@@ -945,6 +951,16 @@ mod tests {
         ) -> MediaReferenceEvidence {
             foreign.prove_foreign(references[0].clone());
             foreign.finish()
+        }
+
+        async fn resolve_local(
+            &self,
+            _references: &[common::media::MediaReference],
+            _instance_id: &InstanceId,
+            _base_url: Option<&common::tagged_url::BaseUrl>,
+            local: crate::LocalMediaSink,
+        ) -> crate::ProvenLocalMediaRefs {
+            local.finish()
         }
     }
 
@@ -986,6 +1002,16 @@ mod tests {
                 .send(())
                 .expect("test observes resolver completion");
             evidence
+        }
+
+        async fn resolve_local(
+            &self,
+            _references: &[common::media::MediaReference],
+            _instance_id: &InstanceId,
+            _base_url: Option<&common::tagged_url::BaseUrl>,
+            local: crate::LocalMediaSink,
+        ) -> crate::ProvenLocalMediaRefs {
+            local.finish()
         }
     }
 
@@ -1106,19 +1132,14 @@ mod tests {
                 Ok(TryDeleteOutcome::Deleted)
             },
         );
-        media
-            .expect_lock_media_reference()
-            .times(1)
-            .returning(|_, _| Ok(()));
-        media
-            .expect_media_entry_is_reclaimable()
-            .times(1)
-            .returning(move |_, actual_media, actual_instance, evidence| {
+        media.expect_reclaim_guard().times(1).returning(
+            move |_, actual_media, actual_instance, evidence| {
                 assert_eq!(actual_media, &expected_reclaim_media);
                 assert_eq!(actual_instance, &expected_reclaim_instance);
                 assert!(evidence.proves_foreign(&expected_reclaim_reference));
-                Ok(false)
-            });
+                Ok(None)
+            },
+        );
 
         let temp = TempDir::new().unwrap();
         let manager = MediaManager::new(
@@ -1290,69 +1311,15 @@ mod tests {
     }
 
     #[test]
-    fn deletion_result_reports_only_owned_nonforeign_posts_on_refusal() {
-        let instance_id: InstanceId = "123e4567-e89b-12d3-a456-426614174000"
-            .parse()
-            .expect("canonical instance ID");
-        let parsed =
-            common::media::parse_media_url(&media_url_for("photo.jpg")).expect("media form parses");
-        let owner_id = UserId::from(7);
-        let foreign = PersistedMediaReference::new(
-            PostId::from(3),
-            parsed.media().clone(),
-            parsed.kind(),
-            parsed.reference_form().clone(),
-        )
-        .with_owner(owner_id);
-        let references = MediaReferenceSnapshot::new(
-            vec![
-                PersistedMediaReference::new(
-                    PostId::from(2),
-                    parsed.media().clone(),
-                    parsed.kind(),
-                    parsed.reference_form().clone(),
-                )
-                .with_owner(owner_id),
-                PersistedMediaReference::new(
-                    PostId::from(1),
-                    parsed.media().clone(),
-                    parsed.kind(),
-                    parsed.reference_form().clone(),
-                )
-                .with_owner(owner_id),
-                PersistedMediaReference::new(
-                    PostId::from(1),
-                    parsed.media().clone(),
-                    parsed.kind(),
-                    parsed.reference_form().clone(),
-                )
-                .with_owner(owner_id),
-                PersistedMediaReference::new(
-                    PostId::from(4),
-                    parsed.media().clone(),
-                    parsed.kind(),
-                    parsed.reference_form().clone(),
-                )
-                .with_owner(UserId::from(8)),
-                foreign.clone(),
-            ],
-            false,
-        );
-        let mut evidence = MediaReferenceEvidence::new(instance_id.clone());
-        assert!(evidence.insert(ProvenForeignReference::new(foreign, instance_id)));
-        let result = MediaDeletionResult::new(
-            MutationOutcome::Confirmed(TryDeleteOutcome::RefusedReferenced),
-            references,
-            evidence,
-        );
+    fn deletion_result_retains_storage_owner_history_classification() {
+        let result = MediaDeletionResult::new(MutationOutcome::Confirmed(
+            TryDeleteOutcome::OwnerRetainedHistory(vec![PostId::from(1), PostId::from(2)]),
+        ));
 
-        assert_eq!(
-            result.referenced_post_ids(owner_id),
-            vec![PostId::from(1), PostId::from(2)]
-        );
         assert!(matches!(
-            result.outcome(),
-            MutationOutcome::Confirmed(TryDeleteOutcome::RefusedReferenced)
+            result.into_outcome(),
+            MutationOutcome::Confirmed(TryDeleteOutcome::OwnerRetainedHistory(post_ids))
+                if post_ids == vec![PostId::from(1), PostId::from(2)]
         ));
     }
 
@@ -1707,45 +1674,6 @@ mod tests {
 
         assert_eq!(metadata.size_bytes, parse_byte_size("0"));
         assert!(ByteSize::try_from(-1).is_err());
-    }
-
-    // guard:no-backend — exercises the pure reclaim mapper before filesystem work
-    #[tokio::test]
-    async fn reclaim_file_after_scope_returns_scope_begin_failure() {
-        let temp = TempDir::new().unwrap();
-        let media = MediaRef {
-            source: MediaSource::Upload,
-            sha256: parse_content_hash(
-                "deadbeef00000000000000000000000000000000000000000000000000000000",
-            ),
-            filename: parse_filename("unreclaimed.png"),
-        };
-
-        let error = MediaManager::reclaim_file_after_scope(
-            temp.path(),
-            &media,
-            Err(WriteScopeError::Begin(sqlx::Error::PoolClosed)),
-        )
-        .await
-        .expect_err("scope begin failure must be returned");
-
-        assert!(matches!(
-            error
-                .downcast_ref::<MediaError>()
-                .and_then(|error| match error {
-                    MediaError::Internal(source) => source.downcast_ref::<sqlx::Error>(),
-                    _ => None,
-                }),
-            Some(sqlx::Error::PoolClosed)
-        ));
-    }
-
-    #[test]
-    fn indeterminate_reclaimability_does_not_reclaim() {
-        assert!(
-            !MediaManager::reclaimable_from_scope(Ok(MutationOutcome::CommitIndeterminate(true)))
-                .expect("indeterminate scope is conservatively non-reclaimable")
-        );
     }
 
     // guard:no-backend — placement fails before the database scope starts.
@@ -2187,18 +2115,6 @@ mod tests {
             &trace,
             "storage.media.dedup_temp_cleanup",
         );
-
-        let (outcome, trace) = crate::helpers::swallowed_test::capture(|| {
-            MediaManager::finish_reclaim(
-                MutationOutcome::Confirmed(TryDeleteOutcome::Deleted),
-                cleanup_error().map_err(anyhow::Error::from),
-            )
-        });
-        assert_eq!(
-            outcome,
-            MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
-        );
-        crate::helpers::swallowed_test::assert_one_report(&trace, "storage.media.reclaim_failure");
     }
 
     // guard:no-backend — mock store; the DB is unused by the dir scan
@@ -2571,6 +2487,60 @@ mod tests {
             parse_byte_size("0")
         );
         assert!(!file_path.exists(), "unreferenced delete reclaims the path");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn reclaim_guard_stays_live_until_manager_finishes_unlink(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let gate = Arc::new(ReclaimUnlinkGate::new());
+        let manager = Arc::new(
+            MediaManager::new(
+                env.state.media.clone(),
+                env.state.posts.clone(),
+                env.state.site_config.clone(),
+                env.state.write_scope.clone(),
+                Arc::new(MediaContentLocks::new(Arc::new(
+                    env.base.path().to_path_buf(),
+                ))),
+                env.base.instance_id().clone(),
+                no_foreign_resolver(),
+            )
+            .with_reclaim_unlink_gate_for_test(Arc::clone(&gate)),
+        );
+        let uploaded = manager
+            .upload_bytes(
+                user_id,
+                &parse_filename("guarded-unlink.jpg"),
+                "image/jpeg".parse().unwrap(),
+                b"jpeg-ish",
+            )
+            .await
+            .unwrap();
+        let media = upload_ref(&uploaded);
+        let file_path = stored_path(env.base.path(), &media);
+        let deletion = tokio::spawn({
+            let manager = Arc::clone(&manager);
+            let media = media.clone();
+            async move { manager.delete_media(user_id, &media, false).await }
+        });
+
+        gate.wait_until_unlink().await;
+        assert!(
+            file_path.exists(),
+            "the manager has reached, but not yet performed, the guarded unlink"
+        );
+        gate.release();
+
+        assert_eq!(
+            deletion.await.unwrap().unwrap().into_outcome(),
+            MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
+        );
+        assert!(
+            !file_path.exists(),
+            "release permits the actual filesystem unlink"
+        );
     }
 
     #[apply(backends)]

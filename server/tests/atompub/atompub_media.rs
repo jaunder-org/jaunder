@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use std::sync::Arc;
 
 use axum::{
@@ -7,6 +8,10 @@ use axum::{
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+use crate::helpers::{
+    ForeignReferenceResolver, atompub, atompub_at, atompub_get, atompub_location, atompub_upload,
+    body_string, create_user_and_session, make_app, make_app_with_media_ownership_resolver,
+};
 use common::pagination::{PageOffset, RowLimit};
 use common::root_relative_url::RootRelativeUrl;
 use common::test_support::{
@@ -14,12 +19,10 @@ use common::test_support::{
 };
 use rstest::*;
 use rstest_reuse::*;
-use storage::test_support::{Backend, SeedRawPost, TestEnv, backends, backends_matrix, seed_media};
-
-use crate::helpers::{
-    ForeignReferenceResolver, atompub, atompub_at, atompub_get, atompub_location, atompub_upload,
-    body_string, create_user_and_session, make_app, make_app_with_media_ownership_resolver,
+use storage::test_support::{
+    Backend, SeedRawPost, TestEnv, backends, backends_matrix, confirmed, noop_mailer, seed_media,
 };
+use url::Url;
 
 const PNG: &[u8] = &[
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
@@ -28,6 +31,26 @@ const PNG: &[u8] = &[
     0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
     0x42, 0x60, 0x82,
 ];
+
+const OWNER_RETAINED_DETAIL: &str = "Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.";
+const GLOBAL_SAFETY_DETAIL: &str = "Media deletion is blocked because Jaunder cannot prove that removing this record would preserve referenced media.";
+
+struct MatchingInstanceTransport {
+    header: Vec<u8>,
+}
+
+#[async_trait]
+impl jaunder::media_ownership::HeadTransport for MatchingInstanceTransport {
+    async fn head(
+        &self,
+        _target: &Url,
+    ) -> Result<jaunder::media_ownership::HeadResponse, jaunder::media_ownership::HeadTransportError>
+    {
+        Ok(jaunder::media_ownership::HeadResponse::new(vec![
+            self.header.clone(),
+        ]))
+    }
+}
 
 async fn assert_media_delete_conflict(
     response: axum::response::Response,
@@ -93,6 +116,113 @@ async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
     );
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn member_delete_masks_closed_write_storage_and_retains_the_typed_handler_cause(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let storage = TempDir::new().expect("temporary media root");
+    let app = make_app(&state, &storage);
+    base.close_pool().await;
+    let hash =
+        parse_content_hash("0000000000000000000000000000000000000000000000000000000000000000");
+
+    let response = app
+        .oneshot(
+            atompub(
+                &session,
+                Method::DELETE,
+                &format!("media/{hash}/closed-storage.png"),
+            )
+            .body(Body::empty())
+            .expect("valid AtomPub DELETE"),
+        )
+        .await
+        .expect("handler response");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        body_string(response).await.is_empty(),
+        "the AtomPub boundary masks the typed storage failure"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn live_instance_proven_absolute_and_scheme_relative_posts_materialize_independent_records(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let source = create_user_and_session(&state).await;
+    let author = create_user_and_session(&state).await;
+    let absolute_media = seed_media(&state, source.user_id, "live-proven-absolute.png").await;
+    let scheme_relative_media =
+        seed_media(&state, source.user_id, "live-proven-scheme-relative.png").await;
+    let storage = TempDir::new().expect("temporary media root");
+    let instance_id = storage::InstanceId::new();
+    let resolver = Arc::new(
+        jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::with_transport(
+            MatchingInstanceTransport {
+                header: instance_id.to_string().into_bytes(),
+            },
+        ),
+    );
+    std::fs::create_dir_all(storage.path().join("media").join("upload"))
+        .expect("media upload directory");
+    std::fs::create_dir_all(storage.path().join("media").join("cached"))
+        .expect("media cache directory");
+    std::fs::create_dir_all(storage.path().join("media").join("tmp"))
+        .expect("media temporary directory");
+    let app = jaunder::create_router_with_media_reference_ownership_resolver(
+        Arc::clone(&state),
+        instance_id,
+        noop_mailer(),
+        false,
+        storage.path().to_path_buf(),
+        resolver,
+    )
+    .expect("router construction");
+    for (title, media, origin) in [
+        ("Proven absolute", &absolute_media, "https://example.com"),
+        (
+            "Proven scheme relative",
+            &scheme_relative_media,
+            "//example.com",
+        ),
+    ] {
+        let local_url = common::media::url(&media.source, &media.sha256, &media.filename);
+        let reference = format!("{origin}{local_url}");
+        let response = app
+            .clone()
+            .oneshot(
+                atompub(&author, Method::POST, "posts")
+                    .header("content-type", "application/atom+xml")
+                    .body(Body::from(format!(
+                        "<?xml version=\"1.0\"?><entry xmlns=\"http://www.w3.org/2005/Atom\"><title>{title}</title><content type=\"html\">&lt;img src=\"{reference}\"&gt;</content></entry>"
+                    )))
+                    .expect("valid AtomPub post request"),
+            )
+            .await
+            .expect("post response");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert!(
+            state
+                .media
+                .get_media(
+                    author.user_id,
+                    &media.sha256,
+                    &media.filename,
+                    &media.source
+                )
+                .await
+                .expect("author media lookup")
+                .is_some(),
+            "{title} live-instance proof materializes an independent media record"
+        );
+    }
+}
 #[apply(backends)]
 #[tokio::test]
 async fn disabled_upload_is_forbidden_without_media_mutation(#[case] backend: Backend) {
@@ -404,7 +534,7 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn delete_media_member_reports_owner_live_post_and_preserves_media(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
@@ -416,8 +546,7 @@ async fn delete_media_member_reports_owner_live_post_and_preserves_media(#[case]
         .map(parse_content_hash)
         .expect("member URL includes the content hash");
     let filename = parse_filename("referenced.png");
-    let media_url =
-        common::media::media_url(&common::media::MediaSource::Upload, &sha256, &filename);
+    let media_url = common::media::url(&common::media::MediaSource::Upload, &sha256, &filename);
     let post = SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("![referenced]({media_url})")))
         .seed(&state)
@@ -433,12 +562,7 @@ async fn delete_media_member_reports_owner_live_post_and_preserves_media(#[case]
         .await
         .unwrap();
 
-    assert_media_delete_conflict(
-        response,
-        "Media is referenced by live Posts. Use Jaunder's web media library to review references and force deletion.",
-        &[i64::from(post.post_id)],
-    )
-    .await;
+    assert_media_delete_conflict(response, OWNER_RETAINED_DETAIL, &[i64::from(post.post_id)]).await;
     assert_eq!(
         app.oneshot(
             atompub_at(&session, Method::GET, &loc)
@@ -458,7 +582,7 @@ async fn delete_media_member_reports_owner_live_post_and_preserves_media(#[case]
 async fn delete_media_member_reports_unique_ascending_owner_live_post_ids(
     #[case] backend: Backend,
 ) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
@@ -470,8 +594,7 @@ async fn delete_media_member_reports_unique_ascending_owner_live_post_ids(
         .map(parse_content_hash)
         .expect("member URL includes the content hash");
     let filename = parse_filename("many-references.png");
-    let media_url =
-        common::media::media_url(&common::media::MediaSource::Upload, &sha256, &filename);
+    let media_url = common::media::url(&common::media::MediaSource::Upload, &sha256, &filename);
     let first = SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("![first]({media_url})")))
         .seed(&state)
@@ -492,18 +615,13 @@ async fn delete_media_member_reports_unique_ascending_owner_live_post_ids(
         .await
         .unwrap();
 
-    assert_media_delete_conflict(
-        response,
-        "Media is referenced by live Posts. Use Jaunder's web media library to review references and force deletion.",
-        &expected,
-    )
-    .await;
+    assert_media_delete_conflict(response, OWNER_RETAINED_DETAIL, &expected).await;
 }
 
 #[apply(backends)]
 #[tokio::test]
-async fn delete_media_member_ignores_deleted_owner_post_references(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+async fn delete_media_member_reports_deleted_post_and_revision_once(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
@@ -515,17 +633,22 @@ async fn delete_media_member_ignores_deleted_owner_post_references(#[case] backe
         .map(parse_content_hash)
         .expect("member URL includes the content hash");
     let filename = parse_filename("deleted-reference.png");
-    let media_url =
-        common::media::media_url(&common::media::MediaSource::Upload, &sha256, &filename);
+    let media_url = common::media::url(&common::media::MediaSource::Upload, &sha256, &filename);
     let post = SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("![deleted]({media_url})")))
         .seed(&state)
         .await;
-    state
-        .posts
-        .soft_delete_post(post.post_id)
-        .await
-        .expect("soft delete succeeds");
+    let outcome = storage::soft_delete_post(
+        &state.write_scope,
+        Arc::clone(&state.posts),
+        Arc::clone(&state.feed_events),
+        post.post_id,
+        session.user_id,
+        common::time::UtcInstant::now(),
+    )
+    .await
+    .expect("soft delete succeeds");
+    confirmed(outcome);
 
     let response = app
         .clone()
@@ -537,7 +660,7 @@ async fn delete_media_member_ignores_deleted_owner_post_references(#[case] backe
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_media_delete_conflict(response, OWNER_RETAINED_DETAIL, &[i64::from(post.post_id)]).await;
     assert_eq!(
         app.oneshot(
             atompub_at(&session, Method::GET, &loc)
@@ -547,18 +670,18 @@ async fn delete_media_member_ignores_deleted_owner_post_references(#[case] backe
         .await
         .unwrap()
         .status(),
-        StatusCode::NOT_FOUND
+        StatusCode::OK,
+        "Deleted Post and Revision references preserve the media Member"
     );
 }
 
 #[apply(backends)]
 #[tokio::test]
-async fn delete_media_member_reports_owner_reference_before_rowless_safety(
-    #[case] backend: Backend,
-) {
-    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+async fn delete_media_member_prefers_global_safety_over_owner_ids(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
+    let other_owner = create_user_and_session(&state).await;
     let app = make_app(&state, &storage);
 
     let loc = upload_and_member_url(&app, &session, "pic.png").await;
@@ -569,13 +692,18 @@ async fn delete_media_member_reports_owner_reference_before_rowless_safety(
         .map(parse_content_hash)
         .expect("member URL includes the content hash");
     let filename = parse_filename("pic.png");
-    let media_url =
-        common::media::media_url(&common::media::MediaSource::Upload, &sha256, &filename);
-    let post = SeedRawPost::new(session.user_id)
+    let media_url = common::media::url(&common::media::MediaSource::Upload, &sha256, &filename);
+    SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!("![referenced]({media_url})")))
         .seed(&state)
         .await;
 
+    SeedRawPost::new(other_owner.user_id)
+        .body(parse_post_body(&format!(
+            "<img src=\"https://unknown.example{media_url}\">"
+        )))
+        .seed(&state)
+        .await;
     let del_resp = app
         .oneshot(
             atompub_at(&session, Method::DELETE, &loc)
@@ -585,12 +713,7 @@ async fn delete_media_member_reports_owner_reference_before_rowless_safety(
         .await
         .unwrap();
 
-    assert_media_delete_conflict(
-        del_resp,
-        "Media is referenced by live Posts. Use Jaunder's web media library to review references and force deletion.",
-        &[i64::from(post.post_id)],
-    )
-    .await;
+    assert_media_delete_conflict(del_resp, GLOBAL_SAFETY_DETAIL, &[]).await;
 }
 
 #[apply(backends)]
@@ -631,7 +754,7 @@ async fn delete_media_member_returns_409_for_another_owners_retained_reference(
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_media_delete_conflict(response, GLOBAL_SAFETY_DETAIL, &[]).await;
     let retained = app
         .oneshot(atompub_get(&owner, loc.as_ref()))
         .await
@@ -645,9 +768,7 @@ async fn delete_media_member_returns_409_for_another_owners_retained_reference(
 
 #[apply(backends)]
 #[tokio::test]
-async fn delete_media_member_force_bypasses_owner_reference_ownership_evidence(
-    #[case] backend: Backend,
-) {
+async fn delete_media_member_has_no_force_override(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let foreign_session = create_user_and_session(&state).await;
@@ -666,26 +787,55 @@ async fn delete_media_member_force_bypasses_owner_reference_ownership_evidence(
         &exact_hash,
         &exact_filename,
     );
-    SeedRawPost::new(session.user_id)
+    let exact_post = SeedRawPost::new(session.user_id)
         .body(parse_post_body(&format!(
             "<img src=\"https://example.com{exact_media_url}\">"
         )))
         .seed(&state)
         .await;
 
-    let exact_delete = app
+    let forced_member_url =
+        parse_root_relative_url(&format!("{}?force=true", exact_member_url.as_ref()));
+    let forced_delete = app
+        .clone()
+        .oneshot(
+            atompub_at(&session, Method::DELETE, &forced_member_url)
+                .header("x-jaunder-force", "true")
+                .body(Body::empty())
+                .expect("failed to build forced AtomPub DELETE request"),
+        )
+        .await
+        .unwrap();
+    assert_media_delete_conflict(
+        forced_delete,
+        OWNER_RETAINED_DETAIL,
+        &[i64::from(exact_post.post_id)],
+    )
+    .await;
+
+    let retry_delete = app
         .clone()
         .oneshot(
             atompub_at(&session, Method::DELETE, &exact_member_url)
                 .body(Body::empty())
-                .expect("failed to build atompub DELETE request"),
+                .expect("failed to build repeated AtomPub DELETE request"),
         )
         .await
         .unwrap();
+    assert_media_delete_conflict(
+        retry_delete,
+        OWNER_RETAINED_DETAIL,
+        &[i64::from(exact_post.post_id)],
+    )
+    .await;
     assert_eq!(
-        exact_delete.status(),
-        StatusCode::NO_CONTENT,
-        "AtomPub's existing force carve-out bypasses an exact owner reference"
+        app.clone()
+            .oneshot(atompub_get(&session, exact_member_url.as_ref()))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK,
+        "query, header, and retry attempts cannot override guarded deletion"
     );
 
     let foreign_member_url = upload_and_member_url(&app, &session, "foreign-origin.png").await;
@@ -753,12 +903,7 @@ async fn delete_media_member_force_bypasses_owner_reference_ownership_evidence(
         )
         .await
         .unwrap();
-    assert_media_delete_conflict(
-        unknown_delete,
-        "Media deletion is blocked because Jaunder cannot prove that removing this record would preserve media referenced by a live Post.",
-        &[],
-    )
-    .await;
+    assert_media_delete_conflict(unknown_delete, GLOBAL_SAFETY_DETAIL, &[]).await;
     assert_eq!(
         app.oneshot(
             atompub_at(&session, Method::GET, &unknown_member_url)

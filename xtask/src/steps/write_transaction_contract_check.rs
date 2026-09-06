@@ -16,7 +16,7 @@ use crate::steps::scan::run_source_scan;
 
 const POLICED_ROOTS: &[&str] = &["storage/src", "server/src", "web/src"];
 
-/// The authoritative, closed application-mutation census. Counts add to 61.
+/// The authoritative, closed application-mutation census. Counts add to 63.
 const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     (
         "AudienceStorage",
@@ -60,8 +60,10 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
         "PostStorage",
         &[
             "create_post",
+            "create_post_with_proven_local_media",
             "create_posts",
             "update_post",
+            "update_post_with_proven_local_media",
             "publish_post",
             "soft_delete_post",
             "unpublish_post",
@@ -121,6 +123,7 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
 /// must be reviewed rather than silently disappearing from the census.
 const INTERNAL_CAPABILITY_EXCLUSIONS: &[(&str, &str)] = &[
     ("MediaStorage", "media_entry_is_reclaimable"), // read under the caller's reclaim lock
+    ("MediaStorage", "reclaim_guard"), // storage-owned lease held through manager unlink
     ("MediaStorage", "lock_media_reference"), // internal serialization for filesystem reconciliation
 ];
 

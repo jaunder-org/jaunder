@@ -69,10 +69,17 @@ pub use instance_identity::*;
 pub use invites::*;
 pub use media::*;
 pub use media_content_locks::MediaContentLocks;
+#[cfg(any(test, feature = "test-utils"))]
+pub use media_manager::ReclaimUnlinkGate;
 pub use media_manager::{
     ManagedUpload, MediaDeletionResult, MediaError, MediaManager, MediaTemporaryDirectoryError,
 };
-pub use media_ownership::*;
+#[cfg(any(test, feature = "test-utils"))]
+pub use media_ownership::PostWriteGate;
+pub use media_ownership::{
+    ForeignEvidenceSink, LocalMediaSink, MediaReferenceOwnershipResolver, PostMediaOwnership,
+    ProvenLocalMediaRefs, resolve_local_media_references, resolve_media_reference_ownership,
+};
 pub use password::*;
 pub use post_service::*;
 pub use postgres::{

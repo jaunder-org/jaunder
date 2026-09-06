@@ -116,7 +116,7 @@ test("an app password can be revoked from the sessions page", async ({
   );
 });
 
-test("AtomPub media deletion refuses a live post reference and preserves the Member", async ({
+test("AtomPub media deletion refuses a retained Post reference and preserves the Member", async ({
   page,
   request,
 }) => {
@@ -137,13 +137,18 @@ test("AtomPub media deletion refuses a live post reference and preserves the Mem
   const mediaLocation = uploaded.headers()["location"];
   expect(mediaLocation).toBeTruthy();
   const mediaMemberUrl = onServer(mediaLocation!);
+  const mediaContentUrl = (await uploaded.text()).match(
+    /<content(?:\s[^>]*)?\ssrc="([^"]+)"/,
+  )?.[1];
+  expect(mediaContentUrl).toBeTruthy();
+  const mediaPath = new URL(mediaContentUrl!).pathname;
 
   const created = await request.post(`${BASE_URL}/atompub/${username}/posts`, {
     headers: { authorization: auth, "content-type": "application/atom+xml" },
     data: `<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
   <title>Media guard</title>
-  <content type="html">&lt;img src="${mediaMemberUrl}"&gt;</content>
+  <content type="html">&lt;img src="${mediaPath}"&gt;</content>
 </entry>`,
   });
   expect(created.status()).toBe(201);
@@ -162,7 +167,7 @@ test("AtomPub media deletion refuses a live post reference and preserves the Mem
     title: "Media deletion refused",
     status: 409,
     detail:
-      "Media is referenced by live Posts. Use Jaunder's web media library to review references and force deletion.",
+      "Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.",
     post_ids: [Number(postId)],
   });
 

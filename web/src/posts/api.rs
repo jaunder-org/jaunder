@@ -564,11 +564,14 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<SavedPost>> {
     let write_scope = expect_context::<WriteScope>();
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
     let content_locks = expect_context::<Arc<MediaContentLocks>>();
-    let outcome = storage::perform_post_creation(
+    let media_ownership = expect_context::<storage::PostMediaOwnership>();
+    let outcome = storage::perform_post_creation_with_media_ownership(
         &write_scope,
         content_locks.as_ref(),
         Arc::clone(&posts),
         Arc::clone(&feed_events),
+        &media_ownership,
+        request_clock,
         PostCreation {
             user_id: auth.user_id,
             body,
@@ -773,11 +776,13 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
     let write_scope = expect_context::<WriteScope>();
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
     let content_locks = expect_context::<Arc<MediaContentLocks>>();
-    let outcome = storage::perform_post_update(
+    let media_ownership = expect_context::<storage::PostMediaOwnership>();
+    let outcome = storage::perform_post_update_with_media_ownership(
         &write_scope,
         content_locks.as_ref(),
         Arc::clone(&posts),
         Arc::clone(&feed_events),
+        &media_ownership,
         PostUpdate {
             post_id,
             editor_user_id: auth.user_id,

@@ -1,20 +1,165 @@
+use std::sync::Arc;
+
 use common::ids::UserId;
 use common::media::{MediaRef, MediaSource};
 use common::test_support::{
     parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_page_offset,
-    parse_row_limit, parse_url,
+    parse_post_body, parse_row_limit, parse_url,
 };
 use common::time::UtcInstant;
+use common::visibility::AudienceTarget;
 use rstest::*;
 use rstest_reuse::*;
 use sqlx::query;
 use storage::sql::QueryStorageExt;
-use storage::test_support::{Backend, SeedUser, backends, confirmed_for, seed_users};
+use storage::test_support::{
+    Backend, SeedUser, backends, confirmed_for, media_row_exists, seed_users,
+};
 use storage::{
-    AppState, CreateMediaError, DeleteMediaError, MediaDeleteMode, MediaRecord,
-    MediaReferenceEvidence, TryDeleteOutcome,
+    AppState, CreateMediaError, ForeignEvidenceSink, MediaContentLocks, MediaDeleteMode,
+    MediaManager, MediaRecord, MediaReferenceEvidence, MediaReferenceOwnershipResolver,
+    PostBookkeepingExpectation, PostCreation, PostFormat, PostMediaOwnership, PostWriteGate,
+    ReclaimUnlinkGate, TryDeleteOutcome, perform_post_creation_with_media_ownership,
 };
 
+struct LocalMediaResolver;
+
+#[async_trait::async_trait]
+impl MediaReferenceOwnershipResolver for LocalMediaResolver {
+    async fn resolve(
+        &self,
+        _references: &[storage::PersistedMediaReference],
+        _instance_id: &storage::InstanceId,
+        _base_url: Option<&common::tagged_url::BaseUrl>,
+        foreign: ForeignEvidenceSink,
+    ) -> MediaReferenceEvidence {
+        foreign.finish()
+    }
+
+    async fn resolve_local(
+        &self,
+        references: &[common::media::MediaReference],
+        _instance_id: &storage::InstanceId,
+        _base_url: Option<&common::tagged_url::BaseUrl>,
+        mut local: storage::LocalMediaSink,
+    ) -> storage::ProvenLocalMediaRefs {
+        for reference in references {
+            local.prove_local(reference.media().clone());
+        }
+        local.finish()
+    }
+}
+
+async fn create_post_with_media(
+    state: &Arc<AppState>,
+    locks: &MediaContentLocks,
+    ownership: &PostMediaOwnership,
+    user_id: UserId,
+    media_url: &str,
+) {
+    let outcome = perform_post_creation_with_media_ownership(
+        &state.write_scope,
+        locks,
+        Arc::clone(&state.posts),
+        Arc::clone(&state.feed_events),
+        ownership,
+        UtcInstant::now(),
+        PostCreation {
+            user_id,
+            body: parse_post_body(&format!("![media]({media_url})")),
+            title: None,
+            format: PostFormat::Markdown,
+            slug_override: None,
+            published_at: Some(UtcInstant::now()),
+            max_attempts: 1,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+            tags: Vec::new(),
+            idempotency_key: None,
+            expectations: PostBookkeepingExpectation::default(),
+        },
+    )
+    .await
+    .expect("real Post service write should succeed");
+    confirmed_for(outcome, "post writer");
+}
+
+fn spawn_post_with_media(
+    state: Arc<AppState>,
+    locks: Arc<MediaContentLocks>,
+    ownership: PostMediaOwnership,
+    user_id: UserId,
+    media_url: String,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        create_post_with_media(&state, &locks, &ownership, user_id, &media_url).await;
+    })
+}
+
+async fn assert_post_writer_won(
+    state: &Arc<AppState>,
+    manager: &MediaManager,
+    write_gate: &PostWriteGate,
+    writer: tokio::task::JoinHandle<()>,
+    source_owner: UserId,
+    author: UserId,
+    media: &MediaRef,
+) {
+    write_gate.wait_until_writer_holds_lock().await;
+    write_gate.release();
+    writer.await.expect("writer task joins");
+    assert_eq!(
+        confirmed_for(
+            manager
+                .delete_media(source_owner, media, false)
+                .await
+                .expect("source removal")
+                .into_outcome(),
+            "source removal",
+        ),
+        TryDeleteOutcome::Deleted
+    );
+    assert!(
+        media_row_exists(state, author, media).await,
+        "writer observed its source and materialized an independent Media Record"
+    );
+    assert!(
+        !media_row_exists(state, source_owner, media).await,
+        "source-owner deletion removes only its own Media Record"
+    );
+}
+
+fn spawn_media_removal(
+    manager: Arc<MediaManager>,
+    source_owner: UserId,
+    media: MediaRef,
+) -> tokio::task::JoinHandle<anyhow::Result<storage::MediaDeletionResult>> {
+    tokio::spawn(async move { manager.delete_media(source_owner, &media, false).await })
+}
+
+async fn assert_post_writer_lost(state: &Arc<AppState>, author: UserId, media: &MediaRef) {
+    assert!(
+        !media_row_exists(state, author, media).await,
+        "writer succeeds with a broken link when removal won"
+    );
+}
+
+async fn upload_race_media(manager: &MediaManager, source_owner: UserId) -> MediaRef {
+    let uploaded = manager
+        .upload_bytes(
+            source_owner,
+            &parse_filename("serialized-race.jpg"),
+            "image/jpeg".parse().unwrap(),
+            b"real media file",
+        )
+        .await
+        .expect("real source upload");
+    MediaRef {
+        source: MediaSource::Upload,
+        sha256: uploaded.value().sha256.clone(),
+        filename: uploaded.value().filename.clone(),
+    }
+}
 async fn create_media(state: &AppState, record: MediaRecord) {
     let media = state.media.clone();
     let outcome = state
@@ -306,7 +451,7 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
+async fn delete_nonexistent_returns_missing(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
@@ -316,12 +461,12 @@ async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
     let media = state.media.clone();
     let media_ref = MediaRef {
         source: MediaSource::Upload,
-        sha256: sha256.clone(),
+        sha256,
         filename: parse_filename("ghost.jpg"),
     };
     let instance_id = env.base.instance_id().clone();
     let evidence = MediaReferenceEvidence::new(instance_id.clone());
-    let err = state
+    let outcome = state
         .write_scope
         .run(move |transaction| {
             Box::pin(async move {
@@ -338,14 +483,11 @@ async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
             })
         })
         .await
-        .expect_err("deleting missing media must fail");
-    let storage::WriteScopeError::Operation(err) = err else {
-        unreachable!("expected media delete operation failure");
-    };
-    assert!(
-        matches!(err, DeleteMediaError::NotFound),
-        "expected NotFound, got {err:?}"
-    );
+        .expect("missing classification succeeds");
+    assert!(matches!(
+        outcome,
+        common::MutationOutcome::Confirmed(TryDeleteOutcome::Missing)
+    ));
 }
 
 #[apply(backends)]
@@ -488,4 +630,117 @@ async fn find_by_hash_returns_any_match(#[case] backend: Backend) {
         .unwrap();
     let found = found.expect("should find the record by hash");
     assert_eq!(found.sha256, sha256);
+}
+
+async fn serialized_post_write_and_removal(backend: Backend, reclaim: bool, writer_first: bool) {
+    let env = backend.setup().await;
+    let source_owner = SeedUser::new().seed(&env.state).await.user_id;
+    let author = SeedUser::new().seed(&env.state).await.user_id;
+    let locks = Arc::new(MediaContentLocks::new(Arc::new(
+        env.base.path().to_path_buf(),
+    )));
+    let reclaim_gate = Arc::new(ReclaimUnlinkGate::new());
+    let manager = MediaManager::new(
+        Arc::clone(&env.state.media),
+        Arc::clone(&env.state.posts),
+        Arc::clone(&env.state.site_config),
+        env.state.write_scope.clone(),
+        Arc::clone(&locks),
+        env.base.instance_id().clone(),
+        Arc::new(LocalMediaResolver),
+    );
+    let manager = if reclaim {
+        manager.with_reclaim_unlink_gate_for_test(Arc::clone(&reclaim_gate))
+    } else {
+        manager
+    };
+    let manager = Arc::new(manager);
+    let media = upload_race_media(&manager, source_owner).await;
+    let media_url = common::media::url(&media.source, &media.sha256, &media.filename).to_string();
+    let write_gate = Arc::new(PostWriteGate::new());
+    let ownership = PostMediaOwnership::new(
+        Arc::new(LocalMediaResolver),
+        env.base.instance_id().clone(),
+        Arc::clone(&env.state.site_config),
+    )
+    .with_post_write_gate_for_test(Arc::clone(&write_gate));
+    if writer_first {
+        let writer = spawn_post_with_media(
+            Arc::clone(&env.state),
+            Arc::clone(&locks),
+            ownership.clone(),
+            author,
+            media_url.clone(),
+        );
+        assert_post_writer_won(
+            &env.state,
+            &manager,
+            &write_gate,
+            writer,
+            source_owner,
+            author,
+            &media,
+        )
+        .await;
+    } else {
+        let removal = spawn_media_removal(Arc::clone(&manager), source_owner, media.clone());
+        if reclaim {
+            reclaim_gate.wait_until_unlink().await;
+            let writer = spawn_post_with_media(
+                Arc::clone(&env.state),
+                Arc::clone(&locks),
+                ownership.clone(),
+                author,
+                media_url.clone(),
+            );
+            reclaim_gate.release();
+            write_gate.wait_until_writer_holds_lock().await;
+            write_gate.release();
+            removal
+                .await
+                .expect("reclaim task joins")
+                .expect("source reclaim");
+            writer.await.expect("writer task joins");
+        } else {
+            removal
+                .await
+                .expect("removal task joins")
+                .expect("source deletion");
+            let writer = spawn_post_with_media(
+                Arc::clone(&env.state),
+                Arc::clone(&locks),
+                ownership.clone(),
+                author,
+                media_url.clone(),
+            );
+            write_gate.wait_until_writer_holds_lock().await;
+            write_gate.release();
+            writer.await.expect("writer task joins");
+        }
+        assert_post_writer_lost(&env.state, author, &media).await;
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn post_writer_wins_over_ordinary_delete(#[case] backend: Backend) {
+    serialized_post_write_and_removal(backend, false, true).await;
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn ordinary_delete_wins_over_post_writer(#[case] backend: Backend) {
+    serialized_post_write_and_removal(backend, false, false).await;
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn post_writer_wins_over_reclaim(#[case] backend: Backend) {
+    serialized_post_write_and_removal(backend, true, true).await;
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn reclaim_wins_over_post_writer(#[case] backend: Backend) {
+    serialized_post_write_and_removal(backend, true, false).await;
 }

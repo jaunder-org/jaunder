@@ -49,7 +49,7 @@ Issue #755 is natively blocked by it and does not implement revision history.
 
 ## Ordered work
 
-- [ ] **1. Establish and prove one proof/materialization seam.**
+- [x] **1. Establish and prove one proof/materialization seam.**
   - Add the resolver from `RenderOutput`-derived `MediaReference` forms whose
     only constructible output is capability-only `ProvenLocalMediaRefs`; keep
     exact identities private to it. Carry it through
@@ -65,7 +65,7 @@ Issue #755 is natively blocked by it and does not implement revision history.
     copied fields, missing-source success, publication no-op, no backfill, and
     persistence through reference/Post deletion.
 
-- [ ] **2. Make delete/reclaim one rich locked outcome, prove it, and migrate
+- [x] **2. Make delete/reclaim one rich locked outcome, prove it, and migrate
       callers.**
   - Keep the conditional delete as policy. On failure, classify under the same
     lock/transaction: missing, owner current/Deleted Post/Revision guard, or
@@ -85,7 +85,7 @@ Issue #755 is natively blocked by it and does not implement revision history.
     including a final record versus global refusal, reclaim-guard lifetime
     across unlink, and typed masked internal errors.
 
-- [ ] **3. Prove integrated concurrency and project the domain.**
+- [x] **3. Prove integrated concurrency and project the domain.**
   - In both backends, race Post writes with delete and reclaim; assert the two
     allowed serialized results: delete-wins yields a successful broken-link
     write with no Media Record when the source vanished before the writer lock,
@@ -95,12 +95,12 @@ Issue #755 is natively blocked by it and does not implement revision history.
 
 ## Completion criteria
 
-- [ ] Every caller consumes the rich outcome; no boolean-force bypass or second
+- [x] Every caller consumes the rich outcome; no boolean-force bypass or second
       ownership-policy path remains.
-- [ ] Both backends prove materialization metadata, current/Deleted/Revision
+- [x] Both backends prove materialization metadata, current/Deleted/Revision
       reporting, global nondisclosure, reclaim-guard unlink lifetime, typed
       masked internal errors, and the two Post-write/delete/reclaim outcomes.
-- [ ] AtomPub's owner detail is exactly
+- [x] AtomPub's owner detail is exactly
       `Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.`;
       its global detail is exactly
       `Media deletion is blocked because Jaunder cannot prove that removing this record would preserve referenced media.`

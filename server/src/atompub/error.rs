@@ -73,11 +73,11 @@ impl IntoResponse for MediaDeleteConflict {
     fn into_response(self) -> Response {
         let (detail, post_ids) = match self {
             Self::OwnerReferences(post_ids) => (
-                "Media is referenced by live Posts. Use Jaunder's web media library to review references and force deletion.",
+                "Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.",
                 post_ids,
             ),
             Self::GlobalSafety => (
-                "Media deletion is blocked because Jaunder cannot prove that removing this record would preserve media referenced by a live Post.",
+                "Media deletion is blocked because Jaunder cannot prove that removing this record would preserve referenced media.",
                 Vec::new(),
             ),
         };
@@ -143,6 +143,12 @@ where
 {
     log_internal(&err);
     HandlerError::Internal(Box::new(err))
+}
+
+/// Reports and retains an opaque manager failure before returning a masked `500`.
+pub(super) fn internal_anyhow(err: anyhow::Error) -> HandlerError {
+    tracing::error!(error = %err, "AtomPub handler internal error");
+    HandlerError::Internal(err.into())
 }
 
 impl From<sqlx::Error> for HandlerError {
@@ -238,10 +244,7 @@ impl From<storage::PerformUpdateError> for HandlerError {
 
 impl From<storage::DeleteMediaError> for HandlerError {
     fn from(err: storage::DeleteMediaError) -> Self {
-        match err {
-            storage::DeleteMediaError::NotFound => HandlerError::NotFound,
-            error @ storage::DeleteMediaError::Internal(_) => internal(error),
-        }
+        internal(err)
     }
 }
 
@@ -298,7 +301,7 @@ mod tests {
             .expect("read problem response body");
         assert_eq!(
             body.as_ref(),
-            br#"{"type":"https://jaunder.org/problems/media-delete-conflict","title":"Media deletion refused","status":409,"detail":"Media is referenced by live Posts. Use Jaunder's web media library to review references and force deletion.","post_ids":[2,7,12]}"#
+            br#"{"type":"https://jaunder.org/problems/media-delete-conflict","title":"Media deletion refused","status":409,"detail":"Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.","post_ids":[2,7,12]}"#
         );
     }
 
@@ -316,7 +319,7 @@ mod tests {
             .expect("read problem response body");
         assert_eq!(
             body.as_ref(),
-            br#"{"type":"https://jaunder.org/problems/media-delete-conflict","title":"Media deletion refused","status":409,"detail":"Media deletion is blocked because Jaunder cannot prove that removing this record would preserve media referenced by a live Post.","post_ids":[]}"#
+            br#"{"type":"https://jaunder.org/problems/media-delete-conflict","title":"Media deletion refused","status":409,"detail":"Media deletion is blocked because Jaunder cannot prove that removing this record would preserve referenced media.","post_ids":[]}"#
         );
     }
 
@@ -438,11 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_media_error_maps_not_found_and_internal() {
-        assert_eq!(
-            status(DeleteMediaError::NotFound.into()),
-            StatusCode::NOT_FOUND
-        );
+    fn delete_media_error_masks_internal_failures() {
         assert_eq!(
             status(DeleteMediaError::Internal(sqlx::Error::PoolClosed).into()),
             StatusCode::INTERNAL_SERVER_ERROR

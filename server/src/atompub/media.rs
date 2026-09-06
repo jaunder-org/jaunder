@@ -17,7 +17,10 @@ use host::atompub::{self, MediaLinkEntry};
 use storage::{MediaManager, MediaRecord, MediaStorage, SiteConfigStorage};
 use web::auth;
 
-use super::{HandlerError, error::MediaDeleteConflict};
+use super::{
+    HandlerError,
+    error::{MediaDeleteConflict, internal_anyhow},
+};
 
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
 
@@ -239,32 +242,31 @@ pub(super) async fn member_delete(
         .delete_media(auth_user.user_id, &media_ref, false)
         .await
         .map_err(map_delete_error)?;
-    let post_ids = result.referenced_post_ids(auth_user.user_id);
-    let outcome = match super::mutation::confirmed_or_accepted(result.into_outcome()) {
-        Ok(outcome) => outcome,
-        Err(status) => return Ok(status.into_response()),
-    };
-    if outcome == storage::TryDeleteOutcome::RefusedReferenced {
-        return Ok(if post_ids.is_empty() {
-            MediaDeleteConflict::global_safety()
-        } else {
-            MediaDeleteConflict::owner_references(post_ids)
+    match super::mutation::confirmed_or_accepted(result.into_outcome()) {
+        Ok(storage::TryDeleteOutcome::Deleted) => Ok(StatusCode::NO_CONTENT.into_response()),
+        Ok(storage::TryDeleteOutcome::Missing) => Err(HandlerError::NotFound),
+        Ok(storage::TryDeleteOutcome::OwnerRetainedHistory(post_ids)) => {
+            Ok(MediaDeleteConflict::owner_references(post_ids).into_response())
         }
-        .into_response());
+        Ok(storage::TryDeleteOutcome::GlobalSafety) => {
+            Ok(MediaDeleteConflict::global_safety().into_response())
+        }
+        Err(status) => Ok(status.into_response()),
     }
-    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 fn map_delete_error(err: anyhow::Error) -> HandlerError {
     match err.downcast::<storage::DeleteMediaError>() {
-        Ok(storage::DeleteMediaError::NotFound) => HandlerError::NotFound,
-        Ok(error) => HandlerError::Internal(Box::new(error)),
-        Err(err) => err.into(),
+        Ok(error) => error.into(),
+        // Deletion has no expected generic manager error: retain and report any
+        // write-scope or storage source before returning the masked response.
+        Err(error) => internal_anyhow(error),
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use super::*;
 
     #[test]
@@ -272,16 +274,22 @@ mod tests {
         let error =
             map_delete_error(storage::DeleteMediaError::Internal(sqlx::Error::RowNotFound).into());
 
-        assert!(matches!(error, HandlerError::Internal(_)));
+        let HandlerError::Internal(source) = error else {
+            panic!("storage deletion failures must stay typed at the handler boundary");
+        };
+        let delete = source
+            .downcast_ref::<storage::DeleteMediaError>()
+            .expect("handler retains the typed deletion failure");
+        assert!(matches!(
+            delete.source().and_then(|source| source.downcast_ref()),
+            Some(sqlx::Error::RowNotFound)
+        ));
     }
 
     #[test]
     fn map_delete_error_preserves_non_delete_errors() {
         let error = map_delete_error(anyhow::anyhow!("media delete failed"));
 
-        assert!(matches!(
-            error,
-            HandlerError::Status(StatusCode::INTERNAL_SERVER_ERROR)
-        ));
+        assert!(matches!(error, HandlerError::Internal(_)));
     }
 }

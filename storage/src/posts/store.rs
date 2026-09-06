@@ -7,6 +7,7 @@ use sqlx::{AssertSqlSafe, Database, Decode, Encode, Executor, Pool, Result, Type
 
 use crate::InstanceId;
 use crate::backend::Backend;
+use crate::media_ownership::ProvenLocalMediaRefs;
 use crate::posts::cursors::{
     CollectionCursor, PostCursor, PostRevisionCursor, ScheduledPostCursor,
 };
@@ -123,6 +124,16 @@ pub trait PostStorage: Send + Sync {
         now: UtcInstant,
     ) -> Result<CreatedPost, CreatePostError>;
 
+    /// Creates a post and materializes its author's resolver-proven local media
+    /// records within the same transaction.
+    async fn create_post_with_proven_local_media(
+        &self,
+        transaction: &mut WriteTransaction,
+        input: &CreatePostInput,
+        now: UtcInstant,
+        local_media: &ProvenLocalMediaRefs,
+    ) -> Result<CreatedPost, CreatePostError>;
+
     /// Creates `inputs.len()` posts in an existing write transaction, returning their new
     /// ids in input order. All-or-nothing: any failure (e.g. a slug conflict on
     /// one row) rolls the whole batch back and nothing persists. An empty slice
@@ -235,6 +246,17 @@ pub trait PostStorage: Send + Sync {
         post_id: PostId,
         editor_user_id: UserId,
         input: &UpdatePostInput,
+    ) -> Result<PostMutation, UpdatePostError>;
+
+    /// Updates a post and materializes its editor's resolver-proven local media
+    /// records within the same transaction.
+    async fn update_post_with_proven_local_media(
+        &self,
+        transaction: &mut WriteTransaction,
+        post_id: PostId,
+        editor_user_id: UserId,
+        input: &UpdatePostInput,
+        local_media: &ProvenLocalMediaRefs,
     ) -> Result<PostMutation, UpdatePostError>;
 
     /// Publishes a draft through the owner-checked revision transaction,
@@ -557,6 +579,44 @@ pub trait PostDialect: Backend {
         media: &BTreeSet<MediaRef>,
     ) -> Result<()>;
 
+    /// Materializes `user_id`'s records from canonical source rows while the
+    /// caller holds every identity's media lock. This SQL is portable; dialects
+    /// supply only the locking discipline that establishes that precondition.
+    async fn materialize_proven_local_media(
+        conn: &mut Self::Connection,
+        user_id: UserId,
+        local_media: &ProvenLocalMediaRefs,
+    ) -> Result<()>
+    where
+        for<'q> i64: Encode<'q, Self> + Type<Self>,
+        for<'q> MediaSource: Encode<'q, Self> + Type<Self>,
+        for<'q> &'q ContentHash: Encode<'q, Self> + Type<Self>,
+        for<'q> &'q Filename: Encode<'q, Self> + Type<Self>,
+        for<'c> &'c mut Self::Connection: Executor<'c, Database = Self>,
+        Self::Arguments: sqlx::IntoArguments<Self>,
+    {
+        for media in local_media.media() {
+            sqlx::query(
+                "INSERT INTO media
+                     (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at)
+                 SELECT $1, m.sha256, m.filename, m.source, m.content_type, m.size_bytes,
+                        m.source_url, m.created_at
+                 FROM media m
+                 WHERE m.source = $2 AND m.sha256 = $3 AND m.filename = $4
+                 ORDER BY m.created_at, m.user_id
+                 LIMIT 1
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind_storage(user_id)
+            .bind_storage(media.source)
+            .bind_storage(&media.sha256)
+            .bind_storage(&media.filename)
+            .execute(&mut *conn)
+            .await?;
+        }
+        Ok(())
+    }
+
     /// Serializes this `(user_id, key)` with competing creates and returns its
     /// live mapping under a row lock. `SQLite` already holds its writer lock;
     /// `PostgreSQL` additionally takes a transaction-scoped advisory lock so an
@@ -775,6 +835,34 @@ where
         let connection = DB::write_connection(transaction)?;
         let (post_id, idempotency_key_expired) =
             lifecycle::write_post_in_tx::<DB>(connection, input, now).await?;
+        let sql = format!(
+            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format,
+                    p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
+                    p.summary, {tags} AS tags
+             FROM posts p JOIN users u ON p.user_id = u.user_id WHERE p.post_id = $1",
+            tags = DB::TAGS_SUBQUERY,
+        );
+        let record = sqlx::query_as::<_, PostRecord>(AssertSqlSafe(sql))
+            .bind_storage(post_id)
+            .fetch_one(connection)
+            .await?;
+        Ok(CreatedPost {
+            record,
+            idempotency_key_expired,
+        })
+    }
+
+    async fn create_post_with_proven_local_media(
+        &self,
+        transaction: &mut WriteTransaction,
+        input: &CreatePostInput,
+        now: UtcInstant,
+        local_media: &ProvenLocalMediaRefs,
+    ) -> Result<CreatedPost, CreatePostError> {
+        let connection = DB::write_connection(transaction)?;
+        let (post_id, idempotency_key_expired) =
+            lifecycle::write_post_in_tx::<DB>(connection, input, now).await?;
+        DB::materialize_proven_local_media(connection, input.user_id, local_media).await?;
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format,
                     p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
@@ -1145,6 +1233,7 @@ where
             ContentHash,
             Filename,
             MediaReferenceKind,
+
             MediaReferenceForm,
         )> = sqlx::query_as(
             "SELECT pm.post_id, p.user_id, pm.revision_id, pm.source, pm.sha256, pm.filename, \
@@ -1306,6 +1395,22 @@ where
         input: &UpdatePostInput,
     ) -> Result<PostMutation, UpdatePostError> {
         DB::update_post(transaction, post_id, editor_user_id, input).await
+    }
+
+    async fn update_post_with_proven_local_media(
+        &self,
+        transaction: &mut WriteTransaction,
+        post_id: PostId,
+        editor_user_id: UserId,
+        input: &UpdatePostInput,
+        local_media: &ProvenLocalMediaRefs,
+    ) -> Result<PostMutation, UpdatePostError> {
+        let mutation = DB::update_post(transaction, post_id, editor_user_id, input).await?;
+        if mutation.changed {
+            let connection = DB::write_connection(transaction)?;
+            DB::materialize_proven_local_media(connection, editor_user_id, local_media).await?;
+        }
+        Ok(mutation)
     }
 
     #[tracing::instrument(
