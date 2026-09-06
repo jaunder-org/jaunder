@@ -2310,6 +2310,69 @@ Corpus: `~/measurements/jaunder/issue-867-navcount/`. Deciding-set files are
 unprefixed, confirming-set files carry a `gate-` prefix, and the README opens
 with a table naming both sets and stating that they must not be pooled.
 
+## #869 — immutable content-addressed CSR assets (findings, 2026-09-05)
+
+**Verdict: keep the treatment.** Content-addressed `/pkg/*` URLs plus
+`Cache-Control: public, max-age=31536000, immutable` reduce warm-navigation
+`wasmFetchMs` in both engines: **−39.0% on Chromium** and **−9.7% on Firefox**.
+The effect is browser-asymmetric but directionally consistent, and the
+navigation populations are identical between the baseline and treatment.
+
+### Protocol and corpus
+
+The deciding set follows the #818 shape: SQLite, one worker, Chromium and
+Firefox, three runs per arm, counterbalanced run-by-run, and a distinct
+`e2eSalt` for every attempt. It shares a campaign with #904, but every result is
+commit-isolated:
+
+- baseline: `728885a2f682d297095f59ef1421723e1f1f8988`
+- #869 only: `ff9f4cc23774042884c0720923115b409d9450cc`
+- #904 only: `f18215dd8d9507571b97564a26ca53107ea8dd65`
+
+No combined-treatment branch contributes evidence. Each retained run passed two
+one-minute load-average samples at most 1.0, 60 seconds apart. The complete
+shared campaign retained all 30 registered slots (18 single-worker deciding, 12
+#904 gate-setting confirmation) from 109 uniquely salted attempts. Seventy-
+eight attempts were rejected by the load rule.
+
+One additional rejected attempt found a real source-closure defect before its
+browser started: the filtered site source omitted the new `tools/csr_bundle`
+path dependency. The treatment was amended, rebuilt, and re-gated; the
+superseded commit `d9b4c35bee4820afae4fa3e792b17c1c0cf33b2a` contributes no
+browser result.
+
+The analyzer certified 18/18 deciding slots, exact commits, unique salts,
+complete Playwright reports and traces, zero dropped navigation telemetry, and
+three retained runs in every arm/browser cell.
+
+### Result
+
+Means over the three retained runs:
+
+| browser  | population                   |  baseline | #869 only |                  delta |
+| -------- | ---------------------------- | --------: | --------: | ---------------------: |
+| Chromium | warm `wasmFetchMs`           | 183.94 ms | 112.20 ms | **−71.74 ms (−39.0%)** |
+| Firefox  | warm `wasmFetchMs`           |  98.64 ms |  89.04 ms |   **−9.60 ms (−9.7%)** |
+| Chromium | cold `wasmFetchMs`           | 222.18 ms | 217.04 ms |       −5.14 ms (−2.3%) |
+| Firefox  | cold `wasmFetchMs`           | 171.30 ms | 162.65 ms |       −8.65 ms (−5.1%) |
+| Chromium | summed `wasmFetchMs` / suite |   57.94 s |   53.63 s |        −4.31 s (−7.4%) |
+| Firefox  | summed `wasmFetchMs` / suite |   42.88 s |   40.51 s |        −2.37 s (−5.5%) |
+
+Every run has 44 warm navigations. Chromium's warm run means are
+179.37/185.71/186.76 ms at baseline and 112.22/112.01/112.37 ms with #869;
+Firefox's are 97.11/101.45/97.34 ms and 88.82/93.02/85.27 ms. The change is
+therefore not a navigation-census artifact or one-run outlier.
+
+Suite wall-clock is not the deciding metric: Chromium moved 533.64 s → 528.16 s
+(−1.0%), while Firefox moved 890.50 s → 904.48 s (+1.6%). That mixed,
+whole-suite signal does not overturn the direct warm-fetch result the issue
+asked to measure.
+
+Corpus: `~/measurements/jaunder/issues-869-904/`. Raw attempts are partitioned
+under `baseline/`, `issue-869/`, and `issue-904/`; `manifest.jsonl` records
+every retained and rejected attempt, and `analysis-report.json` contains the
+validated arithmetic.
+
 ## #801 — CSR mount-cost baseline found no eligible experiment (2026-08-26)
 
 **Verdict: the frozen candidate list is empty.** The current issue contract
