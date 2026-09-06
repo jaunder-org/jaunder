@@ -345,6 +345,7 @@ async fn proxy_rejects_unauthenticated_malformed_url_before_query_extraction(
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(response.headers().get(header::WWW_AUTHENTICATE).is_none());
 }
 
 #[apply(backends)]

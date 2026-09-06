@@ -1,7 +1,7 @@
-use axum::Router;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::Response;
 use axum::routing::{get, post};
+use axum::{Router, middleware};
 
 use super::{media, posts, rsd, service};
 
@@ -30,8 +30,25 @@ where
             "/atompub/{username}/media/{sha}/{filename}",
             get(media::member_get).delete(media::member_delete),
         )
+        .layer(middleware::from_fn(add_basic_auth_challenge))
         .route("/~{username}/rsd.xml", get(rsd::rsd_document))
-        .layer(axum::middleware::from_fn(record_atompub_request))
+        .layer(middleware::from_fn(record_atompub_request))
+}
+
+/// Projects authentication failures from protected `AtomPub` routes onto the
+/// HTTP Basic challenge required by protocol clients.
+async fn add_basic_auth_challenge(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let mut response = next.run(request).await;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        response.headers_mut().insert(
+            header::WWW_AUTHENTICATE,
+            axum::http::HeaderValue::from_static(r#"Basic realm="Jaunder AtomPub""#),
+        );
+    }
+    response
 }
 
 /// Records `jaunder.atompub.requests{op, result}` for every routed `AtomPub`

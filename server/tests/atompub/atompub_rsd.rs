@@ -47,6 +47,7 @@ async fn rsd_document_advertises_service_url(#[case] backend: Backend) {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get(header::WWW_AUTHENTICATE).is_none());
     let content_type = response
         .headers()
         .get(header::CONTENT_TYPE)
