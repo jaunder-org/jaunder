@@ -204,6 +204,7 @@ convention). See the Status column below for each ADR's current status.
 | [0176](adr/0176-media-upload-capability-is-site-wide.md)               | Media Upload Capability Is Site-Wide                                                                         | accepted   |
 | [0177](adr/0177-registration-policy-separates-invitation-authority.md) | Registration Policy Separates Invitation Authority                                                           | accepted   |
 | [0178](adr/0178-split-hermetic-static-check-boundaries.md)             | Split hermetic static checks at the documentation boundary                                                   | accepted   |
+| [0179](adr/0179-rendered-html-media-elements.md)                       | Rendered HTML admits bounded media elements                                                                  | accepted   |
 
 <!-- adr-table:end -->
 

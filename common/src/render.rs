@@ -98,7 +98,7 @@ pub struct RenderedHtml(pub(crate) String);
 /// The single allowlist every [`sanitize`] call scrubs against. It is ammonia's
 /// audited default, widened for fenced-code language markers and the bounded
 /// non-executable media surface recorded by
-/// `docs/adr/drafts/rendered-html-media-elements.md`.
+/// `docs/adr/0179-rendered-html-media-elements.md`.
 ///
 /// Re-admitting `class` without narrowing its values would let attacker-supplied
 /// markup borrow application CSS. Only `language-*` tokens survive on `<pre>` and
