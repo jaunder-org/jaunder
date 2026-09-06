@@ -48,6 +48,12 @@
 
 import type { Page } from "@playwright/test";
 
+type Use<T> = (value: T) => Promise<void>;
+type AutoFixture<Args, T> = [
+  (args: Args, use: Use<T>) => Promise<void>,
+  { auto: true },
+];
+
 /**
  * One declared further load. An engine-dependent allowance carries the `path` of
  * the load it was written for and matches nothing else; an exact allowance has no
@@ -192,6 +198,20 @@ export function trackBoots(page: Page): void {
     state.recordDocumentLoad(page.url());
   });
 }
+
+/**
+ * Arm the default page before requested fixtures can navigate it.
+ *
+ * Kept separate from performance capture so the late-arming contract can
+ * disable only this policy while retaining normal tracing and teardown.
+ */
+export const autoBootBudgetFixture = [
+  async ({ page }: { page: Page }, use: Use<void>) => {
+    trackBoots(page);
+    await use();
+  },
+  { auto: true },
+] satisfies AutoFixture<{ page: Page }, void>;
 
 /**
  * Authorise one further document load on `page`, for a stated reason.

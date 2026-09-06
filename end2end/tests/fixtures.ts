@@ -8,6 +8,7 @@
  */
 
 import { expect, test as base } from "@playwright/test";
+import { autoBootBudgetFixture } from "./bootBudget";
 import {
   applyTestTraceparent,
   autoPerfSpanFixture,
@@ -40,6 +41,7 @@ const test = base.extend<{
   _lifecycleStart: number;
   _autoTestTimeout: void;
   _autoDurationBudget: void;
+  _autoBootBudget: void;
   _autoPerfSpan: void;
   testSpanId: string;
   tracedContext: NewTracedContext;
@@ -65,24 +67,31 @@ const test = base.extend<{
   user: userFixture,
   mailbox: mailboxFixture,
   verifiedUser: verifiedUserFixture,
+  _autoBootBudget: autoBootBudgetFixture,
   _autoPerfSpan: autoPerfSpanFixture,
 });
 
+/** The normal traced fixture surface without automatic default-page arming. */
+const testWithoutAutoBootBudget = test.extend({
+  _autoBootBudget: async ({}, use) => {
+    await use();
+  },
+});
+
 /**
- * The project fixture surface without browser-backed performance setup.
+ * The project fixture surface without browser-backed setup.
  *
- * Tests retain timeout and lifecycle policy while deliberately overriding the
- * only automatic fixture that requests `page`. A test may still request a real
- * page explicitly when the contract requires one without automatic arming.
+ * Pure tests retain timeout and lifecycle policy while overriding both
+ * automatic fixtures that request `page`.
  */
-const testWithoutAutoPerf = test.extend({
+const nonBrowserTest = testWithoutAutoBootBudget.extend({
   _autoPerfSpan: async ({}, use) => {
     await use();
   },
 });
 setTestInfoAccessor(() => test.info());
 
-export { expect, test, testWithoutAutoPerf };
+export { expect, nonBrowserTest, test, testWithoutAutoBootBudget };
 export {
   applyTestTraceparent,
   browserDiagnosticSpanProjectionFor,

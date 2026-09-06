@@ -134,7 +134,7 @@ samples.
 | Chromium | baseline  |            270 |       519511 |       533643 |
 | Chromium | treatment |            251 |       499880 |       513543 |
 | Firefox  | baseline  |            270 |       868334 |       890496 |
-| Firefox  | treatment |            251 |       834992 |       856639 |
+| Firefox  | treatment |            251 |       834992 |       856640 |
 
 | Browser  | Round | Document delta | Body delta ms | Wall delta ms |
 | -------- | ----: | -------------: | ------------: | ------------: |

@@ -12,7 +12,7 @@ import {
   takeBudgetFailures,
   trackBoots,
 } from "./bootBudget";
-import { test, testWithoutAutoPerf } from "./fixtures";
+import { test, testWithoutAutoBootBudget } from "./fixtures";
 import { BASE_URL, goto } from "./helpers";
 
 test("one real document load counts one boot", async ({ page }) => {
@@ -39,7 +39,7 @@ test("a raw page.goto is counted by the page listener", async ({ page }) => {
   expect(takeBudgetFailures()).toHaveLength(1);
 });
 
-testWithoutAutoPerf(
+testWithoutAutoBootBudget(
   "a declaration arms a page after its entry load",
   async ({ page }) => {
     // Automatic arming is disabled for this test: the declaration must observe
