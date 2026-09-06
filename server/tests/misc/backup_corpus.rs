@@ -153,6 +153,39 @@ impl BackupCorpus {
         archive.into_inner()?.finish()?;
         Ok(())
     }
+
+    /// Independently extracts a production archive for raw-wire inspection.
+    /// This intentionally does not reuse production archive helpers.
+    pub(crate) fn extract_archive(
+        source: &Path,
+        destination: &Path,
+    ) -> Result<(), BackupCorpusError> {
+        fs::create_dir(destination)?;
+        let input = fs::File::open(source)?;
+        let decoder = flate2::read::GzDecoder::new(input);
+        let mut archive = tar::Archive::new(decoder);
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            let relative = entry.path()?.into_owned();
+            let destination_path = destination.join(&relative);
+            if entry.header().entry_type().is_dir() {
+                fs::create_dir_all(destination_path)?;
+            } else if entry.header().entry_type().is_file() {
+                if let Some(parent) = destination_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let mut bytes = Vec::new();
+                entry.read_to_end(&mut bytes)?;
+                fs::write(destination_path, bytes)?;
+            } else {
+                return Err(BackupCorpusError::InvalidIndex(format!(
+                    "archive contains a non-file entry: {}",
+                    relative.display()
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Locates the source bytes occupied by the top-level `schema_version` value
@@ -744,8 +777,13 @@ fn format_compatibility_diagnostic(detail: impl std::fmt::Display) -> String {
 
 #[cfg(test)]
 mod reader_tests {
-    use std::{collections::BTreeMap, path::Path};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fs,
+        path::Path,
+    };
 
+    use super::{BackupCorpus, CorpusEntry, CorpusIoMode, InitializedCommandEnv, SupportState};
     use common::{
         ids::{PostId, UserId},
         media::MediaSource,
@@ -760,12 +798,11 @@ mod reader_tests {
     };
     use rstest::*;
     use rstest_reuse::apply;
+    use serde_json::Value;
     use storage::{
-        BackupError, BackupMode, EmailVerified, StorageRuntimeConfig, open_existing_database,
+        BackupError, BackupMode, StorageRuntimeConfig, open_existing_database,
         test_support::{Backend, backends},
     };
-
-    use super::{BackupCorpus, CorpusEntry, CorpusIoMode, InitializedCommandEnv, SupportState};
     macro_rules! assert_eq {
         ($left:expr, $right:expr $(,)?) => {
             ::std::assert_eq!(
@@ -818,6 +855,277 @@ mod reader_tests {
             SupportState::Retired => RestoreExpectation::TypedUnsupportedFormat,
         }
     }
+    struct ReaderRole {
+        name: &'static str,
+        fixture_path: &'static str,
+        table: &'static str,
+        column: &'static str,
+        wire_value: &'static str,
+        restored_expectation: &'static str,
+    }
+
+    const READER_ROLE_INVENTORY: &[ReaderRole] = &[
+        ReaderRole {
+            name: "null",
+            fixture_path: "db/users.ndjson",
+            table: "users",
+            column: "display_name",
+            wire_value: "null",
+            restored_expectation: "legacyuser.display_name is None",
+        },
+        ReaderRole {
+            name: "boolean",
+            fixture_path: "db/users.ndjson",
+            table: "users",
+            column: "is_operator",
+            wire_value: "true",
+            restored_expectation: "legacyuser.is_operator is OPERATOR",
+        },
+        ReaderRole {
+            name: "integer",
+            fixture_path: "db/media.ndjson",
+            table: "media",
+            column: "size_bytes",
+            wire_value: "13",
+            restored_expectation: "avatar.txt.size_bytes is 13",
+        },
+        ReaderRole {
+            name: "real",
+            fixture_path: "db/post_revisions.ndjson",
+            table: "post_revisions",
+            column: "rendered_html",
+            wire_value: "1.25",
+            restored_expectation: "revision.rendered_html semantically equals 1.25",
+        },
+        ReaderRole {
+            name: "text",
+            fixture_path: "db/posts.ndjson",
+            table: "posts",
+            column: "title",
+            wire_value: "\"Legacy wire roles\"",
+            restored_expectation: "post.title is Legacy wire roles",
+        },
+        ReaderRole {
+            name: "structured JSON",
+            fixture_path: "db/posts.ndjson",
+            table: "posts",
+            column: "rendered_html",
+            wire_value: "{\"kind\":\"structured\",\"items\":[1,true]}",
+            restored_expectation: "post.rendered_html semantically preserves the object",
+        },
+        ReaderRole {
+            name: "user→post→revision",
+            fixture_path: "db/post_revisions.ndjson",
+            table: "post_revisions",
+            column: "post_id",
+            wire_value: "71",
+            restored_expectation: "revision belongs to post 71 owned by user 41",
+        },
+        ReaderRole {
+            name: "user→media",
+            fixture_path: "db/media.ndjson",
+            table: "media",
+            column: "user_id",
+            wire_value: "41",
+            restored_expectation: "avatar.txt belongs to user 41",
+        },
+        ReaderRole {
+            name: "exact media bytes",
+            fixture_path: "media/avatar.txt",
+            table: "media",
+            column: "bytes",
+            wire_value: "legacy media\n",
+            restored_expectation: "restored media/avatar.txt bytes exactly match",
+        },
+    ];
+
+    fn assert_reader_inventory_is_complete() {
+        assert_eq!(
+            READER_ROLE_INVENTORY
+                .iter()
+                .map(|role| role.name)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "boolean",
+                "exact media bytes",
+                "integer",
+                "null",
+                "real",
+                "structured JSON",
+                "text",
+                "user→media",
+                "user→post→revision",
+            ]),
+            "reader inventory must name every required historical fixture role"
+        );
+        assert!(READER_ROLE_INVENTORY.iter().all(|role| {
+            !role.fixture_path.is_empty()
+                && !role.table.is_empty()
+                && !role.column.is_empty()
+                && !role.wire_value.is_empty()
+                && !role.restored_expectation.is_empty()
+        }));
+    }
+
+    fn assert_fixture_wire_inventory(fixture: &Path) {
+        assert_reader_inventory_is_complete();
+        for role in READER_ROLE_INVENTORY {
+            let observed = fs::read(fixture.join(role.fixture_path)).unwrap_or_else(|error| {
+                panic!(
+                    "{}",
+                    super::format_compatibility_diagnostic(format_args!(
+                        "{} fixture path {} cannot be read: {error}",
+                        role.name, role.fixture_path
+                    ))
+                )
+            });
+            if role.name == "exact media bytes" {
+                assert_eq!(
+                    observed,
+                    role.wire_value.as_bytes(),
+                    "{} fixture media bytes differ from the inventory",
+                    role.name
+                );
+                continue;
+            }
+            let row = serde_json::from_slice::<Value>(&observed).unwrap_or_else(|error| {
+                panic!(
+                    "{}",
+                    super::format_compatibility_diagnostic(format_args!(
+                        "{} fixture row {} is not JSON: {error}",
+                        role.name, role.fixture_path
+                    ))
+                )
+            });
+            let object = row.as_object().unwrap_or_else(|| {
+                panic!(
+                    "{}",
+                    super::format_compatibility_diagnostic(format_args!(
+                        "{} fixture row {} must be a JSON object",
+                        role.name, role.fixture_path
+                    ))
+                )
+            });
+            let expected = serde_json::from_str::<Value>(role.wire_value).unwrap_or_else(|error| {
+                panic!(
+                    "{}",
+                    super::format_compatibility_diagnostic(format_args!(
+                        "{} inventory wire value is invalid JSON: {error}",
+                        role.name
+                    ))
+                )
+            });
+            assert_eq!(
+                object.get(role.column),
+                Some(&expected),
+                "{} inventory entry for {}.{} wire value differs",
+                role.name,
+                role.table,
+                role.column
+            );
+        }
+    }
+
+    async fn assert_reader_inventory(args: &StorageArgs) {
+        let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open restored database");
+        let user_id = UserId::from(41);
+        let post_id = PostId::from(71);
+        let username: Username = "legacyuser".parse().expect("fixture username");
+        let user = state
+            .users
+            .get_user_by_username(&username)
+            .await
+            .expect("read restored user")
+            .expect("fixture user exists");
+        let post = state
+            .posts
+            .get_post_by_id(post_id, &ViewerIdentity::local(user_id))
+            .await
+            .expect("read restored post")
+            .expect("fixture post exists");
+        let history = state
+            .posts
+            .list_post_revision_history(user_id, post_id, None, PageSize::default())
+            .await
+            .expect("read restored revision history")
+            .expect("fixture post history exists");
+        let revision = state
+            .posts
+            .get_post_revision_detail(user_id, post_id, history.revisions[0].revision_id)
+            .await
+            .expect("read restored revision")
+            .expect("fixture revision exists")
+            .revision;
+        let media = state
+            .media
+            .get_media(
+                user_id,
+                &parse_content_hash(
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                ),
+                &parse_filename("avatar.txt"),
+                &MediaSource::Upload,
+            )
+            .await
+            .expect("read restored media")
+            .expect("fixture media exists");
+
+        for role in READER_ROLE_INVENTORY {
+            match role.name {
+                "null" => assert_eq!(user.display_name, None, "{}", role.restored_expectation),
+                "boolean" => assert_eq!(
+                    user.is_operator,
+                    storage::OperatorStatus::OPERATOR,
+                    "{}",
+                    role.restored_expectation
+                ),
+                "integer" => assert_eq!(
+                    media.size_bytes.to_string(),
+                    "13",
+                    "{}",
+                    role.restored_expectation
+                ),
+                "real" => assert_eq!(
+                    serde_json::from_str::<Value>(revision.rendered_html.as_ref())
+                        .expect("real JSON survives semantically"),
+                    serde_json::json!(1.25),
+                    "{}",
+                    role.restored_expectation
+                ),
+                "text" => assert_eq!(
+                    post.title.as_deref(),
+                    Some("Legacy wire roles"),
+                    "{}",
+                    role.restored_expectation
+                ),
+                "structured JSON" => assert_eq!(
+                    serde_json::from_str::<Value>(post.rendered_html.as_ref())
+                        .expect("structured JSON survives semantically"),
+                    serde_json::json!({"kind": "structured", "items": [1, true]}),
+                    "{}",
+                    role.restored_expectation
+                ),
+                "user→post→revision" => {
+                    assert_eq!(post.user_id, user_id, "{}", role.restored_expectation);
+                    assert_eq!(revision.post_id, post_id, "{}", role.restored_expectation);
+                    assert_eq!(revision.user_id, user_id, "{}", role.restored_expectation);
+                }
+                "user→media" => {
+                    assert_eq!(media.user_id, user_id, "{}", role.restored_expectation);
+                }
+                "exact media bytes" => assert_eq!(
+                    fs::read(args.storage_path.join("media").join("avatar.txt"))
+                        .expect("read restored media bytes"),
+                    b"legacy media\n",
+                    "{}",
+                    role.restored_expectation
+                ),
+                role => panic!("unknown reader-role inventory entry: {role}"),
+            }
+        }
+    }
 
     #[apply(backends)]
     #[tokio::test]
@@ -831,6 +1139,7 @@ mod reader_tests {
                 corpus
                     .materialize(entry, &materialized, schema_version)
                     .expect("materialize verified historical fixture");
+                assert_fixture_wire_inventory(&materialized);
                 let restore_path = match input {
                     CorpusIoMode::Directory => materialized,
                     CorpusIoMode::Archive => {
@@ -847,9 +1156,12 @@ mod reader_tests {
                             .await
                             .unwrap_or_else(|error| {
                                 panic!(
-                                    "restore supported format {} from {}: {error:#}",
-                                    entry.format_version,
-                                    input.name()
+                                    "{}",
+                                    super::format_compatibility_diagnostic(format_args!(
+                                        "supported historical restore version {} from {} failed: {error:#}",
+                                        entry.format_version,
+                                        input.name()
+                                    ))
                                 )
                             });
                         assert_reader_inventory(&target.args).await;
@@ -877,92 +1189,12 @@ mod reader_tests {
         cmd_backup(&target.args, BackupMode::Directory, Some(probe.clone()))
             .await
             .expect("export empty target to observe its schema version");
-        let manifest: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(probe.join("manifest.json")).expect("read probe"),
-        )
-        .expect("parse probe manifest");
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(probe.join("manifest.json")).expect("read probe"))
+                .expect("parse probe manifest");
         manifest["schema_version"]
             .as_i64()
             .expect("backup manifest schema version")
-    }
-
-    async fn assert_reader_inventory(args: &StorageArgs) {
-        let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
-            .await
-            .expect("open restored database");
-        let user_id = UserId::from(41);
-        let post_id = PostId::from(71);
-        let username: Username = "legacyuser".parse().expect("fixture username");
-        let user = state
-            .users
-            .get_user_by_username(&username)
-            .await
-            .expect("read restored user")
-            .expect("fixture user exists");
-        assert_eq!(user.user_id, user_id);
-        assert_eq!(user.display_name, None);
-        assert_eq!(user.email_verified, EmailVerified::UNVERIFIED);
-        assert_eq!(user.is_operator, storage::OperatorStatus::OPERATOR);
-
-        let post = state
-            .posts
-            .get_post_by_id(post_id, &ViewerIdentity::local(user_id))
-            .await
-            .expect("read restored post")
-            .expect("fixture post exists");
-        assert_eq!(post.user_id, user_id);
-        assert_eq!(post.title.as_deref(), Some("Legacy wire roles"));
-        assert_eq!(post.body.as_ref(), "legacy body");
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(post.rendered_html.as_ref())
-                .expect("structured JSON survives semantically"),
-            serde_json::json!({"kind": "structured", "items": [1, true]})
-        );
-        assert_eq!(post.published_at, None);
-
-        let history = state
-            .posts
-            .list_post_revision_history(user_id, post_id, None, PageSize::default())
-            .await
-            .expect("read restored revision history")
-            .expect("fixture post history exists");
-        assert_eq!(history.revisions.len(), 1);
-        let revision = state
-            .posts
-            .get_post_revision_detail(user_id, post_id, history.revisions[0].revision_id)
-            .await
-            .expect("read restored revision")
-            .expect("fixture revision exists")
-            .revision;
-        assert_eq!(revision.post_id, post_id);
-        assert_eq!(revision.user_id, user_id);
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(revision.rendered_html.as_ref())
-                .expect("real JSON survives semantically"),
-            serde_json::json!(1.25)
-        );
-
-        let media = state
-            .media
-            .get_media(
-                user_id,
-                &parse_content_hash(
-                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                ),
-                &parse_filename("avatar.txt"),
-                &MediaSource::Upload,
-            )
-            .await
-            .expect("read restored media")
-            .expect("fixture media exists");
-        assert_eq!(media.user_id, user_id);
-        assert_eq!(media.size_bytes.to_string(), "13");
-        assert_eq!(media.source_url, None);
-        assert_eq!(
-            std::fs::read(args.storage_path.join("media").join("avatar.txt"))
-                .expect("read restored media bytes"),
-            b"legacy media\n"
-        );
     }
     async fn assert_target_unmodified(
         target: &InitializedCommandEnv,
@@ -1019,11 +1251,9 @@ mod writer_tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         fs,
-        io::Read,
         path::Path,
     };
 
-    use flate2::read::GzDecoder;
     use jaunder::commands::cmd_backup;
     use rstest::*;
     use rstest_reuse::apply;
@@ -1164,7 +1394,16 @@ mod writer_tests {
                 CorpusIoMode::Directory => written_path,
                 CorpusIoMode::Archive => {
                     let destination = source.base.path().join("extracted");
-                    extract_archive(&written_path, &destination);
+                    BackupCorpus::extract_archive(&written_path, &destination).unwrap_or_else(
+                        |error| {
+                            panic!(
+                                "{}",
+                                format_compatibility_diagnostic(format_args!(
+                                    "independent archive extraction failed: {error}"
+                                ))
+                            )
+                        },
+                    );
                     destination
                 }
             };
@@ -1176,9 +1415,12 @@ mod writer_tests {
 
     fn assert_writer_version_is_uniquely_supported(export: &Path) {
         let manifest = read_manifest(export);
-        let version = manifest["format_version"]
-            .as_u64()
-            .expect("backup format compatibility: writer format_version must be an integer");
+        let version = manifest["format_version"].as_u64().unwrap_or_else(|| {
+            panic!(
+                "{}",
+                format_compatibility_diagnostic("writer format_version must be an integer")
+            )
+        });
         let corpus = BackupCorpus::checked_in().expect("load backup format compatibility corpus");
         let matches = corpus
             .entries()
@@ -1206,9 +1448,12 @@ mod writer_tests {
     fn assert_v1_raw_wire_oracle(export: &Path, output: CorpusIoMode, ids: &BackupFixtureIds) {
         assert_inventory_is_complete();
         let manifest = read_manifest(export);
-        let members = manifest
-            .as_object()
-            .expect("backup format compatibility: manifest must be an object");
+        let members = manifest.as_object().unwrap_or_else(|| {
+            panic!(
+                "{}",
+                format_compatibility_diagnostic("manifest must be an object")
+            )
+        });
         let expected_members = BTreeSet::from([
             "format_version",
             "mode",
@@ -1262,10 +1507,14 @@ mod writer_tests {
             )
         );
 
+        let tables = manifest["tables"].as_array().unwrap_or_else(|| {
+            panic!(
+                "{}",
+                format_compatibility_diagnostic("manifest tables must be an array")
+            )
+        });
         assert_eq!(
-            manifest["tables"]
-                .as_array()
-                .expect("manifest tables array"),
+            tables,
             &V1_TABLES
                 .iter()
                 .map(|table| Value::from(*table))
@@ -1297,11 +1546,13 @@ mod writer_tests {
     }
 
     fn read_manifest(export: &Path) -> Value {
-        serde_json::from_slice(
-            &fs::read(export.join("manifest.json"))
-                .expect("backup format compatibility: read manifest"),
-        )
-        .expect("backup format compatibility: parse manifest JSON")
+        let bytes = fs::read(export.join("manifest.json")).expect("read manifest");
+        serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+            panic!(
+                "{}",
+                format_compatibility_diagnostic(format_args!("manifest JSON is invalid: {error}"))
+            )
+        })
     }
 
     fn regular_file_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
@@ -1321,7 +1572,12 @@ mod writer_tests {
                         .strip_prefix(root)
                         .expect("backup output child")
                         .to_str()
-                        .expect("UTF-8 backup output path")
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{}",
+                                format_compatibility_diagnostic("backup output path is not UTF-8")
+                            )
+                        })
                         .replace('\\', "/");
                     files.insert(relative, fs::read(path).expect("read backup output file"));
                 }
@@ -1338,7 +1594,14 @@ mod writer_tests {
             .iter()
             .map(|table| {
                 let path = format!("db/{table}.ndjson");
-                let bytes = &files[&path];
+                let bytes = files.get(&path).unwrap_or_else(|| {
+                    panic!(
+                        "{}",
+                        format_compatibility_diagnostic(format_args!(
+                            "manifest table {table} is missing its NDJSON member {path}"
+                        ))
+                    )
+                });
                 let rows = if bytes.is_empty() {
                     Vec::new()
                 } else {
@@ -1353,15 +1616,17 @@ mod writer_tests {
                                 !line.is_empty(),
                                 "backup format compatibility: {path} has an empty NDJSON line"
                             );
-                            let row: Value =
-                                serde_json::from_slice(line).unwrap_or_else(|error| {
-                                    panic!(
-                                        "backup format compatibility: {path} has invalid NDJSON: {error}"
-                                    )
-                                });
+                            let row: Value = serde_json::from_slice(line).unwrap_or_else(|error| {
+                                panic!(
+                                    "{}",
+                                    format_compatibility_diagnostic(format_args!(
+                                        "{path} has invalid NDJSON: {error}"
+                                    ))
+                                )
+                            });
                             assert!(
                                 row.is_object(),
-                                "backup format compatibility: {path} has a non-object NDJSON line; add a new immutable fixture, oracle, and corpus-index entry instead of changing format-1 history"
+                                "{path} has a non-object NDJSON line"
                             );
                             row
                         })
@@ -1508,33 +1773,5 @@ mod writer_tests {
             },
             |value| value == expected,
         )
-    }
-
-    fn extract_archive(source: &Path, destination: &Path) {
-        fs::create_dir(destination).expect("create archive extraction directory");
-        let input = fs::File::open(source).expect("open production archive");
-        let decoder = GzDecoder::new(input);
-        let mut archive = tar::Archive::new(decoder);
-        for entry in archive.entries().expect("read archive entries") {
-            let mut entry = entry.expect("read archive entry");
-            let relative = entry.path().expect("read archive entry path").into_owned();
-            let destination_path = destination.join(&relative);
-            if entry.header().entry_type().is_dir() {
-                fs::create_dir_all(destination_path).expect("create extracted archive directory");
-            } else {
-                assert!(
-                    entry.header().entry_type().is_file(),
-                    "backup format compatibility: archive contains a non-file entry"
-                );
-                if let Some(parent) = destination_path.parent() {
-                    fs::create_dir_all(parent).expect("create extracted archive parent");
-                }
-                let mut bytes = Vec::new();
-                entry
-                    .read_to_end(&mut bytes)
-                    .expect("read archive entry bytes");
-                fs::write(destination_path, bytes).expect("write extracted archive entry");
-            }
-        }
     }
 }
