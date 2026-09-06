@@ -697,6 +697,9 @@ fn run_lifecycle(
                     )
                 }
                 ServerStartPhase::Http => failure.error().to_string(),
+                ServerStartPhase::Interrupted => {
+                    unreachable!("noninterruptible e2e-local startup cannot be interrupted")
+                }
             };
             result.push(
                 StepResult::fail(&server_step)

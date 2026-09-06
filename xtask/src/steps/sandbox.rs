@@ -8,14 +8,13 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::io::Write;
-use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::thread::sleep;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::{Context as _, bail};
+use anyhow::{Context, bail};
+use processkit::{Outcome, StdioMode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::runtime::Builder;
@@ -26,6 +25,7 @@ use crate::result::{CommandResult, StepResult};
 use crate::steps::host_server::{
     HostArtifactConfig, HostArtifacts, HostServerSession, ServerSessionConfig, ServerStartPhase,
 };
+use crate::steps::process::Process;
 
 const SANDBOX_ROOT: &str = ".xtask/sandboxes";
 const PROFILE_METADATA: &str = ".sandbox.json";
@@ -53,7 +53,7 @@ struct ServerMetadata {
     executable_digest: String,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum ServerState {
     Ready,
@@ -105,11 +105,22 @@ impl ServerExit {
         }
     }
 }
+#[derive(Debug)]
+struct InterruptedChild {
+    code: i32,
+    shutdown: anyhow::Result<()>,
+}
+
+enum SupervisedOutcome {
+    Completed(Outcome),
+    Signal(InterruptedChild),
+}
 
 struct ServerSignals {
     runtime: tokio::runtime::Runtime,
     interrupt: tokio::signal::unix::Signal,
     terminate: tokio::signal::unix::Signal,
+    pending: Option<i32>,
 }
 
 struct NamedServer {
@@ -183,6 +194,13 @@ fn run_command(sh: &Shell, result: &mut CommandResult, name: &str, command: Vec<
     else {
         return;
     };
+    let mut signals = match ServerSignals::install() {
+        Ok(signals) => signals,
+        Err(error) => {
+            record(result, "sandbox-signals", error);
+            return;
+        }
+    };
     let digest = match executable_digest(&artifacts.jaunder) {
         Ok(digest) => digest,
         Err(error) => {
@@ -191,33 +209,43 @@ fn run_command(sh: &Shell, result: &mut CommandResult, name: &str, command: Vec<
         }
     };
     let locks = LockPaths::for_name(name);
-    let guards = match command_admission(name, &workspace, &locks, &digest) {
-        Ok(guards) => guards,
+    let guards = match command_admission(name, &workspace, &locks, &digest, &mut signals) {
+        Ok(Some(guards)) => guards,
+        Ok(None) => {
+            result.exit_override = signals.take_pending();
+            return;
+        }
         Err(error) => {
             record(result, "sandbox-command", error);
             return;
         }
     };
-    let status = Command::new(&artifacts.jaunder)
-        .args(&command)
-        .env("JAUNDER_STORAGE_PATH", &workspace)
-        .env("JAUNDER_DB", database_url(&workspace))
-        .status();
+    let process = Process::start(
+        processkit::Command::new(&artifacts.jaunder)
+            .args(command)
+            .env("JAUNDER_STORAGE_PATH", &workspace)
+            .env("JAUNDER_DB", database_url(&workspace))
+            .inherit_stdin()
+            .stdout(StdioMode::Inherit)
+            .stderr(StdioMode::Inherit),
+    );
+    let outcome = process.and_then(|process| supervise_process(process, &mut signals));
     drop(guards);
-    match status {
-        Ok(status) => {
-            let code = status
-                .code()
-                .unwrap_or_else(|| 128 + status.signal().unwrap_or(1));
+    match outcome {
+        Ok(SupervisedOutcome::Completed(outcome)) => {
+            let code = outcome_exit_code(outcome);
             result.exit_override = Some(code);
-            result.push(if status.success() {
+            result.push(if code == 0 {
                 StepResult::ok("sandbox-command")
             } else {
                 StepResult::fail("sandbox-command")
                     .detail(format!("child exited with status {code}"))
             });
         }
-        Err(error) => record(result, "sandbox-command", error.into()),
+        Ok(SupervisedOutcome::Signal(interrupted)) => {
+            finish_interrupted(result, interrupted);
+        }
+        Err(error) => record(result, "sandbox-command", error),
     }
 }
 
@@ -232,11 +260,14 @@ fn command_admission(
     workspace: &Path,
     locks: &LockPaths,
     digest: &str,
-) -> anyhow::Result<CommandLocks> {
+    signals: &mut ServerSignals,
+) -> anyhow::Result<Option<CommandLocks>> {
     let server_probe = lock_file(&locks.server)?;
     match server_probe.try_lock() {
         Ok(()) => {
-            let exclusive = lock_exclusive_blocking(&locks.workspace)?;
+            let Some(exclusive) = lock_exclusive_interruptible(&locks.workspace, signals)? else {
+                return Ok(None);
+            };
             recover_workspace(name)?;
             if !workspace.is_dir() {
                 bail!("sandbox `{name}` does not exist");
@@ -247,10 +278,10 @@ fn command_admission(
             drop(exclusive);
             let shared = lock_shared(&locks.workspace)?;
             drop(server_probe);
-            Ok(CommandLocks {
+            Ok(Some(CommandLocks {
                 _workspace: shared,
                 _runtime: Some(runtime),
-            })
+            }))
         }
         Err(std::fs::TryLockError::WouldBlock) => {
             let shared = lock_shared(&locks.workspace)?;
@@ -262,10 +293,10 @@ fn command_admission(
                     if metadata.state == ServerState::Ready
                         && metadata.executable_digest == digest =>
                 {
-                    Ok(CommandLocks {
+                    Ok(Some(CommandLocks {
                         _workspace: shared,
                         _runtime: None,
-                    })
+                    }))
                 }
                 Some(ServerMetadata {
                     state: ServerState::Ready,
@@ -289,13 +320,6 @@ fn run_server(
     selected_profile: Option<SandboxProfile>,
     reset: bool,
 ) {
-    let mut signals = match ServerSignals::install() {
-        Ok(signals) => signals,
-        Err(error) => {
-            record(result, "sandbox-signals", error);
-            return;
-        }
-    };
     let server_lease = match name.as_deref() {
         Some(name) => {
             let locks = LockPaths::for_name(name);
@@ -313,17 +337,17 @@ fn run_server(
         }
         None => None,
     };
-    let artifacts = HostArtifacts::prepare(sh, result, HostArtifactConfig::sandbox_server());
-    let Some(artifacts) = artifacts else {
-        if let Some(code) = signals.take_pending() {
-            result.exit_override = Some(code);
-        }
+    let Some(artifacts) = HostArtifacts::prepare(sh, result, HostArtifactConfig::sandbox_server())
+    else {
         return;
     };
-    if let Some(code) = signals.take_pending() {
-        result.exit_override = Some(code);
-        return;
-    }
+    let mut signals = match ServerSignals::install() {
+        Ok(signals) => signals,
+        Err(error) => {
+            record(result, "sandbox-signals", error);
+            return;
+        }
+    };
     match name {
         Some(name) => {
             let digest = match executable_digest(&artifacts.jaunder) {
@@ -372,13 +396,16 @@ fn run_disposable_server(
         }
     };
     let workspace = temp.path().join("workspace");
-    if let Err(error) = prepare_workspace(&artifacts, &workspace, profile) {
-        record_startup_failure(result, signals, "sandbox-workspace", error);
-        return;
-    }
-    if let Some(code) = signals.take_pending() {
-        result.exit_override = Some(code);
-        return;
+    match prepare_workspace(&artifacts, &workspace, profile, signals) {
+        Ok(None) => {}
+        Ok(Some(interrupted)) => {
+            finish_interrupted(result, interrupted);
+            return;
+        }
+        Err(error) => {
+            record(result, "sandbox-workspace", error);
+            return;
+        }
     }
     run_session(sh, result, &artifacts, &workspace, profile, signals);
 }
@@ -398,8 +425,12 @@ fn run_named_server(
         server_lease,
     } = config;
     let locks = LockPaths::for_name(&name);
-    let exclusive = match lock_exclusive_blocking(&locks.workspace) {
-        Ok(lock) => lock,
+    let exclusive = match lock_exclusive_interruptible(&locks.workspace, signals) {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            result.exit_override = signals.take_pending();
+            return;
+        }
         Err(error) => {
             record(result, "sandbox-workspace", error);
             return;
@@ -417,18 +448,28 @@ fn run_named_server(
             return;
         }
     };
-    if let Err(error) = ensure_named_workspace(&artifacts, &name, profile, reset) {
-        record_startup_failure(result, signals, "sandbox-workspace", error);
-        return;
-    }
-    if let Some(code) = signals.take_pending() {
-        result.exit_override = Some(code);
-        return;
-    }
-    let mut session = match start_session(sh, &artifacts, &workspace) {
-        Ok(session) => session,
+    match ensure_named_workspace(&artifacts, &name, profile, reset, signals) {
+        Ok(None) => {}
+        Ok(Some(interrupted)) => {
+            finish_interrupted(result, interrupted);
+            return;
+        }
         Err(error) => {
-            record_startup_failure(result, signals, "sandbox-server", error);
+            record(result, "sandbox-workspace", error);
+            return;
+        }
+    }
+    let mut session = match start_session(sh, &artifacts, &workspace, signals) {
+        Ok(SessionStart::Ready(session)) => *session,
+        Ok(SessionStart::Interrupted { code, shutdown }) => {
+            if let Err(error) = shutdown {
+                record(result, "sandbox-shutdown", error);
+            }
+            result.exit_override = Some(code);
+            return;
+        }
+        Err(error) => {
+            record(result, "sandbox-server", error);
             return;
         }
     };
@@ -487,10 +528,17 @@ fn run_session(
     profile: SandboxProfile,
     signals: &mut ServerSignals,
 ) {
-    let mut session = match start_session(sh, artifacts, workspace) {
-        Ok(session) => session,
+    let mut session = match start_session(sh, artifacts, workspace, signals) {
+        Ok(SessionStart::Ready(session)) => *session,
+        Ok(SessionStart::Interrupted { code, shutdown }) => {
+            if let Err(error) = shutdown {
+                record(result, "sandbox-shutdown", error);
+            }
+            result.exit_override = Some(code);
+            return;
+        }
         Err(error) => {
-            record_startup_failure(result, signals, "sandbox-server", error);
+            record(result, "sandbox-server", error);
             return;
         }
     };
@@ -509,32 +557,94 @@ fn run_session(
     result.exit_override = Some(code);
 }
 
+enum SessionStart {
+    Ready(Box<HostServerSession>),
+    Interrupted {
+        code: i32,
+        shutdown: anyhow::Result<()>,
+    },
+}
+
 fn start_session(
     sh: &Shell,
     artifacts: &HostArtifacts,
     workspace: &Path,
-) -> anyhow::Result<HostServerSession> {
+    signals: &mut ServerSignals,
+) -> anyhow::Result<SessionStart> {
     let stderr = File::create(workspace.join("sandbox-server.stderr"))
         .context("creating sandbox stderr capture")?;
-    HostServerSession::start(ServerSessionConfig {
-        shell: sh,
-        jaunder: artifacts.jaunder.clone(),
-        storage: workspace.to_path_buf(),
-        runtime_file: workspace.join("runtime.json"),
-        database_url: database_url(workspace),
-        stderr,
-        extra_env: Vec::new(),
-    })
-    .map_err(|error| {
-        let phase = match error.phase() {
-            ServerStartPhase::Spawn => "spawn",
-            ServerStartPhase::RuntimeFile => "runtime file",
-            ServerStartPhase::Http => "HTTP readiness",
-        };
-        let detail = error.error().to_string();
-        let _ = error.into_session().map(|mut session| session.force_stop());
-        anyhow::anyhow!("sandbox server {phase} failed: {detail}")
-    })
+    let mut signal_code = None;
+    let started = HostServerSession::start_interruptible(
+        ServerSessionConfig {
+            shell: sh,
+            jaunder: artifacts.jaunder.clone(),
+            storage: workspace.to_path_buf(),
+            runtime_file: workspace.join("runtime.json"),
+            database_url: database_url(workspace),
+            stderr,
+            extra_env: Vec::new(),
+        },
+        || {
+            if signal_code.is_none() {
+                signal_code = signals.take_pending();
+            }
+            signal_code.is_some()
+        },
+    );
+    match started {
+        Ok(session) => Ok(SessionStart::Ready(Box::new(session))),
+        Err(error) if error.phase() == ServerStartPhase::Interrupted => {
+            let code = signal_code.expect("interrupted startup captured a signal");
+            let mut session = error
+                .into_session()
+                .expect("interrupted startup retains its session");
+            let shutdown = signals.shutdown_session(&mut session, ServerExit::Signal(code));
+            Ok(SessionStart::Interrupted { code, shutdown })
+        }
+        Err(error) => {
+            let phase = match error.phase() {
+                ServerStartPhase::Spawn => "spawn",
+                ServerStartPhase::RuntimeFile => "runtime file",
+                ServerStartPhase::Http => "HTTP readiness",
+                ServerStartPhase::Interrupted => unreachable!("handled above"),
+            };
+            let detail = error.error().to_string();
+            let _ = error.into_session().map(|mut session| session.force_stop());
+            Err(anyhow::anyhow!("sandbox server {phase} failed: {detail}"))
+        }
+    }
+}
+
+fn supervise_process(
+    mut process: Process,
+    signals: &mut ServerSignals,
+) -> anyhow::Result<SupervisedOutcome> {
+    match signals.wait_until_stopped(|| process.is_stopped()) {
+        ServerExit::Unexpected(_) => process.wait().map(SupervisedOutcome::Completed),
+        ServerExit::Signal(code) => {
+            let shutdown = signals.shutdown_process(&mut process);
+            Ok(SupervisedOutcome::Signal(InterruptedChild {
+                code,
+                shutdown,
+            }))
+        }
+    }
+}
+
+fn outcome_exit_code(outcome: Outcome) -> i32 {
+    match outcome {
+        Outcome::Exited(code) => code,
+        Outcome::Signalled(Some(signal)) => 128 + signal,
+        Outcome::Signalled(None) => 1,
+        _ => 1,
+    }
+}
+
+fn finish_interrupted(result: &mut CommandResult, interrupted: InterruptedChild) {
+    if let Err(error) = interrupted.shutdown {
+        record(result, "sandbox-shutdown", error);
+    }
+    result.exit_override = Some(interrupted.code);
 }
 
 impl ServerSignals {
@@ -554,10 +664,22 @@ impl ServerSignals {
             runtime,
             interrupt,
             terminate,
+            pending: None,
         })
     }
 
     fn take_pending(&mut self) -> Option<i32> {
+        self.pending.take().or_else(|| self.receive_pending())
+    }
+
+    fn has_pending(&mut self) -> bool {
+        if self.pending.is_none() {
+            self.pending = self.receive_pending();
+        }
+        self.pending.is_some()
+    }
+
+    fn receive_pending(&mut self) -> Option<i32> {
         self.runtime.block_on(async {
             tokio::time::timeout(Duration::from_millis(1), async {
                 tokio::select! {
@@ -571,9 +693,13 @@ impl ServerSignals {
     }
 
     fn wait_for_server(&mut self, session: &mut HostServerSession) -> ServerExit {
+        self.wait_until_stopped(|| session.is_stopped())
+    }
+
+    fn wait_until_stopped(&mut self, mut stopped: impl FnMut() -> bool) -> ServerExit {
         self.runtime.block_on(async {
             loop {
-                if session.is_stopped() {
+                if stopped() {
                     return ServerExit::Unexpected(1);
                 }
                 tokio::select! {
@@ -591,27 +717,22 @@ impl ServerSignals {
         exit: ServerExit,
     ) -> anyhow::Result<()> {
         match exit {
-            ServerExit::Signal(_) => session.stop_interruptible(async {
-                tokio::select! {
-                    _ = self.interrupt.recv() => {},
-                    _ = self.terminate.recv() => {},
-                }
-            }),
+            ServerExit::Signal(_) => session.stop_interruptible(self.next_signal()),
             ServerExit::Unexpected(_) => Ok(()),
         }
     }
-}
 
-fn record_startup_failure(
-    result: &mut CommandResult,
-    signals: &mut ServerSignals,
-    step: &'static str,
-    error: anyhow::Error,
-) {
-    if let Some(code) = signals.take_pending() {
-        result.exit_override = Some(code);
-    } else {
-        record(result, step, error);
+    fn shutdown_process(&mut self, process: &mut Process) -> anyhow::Result<()> {
+        process
+            .shutdown_interruptible(Duration::from_secs(10), self.next_signal())
+            .map(|_| ())
+    }
+
+    async fn next_signal(&mut self) {
+        tokio::select! {
+            _ = self.interrupt.recv() => {},
+            _ = self.terminate.recv() => {},
+        }
     }
 }
 
@@ -653,24 +774,44 @@ fn ensure_named_workspace(
     name: &str,
     profile: SandboxProfile,
     reset: bool,
-) -> anyhow::Result<()> {
-    let workspace = named_workspace(name);
+    signals: &mut ServerSignals,
+) -> anyhow::Result<Option<InterruptedChild>> {
+    ensure_named_workspace_at(&sandbox_root(), artifacts, name, profile, reset, signals)
+}
+
+fn ensure_named_workspace_at(
+    parent: &Path,
+    artifacts: &HostArtifacts,
+    name: &str,
+    profile: SandboxProfile,
+    reset: bool,
+    signals: &mut ServerSignals,
+) -> anyhow::Result<Option<InterruptedChild>> {
+    let workspace = parent.join(name);
     if workspace.exists() && !reset {
-        return Ok(());
+        return Ok(None);
     }
-    if reset {
-        let runtime = try_runtime_lock(&workspace.join("runtime.lock"))?;
-        drop(runtime);
-    }
-    let parent = sandbox_root();
-    fs::create_dir_all(&parent)?;
+    let _old_runtime = if reset {
+        Some(try_runtime_lock(&workspace.join("runtime.lock"))?)
+    } else {
+        None
+    };
+    fs::create_dir_all(parent)?;
     let new = parent.join(format!(".{name}.reset-new"));
     let old = parent.join(format!(".{name}.reset-old"));
     let _ = fs::remove_dir_all(&new);
-    if let Err(error) = prepare_workspace(artifacts, &new, profile) {
-        let _ = fs::remove_dir_all(&new);
-        return Err(error);
+    match prepare_workspace(artifacts, &new, profile, signals) {
+        Ok(None) => {}
+        Ok(Some(code)) => {
+            let _ = fs::remove_dir_all(&new);
+            return Ok(Some(code));
+        }
+        Err(error) => {
+            let _ = fs::remove_dir_all(&new);
+            return Err(error);
+        }
     }
+    let _new_runtime = try_runtime_lock(&new.join("runtime.lock"))?;
     if workspace.exists() {
         fs::rename(&workspace, &old).context("retaining old sandbox workspace")?;
         if let Err(error) = fs::rename(&new, &workspace) {
@@ -681,18 +822,29 @@ fn ensure_named_workspace(
     } else {
         fs::rename(new, workspace)?;
     }
-    Ok(())
+    Ok(None)
 }
 
 fn recover_workspace(name: &str) -> anyhow::Result<()> {
-    let parent = sandbox_root();
-    let workspace = named_workspace(name);
+    recover_workspace_at(&sandbox_root(), name)
+}
+
+fn recover_workspace_at(parent: &Path, name: &str) -> anyhow::Result<()> {
+    let workspace = parent.join(name);
     let new = parent.join(format!(".{name}.reset-new"));
     let old = parent.join(format!(".{name}.reset-old"));
     match (workspace.exists(), new.exists(), old.exists()) {
-        (false, _, true) => fs::rename(old, workspace)?,
+        (false, true, true) => {
+            fs::rename(&old, &workspace)?;
+            fs::remove_dir_all(new)?;
+        }
+        (false, false, true) => fs::rename(old, workspace)?,
         (false, true, false) => fs::remove_dir_all(new)?,
-        (true, _, true) => fs::remove_dir_all(old)?,
+        (true, true, true) => {
+            fs::remove_dir_all(old)?;
+            fs::remove_dir_all(new)?;
+        }
+        (true, false, true) => fs::remove_dir_all(old)?,
         (true, true, false) => fs::remove_dir_all(new)?,
         _ => {}
     }
@@ -703,32 +855,48 @@ fn prepare_workspace(
     artifacts: &HostArtifacts,
     workspace: &Path,
     profile: SandboxProfile,
-) -> anyhow::Result<()> {
-    let status = Command::new(&artifacts.jaunder)
-        .arg("init")
-        .env("JAUNDER_STORAGE_PATH", workspace)
-        .env("JAUNDER_DB", database_url(workspace))
-        .status()
-        .context("running jaunder init")?;
-    if !status.success() {
-        bail!("jaunder init failed");
+    signals: &mut ServerSignals,
+) -> anyhow::Result<Option<InterruptedChild>> {
+    let init = Process::start(
+        processkit::Command::new(&artifacts.jaunder)
+            .arg("init")
+            .env("JAUNDER_STORAGE_PATH", workspace)
+            .env("JAUNDER_DB", database_url(workspace))
+            .inherit_stdin()
+            .stdout(StdioMode::Inherit)
+            .stderr(StdioMode::Inherit),
+    )
+    .context("running jaunder init")?;
+    match supervise_process(init, signals)? {
+        SupervisedOutcome::Completed(Outcome::Exited(0)) => {}
+        SupervisedOutcome::Completed(outcome) => bail!("jaunder init failed ({outcome:?})"),
+        SupervisedOutcome::Signal(interrupted) => return Ok(Some(interrupted)),
     }
     if profile != SandboxProfile::Empty {
         let support = artifacts
             .test_support
             .as_ref()
             .context("sandbox profile seeder was not built")?;
-        let status = Command::new(support)
-            .args(["seed-sandbox-profile", "--db"])
-            .arg(database_url(workspace))
-            .args(["--profile", profile.as_str()])
-            .status()
-            .context("running sandbox profile seed")?;
-        if !status.success() {
-            bail!("sandbox profile seed failed");
+        let seed = Process::start(
+            processkit::Command::new(support)
+                .args(["seed-sandbox-profile", "--db"])
+                .arg(database_url(workspace))
+                .args(["--profile", profile.as_str()])
+                .inherit_stdin()
+                .stdout(StdioMode::Inherit)
+                .stderr(StdioMode::Inherit),
+        )
+        .context("running sandbox profile seed")?;
+        match supervise_process(seed, signals)? {
+            SupervisedOutcome::Completed(Outcome::Exited(0)) => {}
+            SupervisedOutcome::Completed(outcome) => {
+                bail!("sandbox profile seed failed ({outcome:?})");
+            }
+            SupervisedOutcome::Signal(interrupted) => return Ok(Some(interrupted)),
         }
     }
-    write_profile_metadata(workspace, profile)
+    write_profile_metadata(workspace, profile)?;
+    Ok(None)
 }
 
 fn named_workspace(name: &str) -> PathBuf {
@@ -887,14 +1055,32 @@ fn print_session(session: &HostServerSession, profile: SandboxProfile) {
         println!("Sandbox credentials: user / jaunder-dev; operator / jaunder-dev");
     }
 }
+fn lock_exclusive_interruptible(
+    path: &Path,
+    signals: &mut ServerSignals,
+) -> anyhow::Result<Option<File>> {
+    let file = lock_file(path)?;
+    loop {
+        if signals.has_pending() {
+            return Ok(None);
+        }
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(file)),
+            Err(std::fs::TryLockError::WouldBlock) => sleep(Duration::from_millis(25)),
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(error)
+                    .with_context(|| format!("acquiring exclusive lock {}", path.display()));
+            }
+        }
+    }
+}
+
 fn lock_exclusive_blocking(path: &Path) -> anyhow::Result<File> {
     let file = lock_file(path)?;
     loop {
         match file.try_lock() {
             Ok(()) => return Ok(file),
-            Err(std::fs::TryLockError::WouldBlock) => {
-                sleep(Duration::from_millis(25));
-            }
+            Err(std::fs::TryLockError::WouldBlock) => sleep(Duration::from_millis(25)),
             Err(std::fs::TryLockError::Error(error)) => {
                 return Err(error)
                     .with_context(|| format!("acquiring exclusive lock {}", path.display()));
@@ -960,6 +1146,115 @@ mod tests {
     }
 
     #[test]
+    fn named_workspace_create_resume_and_reset_are_distinct_transitions() {
+        let temp = tempfile::tempdir().expect("temporary sandbox root");
+        let artifacts = fake_artifacts(temp.path(), 0);
+        let mut signals = ServerSignals::install().expect("signal handlers");
+
+        let created = ensure_named_workspace_at(
+            temp.path(),
+            &artifacts,
+            "demo",
+            SandboxProfile::Empty,
+            false,
+            &mut signals,
+        )
+        .expect("create workspace");
+        assert!(created.is_none());
+        let workspace = temp.path().join("demo");
+        fs::write(workspace.join("retained"), "state").expect("persistent marker");
+
+        ensure_named_workspace_at(
+            temp.path(),
+            &artifacts,
+            "demo",
+            SandboxProfile::Empty,
+            false,
+            &mut signals,
+        )
+        .expect("resume workspace");
+        assert_eq!(
+            fs::read_to_string(workspace.join("retained")).expect("resume marker"),
+            "state"
+        );
+
+        ensure_named_workspace_at(
+            temp.path(),
+            &artifacts,
+            "demo",
+            SandboxProfile::Empty,
+            true,
+            &mut signals,
+        )
+        .expect("reset workspace");
+        assert!(!workspace.join("retained").exists());
+        assert_eq!(
+            read_profile_metadata(&workspace)
+                .expect("reset profile metadata")
+                .profile,
+            SandboxProfile::Empty
+        );
+    }
+
+    #[test]
+    fn failed_reset_preserves_published_workspace() {
+        let temp = tempfile::tempdir().expect("temporary sandbox root");
+        let workspace = temp.path().join("demo");
+        fs::create_dir(&workspace).expect("published workspace");
+        fs::write(workspace.join("retained"), "state").expect("persistent marker");
+        write_profile_metadata(&workspace, SandboxProfile::Empty).expect("profile metadata");
+        let artifacts = fake_artifacts(temp.path(), 7);
+        let mut signals = ServerSignals::install().expect("signal handlers");
+
+        let error = ensure_named_workspace_at(
+            temp.path(),
+            &artifacts,
+            "demo",
+            SandboxProfile::Empty,
+            true,
+            &mut signals,
+        )
+        .expect_err("failed preparation must abort reset");
+
+        assert!(error.to_string().contains("jaunder init failed"));
+        assert_eq!(
+            fs::read_to_string(workspace.join("retained")).expect("preserved marker"),
+            "state"
+        );
+        assert!(!temp.path().join(".demo.reset-new").exists());
+    }
+
+    #[test]
+    fn reset_rejects_an_external_runtime_before_preparation() {
+        let temp = tempfile::tempdir().expect("temporary sandbox root");
+        let workspace = temp.path().join("demo");
+        fs::create_dir(&workspace).expect("published workspace");
+        fs::write(workspace.join("retained"), "state").expect("persistent marker");
+        write_profile_metadata(&workspace, SandboxProfile::Empty).expect("profile metadata");
+        let runtime = lock_file(&workspace.join("runtime.lock")).expect("runtime lock");
+        runtime.try_lock().expect("hold external runtime");
+        let artifacts = fake_artifacts(temp.path(), 0);
+        let mut signals = ServerSignals::install().expect("signal handlers");
+
+        let error = ensure_named_workspace_at(
+            temp.path(),
+            &artifacts,
+            "demo",
+            SandboxProfile::Empty,
+            true,
+            &mut signals,
+        )
+        .expect_err("external runtime must exclude reset");
+
+        assert!(error.to_string().contains("external server"));
+        assert_eq!(
+            fs::read_to_string(workspace.join("retained")).expect("preserved marker"),
+            "state"
+        );
+        assert!(!temp.path().join(".demo.reset-new").exists());
+    }
+
+    #[test]
     fn mismatched_managed_generation_is_rejected_before_command_execution() {
         let temp = tempfile::tempdir().expect("temporary control root");
         let workspace = temp.path().join("workspace");
@@ -974,11 +1269,40 @@ mod tests {
         server.try_lock().expect("hold server lease");
         write_server_metadata(&locks.metadata, ServerState::Ready, "old-digest")
             .expect("ready metadata");
+        let mut signals = ServerSignals::install().expect("signal handlers");
 
-        let error = command_admission("unused", &workspace, &locks, "new-digest")
+        let error = command_admission("unused", &workspace, &locks, "new-digest", &mut signals)
             .expect_err("mismatched generation must fail");
 
         assert!(error.to_string().contains("different executable"));
+    }
+
+    #[test]
+    fn compatible_live_server_admits_a_generation_pinned_command() {
+        let temp = tempfile::tempdir().expect("temporary control root");
+        let workspace = temp.path().join("workspace");
+        fs::create_dir(&workspace).expect("workspace");
+        write_profile_metadata(&workspace, SandboxProfile::Empty).expect("profile metadata");
+        let locks = LockPaths {
+            workspace: temp.path().join("workspace.lock"),
+            server: temp.path().join("server.lock"),
+            metadata: temp.path().join("server.json"),
+        };
+        let server = lock_file(&locks.server).expect("server lease");
+        server.try_lock().expect("hold server lease");
+        let server_workspace = lock_file(&locks.workspace).expect("workspace lock");
+        server_workspace
+            .try_lock_shared()
+            .expect("hold ready generation");
+        write_server_metadata(&locks.metadata, ServerState::Ready, "same-digest")
+            .expect("ready metadata");
+        let mut signals = ServerSignals::install().expect("signal handlers");
+
+        let admitted = command_admission("unused", &workspace, &locks, "same-digest", &mut signals)
+            .expect("matching generation")
+            .expect("command admitted");
+
+        assert!(admitted._runtime.is_none());
     }
 
     #[test]
@@ -994,9 +1318,132 @@ mod tests {
     }
 
     #[test]
+    fn stable_parent_locks_exclude_same_name_transitions_only() {
+        let alpha = LockPaths::for_name("alpha");
+        let beta = LockPaths::for_name("beta");
+        assert_eq!(
+            alpha.workspace,
+            PathBuf::from(".xtask/sandboxes/.locks/alpha.workspace.lock")
+        );
+        assert_ne!(alpha.workspace, beta.workspace);
+        assert_ne!(alpha.server, beta.server);
+
+        let temp = tempfile::tempdir().expect("temporary lock root");
+        let alpha_server = temp.path().join("alpha.server.lock");
+        let beta_server = temp.path().join("beta.server.lock");
+        let first_server = lock_exclusive(&alpha_server).expect("first alpha server");
+        assert!(lock_exclusive(&alpha_server).is_err());
+        let beta_guard = lock_exclusive(&beta_server).expect("independent beta server");
+
+        let workspace = temp.path().join("alpha.workspace.lock");
+        let command = lock_file(&workspace).expect("command workspace lock");
+        command.try_lock_shared().expect("hold command access");
+        assert!(
+            lock_exclusive(&workspace).is_err(),
+            "reset/server transition must wait for a live command"
+        );
+
+        drop((first_server, beta_guard, command));
+    }
+
+    #[test]
+    fn server_metadata_transitions_preserve_the_generation_digest() {
+        let temp = tempfile::tempdir().expect("temporary metadata root");
+        let path = temp.path().join("server.json");
+
+        write_server_metadata(&path, ServerState::Ready, "digest").expect("ready metadata");
+        let ready = read_server_metadata(&path)
+            .expect("read ready metadata")
+            .expect("ready metadata exists");
+        assert_eq!(ready.state, ServerState::Ready);
+        assert_eq!(ready.executable_digest, "digest");
+
+        write_stopping_metadata(&path, "digest").expect("stopping metadata");
+        let stopping = read_server_metadata(&path)
+            .expect("read stopping metadata")
+            .expect("stopping metadata exists");
+        assert_eq!(stopping.state, ServerState::Stopping);
+        assert_eq!(stopping.executable_digest, "digest");
+    }
+
+    #[test]
+    fn recovery_handles_every_interrupted_reset_state() {
+        for (has_current, has_new, has_old) in [
+            (false, false, false),
+            (false, false, true),
+            (false, true, false),
+            (false, true, true),
+            (true, false, false),
+            (true, false, true),
+            (true, true, false),
+            (true, true, true),
+        ] {
+            let temp = tempfile::tempdir().expect("temporary sandbox root");
+            let current = temp.path().join("demo");
+            let new = temp.path().join(".demo.reset-new");
+            let old = temp.path().join(".demo.reset-old");
+            if has_current {
+                fs::create_dir(&current).expect("current workspace");
+                fs::write(current.join("source"), "current").expect("current marker");
+            }
+            if has_new {
+                fs::create_dir(&new).expect("new workspace");
+                fs::write(new.join("source"), "new").expect("new marker");
+            }
+            if has_old {
+                fs::create_dir(&old).expect("old workspace");
+                fs::write(old.join("source"), "old").expect("old marker");
+            }
+
+            recover_workspace_at(temp.path(), "demo").expect("recover workspace");
+
+            assert!(!new.exists(), "new state {has_current}/{has_new}/{has_old}");
+            assert!(!old.exists(), "old state {has_current}/{has_new}/{has_old}");
+            let expected = if has_current {
+                Some("current")
+            } else if has_old {
+                Some("old")
+            } else {
+                None
+            };
+            assert_eq!(
+                current
+                    .exists()
+                    .then(|| fs::read_to_string(current.join("source")).expect("source marker"))
+                    .as_deref(),
+                expected,
+                "state {has_current}/{has_new}/{has_old}"
+            );
+        }
+    }
+
+    #[test]
     fn exact_exit_status_overrides_binary_result_status() {
         let mut result = CommandResult::new("sandbox");
         result.exit_override = Some(37);
         assert_eq!(result.exit_code(), 37);
+    }
+
+    fn fake_artifacts(root: &Path, exit_code: i32) -> HostArtifacts {
+        use std::os::unix::fs::PermissionsExt;
+
+        let jaunder = root.join(format!("fake-jaunder-{exit_code}"));
+        fs::write(
+            &jaunder,
+            format!(
+                "#!/bin/sh\nmkdir -p \"$JAUNDER_STORAGE_PATH\"\ntouch \"$JAUNDER_STORAGE_PATH/initialized\"\nexit {exit_code}\n"
+            ),
+        )
+        .expect("write fake jaunder");
+        let mut permissions = fs::metadata(&jaunder)
+            .expect("fake jaunder metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&jaunder, permissions).expect("make fake jaunder executable");
+        HostArtifacts {
+            root: root.to_path_buf(),
+            jaunder,
+            test_support: None,
+        }
     }
 }

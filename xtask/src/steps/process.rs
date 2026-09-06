@@ -16,6 +16,7 @@ pub(super) struct Process {
     running: Option<RunningProcess>,
     runtime: Runtime,
     stopped: bool,
+    identity: Option<(u32, Option<u64>)>,
 }
 
 impl Process {
@@ -28,10 +29,19 @@ impl Process {
         let running = runtime
             .block_on(command.start())
             .map_err(anyhow::Error::from)?;
+        let (identity, stopped) = match running.pid() {
+            Some(pid) => match processkit::process_info(pid) {
+                Ok(Some(info)) => (Some((pid, info.start_time())), false),
+                Ok(None) => (None, true),
+                Err(_) => (None, false),
+            },
+            None => (None, true),
+        };
         Ok(Self {
             running: Some(running),
             runtime,
-            stopped: false,
+            stopped,
+            identity,
         })
     }
 
@@ -104,9 +114,16 @@ impl Process {
     pub(super) fn is_stopped(&self) -> bool {
         self.stopped
             || self
+                .identity
+                .is_some_and(|(pid, start_time)| process_identity_is_stopped(pid, start_time))
+            || self
                 .running
                 .as_ref()
                 .is_some_and(|running| running.pid().is_none())
+    }
+
+    pub(super) fn identity(&self) -> Option<(u32, Option<u64>)> {
+        self.identity
     }
 
     fn take_running(&mut self) -> anyhow::Result<RunningProcess> {
@@ -114,6 +131,24 @@ impl Process {
             .take()
             .ok_or_else(|| anyhow::anyhow!("process was already stopped"))
     }
+}
+
+fn process_identity_is_stopped(pid: u32, start_time: Option<u64>) -> bool {
+    if processkit::process_is_alive(pid, start_time).is_ok_and(|alive| !alive) {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let stat_path = format!("/proc/{pid}/stat");
+        std::fs::read_to_string(stat_path)
+            .map(|stat| {
+                stat.rsplit_once(") ")
+                    .is_some_and(|(_, fields)| fields.starts_with("Z "))
+            })
+            .unwrap_or(true)
+    }
+    #[cfg(not(target_os = "linux"))]
+    false
 }
 
 impl Drop for Process {

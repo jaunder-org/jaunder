@@ -1,6 +1,8 @@
 //! `test-support` — out-of-process test/e2e helpers that link jaunder's real
 //! crates (see `lib.rs`). Never shipped in the `jaunder` production binary.
 
+use std::sync::Arc;
+
 use clap::{Parser, Subcommand, ValueEnum};
 use common::display_name::DisplayName;
 use host::{capture, feed::FeedEventPhase};
@@ -311,8 +313,12 @@ async fn cmd_seed_sandbox_profile(
     profile: SandboxProfile,
 ) -> anyhow::Result<()> {
     let state = storage::open_existing_database(db, runtime).await?;
+    let site_config = Arc::clone(&state.site_config);
+    let users = Arc::clone(&state.users);
+    let posts = Arc::clone(&state.posts);
+    let write_scope = state.write_scope.clone();
     let anchor = sandbox_profile_anchor();
-    seed_sandbox_profile(&state, profile, anchor).await?;
+    seed_sandbox_profile(site_config, users, posts, write_scope, profile, anchor).await?;
     eprintln!("seeded sandbox profile {}", profile_name(profile));
     Ok(())
 }

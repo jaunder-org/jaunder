@@ -26,8 +26,9 @@ use common::visibility::AudienceTarget;
 use host::config_key::SiteConfigKey;
 use host::feed::{FeedEventPhase, FeedPath};
 use storage::{
-    AppState, OperatorStatus, PostBookkeepingExpectation, PostFormat, RenderedPostContent,
-    render_post_input, seed_post_input,
+    AppState, OperatorStatus, PostBookkeepingExpectation, PostFormat, PostStorage,
+    RenderedPostContent, SiteConfigStorage, UserStorage, WriteScope, render_post_input,
+    seed_post_input,
 };
 
 pub mod panic_gate;
@@ -373,7 +374,10 @@ pub fn sandbox_profile_manifest(anchor: UtcInstant) -> Vec<SandboxPost> {
 /// Returns an error when password preparation, typed input construction, or the
 /// single profile write fails.
 pub async fn seed_sandbox_profile(
-    state: &Arc<AppState>,
+    site_config: Arc<dyn SiteConfigStorage>,
+    users: Arc<dyn UserStorage>,
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
     profile: SandboxProfile,
     anchor: UtcInstant,
 ) -> anyhow::Result<()> {
@@ -400,11 +404,7 @@ pub async fn seed_sandbox_profile(
         .parse::<SiteTitle>()
         .map_err(|error| anyhow::anyhow!("invalid fixed sandbox title: {error}"))?
         .to_string();
-    let site_config = Arc::clone(&state.site_config);
-    let users = Arc::clone(&state.users);
-    let posts = Arc::clone(&state.posts);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 site_config
@@ -701,9 +701,16 @@ mod sandbox_profile_tests {
             .parse::<UtcInstant>()
             .expect("fixed anchor");
 
-        seed_sandbox_profile(&state, SandboxProfile::Standard, anchor)
-            .await
-            .expect("standard profile seeds");
+        seed_sandbox_profile(
+            Arc::clone(&state.site_config),
+            Arc::clone(&state.users),
+            Arc::clone(&state.posts),
+            state.write_scope.clone(),
+            SandboxProfile::Standard,
+            anchor,
+        )
+        .await
+        .expect("standard profile seeds");
 
         assert_eq!(
             state.site_config.list().await.expect("site config list"),
@@ -767,9 +774,16 @@ mod sandbox_profile_tests {
             .expect("fixed minute anchor");
         let expected = sandbox_profile_manifest(anchor);
 
-        seed_sandbox_profile(&state, SandboxProfile::Demo, anchor)
-            .await
-            .expect("demo profile seeds");
+        seed_sandbox_profile(
+            Arc::clone(&state.site_config),
+            Arc::clone(&state.users),
+            Arc::clone(&state.posts),
+            state.write_scope.clone(),
+            SandboxProfile::Demo,
+            anchor,
+        )
+        .await
+        .expect("demo profile seeds");
 
         assert_eq!(
             state.site_config.list().await.expect("site config list"),
