@@ -2601,7 +2601,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn delete_media_operation_failure_retains_file(#[case] backend: Backend) {
+    async fn delete_media_missing_owner_retains_file(#[case] backend: Backend) {
         let env = backend.setup().await;
         let owner = SeedUser::new().seed(&env.state).await.user_id;
         let other_user = SeedUser::new().seed(&env.state).await.user_id;
@@ -2628,15 +2628,17 @@ mod tests {
         let media = upload_ref(&uploaded);
         let file_path = stored_path(env.base.path(), &media);
 
-        assert!(
+        assert_eq!(
             manager
                 .delete_media(other_user, &media, false)
                 .await
-                .is_err()
+                .unwrap()
+                .into_outcome(),
+            MutationOutcome::Confirmed(TryDeleteOutcome::Missing)
         );
         assert!(
             file_path.exists(),
-            "a failed delete must retain the media bytes"
+            "a missing-owner delete must retain the media bytes"
         );
         assert!(media_row_exists(&env.state, owner, &media).await);
     }
