@@ -1,3 +1,4 @@
+mod backup_corpus;
 mod backup_fixture;
 mod backup_interop;
 mod cli_subprocess;

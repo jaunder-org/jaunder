@@ -1,0 +1,14 @@
+{
+  "version": "legacy-format-1-package-sentinel",
+  "schema_version": 1,
+  "schema_checksum": "legacy-format-1-schema-checksum-sentinel",
+  "timestamp": "2026-01-02T03:04:05Z",
+  "mode": "directory",
+  "tables": [
+    "instance_identity",
+    "media",
+    "post_revisions",
+    "posts",
+    "users"
+  ]
+}

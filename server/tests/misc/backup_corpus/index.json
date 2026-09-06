@@ -1,0 +1,10 @@
+{
+  "fixtures": [
+    {
+      "fixture": "format-1",
+      "format_version": 1,
+      "support": "supported",
+      "digest": "b55707c7537a81f523d096116dc36b98556a0c3a96be38a8f02e0c2d76de197b"
+    }
+  ]
+}
