@@ -4,15 +4,23 @@
 use super::TestBase;
 use super::confirmed_for;
 use crate::media::MediaRecord;
+use crate::posts::media::{MediaReferenceEvidence, PersistedMediaReference};
 use crate::sql::Exists;
 use crate::sql::QueryStorageExt;
-use crate::{AppState, DbConnectOptions, StorageRuntimeConfig, resolved_postgres_options};
+use crate::{
+    AppState, DbConnectOptions, ForeignEvidenceSink, InstanceId, LocalMediaSink,
+    MediaReferenceOwnershipResolver, MockSiteConfigStorage, PostMediaOwnership,
+    ProvenLocalMediaRefs, StorageRuntimeConfig, resolved_postgres_options,
+};
 
+use async_trait::async_trait;
 use common::ids::PostId;
 use common::media::{
-    Filename, MediaRef, MediaReferenceForm, MediaReferenceKind, MediaSource, detect_content_type,
-    url,
+    Filename, MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind, MediaSource,
+    detect_content_type, url,
 };
+use common::site::{SiteIdentity, SiteTitle};
+use common::tagged_url::BaseUrl;
 use common::test_support::{parse_byte_size, parse_content_hash};
 use common::time::UtcInstant;
 use sqlx::{PgPool, SqlitePool, postgres::PgConnectOptions, sqlite::SqliteConnectOptions};
@@ -118,6 +126,54 @@ async fn raw_media_filename_exists_postgres(
 /// to [`media_ref_for`]; public because a test spelling the `AtomPub` member layout
 /// (`/atompub/<user>/media/<sha>/<name>`) needs the digest itself, not a serve URL.
 pub use common::test_support::MEDIA_TEST_SHA256;
+
+struct NoMediaOwnership;
+
+#[async_trait]
+impl MediaReferenceOwnershipResolver for NoMediaOwnership {
+    async fn resolve(
+        &self,
+        _references: &[PersistedMediaReference],
+        _instance_id: &InstanceId,
+        _base_url: Option<&BaseUrl>,
+        foreign: ForeignEvidenceSink,
+    ) -> MediaReferenceEvidence {
+        foreign.finish()
+    }
+
+    async fn resolve_local(
+        &self,
+        _references: &[MediaReference],
+        _instance_id: &InstanceId,
+        _base_url: Option<&BaseUrl>,
+        local: LocalMediaSink,
+    ) -> ProvenLocalMediaRefs {
+        local.finish()
+    }
+}
+
+/// Returns a post-media ownership service that proves no rendered reference local.
+///
+/// # Panics
+///
+/// If the fixed canonical test instance ID stops parsing.
+#[must_use]
+pub fn fixture_post_media_ownership() -> PostMediaOwnership {
+    let mut site_config = MockSiteConfigStorage::new();
+    site_config.expect_get_identity().returning(|| {
+        Ok(SiteIdentity {
+            title: SiteTitle::default(),
+            base_url: None,
+        })
+    });
+    PostMediaOwnership::new(
+        Arc::new(NoMediaOwnership),
+        "123e4567-e89b-12d3-a456-426614174000"
+            .parse()
+            .expect("canonical test instance ID"),
+        Arc::new(site_config),
+    )
+}
 
 /// The [`MediaRef`] naming the fixture entry called `name`.
 ///
