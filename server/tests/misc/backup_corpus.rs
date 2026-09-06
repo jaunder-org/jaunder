@@ -149,7 +149,7 @@ impl BackupCorpus {
         let output = fs::File::create(destination)?;
         let encoder = GzEncoder::new(output, Compression::default());
         let mut archive = tar::Builder::new(encoder);
-        archive.append_dir_all(".", source)?;
+        archive.append_dir_all("", source)?;
         archive.into_inner()?.finish()?;
         Ok(())
     }
@@ -160,13 +160,15 @@ impl BackupCorpus {
         source: &Path,
         destination: &Path,
     ) -> Result<(), BackupCorpusError> {
-        fs::create_dir(destination)?;
         let input = fs::File::open(source)?;
         let decoder = flate2::read::GzDecoder::new(input);
         let mut archive = tar::Archive::new(decoder);
         for entry in archive.entries()? {
             let mut entry = entry?;
-            let relative = entry.path()?.into_owned();
+            let path = entry.path()?;
+            let Some(relative) = normalized_archive_relative_path(&path)? else {
+                continue;
+            };
             let destination_path = destination.join(&relative);
             if entry.header().entry_type().is_dir() {
                 fs::create_dir_all(destination_path)?;
@@ -178,13 +180,34 @@ impl BackupCorpus {
                 entry.read_to_end(&mut bytes)?;
                 fs::write(destination_path, bytes)?;
             } else {
-                return Err(BackupCorpusError::InvalidIndex(format!(
+                return Err(BackupCorpusError::UnsafeFixture(format!(
                     "archive contains a non-file entry: {}",
                     relative.display()
                 )));
             }
         }
         Ok(())
+    }
+}
+
+fn normalized_archive_relative_path(path: &Path) -> Result<Option<PathBuf>, BackupCorpusError> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(component) => normalized.push(component),
+            Component::CurDir => {}
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
+                return Err(BackupCorpusError::UnsafeFixture(format!(
+                    "archive entry path must contain only normalized relative components: {}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(normalized))
     }
 }
 
@@ -476,13 +499,11 @@ mod tests {
 
     #[test]
     fn checked_in_legacy_v1_fixture_matches_its_known_digest() {
-        let corpus = BackupCorpus::checked_in().expect("load checked-in corpus");
-        let [entry] = corpus.entries() else {
-            panic!("one initial format fixture");
-        };
+        let corpus = compatibility_result(BackupCorpus::checked_in(), "load checked-in corpus");
+        let entry = compatibility_option(corpus.entries().first(), "one initial format fixture");
         assert_eq!(entry.format_version, 1);
         assert_eq!(entry.support, SupportState::Supported);
-        corpus.verify(entry).expect("known fixture digest matches");
+        compatibility_result(corpus.verify(entry), "known fixture digest matches");
     }
 
     #[test]
@@ -579,21 +600,26 @@ mod tests {
 
     #[test]
     fn legacy_manifest_preserves_sentinels_and_omits_format_version() {
-        let corpus = BackupCorpus::checked_in().expect("load checked-in corpus");
-        let entry = &corpus.entries()[0];
-        let manifest: Value = serde_json::from_slice(
-            &fs::read(corpus.root.join(&entry.fixture).join("manifest.json"))
-                .expect("read fixture manifest"),
-        )
-        .expect("parse fixture manifest");
+        let corpus = compatibility_result(BackupCorpus::checked_in(), "load checked-in corpus");
+        let entry = compatibility_option(
+            corpus.entries().first(),
+            "fixture index must contain an entry",
+        );
+        let bytes = compatibility_result(
+            fs::read(corpus.root.join(&entry.fixture).join("manifest.json")),
+            "read fixture manifest",
+        );
+        let manifest: Value =
+            compatibility_result(serde_json::from_slice(&bytes), "parse fixture manifest");
         assert!(manifest.get("format_version").is_none());
         assert_ne!(manifest["version"], env!("CARGO_PKG_VERSION"));
         assert_ne!(manifest["schema_checksum"], "");
         assert!(
-            manifest["tables"]
-                .as_array()
-                .expect("tables array")
-                .contains(&Value::from("instance_identity"))
+            compatibility_option(
+                manifest.get("tables").and_then(Value::as_array),
+                "fixture manifest tables must be an array",
+            )
+            .contains(&Value::from("instance_identity"))
         );
         assert!(
             corpus
@@ -607,12 +633,18 @@ mod tests {
 
     #[test]
     fn legacy_fixture_pins_every_wire_role_and_its_relationships() {
-        let corpus = BackupCorpus::checked_in().expect("load checked-in corpus");
-        let entry = &corpus.entries()[0];
+        let corpus = compatibility_result(BackupCorpus::checked_in(), "load checked-in corpus");
+        let entry = compatibility_option(
+            corpus.entries().first(),
+            "fixture index must contain an entry",
+        );
         let root = corpus.root.join(&entry.fixture);
+        let bytes = compatibility_result(
+            fs::read(root.join("manifest.json")),
+            "read fixture manifest",
+        );
         let manifest: Value =
-            serde_json::from_slice(&fs::read(root.join("manifest.json")).expect("read manifest"))
-                .expect("parse manifest");
+            compatibility_result(serde_json::from_slice(&bytes), "parse fixture manifest");
         assert_eq!(
             manifest["tables"],
             serde_json::json!([
@@ -703,6 +735,39 @@ mod tests {
             .map(|(path, file)| (path, fs::read(file).expect("read fixture file")))
             .collect()
     }
+    #[test]
+    fn extraction_rejects_traversal_before_writing_outside_destination() {
+        let temp = TempDir::new().expect("create archive test root");
+        let archive_path = temp.path().join("traversal.tar.gz");
+        let output = fs::File::create(&archive_path).expect("create traversal archive");
+        let encoder = GzEncoder::new(output, Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(6);
+        header.set_mode(0o644);
+        let name = b"../outside\0";
+        header.as_mut_bytes()[..name.len()].copy_from_slice(name);
+        header.set_cksum();
+        archive
+            .append(&header, &b"escape"[..])
+            .expect("add traversal archive member");
+        archive
+            .into_inner()
+            .expect("finish traversal tar")
+            .finish()
+            .expect("finish traversal gzip");
+
+        let destination = temp.path().join("destination");
+        let outside = temp.path().join("outside");
+        assert!(matches!(
+            BackupCorpus::extract_archive(&archive_path, &destination),
+            Err(BackupCorpusError::UnsafeFixture(message)) if message.contains("normalized relative")
+        ));
+        assert!(
+            !outside.exists(),
+            "traversal archive must not write outside its destination"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -774,6 +839,23 @@ const FORMAT_BUMP_DIAGNOSTIC: &str = "add a new immutable fixture, oracle, and c
 fn format_compatibility_diagnostic(detail: impl std::fmt::Display) -> String {
     format!("backup format compatibility: {detail}; {FORMAT_BUMP_DIAGNOSTIC}")
 }
+#[cfg(test)]
+fn compatibility_result<T, E: std::fmt::Display>(
+    result: Result<T, E>,
+    detail: impl std::fmt::Display,
+) -> T {
+    result.unwrap_or_else(|error| {
+        panic!(
+            "{}",
+            format_compatibility_diagnostic(format_args!("{detail}: {error}"))
+        )
+    })
+}
+
+#[cfg(test)]
+fn compatibility_option<T>(value: Option<T>, detail: impl std::fmt::Display) -> T {
+    value.unwrap_or_else(|| panic!("{}", format_compatibility_diagnostic(detail)))
+}
 
 #[cfg(test)]
 mod reader_tests {
@@ -783,7 +865,10 @@ mod reader_tests {
         path::Path,
     };
 
-    use super::{BackupCorpus, CorpusEntry, CorpusIoMode, InitializedCommandEnv, SupportState};
+    use super::{
+        BackupCorpus, CorpusEntry, CorpusIoMode, InitializedCommandEnv, SupportState,
+        compatibility_option, compatibility_result,
+    };
     use common::{
         ids::{PostId, UserId},
         media::MediaSource,
@@ -817,6 +902,7 @@ mod reader_tests {
                 $left,
                 $right,
                 "{}",
+
                 super::format_compatibility_diagnostic(format_args!($($message)+))
             )
         };
@@ -836,6 +922,39 @@ mod reader_tests {
                 "{}",
                 super::format_compatibility_diagnostic(format_args!($($message)+))
             )
+        };
+    }
+    macro_rules! assert_restored_reader_roles {
+        ($args:expr, $user_id:expr, $post_id:expr, $user:expr, $post:expr, $revision:expr, $media:expr) => {
+            for role in READER_ROLE_INVENTORY {
+                match role.name {
+                    "null" => assert_eq!($user.display_name, None, "{}", role.restored_expectation),
+                    "boolean" => assert_eq!($user.is_operator, storage::OperatorStatus::OPERATOR, "{}", role.restored_expectation),
+                    "integer" => assert_eq!($media.size_bytes.to_string(), "13", "{}", role.restored_expectation),
+                    "real" => assert_eq!(
+                        compatibility_result(serde_json::from_str::<Value>($revision.rendered_html.as_ref()), "real JSON must survive semantically"),
+                        serde_json::json!(1.25), "{}", role.restored_expectation
+                    ),
+                    "text" => assert_eq!($post.title.as_deref(), Some("Legacy wire roles"), "{}", role.restored_expectation),
+                    "structured JSON" => assert_eq!(
+                        compatibility_result(serde_json::from_str::<Value>($post.rendered_html.as_ref()), "structured JSON must survive semantically"),
+                        serde_json::json!({"kind": "structured", "items": [1, true]}), "{}", role.restored_expectation
+                    ),
+                    "user→post→revision" => {
+                        assert_eq!($post.user_id, $user_id, "{}", role.restored_expectation);
+                        assert_eq!($revision.post_id, $post_id, "{}", role.restored_expectation);
+                        assert_eq!($revision.user_id, $user_id, "{}", role.restored_expectation);
+                    }
+                    "user→media" => {
+                        assert_eq!($media.user_id, $user_id, "{}", role.restored_expectation);
+                    }
+                    "exact media bytes" => assert_eq!(
+                        compatibility_result(fs::read($args.storage_path.join("media").join("avatar.txt")), "read restored media bytes"),
+                        b"legacy media\n", "{}", role.restored_expectation
+                    ),
+                    role => panic!("{}", super::format_compatibility_diagnostic(format_args!("unknown reader-role inventory entry: {role}"))),
+                }
+            }
         };
     }
 
@@ -1025,127 +1144,100 @@ mod reader_tests {
             );
         }
     }
-
     async fn assert_reader_inventory(args: &StorageArgs) {
-        let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
-            .await
-            .expect("open restored database");
+        let state = compatibility_result(
+            open_existing_database(&args.db, &StorageRuntimeConfig::default()).await,
+            "open restored database",
+        );
         let user_id = UserId::from(41);
         let post_id = PostId::from(71);
-        let username: Username = "legacyuser".parse().expect("fixture username");
-        let user = state
-            .users
-            .get_user_by_username(&username)
-            .await
-            .expect("read restored user")
-            .expect("fixture user exists");
-        let post = state
-            .posts
-            .get_post_by_id(post_id, &ViewerIdentity::local(user_id))
-            .await
-            .expect("read restored post")
-            .expect("fixture post exists");
-        let history = state
-            .posts
-            .list_post_revision_history(user_id, post_id, None, PageSize::default())
-            .await
-            .expect("read restored revision history")
-            .expect("fixture post history exists");
-        let revision = state
-            .posts
-            .get_post_revision_detail(user_id, post_id, history.revisions[0].revision_id)
-            .await
-            .expect("read restored revision")
-            .expect("fixture revision exists")
-            .revision;
-        let media = state
-            .media
-            .get_media(
-                user_id,
-                &parse_content_hash(
-                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                ),
-                &parse_filename("avatar.txt"),
-                &MediaSource::Upload,
-            )
-            .await
-            .expect("read restored media")
-            .expect("fixture media exists");
+        let username: Username =
+            compatibility_result("legacyuser".parse(), "parse fixture username");
+        let user = compatibility_option(
+            compatibility_result(
+                state.users.get_user_by_username(&username).await,
+                "read restored user",
+            ),
+            "fixture user exists",
+        );
+        let post = compatibility_option(
+            compatibility_result(
+                state
+                    .posts
+                    .get_post_by_id(post_id, &ViewerIdentity::local(user_id))
+                    .await,
+                "read restored post",
+            ),
+            "fixture post exists",
+        );
+        let history = compatibility_option(
+            compatibility_result(
+                state
+                    .posts
+                    .list_post_revision_history(user_id, post_id, None, PageSize::default())
+                    .await,
+                "read restored revision history",
+            ),
+            "fixture post history exists",
+        );
+        let first_revision = compatibility_option(
+            history.revisions.first(),
+            "fixture post history must contain a revision",
+        );
+        let revision = compatibility_option(
+            compatibility_result(
+                state
+                    .posts
+                    .get_post_revision_detail(user_id, post_id, first_revision.revision_id)
+                    .await,
+                "read restored revision",
+            ),
+            "fixture revision exists",
+        )
+        .revision;
+        let media = compatibility_option(
+            compatibility_result(
+                state
+                    .media
+                    .get_media(
+                        user_id,
+                        &parse_content_hash(
+                            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                        ),
+                        &parse_filename("avatar.txt"),
+                        &MediaSource::Upload,
+                    )
+                    .await,
+                "read restored media",
+            ),
+            "fixture media exists",
+        );
 
-        for role in READER_ROLE_INVENTORY {
-            match role.name {
-                "null" => assert_eq!(user.display_name, None, "{}", role.restored_expectation),
-                "boolean" => assert_eq!(
-                    user.is_operator,
-                    storage::OperatorStatus::OPERATOR,
-                    "{}",
-                    role.restored_expectation
-                ),
-                "integer" => assert_eq!(
-                    media.size_bytes.to_string(),
-                    "13",
-                    "{}",
-                    role.restored_expectation
-                ),
-                "real" => assert_eq!(
-                    serde_json::from_str::<Value>(revision.rendered_html.as_ref())
-                        .expect("real JSON survives semantically"),
-                    serde_json::json!(1.25),
-                    "{}",
-                    role.restored_expectation
-                ),
-                "text" => assert_eq!(
-                    post.title.as_deref(),
-                    Some("Legacy wire roles"),
-                    "{}",
-                    role.restored_expectation
-                ),
-                "structured JSON" => assert_eq!(
-                    serde_json::from_str::<Value>(post.rendered_html.as_ref())
-                        .expect("structured JSON survives semantically"),
-                    serde_json::json!({"kind": "structured", "items": [1, true]}),
-                    "{}",
-                    role.restored_expectation
-                ),
-                "user→post→revision" => {
-                    assert_eq!(post.user_id, user_id, "{}", role.restored_expectation);
-                    assert_eq!(revision.post_id, post_id, "{}", role.restored_expectation);
-                    assert_eq!(revision.user_id, user_id, "{}", role.restored_expectation);
-                }
-                "user→media" => {
-                    assert_eq!(media.user_id, user_id, "{}", role.restored_expectation);
-                }
-                "exact media bytes" => assert_eq!(
-                    fs::read(args.storage_path.join("media").join("avatar.txt"))
-                        .expect("read restored media bytes"),
-                    b"legacy media\n",
-                    "{}",
-                    role.restored_expectation
-                ),
-                role => panic!("unknown reader-role inventory entry: {role}"),
-            }
-        }
+        assert_restored_reader_roles!(args, user_id, post_id, user, post, revision, media);
     }
 
     #[apply(backends)]
     #[tokio::test]
     async fn historical_corpus_entries_restore_through_each_public_input(#[case] backend: Backend) {
-        let corpus = BackupCorpus::checked_in().expect("load corpus");
+        let corpus = compatibility_result(BackupCorpus::checked_in(), "load corpus");
         for entry in corpus.entries() {
             for input in CorpusIoMode::ALL {
                 let target = InitializedCommandEnv::new(backend).await;
                 let schema_version = current_schema_version(&target).await;
                 let materialized = target.base.path().join("materialized");
-                corpus
-                    .materialize(entry, &materialized, schema_version)
-                    .expect("materialize verified historical fixture");
+                compatibility_result(
+                    corpus.materialize(entry, &materialized, schema_version),
+                    "materialize verified historical fixture",
+                );
                 assert_fixture_wire_inventory(&materialized);
                 let restore_path = match input {
                     CorpusIoMode::Directory => materialized,
                     CorpusIoMode::Archive => {
                         let archive = target.base.path().join("fixture.tar.gz");
-                        BackupCorpus::package_archive(&materialized, &archive)
-                            .expect("independently package fixture archive");
+                        compatibility_result(
+                            BackupCorpus::package_archive(&materialized, &archive),
+                            "independently package fixture archive",
+                        );
                         archive
                     }
                 };
@@ -1169,9 +1261,14 @@ mod reader_tests {
                     RestoreExpectation::TypedUnsupportedFormat => {
                         let before =
                             snapshot_target_state(&target, "before-rejected-restore").await;
-                        let error = cmd_restore(&target.args, &restore_path)
-                            .await
-                            .expect_err("retired format must be rejected");
+                        let Err(error) = cmd_restore(&target.args, &restore_path).await else {
+                            panic!(
+                                "{}",
+                                super::format_compatibility_diagnostic(
+                                    "retired format must be rejected"
+                                )
+                            );
+                        };
                         assert!(matches!(
                             error.downcast_ref::<BackupError>(),
                             Some(BackupError::UnsupportedFormatVersion { backup_version, .. })
@@ -1186,15 +1283,22 @@ mod reader_tests {
 
     async fn current_schema_version(target: &InitializedCommandEnv) -> i64 {
         let probe = target.base.path().join("schema-version-probe");
-        cmd_backup(&target.args, BackupMode::Directory, Some(probe.clone()))
-            .await
-            .expect("export empty target to observe its schema version");
-        let manifest: Value =
-            serde_json::from_slice(&fs::read(probe.join("manifest.json")).expect("read probe"))
-                .expect("parse probe manifest");
-        manifest["schema_version"]
-            .as_i64()
-            .expect("backup manifest schema version")
+        compatibility_result(
+            cmd_backup(&target.args, BackupMode::Directory, Some(probe.clone())).await,
+            "export empty target to observe its schema version",
+        );
+        let bytes = compatibility_result(
+            fs::read(probe.join("manifest.json")),
+            "read schema-version probe manifest",
+        );
+        let manifest: Value = compatibility_result(
+            serde_json::from_slice(&bytes),
+            "parse schema-version probe manifest",
+        );
+        compatibility_option(
+            manifest.get("schema_version").and_then(Value::as_i64),
+            "backup manifest schema_version must be an integer",
+        )
     }
     async fn assert_target_unmodified(
         target: &InitializedCommandEnv,
@@ -1212,19 +1316,22 @@ mod reader_tests {
         name: &str,
     ) -> BTreeMap<String, Vec<u8>> {
         let backup = target.base.path().join(name);
-        cmd_backup(&target.args, BackupMode::Directory, Some(backup.clone()))
-            .await
-            .expect("snapshot restore target");
+        compatibility_result(
+            cmd_backup(&target.args, BackupMode::Directory, Some(backup.clone())).await,
+            "snapshot restore target",
+        );
         let mut files = Vec::new();
-        super::collect_regular_files(&backup, Path::new(""), &mut files)
-            .expect("collect target snapshot");
+        compatibility_result(
+            super::collect_regular_files(&backup, Path::new(""), &mut files),
+            "collect target snapshot",
+        );
         files
             .into_iter()
             .filter_map(|(path, file)| {
                 (path.starts_with("db/") || path.starts_with("media/")).then(|| {
                     (
                         path,
-                        std::fs::read(file).expect("read target snapshot entry"),
+                        compatibility_result(std::fs::read(file), "read target snapshot entry"),
                     )
                 })
             })
@@ -1263,8 +1370,8 @@ mod writer_tests {
     use crate::misc::backup_fixture::{BackupFixtureIds, populate_backup_fixture};
 
     use super::{
-        BackupCorpus, CorpusIoMode, InitializedCommandEnv, SupportState,
-        format_compatibility_diagnostic,
+        BackupCorpus, CorpusIoMode, InitializedCommandEnv, SupportState, compatibility_option,
+        compatibility_result, format_compatibility_diagnostic,
     };
     macro_rules! assert_eq {
         ($left:expr, $right:expr $(,)?) => {
@@ -1387,9 +1494,10 @@ mod writer_tests {
                 CorpusIoMode::Directory => "backup",
                 CorpusIoMode::Archive => "backup.tar.gz",
             });
-            let written_path = cmd_backup(&source.args, output.backup_mode(), Some(written))
-                .await
-                .unwrap_or_else(|error| panic!("write {} backup: {error:#}", output.name()));
+            let written_path = compatibility_result(
+                cmd_backup(&source.args, output.backup_mode(), Some(written)).await,
+                format_args!("write {} backup", output.name()),
+            );
             let extracted = match output {
                 CorpusIoMode::Directory => written_path,
                 CorpusIoMode::Archive => {
@@ -1415,13 +1523,14 @@ mod writer_tests {
 
     fn assert_writer_version_is_uniquely_supported(export: &Path) {
         let manifest = read_manifest(export);
-        let version = manifest["format_version"].as_u64().unwrap_or_else(|| {
-            panic!(
-                "{}",
-                format_compatibility_diagnostic("writer format_version must be an integer")
-            )
-        });
-        let corpus = BackupCorpus::checked_in().expect("load backup format compatibility corpus");
+        let version = compatibility_option(
+            manifest.get("format_version").and_then(Value::as_u64),
+            "writer format_version must be an integer",
+        );
+        let corpus = compatibility_result(
+            BackupCorpus::checked_in(),
+            "load backup format compatibility corpus",
+        );
         let matches = corpus
             .entries()
             .iter()
@@ -1448,12 +1557,7 @@ mod writer_tests {
     fn assert_v1_raw_wire_oracle(export: &Path, output: CorpusIoMode, ids: &BackupFixtureIds) {
         assert_inventory_is_complete();
         let manifest = read_manifest(export);
-        let members = manifest.as_object().unwrap_or_else(|| {
-            panic!(
-                "{}",
-                format_compatibility_diagnostic("manifest must be an object")
-            )
-        });
+        let members = compatibility_option(manifest.as_object(), "manifest must be an object");
         let expected_members = BTreeSet::from([
             "format_version",
             "mode",
@@ -1507,12 +1611,10 @@ mod writer_tests {
             )
         );
 
-        let tables = manifest["tables"].as_array().unwrap_or_else(|| {
-            panic!(
-                "{}",
-                format_compatibility_diagnostic("manifest tables must be an array")
-            )
-        });
+        let tables = compatibility_option(
+            manifest.get("tables").and_then(Value::as_array),
+            "manifest tables must be an array",
+        );
         assert_eq!(
             tables,
             &V1_TABLES
@@ -1535,7 +1637,7 @@ mod writer_tests {
             format_compatibility_diagnostic("export path set changed")
         );
         assert_eq!(
-            paths["media/avatar.txt"],
+            compatibility_option(paths.get("media/avatar.txt"), "media member is missing"),
             b"media",
             "{}",
             format_compatibility_diagnostic("media bytes changed")
@@ -1546,40 +1648,45 @@ mod writer_tests {
     }
 
     fn read_manifest(export: &Path) -> Value {
-        let bytes = fs::read(export.join("manifest.json")).expect("read manifest");
-        serde_json::from_slice(&bytes).unwrap_or_else(|error| {
-            panic!(
-                "{}",
-                format_compatibility_diagnostic(format_args!("manifest JSON is invalid: {error}"))
-            )
-        })
+        let bytes = compatibility_result(fs::read(export.join("manifest.json")), "read manifest");
+        compatibility_result(serde_json::from_slice(&bytes), "manifest JSON is invalid")
     }
 
     fn regular_file_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
         fn visit(root: &Path, directory: &Path, files: &mut BTreeMap<String, Vec<u8>>) {
-            for entry in fs::read_dir(directory).expect("read backup output directory") {
-                let entry = entry.expect("read backup output entry");
+            for entry in compatibility_result(
+                fs::read_dir(directory),
+                format_args!("read backup output directory {}", directory.display()),
+            ) {
+                let entry = compatibility_result(entry, "read backup output entry");
                 let path = entry.path();
-                let metadata = fs::symlink_metadata(&path).expect("inspect backup output entry");
+                let metadata = compatibility_result(
+                    fs::symlink_metadata(&path),
+                    format_args!("inspect backup output entry {}", path.display()),
+                );
                 if metadata.file_type().is_dir() {
                     visit(root, &path, files);
                 } else {
                     assert!(
                         metadata.file_type().is_file(),
-                        "backup format compatibility: output contains a special entry"
+                        "output contains a special entry"
                     );
-                    let relative = path
-                        .strip_prefix(root)
-                        .expect("backup output child")
-                        .to_str()
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "{}",
-                                format_compatibility_diagnostic("backup output path is not UTF-8")
-                            )
-                        })
-                        .replace('\\', "/");
-                    files.insert(relative, fs::read(path).expect("read backup output file"));
+                    let relative_path = compatibility_result(
+                        path.strip_prefix(root),
+                        format_args!("backup output path {} is outside its root", path.display()),
+                    );
+                    let relative = compatibility_option(
+                        relative_path.to_str(),
+                        format_args!(
+                            "backup output path {} is not UTF-8",
+                            relative_path.display()
+                        ),
+                    )
+                    .replace('\\', "/");
+                    files.insert(
+                        relative,
+                        compatibility_result(fs::read(path), "read backup output file"),
+                    );
                 }
             }
         }
@@ -1594,14 +1701,10 @@ mod writer_tests {
             .iter()
             .map(|table| {
                 let path = format!("db/{table}.ndjson");
-                let bytes = files.get(&path).unwrap_or_else(|| {
-                    panic!(
-                        "{}",
-                        format_compatibility_diagnostic(format_args!(
-                            "manifest table {table} is missing its NDJSON member {path}"
-                        ))
-                    )
-                });
+                let bytes = compatibility_option(
+                    files.get(&path),
+                    format_args!("manifest table {table} is missing its NDJSON member {path}"),
+                );
                 let rows = if bytes.is_empty() {
                     Vec::new()
                 } else {
@@ -1637,13 +1740,20 @@ mod writer_tests {
             .collect()
     }
 
+    fn table_rows<'a>(rows: &'a BTreeMap<String, Vec<Value>>, table: &str) -> &'a Vec<Value> {
+        compatibility_option(
+            rows.get(table),
+            format_args!("writer rows are missing required table {table}"),
+        )
+    }
+
     fn assert_writer_roles(rows: &BTreeMap<String, Vec<Value>>, ids: &BackupFixtureIds) {
         let author = ids.author.to_string();
         let viewer = ids.viewer.to_string();
         let audience = ids.audience.to_string();
         let subscription = ids.subscription.to_string();
         assert!(
-            rows["users"].iter().any(|row| {
+            table_rows(rows, "users").iter().any(|row| {
                 row_id_is(row, "user_id", &author)
                     && row["username"] == "backupuser"
                     && row["display_name"] == "Backup User"
@@ -1652,7 +1762,7 @@ mod writer_tests {
             "backup format compatibility: author seed must emit its exact boolean and text values"
         );
         assert!(
-            rows["users"].iter().any(|row| {
+            table_rows(rows, "users").iter().any(|row| {
                 row_id_is(row, "user_id", &viewer)
                     && row["username"] == "viewer"
                     && row["display_name"] == "Viewer"
@@ -1661,7 +1771,7 @@ mod writer_tests {
             "backup format compatibility: viewer seed must emit its exact boolean and text values"
         );
         assert!(
-            rows["media"].iter().any(|row| {
+            table_rows(rows, "media").iter().any(|row| {
                 row_id_is(row, "user_id", &author)
                     && row["sha256"]
                         == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -1674,7 +1784,7 @@ mod writer_tests {
             "backup format compatibility: media seed must emit exact null, integer, and text values"
         );
         assert!(
-            rows["user_config"].iter().any(|row| {
+            table_rows(rows, "user_config").iter().any(|row| {
                 row_id_is(row, "user_id", &author)
                     && row["key"] == "posts.default_format"
                     && row["value"] == "org"
@@ -1682,14 +1792,14 @@ mod writer_tests {
             "backup format compatibility: user-config seed must emit its exact text value"
         );
         assert!(
-            rows["posts"].iter().any(|row| {
+            table_rows(rows, "posts").iter().any(|row| {
                 row_id_is(row, "post_id", &ids.public_post.to_string())
                     && row_id_is(row, "user_id", &author)
             }),
             "backup format compatibility: public post must retain its author relationship"
         );
         assert!(
-            rows["audiences"].iter().any(|row| {
+            table_rows(rows, "audiences").iter().any(|row| {
                 row_id_is(row, "audience_id", &audience)
                     && row_id_is(row, "author_user_id", &author)
             }),
@@ -1699,7 +1809,7 @@ mod writer_tests {
             )
         );
         assert!(
-            rows["audience_members"].iter().any(|row| {
+            table_rows(rows, "audience_members").iter().any(|row| {
                 row_id_is(row, "audience_id", &audience)
                     && row_id_is(row, "author_user_id", &author)
                     && row_id_is(row, "subscription_id", &subscription)
@@ -1710,7 +1820,7 @@ mod writer_tests {
             )
         );
         assert!(
-            rows["post_audiences"].iter().any(|row| {
+            table_rows(rows, "post_audiences").iter().any(|row| {
                 row_id_is(row, "post_id", &ids.named_post.to_string())
                     && row_id_is(row, "audience_id", &audience)
             }),
