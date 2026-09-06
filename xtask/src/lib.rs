@@ -46,6 +46,7 @@ mod steps {
     pub mod error_swallowing_inventory_check;
     pub mod flaky;
     pub mod flow_docs;
+    pub mod host_server;
     pub mod host_tests;
     pub mod html_sink_check;
     pub mod ident_gate;
@@ -55,6 +56,7 @@ mod steps {
     pub mod proffered_secret_check;
     pub mod raw_html_door_check;
     pub mod rendered_html_compiler_boundary;
+    pub mod sandbox;
     pub mod scan;
     pub mod sequence_check;
     pub mod server_fn_coverage_check;
@@ -76,7 +78,7 @@ mod steps {
 
 pub use cli::{
     AdrCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser, NixCommand, PrCommand,
-    PrWatchUntil, ServerFnCoverageCommand, TracesCommand,
+    PrWatchUntil, SandboxProfile, ServerFnCoverageCommand, TracesCommand,
 };
 pub use dispatch::run;
 pub use lifecycle::ensure_hooks_installed;

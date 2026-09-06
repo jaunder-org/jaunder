@@ -219,6 +219,19 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
+        Command::Sandbox {
+            name,
+            profile,
+            reset,
+            command,
+        } => {
+            let sh = Shell::new()?;
+            let start = Instant::now();
+            let mut result = CommandResult::new("sandbox");
+            steps::sandbox::run(&sh, &mut result, name, profile, reset, command);
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
         Command::TestLocal { nextest_args } => {
             let sh = Shell::new()?;
             let start = Instant::now();

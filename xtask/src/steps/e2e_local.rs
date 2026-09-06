@@ -30,28 +30,17 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
-use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use processkit::Command as ProcessCommand;
-
 use self::capture::{RetainedCapture, allocate_retained_capture, finalize_capture};
-use self::process::{CollectorGuard, CollectorStartError, ServerProcess};
-
+use self::process::{CollectorGuard, CollectorStartError};
 use anyhow::Context as _;
 use xshell::{Shell, cmd};
 
-use crate::git;
 use crate::result::{CommandResult, StepResult};
-
-/// Parse the server's `runtime.json` (`{"ip","port"}`, ADR-0035) into a base URL.
-/// `None` on malformed JSON or a missing field — the caller keeps polling.
-fn base_url_from_runtime(json: &str) -> Option<String> {
-    let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    let ip = v.get("ip")?.as_str()?;
-    let port = v.get("port")?.as_u64()?;
-    Some(format!("http://{ip}:{port}"))
-}
+use crate::steps::host_server::{
+    HostArtifactConfig, HostArtifacts, HostServerSession, ServerSessionConfig, ServerStartPhase,
+};
 
 const COLLECTOR_PORT_ATTEMPTS: usize = 8;
 
@@ -496,7 +485,7 @@ fn finish_server_setup_failure(
 fn finish_lifecycle(
     sh: &Shell,
     result: &mut CommandResult,
-    server: &mut ServerProcess,
+    server: &mut HostServerSession,
     collector: &mut CollectorGuard,
     retained: &RetainedCapture,
     verification: &LifecycleVerification<'_>,
@@ -510,7 +499,7 @@ fn finish_lifecycle(
                 StepResult::fail(&server_log_step)
                     .detail(format!("failed to finalize server stderr capture: {error}")),
             );
-            server.stopped()
+            server.is_stopped()
         }
     };
 
@@ -562,19 +551,23 @@ fn finish_lifecycle(
 fn run_lifecycle(
     sh: &Shell,
     result: &mut CommandResult,
-    root: &Path,
+    artifacts: &HostArtifacts,
     lifecycle: &BrowserLifecycle,
     workers: &str,
     path: &OsString,
 ) {
+    let root = &artifacts.root;
     let browser = lifecycle.browser;
     let tmpdir_step = step_name(browser, "tmpdir");
     let server_log_step = step_name(browser, "server-log");
     let server_step = step_name(browser, "server");
     let seed_step = step_name(browser, "seed");
-    let test_support_path = root.join("target/debug/test-support");
+    let test_support_path = artifacts
+        .test_support
+        .as_deref()
+        .expect("e2e-local requests the test-support artifact");
     let test_support = test_support_path.display().to_string();
-    let retained = match allocate_retained_capture(root, browser, &test_support_path) {
+    let retained = match allocate_retained_capture(root, browser, test_support_path) {
         Ok(retained) => retained,
         Err(error) => {
             result.push(
@@ -613,7 +606,6 @@ fn run_lifecycle(
     };
     let sp = storage.path().display();
     let db = format!("sqlite:{sp}/jaunder.db");
-    let runtime = storage.path().join("runtime.json");
     let collector_start = Instant::now();
     let collector_capture = match tempfile::tempdir() {
         Ok(capture) => capture,
@@ -675,83 +667,71 @@ fn run_lifecycle(
     };
 
     let server_start = std::time::Instant::now();
-    let command = ProcessCommand::new(root.join("target/debug/jaunder"))
-        .arg("serve")
-        .env("JAUNDER_BIND", "127.0.0.1:0")
-        .env("JAUNDER_STORAGE_PATH", storage.path())
-        .env("JAUNDER_DB", &db)
-        .env("JAUNDER_CAPTURE_DIR", &capture)
-        .env("RUST_LOG", "info")
-        .env(
-            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-            collector.grpc_exporter_url(),
-        );
-    let mut server = match ServerProcess::start(command, stderr_capture) {
+    let config = ServerSessionConfig {
+        shell: sh,
+        jaunder: artifacts.jaunder.clone(),
+        storage: storage.path().to_path_buf(),
+        runtime_file: storage.path().join("runtime.json"),
+        database_url: db.clone(),
+        stderr: stderr_capture,
+        extra_env: vec![
+            ("JAUNDER_CAPTURE_DIR".into(), capture.clone().into()),
+            ("RUST_LOG".into(), "info".into()),
+            (
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT".into(),
+                collector.grpc_exporter_url().into(),
+            ),
+        ],
+    };
+    let mut server = match HostServerSession::start(config) {
         Ok(server) => server,
-        Err(error) => {
+        Err(failure) => {
+            let detail = match failure.phase() {
+                ServerStartPhase::Spawn => {
+                    format!("failed to spawn jaunder serve: {}", failure.error())
+                }
+                ServerStartPhase::RuntimeFile => {
+                    format!(
+                        "server runtime file not ready within 15s: {}",
+                        failure.error()
+                    )
+                }
+                ServerStartPhase::Http => failure.error().to_string(),
+            };
             result.push(
                 StepResult::fail(&server_step)
-                    .detail(format!("failed to spawn jaunder serve: {error}"))
+                    .detail(detail)
                     .with_duration(server_start.elapsed()),
             );
-            finish_server_setup_failure(result, browser, &retained, &mut collector);
+            if let Some(mut server) = failure.into_session() {
+                let verification = LifecycleVerification {
+                    browser,
+                    test_support: &test_support,
+                };
+                finish_lifecycle(
+                    sh,
+                    result,
+                    &mut server,
+                    &mut collector,
+                    &retained,
+                    &verification,
+                    None,
+                );
+            } else {
+                finish_server_setup_failure(result, browser, &retained, &mut collector);
+            }
             return;
         }
     };
-
+    let base_url = server.base_url.clone();
+    result.push(StepResult::ok(&server_step).with_duration(server_start.elapsed()));
     let verification = LifecycleVerification {
         browser,
         test_support: &test_support,
     };
-    if let Err(error) = server.wait_for_path(&runtime, Duration::from_secs(15)) {
-        result.push(
-            StepResult::fail(&server_step)
-                .detail(format!("server runtime file not ready within 15s: {error}"))
-                .with_duration(server_start.elapsed()),
-        );
-        finish_lifecycle(
-            sh,
-            result,
-            &mut server,
-            &mut collector,
-            &retained,
-            &verification,
-            None,
-        );
-        return;
-    }
-    let mut discovered = None;
-    for _ in 0..30 {
-        if let Ok(contents) = std::fs::read_to_string(&runtime)
-            && let Some(url) = base_url_from_runtime(&contents)
-            && cmd!(sh, "curl -sf {url}/").quiet().run().is_ok()
-        {
-            discovered = Some(url);
-            break;
-        }
-        sleep(Duration::from_millis(500));
-    }
-    let Some(base_url) = discovered else {
-        result.push(
-            StepResult::fail(&server_step)
-                .detail("server not reachable via runtime.json within 15s".to_owned())
-                .with_duration(server_start.elapsed()),
-        );
-        finish_lifecycle(
-            sh,
-            result,
-            &mut server,
-            &mut collector,
-            &retained,
-            &verification,
-            None,
-        );
-        return;
-    };
-    result.push(StepResult::ok(&server_step).with_duration(server_start.elapsed()));
 
     let tools = root.join("tools/Cargo.toml");
-    let jaunder = root.join("target/debug/jaunder");
+    let jaunder = &artifacts.jaunder;
     let seed_start = std::time::Instant::now();
     if cmd!(
         sh,
@@ -843,38 +823,14 @@ pub fn run(
         return;
     };
     let plan = e2e_local_plan(test_filter, update_visual_snapshots);
-    super::build_csr::run(sh, result, plan.release_csr);
-    if !result.ok {
-        return;
-    }
-    let root_start = std::time::Instant::now();
-    let Ok(root) = git::toplevel(Path::new(".")) else {
-        result.push(
-            StepResult::fail("e2e-local")
-                .detail("cannot locate repo root".to_owned())
-                .with_duration(root_start.elapsed()),
-        );
+    let Some(artifacts) =
+        HostArtifacts::prepare(sh, result, HostArtifactConfig::e2e_local(plan.release_csr))
+    else {
         return;
     };
 
-    for (pkg, label) in [
-        ("jaunder", "e2e-local-build-server"),
-        ("test-support", "e2e-local-build-support"),
-    ] {
-        let build_start = std::time::Instant::now();
-        if cmd!(sh, "cargo build -p {pkg}").run().is_err() {
-            result.push(
-                StepResult::fail(label)
-                    .detail(format!("cargo build -p {pkg} failed"))
-                    .with_duration(build_start.elapsed()),
-            );
-            return;
-        }
-        result.push(StepResult::ok(label).with_duration(build_start.elapsed()));
-    }
-
     for lifecycle in &plan.lifecycles {
-        run_lifecycle(sh, result, Path::new(&root), lifecycle, &workers, &path);
+        run_lifecycle(sh, result, &artifacts, lifecycle, &workers, &path);
     }
 }
 

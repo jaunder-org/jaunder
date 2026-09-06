@@ -44,6 +44,26 @@ impl E2eBrowser {
     }
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum SandboxProfile {
+    Empty,
+    Standard,
+    Demo,
+}
+
+impl SandboxProfile {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Standard => "standard",
+            Self::Demo => "demo",
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Command {
     /// Inner loop (auto-fixes formatting): host static checks + clippy + the host
@@ -187,6 +207,19 @@ pub enum Command {
     /// Host-only manual command; needs `gh`.
     #[command(subcommand)]
     Issue(issue::IssueCommand),
+    /// Start an interactive disposable or named UX sandbox, or run an admitted
+    /// operational Jaunder command against a named sandbox after `--`.
+    Sandbox {
+        /// Persistent workspace name. Omit for a disposable sandbox.
+        name: Option<String>,
+        #[arg(long, value_enum)]
+        profile: Option<SandboxProfile>,
+        #[arg(long)]
+        reset: bool,
+        /// A Jaunder command run against an existing named workspace.
+        #[arg(last = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
 }
 
 /// An explicit passive-observation target for `pr watch`.
@@ -427,6 +460,7 @@ impl Cli {
             Command::ServerFnCoverage(ServerFnCoverageCommand::Verify) => {
                 steps::server_fn_coverage_check::VERIFY_STEP
             }
+            Command::Sandbox { .. } => "sandbox",
             Command::Pr(PrCommand::Watch { .. }) => "pr-watch",
             Command::Pr(PrCommand::Cleanup { .. }) => "pr-cleanup",
             Command::Pr(PrCommand::Land { .. }) => "pr-land",
@@ -970,5 +1004,58 @@ mod tests {
             }
             _ => panic!("expected traces run"),
         }
+    }
+    #[test]
+    fn sandbox_parses_disposable_named_reset_and_command_modes() {
+        let disposable = Cli::try_parse_from(["xtask", "sandbox"]).unwrap();
+        assert!(matches!(
+            disposable.command,
+            Command::Sandbox {
+                name: None,
+                profile: None,
+                reset: false,
+                command,
+            } if command.is_empty()
+        ));
+
+        let named = Cli::try_parse_from([
+            "xtask",
+            "sandbox",
+            "demo",
+            "--profile",
+            "standard",
+            "--reset",
+        ])
+        .unwrap();
+        assert!(matches!(
+            named.command,
+            Command::Sandbox {
+                name: Some(name),
+                profile: Some(SandboxProfile::Standard),
+                reset: true,
+                command,
+            } if name == "demo" && command.is_empty()
+        ));
+
+        let operational = Cli::try_parse_from([
+            "xtask",
+            "sandbox",
+            "demo",
+            "--",
+            "site-config",
+            "get",
+            "site.title",
+        ])
+        .unwrap();
+        assert!(matches!(
+            operational.command,
+            Command::Sandbox {
+                name: Some(name),
+                profile: None,
+                reset: false,
+                command,
+            } if name == "demo"
+                && command == ["site-config", "get", "site.title"]
+        ));
     }
 }

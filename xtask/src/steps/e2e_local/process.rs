@@ -1,4 +1,4 @@
-//! Processkit-backed supervision for the local E2E server and collector.
+//! Processkit-backed supervision for the local E2E collector.
 
 use std::fs::File;
 use std::net::SocketAddr;
@@ -12,35 +12,6 @@ use processkit::{Command, Outcome, StdioMode};
 
 const COLLECTOR_READINESS_TIMEOUT: Duration = Duration::from_secs(5);
 const PROCESS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// The Jaunder server lifecycle. Processkit drains the raw stderr tee before
-/// shutdown resolves, so the panic verifier sees a complete server log.
-pub(super) struct ServerProcess(Process);
-
-impl ServerProcess {
-    pub(super) fn start(command: Command, stderr: File) -> anyhow::Result<Self> {
-        let stderr = tokio::fs::File::from_std(stderr);
-        Ok(Self(Process::start(
-            command
-                .stderr_raw_tee(stderr)
-                .on_stderr_line(|line| eprintln!("{line}")),
-        )?))
-    }
-    /// Starting a processkit readiness probe also starts its background output
-    /// pumps; without one, a chatty server can fill stderr while xtask waits via
-    /// an external HTTP probe.
-    pub(super) fn wait_for_path(&mut self, path: &Path, within: Duration) -> anyhow::Result<()> {
-        self.0.wait_for_path(path, within)
-    }
-
-    pub(super) fn stop(&mut self) -> anyhow::Result<()> {
-        self.0.shutdown(PROCESS_SHUTDOWN_TIMEOUT).map(|_| ())
-    }
-
-    pub(super) fn stopped(&self) -> bool {
-        self.0.is_stopped()
-    }
-}
 
 /// One collector and its temporary capture directory. Endpoint allocation and
 /// artifact retention remain Jaunder policy; processkit owns containment,
