@@ -41,7 +41,7 @@ Out:
     authenticated flash/layout-shift checks and an actual Chromium/Firefox smoke
     cover all built-ins at desktop and mobile widths.
 
-- [ ] Task 2: Implement the bounded host-only Theme Package compiler.
+- [x] Task 2: Implement the bounded host-only Theme Package compiler.
   - Contract: `host` owns the closed ZIP/manifest parser, media/font validation,
     parser-backed CSS scoping and global-name rewriting, RFC 8785
     canonicalization, and the three approved non-circular digest encodings. It

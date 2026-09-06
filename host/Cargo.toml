@@ -33,6 +33,11 @@ opentelemetry-otlp.workspace = true
 thiserror.workspace = true
 common = { path = "../common", features = ["sanitize"] }
 macros = { path = "../macros" }
+zip = { version = "7", default-features = false, features = ["deflate"] }
+serde_jcs = { version = "0.1", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "avif-native"] }
+wuff = "=0.2.9"
+lightningcss = { version = "=1.0.0-alpha.72", default-features = false, features = ["serde", "visitor"] }
 
 [dev-dependencies]
 common = { path = "../common", features = ["test-support"] }

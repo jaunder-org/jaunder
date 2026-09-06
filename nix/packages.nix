@@ -173,6 +173,12 @@ let
     ];
   };
 
+  # Native AVIF decoding is host-only; keep dav1d out of `commonArgs`, which
+  # also builds the wasm CSR package.
+  hostArgs = commonArgs // {
+    buildInputs = commonArgs.buildInputs ++ [ pkgs.dav1d ];
+  };
+
   mkOfflineCargoHome =
     { name, vendorDir }:
     pkgs.runCommand "${name}-cargo-home" { } ''
@@ -192,7 +198,7 @@ let
     vendorDir = appCargoVendorDir;
   };
 
-  cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+  cargoArtifacts = craneLib.buildDepsOnly hostArgs;
 
   # Compile-only and test-only gates do not need full DWARF. Keep these
   # overrides local to gate derivations so production packages and normal
@@ -208,7 +214,7 @@ let
   cargoArtifactsLeanDev = craneLib.buildDepsOnly (commonArgs // leanDevProfile);
 
   jaunderBin = craneLib.buildPackage (
-    commonArgs
+    hostArgs
     // {
       inherit cargoArtifacts;
       cargoExtraArgs = "-p jaunder";
@@ -235,7 +241,7 @@ let
   # binary and the `services.jaunder` NixOS module, so there is no seed
   # surface anywhere near the release artifact.
   testSupportBin = craneLib.buildPackage (
-    commonArgs
+    hostArgs
     // {
       inherit cargoArtifacts;
       pname = "test-support";
@@ -529,6 +535,7 @@ in
       toolchain
       craneLib
       commonArgs
+      hostArgs
       wasmTestSrc
       appOfflineCargoHome
       toolsOfflineCargoHome
