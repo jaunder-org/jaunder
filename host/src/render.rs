@@ -60,7 +60,15 @@ pub(super) fn render_org(body: &str) -> String {
 /// is data, and reviewable as data. Its counterpart is [`INERT_ATTRS`], and between them
 /// they must cover common's complete sanitizer surface —
 /// `sanitizer_surface_is_fully_classified` enforces that.
-pub const MEDIA_URL_ATTRS: &[(&str, &str)] = &[("a", "href"), ("img", "src")];
+pub const MEDIA_URL_ATTRS: &[(&str, &str)] = &[
+    ("a", "href"),
+    ("img", "src"),
+    ("audio", "src"),
+    ("video", "src"),
+    ("video", "poster"),
+    ("source", "src"),
+    ("track", "src"),
+];
 
 /// Attribute *names* that name no media **wherever they appear**. The counterpart to
 /// [`MEDIA_URL_ATTRS`]: a permitted `(element, attribute)` counts as classified when the
@@ -91,16 +99,19 @@ pub const INERT_ATTRS: &[&str] = &[
     // Advisory text and human-language metadata (`lang`/`title` are generic — permitted
     // on every tag; `hreflang` is the language of a link's *target*, not a link).
     "alt", "hreflang", "lang", "title",
+    // Media presentation, format and caption metadata. URL-bearing `src`/`poster`
+    // remain pair-classified in `MEDIA_URL_ATTRS`.
+    "controls", "default", "kind", "label", "srclang", "type",
     // Quotation provenance — URL-valued, and deliberately out of scope; see above.
     "cite",     // Edit timestamps (`<del>`/`<ins>`).
     "datetime", // Text direction (`<bdo>`).
     "dir",
-    // Presentational geometry and alignment, on tables, columns, rules and images.
+    // Presentational geometry and alignment, on tables, columns, rules, images and video.
     "align", "char", "charoff", "colspan", "headers", "height", "rowspan", "scope", "size", "span",
     "summary", "width", // List numbering (`<ol>`).
     "start",
-    // Common's one widening: the `language-*` marker on a fenced code block, whose
-    // values the attribute filter already narrows.
+    // Common's fenced-code widening: the `language-*` marker whose values the
+    // attribute filter already narrows.
     "class",
 ];
 
@@ -613,6 +624,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn render_preserves_safe_media_elements_in_every_post_format() {
+        let media = concat!(
+            r#"<video src="/media/video.mp4" poster="/media/poster.jpg" "#,
+            r#"width="640" height="360"><source src="/media/video.webm" "#,
+            r#"type="video/webm"><source src="/media/video.ogv" "#,
+            r#"type="video/ogg"><track src="/media/captions.vtt" kind="captions" "#,
+            r#"srclang="en" label="English" default>Video unavailable</video>"#,
+            r#"<audio src="/media/audio.mp3" controls>Audio unavailable</audio>"#,
+        );
+        let bodies = [
+            (PostFormat::Html, media.to_owned()),
+            (PostFormat::Markdown, media.to_owned()),
+            (PostFormat::Org, format!("@@html:{media}@@")),
+        ];
+
+        for (format, body) in bodies {
+            let html = render(&parse_post_body(&body), &format);
+            for expected in [
+                "<video",
+                "/media/video.webm",
+                "/media/video.ogv",
+                "<track",
+                "Video unavailable",
+                "<audio",
+                "controls",
+                "Audio unavailable",
+            ] {
+                assert!(
+                    html.contains(expected),
+                    "{format:?} stripped {expected} from: {html}"
+                );
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Media references (#711)
     // -----------------------------------------------------------------------
@@ -664,13 +711,28 @@ mod tests {
     }
 
     #[test]
-    fn extract_ignores_media_in_stripped_elements_and_code_blocks() {
-        // Sanitisation removes <video>, so it can never load and is not a reference.
-        let video = parse_post_body(&format!(
-            "<video src=\"{}\"></video>",
-            media_url_for("clip.mp4")
-        ));
-        assert!(extract_media_refs(render(&video, &PostFormat::Markdown).as_ref()).is_empty());
+    fn extract_finds_media_in_safe_media_elements_and_ignores_code_blocks() {
+        for (element, attribute, filename) in [
+            ("audio", "src", "sound.mp3"),
+            ("video", "src", "clip.mp4"),
+            ("video", "poster", "poster.jpg"),
+            ("source", "src", "clip.webm"),
+            ("track", "src", "captions.vtt"),
+        ] {
+            let body = parse_post_body(&format!(
+                "<{element} {attribute}=\"{}\"></{element}>",
+                media_url_for(filename)
+            ));
+            let refs = extract_media_refs(render(&body, &PostFormat::Html).as_ref());
+            assert_eq!(refs.len(), 1, "{element}[{attribute}] was not extracted");
+            assert_eq!(refs[0].media().filename.as_ref(), filename);
+        }
+
+        let external_track = parse_post_body(r#"<track src="https://example.com/captions.vtt">"#);
+        assert!(
+            extract_media_refs(render(&external_track, &PostFormat::Html).as_ref()).is_empty(),
+            "a non-Media-shaped external track must not become a Media reference"
+        );
 
         // A URL displayed as literal text points nobody at anything (spec D2).
         let fenced = parse_post_body(&format!("```\n{}\n```", media_url_for("photo.jpg")));
@@ -678,12 +740,13 @@ mod tests {
     }
 
     #[test]
-    fn extract_deduplicates_and_sorts_complete_references() {
+    fn extract_deduplicates_and_sorts_complete_references_from_media_elements() {
         let local = media_url_for("photo.jpg");
         let absolute = format!("https://example.com{local}?download=1");
         let scheme_relative = format!("//example.com:8443{local}?download=1");
         let body = parse_post_body(&format!(
-            "<img src=\"{scheme_relative}\"><img src=\"{local}\"><img src=\"{absolute}\"><img src=\"{absolute}\">"
+            "<video src=\"{scheme_relative}\"></video><source src=\"{local}\">\
+             <track src=\"{absolute}\"><audio src=\"{absolute}\"></audio>"
         ));
         let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
         assert_eq!(refs.len(), 3, "only complete duplicate references collapse");
@@ -795,22 +858,19 @@ mod tests {
     #[test]
     fn sanitizer_coupling_test_bites_when_the_policy_widens() {
         // Prove the guard can fail without duplicating or mutating common's policy.
-        let unclassified = unclassified_sanitizer_pairs([
-            ("video", "src"),
-            ("video", "poster"),
+        let widened = [
+            ("iframe", "src"),
+            ("video", "srcset"),
             ("img", "data-poster"),
-        ]);
-        for attr in ["src", "poster"] {
+        ];
+        let unclassified = unclassified_sanitizer_pairs(widened);
+        for (element, attribute) in widened {
             assert!(
-                unclassified.contains(&("video".to_owned(), attr.to_owned())),
-                "the coupling check must flag the newly permitted, unclassified \
-                 (video, {attr})"
+                unclassified.contains(&(element.to_owned(), attribute.to_owned())),
+                "the coupling check must flag newly permitted, unclassified \
+                 ({element}, {attribute})"
             );
         }
-        assert!(
-            unclassified.contains(&("img".to_owned(), "data-poster".to_owned())),
-            "a newly permitted generic attribute must be flagged on every tag"
-        );
     }
 
     #[test]

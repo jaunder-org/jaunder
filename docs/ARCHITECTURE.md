@@ -503,6 +503,15 @@ rendered-HTML column; no spelling marker enforces that judgement
 ([ADR-0123](adr/0123-rendered-html-storage-decode.md)). `RenderedHtml` stays
 common because dual-target consumers reach it; ammonia stays host-only.
 
+The sanitizer also admits a bounded non-executable media surface:
+`audio[src,controls]`, `video[src,controls,poster,width,height]`,
+`source[src,type]`, and `track[src,kind,srclang,label,default]`, plus ammonia's
+generic `lang` and `title`. Autoplay, loop, muted, preload, `srcset`, event
+handlers, and unsafe URL schemes remain excluded. This preserves the
+no-executable-markup invariant while allowing playable media, alternate
+encodings, posters, and accessible WebVTT tracks
+([bounded media-element allowlist](adr/drafts/rendered-html-media-elements.md)).
+
 **A Post's media references are derived from that sanitized HTML, never
 supplied** ([ADR-0090](adr/0090-media-references-extracted-at-render.md)).
 `RenderOutput` lives in `host`: its private HTML and `Vec<MediaReference>`
