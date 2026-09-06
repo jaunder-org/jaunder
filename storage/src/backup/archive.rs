@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::Utc;
+use common::time::UtcInstant;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 
 use super::error::BackupError;
@@ -40,18 +40,14 @@ impl TemporaryBackupDirectory {
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("backup");
-        let suffix = Utc::now()
-            .timestamp_nanos_opt()
-            .unwrap_or_else(|| Utc::now().timestamp_micros());
+        let suffix = UtcInstant::now().value().as_nanosecond();
         let path = parent.join(format!(".{file_name}.{suffix}.tmp"));
         fs::create_dir(&path)?;
         Ok(Self { path })
     }
 
     pub(super) fn in_temp() -> Result<Self, BackupError> {
-        let suffix = Utc::now()
-            .timestamp_nanos_opt()
-            .unwrap_or_else(|| Utc::now().timestamp_micros());
+        let suffix = UtcInstant::now().value().as_nanosecond();
         let path = std::env::temp_dir().join(format!("jaunder-backup-{suffix}"));
         fs::create_dir(&path)?;
         Ok(Self { path })

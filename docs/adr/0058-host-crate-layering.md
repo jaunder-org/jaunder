@@ -55,6 +55,12 @@ workspace crate but `common`.)_
 > instead the sole orphan-rule exception to `common`'s dual-target dependency
 > purity. Current ownership: [ARCHITECTURE.md](../ARCHITECTURE.md).
 
+> **Annotation (2026-09-06).** As of #1272, the direct `chrono` infrastructure
+> dependency and raw Chrono type use named here had been removed. The host-floor
+> invariant and its distinction between external infrastructure and workspace
+> abstractions remained intact. Current ownership:
+> [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 The intended trio, by compilation target:
 
 - **`common`** — shared code that compiles to _both_ host and wasm

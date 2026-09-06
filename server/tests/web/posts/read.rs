@@ -1,5 +1,4 @@
 use axum::http::StatusCode;
-use chrono::Datelike;
 use common::render::PostFormat;
 use common::seed::{AuthoredPost, PublicPresentation};
 use common::tag::TagLabel;
@@ -52,12 +51,15 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
     let published_at = record
         .published_at
         .expect("published post should have published_at");
+    let published_date = jiff::tz::Offset::UTC
+        .to_datetime(published_at.value())
+        .date();
     let (status, body) = get_post_form(
         &state,
         &session.username,
-        published_at.value().year(),
-        published_at.value().month(),
-        published_at.value().day(),
+        i32::from(published_date.year()),
+        u32::try_from(published_date.month()).expect("Jiff civil month fits u32"),
+        u32::try_from(published_date.day()).expect("Jiff civil day fits u32"),
         &created.slug,
         None,
     )
@@ -104,8 +106,6 @@ async fn get_post_returns_not_found_for_missing_post(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn get_post_carries_tags(#[case] backend: Backend) {
-    use chrono::Datelike;
-
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
@@ -147,12 +147,15 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
         .published_at
         .unwrap();
 
+    let published_date = jiff::tz::Offset::UTC
+        .to_datetime(published_at.value())
+        .date();
     let (status, body) = get_post_form(
         &state,
         &session.username,
-        published_at.value().year(),
-        published_at.value().month(),
-        published_at.value().day(),
+        i32::from(published_date.year()),
+        u32::try_from(published_date.month()).expect("Jiff civil month fits u32"),
+        u32::try_from(published_date.day()).expect("Jiff civil day fits u32"),
         &created.slug,
         Some(&cookie),
     )

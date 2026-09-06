@@ -3,12 +3,12 @@
 //! served by `GET /feed.{rss,atom,json}` and the other feed endpoints.
 
 use async_trait::async_trait;
-use chrono::TimeDelta;
 use common::{etag::ETag, feed::FeedFormat, media::ContentType, time::UtcInstant};
 use host::{
     etag::FeedSemanticFingerprint,
     feed::{FeedPath, MismatchedStoredSyndicationFeedMetadata, SyndicationFeedRepresentation},
 };
+use jiff::Timestamp;
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -100,12 +100,16 @@ impl FeedCacheRow {
                 representation_format,
             });
         }
-        let representation_modified_at = UtcInstant::from(
-            representation_modified_at.value()
-                - TimeDelta::nanoseconds(i64::from(
-                    representation_modified_at.value().timestamp_subsec_nanos(),
-                )),
-        );
+        let whole_seconds = representation_modified_at.value().as_second();
+        // Rebuilding an existing timestamp from its whole-second component is
+        // representable. The boundary fallback keeps this constructor total if
+        // that Jiff invariant ever changes.
+        let representation_modified_at =
+            UtcInstant::from(match Timestamp::from_second(whole_seconds) {
+                Ok(timestamp) => timestamp,
+                Err(_) if whole_seconds.is_negative() => Timestamp::MIN,
+                Err(_) => Timestamp::MAX,
+            });
         Ok(Self {
             feed_path,
             representation,
@@ -416,7 +420,12 @@ mod tests {
     #[test]
     fn timestamp_role_wrappers_preserve_distinct_instants() {
         let updated_at = UtcInstant::now();
-        let generated_at = UtcInstant::from(updated_at.value() + chrono::Duration::seconds(5));
+        let generated_at = UtcInstant::from(
+            updated_at
+                .value()
+                .checked_add(std::time::Duration::from_secs(5))
+                .expect("test instant remains representable"),
+        );
 
         assert_eq!(
             FeedCacheRepresentationModifiedAt(updated_at).value(),
@@ -440,7 +449,12 @@ mod tests {
             representation,
             parse_etag("\"sha256-deadbeef\""),
             updated_at,
-            UtcInstant::from(updated_at.value() + chrono::Duration::seconds(5)),
+            UtcInstant::from(
+                updated_at
+                    .value()
+                    .checked_add(std::time::Duration::from_secs(5))
+                    .expect("test instant remains representable"),
+            ),
             "0000000000000000000000000000000000000000000000000000000000000000"
                 .parse()
                 .expect("valid fingerprint"),
@@ -485,9 +499,7 @@ mod tests {
         );
         assert_eq!(got.generated_at, row.generated_at);
         assert_eq!(
-            got.representation_modified_at
-                .value()
-                .timestamp_subsec_nanos(),
+            got.representation_modified_at.value().subsec_nanosecond(),
             0
         );
     }
@@ -507,7 +519,10 @@ mod tests {
             .etag(parse_etag("\"sha256-rejected-candidate\""))
             .representation_modified_at(row.representation_modified_at)
             .generated_at(UtcInstant::from(
-                row.generated_at.value() + chrono::Duration::seconds(1),
+                row.generated_at
+                    .value()
+                    .checked_add(std::time::Duration::from_secs(1))
+                    .expect("test instant remains representable"),
             ))
             .build();
         upsert_confirmed(&env.state, replacement).await;

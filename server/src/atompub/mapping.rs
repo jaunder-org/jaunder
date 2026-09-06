@@ -5,7 +5,6 @@
 //! and the `Entry` type for both incoming (create/update) and outgoing
 //! (collection member) operations.
 
-use chrono::Utc;
 use common::org::{Presence, PublicationState};
 use common::post_body::{InvalidPostBody, PostBody};
 use common::post_summary::PostSummary;
@@ -14,6 +13,7 @@ use common::tag::TagLabel;
 use common::tagged_url::{self, BaseUrl, EditUriUrl, Permalink};
 use common::time::UtcInstant;
 use host::atompub::{self, Category, Content, Entry, Link, Text};
+use std::str::FromStr;
 use storage::{PostFormat, PostRecord};
 
 /// The post-shaped data carried by an incoming `AtomPub` `Entry`.
@@ -89,13 +89,15 @@ fn classify_published(published: UtcInstant, request_clock: UtcInstant) -> Publi
 ///
 /// The body is the **one** field lenient ingest cannot apply to: an unusable
 /// summary or category is dropped and the entry still names a post, but an entry
-/// with no usable content names nothing. So this is the mapping's sole failure
-/// mode, and the handlers turn it into a `400`.
+/// with no usable content names nothing. So this is the mapping's sole user-input
+/// failure mode, and the handlers turn it into a `400`.
 ///
 /// # Errors
 ///
 /// Returns [`InvalidPostBody`] when the entry's content has no non-blank line —
-/// including an entry that carries no content element at all (#811).
+/// including an entry that carries no content element at all (#811) — or when
+/// Atom's Chrono-backed published timestamp cannot cross the RFC 3339 adapter
+/// into Jiff's supported range.
 pub fn entry_to_post_fields(
     entry: &Entry,
     default_format: PostFormat,
@@ -135,7 +137,9 @@ pub fn entry_to_post_fields(
     // `no`; only a genuinely absent marker leaves room for Org metadata.
     let published = entry
         .published()
-        .map(|published| UtcInstant::from(published.with_timezone(&Utc)));
+        .map(|published| UtcInstant::from_str(&published.to_rfc3339()))
+        .transpose()
+        .map_err(|_| InvalidPostBody)?;
     let lifecycle = match atompub::draft_marker(entry) {
         Some(true) => Presence::Present(PublicationState::Draft),
         Some(false) => Presence::Present(classify_published(
@@ -173,8 +177,15 @@ pub fn entry_to_post_fields(
 /// [`format_to_wire`]: Org→`text/org`, Markdown→`text/markdown`, Html→`html`. The
 /// stable id and the `rel="edit"` link both point at the member edit URI; a public
 /// `rel="alternate"` link is added only for published posts.
-#[must_use]
-pub fn post_to_entry(post: &PostRecord, base_url: &BaseUrl) -> Entry {
+///
+/// # Errors
+///
+/// Returns [`host::atompub::AtomPubError`] when the emitted Jiff timestamps cannot
+/// be represented by Atom's Chrono-backed entry model.
+pub fn post_to_entry(
+    post: &PostRecord,
+    base_url: &BaseUrl,
+) -> Result<Entry, host::atompub::AtomPubError> {
     let username = &*post.author_username;
     let edit_path = format!("/atompub/{username}/posts/{}", post.post_id);
     // `compose` joins base + the edit path (or emits the relative path when unset).
@@ -199,35 +210,41 @@ pub fn post_to_entry(post: &PostRecord, base_url: &BaseUrl) -> Entry {
         });
     }
 
-    let mut entry = Entry {
-        id: edit_uri.to_string(),
-        title: Text::plain(
-            post.title
-                .as_ref()
-                .map_or_else(String::new, ToString::to_string),
-        ),
-        content: Some(Content {
-            content_type: Some(content_type.to_string()),
-            value: Some(String::from(post.body.clone())),
-            ..Default::default()
-        }),
-        // ADR-0063 §5: read the summary out to a plain `String` at the atom Entry
-        // boundary (mirrors the `title` handling elsewhere in this mapper).
-        summary: post.summary.as_deref().map(|s| Text::plain(s.to_owned())),
-        categories: post
-            .tags
-            .iter()
-            .map(|t| Category {
-                // atom_syndication::Category.term is an external owned String — materialize the label.
-                term: t.tag_display.to_string(),
-                ..Default::default()
-            })
-            .collect(),
-        links,
-        published: post.published_at.map(|d| d.value().fixed_offset()),
-        updated: post.updated_at.value().fixed_offset(),
+    // atom_syndication remains Chrono-backed. Build its timestamps by parsing
+    // Jiff's canonical Atom wire representation at this protocol boundary.
+    let mut entry: Entry = format!(
+        "<entry xmlns=\"http://www.w3.org/2005/Atom\"><updated>{}</updated>{}</entry>",
+        post.updated_at,
+        post.published_at
+            .map(|published| format!("<published>{published}</published>"))
+            .unwrap_or_default(),
+    )
+    .parse()
+    .map_err(host::atompub::AtomPubError::Writer)?;
+    entry.id = edit_uri.to_string();
+    entry.title = Text::plain(
+        post.title
+            .as_ref()
+            .map_or_else(String::new, ToString::to_string),
+    );
+    entry.content = Some(Content {
+        content_type: Some(content_type.to_string()),
+        value: Some(String::from(post.body.clone())),
         ..Default::default()
-    };
+    });
+    // ADR-0063 §5: read the summary out to a plain `String` at the atom Entry
+    // boundary (mirrors the `title` handling elsewhere in this mapper).
+    entry.summary = post.summary.as_deref().map(|s| Text::plain(s.to_owned()));
+    entry.categories = post
+        .tags
+        .iter()
+        .map(|t| Category {
+            // atom_syndication::Category.term is an external owned String — materialize the label.
+            term: t.tag_display.to_string(),
+            ..Default::default()
+        })
+        .collect();
+    entry.links = links;
 
     atompub::set_draft(&mut entry, post.published_at.is_none());
     // Read-only server slug (ADR-0023): emitted on every entry, draft or live.
@@ -235,13 +252,12 @@ pub fn post_to_entry(post: &PostRecord, base_url: &BaseUrl) -> Entry {
     // (a serialization boundary, like the JSON serde bridge), not a slug-value
     // carrier; the typed `Slug` is derefed to its text here.
     atompub::set_j_slug(&mut entry, post.slug.as_ref());
-    entry
+    Ok(entry)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use common::ids::{PostId, TagId, UserId};
     use common::slug::Slug;
     use common::tag::{Tag, TagLabel};
@@ -309,9 +325,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields =
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+            .expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Html);
         assert_eq!(fields.body, "<p>HTML content</p>");
@@ -329,9 +344,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields =
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+            .expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Html);
     }
@@ -347,9 +361,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields =
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+            .expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Markdown);
         assert_eq!(fields.body, "# Markdown");
@@ -367,9 +380,8 @@ mod tests {
 
         let entry = xml.parse::<Entry>().expect("parse entry");
         // Default is Markdown, but the explicit media type selects Org.
-        let fields =
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+            .expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Org);
         assert_eq!(fields.body, "* Org body");
@@ -387,8 +399,8 @@ mod tests {
 
         let entry = xml.parse::<Entry>().expect("parse entry");
         // Default is Org, but the explicit media type selects Markdown.
-        let fields = entry_to_post_fields(&entry, PostFormat::Org, UtcInstant::from(Utc::now()))
-            .expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Org, UtcInstant::now()).expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Markdown);
         assert_eq!(fields.body, "# Markdown body");
@@ -405,8 +417,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Org, UtcInstant::from(Utc::now()))
-            .expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Org, UtcInstant::now()).expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Org);
         assert_eq!(fields.body, "some text");
@@ -422,13 +434,9 @@ mod tests {
   <id>id</id>
   <updated>2026-05-31T00:00:00Z</updated>
 </entry>"#;
-
         let entry = xml.parse::<Entry>().expect("parse entry");
 
-        assert!(
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .is_err()
-        );
+        assert!(entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now()).is_err());
     }
 
     #[test]
@@ -443,9 +451,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields =
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+            .expect("valid body");
 
         assert_eq!(
             fields.summary,
@@ -464,9 +471,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields =
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+            .expect("valid body");
 
         assert_eq!(fields.summary, None);
     }
@@ -484,9 +490,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields =
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+            .expect("valid body");
 
         assert_eq!(
             fields.categories,
@@ -508,9 +513,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields =
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+            .expect("valid body");
 
         assert_eq!(fields.categories, Presence::Absent);
     }
@@ -531,9 +535,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields =
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+            .expect("valid body");
 
         assert_eq!(
             fields.categories,
@@ -555,9 +558,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields =
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+            .expect("valid body");
 
         assert!(fields.is_draft);
         assert_eq!(fields.lifecycle, Presence::Present(PublicationState::Draft));
@@ -603,9 +605,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields =
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+            .expect("valid body");
 
         assert!(!fields.is_draft);
         assert_eq!(fields.lifecycle, Presence::Absent);
@@ -681,9 +682,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields =
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+            .expect("valid body");
 
         assert_eq!(fields.title.as_deref(), Some("My Post Title"));
     }
@@ -698,9 +698,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields =
-            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
-                .expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::now())
+            .expect("valid body");
 
         assert_eq!(fields.title, None);
     }
@@ -763,7 +762,8 @@ mod tests {
     }
 
     #[test]
-    fn post_to_entry_markdown_format_becomes_text_content() {
+    fn post_to_entry_markdown_format_becomes_text_content()
+    -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(42),
             title: Some(parse_post_title("Title")),
@@ -775,17 +775,18 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         assert_eq!(
             entry.content().unwrap().content_type(),
             Some("text/markdown")
         );
         assert_eq!(entry.content().unwrap().value(), Some("# Markdown Body"));
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_org_format_becomes_text_content() {
+    fn post_to_entry_org_format_becomes_text_content() -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(42),
             title: Some(parse_post_title("Title")),
@@ -797,14 +798,15 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         assert_eq!(entry.content().unwrap().content_type(), Some("text/org"));
         assert_eq!(entry.content().unwrap().value(), Some("* Org Body"));
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_html_format_becomes_html_content() {
+    fn post_to_entry_html_format_becomes_html_content() -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(42),
             title: Some(parse_post_title("Title")),
@@ -816,14 +818,15 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         assert_eq!(entry.content().unwrap().content_type(), Some("html"));
         assert_eq!(entry.content().unwrap().value(), Some("<p>HTML</p>"));
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_id_is_edit_uri() {
+    fn post_to_entry_id_is_edit_uri() -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("Title")),
@@ -835,13 +838,14 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         assert_eq!(entry.id, "https://example.com/atompub/alice/posts/7");
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_edit_link() {
+    fn post_to_entry_edit_link() -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("Title")),
@@ -853,7 +857,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         let edit_links: Vec<_> = entry.links().iter().filter(|l| l.rel() == "edit").collect();
         assert_eq!(edit_links.len(), 1);
@@ -861,23 +865,25 @@ mod tests {
             edit_links[0].href(),
             "https://example.com/atompub/alice/posts/7"
         );
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_published_post_has_alternate_link() {
-        let now = Utc::now();
+    fn post_to_entry_published_post_has_alternate_link() -> Result<(), host::atompub::AtomPubError>
+    {
+        let now = UtcInstant::now();
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("Title")),
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(now)),
+            published_at: Some(now),
             summary: None,
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         let alternate_links: Vec<_> = entry
             .links()
@@ -891,10 +897,11 @@ mod tests {
                 .href()
                 .starts_with("https://example.com/~alice")
         );
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_draft_post_has_no_alternate_link() {
+    fn post_to_entry_draft_post_has_no_alternate_link() -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("Title")),
@@ -906,7 +913,7 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         let alternate_links: Vec<_> = entry
             .links()
@@ -914,10 +921,11 @@ mod tests {
             .filter(|l| l.rel() == "alternate")
             .collect();
         assert_eq!(alternate_links.len(), 0);
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_preserves_genuine_title() {
+    fn post_to_entry_preserves_genuine_title() -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("My Title")),
@@ -929,13 +937,15 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         assert_eq!(entry.title().as_str(), "My Title");
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_emits_empty_title_for_untitled_post() {
+    fn post_to_entry_emits_empty_title_for_untitled_post() -> Result<(), host::atompub::AtomPubError>
+    {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: None,
@@ -947,13 +957,14 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         assert_eq!(entry.title().as_str(), "");
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_preserves_title_equal_to_slug() {
+    fn post_to_entry_preserves_title_equal_to_slug() -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("my-slug")),
@@ -965,13 +976,14 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         assert_eq!(entry.title().as_str(), "my-slug");
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_summary() {
+    fn post_to_entry_summary() -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("Title")),
@@ -983,13 +995,14 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         assert_eq!(entry.summary().unwrap().as_str(), "This is a summary");
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_no_summary() {
+    fn post_to_entry_no_summary() -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("Title")),
@@ -1001,13 +1014,14 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         assert_eq!(entry.summary(), None);
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_categories_from_tags() {
+    fn post_to_entry_categories_from_tags() -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("Title")),
@@ -1025,14 +1039,15 @@ mod tests {
             ],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         let terms: Vec<_> = entry.categories().iter().map(Category::term).collect();
         assert_eq!(terms, vec!["Rust", "Programming"]);
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_no_tags() {
+    fn post_to_entry_no_tags() -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("Title")),
@@ -1044,13 +1059,14 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         assert_eq!(entry.categories().len(), 0);
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_published_post_not_marked_draft() {
+    fn post_to_entry_published_post_not_marked_draft() -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("Title")),
@@ -1062,13 +1078,14 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         assert!(!atompub::is_draft(&entry));
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_draft_post_marked_draft() {
+    fn post_to_entry_draft_post_marked_draft() -> Result<(), host::atompub::AtomPubError> {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("Title")),
@@ -1080,31 +1097,36 @@ mod tests {
             tags: vec![],
         });
 
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         assert!(atompub::is_draft(&entry));
+        Ok(())
     }
 
     #[test]
-    fn post_to_entry_timestamps() {
-        let now = Utc::now();
+    fn post_to_entry_timestamps() -> Result<(), host::atompub::AtomPubError> {
+        let now = UtcInstant::now();
         let mut post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("Title")),
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(now)),
+            published_at: Some(now),
             summary: None,
             tags: vec![],
         });
-        post.updated_at = UtcInstant::from(now);
-        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+        post.updated_at = now;
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"))?;
 
         assert_eq!(
-            entry.published().map(chrono::DateTime::timestamp),
-            Some(now.timestamp())
+            entry
+                .published()
+                .expect("published post maps to an Atom published timestamp")
+                .timestamp(),
+            now.value().as_second()
         );
-        assert_eq!(entry.updated().timestamp(), now.timestamp());
+        assert_eq!(entry.updated().timestamp(), now.value().as_second());
+        Ok(())
     }
 }

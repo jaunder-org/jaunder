@@ -1,6 +1,5 @@
 use std::str::FromStr;
 
-use chrono::{DateTime, Utc};
 use macros::StrNewtype;
 use thiserror::Error;
 
@@ -13,6 +12,7 @@ use common::{
     site::SiteTitle,
     tag::TagLabel,
     tagged_url::{CanonicalUrl, FeedUrl, HubUrl, PermalinkUrl},
+    time::UtcInstant,
 };
 
 /// Human-readable title of a public Syndication Feed document.
@@ -102,7 +102,7 @@ pub struct FeedMetadata {
     pub self_url: FeedUrl,
     pub hub_url: Option<HubUrl>,
     /// Feed-level timestamp selected by cache identity comparison, not an item timestamp.
-    pub representation_modified_at: DateTime<Utc>,
+    pub representation_modified_at: UtcInstant,
 }
 
 #[derive(Debug, Clone)]
@@ -112,13 +112,13 @@ pub struct FeedItem {
     pub permalink: PermalinkUrl,
     pub summary: Option<PostSummary>,
     pub content_html: RenderedHtml,
-    pub published_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub published_at: UtcInstant,
+    pub updated_at: UtcInstant,
     pub tags: Vec<TagLabel>,
 }
 
 impl crate::feed::window::HasPublishedAt for FeedItem {
-    fn published_at(&self) -> DateTime<Utc> {
+    fn published_at(&self) -> UtcInstant {
         self.published_at
     }
 }
@@ -127,13 +127,12 @@ impl crate::feed::window::HasPublishedAt for FeedItem {
 mod tests {
     use super::*;
     use crate::feed::test_support::feed_item;
-    use chrono::TimeZone;
     use common::feed::FeedSurface;
     use common::{
         site::SiteTitle,
-        test_support::{parse_post_title, parse_url, rendered_html},
+        test_support::{parse_post_title, parse_url, parse_utc_instant, rendered_html},
+        time::UtcInstant,
     };
-
     #[test]
     fn feed_title_parses_trims_and_rejects_blank() {
         assert_eq!("  A Feed  ".parse::<FeedTitle>().unwrap(), "A Feed");
@@ -185,7 +184,7 @@ mod tests {
         );
     }
 
-    fn item(id: PostId, ts: DateTime<Utc>) -> FeedItem {
+    fn item(id: PostId, ts: UtcInstant) -> FeedItem {
         FeedItem {
             title: Some(parse_post_title("t")),
             ..feed_item(
@@ -200,7 +199,7 @@ mod tests {
     #[test]
     fn feed_item_implements_has_published_at() {
         use crate::feed::window::{HasPublishedAt, HybridWindow};
-        let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let now = parse_utc_instant("2026-01-01T00:00:00Z");
         let i = item(PostId::from(1), now);
         assert_eq!(<FeedItem as HasPublishedAt>::published_at(&i), now);
         // And exercise it through HybridWindow::select to confirm trait wiring.

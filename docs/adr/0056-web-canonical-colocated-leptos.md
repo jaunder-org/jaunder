@@ -101,6 +101,11 @@ wanted later, the canonical single-crate `web` = `app` is the correct base for
 it, and the only high-value peel (a pure `render` leaf so `server` need not
 depend on all of leptos-csr `web`) can be revisited on its own merits.
 
+> **Annotation (2026-09-06).** As of #1272, this decision's implementation
+> commitment to the Chrono `wasmbind` datetime helper had been superseded; the
+> dual-target-clean browser-touchpoint and no-fake-stub decisions remained
+> intact. Current time-model truth: [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - Supersedes ADR-0055's central decision (module-level wasm-only gating →

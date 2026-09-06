@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use chrono::Datelike;
 use common::tag::MAX_TAGS_PER_POST;
 use common::test_support::{parse_post_body, parse_row_limit, parse_slug, parse_tag_label};
 use common::time::UtcInstant;
 use common::visibility::{AudienceBase, AudienceSelection};
+use jiff::ToSpan;
 use server_fn::ServerFn;
 use storage::PostFormat;
 use web::posts::{PostInputs, SavedPost};
@@ -84,12 +84,15 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
         record.rendered_html
     );
     let published_at = record.published_at.expect("published post");
+    let published_date = jiff::tz::TimeZone::UTC
+        .to_datetime(published_at.value())
+        .date();
     let expected_permalink = format!(
         "/~{}/{:04}/{:02}/{:02}/{}",
         session.username,
-        published_at.value().year(),
-        published_at.value().month(),
-        published_at.value().day(),
+        published_date.year(),
+        published_date.month(),
+        published_date.day(),
         record.slug.as_ref()
     );
     assert_eq!(created.permalink, *expected_permalink);
@@ -320,11 +323,12 @@ async fn create_post_rejects(
 #[apply(backends)]
 #[tokio::test]
 async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backend) {
-    use chrono::TimeZone;
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
-    let future = chrono::Utc.with_ymd_and_hms(2099, 1, 1, 0, 0, 0).unwrap();
+    let future = "2099-01-01T00:00:00Z"
+        .parse::<jiff::Timestamp>()
+        .expect("valid test instant");
     let (status, body) = create_post_json(
         &state,
         PostInputs {
@@ -401,9 +405,13 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
     let published_at = record
         .published_at
         .expect("published post has published_at");
-    let now = chrono::Utc::now();
+    let now = UtcInstant::now();
+    let earliest = now
+        .value()
+        .checked_sub(1.minute())
+        .expect("test window is within Timestamp range");
     assert!(
-        (now - published_at.value()).num_seconds().abs() < 60,
+        published_at.value() >= earliest && published_at <= now,
         "publish-now should stamp ~now, got {published_at}"
     );
 
@@ -413,7 +421,7 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
             None,
             parse_row_limit("50"),
             &common::visibility::ViewerIdentity::Anonymous,
-            common::time::UtcInstant::from(now),
+            now,
         )
         .await
         .unwrap();
@@ -693,9 +701,9 @@ async fn create_org_metadata_failures_do_not_create_rows(#[case] backend: Backen
     let session = create_user_and_session(&state).await;
     let cookie = session.cookie();
     let structured_publish_at = UtcInstant::from(
-        chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
-            .expect("valid test instant")
-            .to_utc(),
+        "2020-01-01T00:00:00Z"
+            .parse::<jiff::Timestamp>()
+            .expect("valid test instant"),
     );
     let cases = [
         ("#+PROPERTY: JAUNDER_STATUS draft", false, None),

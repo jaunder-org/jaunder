@@ -10,6 +10,8 @@ use std::io::{self, Result, Write};
 use std::panic::{self, PanicHookInfo};
 use std::path::{Path, PathBuf};
 use std::thread;
+
+use jiff::Timestamp;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::Layer;
 use tracing_subscriber::registry::LookupSpan;
@@ -238,8 +240,9 @@ fn install_diag_panic_hook_with(
     panic::set_hook(Box::new(move |info| {
         match open(&path) {
             Ok(mut file) => {
-                let timestamp =
-                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+                let timestamp = Timestamp::now()
+                    .strftime("%Y-%m-%dT%H:%M:%S%.6fZ")
+                    .to_string();
                 let thread = thread::current().name().unwrap_or("unnamed").to_owned();
                 let line = DiagPanicRecord::from_panic(info, &thread, &timestamp).to_line();
                 if write(&mut file, line.as_bytes()).is_err() {

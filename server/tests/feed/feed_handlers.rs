@@ -2,8 +2,8 @@ use axum::{
     body::Body,
     http::{Method, Request, StatusCode, header},
 };
-use chrono::{TimeZone, Utc};
 use common::{tagged_url::HubUrl, test_support::parse_etag, time::UtcInstant};
+use jiff::Timestamp;
 use sqlx::{query, query_as};
 use tower::ServiceExt;
 
@@ -432,8 +432,8 @@ async fn routed_conditional_responses_preserve_the_get_head_validator_matrix(
     let body = "cached feed body";
     let etag = "\"current-feed-etag\"";
     let modified_at = UtcInstant::from(
-        Utc.with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
-            .single()
+        "2024-01-02T03:04:05Z"
+            .parse::<Timestamp>()
             .expect("fixed HTTP date"),
     );
     SeedFeedCache::new(fp(feed_path))

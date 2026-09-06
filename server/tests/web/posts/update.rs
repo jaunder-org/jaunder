@@ -682,7 +682,6 @@ async fn unpublish_post_reverts_published_post_to_draft(#[case] backend: Backend
 #[apply(backends)]
 #[tokio::test]
 async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
-    use chrono::TimeZone;
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
 
@@ -702,7 +701,9 @@ async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
 
     // `publish` stamps `now`, so the backdate has to come through `update`'s
     // explicit `publish_at`.
-    let backdated = chrono::Utc.with_ymd_and_hms(2020, 3, 5, 12, 0, 0).unwrap();
+    let backdated = "2020-03-05T12:00:00Z"
+        .parse::<jiff::Timestamp>()
+        .expect("valid test instant");
     let (status, body) = update_post_json(
         &state,
         draft.post_id,

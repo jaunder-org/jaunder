@@ -61,6 +61,136 @@ pub fn fixture_published_at() -> UtcInstant {
         .expect("valid fixture timestamp")
 }
 
+/// Immutable pre-Jiff NDJSON spelling captured from the deployed Chrono backup
+/// format. It deliberately differs from Jiff's public `Z` rendering.
+const PRE_JIFF_BACKUP_PUBLISHED_AT_BYTES: &[u8] = b"2026-04-29T12:34:56.789012+00:00";
+
+pub fn assert_exported_backup_timestamp_bytes(backup_path: &std::path::Path) {
+    let rows = std::fs::read(backup_path.join("db").join("posts.ndjson"))
+        .expect("read exported post rows");
+    assert!(
+        rows.windows(PRE_JIFF_BACKUP_PUBLISHED_AT_BYTES.len())
+            .any(|bytes| bytes == PRE_JIFF_BACKUP_PUBLISHED_AT_BYTES),
+        "export must retain the established timestamp bytes; rows: {}",
+        String::from_utf8_lossy(&rows)
+    );
+}
+
+/// Rewrites the exported post field from an independently stored pre-Jiff
+/// literal before restore. The complete current-schema archive supplies its
+/// generated schema checksum and table set, while this input is deliberately
+/// not sourced from the current exporter.
+pub fn make_pre_jiff_backup_fixture(backup_path: &std::path::Path) {
+    let rows_path = backup_path.join("db").join("posts.ndjson");
+    let rows = std::fs::read_to_string(&rows_path).expect("read exported post rows");
+    let mut rewritten = 0;
+    let rows = rows
+        .lines()
+        .map(|line| {
+            let mut row: serde_json::Value = serde_json::from_str(line).expect("parse post row");
+            if row["published_at"].is_string() {
+                row["published_at"] = serde_json::json!(
+                    std::str::from_utf8(PRE_JIFF_BACKUP_PUBLISHED_AT_BYTES)
+                        .expect("pre-Jiff timestamp is UTF-8")
+                );
+                rewritten += 1;
+            }
+            serde_json::to_string(&row).expect("serialize pre-Jiff post row")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rewritten >= 2,
+        "fixture must contain both public and Named post timestamps"
+    );
+    std::fs::write(rows_path, format!("{rows}\n")).expect("write pre-Jiff post rows");
+    assert_exported_backup_timestamp_bytes(backup_path);
+
+    let manifest_path = backup_path.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).expect("read manifest"))
+            .expect("parse manifest");
+    manifest
+        .as_object_mut()
+        .expect("manifest object")
+        .remove("format_version");
+    std::fs::write(
+        manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("serialize pre-Jiff manifest"),
+    )
+    .expect("write pre-Jiff manifest");
+}
+
+/// Replaces the Named-audience post timestamp in a backup table row with a
+/// value beyond Jiff's supported range. The public post remains first and
+/// readable, making the decoder boundary observable row-by-row.
+pub fn replace_named_post_timestamp_with_out_of_range(
+    backup_path: &std::path::Path,
+    public_post: PostId,
+    named_post: PostId,
+) {
+    let rows_path = backup_path.join("db").join("posts.ndjson");
+    let rows = std::fs::read_to_string(&rows_path).expect("read exported post rows");
+    let public_post = serde_json::to_value(public_post).expect("serialize public post id");
+    let named_post = serde_json::to_value(named_post).expect("serialize named post id");
+    let mut public_index = None;
+    let mut named_index = None;
+    let rows = rows
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            let mut row: serde_json::Value = serde_json::from_str(line).expect("parse post row");
+            if row["post_id"] == public_post {
+                public_index = Some(index);
+            }
+            if row["post_id"] == named_post {
+                row["published_at"] = serde_json::json!("10000-01-01T00:00:00+00:00");
+                named_index = Some(index);
+            }
+            serde_json::to_string(&row).expect("serialize post row")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        public_index < named_index,
+        "supported post row must precede the out-of-range post row"
+    );
+    std::fs::write(rows_path, format!("{rows}\n")).expect("write modified post rows");
+}
+
+pub fn assert_fixture_timestamp_meaning(instant: UtcInstant) {
+    let rendered = instant.to_string();
+    assert_eq!(rendered, "2026-04-29T12:34:56.789012Z");
+    assert_eq!(&rendered[..10], "2026-04-29", "civil date");
+    assert_eq!(&rendered[20..26], "789012", "microsecond precision");
+    assert!(rendered.ends_with('Z'), "UTC timezone meaning");
+}
+
+/// Shows a valid backup row remains readable until a later out-of-range row is
+/// decoded through the normal storage query path.
+pub async fn assert_supported_post_precedes_out_of_range_post(
+    args: &StorageArgs,
+    ids: &BackupFixtureIds,
+) {
+    let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
+        .await
+        .expect("open restored database");
+    assert!(
+        state
+            .posts
+            .get_post_by_id(ids.public_post, &ViewerIdentity::local(ids.author))
+            .await
+            .expect("decode supported preceding post row")
+            .is_some(),
+        "supported row preceding the out-of-range row must remain readable"
+    );
+    state
+        .posts
+        .get_post_by_id(ids.named_post, &ViewerIdentity::local(ids.viewer))
+        .await
+        .expect_err("decoding the out-of-range post row must fail");
+}
+
 pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
@@ -292,8 +422,11 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
         .expect("restored post");
     assert_eq!(post.title.as_ref(), Some(&ids.public_post_title));
     assert_eq!(post.slug, ids.public_post_slug);
-    // Value interop (DEC-D): the timestamp survives with its value.
-    assert_eq!(post.published_at, Some(fixture_published_at()));
+    // Restore preserves the instant, its UTC civil date, microsecond precision,
+    // and timezone meaning across source/target backends.
+    let published_at = post.published_at.expect("restored published timestamp");
+    assert_eq!(published_at, fixture_published_at());
+    assert_fixture_timestamp_meaning(published_at);
 
     // Tags ride along on the post record already read above (#771).
     let tags = &post.tags;

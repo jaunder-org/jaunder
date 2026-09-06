@@ -2,10 +2,10 @@
 
 use std::{fmt, str::FromStr};
 
-use chrono::{DateTime, Utc};
 use common::{
     etag::ETag, feed::FeedFormat, media::ContentHash, post_body::PostBody,
     post_summary::PostSummary, post_title::PostTitle, render::PostFormat, tag::TagLabel,
+    time::UtcInstant,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -102,7 +102,7 @@ pub fn feed_semantic_fingerprint(
 #[must_use]
 pub fn feed_etag(
     fingerprint: &FeedSemanticFingerprint,
-    representation_modified_at: DateTime<Utc>,
+    representation_modified_at: UtcInstant,
 ) -> ETag {
     let mut hasher = Sha256::new();
     write_bytes(&mut hasher, b"jaunder.feed.etag.v1");
@@ -167,9 +167,9 @@ fn write_string(hasher: &mut Sha256, value: &str) {
     write_bytes(hasher, value.as_bytes());
 }
 
-fn write_timestamp(hasher: &mut Sha256, value: DateTime<Utc>) {
-    hasher.update(value.timestamp().to_be_bytes());
-    hasher.update(value.timestamp_subsec_nanos().to_be_bytes());
+fn write_timestamp(hasher: &mut Sha256, value: UtcInstant) {
+    hasher.update(value.value().as_second().to_be_bytes());
+    hasher.update(value.value().subsec_nanosecond().to_be_bytes());
 }
 
 fn write_bytes(hasher: &mut Sha256, value: &[u8]) {
@@ -220,14 +220,16 @@ pub fn post_content_etag<'a>(
 mod tests {
     use super::*;
     use crate::feed::{FeedDescription, FeedTitle};
-    use chrono::TimeZone;
     use common::{
         ids::PostId,
-        test_support::{parse_post_summary, parse_post_title, parse_url, rendered_html},
+        test_support::{
+            parse_post_summary, parse_post_title, parse_url, parse_utc_instant, rendered_html,
+        },
+        time::UtcInstant,
     };
 
-    fn time(day: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 1, day, 1, 2, 3).unwrap()
+    fn time(day: u32) -> UtcInstant {
+        parse_utc_instant(&format!("2026-01-{day:02}T01:02:03Z"))
     }
     fn metadata() -> FeedMetadata {
         FeedMetadata {
@@ -280,7 +282,7 @@ mod tests {
         format: FeedFormat,
         metadata: &FeedMetadata,
         items: &[FeedItem],
-        representation_modified_at: DateTime<Utc>,
+        representation_modified_at: UtcInstant,
     ) -> ETag {
         feed_etag(
             &feed_semantic_fingerprint(format, metadata, items),

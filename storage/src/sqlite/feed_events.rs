@@ -376,11 +376,11 @@ impl FeedEventDialect for Sqlite {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use super::finish_purge;
     use crate::FeedEventRecord;
     use crate::test_support::{Backend, fp, sqlite_only};
-    use chrono::Duration;
     use common::{ids::FeedEventId, time::UtcInstant};
     use host::feed::FeedEventStatus;
 
@@ -453,7 +453,7 @@ mod tests {
                         .run(move |transaction| {
                             Box::pin(async move {
                                 feed_events
-                                    .claim_pending_batch(transaction, 200, Duration::zero())
+                                    .claim_pending_batch(transaction, 200, Duration::ZERO)
                                     .await
                             })
                         })

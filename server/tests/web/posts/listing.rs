@@ -5,6 +5,8 @@ use common::seed::{Page, PublicPresentation, RenderedPost};
 use common::tag::TagLabel;
 use common::test_support::{parse_post_body, parse_tag_label};
 use common::theme::Theme;
+use common::time::UtcInstant;
+use jiff::ToSpan;
 use server_fn::ServerFn;
 use storage::PostFormat;
 use web::posts::{PostInputs, SavedPost, UnpublishedPost};
@@ -147,18 +149,24 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
 
     // Seed a scheduled post (future `published_at`) and a live post (past)
     // directly via storage — the web compose datetime control is Task 6.
-    let now = chrono::Utc::now();
+    let now = UtcInstant::now();
+    let scheduled_at = UtcInstant::from(
+        now.value()
+            .checked_add(72.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let sched_id = SeedRawPost::new(author.user_id)
-        .published_at(common::time::UtcInstant::from(
-            now + chrono::Duration::days(3),
-        ))
+        .published_at(scheduled_at)
         .seed(&state)
         .await
         .post_id;
+    let live_at = UtcInstant::from(
+        now.value()
+            .checked_sub(24.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let live_id = SeedRawPost::new(author.user_id)
-        .published_at(common::time::UtcInstant::from(
-            now - chrono::Duration::days(1),
-        ))
+        .published_at(live_at)
         .seed(&state)
         .await
         .post_id;
@@ -192,25 +200,35 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
     let stranger = create_user_and_session(&state).await;
     let author_cookie = author.cookie();
 
-    let now = chrono::Utc::now();
-    let same_time = now + chrono::Duration::days(3);
+    let now = UtcInstant::now();
+    let same_time = UtcInstant::from(
+        now.value()
+            .checked_add(72.hours())
+            .expect("fixture is within Timestamp range"),
+    );
 
     let draft_id = SeedRawPost::new(author.user_id)
         .draft()
         .seed(&state)
         .await
         .post_id;
+    let live_at = UtcInstant::from(
+        now.value()
+            .checked_sub(24.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let live_id = SeedRawPost::new(author.user_id)
-        .published_at(common::time::UtcInstant::from(
-            now - chrono::Duration::days(1),
-        ))
+        .published_at(live_at)
         .seed(&state)
         .await
         .post_id;
+    let deleted_at = UtcInstant::from(
+        now.value()
+            .checked_add(48.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let deleted_id = SeedRawPost::new(author.user_id)
-        .published_at(common::time::UtcInstant::from(
-            now + chrono::Duration::days(2),
-        ))
+        .published_at(deleted_at)
         .seed(&state)
         .await
         .post_id;
@@ -231,35 +249,44 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
         })
         .await
         .unwrap();
+    let other_at = UtcInstant::from(
+        now.value()
+            .checked_add(24.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let other_id = SeedRawPost::new(stranger.user_id)
-        .published_at(common::time::UtcInstant::from(
-            now + chrono::Duration::days(1),
-        ))
+        .published_at(other_at)
         .seed(&state)
         .await
         .post_id;
 
+    let earlier_at = UtcInstant::from(
+        now.value()
+            .checked_add(24.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let earlier_id = SeedRawPost::new(author.user_id)
-        .published_at(common::time::UtcInstant::from(
-            now + chrono::Duration::days(1),
-        ))
+        .published_at(earlier_at)
         .seed(&state)
         .await
         .post_id;
     let same_a_id = SeedRawPost::new(author.user_id)
-        .published_at(common::time::UtcInstant::from(same_time))
+        .published_at(same_time)
         .seed(&state)
         .await
         .post_id;
     let same_b_id = SeedRawPost::new(author.user_id)
-        .published_at(common::time::UtcInstant::from(same_time))
+        .published_at(same_time)
         .seed(&state)
         .await
         .post_id;
+    let later_at = UtcInstant::from(
+        now.value()
+            .checked_add(120.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let later_id = SeedRawPost::new(author.user_id)
-        .published_at(common::time::UtcInstant::from(
-            now + chrono::Duration::days(5),
-        ))
+        .published_at(later_at)
         .seed(&state)
         .await
         .post_id;

@@ -62,28 +62,29 @@ pub struct MediaLinkEntry {
 ///
 /// # Errors
 ///
-/// Returns [`AtomPubError`] if the document cannot be written.
+/// Returns [`AtomPubError`] if the assembled Atom model cannot be parsed or written.
 pub fn render_media_link_entry(entry: &MediaLinkEntry) -> Result<String, AtomPubError> {
-    let atom_entry = Entry {
-        id: entry.id.to_string(),
-        // The one display surface in this document: the title shows the name the user
-        // typed, while every URL below keeps the canonical stored spelling (#720).
-        title: Text::plain(entry.title.decoded()),
-        updated: entry.updated.value().fixed_offset(),
-        published: Some(entry.published.value().fixed_offset()),
-        // A media-link entry references the binary rather than embedding it, so the
-        // content carries `src` and no value (RFC 5023 §9.6).
-        content: Some(Content {
-            content_type: Some(entry.content_type.to_string()),
-            src: Some(entry.content_src.to_string()),
-            ..Default::default()
-        }),
-        links: vec![
-            rel_link("edit", &entry.edit_uri),
-            rel_link("edit-media", &entry.edit_media_uri),
-        ],
+    let mut atom_entry: Entry = format!(
+        "<entry xmlns=\"http://www.w3.org/2005/Atom\"><updated>{}</updated><published>{}</published></entry>",
+        entry.updated, entry.published
+    )
+    .parse()
+    .map_err(AtomPubError::Writer)?;
+    atom_entry.id = entry.id.to_string();
+    // The one display surface in this document: the title shows the name the user
+    // typed, while every URL below keeps the canonical stored spelling (#720).
+    atom_entry.title = Text::plain(entry.title.decoded());
+    // A media-link entry references the binary rather than embedding it, so the
+    // content carries `src` and no value (RFC 5023 §9.6).
+    atom_entry.content = Some(Content {
+        content_type: Some(entry.content_type.to_string()),
+        src: Some(entry.content_src.to_string()),
         ..Default::default()
-    };
+    });
+    atom_entry.links = vec![
+        rel_link("edit", &entry.edit_uri),
+        rel_link("edit-media", &entry.edit_media_uri),
+    ];
 
     to_xml_string(atom_entry.write_to(Vec::new()))
 }

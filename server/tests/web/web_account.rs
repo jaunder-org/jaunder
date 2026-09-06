@@ -7,6 +7,7 @@ use common::test_support::{
     parse_bio, parse_display_name, parse_email, parse_invite_ttl_hours, parse_session_label,
 };
 use common::{MutationOutcome, theme::Theme};
+use jiff::ToSpan;
 use server_fn::ServerFn;
 use storage::{EmailVerified, ProfileUpdate};
 
@@ -443,9 +444,19 @@ async fn create_invite_nested_request_maps_fields(#[case] backend: Backend) {
     let invites = state.invites.list_invites().await.unwrap();
     assert_eq!(invites.len(), 1, "expected one stored invite");
     let stored_ttl = invites[0].expires_at.value() - invites[0].created_at.value();
+    let expected_expiry = invites[0]
+        .created_at
+        .value()
+        .checked_add(37.hours())
+        .expect("fixture is within Timestamp range");
+    let earliest_expiry = invites[0]
+        .created_at
+        .value()
+        .checked_add(36.hours().minutes(59).seconds(59))
+        .expect("fixture is within Timestamp range");
     assert!(
-        stored_ttl <= chrono::Duration::hours(37)
-            && stored_ttl >= chrono::Duration::hours(37) - chrono::Duration::seconds(1),
+        invites[0].expires_at.value() <= expected_expiry
+            && invites[0].expires_at.value() >= earliest_expiry,
         "stored invite should preserve the 37-hour TTL, got {stored_ttl:?}"
     );
 

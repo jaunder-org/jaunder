@@ -1181,14 +1181,13 @@ mod tests {
     #[test]
     fn rendered_post_keeps_titleless_posts_titleless() {
         use crate::posts::server::rendered_post;
-        use chrono::{TimeZone, Utc};
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
         };
         use storage::{PostFormat, PostRecord};
 
-        let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
+        let base_time: common::time::UtcInstant = "2026-04-16T10:11:12Z".parse().unwrap();
         let slug = "titleless-note".parse::<Slug>().unwrap();
 
         let summary = rendered_post(
@@ -1201,9 +1200,9 @@ mod tests {
                 body: parse_post_body("Titleless note"),
                 format: PostFormat::Markdown,
                 rendered_html: common::test_support::rendered_html("<p>Titleless note</p>"),
-                created_at: common::time::UtcInstant::from(base_time),
-                updated_at: common::time::UtcInstant::from(base_time),
-                published_at: Some(common::time::UtcInstant::from(base_time)),
+                created_at: base_time,
+                updated_at: base_time,
+                published_at: Some(base_time),
                 deleted_at: None,
                 summary: None,
                 tags: vec![],
@@ -1224,14 +1223,13 @@ mod tests {
     #[test]
     fn authored_post_marks_draft_state_from_published_at() {
         use crate::posts::server::authored_post;
-        use chrono::{TimeZone, Utc};
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
         };
         use storage::{PostFormat, PostRecord};
 
-        let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
+        let base_time: common::time::UtcInstant = "2026-04-16T10:11:12Z".parse().unwrap();
         let author_username = parse_username("author");
         let slug = "hello-world".parse::<Slug>().unwrap();
 
@@ -1245,8 +1243,8 @@ mod tests {
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: common::test_support::rendered_html("<p>body</p>"),
-                created_at: common::time::UtcInstant::from(base_time),
-                updated_at: common::time::UtcInstant::from(base_time),
+                created_at: base_time,
+                updated_at: base_time,
                 published_at: None,
                 deleted_at: None,
                 summary: None,
@@ -1268,9 +1266,9 @@ mod tests {
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: common::test_support::rendered_html("<p>body</p>"),
-                created_at: common::time::UtcInstant::from(base_time),
-                updated_at: common::time::UtcInstant::from(base_time),
-                published_at: Some(common::time::UtcInstant::from(base_time)),
+                created_at: base_time,
+                updated_at: base_time,
+                published_at: Some(base_time),
                 deleted_at: None,
                 summary: None,
                 tags: vec![],

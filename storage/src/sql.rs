@@ -84,7 +84,6 @@ pub trait StorageBind: sealed::StorageBind {}
 /// use common::tag::Tag;
 /// use sqlx::{Postgres, QueryBuilder, query_as, query_scalar};
 /// use storage::sql::{QueryBuilderStorageExt, RowCount};
-/// # use chrono::Utc;
 /// # use serde_json::json;
 /// # use sqlx::{Sqlite, query};
 /// # use storage::sql::QueryStorageExt;
@@ -133,12 +132,11 @@ pub trait StorageBind: sealed::StorageBind {}
 /// ```
 ///
 /// ```compile_fail
-/// # use chrono::Utc;
 /// # use sqlx::{Sqlite, query};
 /// # use storage::sql::QueryStorageExt;
 /// # let primitive_query = query::<Sqlite>("SELECT ?");
 ///
-/// let _ = primitive_query.bind_storage(Utc::now());
+/// let _ = primitive_query.bind_storage(jiff::Timestamp::now());
 /// ```
 ///
 /// ```compile_fail

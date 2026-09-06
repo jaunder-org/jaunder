@@ -546,6 +546,7 @@ mod tests {
     use super::*;
     use crate::sql::QueryStorageExt;
     use crate::test_support::{Backend, backends};
+    use jiff::ToSpan;
 
     use common::test_support::{
         parse_bio, parse_display_name, parse_email, parse_session_label, parse_token_hash,
@@ -559,15 +560,30 @@ mod tests {
     #[tokio::test]
     async fn utc_instant_round_trips_directly_through_sqlx(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let expected = "2026-08-26T12:34:56.123456Z".parse::<UtcInstant>().unwrap();
-        let actual = crate::with_closeable_pool!(env.base.pool(), pool, {
-            sqlx::query_scalar::<_, UtcInstant>("SELECT $1")
-                .bind_storage(expected)
-                .fetch_one(pool)
-                .await
-                .unwrap()
-        });
-        assert_eq!(actual, expected);
+        for (instant, postgres_instant) in [
+            ("2026-08-26T12:34:56Z", "2026-08-26T12:34:56Z"),
+            ("2026-08-26T12:34:56.100Z", "2026-08-26T12:34:56.100Z"),
+            ("2026-08-26T12:34:56.123400Z", "2026-08-26T12:34:56.123400Z"),
+            ("2026-08-26T12:34:56.123456Z", "2026-08-26T12:34:56.123456Z"),
+            (
+                "2026-08-26T12:34:56.123456700Z",
+                "2026-08-26T12:34:56.123456Z",
+            ),
+        ] {
+            let instant = instant.parse::<UtcInstant>().unwrap();
+            let actual = crate::with_closeable_pool!(env.base.pool(), pool, {
+                sqlx::query_scalar::<_, UtcInstant>("SELECT $1")
+                    .bind_storage(instant)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap()
+            });
+            let expected = match backend {
+                Backend::Sqlite => instant,
+                Backend::Postgres => postgres_instant.parse().unwrap(),
+            };
+            assert_eq!(actual, expected);
+        }
 
         let absent = crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query_scalar::<_, Option<UtcInstant>>("SELECT $1")
@@ -577,6 +593,118 @@ mod tests {
                 .unwrap()
         });
         assert_eq!(absent, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn utc_instant_preserves_legacy_rows_and_backend_timestamp_contracts(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let supported = "2026-08-26T12:34:56.123456Z".parse::<UtcInstant>().unwrap();
+
+        let legacy_insert = match backend {
+            Backend::Sqlite => {
+                "INSERT INTO utc_instant_codec_legacy (id, instant)
+                 VALUES ($1, $2), ($3, $4)"
+            }
+            Backend::Postgres => {
+                "INSERT INTO utc_instant_codec_legacy (id, instant)
+                 VALUES ($1, $2::timestamptz), ($3, $4::timestamptz)"
+            }
+        };
+
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(
+                "CREATE TABLE utc_instant_codec_legacy (
+                    id BIGINT PRIMARY KEY,
+                    instant TIMESTAMPTZ NOT NULL
+                )",
+            )
+            .execute(pool)
+            .await
+            .unwrap();
+            sqlx::query(legacy_insert)
+                .bind(1_i64)
+                .bind("2026-08-26 14:34:56.123456+02:00")
+                .bind(2_i64)
+                .bind("10000-01-01 00:00:00+00:00")
+                .execute(pool)
+                .await
+                .unwrap();
+        });
+
+        let read_supported = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_scalar::<_, UtcInstant>(
+                "SELECT instant FROM utc_instant_codec_legacy WHERE id = $1",
+            )
+            .bind(1_i64)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        });
+        assert_eq!(read_supported, supported);
+
+        for (id, (instant, sqlite_bytes)) in (3_i64..).zip([
+            ("2026-08-26T12:34:56Z", "2026-08-26T12:34:56+00:00"),
+            ("2026-08-26T12:34:56.100Z", "2026-08-26T12:34:56.100+00:00"),
+            (
+                "2026-08-26T12:34:56.123400Z",
+                "2026-08-26T12:34:56.123400+00:00",
+            ),
+            (
+                "2026-08-26T12:34:56.123456Z",
+                "2026-08-26T12:34:56.123456+00:00",
+            ),
+            (
+                "2026-08-26T12:34:56.123456700Z",
+                "2026-08-26T12:34:56.123456700+00:00",
+            ),
+        ]) {
+            let stored = instant.parse::<UtcInstant>().unwrap();
+            crate::with_closeable_pool!(env.base.pool(), pool, {
+                sqlx::query("INSERT INTO utc_instant_codec_legacy (id, instant) VALUES ($1, $2)")
+                    .bind(id)
+                    .bind_storage(stored)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            });
+
+            if matches!(backend, Backend::Sqlite) {
+                let bytes = crate::with_closeable_pool!(env.base.pool(), pool, {
+                    sqlx::query_scalar::<_, String>(
+                        "SELECT instant FROM utc_instant_codec_legacy WHERE id = $1",
+                    )
+                    .bind(id)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap()
+                });
+                assert_eq!(bytes, sqlite_bytes);
+            }
+        }
+
+        let out_of_range = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_scalar::<_, UtcInstant>(
+                "SELECT instant FROM utc_instant_codec_legacy WHERE id = $1",
+            )
+            .bind(2_i64)
+            .fetch_one(pool)
+            .await
+        });
+        assert!(out_of_range.is_err());
+
+        let still_readable = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_scalar::<_, UtcInstant>(
+                "SELECT instant FROM utc_instant_codec_legacy WHERE id = $1",
+            )
+            .bind(1_i64)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        });
+        assert_eq!(still_readable, supported);
     }
 
     #[test]
@@ -602,7 +730,11 @@ mod tests {
     #[test]
     fn test_build_session_record() {
         let now = UtcInstant::now();
-        let later = UtcInstant::from(now.value() + chrono::Duration::seconds(5));
+        let later = UtcInstant::from(
+            now.value()
+                .checked_add(5.seconds())
+                .expect("fixture is within Timestamp range"),
+        );
         let record = build_session_record(SessionRecordParts {
             token_hash: parse_token_hash("hash"),
             user_id: UserId::from(1),
@@ -767,7 +899,11 @@ mod tests {
     #[test]
     fn session_row_helper_round_trips() {
         let now = UtcInstant::now();
-        let last_used_at = UtcInstant::from(now.value() + chrono::Duration::seconds(5));
+        let last_used_at = UtcInstant::from(
+            now.value()
+                .checked_add(5.seconds())
+                .expect("fixture is within Timestamp range"),
+        );
         let session = SessionRow {
             token_hash: parse_token_hash("tokenhash"),
             user_id: UserId::from(1),

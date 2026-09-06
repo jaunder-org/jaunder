@@ -1,3 +1,4 @@
+use jiff::ToSpan;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -7,6 +8,7 @@ use common::invite::InviteTtlHours;
 use common::mailer::{EmailMessage, MailSender};
 use common::session_label::SessionLabel;
 use common::tagged_url::{self, MailConfirmUrl};
+use common::time::UtcInstant;
 use common::token::RawToken;
 use common::username::Username;
 use host::password::Password;
@@ -187,10 +189,14 @@ pub async fn cmd_user_invite(
         ));
     }
 
-    // The 1..=336 bound lives in `InviteTtlHours` (clap rejects an out-of-range `--expires-in`
-    // at parse), so no in-body overflow check is needed.
-    let expires_at = common::time::UtcInstant::from(
-        chrono::Utc::now() + chrono::Duration::hours(expires_in.unwrap_or_default().value()),
+    // The 1..=336 bound lives in `InviteTtlHours` (clap rejects an out-of-range
+    // `--expires-in` at parse). A timestamp beyond Jiff's supported range is
+    // reported to the operator instead of issuing an invitation that cannot expire.
+    let expires_at = UtcInstant::from(
+        UtcInstant::now()
+            .value()
+            .checked_add(expires_in.unwrap_or_default().value().hours())
+            .context("invite expiry is outside Jiff's supported timestamp range")?,
     );
 
     let invites = Arc::clone(&state.invites);

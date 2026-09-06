@@ -28,7 +28,7 @@ async fn claim_pending(state: &std::sync::Arc<storage::AppState>) -> Vec<storage
             .run(move |transaction| {
                 Box::pin(async move {
                     feed_events
-                        .claim_pending_batch(transaction, 100, chrono::Duration::seconds(86400))
+                        .claim_pending_batch(transaction, 100, std::time::Duration::from_hours(24))
                         .await
                 })
             })

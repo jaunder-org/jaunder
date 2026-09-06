@@ -156,6 +156,11 @@ it gains `storage` and `web` as dependents.
 `server` remains the host _ceiling_ (composition root, may know everything);
 `host` is the _floor_.
 
+> **Annotation (2026-09-06).** As of #1272, the raw Chrono type and Chrono parse
+> route named in this extension of the host-floor invariant had been removed.
+> The no-workspace-crate-above-`common` rule and the `sqlx`/HTTP examples
+> remained intact. Current ownership: [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ### Naming
 
 The carrier keeps the name `InternalError`, now `host::error::InternalError`. It

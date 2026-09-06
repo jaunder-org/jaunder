@@ -1068,7 +1068,6 @@ mod tests {
     };
     #[cfg(feature = "test-utils")]
     use crate::{MockFeedEventStorage, MockPostStorage};
-    use chrono::{Duration, TimeZone, Utc};
     use common::idempotency_key::IdempotencyKey;
     use common::media::{MediaReferenceForm, MediaReferenceKind};
     use common::test_support::{
@@ -1077,6 +1076,7 @@ mod tests {
     };
     #[cfg(feature = "test-utils")]
     use common::test_support::{parse_tag, parse_tag_label};
+    use jiff::ToSpan;
     #[cfg(feature = "test-utils")]
     use sqlx::Error as SqlxError;
 
@@ -1598,10 +1598,22 @@ mod tests {
         let env = backend.setup().await;
         let user = SeedUser::new().seed(&env.state).await;
         let now: UtcInstant = "2042-07-01T12:00:00Z".parse().unwrap();
-        let future = UtcInstant::from(now.value() + Duration::hours(1));
-        let later_future = UtcInstant::from(now.value() + Duration::hours(2));
+        let future = UtcInstant::from(
+            now.value()
+                .checked_add(1.hour())
+                .expect("test instant remains representable"),
+        );
+        let later_future = UtcInstant::from(
+            now.value()
+                .checked_add(2.hours())
+                .expect("test instant remains representable"),
+        );
         let post = crate::test_support::SeedRawPost::new(user.user_id)
-            .published_at(UtcInstant::from(now.value() - Duration::hours(1)))
+            .published_at(UtcInstant::from(
+                now.value()
+                    .checked_sub(1.hour())
+                    .expect("test instant remains representable"),
+            ))
             .audiences(vec![AudienceTarget::Public])
             .tags(["rust"])
             .seed(&env.state)
@@ -3020,12 +3032,13 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let storage = Arc::clone(&env.state.posts);
         let key = parse_idempotency_key("indeterminate-commit-key");
-        let created_at = UtcInstant::from(
-            Utc.with_ymd_and_hms(2026, 8, 31, 12, 0, 0)
-                .single()
-                .expect("fixed instant"),
+        let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
+        let cutoff = UtcInstant::from(
+            created_at
+                .value()
+                .checked_add(1.hour())
+                .expect("test instant remains representable"),
         );
-        let cutoff = UtcInstant::from(created_at.value() + Duration::hours(1));
 
         confirmed(
             perform_post_creation_at(
@@ -3115,12 +3128,13 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let storage = Arc::clone(&env.state.posts);
         let key = parse_idempotency_key("retained-key");
-        let created_at = UtcInstant::from(
-            Utc.with_ymd_and_hms(2026, 8, 31, 12, 0, 0)
-                .single()
-                .expect("fixed instant"),
+        let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
+        let cutoff = UtcInstant::from(
+            created_at
+                .value()
+                .checked_add(1.hour())
+                .expect("test instant remains representable"),
         );
-        let cutoff = UtcInstant::from(created_at.value() + Duration::hours(1));
 
         let first = confirmed(
             perform_post_creation_at(
@@ -3140,7 +3154,12 @@ mod tests {
                 .post_id_for_idempotency_key(
                     user_id,
                     &key,
-                    UtcInstant::from(cutoff.value() - Duration::seconds(1)),
+                    UtcInstant::from(
+                        cutoff
+                            .value()
+                            .checked_sub(1.second())
+                            .expect("test instant remains representable"),
+                    ),
                 )
                 .await
                 .expect("pre-cutoff lookup"),
@@ -3191,7 +3210,10 @@ mod tests {
         assert_eq!(
             storage
                 .prune_expired_idempotency_keys(UtcInstant::from(
-                    cutoff.value() + Duration::hours(1)
+                    cutoff
+                        .value()
+                        .checked_add(1.hour())
+                        .expect("test instant remains representable"),
                 ))
                 .await
                 .expect("prune expired mapping"),
@@ -3202,7 +3224,12 @@ mod tests {
                 .post_id_for_idempotency_key(
                     user_id,
                     &key,
-                    UtcInstant::from(cutoff.value() + Duration::hours(1)),
+                    UtcInstant::from(
+                        cutoff
+                            .value()
+                            .checked_add(1.hour())
+                            .expect("test instant remains representable"),
+                    ),
                 )
                 .await
                 .expect("lookup after pruning"),
@@ -3218,7 +3245,12 @@ mod tests {
         let storage = Arc::clone(&env.state.posts);
         let key = parse_idempotency_key("concurrent-retained-key");
         let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
-        let cutoff = UtcInstant::from(created_at.value() + Duration::hours(1));
+        let cutoff = UtcInstant::from(
+            created_at
+                .value()
+                .checked_add(1.hour())
+                .expect("test instant remains representable"),
+        );
 
         let original = confirmed(
             perform_post_creation_at(
@@ -3270,7 +3302,12 @@ mod tests {
                 .post_id_for_idempotency_key(
                     user_id,
                     &key,
-                    UtcInstant::from(cutoff.value() + Duration::seconds(1)),
+                    UtcInstant::from(
+                        cutoff
+                            .value()
+                            .checked_add(1.second())
+                            .expect("test instant remains representable"),
+                    ),
                 )
                 .await
                 .expect("replacement mapping"),

@@ -1,6 +1,6 @@
 //! Post lifecycle bookkeeping, revisions, and shared mutation support.
 
-use chrono::Duration;
+use jiff::ToSpan;
 use sha2::{Digest, Sha256};
 use sqlx::{AssertSqlSafe, Database, Decode, Encode, Executor, Pool, Result, Row, Type};
 
@@ -31,7 +31,13 @@ use host::etag;
 const IDEMPOTENCY_REPLAY_WINDOW_HOURS: i64 = 1;
 
 pub(crate) fn idempotency_replay_cutoff(now: UtcInstant) -> UtcInstant {
-    UtcInstant::from(now.value() - Duration::hours(IDEMPOTENCY_REPLAY_WINDOW_HOURS))
+    // At Timestamp::MIN no mapping can predate the replay window, so clamping
+    // keeps the replay predicate correct at the representable boundary.
+    UtcInstant::from(
+        now.value()
+            .saturating_sub(IDEMPOTENCY_REPLAY_WINDOW_HOURS.hours())
+            .map_or(jiff::Timestamp::MIN, std::convert::identity),
+    )
 }
 
 /// Persistence operation for a post's publication/deletion lifecycle.
@@ -646,6 +652,15 @@ mod tests {
     use crate::posts::models::PostFormat;
     use common::ids::PostId;
     use common::test_support::{parse_etag, parse_slug};
+    use common::time::UtcInstant;
+
+    #[test]
+    fn idempotency_replay_cutoff_clamps_at_the_earliest_timestamp() {
+        assert_eq!(
+            super::idempotency_replay_cutoff(UtcInstant::from(jiff::Timestamp::MIN)),
+            UtcInstant::from(jiff::Timestamp::MIN)
+        );
+    }
 
     #[test]
     fn org_bookkeeping_conversion_preserves_each_persistence_expectation() {

@@ -1127,10 +1127,10 @@ mod tests {
 
     #[test]
     fn masked_pairs_a_site_validation_message_with_a_typed_source() {
-        // Mirrors the chrono parse call sites: a specific public message plus a
-        // typed source on the anyhow chain. `host` has no `chrono` dep, so a
-        // stand-in typed error stands for `chrono::ParseError`; the real chrono
-        // wiring is guarded by the web suite.
+        // Mirrors parse call sites: a specific public message plus a typed source
+        // on the anyhow chain. `host` has no time-library dependency, so this
+        // stand-in validates the error-carrier contract without coupling it to an
+        // implementation type.
         let error = InternalError::masked(
             ErrorKind::Validation,
             ErrorClass::Client,

@@ -23,7 +23,9 @@ pub async fn cmd_backup(
     path: Option<PathBuf>,
 ) -> anyhow::Result<PathBuf> {
     let runtime = support::storage_runtime_config(&storage.db)?;
-    let destination_path = path.unwrap_or_else(|| default_backup_path(storage, mode));
+    let destination_path = path.unwrap_or_else(|| {
+        crate::backup::backup_path_for_mode(&storage.storage_path.join("backups"), mode)
+    });
     let manifest = storage::export_backup(BackupExportOptions {
         database: &storage.db,
         runtime: &runtime,
@@ -89,15 +91,6 @@ fn print_restore_validation_report(report: &RestoreValidationReport) {
     }
 }
 
-fn default_backup_path(storage: &StorageArgs, mode: BackupMode) -> PathBuf {
-    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-    let name = match mode {
-        BackupMode::Directory => format!("backup-{timestamp}"),
-        BackupMode::Archive => format!("backup-{timestamp}.tar.gz"),
-    };
-    storage.storage_path.join("backups").join(name)
-}
-
 async fn ensure_restore_target_empty(
     storage: &StorageArgs,
     runtime: &StorageRuntimeConfig,
@@ -137,31 +130,6 @@ fn directory_has_entries(path: &Path) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn default_backup_path_is_under_storage_backups() {
-        let storage = StorageArgs {
-            storage_path: PathBuf::from("/tmp/jaunder"),
-            db: "sqlite:/tmp/jaunder.db".parse().expect("sqlite db"),
-        };
-
-        let path = default_backup_path(&storage, BackupMode::Directory);
-
-        assert!(path.starts_with("/tmp/jaunder/backups"));
-    }
-
-    #[test]
-    fn default_archive_backup_path_ends_with_tar_gz() {
-        let storage = StorageArgs {
-            storage_path: PathBuf::from("/tmp/jaunder"),
-            db: "sqlite:/tmp/jaunder.db".parse().expect("sqlite db"),
-        };
-
-        let path = default_backup_path(&storage, BackupMode::Archive);
-
-        assert!(path.starts_with("/tmp/jaunder/backups"));
-        assert!(path.to_string_lossy().ends_with(".tar.gz"));
-    }
 
     #[test]
     fn directory_has_entries_handles_missing_empty_and_nested_paths() {

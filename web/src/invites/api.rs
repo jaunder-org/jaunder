@@ -6,9 +6,9 @@ use {
     crate::auth,
     crate::error::{InternalError, from_write_scope_error as map_write_scope_error},
     crate::mail,
-    chrono::Utc,
     common::mailer::{EmailMessage, MailSender},
     common::tagged_url::{self, MailConfirmUrl},
+    jiff::ToSpan,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{InviteStorage, SiteConfigStorage, UserStorage, WriteScope},
@@ -76,11 +76,16 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<MutationOutcome<(
     // address at decode time (ADR-0065), so no in-handler parse is needed.
     let base_url = mail::require_base_url(&*site_config).await?;
 
-    // The bound now lives in `InviteTtlHours` (1..=336): the typed arg rejects an
-    // out-of-range value at decode, so no in-body overflow check is needed. `hours` is
-    // reused in the email body below.
+    // `InviteTtlHours` bounds the requested duration to 1..=336. A system
+    // clock at Jiff's upper boundary clamps to the maximum instant rather than
+    // wrapping or panicking. `hours` is reused in the email body below.
     let hours = expires_in_hours.unwrap_or_default().value();
-    let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(hours));
+    let expires_at = UtcInstant::from(
+        UtcInstant::now()
+            .value()
+            .saturating_add(hours.hours())
+            .map_or(jiff::Timestamp::MAX, std::convert::identity),
+    );
 
     let outcome = write_scope
         .run(|transaction| {

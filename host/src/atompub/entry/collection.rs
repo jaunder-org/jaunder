@@ -39,7 +39,7 @@ pub struct FeedMeta {
 ///
 /// # Errors
 ///
-/// Returns [`AtomPubError`] if the document cannot be written.
+/// Returns [`AtomPubError`] if the assembled Atom model cannot be parsed or written.
 pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPubError> {
     let mut links = vec![rel_link("self", &meta.self_url)];
     // Pagination links emit in a fixed order: first, previous, next.
@@ -53,14 +53,16 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPub
         }
     }
 
-    let feed = Feed {
-        id: meta.id.to_string(),
-        title: Text::plain(meta.title.to_string()),
-        updated: meta.updated.value().fixed_offset(),
-        links,
-        entries: entries.to_vec(),
-        ..Default::default()
-    };
+    let mut feed: Feed = format!(
+        "<feed xmlns=\"http://www.w3.org/2005/Atom\"><updated>{}</updated></feed>",
+        meta.updated
+    )
+    .parse()
+    .map_err(AtomPubError::Writer)?;
+    feed.id = meta.id.to_string();
+    feed.title = Text::plain(meta.title.to_string());
+    feed.links = links;
+    feed.entries = entries.to_vec();
 
     to_xml_string(feed.write_to(Vec::new()))
 }
@@ -74,12 +76,9 @@ mod tests {
     use common::test_support::{parse_url, parse_utc_instant};
 
     fn sample_entry() -> Entry {
-        Entry {
-            id: "tag:example.com,2026:post/1".to_string(),
-            title: Text::plain("Hello"),
-            updated: chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z").unwrap(),
-            ..Default::default()
-        }
+        r#"<entry xmlns="http://www.w3.org/2005/Atom"><id>tag:example.com,2026:post/1</id><title>Hello</title><updated>2026-01-02T00:00:00Z</updated></entry>"#
+            .parse()
+            .expect("valid Atom entry")
     }
 
     #[test]

@@ -60,6 +60,12 @@ This applies only to absolute instants owned by storage. Durations, local
 wall-clock values, `SystemTime` suffixes, SQL physical types and values, and
 non-storage protocol representations remain unchanged.
 
+> **Annotation (2026-09-06).** As of #1272, this decision's Chrono-backed
+> implementation and its conclusion that Jiff lacked the required SQLx path had
+> been superseded. Its storage-wide `UtcInstant` seam and physical-compatibility
+> requirements remained intact. Current time-model truth:
+> [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Alternatives considered
 
 - **Keep raw `DateTime<Utc>` inside storage.** This preserves ADR-0072's former

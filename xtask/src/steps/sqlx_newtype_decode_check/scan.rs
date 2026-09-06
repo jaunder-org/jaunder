@@ -479,9 +479,9 @@ mod tests {
     }
 
     #[test]
-    fn tuple_alias_element_is_collected() {
+    fn tuple_alias_elements_are_collected_for_approval() {
         let src = "type CacheTuple = (FeedPath, i64, DateTime<Utc>);";
-        assert_eq!(targets(src), vec!["i64"]);
+        assert_eq!(targets(src), vec!["i64", "DateTime<Utc>"]);
     }
 
     #[test]

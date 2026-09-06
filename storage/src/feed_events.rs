@@ -2,12 +2,7 @@
 //! the feed worker. Rows transition pending → claimed → done|failed; stuck
 //! claims are re-eligible after `lease_timeout` elapses (claim-lease pattern).
 
-use std::str::FromStr;
-#[cfg(test)]
-use std::sync::Arc;
-
 use async_trait::async_trait;
-use chrono::Duration;
 use common::ids::FeedEventId;
 use common::pagination::{PageSize, RowLimit};
 use common::time::UtcInstant;
@@ -18,6 +13,10 @@ use host::{
     retention::Domain,
 };
 use sqlx::{Database, Pool};
+use std::str::FromStr;
+#[cfg(test)]
+use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 #[cfg(test)]
 use tokio::sync::{Notify, RwLock};
@@ -572,7 +571,16 @@ const INSERT_FEED_EVENT: &str = "INSERT INTO feed_events (feed_url) VALUES ($1)"
 
 /// The maximum rows one terminal-retention statement may delete.
 const TERMINAL_PRUNE_LIMIT: RowLimit = RowLimit::at_most(200);
-const FAILED_EVENT_RETENTION: Duration = Duration::days(7);
+const FAILED_EVENT_RETENTION: Duration = Duration::from_hours(168);
+
+fn failed_event_cutoff(now: UtcInstant) -> UtcInstant {
+    UtcInstant::from(
+        now.value()
+            .saturating_sub(FAILED_EVENT_RETENTION)
+            .map_or(jiff::Timestamp::MIN, std::convert::identity),
+    )
+}
+
 impl<DB: Database> FeedEventStore<DB> {
     #[must_use]
     pub fn new(pool: Pool<DB>) -> Self {
@@ -705,7 +713,7 @@ where
             return Err(FeedEventRedriveRejected.into());
         }
         let connection = DB::write_connection(transaction)?;
-        let failed_cutoff = UtcInstant::from(now.value() - FAILED_EVENT_RETENTION);
+        let failed_cutoff = failed_event_cutoff(now);
         if DB::redrive_dead_letters(connection, ids, now, failed_cutoff).await? {
             Ok(())
         } else {
@@ -868,7 +876,7 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn prune_terminal_events(&self, now: UtcInstant) -> Result<u64, FeedEventError> {
-        let failed_cutoff = UtcInstant::from(now.value() - FAILED_EVENT_RETENTION);
+        let failed_cutoff = failed_event_cutoff(now);
         let mut deleted = 0;
         loop {
             let batch =
@@ -902,7 +910,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
 
-    use chrono::{Duration, TimeZone, Timelike, Utc};
+    use jiff::ToSpan;
     use sqlx::Error as SqlxError;
     use tokio::time;
 
@@ -1077,7 +1085,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&feeds),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         let terminal = fixture_instant(1_000);
@@ -1101,7 +1109,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&feeds),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         mark_regenerated(
@@ -1221,7 +1229,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         let publication = redriven
@@ -1243,7 +1251,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&feeds),
             1,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         let terminal = fixture_instant(1_000);
@@ -1255,7 +1263,12 @@ mod tests {
             terminal,
         )
         .await;
-        let now = UtcInstant::from(terminal.value() + Duration::days(8));
+        let now = UtcInstant::from(
+            terminal
+                .value()
+                .checked_add(192.hours())
+                .expect("test instant remains representable"),
+        );
 
         let rejection = env
             .state
@@ -1344,7 +1357,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         // FeedPath has no Ord (deliberate), so compare as sets.
@@ -1373,7 +1386,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         assert_eq!(claimed.len(), 2);
@@ -1397,7 +1410,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         assert!(claimed.is_empty());
@@ -1417,7 +1430,7 @@ mod tests {
         let count = env
             .state
             .feed_events
-            .claimable_count(Duration::minutes(5))
+            .claimable_count(Duration::from_mins(5))
             .await
             .unwrap();
 
@@ -1439,14 +1452,19 @@ mod tests {
             Arc::clone(&env.state.feed_events),
             vec![id],
             "retry later".to_owned(),
-            UtcInstant::from(chrono::Utc::now() + Duration::hours(1)),
+            UtcInstant::from(
+                UtcInstant::now()
+                    .value()
+                    .checked_add(1.hour())
+                    .expect("test instant remains representable"),
+            ),
         )
         .await;
 
         let count = env
             .state
             .feed_events
-            .claimable_count(Duration::minutes(5))
+            .claimable_count(Duration::from_mins(5))
             .await
             .unwrap();
 
@@ -1467,7 +1485,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         assert_eq!(claimed.len(), 1);
@@ -1475,7 +1493,7 @@ mod tests {
         let count = env
             .state
             .feed_events
-            .claimable_count(Duration::minutes(5))
+            .claimable_count(Duration::from_mins(5))
             .await
             .unwrap();
 
@@ -1496,14 +1514,14 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
 
         let count = env
             .state
             .feed_events
-            .claimable_count(Duration::zero())
+            .claimable_count(Duration::ZERO)
             .await
             .unwrap();
 
@@ -1532,7 +1550,7 @@ mod tests {
         // one — the batch is NOT failed (which would wedge the worker forever).
         // The batch-level report is redacted rather than retaining the bad value.
         let feed_events = Arc::clone(&env.state.feed_events);
-        let lease = Duration::minutes(5);
+        let lease = Duration::from_mins(5);
         let (claimed, trace) = crate::helpers::swallowed_test::capture_async(
             env.state.write_scope.run(move |transaction| {
                 Box::pin(async move {
@@ -1599,7 +1617,7 @@ mod tests {
             .unwrap();
 
         let feed_events = Arc::clone(&env.state.feed_events);
-        let lease = Duration::minutes(5);
+        let lease = Duration::from_mins(5);
         let err = match env
             .state
             .write_scope
@@ -1671,7 +1689,7 @@ mod tests {
             .unwrap();
 
         let feed_events = Arc::clone(&env.state.feed_events);
-        let lease = Duration::minutes(5);
+        let lease = Duration::from_mins(5);
         let err = match env
             .state
             .write_scope
@@ -1757,7 +1775,7 @@ mod tests {
             .unwrap();
 
         let feed_events = Arc::clone(&env.state.feed_events);
-        let lease = Duration::minutes(5);
+        let lease = Duration::from_mins(5);
         let (claimed, trace) = crate::helpers::swallowed_test::capture_async(
             env.state.write_scope.run(move |transaction| {
                 Box::pin(async move {
@@ -1826,7 +1844,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         assert_eq!(claimed.len(), 1);
@@ -1848,14 +1866,14 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         let second = claim(
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         assert_eq!(first.len(), 1);
@@ -1876,7 +1894,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         // With a zero lease, the just-claimed row is immediately re-eligible.
@@ -1884,7 +1902,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::zero(),
+            Duration::ZERO,
         )
         .await;
         assert_eq!(second.len(), 1);
@@ -1904,7 +1922,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         let ids: Vec<FeedEventId> = claimed.iter().map(|r| r.id).collect();
@@ -1936,7 +1954,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         assert!(next.is_empty());
@@ -1956,10 +1974,15 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
-        let future = UtcInstant::from(Utc::now() + Duration::minutes(1));
+        let future = UtcInstant::from(
+            UtcInstant::now()
+                .value()
+                .checked_add(1.minute())
+                .expect("test instant remains representable"),
+        );
         retry_regeneration(
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
@@ -1973,7 +1996,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         assert!(now.is_empty());
@@ -2012,7 +2035,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&env.state.feed_events),
             10,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         assert!(next.is_empty());
@@ -2035,7 +2058,7 @@ mod tests {
             &env.state.write_scope,
             Arc::clone(&feeds),
             100,
-            Duration::minutes(5),
+            Duration::from_mins(5),
         )
         .await;
         let terminal = fixture_instant(700_000);
@@ -2069,12 +2092,9 @@ mod tests {
     }
 
     fn fixture_instant(microsecond: u32) -> UtcInstant {
-        UtcInstant::from(
-            Utc.with_ymd_and_hms(2026, 8, 26, 12, 34, 56)
-                .unwrap()
-                .with_nanosecond(microsecond * 1_000)
-                .unwrap(),
-        )
+        format!("2026-08-26T12:34:56.{microsecond:06}Z")
+            .parse()
+            .expect("valid fixed test instant")
     }
     async fn claim_at<DB: FeedEventDialect>(
         pool: &Pool<DB>,
@@ -2271,7 +2291,11 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let now = fixture_instant(900_000);
-        let cutoff = UtcInstant::from(now.value() - Duration::days(7));
+        let cutoff = UtcInstant::from(
+            now.value()
+                .checked_sub(168.hours())
+                .expect("test instant remains representable"),
+        );
         crate::with_closeable_pool!(env.base.pool(), pool, {
             for (path, status, terminal_at) in [
                 (
@@ -2287,12 +2311,21 @@ mod tests {
                 (
                     fp("/~failed-newer/feed.rss"),
                     FeedEventStatus::Failed,
-                    Some(UtcInstant::from(cutoff.value() + Duration::seconds(1))),
+                    Some(UtcInstant::from(
+                        cutoff
+                            .value()
+                            .checked_add(1.second())
+                            .expect("test instant remains representable"),
+                    )),
                 ),
                 (
                     fp("/~completed-future/feed.rss"),
                     FeedEventStatus::Done,
-                    Some(UtcInstant::from(now.value() + Duration::seconds(1))),
+                    Some(UtcInstant::from(
+                        now.value()
+                            .checked_add(1.second())
+                            .expect("test instant remains representable"),
+                    )),
                 ),
                 (fp("/~pending/feed.rss"), FeedEventStatus::Pending, None),
                 (fp("/~claimed/feed.rss"), FeedEventStatus::Claimed, None),

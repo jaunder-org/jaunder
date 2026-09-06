@@ -101,7 +101,6 @@ mod tests {
     #[test]
     fn authored_post_carries_summary_and_source() {
         use crate::posts::server::authored_post;
-        use chrono::{TimeZone, Utc};
         use common::test_support::{parse_post_body, parse_post_summary, parse_username};
         use common::{
             ids::{PostId, UserId},
@@ -110,7 +109,7 @@ mod tests {
         };
         use storage::{PostFormat, PostRecord};
 
-        let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
+        let base_time: UtcInstant = "2026-04-16T10:11:12Z".parse().unwrap();
         let author_username = parse_username("author");
         let slug = "hello-world".parse::<Slug>().unwrap();
 
@@ -124,9 +123,9 @@ mod tests {
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: common::test_support::rendered_html("<p>body</p>"),
-                created_at: UtcInstant::from(base_time),
-                updated_at: UtcInstant::from(base_time),
-                published_at: Some(UtcInstant::from(base_time)),
+                created_at: base_time,
+                updated_at: base_time,
+                published_at: Some(base_time),
                 deleted_at: None,
                 summary: Some(parse_post_summary("the summary")),
                 tags: vec![],
@@ -153,7 +152,6 @@ mod tests {
     #[test]
     fn authored_post_leaves_a_draft_published_at_none() {
         use crate::posts::server::authored_post;
-        use chrono::{TimeZone, Utc};
         use common::test_support::{parse_post_body, parse_username};
         use common::{
             ids::{PostId, UserId},
@@ -162,7 +160,7 @@ mod tests {
         };
         use storage::{PostFormat, PostRecord};
 
-        let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
+        let base_time: UtcInstant = "2026-04-16T10:11:12Z".parse().unwrap();
         let author_username = parse_username("author");
         let slug = "unpublished".parse::<Slug>().unwrap();
 
@@ -176,8 +174,8 @@ mod tests {
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: common::test_support::rendered_html("<p>body</p>"),
-                created_at: UtcInstant::from(base_time),
-                updated_at: UtcInstant::from(base_time),
+                created_at: base_time,
+                updated_at: base_time,
                 published_at: None,
                 deleted_at: None,
                 summary: None,
@@ -208,7 +206,6 @@ mod tests {
     #[test]
     fn rendered_post_refuses_a_draft() {
         use crate::posts::server::rendered_post;
-        use chrono::{TimeZone, Utc};
         use common::test_support::{parse_post_body, parse_username};
         use common::{
             ids::{PostId, UserId},
@@ -217,7 +214,7 @@ mod tests {
         };
         use storage::{PostFormat, PostRecord};
 
-        let base_time = Utc.with_ymd_and_hms(2026, 4, 16, 10, 11, 12).unwrap();
+        let base_time: UtcInstant = "2026-04-16T10:11:12Z".parse().unwrap();
         let author_username = parse_username("author");
         let slug = "unpublished".parse::<Slug>().unwrap();
 
@@ -231,8 +228,8 @@ mod tests {
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: common::test_support::rendered_html("<p>body</p>"),
-                created_at: UtcInstant::from(base_time),
-                updated_at: UtcInstant::from(base_time),
+                created_at: base_time,
+                updated_at: base_time,
                 published_at: None,
                 deleted_at: None,
                 summary: None,

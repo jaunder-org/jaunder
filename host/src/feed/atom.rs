@@ -2,8 +2,16 @@ use atom_syndication::{Category, Content, Entry, Feed, Link, Text};
 
 use crate::feed::{FeedItem, FeedMetadata, SyndicationFeedRepresentation};
 
-#[must_use]
-pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRepresentation {
+/// Renders an Atom feed using the upstream Atom model.
+///
+/// # Errors
+///
+/// Returns the upstream Atom parser error if canonical feed timestamps cannot
+/// cross its Chrono-backed representation boundary.
+pub fn render_atom(
+    meta: &FeedMetadata,
+    items: &[FeedItem],
+) -> Result<SyndicationFeedRepresentation, atom_syndication::Error> {
     let mut links = vec![
         Link {
             href: meta.canonical_url.to_string(),
@@ -24,70 +32,74 @@ pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRe
         });
     }
 
-    let entries: Vec<Entry> = items
+    let entries: Result<Vec<Entry>, atom_syndication::Error> = items
         .iter()
         .map(|i| {
-            let mut entry = Entry {
-                id: i.permalink.to_string(),
-                title: Text::plain(i.title.clone().map(String::from).unwrap_or_default()),
-                updated: i.updated_at.fixed_offset(),
-                published: Some(i.published_at.fixed_offset()),
-                links: vec![Link {
-                    href: i.permalink.to_string(),
-                    rel: "alternate".to_string(),
-                    ..Default::default()
-                }],
-                content: Some(Content {
-                    content_type: Some("html".to_string()),
-                    value: Some(i.content_html.to_string()),
-                    ..Default::default()
-                }),
-                categories: i
-                    .tags
-                    .iter()
-                    .map(|t| Category {
-                        // atom_syndication::Category.term is an external owned String — materialize the label.
-                        term: t.to_string(),
-                        ..Default::default()
-                    })
-                    .collect(),
+            // atom_syndication remains Chrono-backed. Feed timestamps cross its
+            // supported XML parse boundary rather than exposing that type here.
+            let mut entry: Entry = format!(
+                "<entry xmlns=\"http://www.w3.org/2005/Atom\"><updated>{}</updated><published>{}</published></entry>",
+                i.updated_at, i.published_at
+            )
+            .parse()?;
+            entry.id = i.permalink.to_string();
+            entry.title = Text::plain(i.title.clone().map(String::from).unwrap_or_default());
+            entry.links = vec![Link {
+                href: i.permalink.to_string(),
+                rel: "alternate".to_string(),
                 ..Default::default()
-            };
+            }];
+            entry.content = Some(Content {
+                content_type: Some("html".to_string()),
+                value: Some(i.content_html.to_string()),
+                ..Default::default()
+            });
+            entry.categories = i
+                .tags
+                .iter()
+                .map(|t| Category {
+                    // atom_syndication::Category.term is an external owned String — materialize the label.
+                    term: t.to_string(),
+                    ..Default::default()
+                })
+                .collect();
             if let Some(s) = &i.summary {
                 // ADR-0063 §5: read the summary out to a plain `String` at the
                 // atom_syndication boundary (mirrors the `title` handling above).
                 entry.summary = Some(Text::plain(s.to_string()));
             }
-            entry
+            Ok(entry)
         })
         .collect();
+    let entries = entries?;
 
-    let feed = Feed {
-        title: Text::plain(meta.title.to_string()),
-        id: meta.self_url.to_string(),
-        updated: meta.representation_modified_at.fixed_offset(),
-        subtitle: meta
-            .description
-            .as_ref()
-            .map(|description| Text::plain(description.to_string())),
-        links,
-        entries,
-        ..Default::default()
-    };
+    let mut feed: Feed = format!(
+        "<feed xmlns=\"http://www.w3.org/2005/Atom\"><updated>{}</updated></feed>",
+        meta.representation_modified_at
+    )
+    .parse()?;
+    feed.title = Text::plain(meta.title.to_string());
+    feed.id = meta.self_url.to_string();
+    feed.subtitle = meta
+        .description
+        .as_ref()
+        .map(|description| Text::plain(description.to_string()));
+    feed.links = links;
+    feed.entries = entries;
 
-    SyndicationFeedRepresentation::from_atom(feed.to_string())
+    Ok(SyndicationFeedRepresentation::from_atom(feed.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
-
     use super::*;
     use crate::feed::FeedDescription;
     use crate::feed::test_support::{feed_item, feed_metadata};
     use common::{
         ids::PostId,
-        test_support::{parse_post_summary, parse_post_title, parse_url, rendered_html},
+        test_support::{
+            parse_post_summary, parse_post_title, parse_url, parse_utc_instant, rendered_html,
+        },
     };
 
     fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
@@ -107,14 +119,14 @@ mod tests {
                 PostId::from(1),
                 parse_url("https://example.com/~alice/posts/1"),
                 rendered_html("<p>hi</p>"),
-                chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+                parse_utc_instant("2026-01-01T00:00:00Z"),
             )
         }
     }
 
     #[test]
     fn renders_empty_atom() {
-        let out = render_atom(&meta(None, Some("A site")), &[]);
+        let out = render_atom(&meta(None, Some("A site")), &[]).expect("canonical timestamps");
         assert!(out.body().contains("<feed"));
         assert!(!out.body().contains("<entry>"));
         assert_eq!(out.format(), common::feed::FeedFormat::Atom);
@@ -125,31 +137,35 @@ mod tests {
     }
     #[test]
     fn serializes_feed_title_and_description_presence() {
-        let without = render_atom(&meta(None, None), &[]);
+        let without = render_atom(&meta(None, None), &[]).expect("canonical timestamps");
         assert!(without.body().contains("<title>Site</title>"));
         assert!(!without.body().contains("<subtitle"));
 
-        let with = render_atom(&meta(None, Some("A site")), &[]);
+        let with = render_atom(&meta(None, Some("A site")), &[]).expect("canonical timestamps");
         assert!(with.body().contains("<subtitle>A site</subtitle>"));
     }
 
     #[test]
     fn uses_feed_representation_time_for_updated() {
-        let representation_time = chrono::Utc.with_ymd_and_hms(2026, 2, 3, 4, 5, 6).unwrap();
+        let representation_time = parse_utc_instant("2026-02-03T04:05:06Z");
         let mut metadata = meta(None, Some("A site"));
         metadata.representation_modified_at = representation_time;
 
-        let rendered = render_atom(&metadata, &[item()]);
+        let rendered = render_atom(&metadata, &[item()]).expect("canonical timestamps");
 
-        assert!(rendered.body().contains(&format!(
-            "<updated>{}</updated>",
-            representation_time.to_rfc3339()
-        )));
+        assert!(
+            rendered
+                .body()
+                .contains("<updated>2026-02-03T04:05:06+00:00</updated>"),
+            "out: {}",
+            rendered.body()
+        );
     }
 
     #[test]
     fn renders_explicit_title_for_titled_post() {
-        let out = render_atom(&meta(None, Some("A site")), &[item()]);
+        let out =
+            render_atom(&meta(None, Some("A site")), &[item()]).expect("canonical timestamps");
         let body = out.body();
 
         assert!(body.contains("<title>Hello</title>"), "out: {body}");
@@ -163,7 +179,7 @@ mod tests {
             ..item()
         };
 
-        let out = render_atom(&meta(None, Some("A site")), &[item]);
+        let out = render_atom(&meta(None, Some("A site")), &[item]).expect("canonical timestamps");
         let body = out.body();
 
         assert_eq!(body.matches("<title></title>").count(), 1, "out: {body}");
@@ -172,7 +188,7 @@ mod tests {
 
     #[test]
     fn emits_self_link() {
-        let out = render_atom(&meta(None, Some("A site")), &[]);
+        let out = render_atom(&meta(None, Some("A site")), &[]).expect("canonical timestamps");
         assert!(out.body().contains("rel=\"self\""));
         assert!(
             out.body()
@@ -185,20 +201,23 @@ mod tests {
         let out = render_atom(
             &meta(Some("https://hub.example.com/"), Some("A site")),
             &[item()],
-        );
+        )
+        .expect("canonical timestamps");
         assert!(out.body().contains("rel=\"hub\""));
         assert!(out.body().contains("https://hub.example.com/"));
     }
 
     #[test]
     fn omits_hub_link_when_unset() {
-        let out = render_atom(&meta(None, Some("A site")), &[item()]);
+        let out =
+            render_atom(&meta(None, Some("A site")), &[item()]).expect("canonical timestamps");
         assert!(!out.body().contains("rel=\"hub\""));
     }
 
     #[test]
     fn includes_tags_as_categories() {
-        let out = render_atom(&meta(None, Some("A site")), &[item()]);
+        let out =
+            render_atom(&meta(None, Some("A site")), &[item()]).expect("canonical timestamps");
         assert!(out.body().contains("term=\"rust\""));
     }
 
@@ -207,7 +226,8 @@ mod tests {
         // #560 / AC5: the entry `atom:id` and alternate `<link>` render the composed
         // *absolute* permalink — never a relative `/…` atom:id (RFC-4287 requires an
         // absolute IRI).
-        let out = render_atom(&meta(None, Some("A site")), &[item()]);
+        let out =
+            render_atom(&meta(None, Some("A site")), &[item()]).expect("canonical timestamps");
         let body = out.body();
         assert!(
             body.contains("https://example.com/~alice/posts/1"),

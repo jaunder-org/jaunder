@@ -345,8 +345,8 @@ pub async fn collection_get(
 
     let entries: Vec<_> = records
         .iter()
-        .map(|p| mapping::post_to_entry(p, &base))
-        .collect();
+        .map(|post| mapping::post_to_entry(post, &base))
+        .collect::<Result<_, _>>()?;
 
     let updated = records
         .first()
@@ -418,7 +418,7 @@ pub async fn member_get(
     let site_config = services.site_config();
     let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
     let base = super::required_base_url(site_config).await?;
-    let entry = mapping::post_to_entry(&post, &base);
+    let entry = mapping::post_to_entry(&post, &base)?;
     let xml = atompub::entry_to_xml(&entry)?;
     Ok((
         [
@@ -586,7 +586,7 @@ fn post_entry_response(
 ) -> Result<Response, HandlerError> {
     let location_path = format!("/atompub/{username}/posts/{}", post.post_id);
     let location: EditUriUrl = tagged_url::compose(base, &location_path);
-    let xml = atompub::entry_to_xml(&mapping::post_to_entry(post, base))?;
+    let xml = atompub::entry_to_xml(&mapping::post_to_entry(post, base)?)?;
     Ok((
         status,
         [
@@ -690,7 +690,7 @@ pub async fn member_put(
         .await?
         .ok_or(HandlerError::Invariant)?;
     let base = super::required_base_url(site_config).await?;
-    let xml = atompub::entry_to_xml(&mapping::post_to_entry(&post, &base))?;
+    let xml = atompub::entry_to_xml(&mapping::post_to_entry(&post, &base)?)?;
     Ok((
         StatusCode::OK,
         [
@@ -705,7 +705,6 @@ pub async fn member_put(
 #[cfg(test)]
 mod etag_tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
     use common::ids::{TagId, UserId};
     use common::tag::{Tag, TagLabel};
     use common::test_support::{
@@ -723,10 +722,7 @@ mod etag_tests {
     }
 
     fn base_post() -> PostRecord {
-        let t = Utc
-            .timestamp_opt(1_000_000, 0)
-            .single()
-            .expect("valid time");
+        let t = parse_utc_instant("1970-01-12T13:46:40Z");
         PostRecord {
             post_id: PostId::from(1),
             user_id: UserId::from(1),
@@ -736,9 +732,9 @@ mod etag_tests {
             body: parse_post_body("Body text."),
             format: PostFormat::Org,
             rendered_html: common::test_support::rendered_html("<p>Body text.</p>"),
-            created_at: UtcInstant::from(t),
-            updated_at: UtcInstant::from(t),
-            published_at: Some(UtcInstant::from(t)),
+            created_at: t,
+            updated_at: t,
+            published_at: Some(t),
             deleted_at: None,
             summary: Some(parse_post_summary("Summary")),
             tags: vec![
@@ -782,17 +778,14 @@ mod etag_tests {
         // AC2/AC5: nothing outside the content fields moves the ETag — including a
         // published_at whose *value* advances while staying Some (non-draft).
         let e = etag_for(&base_post());
-        let later = Utc
-            .timestamp_opt(9_000_000, 0)
-            .single()
-            .expect("valid time");
+        let later = parse_utc_instant("1970-04-15T04:00:00Z");
         let mut p = base_post();
         p.post_id = PostId::from(999);
         p.user_id = UserId::from(42);
         p.slug = "other-slug".parse().expect("parse slug");
-        p.created_at = UtcInstant::from(later);
-        p.updated_at = UtcInstant::from(later);
-        p.published_at = Some(UtcInstant::from(later));
+        p.created_at = later;
+        p.updated_at = later;
+        p.published_at = Some(later);
         p.rendered_html = common::test_support::rendered_html("<p>totally different</p>");
         p.tags = vec![
             mk_tag(

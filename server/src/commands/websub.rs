@@ -109,7 +109,6 @@ fn format_cursor(cursor: FeedEventDeadLetterCursor) -> String {
 mod tests {
     use std::sync::Arc;
 
-    use chrono::{TimeZone as _, Utc};
     use rstest::*;
     use rstest_reuse::*;
     use storage::{
@@ -172,7 +171,7 @@ mod tests {
 
     #[test]
     fn list_output_includes_every_field_and_stable_next_cursor() {
-        let terminal_at = UtcInstant::from(Utc.with_ymd_and_hms(2026, 9, 3, 12, 0, 0).unwrap());
+        let terminal_at: UtcInstant = "2026-09-03T12:00:00Z".parse().unwrap();
         let id = FeedEventId::from(42);
         let page = FeedEventDeadLetterPage {
             events: vec![FeedEventDeadLetter {

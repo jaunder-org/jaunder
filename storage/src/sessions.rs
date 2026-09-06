@@ -1,6 +1,7 @@
 //! Session and device token storage.
 
 use async_trait::async_trait;
+use jiff::ToSpan;
 
 use sqlx::{Database, Encode, Error, Executor, Pool, Result, Type};
 
@@ -135,7 +136,13 @@ use crate::helpers::{self, SessionRow};
 const SESSION_TOUCH_FRESHNESS_SECONDS: i64 = 60;
 
 fn session_touch_cutoff(now: UtcInstant) -> UtcInstant {
-    UtcInstant::from(now.value() - chrono::Duration::seconds(SESSION_TOUCH_FRESHNESS_SECONDS))
+    // At Timestamp::MIN there is no earlier session timestamp to refresh, so
+    // clamping preserves the freshness-window predicate.
+    UtcInstant::from(
+        now.value()
+            .saturating_sub(SESSION_TOUCH_FRESHNESS_SECONDS.seconds())
+            .map_or(jiff::Timestamp::MIN, std::convert::identity),
+    )
 }
 
 /// Per-backend divergences of [`SessionStorage`]. The only operation that differs
@@ -305,6 +312,14 @@ mod tests {
     use rstest_reuse::*;
     use std::sync::Arc;
 
+    #[test]
+    fn session_touch_cutoff_clamps_at_the_earliest_timestamp() {
+        assert_eq!(
+            session_touch_cutoff(UtcInstant::from(jiff::Timestamp::MIN)),
+            UtcInstant::from(jiff::Timestamp::MIN)
+        );
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn session_round_trips_token_hash_and_username(#[case] backend: Backend) {
@@ -465,14 +480,29 @@ mod tests {
         let cases = [
             (
                 "stale",
-                UtcInstant::from(stale_before.value() - chrono::Duration::microseconds(1)),
+                UtcInstant::from(
+                    stale_before
+                        .value()
+                        .checked_sub(1.microsecond())
+                        .expect("fixture is within Timestamp range"),
+                ),
                 now,
             ),
             ("exact", stale_before, stale_before),
             (
                 "fresh",
-                UtcInstant::from(stale_before.value() + chrono::Duration::microseconds(1)),
-                UtcInstant::from(stale_before.value() + chrono::Duration::microseconds(1)),
+                UtcInstant::from(
+                    stale_before
+                        .value()
+                        .checked_add(1.microsecond())
+                        .expect("fixture is within Timestamp range"),
+                ),
+                UtcInstant::from(
+                    stale_before
+                        .value()
+                        .checked_add(1.microsecond())
+                        .expect("fixture is within Timestamp range"),
+                ),
             ),
         ];
 

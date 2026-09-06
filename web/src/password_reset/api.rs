@@ -5,7 +5,6 @@
 use {
     crate::error::{self, InternalError, SwallowedSource},
     crate::mail,
-    chrono::Duration,
     common::mailer::{EmailMessage, MailSender},
     common::tagged_url::{self, MailConfirmUrl},
     common::time::UtcInstant,
@@ -14,6 +13,7 @@ use {
         metrics::{self, EmailKind, PasswordResetEvent},
         password,
     },
+    jiff::ToSpan,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{
@@ -192,10 +192,17 @@ async fn deliver_reset_messages(
         }
     };
     let reset_url: MailConfirmUrl = tagged_url::compose(&base_url, "/reset-password");
+    // At Jiff's upper clock boundary, clamp the expiry rather than panicking
+    // inside detached account-enumeration-equalized work.
 
     for (user_id, verified_email) in recipients {
         let password_resets = Arc::clone(&password_resets);
-        let expires_at = UtcInstant::from(chrono::Utc::now() + Duration::hours(1));
+        let expires_at = UtcInstant::from(
+            UtcInstant::now()
+                .value()
+                .saturating_add(1.hour())
+                .map_or(jiff::Timestamp::MAX, std::convert::identity),
+        );
         let outcome = match write_scope
             .run(|transaction| {
                 Box::pin(async move {

@@ -1,5 +1,6 @@
 use common::ids::FeedEventId;
 use common::time::UtcInstant;
+use jiff::ToSpan;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, backends, fp};
@@ -28,7 +29,7 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
         .unwrap();
     let feed_events_for_claim = state.feed_events.clone();
     let claim_limit = 50;
-    let claim_lease = chrono::Duration::minutes(5);
+    let claim_lease = std::time::Duration::from_mins(5);
     let claimed = storage::test_support::confirmed_for(
         state
             .write_scope
@@ -76,7 +77,12 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
     let feed_events_for_failure = state.feed_events.clone();
     let ids_for_failure = ids.clone();
     let failure_reason = "boom";
-    let retry_at = UtcInstant::from(chrono::Utc::now() + chrono::Duration::minutes(1));
+    let retry_at = UtcInstant::from(
+        UtcInstant::now()
+            .value()
+            .checked_add(1.minute())
+            .expect("fixture is within Timestamp range"),
+    );
     state
         .write_scope
         .run(move |transaction| {
@@ -127,7 +133,12 @@ async fn stale_generation_restarts_with_fresh_regeneration_budget(#[case] backen
         "enqueue acknowledgement",
     );
     let event_ids = vec![event_id];
-    let retry_at = UtcInstant::from(chrono::Utc::now() + chrono::Duration::hours(1));
+    let retry_at = UtcInstant::from(
+        UtcInstant::now()
+            .value()
+            .checked_add(1.hour())
+            .expect("fixture is within Timestamp range"),
+    );
 
     let feed_events = state.feed_events.clone();
     let ids = event_ids.clone();
@@ -185,7 +196,7 @@ async fn stale_generation_restarts_with_fresh_regeneration_budget(#[case] backen
             .run(move |transaction| {
                 Box::pin(async move {
                     feed_events
-                        .claim_pending_batch(transaction, 1, chrono::Duration::minutes(5))
+                        .claim_pending_batch(transaction, 1, std::time::Duration::from_mins(5))
                         .await
                 })
             })

@@ -1,5 +1,3 @@
-use chrono::TimeDelta;
-
 use common::{
     feed::{FeedFormat, FeedSurface},
     tagged_url::{self, BaseUrl, CanonicalUrl, FeedUrl, Permalink},
@@ -45,8 +43,8 @@ pub async fn render(
     };
     let generated_at = UtcInstant::now();
     let representation_modified_at = UtcInstant::from(
-        generated_at.value()
-            - TimeDelta::nanoseconds(i64::from(generated_at.value().timestamp_subsec_nanos())),
+        jiff::Timestamp::from_second(generated_at.value().as_second())
+            .map_err(|error| RegenerateError::Publisher(error.into()))?,
     );
     let published = posts
         .list_published_in_window(&surface, &window, generated_at, &ViewerIdentity::Anonymous)
@@ -75,15 +73,16 @@ pub async fn render(
         canonical_url,
         self_url,
         hub_url: snapshot.feeds.websub_hub_url.clone(),
-        representation_modified_at: representation_modified_at.value(),
+        representation_modified_at,
     };
     let body = match format {
         FeedFormat::Rss => feed::render_rss(&meta, &items),
-        FeedFormat::Atom => feed::render_atom(&meta, &items),
+        FeedFormat::Atom => feed::render_atom(&meta, &items)
+            .map_err(|error| RegenerateError::Publisher(error.into()))?,
         FeedFormat::Json => feed::render_json(&meta, &items),
     };
     let fingerprint = etag::feed_semantic_fingerprint(format, &meta, &items);
-    let etag = etag::feed_etag(&fingerprint, representation_modified_at.value());
+    let etag = etag::feed_etag(&fingerprint, representation_modified_at);
     FeedCacheRow::new(
         feed_path,
         body,
@@ -129,8 +128,8 @@ fn build_feed_items(base: &BaseUrl, records: &[PostRecord]) -> Vec<FeedItem> {
                 // FeedItem carries the post's RenderedHtml unflattened (#470); the value
                 // is already rendered — no from_trusted rebuild, just propagate it.
                 content_html: p.rendered_html.clone(),
-                published_at: published_at.value(),
-                updated_at: p.updated_at.value(),
+                published_at,
+                updated_at: p.updated_at,
                 tags: p.tags.iter().map(|t| t.tag_display.clone()).collect(),
             }
         })

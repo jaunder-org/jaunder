@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use chrono::Utc;
 use common::ids::{AudienceId, PostId, UserId};
 use common::post_title::PostTitle;
 use common::slug::Slug;
@@ -11,6 +10,7 @@ use common::test_support::{
 };
 use common::time::UtcInstant;
 use common::visibility::{AudienceTarget, ViewerIdentity};
+use jiff::{Timestamp, ToSpan};
 use rstest::*;
 use rstest_reuse::*;
 use sqlx::{AssertSqlSafe, query};
@@ -238,10 +238,13 @@ fn update_input<'a>(
 #[apply(backends)]
 #[tokio::test]
 async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
-    use chrono::{Duration, TimeZone};
     let env = backend.setup().await;
     let state = &env.state;
-    let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
+    let now = UtcInstant::from(
+        "2026-06-26T12:00:00Z"
+            .parse::<Timestamp>()
+            .expect("fixed test instant"),
+    );
     let alice = SeedUser::new().seed(state).await.user_id;
 
     // A fresh draft (published_at NULL).
@@ -253,7 +256,11 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     let title = parse_post_title("Updated Title");
 
     // Publish { at: Some(future) } on a draft => scheduled at that instant.
-    let future = UtcInstant::from(now + Duration::days(1));
+    let future = UtcInstant::from(
+        now.value()
+            .checked_add(24.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let rec = confirmed(
         perform_post_update(
             &state.write_scope,
@@ -278,7 +285,11 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     );
 
     // Publish { at: Some(past) } stores the exact backdated instant.
-    let past = UtcInstant::from(now - Duration::days(1));
+    let past = UtcInstant::from(
+        now.value()
+            .checked_sub(24.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let backdated = confirmed(
         perform_post_update(
             &state.write_scope,
@@ -974,7 +985,11 @@ async fn current_revision_summary_derives_lifecycle_from_request_clock(#[case] b
     let state = &env.state;
     let owner = SeedUser::new().seed(state).await.user_id;
     let now = UtcInstant::now();
-    let scheduled_at = UtcInstant::from(now.value() + chrono::Duration::hours(1));
+    let scheduled_at = UtcInstant::from(
+        now.value()
+            .checked_add(1.hour())
+            .expect("fixture is within Timestamp range"),
+    );
     let post_id = SeedRawPost::new(owner)
         .published_at(scheduled_at)
         .seed(state)
@@ -992,7 +1007,12 @@ async fn current_revision_summary_derives_lifecycle_from_request_clock(#[case] b
         .get_current_revision_summary(
             owner,
             post_id,
-            UtcInstant::from(scheduled_at.value() + chrono::Duration::seconds(1)),
+            UtcInstant::from(
+                scheduled_at
+                    .value()
+                    .checked_add(1.second())
+                    .expect("fixture is within Timestamp range"),
+            ),
         )
         .await
         .unwrap()
