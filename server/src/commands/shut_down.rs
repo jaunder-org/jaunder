@@ -8,13 +8,13 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use rustix::{
-    event::{PollFd, PollFlags, Timespec, poll},
-    process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal},
+    event::{self, PollFd, PollFlags, Timespec},
+    process::{self, Pid, PidfdFlags, Signal},
 };
 
 use crate::{
     cli::StorageArgs,
-    runtime_file::{canonical_runtime_path, read_proc_start_time},
+    runtime_file::{self, RuntimeProcessIdentity, RuntimeRecord},
 };
 
 /// Requests graceful shutdown of the instance currently owning `storage`.
@@ -34,29 +34,17 @@ pub(super) fn cmd_shut_down(storage: &StorageArgs, timeout: Duration) -> Result<
     cmd_shut_down_with(&storage.storage_path, timeout, &LinuxProcessOperations)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RuntimeIdentity {
-    pid: u32,
-    start_time: u64,
-}
-
-struct RuntimeRecord {
-    identity: RuntimeIdentity,
-    port: u16,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SignalOutcome {
-    Delivered,
+enum OpenOutcome<Handle> {
+    Captured(Handle),
     ProcessExited,
 }
 
 trait ProcessOperations {
     type Handle;
 
-    fn open(&self, pid: u32) -> io::Result<Self::Handle>;
+    fn open(&self, pid: u32) -> io::Result<OpenOutcome<Self::Handle>>;
     fn start_time(&self, pid: u32) -> io::Result<Option<u64>>;
-    fn signal_term(&self, handle: &Self::Handle) -> io::Result<SignalOutcome>;
+    fn signal_term(&self, handle: &Self::Handle) -> io::Result<()>;
     fn wait_for_exit(&self, handle: &Self::Handle, timeout: Duration) -> io::Result<bool>;
 }
 
@@ -65,22 +53,25 @@ struct LinuxProcessOperations;
 impl ProcessOperations for LinuxProcessOperations {
     type Handle = rustix::fd::OwnedFd;
 
-    fn open(&self, pid: u32) -> io::Result<Self::Handle> {
+    fn open(&self, pid: u32) -> io::Result<OpenOutcome<Self::Handle>> {
         let pid = i32::try_from(pid)
             .ok()
             .and_then(Pid::from_raw)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid runtime pid"))?;
-        pidfd_open(pid, PidfdFlags::empty()).map_err(Into::into)
+        match process::pidfd_open(pid, PidfdFlags::empty()) {
+            Ok(handle) => Ok(OpenOutcome::Captured(handle)),
+            Err(error) if error == rustix::io::Errno::SRCH => Ok(OpenOutcome::ProcessExited),
+            Err(error) => Err(error.into()),
+        }
     }
 
     fn start_time(&self, pid: u32) -> io::Result<Option<u64>> {
-        read_proc_start_time(pid)
+        runtime_file::read_proc_start_time(pid)
     }
 
-    fn signal_term(&self, handle: &Self::Handle) -> io::Result<SignalOutcome> {
-        match pidfd_send_signal(handle, Signal::TERM) {
-            Ok(()) => Ok(SignalOutcome::Delivered),
-            Err(error) if error == rustix::io::Errno::SRCH => Ok(SignalOutcome::ProcessExited),
+    fn signal_term(&self, handle: &Self::Handle) -> io::Result<()> {
+        match process::pidfd_send_signal(handle, Signal::TERM) {
+            Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
             Err(error) => Err(error.into()),
         }
     }
@@ -101,7 +92,7 @@ impl ProcessOperations for LinuxProcessOperations {
                 tv_nsec: remaining.subsec_nanos().into(),
             };
             let mut fds = [PollFd::new(handle, PollFlags::IN)];
-            match poll(&mut fds, Some(&timeout)) {
+            match event::poll(&mut fds, Some(&timeout)) {
                 Ok(0) => return Ok(false),
                 Ok(_) => return Ok(true),
                 Err(error) if error == rustix::io::Errno::INTR => {}
@@ -116,10 +107,10 @@ fn cmd_shut_down_with(
     timeout: Duration,
     operations: &impl ProcessOperations,
 ) -> Result<()> {
-    let runtime_path = canonical_runtime_path(storage_path);
+    let runtime_path = runtime_file::canonical_runtime_path(storage_path);
     let runtime = read_runtime_record(&runtime_path)?
         .ok_or_else(|| anyhow!("missing runtime identity: {}", runtime_path.display()))?;
-    let identity = runtime.identity;
+    let identity = runtime.process;
     if runtime.port == 0 {
         return Err(anyhow!(
             "instance still starting: runtime identity has port zero"
@@ -129,9 +120,15 @@ fn cmd_shut_down_with(
     // Validate before and after pidfd acquisition: a reuse before acquisition
     // is refused, while a reuse after acquisition cannot redirect the pidfd.
     verify_process_identity(operations, identity)?;
-    let handle = operations
+    let handle = match operations
         .open(identity.pid)
-        .context("cannot acquire process handle")?;
+        .context("cannot acquire process handle")?
+    {
+        OpenOutcome::Captured(handle) => handle,
+        OpenOutcome::ProcessExited => {
+            return Err(anyhow!("dead process: runtime pid no longer exists"));
+        }
+    };
     verify_process_identity(operations, identity)?;
 
     operations
@@ -144,7 +141,7 @@ fn cmd_shut_down_with(
         return Err(anyhow!("timeout waiting for graceful shutdown"));
     }
 
-    match read_runtime_record(&runtime_path)?.map(|record| record.identity) {
+    match read_runtime_record(&runtime_path)?.map(|record| record.process) {
         None => Ok(()),
         Some(current) if current != identity => Ok(()),
         Some(_) => Err(anyhow!("runtime identity still owned after process exit")),
@@ -153,7 +150,7 @@ fn cmd_shut_down_with(
 
 fn verify_process_identity(
     operations: &impl ProcessOperations,
-    identity: RuntimeIdentity,
+    identity: RuntimeProcessIdentity,
 ) -> Result<()> {
     match operations
         .start_time(identity.pid)
@@ -173,48 +170,25 @@ fn read_runtime_record(path: &Path) -> Result<Option<RuntimeRecord>> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("malformed runtime identity: cannot read"),
     };
-    let value: serde_json::Value =
-        serde_json::from_slice(&contents).context("malformed runtime identity")?;
-    let pid = value["pid"]
-        .as_u64()
-        .and_then(|pid| u32::try_from(pid).ok())
-        .filter(|pid| *pid != 0)
-        .ok_or_else(|| anyhow!("malformed runtime identity: invalid pid"))?;
-    let start_time = value["start_time"]
-        .as_u64()
-        .ok_or_else(|| anyhow!("malformed runtime identity: invalid start-time"))?;
-    let port = runtime_port(&value)?;
-    value["ip"]
-        .as_str()
-        .ok_or_else(|| anyhow!("malformed runtime identity: invalid ip"))?;
-    Ok(Some(RuntimeRecord {
-        identity: RuntimeIdentity { pid, start_time },
-        port,
-    }))
-}
-
-fn runtime_port(value: &serde_json::Value) -> Result<u16> {
-    value["port"]
-        .as_u64()
-        .and_then(|port| u16::try_from(port).ok())
-        .ok_or_else(|| anyhow!("malformed runtime identity: invalid port"))
+    runtime_file::decode_runtime_record(&contents)
+        .context("malformed runtime identity")
+        .map(Some)
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
-        cell::{Cell, RefCell},
+        cell::RefCell,
         collections::VecDeque,
         fs, io,
         path::{Path, PathBuf},
         process::{Child, Command},
-        rc::Rc,
         time::Duration,
     };
 
     use super::*;
 
-    const CAPTURED: RuntimeIdentity = RuntimeIdentity {
+    const CAPTURED: RuntimeProcessIdentity = RuntimeProcessIdentity {
         pid: 41,
         start_time: 101,
     };
@@ -224,7 +198,8 @@ mod tests {
     struct FakeOperations {
         start_times: RefCell<VecDeque<io::Result<Option<u64>>>>,
         wait_result: bool,
-        signal_outcome: SignalOutcome,
+        exit_on_open: bool,
+        signal_target_exited: bool,
         signals: RefCell<Vec<u32>>,
         opens: RefCell<u32>,
         on_open: Option<Box<dyn Fn()>>,
@@ -240,7 +215,8 @@ mod tests {
                     Ok(Some(CAPTURED.start_time)),
                 ])),
                 wait_result: true,
-                signal_outcome: SignalOutcome::Delivered,
+                exit_on_open: false,
+                signal_target_exited: false,
                 signals: RefCell::new(Vec::new()),
                 opens: RefCell::new(0),
                 on_open: None,
@@ -253,12 +229,16 @@ mod tests {
     impl ProcessOperations for FakeOperations {
         type Handle = FakeHandle;
 
-        fn open(&self, _pid: u32) -> io::Result<Self::Handle> {
+        fn open(&self, _pid: u32) -> io::Result<OpenOutcome<Self::Handle>> {
             *self.opens.borrow_mut() += 1;
             if let Some(on_open) = &self.on_open {
                 on_open();
             }
-            Ok(FakeHandle(7))
+            if self.exit_on_open {
+                Ok(OpenOutcome::ProcessExited)
+            } else {
+                Ok(OpenOutcome::Captured(FakeHandle(7)))
+            }
         }
 
         fn start_time(&self, _pid: u32) -> io::Result<Option<u64>> {
@@ -268,14 +248,14 @@ mod tests {
                 .expect("configured start-time result")
         }
 
-        fn signal_term(&self, handle: &Self::Handle) -> io::Result<SignalOutcome> {
-            if self.signal_outcome == SignalOutcome::Delivered {
-                self.signals.borrow_mut().push(handle.0);
-                if let Some(on_signal) = &self.on_signal {
-                    on_signal();
-                }
+        fn signal_term(&self, handle: &Self::Handle) -> io::Result<()> {
+            if let Some(on_signal) = &self.on_signal {
+                on_signal();
             }
-            Ok(self.signal_outcome)
+            if !self.signal_target_exited {
+                self.signals.borrow_mut().push(handle.0);
+            }
+            Ok(())
         }
 
         fn wait_for_exit(&self, _handle: &Self::Handle, _timeout: Duration) -> io::Result<bool> {
@@ -293,7 +273,7 @@ mod tests {
     impl ProcessOperations for RuntimeReleasingLinuxOperations {
         type Handle = rustix::fd::OwnedFd;
 
-        fn open(&self, pid: u32) -> io::Result<Self::Handle> {
+        fn open(&self, pid: u32) -> io::Result<OpenOutcome<Self::Handle>> {
             LinuxProcessOperations.open(pid)
         }
 
@@ -301,7 +281,7 @@ mod tests {
             LinuxProcessOperations.start_time(pid)
         }
 
-        fn signal_term(&self, handle: &Self::Handle) -> io::Result<SignalOutcome> {
+        fn signal_term(&self, handle: &Self::Handle) -> io::Result<()> {
             LinuxProcessOperations.signal_term(handle)
         }
 
@@ -326,7 +306,7 @@ mod tests {
         temp.path().join("runtime.json")
     }
 
-    fn write_identity(path: &Path, identity: RuntimeIdentity, port: u16) {
+    fn write_identity(path: &Path, identity: RuntimeProcessIdentity, port: u16) {
         fs::write(
             path,
             format!(
@@ -347,9 +327,9 @@ mod tests {
                 .spawn()
                 .expect("dedicated target child"),
         );
-        let identity = RuntimeIdentity {
+        let identity = RuntimeProcessIdentity {
             pid: child.0.id(),
-            start_time: read_proc_start_time(child.0.id())
+            start_time: runtime_file::read_proc_start_time(child.0.id())
                 .expect("read child start time")
                 .expect("live child start time"),
         };
@@ -428,6 +408,26 @@ mod tests {
     }
 
     #[test]
+    fn exit_during_handle_acquisition_reports_dead_category() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let path = runtime_path(&temp);
+        write_identity(&path, CAPTURED, 3000);
+        let bytes = fs::read(&path).expect("runtime bytes");
+        let operations = FakeOperations {
+            exit_on_open: true,
+            ..FakeOperations::matching()
+        };
+
+        let error = cmd_shut_down_with(temp.path(), Duration::from_secs(1), &operations)
+            .expect_err("exit during handle acquisition must refuse");
+
+        assert!(error.to_string().contains("dead process"));
+        assert_eq!(*operations.opens.borrow(), 1);
+        assert!(operations.signals.borrow().is_empty());
+        assert_eq!(fs::read(path).expect("runtime bytes"), bytes);
+    }
+
+    #[test]
     fn reuse_during_handle_acquisition_refuses_before_signaling() {
         let temp = tempfile::TempDir::new().expect("temp dir");
         write_identity(&runtime_path(&temp), CAPTURED, 3000);
@@ -451,13 +451,14 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("temp dir");
         let path = runtime_path(&temp);
         write_identity(&path, CAPTURED, 3000);
-        let pid_reused = Rc::new(Cell::new(false));
-        let reused_after_signal = Rc::clone(&pid_reused);
-        let removed_path = path.clone();
+        let replacement = RuntimeProcessIdentity {
+            pid: CAPTURED.pid,
+            start_time: CAPTURED.start_time + 1,
+        };
+        let replacement_path = path.clone();
         let operations = FakeOperations {
             on_signal: Some(Box::new(move || {
-                reused_after_signal.set(true);
-                fs::remove_file(&removed_path).expect("remove identity");
+                write_identity(&replacement_path, replacement, 3001);
             })),
             ..FakeOperations::matching()
         };
@@ -465,8 +466,14 @@ mod tests {
         cmd_shut_down_with(temp.path(), Duration::from_secs(1), &operations)
             .expect("signal remains bound to captured handle");
 
-        assert!(pid_reused.get());
         assert_eq!(*operations.signals.borrow(), vec![7]);
+        assert_eq!(
+            read_runtime_record(&path)
+                .expect("read replacement")
+                .expect("replacement identity")
+                .process,
+            replacement
+        );
     }
 
     #[test]
@@ -529,7 +536,7 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("temp dir");
         let path = runtime_path(&temp);
         write_identity(&path, CAPTURED, 3000);
-        let replacement = RuntimeIdentity {
+        let replacement = RuntimeProcessIdentity {
             pid: 42,
             start_time: 202,
         };
@@ -553,8 +560,8 @@ mod tests {
         write_identity(&path, CAPTURED, 3000);
         let removed_path = path.clone();
         let operations = FakeOperations {
-            signal_outcome: SignalOutcome::ProcessExited,
-            on_wait: Some(Box::new(move || {
+            signal_target_exited: true,
+            on_signal: Some(Box::new(move || {
                 fs::remove_file(&removed_path).expect("remove identity");
             })),
             ..FakeOperations::matching()
