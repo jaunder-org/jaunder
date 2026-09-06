@@ -20,13 +20,13 @@ const IN_WASM: &str = "csr_bg.wasm";
 const EXPERIMENT_SHAPE_SECTION_NAME: &str = "jaunder.shape";
 
 /// The `wasm-opt` optimisation level, pinned by measurement on the current
-/// WebSub-recovery bundle (#836, #1052):
+/// Jiff bundled-TZDB bundle (#836, #1052, #1272):
 ///
 /// | level        | raw bytes |
 /// | ------------ | --------- |
-/// | `-O2`        | 2 748 684 |
-/// | `-Os`        | 2 710 670 |
-/// | **`-Oz`**    | **2 598 316** |
+/// | `-O2`        | 3 279 507 |
+/// | `-Os`        | 3 236 295 |
+/// | **`-Oz`**    | **3 102 495** |
 ///
 /// Size is the objective, not speed: firefox spends ~88 ms compiling each MiB of
 /// this file (#818), while the Rust-side mount path it produces measures

@@ -82,6 +82,10 @@ boundary decisions remain in force.
 - Bundled TZDB makes local-time behavior independent of host zoneinfo. HTML
   datetime-local retains browser-normalizing non-strict gap conversion; strict
   seams, including Org, retain earlier-fold selection and gap rejection.
+- Shipping the bundled TZDB increases the `-Oz` raw WASM artifact from the
+  previous 2 700 875-byte reference to 3 102 495 bytes. The committed ceiling is
+  deliberately recalibrated to 3 200 000 bytes, retaining 3.1% headroom while
+  remaining below remeasured `-Os` (3 236 295) and `-O2` (3 279 507).
 - Unavoidable third-party implementation dependencies can still bring Chrono
   transitively. Atom/RSS protocol models remain isolated at adapters instead of
   defining Jaunder's domain, web, storage, or feed-public time seams.

@@ -9,34 +9,34 @@
 
 use serde::Serialize;
 
-/// Raw bytes of the manifest-selected WASM identity artifact achieved after the
-/// owner Post Revision history UI landed (#1055), still using `wasm-opt -Oz`.
+/// Raw bytes of the manifest-selected WASM identity artifact after Jiff's
+/// bundled IANA TZDB landed (#1272), still using `wasm-opt -Oz`.
 ///
 /// `validate` reports observed size as a drift against this. **A drift of a few
 /// bytes is build noise, not erosion**: the artifact is not bit-reproducible
 /// across builds — a docs-only commit was observed to move it by 13 bytes. Read
 /// the drift for its order of magnitude, not its sign; kilobytes mean something
 /// changed.
-pub const WASM_RAW_ACHIEVED_BYTES: u64 = 2_700_875;
+pub const WASM_RAW_ACHIEVED_BYTES: u64 = 3_102_495;
 
 /// The ceiling `cargo xtask validate` enforces.
 ///
 /// Headroom is **3.1%** over [`WASM_RAW_ACHIEVED_BYTES`]. The three optimisation
-/// levels were re-measured on the SMTP-relay bundle:
+/// levels were re-measured on the Jiff bundled-TZDB bundle:
 ///
 /// | build                      | raw bytes |
 /// | -------------------------- | --------- |
-/// | `-Oz` (achieved)           | 2 700 875 |
-/// | **ceiling**                | **2 785 000** |
-/// | `-Os`                      | 2 824 602 |
-/// | `-O2`                      | 2 864 716 |
+/// | `-Oz` (achieved)           | 3 102 495 |
+/// | **ceiling**                | **3 200 000** |
+/// | `-Os`                      | 3 236 295 |
+/// | `-O2`                      | 3 279 507 |
 ///
 /// The ceiling leaves ordinary headroom but remains below both weaker
 /// optimisation levels, so losing `-Oz` still fails rather than being hidden by
 /// the feature-driven recalibration.
 ///
 /// Lower it deliberately, in the same commit as the win that earned it.
-pub const WASM_RAW_CEILING_BYTES: u64 = 2_785_000;
+pub const WASM_RAW_CEILING_BYTES: u64 = 3_200_000;
 
 #[derive(Debug, Serialize)]
 pub struct BudgetVerdict {
@@ -106,11 +106,11 @@ mod tests {
     }
 
     /// Raw bytes of the shipped wasm at the weaker `wasm-opt` levels, remeasured
-    /// on the SMTP-relay bundle. `NO_WASM_OPT_BYTES` retains the pre-#836
+    /// on the Jiff bundled-TZDB bundle. `NO_WASM_OPT_BYTES` retains the pre-#836
     /// historical guard. The next three tests run the real predicate over them.
     const NO_WASM_OPT_BYTES: u64 = 5_350_591;
-    const O2_LEVEL_BYTES: u64 = 2_864_716;
-    const OS_LEVEL_BYTES: u64 = 2_824_602;
+    const O2_LEVEL_BYTES: u64 = 3_279_507;
+    const OS_LEVEL_BYTES: u64 = 3_236_295;
 
     #[test]
     fn the_achieved_size_passes_its_own_budget() {
