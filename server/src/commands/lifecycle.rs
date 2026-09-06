@@ -531,10 +531,47 @@ async fn serve_with_shutdown(
     Ok(())
 }
 
-/// Installs `SIGINT`/`SIGTERM` handlers and returns a receiver that fires when the
-/// first arrives (the graceful-shutdown trigger). A second signal forces an
-/// immediate exit, best-effort removing the runtime file first — necessary because
-/// `process::exit` skips `Drop`.
+/// Models the shutdown supervisor's signal policy without process-global handler
+/// installation or process termination.
+#[cfg(any(test, unix))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShutdownSignal {
+    Sigint,
+    Sigterm,
+}
+
+#[cfg(any(test, unix))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShutdownState {
+    AwaitingSignal,
+    Draining,
+}
+
+#[cfg(any(test, unix))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShutdownTransition {
+    BeginGracefulDrain,
+    ContinueGracefulDrain,
+    ForceExitAndRemoveRuntimeIdentity,
+}
+
+#[cfg(any(test, unix))]
+fn shutdown_transition(state: ShutdownState, signal: ShutdownSignal) -> ShutdownTransition {
+    match (state, signal) {
+        (ShutdownState::AwaitingSignal, _) => ShutdownTransition::BeginGracefulDrain,
+        (ShutdownState::Draining, ShutdownSignal::Sigterm) => {
+            ShutdownTransition::ContinueGracefulDrain
+        }
+        (ShutdownState::Draining, ShutdownSignal::Sigint) => {
+            ShutdownTransition::ForceExitAndRemoveRuntimeIdentity
+        }
+    }
+}
+
+/// Installs `SIGINT`/`SIGTERM` handlers and returns a receiver that fires when
+/// the first signal begins graceful draining. Later `SIGTERM` signals continue
+/// that drain; a later `SIGINT` removes the runtime identity and forces an
+/// immediate exit because `process::exit` skips `Drop`.
 ///
 /// The streams are created synchronously (before returning), so a caller can rely
 /// on the handlers being active the moment this returns.
@@ -552,19 +589,34 @@ fn spawn_shutdown_supervisor(runtime_path: PathBuf) -> io::Result<(Receiver<()>,
         // cov:ignore-start -- async signal wait-loop; the forced branch ends in
         // process::exit and is unreachable by a survivable test. The synchronous
         // setup above and serve_with_shutdown are host-covered by the signal tests.
-        let signal = tokio::select! {
-            _ = sigint.recv() => "SIGINT",
-            _ = sigterm.recv() => "SIGTERM",
-        };
-        tracing::info!(
-            signal,
-            "received shutdown signal; draining in-flight requests"
-        );
-        let _ = tx.send(());
-        tokio::select! { _ = sigint.recv() => {}, _ = sigterm.recv() => {} }
-        tracing::warn!("second shutdown signal; forcing immediate exit");
-        runtime_file::remove_runtime_file(&runtime_path);
-        std::process::exit(0);
+        let mut state = ShutdownState::AwaitingSignal;
+        let mut graceful_shutdown = Some(tx);
+        loop {
+            let (signal, signal_name) = tokio::select! {
+                _ = sigint.recv() => (ShutdownSignal::Sigint, "SIGINT"),
+                _ = sigterm.recv() => (ShutdownSignal::Sigterm, "SIGTERM"),
+            };
+            match shutdown_transition(state, signal) {
+                ShutdownTransition::BeginGracefulDrain => {
+                    tracing::info!(
+                        signal = signal_name,
+                        "received shutdown signal; draining in-flight requests"
+                    );
+                    if let Some(tx) = graceful_shutdown.take() {
+                        let _ = tx.send(());
+                    }
+                    state = ShutdownState::Draining;
+                }
+                ShutdownTransition::ContinueGracefulDrain => {
+                    tracing::info!("received SIGTERM while draining; continuing graceful shutdown");
+                }
+                ShutdownTransition::ForceExitAndRemoveRuntimeIdentity => {
+                    tracing::warn!("received SIGINT while draining; forcing immediate exit");
+                    runtime_file::remove_runtime_file(&runtime_path);
+                    std::process::exit(0);
+                }
+            }
+        }
         // cov:ignore-stop
     });
     Ok((rx, supervisor))
@@ -1405,6 +1457,38 @@ mod tests {
                 .expect_err("serve failure must remain primary")
                 .to_string(),
             "serve failed"
+        );
+    }
+
+    #[test]
+    fn first_sigint_starts_graceful_drain() {
+        assert_eq!(
+            shutdown_transition(ShutdownState::AwaitingSignal, ShutdownSignal::Sigint),
+            ShutdownTransition::BeginGracefulDrain
+        );
+    }
+
+    #[test]
+    fn first_sigterm_starts_graceful_drain() {
+        assert_eq!(
+            shutdown_transition(ShutdownState::AwaitingSignal, ShutdownSignal::Sigterm),
+            ShutdownTransition::BeginGracefulDrain
+        );
+    }
+
+    #[test]
+    fn repeated_sigterm_continues_graceful_drain() {
+        assert_eq!(
+            shutdown_transition(ShutdownState::Draining, ShutdownSignal::Sigterm),
+            ShutdownTransition::ContinueGracefulDrain
+        );
+    }
+
+    #[test]
+    fn later_sigint_forces_exit_and_removes_runtime_identity() {
+        assert_eq!(
+            shutdown_transition(ShutdownState::Draining, ShutdownSignal::Sigint),
+            ShutdownTransition::ForceExitAndRemoveRuntimeIdentity
         );
     }
 
