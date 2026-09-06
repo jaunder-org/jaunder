@@ -84,7 +84,7 @@ Out:
     malformed-manifest, malformed-row, constraint-rollback, full-table, archive,
     and backend-interoperability suites through their existing focused filters.
 
-- [ ] Task 4: Publish the corpus maintenance and architecture contract.
+- [x] Task 4: Publish the corpus maintenance and architecture contract.
   - Contract: test-adjacent documentation explains adding a new immutable
     fixture/index/oracle entry without regenerating history, digest refresh
     review, and format-bump diagnostics. It states that retiring support
