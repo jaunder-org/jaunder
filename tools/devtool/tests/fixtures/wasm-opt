@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+while [ "$1" != "-o" ]; do
+    input="$1"
+    shift
+done
+cp "$input" "$2"

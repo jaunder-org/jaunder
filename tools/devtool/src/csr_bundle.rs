@@ -602,49 +602,18 @@ fn run_with_tools(
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
 
     use super::*;
 
-    fn write_executable(path: &Path, source: &str) {
-        fs::write(path, source).unwrap();
-        let mut permissions = fs::metadata(path).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).unwrap();
-    }
-
-    fn fixture_tools(directory: &Path) -> (PathBuf, PathBuf) {
-        let wasm_bindgen = directory.join("wasm-bindgen");
-        write_executable(
-            &wasm_bindgen,
-            r#"#!/bin/sh
-set -eu
-out="$4"
-mkdir -p "$out/deps"
-printf '%s\n' "import './deps/dep.js'; const wasm_path = 'csr_bg.wasm'; async function __wbg_load(module, imports) { if (typeof Response === 'function' && module instanceof Response) {} await WebAssembly.instantiateStreaming(module, imports); const bytes = await module.arrayBuffer(); return WebAssembly.instantiate(bytes, imports); } async function __wbg_init(module_or_path) { fetch(module_or_path); return __wbg_load(await module_or_path, imports); } export { __wbg_init };" > "$out/csr.js"
-printf '%s\n' "export const dependency = true;" > "$out/deps/dep.js"
-cp "$5" "$out/csr_bg.wasm"
-"#,
-        );
-        let wasm_opt = directory.join("wasm-opt");
-        write_executable(
-            &wasm_opt,
-            r#"#!/bin/sh
-set -eu
-while [ "$1" != "-o" ]; do
-    input="$1"
-    shift
-done
-cp "$input" "$2"
-"#,
-        );
-        (wasm_bindgen, wasm_opt)
+    fn fixture_tools() -> (PathBuf, PathBuf) {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        (fixtures.join("wasm-bindgen"), fixtures.join("wasm-opt"))
     }
 
     fn produce_fixture(directory: &Path, name: &str) -> PathBuf {
         let input = directory.join("input.wasm");
         fs::write(&input, b"\0asm\x01\0\0\0").unwrap();
-        let (wasm_bindgen, wasm_opt) = fixture_tools(directory);
+        let (wasm_bindgen, wasm_opt) = fixture_tools();
         let output = directory.join(name);
         run_with_tools(&input, &output, None, None, 0, &wasm_bindgen, &wasm_opt).unwrap();
         output

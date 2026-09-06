@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+out="$4"
+mkdir -p "$out/deps"
+printf '%s\n' "import './deps/dep.js'; const wasm_path = 'csr_bg.wasm'; async function __wbg_load(module, imports) { if (typeof Response === 'function' && module instanceof Response) {} await WebAssembly.instantiateStreaming(module, imports); const bytes = await module.arrayBuffer(); return WebAssembly.instantiate(bytes, imports); } async function __wbg_init(module_or_path) { fetch(module_or_path); return __wbg_load(await module_or_path, imports); } export { __wbg_init };" > "$out/csr.js"
+printf '%s\n' "export const dependency = true;" > "$out/deps/dep.js"
+cp "$5" "$out/csr_bg.wasm"
