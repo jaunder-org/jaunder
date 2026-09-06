@@ -873,7 +873,7 @@ feed on an actual normalized change. A kernel-backed publisher gate serializes
 the final cache-commit/publish region with configuration mutation, without
 holding a database transaction across rendering or HTTP
 ([publisher-side WebSub decision](adr/0137-publisher-side-websub.md)); durable
-publisher fencing is recorded in `docs/adr/drafts/publisher-generation-gate.md`.
+publisher fencing is recorded in `docs/adr/0173-publisher-generation-gate.md`.
 
 **Current publisher behavior.** Production pings through
 `WebSubClient::send_publish(&HubUrl, &FeedUrl)`
