@@ -48,6 +48,12 @@
 
 import type { Page } from "@playwright/test";
 
+type Use<T> = (value: T) => Promise<void>;
+type AutoFixture<Args, T> = [
+  (args: Args, use: Use<T>) => Promise<void>,
+  { auto: true },
+];
+
 /**
  * One declared further load. An engine-dependent allowance carries the `path` of
  * the load it was written for and matches nothing else; an exact allowance has no
@@ -59,29 +65,6 @@ type Allowance = {
   path?: string;
 };
 
-type BudgetState = {
-  /** Document loads on this page, in order, as URLs. */
-  loads: string[];
-  /** Declared further loads not yet consumed — see {@link takeAllowance}. */
-  allowances: Allowance[];
-  /** Set on the first undeclared extra load; raised at the next `goto` or, if
-   *  there is none, by the teardown sweep. */
-  violation?: string;
-};
-
-const states = new WeakMap<Page, BudgetState>();
-
-/**
- * The pages armed since the last {@link takeOrphanedAllowances} call, so that
- * teardown can sweep every page a test touched rather than only its default one.
- *
- * A strong `Set` where the state map is a `WeakMap`, deliberately: it is emptied
- * once per test, so it retains a page for at most one test rather than for the
- * run. Playwright runs a worker's tests serially in one process, so there is
- * exactly one test's worth of pages in here at a time.
- */
-const tracked = new Set<Page>();
-
 /**
  * A page's blank starting document is not a boot. Playwright opens every page
  * at `about:blank`, and whether that fires `domcontentloaded` is an engine
@@ -92,44 +75,111 @@ function isRealDocument(url: string): boolean {
 }
 
 /**
- * The pathname of a load or of a declared path.
- *
- * **Pathname, not the whole URL:** the origin is an ephemeral `host:port` chosen
- * per run (`JAUNDER_E2E_BASE_URL`), so an origin-bearing key could never be
- * written in a test; and the query string carries per-run salts and tokens, which
- * would make a declaration match on one run and not the next. The route is what a
- * declaration is actually about. The dummy base only supplies the parser with an
- * origin to discard — a declared path is relative by construction.
+ * The pathname of a load or of a declared path. Origins and query strings vary
+ * per run, while the route is what an engine-dependent declaration describes.
  */
 function pathOf(url: string): string {
   return new URL(url, "http://budget.invalid").pathname;
 }
 
-/**
- * Consume one allowance for a load of `url`, **a matching scoped allowance
- * first**, then the first exact one.
- *
- * Scoped-first is what makes the two forms compose. Take the pre-paint redirect:
- * an exact declaration for `/app` (which always lands) plus an engine-dependent
- * one for `/`. On firefox the `/` load must spend the `/` declaration — spending
- * the exact one there would leave `/app` with nothing to consume and fail the
- * page. On chromium `/` never arrives, `/app` matches no scoped allowance, and it
- * spends the exact one, leaving the scoped declaration unconsumed and exempt.
- *
- * The exact form stays unscoped: it must be consumed, so an unconsumed one is
- * already reported and cannot silently absorb anything.
- */
-function takeAllowance(state: BudgetState, url: string): Allowance | undefined {
-  const path = pathOf(url);
-  const scoped = state.allowances.findIndex((a) => a.path === path);
-  const index =
-    scoped === -1
-      ? state.allowances.findIndex((a) => a.path === undefined)
-      : scoped;
-  if (index === -1) return undefined;
-  const [taken] = state.allowances.splice(index, 1);
-  return taken;
+function validateReason(reason: string, by: string): void {
+  if (reason.trim() === "") {
+    throw new Error(
+      `${by} needs a non-empty reason: it is the record of why this ` +
+        "page boots more than once (#867).",
+    );
+  }
 }
+
+/**
+ * The browser-independent state machine behind the per-page budget.
+ *
+ * This is intentionally the only accounting seam: the page adapter supplies
+ * actual `DOMContentLoaded` URLs, while cheap tests drive the same transitions
+ * directly without inventing a Page or event emitter.
+ */
+export class BootBudgetAccounting {
+  /** Document loads on this page, in order, as URLs. */
+  private readonly loads: string[] = [];
+  /** Declared further loads not yet consumed. */
+  private readonly allowances: Allowance[] = [];
+  /** Set on the first undeclared extra load. */
+  private violation?: string;
+
+  recordDocumentLoad(url: string): void {
+    if (!isRealDocument(url)) return;
+    this.loads.push(url);
+    if (this.loads.length === 1) return;
+
+    if (this.takeAllowance(url) !== undefined) return;
+    this.violation ??=
+      `second document load on this page: it booted at ${this.loads[0]}, ` +
+      `then loaded ${url}. A page boots once (#867) — move within the app ` +
+      `with navigateInApp, or, if this page's cold render is the subject, ` +
+      `declare it with allowSecondBoot(page, "<reason>").`;
+  }
+
+  allowSecondBoot(reason: string): void {
+    validateReason(reason, "allowSecondBoot");
+    this.allowances.push({ reason });
+  }
+
+  allowEngineDependentBoot(path: string, reason: string): void {
+    validateReason(reason, "allowEngineDependentBoot");
+    this.allowances.push({ reason, path: pathOf(path) });
+  }
+
+  bootCount(): number {
+    return this.loads.length;
+  }
+
+  pendingReasons(): string[] {
+    return this.allowances.map((allowance) => allowance.reason);
+  }
+
+  takeFailures(): string[] {
+    const violations =
+      this.violation === undefined
+        ? []
+        : [`undeclared second load — ${this.violation}`];
+    this.violation = undefined;
+    const where = this.loads[0] ?? "(a page that never loaded)";
+    const orphans = this.allowances
+      .filter((allowance) => allowance.path === undefined)
+      .map((allowance) => `${where}: ${allowance.reason}`);
+    this.allowances.length = 0;
+    return [...violations, ...orphans];
+  }
+
+  throwIfViolated(): void {
+    if (this.violation === undefined) return;
+    const { violation } = this;
+    this.violation = undefined;
+    throw new Error(violation);
+  }
+
+  private takeAllowance(url: string): Allowance | undefined {
+    const path = pathOf(url);
+    const scoped = this.allowances.findIndex(
+      (allowance) => allowance.path === path,
+    );
+    const index =
+      scoped === -1
+        ? this.allowances.findIndex((allowance) => allowance.path === undefined)
+        : scoped;
+    if (index === -1) return undefined;
+    const [taken] = this.allowances.splice(index, 1);
+    return taken;
+  }
+}
+
+const states = new WeakMap<Page, BootBudgetAccounting>();
+
+/**
+ * The pages armed since the last {@link takeBudgetFailures} call, so teardown
+ * can sweep every page a test touched rather than only its default one.
+ */
+const tracked = new Set<Page>();
 
 /**
  * Arm the budget on `page`. Idempotent: `tracedContext` arms every page it
@@ -140,24 +190,28 @@ export function trackBoots(page: Page): void {
     tracked.add(page);
     return;
   }
-  const state: BudgetState = { loads: [], allowances: [] };
+  const state = new BootBudgetAccounting();
   states.set(page, state);
   tracked.add(page);
 
   page.on("domcontentloaded", () => {
-    const url = page.url();
-    if (!isRealDocument(url)) return;
-    state.loads.push(url);
-    if (state.loads.length === 1) return;
-
-    if (takeAllowance(state, url) !== undefined) return;
-    state.violation ??=
-      `second document load on this page: it booted at ${state.loads[0]}, ` +
-      `then loaded ${url}. A page boots once (#867) — move within the app ` +
-      `with navigateInApp, or, if this page's cold render is the subject, ` +
-      `declare it with allowSecondBoot(page, "<reason>").`;
+    state.recordDocumentLoad(page.url());
   });
 }
+
+/**
+ * Arm the default page before requested fixtures can navigate it.
+ *
+ * Kept separate from performance capture so the late-arming contract can
+ * disable only this policy while retaining normal tracing and teardown.
+ */
+export const autoBootBudgetFixture = [
+  async ({ page }: { page: Page }, use: Use<void>) => {
+    trackBoots(page);
+    await use();
+  },
+  { auto: true },
+] satisfies AutoFixture<{ page: Page }, void>;
 
 /**
  * Authorise one further document load on `page`, for a stated reason.
@@ -202,7 +256,7 @@ export function allowEngineDependentBoot(
   path: string,
   reason: string,
 ): void {
-  declare(page, reason, pathOf(path), "allowEngineDependentBoot");
+  declare(page, reason, path, "allowEngineDependentBoot");
 }
 
 /**
@@ -216,12 +270,7 @@ function declare(
   path: string | undefined,
   by: string,
 ): void {
-  if (reason.trim() === "") {
-    throw new Error(
-      `${by} needs a non-empty reason: it is the record of why this ` +
-        "page boots more than once (#867).",
-    );
-  }
+  validateReason(reason, by);
   let state = states.get(page);
   if (state === undefined) {
     // Arming late. A declaration can only ever follow the page's entry load —
@@ -239,19 +288,20 @@ function declare(
     // is the budget silently disarming itself, which is the one failure it
     // exists to prevent.
     const url = page.url();
-    if (isRealDocument(url)) state?.loads.push(url);
+    if (isRealDocument(url)) state?.recordDocumentLoad(url);
   }
-  state?.allowances.push({ reason, path });
+  if (path === undefined) state?.allowSecondBoot(reason);
+  else state?.allowEngineDependentBoot(path, reason);
 }
 
 /** Document loads counted on `page` so far. Zero if never armed. */
 export function bootCount(page: Page): number {
-  return states.get(page)?.loads.length ?? 0;
+  return states.get(page)?.bootCount() ?? 0;
 }
 
 /** Reasons declared on `page` that no load has consumed yet, either form. */
 export function pendingReasons(page: Page): string[] {
-  return (states.get(page)?.allowances ?? []).map((a) => a.reason);
+  return states.get(page)?.pendingReasons() ?? [];
 }
 
 /**
@@ -297,16 +347,12 @@ export function takeBudgetFailures(): string[] {
   for (const page of tracked) {
     const state = states.get(page);
     if (state === undefined) continue;
-    if (state.violation !== undefined) {
-      violations.push(`undeclared second load — ${state.violation}`);
-      state.violation = undefined;
+    const failures = state.takeFailures();
+    for (const failure of failures) {
+      if (failure.startsWith("undeclared second load —"))
+        violations.push(failure);
+      else orphans.push(failure);
     }
-    const where = state.loads[0] ?? "(a page that never loaded)";
-    for (const allowance of state.allowances) {
-      if (allowance.path !== undefined) continue; // engine-dependent: exempt
-      orphans.push(`${where}: ${allowance.reason}`);
-    }
-    state.allowances.length = 0;
   }
   tracked.clear();
   // Violations first: a load that happened outranks a declaration for one that
@@ -321,9 +367,5 @@ export function takeBudgetFailures(): string[] {
  * error and the teardown sweep does not report it a second time.
  */
 export function throwIfViolated(page: Page): void {
-  const state = states.get(page);
-  if (state?.violation === undefined) return;
-  const { violation } = state;
-  state.violation = undefined;
-  throw new Error(violation);
+  states.get(page)?.throwIfViolated();
 }

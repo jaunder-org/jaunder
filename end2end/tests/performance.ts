@@ -608,12 +608,6 @@ export const autoPerfSpanFixture = [
     const lifecycleStartMs = _lifecycleStart;
     const perfSpanEntryMs = Date.now();
 
-    // Arm the one-boot-per-page budget (#867). This fixture is `auto`, and
-    // Playwright sets auto fixtures up before requested ones, so arming
-    // happens before `registeredPage` navigates — which is what lets the
-    // budget see a test's very first document load rather than only later ones.
-    trackBoots(page);
-
     // Capture attaches before the phase switch below, so any pre-test traffic
     // is measured rather than invisible (#794). Attribution is a separate
     // concern and still waits — fusing the two is what once left the (since
