@@ -4,6 +4,14 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::{issue, steps};
 
+fn nonempty(value: &str) -> Result<String, String> {
+    if value.trim().is_empty() {
+        Err("must not be empty".to_owned())
+    } else {
+        Ok(value.to_owned())
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "xtask", about = "Jaunder dev orchestration")]
 pub struct Cli {
@@ -362,6 +370,16 @@ pub enum WasmCoverageCommand {
     /// The aggregate is always written to `.xtask/wasm-coverage/status.json`.
     #[command(after_help = "EXAMPLES:\n  cargo xtask wasm-coverage probe")]
     Probe,
+    /// Measure the separately built baseline and instrumented diagnostic bundles during
+    /// a coordinated quiet host window. The acknowledgement is deliberately required:
+    /// these numbers are invalid when unrelated host work is competing for resources.
+    #[command(
+        after_help = "EXAMPLES:\n  cargo xtask wasm-coverage measure --quiescent-window '2026-09-06 coordinated window'"
+    )]
+    Measure {
+        #[arg(long, value_parser = nonempty)]
+        quiescent_window: String,
+    },
 }
 
 /// `nix` subcommands.
@@ -469,6 +487,7 @@ impl Cli {
             Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
             Command::WasmCoverage(WasmCoverageCommand::Probe) => "wasm-coverage-probe",
+            Command::WasmCoverage(WasmCoverageCommand::Measure { .. }) => "wasm-coverage-measure",
             Command::Nix(NixCommand::ProbeSource) => "nix-probe-source",
             Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate) => {
                 steps::server_fn_coverage_check::REGENERATE_STEP

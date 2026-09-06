@@ -37,11 +37,18 @@ const chromiumLaunchOptions = {
 };
 const visualTag = /@visual/;
 const diagnosticCoverage = Boolean(process.env.JAUNDER_WASM_COVERAGE_OUT);
+const measurementMode = Boolean(process.env.JAUNDER_WASM_COVERAGE_MODE);
 const diagnosticCoverageSpec = /wasm-coverage\.spec\.ts/;
+const measurementSpec = /wasm-coverage-measure\.spec\.ts/;
+const diagnosticSpec = measurementMode
+  ? measurementSpec
+  : diagnosticCoverageSpec;
 const ignoreDiagnosticCoverage = (pattern: RegExp) =>
   diagnosticCoverage
     ? pattern
-    : new RegExp(`${pattern.source}|${diagnosticCoverageSpec.source}`);
+    : new RegExp(
+        `${pattern.source}|${diagnosticCoverageSpec.source}|${measurementSpec.source}`,
+      );
 
 export default defineConfig({
   testDir: "./tests",
@@ -104,7 +111,7 @@ export default defineConfig({
       ),
       grepInvert: visualTag,
       ...(diagnosticCoverage
-        ? { testMatch: diagnosticCoverageSpec, dependencies: [] }
+        ? { testMatch: diagnosticSpec, dependencies: [] }
         : { dependencies: ["chromium-visual"] }),
       use: {
         ...devices["Desktop Chrome"],
@@ -151,7 +158,7 @@ export default defineConfig({
       ),
       grepInvert: visualTag,
       ...(diagnosticCoverage
-        ? { testMatch: diagnosticCoverageSpec, dependencies: [] }
+        ? { testMatch: diagnosticSpec, dependencies: [] }
         : { dependencies: ["firefox-visual"] }),
       use: {
         ...devices["Desktop Firefox"],

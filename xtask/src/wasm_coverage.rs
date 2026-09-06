@@ -9,6 +9,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
@@ -617,6 +618,366 @@ fn write_aggregate(aggregate: &Aggregate) -> Result<()> {
     Ok(())
 }
 
+const MEASUREMENT_ROOT: &str = ".xtask/wasm-coverage/measurement";
+const MEASUREMENT_VERSION: &str = "wasm-coverage-measurement-v1";
+const MODES: [&str; 2] = ["baseline", "instrumented"];
+
+/// One retained VM result. The producer, rather than the host clock, records the
+/// focused browser-flow duration and the served module's uncompressed byte count.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MeasurementRun {
+    pub version: String,
+    pub browser: String,
+    pub mode: String,
+    pub cache_buster: String,
+    #[serde(default)]
+    pub nix_realization: String,
+    #[serde(default)]
+    pub artifact_root: String,
+    pub focused_flow_milliseconds: u64,
+    pub served_wasm_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MeasurementSummary {
+    pub browser: String,
+    pub mode: String,
+    pub median_milliseconds: u64,
+    pub range_milliseconds: [u64; 2],
+    pub median_wasm_bytes: u64,
+    pub range_wasm_bytes: [u64; 2],
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MeasurementManifest {
+    pub version: String,
+    pub quiescent_window: String,
+    pub runs: Vec<MeasurementRun>,
+    pub summaries: Vec<MeasurementSummary>,
+}
+
+/// Execute the fixed experiment. Warm-ups are deliberately discarded; retained
+/// runs alternate baseline then instrumented, five times for each browser.
+pub fn measure(quiescent_window: &str) -> Result<MeasurementManifest> {
+    measure_with(&ProcessRunner, quiescent_window)
+}
+
+fn measure_with(runner: &dyn CommandRunner, quiescent_window: &str) -> Result<MeasurementManifest> {
+    if quiescent_window.trim().is_empty() {
+        bail!("measurement requires a nonempty --quiescent-window acknowledgement");
+    }
+    let root = Path::new(MEASUREMENT_ROOT);
+    if root.exists() {
+        fs::remove_dir_all(root).context("clearing stale measurement evidence")?;
+    }
+    fs::create_dir_all(root)?;
+    let invocation_nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("reading measurement invocation clock")?
+        .as_nanos();
+    let mut runs = Vec::new();
+    for browser in BROWSERS {
+        for mode in MODES {
+            let cache_buster = cache_buster(invocation_nonce, browser, mode, "warmup", 0);
+            realize_measurement(
+                runner,
+                browser,
+                mode,
+                &cache_buster,
+                &root.join("warmups").join(browser).join(mode),
+            )?;
+        }
+        for pair in 0..5 {
+            for mode in MODES {
+                let cache_buster = cache_buster(invocation_nonce, browser, mode, "measured", pair);
+                let evidence = root
+                    .join("runs")
+                    .join(browser)
+                    .join(format!("{pair}-{mode}"));
+                let run = realize_measurement(runner, browser, mode, &cache_buster, &evidence)?;
+                runs.push(run);
+            }
+        }
+    }
+    let manifest = MeasurementManifest {
+        version: MEASUREMENT_VERSION.to_owned(),
+        quiescent_window: quiescent_window.to_owned(),
+        summaries: measurement_summaries(&runs)?,
+        runs,
+    };
+    validate_measurement(&manifest)?;
+    validate_retained_measurement(&manifest, root)?;
+    write_measurement_manifest(&manifest)?;
+    Ok(manifest)
+}
+
+fn cache_buster(
+    invocation_nonce: u128,
+    browser: &str,
+    mode: &str,
+    phase: &str,
+    ordinal: usize,
+) -> String {
+    // Invocation-owned entropy prevents a binary-cache hit and is retained verbatim.
+    format!(
+        "{invocation_nonce}-{}-{browser}-{mode}-{phase}-{ordinal}",
+        std::process::id()
+    )
+}
+
+fn realize_measurement(
+    runner: &dyn CommandRunner,
+    browser: &str,
+    mode: &str,
+    cache_buster: &str,
+    evidence: &Path,
+) -> Result<MeasurementRun> {
+    if cache_buster.trim().is_empty() {
+        bail!("measurement cache-buster must not be empty");
+    }
+    let package = format!("wasm-coverage-measure-{browser}-{mode}");
+    let output = Path::new(".xtask/gcroots").join(format!("{package}-{cache_buster}"));
+    fs::create_dir_all(".xtask/gcroots")?;
+    let mut command = Command::new("nix");
+    command
+        .args([
+            "build",
+            "-L",
+            "--impure",
+            "--accept-flake-config",
+            "--out-link",
+        ])
+        .arg(&output)
+        .arg(format!(".#{package}"))
+        .env("JAUNDER_WASM_COVERAGE_CACHE_BUSTER", cache_buster);
+    let result = runner.run(&mut command)?;
+    if !result.status.success() {
+        bail!(
+            "nix build exited with {}: {}",
+            result.status,
+            String::from_utf8_lossy(&result.stderr).trim()
+        );
+    }
+    unpack_measurement_archive(&output.join(format!("{package}.tar.gz")), evidence)?;
+    let realization = fs::canonicalize(&output)
+        .context("resolving fresh Nix measurement realization")?
+        .display()
+        .to_string();
+    fs::write(
+        evidence.join("nix-realization.json"),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "cache_buster": cache_buster,
+                "nix_realization": realization,
+            }))?
+        ),
+    )?;
+    let mut run: MeasurementRun = serde_json::from_slice(
+        &fs::read(evidence.join("measurement.json")).context("reading measurement result")?,
+    )
+    .context("parsing measurement result")?;
+    run.nix_realization = realization;
+    if run.browser != browser || run.mode != mode || run.cache_buster != cache_buster {
+        bail!("measurement producer identity or cache-buster does not match invocation");
+    }
+    run.artifact_root = evidence
+        .strip_prefix(MEASUREMENT_ROOT)
+        .context("measurement evidence is outside the measurement root")?
+        .to_string_lossy()
+        .to_string();
+    validate_measurement_run(&run)?;
+    Ok(run)
+}
+
+fn unpack_measurement_archive(archive: &Path, destination: &Path) -> Result<()> {
+    let _ = fs::remove_dir_all(destination);
+    fs::create_dir_all(destination)?;
+    let mut archive = Archive::new(GzDecoder::new(fs::File::open(archive)?));
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        let path_text = path.to_string_lossy();
+        let relative = relative_path(&path_text)?;
+        if !entry.header().entry_type().is_file() || relative != Path::new("measurement.json") {
+            bail!("measurement archive contains an unexpected entry");
+        }
+        entry.unpack(destination.join(relative))?;
+    }
+    Ok(())
+}
+
+pub fn validate_measurement(manifest: &MeasurementManifest) -> Result<()> {
+    if manifest.version != MEASUREMENT_VERSION || manifest.quiescent_window.trim().is_empty() {
+        bail!("unknown measurement manifest or missing quiescent-window acknowledgement");
+    }
+    let mut cache_busters = BTreeSet::new();
+    let mut realizations = BTreeSet::new();
+    for browser in BROWSERS {
+        let browser_runs: Vec<_> = manifest
+            .runs
+            .iter()
+            .filter(|run| run.browser == browser)
+            .collect();
+        if browser_runs.len() != 10 {
+            bail!(
+                "{browser}: expected exactly 10 measured runs, got {}",
+                browser_runs.len()
+            );
+        }
+        for (index, run) in browser_runs.iter().enumerate() {
+            validate_measurement_run(run)?;
+            let expected_mode = MODES[index % 2];
+            if run.mode != expected_mode {
+                bail!(
+                    "{browser}: run {index} is {}, expected {expected_mode}",
+                    run.mode
+                );
+            }
+            if !cache_busters.insert(run.cache_buster.as_str()) {
+                bail!("duplicate measurement cache-buster {:?}", run.cache_buster);
+            }
+            if !realizations.insert(run.nix_realization.as_str()) {
+                bail!("duplicate Nix realization {:?}", run.nix_realization);
+            }
+        }
+    }
+    if manifest.runs.len() != 20 {
+        bail!("manifest contains runs outside the two exact browser populations");
+    }
+    if manifest.summaries != measurement_summaries(&manifest.runs)? {
+        bail!("measurement summaries do not reconcile with retained runs");
+    }
+    Ok(())
+}
+
+fn validate_measurement_run(run: &MeasurementRun) -> Result<()> {
+    if run.version != MEASUREMENT_VERSION
+        || !BROWSERS.contains(&run.browser.as_str())
+        || !MODES.contains(&run.mode.as_str())
+        || run.artifact_root.trim().is_empty()
+        || run.nix_realization.trim().is_empty()
+        || run.focused_flow_milliseconds == 0
+        || run.served_wasm_bytes == 0
+    {
+        bail!("malformed, stale, or incomplete measurement run");
+    }
+    Ok(())
+}
+
+fn validate_retained_measurement(manifest: &MeasurementManifest, root: &Path) -> Result<()> {
+    let runs_root = root.join("runs");
+    let mut expected = BTreeSet::new();
+    for run in &manifest.runs {
+        let relative = relative_path(&run.artifact_root)?;
+        if !relative.starts_with("runs") {
+            bail!("measurement artifact root is outside retained runs");
+        }
+        let evidence = root.join(relative);
+        let producer: MeasurementRun = serde_json::from_slice(
+            &fs::read(evidence.join("measurement.json"))
+                .context("reading retained measurement payload")?,
+        )
+        .context("parsing retained measurement payload")?;
+        if producer.version != run.version
+            || producer.browser != run.browser
+            || producer.mode != run.mode
+            || producer.cache_buster != run.cache_buster
+            || producer.focused_flow_milliseconds != run.focused_flow_milliseconds
+            || producer.served_wasm_bytes != run.served_wasm_bytes
+        {
+            bail!("retained measurement payload does not match manifest");
+        }
+        let realization: serde_json::Value = serde_json::from_slice(
+            &fs::read(evidence.join("nix-realization.json"))
+                .context("reading retained Nix realization")?,
+        )
+        .context("parsing retained Nix realization")?;
+        if realization
+            .pointer("/cache_buster")
+            .and_then(serde_json::Value::as_str)
+            != Some(&run.cache_buster)
+            || realization
+                .pointer("/nix_realization")
+                .and_then(serde_json::Value::as_str)
+                != Some(&run.nix_realization)
+        {
+            bail!("retained Nix realization does not match manifest");
+        }
+        expected.insert(
+            relative
+                .join("measurement.json")
+                .strip_prefix("runs")?
+                .to_owned(),
+        );
+        expected.insert(
+            relative
+                .join("nix-realization.json")
+                .strip_prefix("runs")?
+                .to_owned(),
+        );
+    }
+    if regular_files(&runs_root)? != expected {
+        bail!("retained measurement evidence has missing, tampered, or unreferenced files");
+    }
+    Ok(())
+}
+
+fn measurement_summaries(runs: &[MeasurementRun]) -> Result<Vec<MeasurementSummary>> {
+    let mut summaries = Vec::new();
+    for browser in BROWSERS {
+        for mode in MODES {
+            let selected: Vec<_> = runs
+                .iter()
+                .filter(|run| run.browser == browser && run.mode == mode)
+                .collect();
+            if selected.len() != 5 {
+                bail!(
+                    "{browser}/{mode}: expected five runs, got {}",
+                    selected.len()
+                );
+            }
+            let timings: Vec<_> = selected
+                .iter()
+                .map(|run| run.focused_flow_milliseconds)
+                .collect();
+            let bytes: Vec<_> = selected.iter().map(|run| run.served_wasm_bytes).collect();
+            summaries.push(MeasurementSummary {
+                browser: browser.to_owned(),
+                mode: mode.to_owned(),
+                median_milliseconds: median(timings.clone())?,
+                range_milliseconds: range(timings)?,
+                median_wasm_bytes: median(bytes.clone())?,
+                range_wasm_bytes: range(bytes)?,
+            });
+        }
+    }
+    Ok(summaries)
+}
+
+fn median(mut values: Vec<u64>) -> Result<u64> {
+    values.sort_unstable();
+    values
+        .get(values.len() / 2)
+        .copied()
+        .context("median of empty population")
+}
+fn range(mut values: Vec<u64>) -> Result<[u64; 2]> {
+    values.sort_unstable();
+    Ok([
+        *values.first().context("range of empty population")?,
+        *values.last().context("range of empty population")?,
+    ])
+}
+
+fn write_measurement_manifest(manifest: &MeasurementManifest) -> Result<()> {
+    let path = Path::new(MEASUREMENT_ROOT).join("manifest-v1.json");
+    fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(manifest)?),
+    )?;
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -812,5 +1173,114 @@ mod tests {
         assert!(prove_count_union("10|2| a\n", "10|3| a\n", "10|5| a\n").is_ok());
         assert!(prove_count_union("10|2| a\n", "10|3| a\n", "10|4| a\n").is_err());
         assert!(prove_count_union("10|2| a\n", "11|3| b\n", "10|2| a\n11|3| b\n").is_err());
+    }
+    fn measurement_manifest() -> MeasurementManifest {
+        let mut runs = Vec::new();
+        for browser in BROWSERS {
+            for pair in 0..5 {
+                for mode in MODES {
+                    runs.push(MeasurementRun {
+                        version: MEASUREMENT_VERSION.into(),
+                        browser: browser.into(),
+                        mode: mode.into(),
+                        cache_buster: format!("{browser}-{mode}-{pair}"),
+                        nix_realization: format!("/nix/store/{browser}-{mode}-{pair}"),
+                        artifact_root: format!("runs/{browser}/{pair}-{mode}"),
+                        focused_flow_milliseconds: 10 + pair as u64,
+                        served_wasm_bytes: 100 + pair as u64,
+                    });
+                }
+            }
+        }
+        MeasurementManifest {
+            version: MEASUREMENT_VERSION.into(),
+            quiescent_window: "coordinated".into(),
+            summaries: measurement_summaries(&runs).unwrap(),
+            runs,
+        }
+    }
+
+    #[test]
+    fn measurement_requires_exact_fresh_alternating_population_and_reconciliation() {
+        let manifest = measurement_manifest();
+        assert!(validate_measurement(&manifest).is_ok());
+        let mut duplicate = manifest.clone();
+        duplicate.runs[1].cache_buster = duplicate.runs[0].cache_buster.clone();
+        assert!(validate_measurement(&duplicate).is_err());
+        let mut stale = manifest.clone();
+        stale.runs[0].nix_realization.clear();
+        assert!(validate_measurement(&stale).is_err());
+        let mut missing = manifest.clone();
+        missing.runs.pop();
+        let mut duplicate_realization = manifest.clone();
+        duplicate_realization.runs[1].nix_realization =
+            duplicate_realization.runs[0].nix_realization.clone();
+        assert!(validate_measurement(&duplicate_realization).is_err());
+        assert!(validate_measurement(&missing).is_err());
+        let mut reordered = manifest.clone();
+        reordered.runs.swap(0, 1);
+        assert!(validate_measurement(&reordered).is_err());
+        let mut unreconciled = manifest;
+        unreconciled.summaries[0].median_milliseconds = 99;
+        assert!(validate_measurement(&unreconciled).is_err());
+    }
+
+    #[test]
+    fn measurement_statistics_are_deterministic() {
+        assert_eq!(median(vec![5, 1, 3, 2, 4]).unwrap(), 3);
+        assert_eq!(range(vec![5, 1, 3, 2, 4]).unwrap(), [1, 5]);
+    }
+
+    fn retain_measurement(manifest: &MeasurementManifest, root: &Path) {
+        for run in &manifest.runs {
+            let evidence = root.join(&run.artifact_root);
+            fs::create_dir_all(&evidence).unwrap();
+            fs::write(
+                evidence.join("measurement.json"),
+                serde_json::to_vec(run).unwrap(),
+            )
+            .unwrap();
+            fs::write(
+                evidence.join("nix-realization.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "cache_buster": run.cache_buster,
+                    "nix_realization": run.nix_realization,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn retained_measurement_rejects_missing_tampered_and_unreferenced_evidence() {
+        let manifest = measurement_manifest();
+        let root = tempdir().unwrap();
+        retain_measurement(&manifest, root.path());
+        assert!(validate_retained_measurement(&manifest, root.path()).is_ok());
+        fs::remove_file(
+            root.path()
+                .join(&manifest.runs[0].artifact_root)
+                .join("measurement.json"),
+        )
+        .unwrap();
+        assert!(validate_retained_measurement(&manifest, root.path()).is_err());
+        retain_measurement(&manifest, root.path());
+        fs::write(
+            root.path()
+                .join(&manifest.runs[0].artifact_root)
+                .join("measurement.json"),
+            "{}",
+        )
+        .unwrap();
+        assert!(validate_retained_measurement(&manifest, root.path()).is_err());
+        retain_measurement(&manifest, root.path());
+        fs::write(root.path().join("runs/extra"), "unexpected").unwrap();
+        assert!(validate_retained_measurement(&manifest, root.path()).is_err());
+    }
+
+    #[test]
+    fn measurement_refuses_missing_quiescent_acknowledgement() {
+        assert!(measure_with(&ProcessRunner, " \t").is_err());
     }
 }

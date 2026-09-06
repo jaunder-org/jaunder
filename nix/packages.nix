@@ -745,6 +745,51 @@ let
       PY
     '';
 
+  # The timing baseline intentionally shares the diagnostic pinned nightly, source
+  # closure, wasm-bindgen/wasm-opt bundling, service, and focused browser flow. It
+  # differs only by omitting -Cinstrument-coverage, minicov, and the diagnostic
+  # exports; those are unavoidable because they are what this experiment measures.
+  diagnosticBaselineCsrWasmBundle = pkgs.runCommand "jaunder-diagnostic-baseline-csr-wasm-bundle"
+    {
+      nativeBuildInputs = [ pkgs.stdenv.cc diagnosticToolchain devtoolBin pkgs.binaryen pkgs.python3 wasm-bindgen-cli ];
+    }
+    ''
+      export PATH=${diagnosticToolchain}/bin:$PATH
+      work="$TMPDIR/wasm-coverage-baseline"
+      mkdir -p "$work"
+      cp -r ${siteSrc}/. "$work/source"
+      chmod -R u+w "$work/source"
+      cd "$work/source"
+      export CARGO_HOME=${appOfflineCargoHome}
+      export CARGO_TARGET_DIR="$work/target"
+      cargo build -p csr --target wasm32-unknown-unknown --release
+      devtool csr-bundle --wasm "$work/target/wasm32-unknown-unknown/release/csr.wasm" --out "$out/pkg"
+      python3 - "$out/status.json" "$out/pkg/jaunder.wasm" <<'PY'
+      import hashlib, json, pathlib, sys
+      status, wasm = map(pathlib.Path, sys.argv[1:])
+      status.write_text(json.dumps({
+          "version": 1, "outcome": "succeeded",
+          "served_module": {"path": "pkg/jaunder.wasm", "sha256": hashlib.sha256(wasm.read_bytes()).hexdigest()},
+          "unavoidable_deviations": [
+              "omits -Cinstrument-coverage and minicov profiler runtime",
+              "omits diagnostic-coverage feature and diagnostic browser exports",
+          ],
+      }, indent=2) + "\n")
+      PY
+    '';
+
+  diagnosticBaselineJaunderBin = craneLib.buildPackage (
+    commonArgs
+    // {
+      inherit cargoArtifacts;
+      pname = "jaunder-diagnostic-wasm-coverage-baseline";
+      cargoExtraArgs = "-p jaunder";
+      JAUNDER_CSR_BUNDLE_DIR = "${diagnosticBaselineCsrWasmBundle}/pkg";
+      JAUNDER_PUBLIC_DIR = "${../public}";
+      doCheck = false;
+    }
+  );
+
   # The diagnostic browser probe must serve the same instrumented bundle that
   # it later records.  Keep this derivative separate from the release binary:
   # only the probe VM selects it through an explicit service override.
@@ -847,6 +892,7 @@ in
       leanDevAndTestProfile
       jaunderBin
       diagnosticJaunderBin
+      diagnosticBaselineJaunderBin
       testSupportBin
       devtoolBin
       cargo-crap
@@ -855,6 +901,8 @@ in
       leptosfmt
       csrWasmBundle
       e2ePackage
+      emacsSrc
+      emacsForCi
       ;
   };
 }

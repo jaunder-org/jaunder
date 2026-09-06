@@ -24,6 +24,7 @@ let
     csrWasmBundle
     e2ePackage
     diagnosticJaunderBin
+    diagnosticBaselineJaunderBin
     emacsSrc
     emacsForCi
     ;
@@ -709,8 +710,60 @@ mkWasmCoverageProducer =
       machine.copy_from_machine("/tmp/wasm-coverage-${browser}.tar.gz", "")
     '';
   };
+# These manual timing producers are intentionally separate from the permanent
+# coverage evidence producers above. `cacheBuster` is interpolated into the
+# derivation name and retained result, so `--impure` invocation entropy changes
+# the Nix realization rather than merely a runtime environment variable.
+mkWasmCoverageMeasurementProducer =
+  {
+    browser,
+    mode,
+    cacheBuster,
+  }:
+  assert cacheBuster != "";
+  pkgs.testers.nixosTest {
+    name = "jaunder-wasm-coverage-measure-${browser}-${mode}-${cacheBuster}";
+    nodes.machine = { lib, ... }: {
+      imports = [ self.nixosModules.jaunder ];
+      environment.systemPackages = [ pkgs.sqlite testSupportBin pkgs.python3 ];
+      services.jaunder.enable = true;
+      services.jaunder.db = "sqlite:/var/lib/jaunder/data/jaunder.db";
+      services.jaunder.bind = "127.0.0.1:3000";
+      systemd.services.jaunder.wantedBy = lib.mkForce [ ];
+      systemd.services.jaunder.preStart = lib.mkForce ''
+        ${if mode == "baseline" then diagnosticBaselineJaunderBin else diagnosticJaunderBin}/bin/jaunder init --db "$JAUNDER_DB" --skip-if-exists
+      '';
+      systemd.services.jaunder.serviceConfig.ExecStart = lib.mkForce "${if mode == "baseline" then diagnosticBaselineJaunderBin else diagnosticJaunderBin}/bin/jaunder serve";
+    };
+    testScript = ''
+      machine.start()
+      machine.succeed("systemctl start jaunder.service")
+      machine.wait_for_unit("jaunder.service", timeout=60)
+      machine.wait_for_open_port(3000, timeout=30)
+      machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e && mkdir -p /var/lib/jaunder/wasm-coverage")
+      status, output = machine.execute(
+        "cd /tmp/e2e"
+        + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
+        + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+        + " JAUNDER_DB=sqlite:/var/lib/jaunder/data/jaunder.db"
+        + " FONTCONFIG_FILE=${visualFontConfig}"
+        + " JAUNDER_WASM_COVERAGE_OUT=/var/lib/jaunder/wasm-coverage"
+        + " JAUNDER_WASM_COVERAGE_CACHE_BUSTER=${cacheBuster}"
+        + " JAUNDER_WASM_COVERAGE_MODE=${mode}"
+        + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
+        + " tests/wasm-coverage-measure.spec.ts --config playwright.config.ts --project ${browser}",
+        timeout=300,
+      )
+      assert status == 0, output
+      machine.succeed("test -s /var/lib/jaunder/wasm-coverage/measurement.json")
+      machine.succeed("tar czf /tmp/wasm-coverage-measure-${browser}-${mode}.tar.gz -C /var/lib/jaunder/wasm-coverage measurement.json")
+      machine.copy_from_machine("/tmp/wasm-coverage-measure-${browser}-${mode}.tar.gz", "")
+    '';
+  };
+  measurementCacheBuster = builtins.getEnv "JAUNDER_WASM_COVERAGE_CACHE_BUSTER";
 in
 {
+
   packages = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
     {
 # The e2e aggregate: a symlinkJoin of every browser/backend `e2e-*`
@@ -734,6 +787,28 @@ wasm-coverage-chromium-export-failure = mkWasmCoverageProducer {
 wasm-coverage-firefox-mapping-failure = mkWasmCoverageProducer {
   browser = "firefox";
   failure = "mapping";
+};
+}
+// pkgs.lib.optionalAttrs (measurementCacheBuster != "") {
+wasm-coverage-measure-chromium-baseline = mkWasmCoverageMeasurementProducer {
+  browser = "chromium";
+  mode = "baseline";
+  cacheBuster = measurementCacheBuster;
+};
+wasm-coverage-measure-chromium-instrumented = mkWasmCoverageMeasurementProducer {
+  browser = "chromium";
+  mode = "instrumented";
+  cacheBuster = measurementCacheBuster;
+};
+wasm-coverage-measure-firefox-baseline = mkWasmCoverageMeasurementProducer {
+  browser = "firefox";
+  mode = "baseline";
+  cacheBuster = measurementCacheBuster;
+};
+wasm-coverage-measure-firefox-instrumented = mkWasmCoverageMeasurementProducer {
+  browser = "firefox";
+  mode = "instrumented";
+  cacheBuster = measurementCacheBuster;
 };
     }
     // e2eSingleWorkerPackages

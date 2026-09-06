@@ -216,8 +216,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 Ok(aggregate) => {
                     let ok = aggregate.verdict == wasm_coverage::Verdict::Passed;
                     let detail = if ok {
-                        "both browser reports map executed original Rust lines; merged evidence retained"
-                            .to_owned()
+                        "both browser reports map executed original Rust lines; merged evidence retained".to_owned()
                     } else {
                         aggregate.blockers.join("; ")
                     };
@@ -238,6 +237,20 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                         .with_duration(step_start.elapsed()),
                 ),
             }
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::WasmCoverage(WasmCoverageCommand::Measure { quiescent_window }) => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("wasm-coverage-measure");
+            let step_start = Instant::now();
+            result.push(match wasm_coverage::measure(&quiescent_window) {
+                Ok(manifest) => StepResult::ok("wasm-coverage-measure").detail(format!(
+                    "retained {} reconciled runs at .xtask/wasm-coverage/measurement/manifest-v1.json",
+                    manifest.runs.len()
+                )),
+                Err(error) => StepResult::fail("wasm-coverage-measure").detail(format!("{error:#}")),
+            }.with_duration(step_start.elapsed()));
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
