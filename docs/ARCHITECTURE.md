@@ -194,7 +194,7 @@ scope, content-lock, instance-identity, and ownership-resolver dependencies,
 then injects that same manager independently into Axum extensions and Leptos
 context. AtomPub and web upload/delete entry points supply only transport policy
 and input. The proposed site-wide
-[Media Upload Capability](adr/drafts/media-upload-capability-is-site-wide.md) is
+[Media Upload Capability](adr/0176-media-upload-capability-is-site-wide.md) is
 checked once by this shared manager before an upload starts, so both transports
 reject disabled creation identically while retrieval, deletion, and
 already-admitted transfers remain unaffected. For deletion, the manager loads
@@ -304,7 +304,7 @@ distinct from malformed backup content and relational constraint failure.
 Typed-domain invariant violations instead retain #725's restore-and-report
 behavior: data and media restore, then the command reports current-domain
 violations. This policy is recorded in the
-[backup format and schema compatibility decision](adr/drafts/backup-format-and-schema-compatibility.md).
+[backup format and schema compatibility decision](adr/0174-backup-format-and-schema-compatibility.md).
 
 Restore is authoritative and order-independent: both backends clear every target
 table in a first pass, then load all rows in a second, with FK enforcement
@@ -812,7 +812,7 @@ Document, so clients feature-detect once and degrade gracefully.
 closed `CollectionAccept` type, separately from concrete uploaded-media
 `common::media::ContentType` values. The Posts Collection advertises exactly
 `application/atom+xml;type=entry`; when the proposed site-wide
-[Media Upload Capability](adr/drafts/media-upload-capability-is-site-wide.md) is
+[Media Upload Capability](adr/0176-media-upload-capability-is-site-wide.md) is
 enabled, the Media Collection advertises exactly `*/*`, and when disabled the
 Service Document omits that collection. The wildcard therefore exists only at
 the AtomPub discovery boundary and can never enter media request parsing or
@@ -953,7 +953,7 @@ user issuance), and `Open` / `open` (registration without consuming a supplied
 invitation; issuance disabled). Absent or invalid configuration remains
 `Closed`. The former `InviteOnly` / `invite_only` value is removed rather than
 retained as an ambiguous compatibility spelling
-([registration policy separates invitation authority](adr/drafts/registration-policy-separates-invitation-authority.md)).
+([registration policy separates invitation authority](adr/0177-registration-policy-separates-invitation-authority.md)).
 
 Invitation creation and listing enforce the policy at their web server
 boundaries; the local `jaunder user-invite` command acts with operator authority
@@ -1306,7 +1306,7 @@ shell, drives server staging and public-projector shell generation, and tells
 host audits which file carries the WASM role. Producers and consumers reject
 cycles, incomplete inventories, unsafe paths, and digest mismatches rather than
 guessing roles from filenames
-([content-addressed CSR bundle manifest](adr/drafts/content-addressed-csr-bundle-manifest.md)).
+([content-addressed CSR bundle manifest](adr/0175-content-addressed-csr-bundle-manifest.md)).
 Names cannot live in `web`, because compiling the final WASM name into the WASM
 would make the content hash self-referential.
 
@@ -1930,7 +1930,7 @@ override.
   `JAUNDER_CSR_BUNDLE_DIR` (Nix) or `target/site` (host build). The rendered SPA
   and public-projector shells consume the same manifest, so no source literal or
   filename heuristic duplicates asset identity
-  ([content-addressed CSR bundle manifest](adr/drafts/content-addressed-csr-bundle-manifest.md)).
+  ([content-addressed CSR bundle manifest](adr/0175-content-addressed-csr-bundle-manifest.md)).
 
 Only the two base stylesheets are embedded separately. ADR-0003 also anticipated
 **user-uploadable** stylesheets served from the storage layer; that was never
@@ -1984,8 +1984,8 @@ recognised keys holding unparseable values as `INVALID`, so legacy rows stay
 visible.
 
 `media.uploads_enabled` is the proposed site-wide
-[Media Upload Capability](adr/drafts/media-upload-capability-is-site-wide.md).
-Its absent default is enabled; malformed physical data reads as disabled, and
+[Media Upload Capability](adr/0176-media-upload-capability-is-site-wide.md). Its
+absent default is enabled; malformed physical data reads as disabled, and
 storage failures propagate. Operators change the same closed-registry value
 through either `site-config` or an independently saved Media Uploads card on
 `/admin/site`; neither byte limits nor quotas carry capability semantics.
@@ -2942,7 +2942,7 @@ hermetic surface is split at the documentation boundary: `static-docs` runs
 workspace-specific offline Cargo homes. `validate --no-e2e` builds
 `nix-static-docs`, then `nix-static-code`, before the Nix test checks, so CI
 fails if either hermetic boundary drifts from the host definitions
-([hermetic documentation/code static boundaries](adr/drafts/split-hermetic-static-check-boundaries.md);
+([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md);
 [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
 The two CSR-facing source filters follow resolved target reachability rather
@@ -3257,7 +3257,7 @@ host-side subcommands are therefore chartered, not drift.
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
   [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md),
-  [hermetic documentation/code static boundaries](adr/drafts/split-hermetic-static-check-boundaries.md)).
+  [hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md)).
 
 **xtask is host-only — an enforced invariant.** Nix derivations never invoke
 xtask; the flow is strictly one-directional (host `cargo xtask` → `nix build`).

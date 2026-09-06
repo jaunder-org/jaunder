@@ -38,7 +38,7 @@ request flow is added.
   a clean cutover. There are no deployed instances whose stored policy needs
   migration or compatibility parsing.
 - The durable policy model is recorded in
-  `docs/adr/drafts/registration-policy-separates-invitation-authority.md`.
+  `docs/adr/0177-registration-policy-separates-invitation-authority.md`.
 
 ## Acceptance
 

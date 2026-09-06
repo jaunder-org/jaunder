@@ -1,6 +1,6 @@
-# ADR-DRAFT: Backup format and schema compatibility
+# ADR-0174: Backup format and schema compatibility
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-04
 - Issue: [#1161](https://github.com/jaunder-org/jaunder/issues/1161)
 
@@ -19,13 +19,13 @@ neither can be a portable compatibility authority: package chronology does not
 describe backup readability, and SQLite and PostgreSQL intentionally represent
 and therefore checksum their schemas differently. Restore must retain the
 uniform transactional failure contract of
-[ADR-0054](../0054-backup-test-homing-and-uniform-restore-failure.md), the
-strict empty-target and schema-derived backup policy of
-[ADR-0064](../0064-backup-target-auto-derivation.md), and the clear-then-load
-shape of [ADR-0115](../0115-clear-then-load-restore.md). Typed-domain invariant
+[ADR-0054](0054-backup-test-homing-and-uniform-restore-failure.md), the strict
+empty-target and schema-derived backup policy of
+[ADR-0064](0064-backup-target-auto-derivation.md), and the clear-then-load shape
+of [ADR-0115](0115-clear-then-load-restore.md). Typed-domain invariant
 violations also retain the diagnostic restore-and-report behavior established by
 the
-[archived #725 specification](../../archive/2026-08-24-issue-725-backup-restore-typed-column-validation-spec.md).
+[archived #725 specification](../archive/2026-08-24-issue-725-backup-restore-typed-column-validation-spec.md).
 
 ## Decision
 

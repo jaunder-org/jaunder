@@ -44,7 +44,7 @@ streaming instantiation, and the single-binary deployment remain intact.
   addressing and successful browser compatibility retain the feature even when
   timing deltas fall below noise.
 - The bundle-manifest ownership seam is recorded in
-  `docs/adr/drafts/content-addressed-csr-bundle-manifest.md` and projected into
+  `docs/adr/0175-content-addressed-csr-bundle-manifest.md` and projected into
   `docs/ARCHITECTURE.md`. It does not change Jaunder's domain vocabulary.
 
 ## Acceptance
