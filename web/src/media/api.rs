@@ -26,10 +26,7 @@ use {
     // Server-only: the delete guard's key. The CSR build never runs a query.
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{
-        DeleteMediaError, MediaError, MediaManager, MediaStorage, SiteConfigStorage,
-        TryDeleteOutcome,
-    },
+    storage::{MediaError, MediaManager, MediaStorage, SiteConfigStorage, TryDeleteOutcome},
 };
 
 use common::ids::PostId;
@@ -77,7 +74,9 @@ pub async fn get_uploads_enabled() -> WebResult<bool> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MediaDeletion {
     Deleted,
-    RefusedReferenced { post_ids: Vec<PostId> },
+    Missing,
+    OwnerRetainedHistory { post_ids: Vec<PostId> },
+    GlobalSafety,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,11 +168,13 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MutationOutcome<Me
         .await
         .map_err(map_delete_error)?;
 
-    let post_ids = result.referenced_post_ids(auth.user_id);
-
     Ok(result.into_outcome().map(|outcome| match outcome {
         TryDeleteOutcome::Deleted => MediaDeletion::Deleted,
-        TryDeleteOutcome::RefusedReferenced => MediaDeletion::RefusedReferenced { post_ids },
+        TryDeleteOutcome::Missing => MediaDeletion::Missing,
+        TryDeleteOutcome::OwnerRetainedHistory(post_ids) => {
+            MediaDeletion::OwnerRetainedHistory { post_ids }
+        }
+        TryDeleteOutcome::GlobalSafety => MediaDeletion::GlobalSafety,
     }))
 }
 
@@ -209,17 +210,10 @@ fn map_media_error(err: anyhow::Error) -> InternalError {
     InternalError::masked(kind, class, public_message, err)
 }
 
-/// Maps media deletion failures from the manager while preserving the existing
-/// `NotFound` classification from the storage path and the bounded media I/O
-/// classifications from file reclamation.
+/// Maps media deletion failures from the manager while retaining typed unexpected
+/// causes at the web operator boundary. Missing is a normal deletion outcome.
 #[cfg(feature = "server")]
 fn map_delete_error(err: anyhow::Error) -> InternalError {
-    if matches!(
-        err.downcast_ref::<DeleteMediaError>(),
-        Some(DeleteMediaError::NotFound)
-    ) {
-        return InternalError::not_found("media");
-    }
     if err.downcast_ref::<MediaError>().is_some() {
         return map_media_error(err);
     }
@@ -299,12 +293,11 @@ pub async fn upload(data: MultipartData) -> WebResult<MutationOutcome<UploadedMe
 
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::{
-        DeleteMediaError, MediaError, map_delete_error, map_media_error, map_multipart_error,
-    };
+    use super::{MediaError, map_delete_error, map_media_error, map_multipart_error};
     use crate::error::{ErrorKind, InternalError};
     use std::error::Error;
     use std::fmt;
+    use storage::DeleteMediaError;
 
     fn typed_source<T: Error + 'static>(error: &InternalError) -> Option<&T> {
         let mut current: &(dyn Error + 'static) = error;
@@ -364,11 +357,6 @@ mod tests {
 
     #[test]
     fn map_delete_error_classifies_manager_errors() {
-        assert_eq!(
-            map_delete_error(anyhow::anyhow!(DeleteMediaError::NotFound)).kind(),
-            ErrorKind::NotFound
-        );
-
         let media = map_delete_error(anyhow::anyhow!(MediaError::Internal(Box::new(
             std::io::Error::other("unlink sentinel"),
         ))));

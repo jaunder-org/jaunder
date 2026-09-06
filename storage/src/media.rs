@@ -1,18 +1,20 @@
 //! Media file metadata storage.
 
 use async_trait::async_trait;
-use common::ids::UserId;
+use common::ids::{PostId, UserId};
 use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaRef, MediaSource};
 use common::pagination::{PageOffset, RowLimit};
 use common::tagged_url::MediaSourceUrl;
 use common::time::UtcInstant;
-use sqlx::{Database, Decode, Encode, Executor, FromRow, Pool, Result, Row, Type};
+use sqlx::{
+    ColumnIndex, Database, Decode, Encode, Executor, FromRow, Pool, QueryBuilder, Result, Row, Type,
+};
 
 use crate::InstanceId;
 use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::posts::media::MediaReferenceEvidence;
-use crate::sql::QueryStorageExt;
+use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
 use thiserror::Error;
 
 /// A media metadata record returned by [`MediaStorage`] queries.
@@ -92,39 +94,51 @@ pub enum CreateMediaError {
     Internal(#[from] sqlx::Error),
 }
 
-/// Errors that can occur when deleting a media record.
+/// Errors that can occur while deciding a media deletion.
 #[derive(Debug, Error)]
 pub enum DeleteMediaError {
-    /// The specified media record does not exist.
-    #[error("media not found")]
-    NotFound,
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
 }
 
-/// What [`MediaStorage::try_delete_media`] did.
-///
-/// A bare `bool` cannot carry the third case — the record was never there — which
-/// [`DeleteMediaError::NotFound`] keeps distinct (spec D8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The locked, public classification of a media deletion attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TryDeleteOutcome {
     /// The record was removed.
     Deleted,
-    /// The record was left in place because deleting it would violate either the
-    /// caller's unforced own-reference guard or the global rowless-reference guard.
-    RefusedReferenced,
+    /// The requested record was absent.
+    Missing,
+    /// Retained history belonging only to the authenticated owner prevents deletion.
+    OwnerRetainedHistory(Vec<PostId>),
+    /// Evidence outside reportable owner history prevents safe deletion.
+    GlobalSafety,
 }
 
-/// Whether media deletion must honor the owner's live-reference guard.
+/// A storage-issued lease proving the caller still holds the transaction and media
+/// lock that made filesystem reclamation safe.
 ///
-/// This persists directly as the existing SQL boolean representation while
-/// keeping guarded and forced deletion distinct at every storage boundary.
+/// Only storage can mint the lease. The caller's write-scope callback keeps the
+/// transaction alive until this token is explicitly finalized after unlink.
+pub struct ReclaimGuard {
+    _private: (),
+}
+
+impl ReclaimGuard {
+    pub(crate) const fn new() -> Self {
+        Self { _private: () }
+    }
+
+    /// Releases the lease after the caller's filesystem action has completed.
+    pub fn finalize(self) {}
+}
+
+/// Whether media deletion may knowingly break reportable owner retained history.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
 pub struct MediaDeleteMode(bool);
 
 impl MediaDeleteMode {
-    /// Refuse deletion when the requesting owner's live post references media.
+    /// Refuse deletion when the requesting owner's retained history names media.
     pub const GUARDED: Self = Self(false);
     /// Permit deletion despite the requesting owner's retained history.
     pub const FORCED: Self = Self(true);
@@ -170,8 +184,6 @@ pub trait MediaStorage: Send + Sync {
     ) -> Result<Option<MediaRecord>>;
 
     /// Lists media records for a user, with optional filtering and pagination.
-    // Explicit `'a` for `mockall::automock` — see
-    // `PostStorage::list_published_by_user`.
     async fn list_media<'a>(
         &self,
         user_id: UserId,
@@ -180,17 +192,10 @@ pub trait MediaStorage: Send + Sync {
         offset: PageOffset,
     ) -> Result<Vec<MediaRecord>>;
 
-    /// Deletes a media record according to `mode`, refusing guarded deletion when
-    /// `user_id`'s live posts reference it, or when deleting it would leave a
-    /// live Post anywhere naming a file with no remaining media row.
+    /// Atomically deletes a record or returns its locked safety classification.
     ///
-    /// The guards and the delete are **one statement**, so the storage decision has
-    /// no check-then-delete window (spec D8, #721).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DeleteMediaError::NotFound`] if no such record exists — the case a
-    /// refusal is distinguished from by a follow-up existence check on the cold path.
+    /// The conditional delete and all cold-path classification queries run under
+    /// the same write transaction and media lock.
     async fn try_delete_media(
         &self,
         transaction: &mut WriteTransaction,
@@ -201,10 +206,17 @@ pub trait MediaStorage: Send + Sync {
         mode: MediaDeleteMode,
     ) -> Result<TryDeleteOutcome, DeleteMediaError>;
 
-    /// Whether the physical file named by `media` can be unlinked after a row
-    /// delete: no remaining media row and no live Post anywhere still names it.
-    /// Checks reclaimability under `transaction`'s media-reference lock. The
-    /// caller keeps that transaction open through its physical unlink.
+    async fn reclaim_guard(
+        &self,
+        transaction: &mut WriteTransaction,
+        media: &MediaRef,
+        current_instance_id: &InstanceId,
+        evidence: &MediaReferenceEvidence,
+    ) -> Result<Option<ReclaimGuard>>;
+
+    /// Checks whether an already-deleted entry is reclaimable under the caller's
+    /// media lock. Kept for focused storage probes; production uses
+    /// [`MediaStorage::reclaim_guard`] to hold the lease through unlink.
     async fn media_entry_is_reclaimable(
         &self,
         transaction: &mut WriteTransaction,
@@ -231,13 +243,10 @@ pub trait MediaStorage: Send + Sync {
 
 /// Backend-specific divergence for [`MediaStore`].
 ///
-/// [`get_user_upload_usage`][MediaDialect::get_user_upload_usage] diverges
-/// because Postgres requires an explicit `::bigint` cast on the
-/// `COALESCE(SUM(…), 0)` expression while `SQLite` does not support that syntax.
-/// It is the only divergence: the delete is shared on [`MediaStore`] because
-/// `RETURNING` + `fetch_optional` asks "did a row match" generically, with no
-/// need to monomorphise over `.rows_affected()` on the per-backend
-/// `DB::QueryResult` types ([`MediaStorage::try_delete_media`], #711).
+/// Aggregate casts and transaction-scoped media locking diverge by backend.
+/// The guarded delete, its locked classification, and reclamation decision use
+/// portable `RETURNING`/`EXISTS` SQL in this generic owner, keeping the policy
+/// identical across the two dialects (ADR-0019).
 #[async_trait]
 pub trait MediaDialect: Backend {
     /// Returns the total upload bytes for `user_id` using backend-appropriate SQL.
@@ -249,9 +258,7 @@ pub trait MediaDialect: Backend {
     /// Returns the total upload bytes across all users using backend-appropriate SQL.
     async fn total_upload_bytes(pool: &Pool<Self>) -> Result<ByteSize>;
 
-    /// `true` means the row was deleted; `false` preserves the caller's
-    /// NotFound-versus-refusal classification. `mode` remains typed through the
-    /// dialect so its SQL representation cannot be substituted with another bool.
+    /// Performs the portable conditional deletion under the dialect's media lock.
     async fn try_delete_media(
         conn: &mut Self::Connection,
         user_id: UserId,
@@ -259,16 +266,171 @@ pub trait MediaDialect: Backend {
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
         mode: MediaDeleteMode,
-    ) -> Result<bool>;
+    ) -> Result<bool>
+    where
+        for<'q> i64: Encode<'q, Self> + Type<Self>,
+        String: Type<Self>,
+        for<'q> String: Encode<'q, Self>,
+        for<'q> MediaDeleteMode: Encode<'q, Self> + Type<Self>,
+        for<'q> &'q str: Encode<'q, Self> + Type<Self>,
+        for<'q> &'q InstanceId: Encode<'q, Self> + Type<Self>,
+        for<'q> i32: Decode<'q, Self> + Type<Self>,
+        usize: ColumnIndex<Self::Row>,
+        for<'c> &'c mut Self::Connection: Executor<'c, Database = Self>,
+        Self::Arguments: sqlx::IntoArguments<Self>,
+    {
+        Self::lock_media_reference(conn, media).await?;
+        let mut query = QueryBuilder::<Self>::new(String::new());
+        crate::posts::media::push_media_reference_evidence_cte(&mut query, evidence);
+        query.push("DELETE FROM media WHERE user_id = ");
+        query
+            .push_storage_bind(user_id)
+            .push(" AND source = ")
+            .push_storage_bind(media.source)
+            .push(" AND sha256 = ")
+            .push_storage_bind(media.sha256.clone())
+            .push(" AND filename = ")
+            .push_storage_bind(media.filename.clone())
+            .push(" AND (")
+            .push_storage_bind(mode);
+        query.push(" OR NOT EXISTS (SELECT 1");
+        crate::posts::media::push_owner_media_reference_from_where(&mut query, user_id, media);
+        crate::posts::media::push_live_media_reference_predicate(&mut query, current_instance_id);
+        query.push(")) AND (NOT EXISTS (SELECT 1");
+        crate::posts::media::push_other_owner_media_reference_from_where(
+            &mut query, user_id, media,
+        );
+        crate::posts::media::push_live_media_reference_predicate(&mut query, current_instance_id);
+        query.push(") OR EXISTS (SELECT 1 FROM media m2 WHERE m2.source = ");
+        query
+            .push_storage_bind(media.source)
+            .push(" AND m2.sha256 = ")
+            .push_storage_bind(media.sha256.clone())
+            .push(" AND m2.filename = ")
+            .push_storage_bind(media.filename.clone())
+            .push(" AND m2.user_id <> ")
+            .push_storage_bind(user_id)
+            .push(")) RETURNING 1");
+        Ok(query
+            .build_query_scalar::<i32>()
+            .fetch_optional(&mut *conn)
+            .await?
+            .is_some())
+    }
 
-    /// Executes the locked global reclaimability decision for a concrete dialect
-    /// in the caller-owned write transaction.
+    /// Lists the authenticated owner's retained Post IDs after foreign evidence
+    /// exemptions, in ascending order.
+    async fn owner_retained_post_ids(
+        conn: &mut Self::Connection,
+        user_id: UserId,
+        media: &MediaRef,
+        current_instance_id: &InstanceId,
+        evidence: &MediaReferenceEvidence,
+    ) -> Result<Vec<PostId>>
+    where
+        for<'q> i64: Decode<'q, Self> + Encode<'q, Self> + Type<Self>,
+        String: Type<Self>,
+        for<'q> String: Encode<'q, Self>,
+        for<'q> &'q str: Encode<'q, Self> + Type<Self>,
+        for<'q> &'q InstanceId: Encode<'q, Self> + Type<Self>,
+        for<'q> PostId: Decode<'q, Self> + Type<Self>,
+        usize: ColumnIndex<Self::Row>,
+        for<'c> &'c mut Self::Connection: Executor<'c, Database = Self>,
+        Self::Arguments: sqlx::IntoArguments<Self>,
+    {
+        let mut query = QueryBuilder::<Self>::new(String::new());
+        crate::posts::media::push_media_reference_evidence_cte(&mut query, evidence);
+        query.push("SELECT DISTINCT pm.post_id");
+        crate::posts::media::push_owner_media_reference_from_where(&mut query, user_id, media);
+        crate::posts::media::push_live_media_reference_predicate(&mut query, current_instance_id);
+        query.push(" ORDER BY pm.post_id ASC");
+        query
+            .build_query_scalar::<PostId>()
+            .fetch_all(&mut *conn)
+            .await
+    }
+
+    /// Whether unreportable global evidence still makes deletion unsafe.
+    async fn has_global_media_safety(
+        conn: &mut Self::Connection,
+        user_id: UserId,
+        media: &MediaRef,
+        current_instance_id: &InstanceId,
+        evidence: &MediaReferenceEvidence,
+    ) -> Result<bool>
+    where
+        for<'q> i64: Encode<'q, Self> + Type<Self>,
+        String: Type<Self>,
+        for<'q> String: Encode<'q, Self>,
+        for<'q> &'q str: Encode<'q, Self> + Type<Self>,
+        for<'q> &'q InstanceId: Encode<'q, Self> + Type<Self>,
+        for<'q> i32: Decode<'q, Self> + Type<Self>,
+        usize: ColumnIndex<Self::Row>,
+        for<'c> &'c mut Self::Connection: Executor<'c, Database = Self>,
+        Self::Arguments: sqlx::IntoArguments<Self>,
+    {
+        let mut query = QueryBuilder::<Self>::new(String::new());
+        crate::posts::media::push_media_reference_evidence_cte(&mut query, evidence);
+        query.push("SELECT 1 WHERE EXISTS (SELECT 1");
+        crate::posts::media::push_other_owner_media_reference_from_where(
+            &mut query, user_id, media,
+        );
+        crate::posts::media::push_live_media_reference_predicate(&mut query, current_instance_id);
+        query.push(") AND NOT EXISTS (SELECT 1 FROM media m2 WHERE m2.source = ");
+        query
+            .push_storage_bind(media.source)
+            .push(" AND m2.sha256 = ")
+            .push_storage_bind(media.sha256.clone())
+            .push(" AND m2.filename = ")
+            .push_storage_bind(media.filename.clone())
+            .push(" AND m2.user_id <> ")
+            .push_storage_bind(user_id)
+            .push(")");
+        Ok(query
+            .build_query_scalar::<i32>()
+            .fetch_optional(&mut *conn)
+            .await?
+            .is_some())
+    }
+
+    /// Executes the portable locked global reclaimability decision.
     async fn media_entry_is_reclaimable(
         conn: &mut Self::Connection,
         media: &MediaRef,
         current_instance_id: &InstanceId,
         evidence: &MediaReferenceEvidence,
-    ) -> Result<bool>;
+    ) -> Result<bool>
+    where
+        for<'q> i64: Encode<'q, Self> + Type<Self>,
+        String: Type<Self>,
+        for<'q> String: Encode<'q, Self>,
+        for<'q> &'q str: Encode<'q, Self> + Type<Self>,
+        for<'q> &'q InstanceId: Encode<'q, Self> + Type<Self>,
+        for<'q> i32: Decode<'q, Self> + Type<Self>,
+        usize: ColumnIndex<Self::Row>,
+        for<'c> &'c mut Self::Connection: Executor<'c, Database = Self>,
+        Self::Arguments: sqlx::IntoArguments<Self>,
+    {
+        Self::lock_media_reference(conn, media).await?;
+        let mut query = QueryBuilder::<Self>::new(String::new());
+        crate::posts::media::push_media_reference_evidence_cte(&mut query, evidence);
+        query.push("SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM media WHERE source = ");
+        query
+            .push_storage_bind(media.source)
+            .push(" AND sha256 = ")
+            .push_storage_bind(media.sha256.clone())
+            .push(" AND filename = ")
+            .push_storage_bind(media.filename.clone());
+        query.push(") AND NOT EXISTS (SELECT 1");
+        crate::posts::media::push_any_media_reference_from_where(&mut query, media);
+        crate::posts::media::push_live_media_reference_predicate(&mut query, current_instance_id);
+        query.push(")");
+        Ok(query
+            .build_query_scalar::<i32>()
+            .fetch_optional(&mut *conn)
+            .await?
+            .is_some())
+    }
 }
 
 /// Generic [`MediaStorage`] backed by any [`MediaDialect`] database.
@@ -310,6 +472,7 @@ where
     // `MediaDeleteMode` binds directly into the guarded-delete expression.
     for<'q> MediaDeleteMode: Encode<'q, DB> + Type<DB>,
     for<'q> i64: sqlx::Decode<'q, DB>,
+    for<'q> i32: Decode<'q, DB> + Type<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
@@ -362,6 +525,14 @@ where
             }
             Err(e) => Err(CreateMediaError::Internal(e)),
         }
+    }
+
+    async fn lock_media_reference(
+        &self,
+        transaction: &mut WriteTransaction,
+        media: &MediaRef,
+    ) -> Result<()> {
+        DB::lock_media_reference(DB::write_connection(transaction)?, media).await
     }
 
     #[tracing::instrument(
@@ -449,18 +620,6 @@ where
     }
 
     #[tracing::instrument(
-        name = "storage.media.lock_reference",
-        skip(self, transaction, media),
-        fields(db.system = DB::DB_SYSTEM)
-    )]
-    async fn lock_media_reference(
-        &self,
-        transaction: &mut WriteTransaction,
-        media: &MediaRef,
-    ) -> Result<()> {
-        DB::lock_media_reference(DB::write_connection(transaction)?, media).await
-    }
-    #[tracing::instrument(
         name = "storage.media.try_delete",
         skip(self, transaction, media),
         fields(db.system = DB::DB_SYSTEM)
@@ -475,7 +634,7 @@ where
         mode: MediaDeleteMode,
     ) -> Result<TryDeleteOutcome, DeleteMediaError> {
         let connection = DB::write_connection(transaction)?;
-        let removed = DB::try_delete_media(
+        if DB::try_delete_media(
             connection,
             user_id,
             media,
@@ -483,8 +642,8 @@ where
             evidence,
             mode,
         )
-        .await?;
-        if removed {
+        .await?
+        {
             return Ok(TryDeleteOutcome::Deleted);
         }
 
@@ -498,19 +657,55 @@ where
         .bind_storage(&media.filename)
         .fetch_optional(DB::write_connection(transaction)?)
         .await?;
+        if present.is_none() {
+            return Ok(TryDeleteOutcome::Missing);
+        }
 
-        if present.is_some() {
-            Ok(TryDeleteOutcome::RefusedReferenced)
+        let owner_post_ids = DB::owner_retained_post_ids(
+            DB::write_connection(transaction)?,
+            user_id,
+            media,
+            current_instance_id,
+            evidence,
+        )
+        .await?;
+        if DB::has_global_media_safety(
+            DB::write_connection(transaction)?,
+            user_id,
+            media,
+            current_instance_id,
+            evidence,
+        )
+        .await?
+            || owner_post_ids.is_empty()
+        {
+            Ok(TryDeleteOutcome::GlobalSafety)
         } else {
-            Err(DeleteMediaError::NotFound)
+            Ok(TryDeleteOutcome::OwnerRetainedHistory(owner_post_ids))
         }
     }
 
-    #[tracing::instrument(
-        name = "storage.media.entry_reclaimable",
-        skip(self, transaction, media),
-        fields(db.system = DB::DB_SYSTEM)
-    )]
+    async fn reclaim_guard(
+        &self,
+        transaction: &mut WriteTransaction,
+        media: &MediaRef,
+        current_instance_id: &InstanceId,
+        evidence: &MediaReferenceEvidence,
+    ) -> Result<Option<ReclaimGuard>> {
+        if DB::media_entry_is_reclaimable(
+            DB::write_connection(transaction)?,
+            media,
+            current_instance_id,
+            evidence,
+        )
+        .await?
+        {
+            Ok(Some(ReclaimGuard::new()))
+        } else {
+            Ok(None)
+        }
+    }
+
     async fn media_entry_is_reclaimable(
         &self,
         transaction: &mut WriteTransaction,
@@ -744,9 +939,9 @@ mod tests {
             let body = parse_post_body(&format!("new reference\n\n<img src=\"{form}\">"));
             async move {
                 started_tx.send(()).expect("parent waits for writer start");
-                create_post_via_service(&state, owner, body).await;
+                let post_id = create_post_via_service(&state, owner, body).await;
                 finished_tx
-                    .send(())
+                    .send(post_id)
                     .expect("parent waits for writer completion");
             }
         });
@@ -761,7 +956,7 @@ mod tests {
         held.rollback()
             .await
             .expect("rollback releases the shared media lock");
-        finished_rx.await.expect("writer completed after rollback");
+        let new_post_id = finished_rx.await.expect("writer completed after rollback");
         writer.await.expect("writer task does not panic");
 
         let held = env
@@ -812,8 +1007,8 @@ mod tests {
                 .await
                 .expect("delete completed after lock release")
                 .expect("guarded delete query succeeds"),
-            TryDeleteOutcome::RefusedReferenced,
-            "the new unevidenced reference must prevent the owner-row delete"
+            TryDeleteOutcome::OwnerRetainedHistory(vec![new_post_id]),
+            "the new unevidenced owner reference must prevent the owner-row delete"
         );
         delete.await.expect("delete task does not panic");
         assert!(media_row_exists(&env.state, owner, &media).await);
@@ -1237,7 +1432,7 @@ mod tests {
         let [user] = seed_users::<1>(&env.state).await;
         let media = seed_media(&env.state, user, "photo.jpg").await;
         let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
-        create_post_via_service(&env.state, user, parse_post_body(&embed)).await;
+        let post_id = create_post_via_service(&env.state, user, parse_post_body(&embed)).await;
 
         assert_eq!(
             confirmed(
@@ -1252,7 +1447,7 @@ mod tests {
                 .await
                 .expect("the guarded delete succeeds as a scoped write"),
             ),
-            TryDeleteOutcome::RefusedReferenced
+            TryDeleteOutcome::OwnerRetainedHistory(vec![post_id])
         );
         assert!(
             media_row_exists(&env.state, user, &media).await,
@@ -1302,8 +1497,8 @@ mod tests {
                 .await
                 .expect("near-match guarded delete succeeds"),
             ),
-            TryDeleteOutcome::RefusedReferenced,
-            "different kind/form evidence must not exempt the local row"
+            TryDeleteOutcome::OwnerRetainedHistory(vec![post_id]),
+            "different kind/form evidence must not exempt the owner's local row"
         );
 
         let exact =
@@ -1472,8 +1667,8 @@ mod tests {
                 .await
                 .expect("guarded delete succeeds"),
             ),
-            TryDeleteOutcome::RefusedReferenced,
-            "current evidence cannot exempt a retained revision subject"
+            TryDeleteOutcome::OwnerRetainedHistory(vec![post_id]),
+            "current evidence cannot exempt the owner's retained revision subject"
         );
 
         let mut revision_evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
@@ -1494,8 +1689,8 @@ mod tests {
                 .await
                 .expect("guarded delete succeeds"),
             ),
-            TryDeleteOutcome::RefusedReferenced,
-            "the unexamined deleted-current subject remains protected"
+            TryDeleteOutcome::OwnerRetainedHistory(vec![post_id]),
+            "revision evidence cannot exempt the owner's deleted-current subject"
         );
 
         let mut complete_evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
@@ -1614,13 +1809,9 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn try_delete_media_reports_not_found_distinctly_from_refusal(#[case] backend: Backend) {
-        // A17c — the conditional statement returns no row in both cases, so this pins
-        // that the follow-up existence check still separates them, preserving today's
-        // `DeleteMediaError::NotFound`.
+    async fn try_delete_media_reports_missing_distinctly_from_refusal(#[case] backend: Backend) {
         let env = backend.setup().await;
         let [user] = seed_users::<1>(&env.state).await;
-
         let result = try_delete_media_scoped(
             &env.state,
             user,
@@ -1629,17 +1820,10 @@ mod tests {
             &MediaReferenceEvidence::new(env.base.instance_id().clone()),
             MediaDeleteMode::GUARDED,
         )
-        .await;
+        .await
+        .expect("missing classification succeeds");
 
-        assert!(
-            matches!(
-                result,
-                Err(crate::WriteScopeError::Operation(
-                    DeleteMediaError::NotFound
-                ))
-            ),
-            "expected NotFound, got {result:?}"
-        );
+        assert_eq!(confirmed(result), TryDeleteOutcome::Missing);
     }
 
     #[apply(backends)]
@@ -1699,10 +1883,12 @@ mod tests {
                 .await
                 .expect("no SQLite busy under concurrent scoped writes"),
             );
-            assert_eq!(
-                outcome,
-                TryDeleteOutcome::RefusedReferenced,
-                "a live reference exists throughout, so no unforced delete may succeed"
+            assert!(
+                matches!(
+                    &outcome,
+                    TryDeleteOutcome::OwnerRetainedHistory(post_ids) if !post_ids.is_empty()
+                ),
+                "a retained owner reference exists throughout, so no guarded delete may succeed"
             );
         }
         writer.await.expect("the concurrent writer does not panic");
@@ -1738,7 +1924,9 @@ mod tests {
                             .await?,
                         TryDeleteOutcome::Deleted
                     );
-                    Err::<TryDeleteOutcome, DeleteMediaError>(DeleteMediaError::NotFound)
+                    Err::<TryDeleteOutcome, DeleteMediaError>(DeleteMediaError::Internal(
+                        sqlx::Error::RowNotFound,
+                    ))
                 })
             })
             .await;
@@ -1746,7 +1934,7 @@ mod tests {
         assert!(matches!(
             result,
             Err(crate::WriteScopeError::Operation(
-                DeleteMediaError::NotFound
+                DeleteMediaError::Internal(_)
             ))
         ));
         assert!(

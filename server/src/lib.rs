@@ -42,7 +42,7 @@ use crate::{
 };
 use ::storage::{
     AppState, InstanceId, MediaContentLocks, MediaManager, MediaReferenceOwnershipResolver,
-    SessionStorage, WriteScope,
+    PostMediaOwnership, SessionStorage, WriteScope,
 };
 
 async fn retire_session_cookie(
@@ -178,6 +178,11 @@ where
     let instance_header = instance_id.to_string().parse::<HeaderValue>()?;
     let storage_path = Arc::new(storage_path);
     let media_content_locks = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path)));
+    let post_media_ownership = PostMediaOwnership::new(
+        Arc::clone(&media_ownership_resolver),
+        instance_id.clone(),
+        Arc::clone(&state.site_config),
+    );
     let publisher_service = Arc::new(PublisherService::new(
         (*storage_path).clone(),
         Arc::clone(&state.publisher),
@@ -207,8 +212,10 @@ where
         let publisher_service = Arc::clone(&publisher_service);
         let media_content_locks = Arc::clone(&media_content_locks);
         let media_manager = Arc::clone(&media_manager);
+        let post_media_ownership = post_media_ownership.clone();
 
         move || {
+            prelude::provide_context(post_media_ownership.clone());
             context::provide_app_state_contexts(&state, &publisher_service);
             context::provide_media_content_locks_context(&media_content_locks);
             context::provide_mailer_context(&mailer);
@@ -238,6 +245,7 @@ where
         // HTML sits ahead of this fallback.
         let app = crate::projector::register(app, crate::projector::Shell(site::shell_html()));
         app.fallback(site::serve_site)
+            .layer(axum::Extension(post_media_ownership))
     };
     // Raw Axum handlers receive only the storage traits they declare
     // (ADR-0016); server functions receive their separate Leptos contexts.

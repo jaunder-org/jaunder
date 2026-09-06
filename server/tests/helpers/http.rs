@@ -9,12 +9,13 @@ use axum::{
     http::{Request, StatusCode, header},
 };
 use common::mailer::MailSender;
-use common::media::MediaReferenceForm;
+use common::media::{MediaReference, MediaReferenceForm};
 use common::tagged_url::BaseUrl;
 use storage::test_support::{Backend, TestEnv, confirmed_for, noop_mailer};
 use storage::{
-    ForeignEvidenceSink, InstanceId, MediaReferenceEvidence, MediaReferenceOwnershipResolver,
-    PasswordResetStorage, PersistedMediaReference, SiteConfigStorage, UserStorage, WriteScope,
+    ForeignEvidenceSink, InstanceId, LocalMediaSink, MediaReferenceEvidence,
+    MediaReferenceOwnershipResolver, PasswordResetStorage, PersistedMediaReference,
+    ProvenLocalMediaRefs, SiteConfigStorage, UserStorage, WriteScope,
 };
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -131,6 +132,16 @@ impl MediaReferenceOwnershipResolver for ForeignReferenceResolver {
             }
         }
         foreign.finish()
+    }
+
+    async fn resolve_local(
+        &self,
+        _references: &[MediaReference],
+        _instance_id: &InstanceId,
+        _base_url: Option<&BaseUrl>,
+        local: LocalMediaSink,
+    ) -> ProvenLocalMediaRefs {
+        local.finish()
     }
 }
 

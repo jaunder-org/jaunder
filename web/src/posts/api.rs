@@ -564,11 +564,14 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<SavedPost>> {
     let write_scope = expect_context::<WriteScope>();
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
     let content_locks = expect_context::<Arc<MediaContentLocks>>();
-    let outcome = storage::perform_post_creation(
+    let media_ownership = expect_context::<storage::PostMediaOwnership>();
+    let outcome = storage::perform_post_creation_with_media_ownership(
         &write_scope,
         content_locks.as_ref(),
         Arc::clone(&posts),
         Arc::clone(&feed_events),
+        &media_ownership,
+        request_clock,
         PostCreation {
             user_id: auth.user_id,
             body,
@@ -773,11 +776,13 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
     let write_scope = expect_context::<WriteScope>();
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
     let content_locks = expect_context::<Arc<MediaContentLocks>>();
-    let outcome = storage::perform_post_update(
+    let media_ownership = expect_context::<storage::PostMediaOwnership>();
+    let outcome = storage::perform_post_update_with_media_ownership(
         &write_scope,
         content_locks.as_ref(),
         Arc::clone(&posts),
         Arc::clone(&feed_events),
+        &media_ownership,
         PostUpdate {
             post_id,
             editor_user_id: auth.user_id,
@@ -1307,7 +1312,9 @@ mod server_tests {
         MediaContentLocks, MockAudienceStorage, MockFeedEventStorage, MockPostStorage, PostFormat,
         PostMutation, PostRecord, PostRevisionMetadata, PostRevisionPage, PostStorage,
         UpdatePostError,
-        test_support::{fixture_media_content_locks, mock_write_scope},
+        test_support::{
+            fixture_media_content_locks, fixture_post_media_ownership, mock_write_scope,
+        },
     };
     fn owned_post(user_id: UserId) -> PostRecord {
         let now = UtcInstant::now();
@@ -1664,6 +1671,7 @@ mod server_tests {
         provide_context(Arc::new(MockAudienceStorage::new()) as Arc<dyn AudienceStorage>);
         provide_context(mock_write_scope());
         provide_context(Arc::new(fixture_media_content_locks()) as Arc<MediaContentLocks>);
+        provide_context(fixture_post_media_ownership());
         let mut events = MockFeedEventStorage::new();
         events
             .expect_enqueue_many()
@@ -1918,9 +1926,9 @@ mod server_tests {
         // the complete initial post state atomically.
         let mut posts = MockPostStorage::new();
         posts
-            .expect_create_post()
-            .withf(|_transaction, input, _now| input.tags.len() == 2)
-            .returning(|_transaction, _input, _now| {
+            .expect_create_post_with_proven_local_media()
+            .withf(|_transaction, input, _now, _local_media| input.tags.len() == 2)
+            .returning(|_transaction, _input, _now, _local_media| {
                 Ok(CreatedPost {
                     record: owned_post(UserId::from(1)),
                     idempotency_key_expired: false,
@@ -1941,11 +1949,13 @@ mod server_tests {
     async fn update_writes_every_tag_in_one_batched_call() {
         let mut posts = MockPostStorage::new();
         posts
-            .expect_update_post()
-            .withf(|_transaction, _id, _user, input| {
+            .expect_update_post_with_proven_local_media()
+            .withf(|_transaction, _id, _user, input, _local_media| {
                 input.tags.as_ref().is_some_and(|tags| tags.len() == 2)
             })
-            .returning(|_transaction, _id, _user, _input| Ok(unchanged_mutation(UserId::from(1))));
+            .returning(|_transaction, _id, _user, _input, _local_media| {
+                Ok(unchanged_mutation(UserId::from(1)))
+            });
         let owner = mutation_owner(posts);
         let result = update(
             PostId::from(1),
@@ -1961,9 +1971,11 @@ mod server_tests {
     async fn update_with_tags_unset_defers_preservation_to_storage() {
         let mut posts = MockPostStorage::new();
         posts
-            .expect_update_post()
-            .withf(|_transaction, _id, _user, input| input.tags.is_none())
-            .returning(|_transaction, _id, _user, _input| Ok(unchanged_mutation(UserId::from(1))));
+            .expect_update_post_with_proven_local_media()
+            .withf(|_transaction, _id, _user, input, _local_media| input.tags.is_none())
+            .returning(|_transaction, _id, _user, _input, _local_media| {
+                Ok(unchanged_mutation(UserId::from(1)))
+            });
 
         let owner = mutation_owner(posts);
         let result = update(PostId::from(1), post_inputs(None)).await;
@@ -1978,12 +1990,14 @@ mod server_tests {
 
         let mut posts = MockPostStorage::new();
         posts
-            .expect_update_post()
-            .withf(|_transaction, _id, _user, input| {
+            .expect_update_post_with_proven_local_media()
+            .withf(|_transaction, _id, _user, input, _local_media| {
                 input.summary.as_deref() == Some("structured summary")
                     && input.audiences == [AudienceTarget::Subscribers]
             })
-            .returning(|_transaction, _id, _user, _input| Ok(unchanged_mutation(UserId::from(1))));
+            .returning(|_transaction, _id, _user, _input, _local_media| {
+                Ok(unchanged_mutation(UserId::from(1)))
+            });
         let owner = mutation_owner(posts);
         let result = update(
             PostId::from(1),
@@ -2011,8 +2025,10 @@ mod server_tests {
     async fn update_projects_stale_org_sync_to_conflict() {
         let mut posts = MockPostStorage::new();
         posts
-            .expect_update_post()
-            .returning(|_transaction, _id, _user, _input| Err(UpdatePostError::StaleContent));
+            .expect_update_post_with_proven_local_media()
+            .returning(|_transaction, _id, _user, _input, _local_media| {
+                Err(UpdatePostError::StaleContent)
+            });
         let owner = mutation_owner(posts);
         let result = update(
             PostId::from(1),

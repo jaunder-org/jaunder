@@ -11,8 +11,9 @@ use thiserror::Error;
 
 use crate::{
     CreatePostError, CreatePostInput, FeedEventStorage, MediaContentLocks,
-    PostBookkeepingExpectation, PostFormat, PostMutation, PostRecord, PostStorage, PublishUpdate,
-    UpdatePostError, UpdatePostInput, WriteScope, WriteScopeError, WriteTransaction,
+    PostBookkeepingExpectation, PostFormat, PostMediaOwnership, PostMutation, PostRecord,
+    PostStorage, PublishUpdate, UpdatePostError, UpdatePostInput, WriteScope, WriteScopeError,
+    WriteTransaction,
 };
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, UserId};
@@ -129,6 +130,7 @@ async fn enqueue_lifecycle_feed_paths(
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 /// Renders `body` according to `format` and creates the post through one caller-owned
 /// write scope.
 ///
@@ -197,6 +199,74 @@ pub async fn create_rendered_post(
             Ok(MutationOutcome::CommitIndeterminate(created.record))
         }
     }
+}
+
+/// Creates a rendered post after resolving its rendered media references into
+/// the opaque ownership capability before storage locks are acquired.
+///
+/// # Errors
+///
+/// Returns [`CreatePostError`] when identity resolution, media locking, the
+/// storage mutation, or its earned feed-event write fails.
+pub async fn create_rendered_post_with_media_ownership(
+    write_scope: &WriteScope,
+    content_locks: &MediaContentLocks,
+    storage: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    ownership: &PostMediaOwnership,
+    content: RenderedPostContent,
+    now: UtcInstant,
+) -> Result<MutationOutcome<PostRecord>, CreatePostError> {
+    let input = render_post_input(content);
+    let local_media = ownership
+        .resolve(input.rendered.media())
+        .await
+        .map_err(CreatePostError::Internal)?;
+    let _media_locks = content_locks
+        .acquire(
+            input
+                .rendered
+                .media()
+                .iter()
+                .map(common::media::MediaReference::media),
+        )
+        .await
+        .map_err(|error| CreatePostError::Internal(sqlx::Error::Io(error)))?;
+    #[cfg(any(test, feature = "test-utils"))]
+    ownership.pause_after_media_lock_for_test().await;
+    let outcome = write_scope
+        .run(move |transaction| {
+            let storage = Arc::clone(&storage);
+            let feed_events = Arc::clone(&feed_events);
+            Box::pin(async move {
+                let created = storage
+                    .create_post_with_proven_local_media(transaction, &input, now, &local_media)
+                    .await?;
+                let feed_paths = affected_post_feed_paths(
+                    None,
+                    (
+                        &created.record,
+                        input
+                            .audiences
+                            .iter()
+                            .any(|audience| matches!(audience, AudienceTarget::Public)),
+                    ),
+                    now,
+                );
+                if !feed_paths.is_empty() {
+                    feed_events
+                        .enqueue_many(transaction, &feed_paths)
+                        .await
+                        .map_err(|error| match error {
+                            crate::FeedEventError::Db(error) => CreatePostError::Internal(error),
+                        })?;
+                }
+                Ok(created)
+            })
+        })
+        .await
+        .map_err(map_create_post_scope_error)?;
+    Ok(outcome.map(|created| created.record))
 }
 
 /// Renders `body` per `format` and assembles the [`CreatePostInput`] without
@@ -355,6 +425,7 @@ pub struct PostUpdate<'a> {
     pub expectations: PostBookkeepingExpectation,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 /// Validates inputs, computes the slug, renders the body, and atomically
 /// updates the post via storage.
 ///
@@ -432,6 +503,108 @@ pub async fn perform_post_update(
             Box::pin(async move {
                 let mutation = storage
                     .update_post(transaction, post_id, editor_user_id, &input)
+                    .await?;
+                if mutation.changed {
+                    let current_has_public_audience = input
+                        .audiences
+                        .iter()
+                        .any(|audience| matches!(audience, AudienceTarget::Public));
+                    let feed_paths = affected_post_feed_paths(
+                        Some((&mutation.previous, mutation.previous_has_public_audience)),
+                        (&mutation.record, current_has_public_audience),
+                        input.request_clock,
+                    );
+                    if !feed_paths.is_empty() {
+                        feed_events
+                            .enqueue_many(transaction, &feed_paths)
+                            .await
+                            .map_err(|error| match error {
+                                crate::FeedEventError::Db(error) => {
+                                    UpdatePostError::Internal(error)
+                                }
+                            })?;
+                    }
+                }
+                Ok::<PostRecord, UpdatePostError>(mutation.record)
+            })
+        })
+        .await
+        .map_err(map_post_update_scope_error)
+}
+
+/// Updates a post after resolving rendered references before its storage write.
+///
+/// # Errors
+///
+/// Returns [`PerformUpdateError`] when canonicalization, media resolution or
+/// locking, the storage mutation, or its earned feed-event write fails.
+pub async fn perform_post_update_with_media_ownership(
+    write_scope: &WriteScope,
+    content_locks: &MediaContentLocks,
+    storage: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    ownership: &PostMediaOwnership,
+    input: PostUpdate<'_>,
+) -> Result<MutationOutcome<PostRecord>, PerformUpdateError> {
+    let PostUpdate {
+        post_id,
+        editor_user_id,
+        body,
+        title,
+        format,
+        slug_override,
+        publish,
+        summary,
+        audiences,
+        tags,
+        request_clock,
+        expectations,
+    } = input;
+    let (title, derived_slug) = common::render::derive_post_naming(title, &body, &format);
+    let body = common::render::canonicalize_body(&body, &format)
+        .map_err(|_| PerformUpdateError::EmptyPost)?;
+    let slug = slug_override.cloned().unwrap_or(derived_slug);
+    let rendered = host::render::with_media(&body, &format);
+    let local_media = ownership
+        .resolve(rendered.media())
+        .await
+        .map_err(PerformUpdateError::Storage)?;
+    let input = UpdatePostInput {
+        title,
+        slug,
+        body,
+        format,
+        rendered,
+        publish,
+        summary,
+        audiences,
+        tags,
+        request_clock,
+        expectations,
+    };
+    let _media_locks = content_locks
+        .acquire(
+            input
+                .rendered
+                .media()
+                .iter()
+                .map(common::media::MediaReference::media),
+        )
+        .await
+        .map_err(|error| PerformUpdateError::Storage(sqlx::Error::Io(error)))?;
+    write_scope
+        .run(move |transaction| {
+            let storage = Arc::clone(&storage);
+            let feed_events = Arc::clone(&feed_events);
+            Box::pin(async move {
+                let mutation = storage
+                    .update_post_with_proven_local_media(
+                        transaction,
+                        post_id,
+                        editor_user_id,
+                        &input,
+                        &local_media,
+                    )
                     .await?;
                 if mutation.changed {
                     let current_has_public_audience = input
@@ -666,6 +839,7 @@ pub struct PostCreation<'a> {
     pub expectations: PostBookkeepingExpectation,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 /// Validates inputs, computes the slug, renders the body, and atomically
 /// creates the post in storage, retrying on slug collision.
 ///
@@ -691,6 +865,7 @@ pub async fn perform_post_creation(
     .await
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 /// Performs post creation against one explicit request clock.
 ///
 /// `AtomPub` supplies its request clock so an Idempotency Key mapping and its
@@ -791,6 +966,89 @@ pub async fn perform_post_creation_at(
     Err(PerformCreationError::Exhausted(max_attempts))
 }
 
+/// Creates a post with resolver-proven local media materialization.
+///
+/// # Errors
+///
+/// Returns [`PerformCreationError`] when canonicalization, media resolution or
+/// locking, slug selection, the storage mutation, or its earned feed-event
+/// write fails.
+pub async fn perform_post_creation_with_media_ownership(
+    write_scope: &WriteScope,
+    content_locks: &MediaContentLocks,
+    storage: Arc<dyn PostStorage>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    ownership: &PostMediaOwnership,
+    now: UtcInstant,
+    input: PostCreation<'_>,
+) -> Result<MutationOutcome<PostRecord>, PerformCreationError> {
+    let PostCreation {
+        user_id,
+        body,
+        title,
+        format,
+        slug_override,
+        published_at,
+        max_attempts,
+        summary,
+        audiences,
+        tags,
+        idempotency_key,
+        expectations,
+    } = input;
+    let (title, derived_slug) = common::render::derive_post_naming(title, &body, &format);
+    let body = common::render::canonicalize_body(&body, &format)
+        .map_err(|_| PerformCreationError::EmptyPost)?;
+    let slug_seed = slug_override.cloned().unwrap_or(derived_slug);
+    for attempt in 0..max_attempts {
+        let slug =
+            candidate_slug(&slug_seed, attempt).map_err(PerformCreationError::InvalidSlug)?;
+        let is_expected_slug = expectations
+            .slug
+            .as_ref()
+            .is_some_and(|expected| expected == &slug);
+        match create_rendered_post_with_media_ownership(
+            write_scope,
+            content_locks,
+            Arc::clone(&storage),
+            Arc::clone(&feed_events),
+            ownership,
+            RenderedPostContent {
+                user_id,
+                title: title.clone(),
+                slug,
+                body: body.clone(),
+                format,
+                published_at,
+                summary: summary.clone(),
+                audiences: audiences.clone(),
+                idempotency_key: idempotency_key.cloned(),
+                tags: tags.clone(),
+                expectations: expectations.clone(),
+            },
+            now,
+        )
+        .await
+        {
+            Ok(outcome) => return Ok(outcome),
+            Err(CreatePostError::SlugConflict) if is_expected_slug => {
+                return Err(PerformCreationError::BookkeepingMismatch);
+            }
+            Err(CreatePostError::SlugConflict) => {}
+            Err(CreatePostError::IdempotencyConflict(post_id)) => {
+                return Err(PerformCreationError::IdempotencyConflict(post_id));
+            }
+            Err(CreatePostError::BookkeepingMismatch) => {
+                return Err(PerformCreationError::BookkeepingMismatch);
+            }
+            Err(CreatePostError::Internal(error)) => {
+                return Err(PerformCreationError::Storage(error));
+            }
+        }
+    }
+    Err(PerformCreationError::Exhausted(max_attempts))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -798,25 +1056,74 @@ pub async fn perform_post_creation_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MediaRecord;
     use crate::sql::QueryStorageExt;
+    #[cfg(feature = "test-utils")]
+    use crate::test_support::SeedPost;
     #[cfg(feature = "test-utils")]
     use crate::test_support::mock_write_scope;
     use crate::test_support::{
-        Backend, SeedPost, SeedUser, backends, confirmed, fetch_post_media, media_ref_for,
-        media_url_for, seed_media,
+        Backend, SeedUser, backends, confirmed, fetch_post_media, media_ref_for, media_url_for,
+        seed_media, seed_users,
     };
     #[cfg(feature = "test-utils")]
     use crate::{MockFeedEventStorage, MockPostStorage};
     use chrono::{Duration, TimeZone, Utc};
     use common::idempotency_key::IdempotencyKey;
     use common::media::{MediaReferenceForm, MediaReferenceKind};
-    use common::test_support::{parse_post_body, parse_post_title, parse_row_limit, parse_slug};
+    use common::test_support::{
+        parse_byte_size, parse_content_type, parse_post_body, parse_post_title, parse_row_limit,
+        parse_slug,
+    };
     #[cfg(feature = "test-utils")]
     use common::test_support::{parse_tag, parse_tag_label};
     #[cfg(feature = "test-utils")]
     use sqlx::Error as SqlxError;
 
     use rstest::*;
+
+    struct LocalOnlyResolver;
+
+    #[async_trait::async_trait]
+    impl crate::MediaReferenceOwnershipResolver for LocalOnlyResolver {
+        async fn resolve(
+            &self,
+            _references: &[crate::PersistedMediaReference],
+            instance_id: &crate::InstanceId,
+            _base_url: Option<&common::tagged_url::BaseUrl>,
+            foreign: crate::ForeignEvidenceSink,
+        ) -> crate::MediaReferenceEvidence {
+            let _ = instance_id;
+            foreign.finish()
+        }
+
+        async fn resolve_local(
+            &self,
+            references: &[common::media::MediaReference],
+            _instance_id: &crate::InstanceId,
+            _base_url: Option<&common::tagged_url::BaseUrl>,
+            mut local: crate::LocalMediaSink,
+        ) -> crate::ProvenLocalMediaRefs {
+            for reference in references {
+                if matches!(reference.kind(), common::media::MediaReferenceKind::Local) {
+                    local.prove_local(reference.media().clone());
+                }
+            }
+            local.finish()
+        }
+    }
+
+    async fn create_media_record(state: &Arc<crate::AppState>, record: MediaRecord) {
+        let media = Arc::clone(&state.media);
+        let outcome = state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move { media.create_media(transaction, &record).await })
+            })
+            .await
+            .expect("media fixture write succeeds");
+        confirmed(outcome);
+    }
     use rstest_reuse::*;
     #[test]
     fn create_post_scope_error_maps_operation_and_begin() {
@@ -3191,5 +3498,435 @@ mod tests {
         let storage: InternalError = PerformCreationError::Storage(sqlx::Error::PoolClosed).into();
         assert_eq!(storage.kind(), ErrorKind::Storage);
         assert_eq!(storage.public_message(), "storage operation failed");
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn qualifying_local_reference_copies_the_canonical_source(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let mut users = seed_users::<4>(&env.state).await;
+        users.sort();
+        let [lowest_user, canonical_user, tied_user, author] = users;
+        let media = media_ref_for("materialized.jpg");
+        let earliest: UtcInstant = "2026-08-01T12:00:00Z".parse().expect("fixed instant");
+        let later: UtcInstant = "2026-08-02T12:00:00Z".parse().expect("fixed instant");
+        let canonical = MediaRecord {
+            user_id: canonical_user,
+            sha256: media.sha256.clone(),
+            filename: media.filename.clone(),
+            source: media.source,
+            content_type: parse_content_type("image/jpeg"),
+            size_bytes: parse_byte_size("3"),
+            source_url: None,
+            created_at: earliest,
+        };
+        let mut tied = canonical.clone();
+        tied.user_id = tied_user;
+        tied.size_bytes = parse_byte_size("4");
+        let mut later_lowest_user = canonical.clone();
+        later_lowest_user.user_id = lowest_user;
+        later_lowest_user.size_bytes = parse_byte_size("5");
+        later_lowest_user.created_at = later;
+        create_media_record(&env.state, canonical.clone()).await;
+        create_media_record(&env.state, tied).await;
+        create_media_record(&env.state, later_lowest_user).await;
+
+        let ownership = PostMediaOwnership::new(
+            Arc::new(LocalOnlyResolver),
+            env.base.instance_id().clone(),
+            Arc::clone(&env.state.site_config),
+        );
+        let outcome = perform_post_creation_with_media_ownership(
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&env.state.posts),
+            Arc::clone(&env.state.feed_events),
+            &ownership,
+            UtcInstant::now(),
+            PostCreation {
+                user_id: author,
+                body: parse_post_body(&format!(
+                    "<img src=\"{}\">",
+                    media_url_for("materialized.jpg")
+                )),
+                title: None,
+                format: PostFormat::Html,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 1,
+                summary: None,
+                audiences: vec![AudienceTarget::Private],
+                tags: Vec::new(),
+                idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .expect("post write succeeds");
+        let _ = confirmed(outcome);
+
+        let copied = env
+            .state
+            .media
+            .get_media(author, &media.sha256, &media.filename, &media.source)
+            .await
+            .expect("lookup succeeds")
+            .expect("qualifying reference creates author record");
+        assert_eq!(copied.source, canonical.source);
+        assert_eq!(copied.content_type, canonical.content_type);
+        assert_eq!(copied.size_bytes, canonical.size_bytes);
+        assert_eq!(copied.source_url, canonical.source_url);
+        assert_eq!(copied.created_at, canonical.created_at);
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn unproven_absolute_and_scheme_relative_references_do_not_materialize(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let [source_user, author] = seed_users::<2>(&env.state).await;
+        let media = seed_media(&env.state, source_user, "unproven.jpg").await;
+        let ownership = PostMediaOwnership::new(
+            Arc::new(LocalOnlyResolver),
+            env.base.instance_id().clone(),
+            Arc::clone(&env.state.site_config),
+        );
+        for reference in [
+            format!("https://foreign.test{}", media_url_for("unproven.jpg")),
+            format!("//foreign.test{}", media_url_for("unproven.jpg")),
+        ] {
+            perform_post_creation_with_media_ownership(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&env.state.posts),
+                Arc::clone(&env.state.feed_events),
+                &ownership,
+                UtcInstant::now(),
+                PostCreation {
+                    user_id: author,
+                    body: parse_post_body(&format!("<img src=\"{reference}\">")),
+                    title: None,
+                    format: PostFormat::Html,
+                    slug_override: None,
+                    published_at: None,
+                    max_attempts: 10,
+                    summary: None,
+                    audiences: vec![AudienceTarget::Private],
+                    tags: Vec::new(),
+                    idempotency_key: None,
+                    expectations: PostBookkeepingExpectation::default(),
+                },
+            )
+            .await
+            .expect("unproven reference does not reject post write");
+        }
+        assert!(
+            env.state
+                .media
+                .get_media(author, &media.sha256, &media.filename, &media.source)
+                .await
+                .expect("lookup succeeds")
+                .is_none()
+        );
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn missing_source_leaves_local_reference_post_write_successful(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let author = SeedUser::new().seed(&env.state).await.user_id;
+        let media = media_ref_for("absent-source.jpg");
+        let ownership = PostMediaOwnership::new(
+            Arc::new(LocalOnlyResolver),
+            env.base.instance_id().clone(),
+            Arc::clone(&env.state.site_config),
+        );
+        let outcome = perform_post_creation_with_media_ownership(
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&env.state.posts),
+            Arc::clone(&env.state.feed_events),
+            &ownership,
+            UtcInstant::now(),
+            PostCreation {
+                user_id: author,
+                body: parse_post_body(&format!(
+                    "<img src=\"{}\">",
+                    media_url_for("absent-source.jpg")
+                )),
+                title: None,
+                format: PostFormat::Html,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 1,
+                summary: None,
+                audiences: vec![AudienceTarget::Private],
+                tags: Vec::new(),
+                idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .expect("missing source does not fail Post write");
+        let _ = confirmed(outcome);
+        assert!(
+            env.state
+                .media
+                .get_media(author, &media.sha256, &media.filename, &media.source)
+                .await
+                .expect("lookup succeeds")
+                .is_none()
+        );
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn content_update_materializes_author_record(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [source_user, author] = seed_users::<2>(&env.state).await;
+        let media = seed_media(&env.state, source_user, "updated.jpg").await;
+        let post = confirmed(
+            perform_post_creation(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&env.state.posts),
+                Arc::clone(&env.state.feed_events),
+                PostCreation {
+                    user_id: author,
+                    body: parse_post_body("Draft without media."),
+                    title: None,
+                    format: PostFormat::Markdown,
+                    slug_override: None,
+                    published_at: None,
+                    max_attempts: 1,
+                    summary: None,
+                    audiences: vec![AudienceTarget::Private],
+                    tags: Vec::new(),
+                    idempotency_key: None,
+                    expectations: PostBookkeepingExpectation::default(),
+                },
+            )
+            .await
+            .expect("initial post write succeeds"),
+        );
+        let ownership = PostMediaOwnership::new(
+            Arc::new(LocalOnlyResolver),
+            env.base.instance_id().clone(),
+            Arc::clone(&env.state.site_config),
+        );
+        confirmed(
+            perform_post_update_with_media_ownership(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&env.state.posts),
+                Arc::clone(&env.state.feed_events),
+                &ownership,
+                PostUpdate {
+                    post_id: post.post_id,
+                    editor_user_id: author,
+                    body: parse_post_body(&format!(
+                        "<img src=\"{}\">",
+                        media_url_for("updated.jpg")
+                    )),
+                    title: None,
+                    format: PostFormat::Html,
+                    slug_override: None,
+                    publish: PublishUpdate::Unpublish,
+                    summary: None,
+                    audiences: vec![AudienceTarget::Private],
+                    tags: None,
+                    request_clock: UtcInstant::now(),
+                    expectations: PostBookkeepingExpectation::default(),
+                },
+            )
+            .await
+            .expect("content update succeeds"),
+        );
+        assert!(
+            env.state
+                .media
+                .get_media(author, &media.sha256, &media.filename, &media.source)
+                .await
+                .expect("lookup succeeds")
+                .is_some(),
+            "a qualifying content update materializes the author's record"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publication_only_update_does_not_materialize_author_record(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [source_user, author] = seed_users::<2>(&env.state).await;
+        let media = seed_media(&env.state, source_user, "publish-only.jpg").await;
+        let post = confirmed(
+            perform_post_creation(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&env.state.posts),
+                Arc::clone(&env.state.feed_events),
+                PostCreation {
+                    user_id: author,
+                    body: parse_post_body(&format!(
+                        "<img src=\"{}\">",
+                        media_url_for("publish-only.jpg")
+                    )),
+                    title: None,
+                    format: PostFormat::Html,
+                    slug_override: None,
+                    published_at: None,
+                    max_attempts: 1,
+                    summary: None,
+                    audiences: vec![AudienceTarget::Private],
+                    tags: Vec::new(),
+                    idempotency_key: None,
+                    expectations: PostBookkeepingExpectation::default(),
+                },
+            )
+            .await
+            .expect("initial post write succeeds"),
+        );
+        confirmed(
+            publish_post(
+                &env.state.write_scope,
+                Arc::clone(&env.state.posts),
+                Arc::clone(&env.state.feed_events),
+                post.post_id,
+                author,
+                UtcInstant::now(),
+            )
+            .await
+            .expect("publication succeeds"),
+        );
+        assert!(
+            env.state
+                .media
+                .get_media(author, &media.sha256, &media.filename, &media.source)
+                .await
+                .expect("lookup succeeds")
+                .is_none(),
+            "publication does not resolve or materialize media"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn materialized_author_record_survives_reference_and_post_removal(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let [source_user, author] = seed_users::<2>(&env.state).await;
+        let media = seed_media(&env.state, source_user, "retained.jpg").await;
+        let ownership = PostMediaOwnership::new(
+            Arc::new(LocalOnlyResolver),
+            env.base.instance_id().clone(),
+            Arc::clone(&env.state.site_config),
+        );
+        let post = confirmed(
+            perform_post_creation_with_media_ownership(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&env.state.posts),
+                Arc::clone(&env.state.feed_events),
+                &ownership,
+                UtcInstant::now(),
+                PostCreation {
+                    user_id: author,
+                    body: parse_post_body(&format!(
+                        "<img src=\"{}\">",
+                        media_url_for("retained.jpg")
+                    )),
+                    title: None,
+                    format: PostFormat::Html,
+                    slug_override: None,
+                    published_at: None,
+                    max_attempts: 1,
+                    summary: None,
+                    audiences: vec![AudienceTarget::Private],
+                    tags: Vec::new(),
+                    idempotency_key: None,
+                    expectations: PostBookkeepingExpectation::default(),
+                },
+            )
+            .await
+            .expect("initial content write succeeds"),
+        );
+        confirmed(
+            perform_post_update_with_media_ownership(
+                &env.state.write_scope,
+                &env.media_content_locks(),
+                Arc::clone(&env.state.posts),
+                Arc::clone(&env.state.feed_events),
+                &ownership,
+                PostUpdate {
+                    post_id: post.post_id,
+                    editor_user_id: author,
+                    body: parse_post_body("Reference removed."),
+                    title: None,
+                    format: PostFormat::Markdown,
+                    slug_override: None,
+                    publish: PublishUpdate::Unpublish,
+                    summary: None,
+                    audiences: vec![AudienceTarget::Private],
+                    tags: None,
+                    request_clock: UtcInstant::now(),
+                    expectations: PostBookkeepingExpectation::default(),
+                },
+            )
+            .await
+            .expect("reference-removing update succeeds"),
+        );
+        confirmed(
+            soft_delete_post(
+                &env.state.write_scope,
+                Arc::clone(&env.state.posts),
+                Arc::clone(&env.state.feed_events),
+                post.post_id,
+                author,
+                UtcInstant::now(),
+            )
+            .await
+            .expect("post deletion succeeds"),
+        );
+        let source_media = Arc::clone(&env.state.media);
+        let source_ref = media.clone();
+        let instance_id = env.base.instance_id().clone();
+        let deletion = confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        source_media
+                            .try_delete_media(
+                                transaction,
+                                source_user,
+                                &source_ref,
+                                &instance_id,
+                                &crate::MediaReferenceEvidence::new(instance_id.clone()),
+                                crate::MediaDeleteMode::GUARDED,
+                            )
+                            .await
+                            .map_err(anyhow::Error::from)
+                    })
+                })
+                .await
+                .expect("source record deletion succeeds"),
+        );
+        assert_eq!(deletion, crate::TryDeleteOutcome::Deleted);
+        assert!(
+            env.state
+                .media
+                .get_media(source_user, &media.sha256, &media.filename, &media.source)
+                .await
+                .expect("source lookup succeeds")
+                .is_none(),
+            "the source owner no longer has a record"
+        );
+        assert!(
+            env.state
+                .media
+                .get_media(author, &media.sha256, &media.filename, &media.source)
+                .await
+                .expect("author lookup succeeds")
+                .is_some(),
+            "a source deletion cannot pin or remove the author's independent record"
+        );
     }
 }

@@ -116,6 +116,67 @@ test("an app password can be revoked from the sessions page", async ({
   );
 });
 
+test("AtomPub media deletion refuses a retained Post reference and preserves the Member", async ({
+  page,
+  request,
+}) => {
+  const username = await signInAsNewUser(page);
+  const token = await mintAppPassword(page, "AtomPub media delete guard");
+  const auth =
+    "Basic " + Buffer.from(`${username}:${token}`).toString("base64");
+
+  const uploaded = await request.post(`${BASE_URL}/atompub/${username}/media`, {
+    headers: {
+      authorization: auth,
+      "content-type": "image/png",
+      slug: "guarded.png",
+    },
+    data: PNG,
+  });
+  expect(uploaded.status()).toBe(201);
+  const mediaLocation = uploaded.headers()["location"];
+  expect(mediaLocation).toBeTruthy();
+  const mediaMemberUrl = onServer(mediaLocation!);
+  const mediaContentUrl = (await uploaded.text()).match(
+    /<content(?:\s[^>]*)?\ssrc="([^"]+)"/,
+  )?.[1];
+  expect(mediaContentUrl).toBeTruthy();
+  const mediaPath = new URL(mediaContentUrl!).pathname;
+
+  const created = await request.post(`${BASE_URL}/atompub/${username}/posts`, {
+    headers: { authorization: auth, "content-type": "application/atom+xml" },
+    data: `<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>Media guard</title>
+  <content type="html">&lt;img src="${mediaPath}"&gt;</content>
+</entry>`,
+  });
+  expect(created.status()).toBe(201);
+  const postId = onServer(created.headers()["location"]).match(
+    /\/posts\/(\d+)$/,
+  )?.[1];
+  expect(postId).toBeTruthy();
+
+  const refused = await request.delete(mediaMemberUrl, {
+    headers: { authorization: auth },
+  });
+  expect(refused.status()).toBe(409);
+  expect(refused.headers()["content-type"]).toBe("application/problem+json");
+  await expect(refused.json()).resolves.toEqual({
+    type: "https://jaunder.org/problems/media-delete-conflict",
+    title: "Media deletion refused",
+    status: 409,
+    detail:
+      "Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.",
+    post_ids: [Number(postId)],
+  });
+
+  const preserved = await request.get(mediaMemberUrl, {
+    headers: { authorization: auth },
+  });
+  expect(preserved.status()).toBe(200);
+});
+
 test("full AtomPub Org publishing flow over HTTP with an app password", async ({
   page,
   request,

@@ -1,5 +1,8 @@
-use axum::http::StatusCode;
+use axum::Json;
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use common::ids::PostId;
+use serde::Serialize;
 use thiserror::Error;
 
 /// The error type for the raw `AtomPub` HTTP handlers.
@@ -42,6 +45,70 @@ pub enum HandlerError {
     Invariant,
 }
 
+/// The problem document returned when an `AtomPub` media deletion is unsafe.
+#[derive(Debug)]
+pub(super) enum MediaDeleteConflict {
+    /// The authenticated owner's live Posts reference the media.
+    OwnerReferences(Vec<PostId>),
+    /// Global reference evidence makes deletion unsafe without reportable owner IDs.
+    GlobalSafety,
+}
+
+impl MediaDeleteConflict {
+    /// Builds an owner-reference conflict whose Post IDs are safe to disclose.
+    pub(super) fn owner_references(post_ids: impl IntoIterator<Item = PostId>) -> Self {
+        let mut post_ids: Vec<_> = post_ids.into_iter().collect();
+        post_ids.sort_unstable_by_key(|post_id| i64::from(*post_id));
+        post_ids.dedup();
+        Self::OwnerReferences(post_ids)
+    }
+
+    /// Builds a global safety conflict without disclosing any Post IDs.
+    pub(super) const fn global_safety() -> Self {
+        Self::GlobalSafety
+    }
+}
+
+impl IntoResponse for MediaDeleteConflict {
+    fn into_response(self) -> Response {
+        let (detail, post_ids) = match self {
+            Self::OwnerReferences(post_ids) => (
+                "Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.",
+                post_ids,
+            ),
+            Self::GlobalSafety => (
+                "Media deletion is blocked because Jaunder cannot prove that removing this record would preserve referenced media.",
+                Vec::new(),
+            ),
+        };
+        let mut response = Json(MediaDeleteProblem {
+            problem_type: "https://jaunder.org/problems/media-delete-conflict",
+            title: "Media deletion refused",
+            status: StatusCode::CONFLICT.as_u16(),
+            detail,
+            post_ids,
+        })
+        .into_response();
+        *response.status_mut() = StatusCode::CONFLICT;
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/problem+json"),
+        );
+        response
+    }
+}
+
+/// The fixed schema for `AtomPub` media deletion refusal documents.
+#[derive(Serialize)]
+struct MediaDeleteProblem {
+    #[serde(rename = "type")]
+    problem_type: &'static str,
+    title: &'static str,
+    status: u16,
+    detail: &'static str,
+    post_ids: Vec<PostId>,
+}
+
 impl IntoResponse for HandlerError {
     fn into_response(self) -> Response {
         match self {
@@ -76,6 +143,12 @@ where
 {
     log_internal(&err);
     HandlerError::Internal(Box::new(err))
+}
+
+/// Reports and retains an opaque manager failure before returning a masked `500`.
+pub(super) fn internal_anyhow(err: anyhow::Error) -> HandlerError {
+    tracing::error!(error = %err, "AtomPub handler internal error");
+    HandlerError::Internal(err.into())
 }
 
 impl From<sqlx::Error> for HandlerError {
@@ -171,10 +244,7 @@ impl From<storage::PerformUpdateError> for HandlerError {
 
 impl From<storage::DeleteMediaError> for HandlerError {
     fn from(err: storage::DeleteMediaError) -> Self {
-        match err {
-            storage::DeleteMediaError::NotFound => HandlerError::NotFound,
-            error @ storage::DeleteMediaError::Internal(_) => internal(error),
-        }
+        internal(err)
     }
 }
 
@@ -199,14 +269,58 @@ impl From<anyhow::Error> for HandlerError {
 
 #[cfg(test)]
 mod tests {
-    use super::HandlerError;
-    use axum::http::StatusCode;
+    use super::{HandlerError, MediaDeleteConflict};
+    use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
+    use common::ids::PostId;
     use storage::{DeleteMediaError, PerformCreationError, PerformUpdateError, TaggingError};
 
     /// The status an error maps to through the single `IntoResponse` boundary.
     fn status(err: HandlerError) -> StatusCode {
         err.into_response().status()
+    }
+
+    #[tokio::test]
+    async fn owner_media_delete_conflict_is_a_problem_document_with_sorted_unique_post_ids() {
+        let response = MediaDeleteConflict::owner_references([
+            PostId::from(7),
+            PostId::from(2),
+            PostId::from(7),
+            PostId::from(12),
+            PostId::from(2),
+        ])
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "application/problem+json"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read problem response body");
+        assert_eq!(
+            body.as_ref(),
+            br#"{"type":"https://jaunder.org/problems/media-delete-conflict","title":"Media deletion refused","status":409,"detail":"Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.","post_ids":[2,7,12]}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn global_media_delete_conflict_is_a_problem_document_without_post_ids() {
+        let response = MediaDeleteConflict::global_safety().into_response();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "application/problem+json"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read problem response body");
+        assert_eq!(
+            body.as_ref(),
+            br#"{"type":"https://jaunder.org/problems/media-delete-conflict","title":"Media deletion refused","status":409,"detail":"Media deletion is blocked because Jaunder cannot prove that removing this record would preserve referenced media.","post_ids":[]}"#
+        );
     }
 
     #[test]
@@ -327,11 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_media_error_maps_not_found_and_internal() {
-        assert_eq!(
-            status(DeleteMediaError::NotFound.into()),
-            StatusCode::NOT_FOUND
-        );
+    fn delete_media_error_masks_internal_failures() {
         assert_eq!(
             status(DeleteMediaError::Internal(sqlx::Error::PoolClosed).into()),
             StatusCode::INTERNAL_SERVER_ERROR

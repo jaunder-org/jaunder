@@ -15,15 +15,18 @@ use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
 use storage::{
-    CreateMediaError, ForeignEvidenceSink, InstanceId, MediaRecord, MediaReferenceEvidence,
-    MediaReferenceOwnershipResolver, PersistedMediaReference, WriteScopeError,
+    CreateMediaError, ForeignEvidenceSink, InstanceId, LocalMediaSink, MediaRecord,
+    MediaReferenceEvidence, MediaReferenceOwnershipResolver, PersistedMediaReference,
+    ProvenLocalMediaRefs, WriteScopeError,
 };
 
 use crate::helpers::{
     ForeignReferenceResolver, MultipartFile, create_user_and_session, make_app, post_form,
     post_multipart, post_server_fn, post_server_fn_with_media_ownership_resolver,
 };
-use common::media::{MaxFileSize, MediaReferenceForm, MediaSource, UploadedMedia, UserQuota};
+use common::media::{
+    MaxFileSize, MediaReference, MediaReferenceForm, MediaSource, UploadedMedia, UserQuota,
+};
 use common::test_support::{
     parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_post_body,
 };
@@ -88,6 +91,16 @@ impl MediaReferenceOwnershipResolver for BlockingOwnershipResolver {
         self.started.notify_one();
         self.release.notified().await;
         foreign.finish()
+    }
+
+    async fn resolve_local(
+        &self,
+        _: &[MediaReference],
+        _: &InstanceId,
+        _: Option<&common::tagged_url::BaseUrl>,
+        local: LocalMediaSink,
+    ) -> ProvenLocalMediaRefs {
+        local.finish()
     }
 }
 // ─── media_usage ──────────────────────────────────────────────
@@ -394,7 +407,7 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
     assert_eq!(
         confirmed_media_deletion(&body_str),
-        MediaDeletion::RefusedReferenced {
+        MediaDeletion::OwnerRetainedHistory {
             post_ids: vec![post.post_id],
         },
         "delete without force should report the referencing post"
@@ -449,7 +462,7 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(
         confirmed_media_deletion(&body),
-        MediaDeletion::RefusedReferenced {
+        MediaDeletion::OwnerRetainedHistory {
             post_ids: vec![owned.post_id],
         }
     );
@@ -486,9 +499,7 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(
         confirmed_media_deletion(&body),
-        MediaDeletion::RefusedReferenced {
-            post_ids: vec![owned.post_id],
-        },
+        MediaDeletion::GlobalSafety,
         "unknown foreign ownership fails closed"
     );
     let calls = resolver.calls();
@@ -506,7 +517,7 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
 
 #[apply(backends)]
 #[tokio::test]
-async fn delete_refusal_reports_the_reference_snapshot_despite_a_concurrent_post(
+async fn delete_refusal_reports_locked_classification_including_concurrent_post(
     #[case] backend: Backend,
 ) {
     let TestEnv { state, base: _base } = backend.setup().await;
@@ -557,13 +568,13 @@ async fn delete_refusal_reports_the_reference_snapshot_despite_a_concurrent_post
         .await;
     resolver.release.notify_one();
     let (status, body) = deleting.await.expect("delete task does not panic");
+    let mut expected = vec![original.post_id, later.post_id];
+    expected.sort_unstable_by_key(|post_id| i64::from(*post_id));
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(
         confirmed_media_deletion(&body),
-        MediaDeletion::RefusedReferenced {
-            post_ids: vec![original.post_id],
-        },
-        "the refusal explains the pre-lock reference snapshot, not a later query"
+        MediaDeletion::OwnerRetainedHistory { post_ids: expected },
+        "classification under the delete lock includes the concurrent retained Post"
     );
     assert_ne!(original.post_id, later.post_id);
 }

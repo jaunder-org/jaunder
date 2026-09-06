@@ -7,13 +7,13 @@ import {
   signInAsNewUserRecord,
   click,
   waitForSelector,
-  failServerFn,
   type MutationOutcome,
   stallServerFn,
 } from "./helpers";
 import { createPostViaApi } from "./posts";
 import { navigateInApp } from "./navigate";
 import type { Page } from "@playwright/test";
+import { createHash } from "node:crypto";
 import { seedConfigViaTool } from "./seed";
 
 type UploadedMedia = { url: string; filename: string };
@@ -405,7 +405,9 @@ test.describe("Media delete guard", () => {
     // Naming the post is part of the contract: this cannot pass on an empty lookup.
     await expect(
       page.getByText(
-        new RegExp(`Cannot delete: referenced in post\\(s\\) ${post_id}\\.`),
+        new RegExp(
+          `Cannot delete: referenced in retained post\\(s\\) ${post_id}\\.`,
+        ),
       ),
     ).toBeVisible();
     expect(listRequests()).toBe(0);
@@ -421,14 +423,16 @@ test.describe("Media delete guard", () => {
     );
   });
 
-  test("forced media delete refuses rowless references and cannot double dispatch", async ({
+  test("rowless references trigger global safety without a force escape hatch", async ({
     page,
     tracedContext,
   }) => {
     await signInAsNewUser(page);
-    const { url } = await uploadMedia(page, "forced.jpg");
-    // Force may discard the owner's own reconstruction. A different user's Post
-    // supplies the global rowless reference that force must still preserve.
+    const content = "delete guard content";
+    const sha = createHash("sha256").update(content).digest("hex");
+    const url = `/media/upload/${sha.slice(0, 2)}/${sha.slice(2, 4)}/${sha}/guarded.jpg`;
+    // Create the foreign reference while there is no canonical source:
+    // post-write materialization must not invent a Media Record.
     const referenceContext = await tracedContext();
     try {
       const referencePage = await referenceContext.newPage();
@@ -437,47 +441,24 @@ test.describe("Media delete guard", () => {
     } finally {
       await referenceContext.close();
     }
-    await attemptDelete(page);
-    const forceButton = page.getByRole("button", { name: /^Force delete / });
-
-    const refusalError = await page.locator("p.error").innerText();
-    const failedCounts = countMediaRequests(page);
-    await failServerFn(page, "media/delete");
-    await forceButton.click();
-    await expect.poll(failedCounts.deleteRequests).toBe(1);
-    await expect(page.locator("p.error")).not.toHaveText(refusalError);
-    await expect(page.getByRole("link", { name: "forced.jpg" })).toBeVisible();
-    expect(failedCounts.listRequests()).toBe(0);
-    expect(failedCounts.usageRequests()).toBe(0);
-    await page.unroute("**/api/media/delete");
-
-    await page.getByRole("button", { name: "Delete", exact: true }).click();
-    await expect(
-      page.getByText(/Cannot delete: referenced in post/),
-    ).toBeVisible();
-    await expect(forceButton).toBeVisible();
-    const counts = countMediaRequests(page);
-    const release = await stallServerFn(page, "media/delete");
-    await forceButton.click();
-    await expect.poll(counts.deleteRequests).toBe(1);
-    await expect(forceButton).toBeDisabled();
-    await forceButton.click({ force: true });
-    expect(counts.deleteRequests()).toBe(1);
-    const settled = page.waitForResponse(
-      (response) =>
-        response.url().includes("/api/media/delete") &&
-        response.request().method() === "POST",
+    const uploaded = await uploadMedia(
+      page,
+      "guarded.jpg",
+      Buffer.from(content),
     );
-    release();
-    await settled;
+    expect(uploaded.url).toBe(url);
 
-    await expect(forceButton).toBeEnabled();
+    await attemptDelete(page);
+
     await expect(
-      page.getByText(/Cannot delete: referenced in post/),
+      page.getByText(
+        /Cannot delete: Jaunder cannot prove that this media is safe to remove/,
+      ),
     ).toBeVisible();
-    await expect(page.getByRole("link", { name: "forced.jpg" })).toBeVisible();
-    expect(counts.listRequests()).toBe(0);
-    expect(counts.usageRequests()).toBe(0);
+    await expect(
+      page.getByRole("button", { name: /^Force delete / }),
+    ).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "guarded.jpg" })).toBeVisible();
   });
 
   test("a post embedding the raw filename spelling blocks deletion", async ({
@@ -494,7 +475,7 @@ test.describe("Media delete guard", () => {
 
     await attemptDelete(page);
     await expect(
-      page.getByText(/Cannot delete: referenced in post/),
+      page.getByText(/Cannot delete: referenced in retained post/),
     ).toBeVisible();
   });
 
@@ -516,7 +497,7 @@ test.describe("Media delete guard", () => {
 
     await attemptDelete(page);
     await expect(
-      page.getByText(/Cannot delete: referenced in post/),
+      page.getByText(/Cannot delete: referenced in retained post/),
     ).toBeVisible();
   });
 });
