@@ -206,6 +206,29 @@ async fn media_endpoints_reject_unauthenticated_requests(#[case] backend: Backen
     }
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn media_server_function_auth_rejection_does_not_advertise_basic(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let request_body =
+        serde_qs::to_string(&web::media::GetUsage {}).expect("serialize server-function input");
+
+    let response = make_app(&state, &base)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(<web::media::GetUsage as ServerFn>::PATH)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(request_body))
+                .expect("build unauthenticated server-function request"),
+        )
+        .await
+        .expect("server-function request");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(response.headers().get(header::WWW_AUTHENTICATE).is_none());
+}
+
 // ─── list_my_media ────────────────────────────────────────────
 
 #[apply(backends)]

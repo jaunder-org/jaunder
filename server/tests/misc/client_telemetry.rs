@@ -169,6 +169,13 @@ fn event_json() -> String {
 fn assert_silent_rejection(observation: &Observation, expected: StatusCode) {
     assert_eq!(observation.response.status(), expected);
     assert!(
+        observation
+            .response
+            .headers()
+            .get(header::WWW_AUTHENTICATE)
+            .is_none()
+    );
+    assert!(
         !observation.events.contains(INTAKE_WARNING),
         "rejection emitted intake warning: {}",
         observation.events
