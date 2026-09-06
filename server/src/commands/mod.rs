@@ -2,6 +2,7 @@ mod account;
 mod backup;
 mod dispatch;
 mod lifecycle;
+mod shut_down;
 mod site_config;
 mod storage_bootstrap;
 mod support;

@@ -1,4 +1,6 @@
 use std::fmt;
+use std::num::NonZeroU64;
+
 use std::str::FromStr;
 use std::{net::SocketAddr, path::PathBuf};
 
@@ -276,6 +278,23 @@ pub enum Commands {
         /// Deployment environment.
         #[arg(long, env = "JAUNDER_ENV", default_value_t = DeploymentEnv::Dev)]
         environment: DeploymentEnv,
+    },
+
+    /// Gracefully shut down the instance owning the selected storage directory.
+    ///
+    /// Waits for that exact instance to exit and for its runtime identity to no
+    /// longer name it, rather than merely reporting signal delivery. Refuses
+    /// missing, malformed, dead, start-time-mismatched, or starting runtime
+    /// identities. On timeout, returns an error without escalation.
+    ShutDown {
+        #[command(flatten)]
+        storage: StorageArgs,
+
+        /// Maximum seconds to wait for full shutdown completion (default: 30).
+        ///
+        /// Timeout returns an error without sending an escalation signal.
+        #[arg(long, default_value = "30")]
+        timeout: NonZeroU64,
     },
 
     /// Create a user account directly, bypassing the registration policy.
@@ -1288,6 +1307,72 @@ mod tests {
             unreachable!("parse yields unset")
         };
         assert_eq!(key, SiteConfigKey::SiteTitle);
+    }
+
+    // --- shut-down ---
+
+    #[test]
+    fn shut_down_parses_default_storage_and_timeout() {
+        let cli = parse(&["shut-down"]);
+        let Commands::ShutDown { storage, timeout } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::ShutDown")
+        };
+        assert_eq!(storage.storage_path, PathBuf::from("./data"));
+        assert_eq!(timeout.get(), 30);
+    }
+
+    #[test]
+    fn shut_down_parses_selected_storage_and_timeout() {
+        let cli = parse(&[
+            "shut-down",
+            "--storage-path",
+            "/tmp/shutdown-target",
+            "--timeout",
+            "45",
+        ]);
+        let Commands::ShutDown { storage, timeout } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::ShutDown")
+        };
+        assert_eq!(storage.storage_path, PathBuf::from("/tmp/shutdown-target"));
+        assert_eq!(timeout.get(), 45);
+    }
+
+    #[test]
+    fn shut_down_rejects_non_positive_timeout() {
+        for timeout in ["0", "-1"] {
+            assert!(
+                Cli::try_parse_from(["jaunder", "shut-down", "--timeout", timeout]).is_err(),
+                "{timeout} must not parse as a timeout"
+            );
+        }
+    }
+
+    #[test]
+    fn shut_down_help_describes_operator_contract() {
+        let help = Cli::try_parse_from(["jaunder", "shut-down", "--help"])
+            .err()
+            .expect("help exits through clap")
+            .to_string();
+        for topic in [
+            "storage directory",
+            "exit",
+            "runtime identity",
+            "missing",
+            "malformed",
+            "dead",
+            "start-time-mismatched",
+            "starting",
+            "timeout",
+            "escalation",
+        ] {
+            assert!(help.contains(topic), "help must describe {topic}: {help}");
+        }
+    }
+
+    #[test]
+    fn shut_down_is_not_a_serve_command() {
+        let cli = parse(&["shut-down"]);
+        assert!(!cli.command.expect("subcommand").is_serve());
     }
 
     #[test]

@@ -1926,6 +1926,19 @@ retains ADR-0035's discovery contract while the
 qualifies its JSON-as-mutex behavior and removes ADR-0144's runtime-path
 override.
 
+Local shutdown control reuses that ownership identity rather than opening an
+administration route. `jaunder shut-down` resolves the selected storage
+directory's ready, live `runtime.json` identity to an exact OS process handle,
+validates both PID and process start time, sends SIGTERM through that handle,
+and waits for the captured instance to exit and relinquish the identity. Absent
+external escalation, that completion follows the ordinary graceful drain; the
+command cannot infer an external forced-exit cause. Missing, malformed, stale,
+mismatched, and port-zero identities are refused without mutation. Repeated
+SIGTERM is non-escalating so concurrent automation joins the same drain; a
+further SIGINT retains interactive forced exit. The bounded wait never escalates
+on timeout. No administration secret or network control channel exists
+([identity-verified local shutdown](adr/drafts/identity-verified-local-shutdown.md)).
+
 - `StaticAssets` (`server/src/assets.rs:3-5`, `#[folder = "assets/"]`) carries
   the base stylesheets `jaunder.css` and `jaunder-themes.css`, mounted at
   `/style` by `axum_embed::ServeEmbed` (`server/src/lib.rs:54,57`), which

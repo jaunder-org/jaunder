@@ -7,7 +7,7 @@ use crate::cli::{Commands, DeadLetterAction, DeadLetterCursor, SiteConfigAction,
 use super::{
     account, backup,
     lifecycle::{self, ServeCapturePaths},
-    site_config, storage_bootstrap, websub,
+    shut_down, site_config, storage_bootstrap, websub,
 };
 
 pub enum CommandOutput {
@@ -57,6 +57,10 @@ impl Commands {
             )
             .await
             .map(|()| CommandOutput::None),
+            Commands::ShutDown { storage, timeout } => {
+                shut_down::cmd_shut_down(&storage, std::time::Duration::from_secs(timeout.get()))
+                    .map(|()| CommandOutput::None)
+            }
             Commands::UserCreate {
                 storage,
                 username,

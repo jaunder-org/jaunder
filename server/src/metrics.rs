@@ -489,7 +489,7 @@ fn report_source_failure(context: &'static str) {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::{LazyLock, Mutex, OnceLock, mpsc};
+    use std::sync::{LazyLock, Mutex, mpsc};
 
     #[derive(Clone)]
     struct SharedWriter(Arc<std::sync::Mutex<Vec<u8>>>);
@@ -553,13 +553,30 @@ mod tests {
         release: Mutex<mpsc::Receiver<()>>,
     }
 
-    static BLOCKING_MEASUREMENT: OnceLock<BlockingMeasurement> = OnceLock::new();
+    static BLOCKING_MEASUREMENT: LazyLock<Mutex<Option<Arc<BlockingMeasurement>>>> =
+        LazyLock::new(|| Mutex::new(None));
+    static BLOCKING_MEASUREMENT_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+    fn install_blocking_measurement(measurement: BlockingMeasurement) {
+        let slot = &BLOCKING_MEASUREMENT;
+        let _ = slot
+            .lock()
+            .expect("blocking measurement lock")
+            .replace(Arc::new(measurement));
+    }
 
     fn blocking_measurement(path: &Path) -> io::Result<u64> {
         if path == Path::new("fail") {
             return Err(io::Error::other("injected blocking measurement failure"));
         }
-        let measurement = BLOCKING_MEASUREMENT.get().expect("blocking measurement");
+        let slot = &BLOCKING_MEASUREMENT;
+        let measurement = Arc::clone(
+            slot.lock()
+                .expect("blocking measurement lock")
+                .as_ref()
+                .expect("installed blocking measurement"),
+        );
         measurement
             .start_async
             .lock()
@@ -773,19 +790,15 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn filesystem_measurement_runs_on_blocking_work() {
+        let _test_lock = BLOCKING_MEASUREMENT_TEST_LOCK.lock().await;
         let (start_sender, start_receiver) = tokio::sync::oneshot::channel();
         let (entered_sender, entered_receiver) = mpsc::channel();
         let (release_sender, release_receiver) = mpsc::channel();
-        assert!(
-            BLOCKING_MEASUREMENT
-                .set(BlockingMeasurement {
-                    start_async: Mutex::new(Some(start_sender)),
-                    entered: entered_sender,
-                    release: Mutex::new(release_receiver),
-                })
-                .is_ok(),
-            "one blocking measurement"
-        );
+        install_blocking_measurement(BlockingMeasurement {
+            start_async: Mutex::new(Some(start_sender)),
+            entered: entered_sender,
+            release: Mutex::new(release_receiver),
+        });
         let async_worker_progressed = Arc::new(AtomicBool::new(false));
         let progress = async_worker_progressed.clone();
         tokio::spawn(async move {
@@ -818,6 +831,61 @@ mod tests {
             error
                 .to_string()
                 .contains("injected blocking measurement failure")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn saturation_sampler_shutdown_waits_for_active_filesystem_measurement() {
+        let _test_lock = BLOCKING_MEASUREMENT_TEST_LOCK.lock().await;
+        let (start_sender, start_receiver) = tokio::sync::oneshot::channel();
+        let (entered_sender, entered_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        install_blocking_measurement(BlockingMeasurement {
+            start_async: Mutex::new(Some(start_sender)),
+            entered: entered_sender,
+            release: Mutex::new(release_receiver),
+        });
+        let sources = SaturationSources::fake_with_media_filesystem(
+            sample(),
+            MediaFilesystemSource::with_measurement(PathBuf::new(), blocking_measurement),
+        );
+        let snapshot = Arc::new(RwLock::new(SaturationSnapshot::default()));
+        let sampler = spawn_saturation_sampler_with_interval(
+            sources,
+            snapshot.clone(),
+            Duration::from_millis(1),
+        );
+
+        tokio::time::timeout(Duration::from_secs(1), start_receiver)
+            .await
+            .expect("filesystem measurement admitted")
+            .expect("filesystem measurement starts");
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            tokio::task::spawn_blocking(move || entered_receiver.recv()),
+        )
+        .await
+        .expect("filesystem measurement remains blocked")
+        .expect("measurement entry task")
+        .expect("measurement entered");
+
+        let mut shutdown = tokio::spawn(sampler.shutdown());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut shutdown)
+                .await
+                .is_err(),
+            "shutdown must wait for active filesystem measurement"
+        );
+        release_sender.send(()).expect("release measurement");
+        shutdown
+            .await
+            .expect("shutdown task")
+            .expect("sampler shutdown");
+
+        assert_eq!(
+            read_snapshot(&snapshot).media_filesystem_bytes,
+            Some(1),
+            "snapshot records the injected filesystem measurement"
         );
     }
 

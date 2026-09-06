@@ -568,58 +568,89 @@ fn shutdown_transition(state: ShutdownState, signal: ShutdownSignal) -> Shutdown
     }
 }
 
-/// Installs `SIGINT`/`SIGTERM` handlers and returns a receiver that fires when
-/// the first signal begins graceful draining. Later `SIGTERM` signals continue
-/// that drain; a later `SIGINT` removes the runtime identity and forces an
-/// immediate exit because `process::exit` skips `Drop`.
+/// Owns the shutdown supervisor for the complete lifetime of a serve command.
 ///
-/// The streams are created synchronously (before returning), so a caller can rely
-/// on the handlers being active the moment this returns.
-///
-/// # Errors
-///
-/// Returns an error if a signal handler cannot be installed.
+/// Dropping this guard aborts the supervisor, so no setup failure can detach its
+/// task after the signal handlers have been installed.
 #[cfg(unix)]
-fn spawn_shutdown_supervisor(runtime_path: PathBuf) -> io::Result<(Receiver<()>, JoinHandle<()>)> {
-    use tokio::signal::unix::{SignalKind, signal};
-    let mut sigint = signal(SignalKind::interrupt())?;
-    let mut sigterm = signal(SignalKind::terminate())?;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let supervisor = tokio::spawn(async move {
-        // cov:ignore-start -- async signal wait-loop; the forced branch ends in
-        // process::exit and is unreachable by a survivable test. The synchronous
-        // setup above and serve_with_shutdown are host-covered by the signal tests.
-        let mut state = ShutdownState::AwaitingSignal;
-        let mut graceful_shutdown = Some(tx);
-        loop {
-            let (signal, signal_name) = tokio::select! {
-                _ = sigint.recv() => (ShutdownSignal::Sigint, "SIGINT"),
-                _ = sigterm.recv() => (ShutdownSignal::Sigterm, "SIGTERM"),
-            };
-            match shutdown_transition(state, signal) {
-                ShutdownTransition::BeginGracefulDrain => {
-                    tracing::info!(
-                        signal = signal_name,
-                        "received shutdown signal; draining in-flight requests"
-                    );
-                    if let Some(tx) = graceful_shutdown.take() {
-                        let _ = tx.send(());
+struct ShutdownSupervisor {
+    task: Option<JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+impl ShutdownSupervisor {
+    /// Installs the signal handlers synchronously, before returning the receiver
+    /// that begins graceful shutdown on the first signal.
+    fn install(runtime_path: PathBuf) -> io::Result<(Receiver<()>, Self)> {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let mut sigint = signal(SignalKind::interrupt())?;
+        let mut sigterm = signal(SignalKind::terminate())?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            // cov:ignore-start -- async signal wait-loop; the forced branch ends in
+            // process::exit and is unreachable by a survivable test. The synchronous
+            // setup above and serve_with_shutdown are host-covered by the signal tests.
+            let mut state = ShutdownState::AwaitingSignal;
+            let mut graceful_shutdown = Some(tx);
+            loop {
+                let (signal, signal_name) = tokio::select! {
+                    _ = sigint.recv() => (ShutdownSignal::Sigint, "SIGINT"),
+                    _ = sigterm.recv() => (ShutdownSignal::Sigterm, "SIGTERM"),
+                };
+                match shutdown_transition(state, signal) {
+                    ShutdownTransition::BeginGracefulDrain => {
+                        tracing::info!(
+                            signal = signal_name,
+                            "received shutdown signal; draining in-flight requests"
+                        );
+                        if let Some(tx) = graceful_shutdown.take() {
+                            let _ = tx.send(());
+                        }
+                        state = ShutdownState::Draining;
                     }
-                    state = ShutdownState::Draining;
-                }
-                ShutdownTransition::ContinueGracefulDrain => {
-                    tracing::info!("received SIGTERM while draining; continuing graceful shutdown");
-                }
-                ShutdownTransition::ForceExitAndRemoveRuntimeIdentity => {
-                    tracing::warn!("received SIGINT while draining; forcing immediate exit");
-                    runtime_file::remove_runtime_file(&runtime_path);
-                    std::process::exit(0);
+                    ShutdownTransition::ContinueGracefulDrain => {
+                        tracing::info!(
+                            "received SIGTERM while draining; continuing graceful shutdown"
+                        );
+                    }
+                    ShutdownTransition::ForceExitAndRemoveRuntimeIdentity => {
+                        tracing::warn!("received SIGINT while draining; forcing immediate exit");
+                        runtime_file::remove_runtime_file(&runtime_path);
+                        std::process::exit(0);
+                    }
                 }
             }
+            // cov:ignore-stop
+        });
+        Ok((rx, Self { task: Some(task) }))
+    }
+
+    async fn abort_and_join(mut self) {
+        let Some(task) = self.task.take() else {
+            unreachable!("shutdown supervisor owns one task until joined")
+        };
+        task.abort();
+        match task.await {
+            Err(error) if error.is_cancelled() => {}
+            Ok(()) => {}
+            Err(error) => error::report_swallowed(
+                error::ErrorKind::Internal,
+                error::ErrorClass::Transient,
+                "server.shutdown_supervisor.join",
+                error::SwallowedSource::Error(&error),
+            ),
         }
-        // cov:ignore-stop
-    });
-    Ok((rx, supervisor))
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ShutdownSupervisor {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
 }
 
 /// Starts the HTTP server and the background workers.
@@ -638,13 +669,12 @@ pub async fn cmd_serve(
     // Telemetry is owned by `run`, which holds the TelemetryGuard across this
     // call (see `server/src/main.rs`); `cmd_serve` does not init it, matching
     // every other `cmd_*`.
-    // cov:ignore-start -- live serve glue: unreachable by host tests (the sole
-    // cmd_serve test returns early at prepare_server). The covered pieces live in
-    // serve_with_shutdown + spawn_shutdown_supervisor, exercised by the signal
-    // tests; this only wires them to the prepared server. Mirrors jaunder-uox1.
-    //
-    // The marker starts at the destructuring, not below it: completing this binding
-    // *is* the prepare_server-succeeded path, so the same rationale covers it (#693).
+    // Install handlers before preparation can publish a nonzero runtime port.
+    // The guard aborts its task if preparation returns early.
+    #[cfg(unix)]
+    let (shutdown_rx, shutdown_supervisor) =
+        ShutdownSupervisor::install(runtime_file::canonical_runtime_path(&storage.storage_path))?;
+
     let PreparedServer {
         listener,
         router,
@@ -655,17 +685,10 @@ pub async fn cmd_serve(
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     #[cfg(unix)]
-    let (mut serve_result, shutdown_supervisor) =
-        match spawn_shutdown_supervisor(runtime_guard.path().to_path_buf()) {
-            Ok((shutdown_rx, supervisor)) => (
-                serve_with_shutdown(listener, router, async move {
-                    let _ = shutdown_rx.await;
-                })
-                .await,
-                Some(supervisor),
-            ),
-            Err(error) => (Err(error.into()), None),
-        };
+    let mut serve_result = serve_with_shutdown(listener, router, async move {
+        let _ = shutdown_rx.await;
+    })
+    .await;
     #[cfg(not(unix))]
     let mut serve_result = {
         // No signal handling off unix (jaunder targets Linux/NixOS): serve until
@@ -674,7 +697,7 @@ pub async fn cmd_serve(
     };
     // Refuse every new background activation together. Admitted work and the
     // current saturation sample must finish while both the storage lock and the
-    // second-signal forced-exit supervisor remain live.
+    // SIGINT forced-exit supervisor remain live.
     workers.stop();
     if let Some(metrics) = saturation_metrics {
         let saturation_shutdown = metrics.shutdown().await;
@@ -693,23 +716,10 @@ pub async fn cmd_serve(
     );
     merge_worker_shutdown(&mut serve_result, backup_shutdown, "server.backup.shutdown");
     #[cfg(unix)]
-    if let Some(supervisor) = shutdown_supervisor {
-        supervisor.abort();
-        match supervisor.await {
-            Err(error) if error.is_cancelled() => {}
-            Ok(()) => {}
-            Err(error) => error::report_swallowed(
-                error::ErrorKind::Internal,
-                error::ErrorClass::Transient,
-                "server.shutdown_supervisor.join",
-                error::SwallowedSource::Error(&error),
-            ),
-        }
-    }
+    shutdown_supervisor.abort_and_join().await;
     drop(workers);
     drop(runtime_guard);
     serve_result
-    // cov:ignore-stop
 }
 
 #[cfg(test)]
@@ -1492,13 +1502,11 @@ mod tests {
         );
     }
 
-    // The two shutdown tests below raise a REAL signal to their own process. This
-    // is safe only under `cargo nextest` (one process per test) — the tokio
-    // handler, installed synchronously by spawn_shutdown_supervisor *before* we
-    // raise, replaces the default terminate disposition so the signal is delivered
-    // to the handler instead of killing us. Under a bare `cargo test` (libtest,
-    // shared process) two such tests could observe each other's signals; the gate
-    // runs nextest.
+    // The shutdown tests below raise a REAL signal to their own process. This is
+    // safe only under `cargo nextest` (one process per test): installation is
+    // synchronous, so the signal is delivered to this command's handler rather
+    // than its default disposition. Bare `cargo test` shares one process, so
+    // signal tests could observe each other's signals.
     #[cfg(unix)]
     async fn assert_signal_removes_runtime_file(signal: nix::sys::signal::Signal) {
         let dir = TempDir::new().unwrap();
@@ -1513,8 +1521,8 @@ mod tests {
 
         // Installs the SIGINT/SIGTERM handlers synchronously, so the raise below
         // cannot beat handler installation.
-        let (shutdown_rx, supervisor) =
-            spawn_shutdown_supervisor(guard.path().to_path_buf()).unwrap();
+        let (shutdown_rx, supervisor) = ShutdownSupervisor::install(guard.path().to_path_buf())
+            .expect("install shutdown supervisor");
         let handle = tokio::spawn(serve_with_shutdown(
             listener,
             axum::Router::new(),
@@ -1529,20 +1537,67 @@ mod tests {
             .await
             .unwrap()
             .expect("serve_with_shutdown returns Ok on graceful shutdown");
-        supervisor.abort();
-        assert!(
-            supervisor
-                .await
-                .expect_err("supervisor was aborted")
-                .is_cancelled(),
-            "graceful shutdown must cancel the forced-exit supervisor"
-        );
+        supervisor.abort_and_join().await;
         assert!(
             path.exists(),
             "serve completion must not release runtime ownership"
         );
         drop(guard);
         assert!(!path.exists(), "runtime.json removed after {signal:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cmd_serve_handles_sigterm_immediately_after_ready_publication() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("initialize test database");
+        let runtime_path = runtime_file::canonical_runtime_path(&storage.storage_path);
+        let telemetry = test_telemetry(None);
+        let bind = "127.0.0.1:0".parse().expect("bind address");
+        let mut command =
+            tokio::spawn(async move { cmd_serve(&storage, bind, false, &telemetry, None).await });
+
+        if tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let ready = fs::read(&runtime_path)
+                    .ok()
+                    .and_then(|contents| {
+                        serde_json::from_slice::<serde_json::Value>(&contents).ok()
+                    })
+                    .and_then(|runtime| runtime["port"].as_u64())
+                    .is_some_and(|port| port != 0);
+                if ready {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .is_err()
+        {
+            command.abort();
+            let _ = command.await;
+            panic!("cmd_serve must publish a ready runtime identity");
+        }
+
+        nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).expect("send SIGTERM");
+
+        if let Ok(result) = tokio::time::timeout(Duration::from_secs(5), &mut command).await {
+            result
+                .expect("cmd_serve task must not panic")
+                .expect("cmd_serve must gracefully shut down");
+        } else {
+            command.abort();
+            let _ = command.await;
+            panic!("cmd_serve must complete after SIGTERM");
+        }
+        assert!(
+            !runtime_path.exists(),
+            "completed cmd_serve must remove its runtime identity"
+        );
     }
 
     #[cfg(unix)]
