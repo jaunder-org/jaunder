@@ -31,6 +31,21 @@ and upload discovery is hidden. It is independent of maximum file size and user
 quota. _Avoid_: upload limit (a byte limit is a quantity, not a capability), web
 uploads (the policy is cross-protocol), magic zero.
 
+### Presentation
+
+**Style Contract**: The versioned semantic HTML surface shared by Jaunder's
+built-in and custom public themes. It guarantees accessible source order,
+landmarks, and named concept hooks, not incidental wrapper nesting or sibling
+positions. _Avoid_: template API (themes cannot replace the document), DOM
+snapshot (incidental structure is not contractual).
+
+**Theme Package**: A portable, non-executable custom public theme containing a
+versioned manifest, one CSS entry point that Jaunder validates and scopes, and
+optional package-local font or raster-image assets. A stored Theme Package
+belongs to the operator or one author; owner Media bindings remain instance data
+and do not travel with it. _Avoid_: template, plugin, skin (the package is CSS
+and assets, not code or a viewer preference).
+
 ### Publishing
 
 **Post**: A unit of authored content owned by one local user, carrying a body in

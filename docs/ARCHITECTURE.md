@@ -1301,6 +1301,52 @@ session, or browser state: identical route content and effective theme produce
 the same representation bytes and cache identity, while a different effective
 theme changes that representation.
 
+### Committed direction — custom public themes
+
+Nothing in this subsection is built. The proposed custom-theme decision lives in
+[`docs/adr/drafts/css-package-public-themes.md`](adr/drafts/css-package-public-themes.md).
+
+Public markup will expose a versioned semantic Style Contract shared by built-in
+and custom themes; accessible source order and exact concept hooks will be
+stable while incidental wrappers will not. Custom CSS will be scoped inside an
+unthemeable paint-containment/low-stacking boundary, with authenticated owner
+mutation controls in a sibling trusted-chrome stacking context above it. A Theme
+Package will contain a closed manifest, one parser-validated stylesheet, and
+allowlisted local WOFF2 or raster-image assets. Bounded import and
+transformation will reject unsafe archives, unscopable CSS, global-name
+collisions, external resources, and executable content. Publication will use raw
+full SHA-256 content hashes for immutable same-origin CSS/assets and separate
+non-circular framed hashes for source-package and revision identity. Publishing
+will advance the stable Theme ID, so a selected theme will adopt its new
+revision without a second selection mutation while prior bytes remain unchanged.
+Issued content will remain addressable while live and through the one-year asset
+lifetime plus five-minute HTML freshness window after its last reference is
+detached; collection will require both no live reference and the elapsed
+deadline.
+
+The operator and each author will own separate custom-theme catalogs. An
+effective public selection will be either a built-in `Theme` or an owner-valid
+custom Theme ID; the site/author precedence above will remain unchanged. Every
+draft-derived read will be owner-authorized, anonymous-denying, and
+`private, no-store`, and will never mutate selection; Studio surfaces will never
+load custom CSS. Removing a selected site theme will reset the site selection to
+Studio, while removing a selected author theme will restore site inheritance.
+Missing or corrupt values will follow those fallbacks, but database read
+failures will remain errors.
+
+Theme/revision counts and retained bytes will be admitted atomically against
+per-owner and site-wide quotas, with detached content charged until collection.
+Per-principal rate limits and one in-flight package operation per owner will
+bound repeated parsing and publication.
+
+Published presentation may bind the Style Contract's decorative `logo` and
+`header` roles to package images or exact owner Media. A versioned header-pool
+hash over typed canonical route and persisted revision/pool/shuffle state will
+let routes vary while identical route state remains byte-identical. Binding and
+guarded deletion will share the exact Media-key lock, making these presentation
+references race-free and distinct from Post Media references derived from
+`RenderedHtml`.
+
 Markup is built with **maud's `html!`**
 ([ADR-0093](adr/0093-web-render-html-macro.md)), and the trusted-HTML invariant
 is carried by one crate-local newtype, `web::html::Markup` (`web/src/html.rs`),
