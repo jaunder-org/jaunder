@@ -1,12 +1,13 @@
 //! Produces the build-only manifest and content-addressed `/pkg` CSR runtime bundle.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, bail};
-use csr_bundle::{Asset, Manifest, Representation, Role, VERSION, digest};
+use csr_bundle::{Asset, Manifest, Representation, Role};
 use flate2::Compression;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{Expression, ImportExpression, Statement};
@@ -169,7 +170,7 @@ fn append_shape_sections(wasm: &Path, label: &str, count: u32) -> anyhow::Result
         count > 0,
         "--wasm-shape-section-count must be greater than zero"
     );
-    let mut bytes = std::fs::read(wasm)?;
+    let mut bytes = fs::read(wasm)?;
     anyhow::ensure!(
         bytes.starts_with(b"\0asm\x01\0\0\0"),
         "{} is not a wasm module",
@@ -181,7 +182,7 @@ fn append_shape_sections(wasm: &Path, label: &str, count: u32) -> anyhow::Result
             format!("{label}:{index}").as_bytes(),
         ));
     }
-    std::fs::write(wasm, bytes)?;
+    fs::write(wasm, bytes)?;
     Ok(())
 }
 fn wasm_opt_args(level: &str, input: &Path, output: &Path) -> Vec<String> {
@@ -198,27 +199,51 @@ fn wasm_opt_args(level: &str, input: &Path, output: &Path) -> Vec<String> {
     ]);
     args
 }
-fn run_wasm_opt(wasm: &Path) -> anyhow::Result<()> {
+fn run_wasm_opt(wasm_opt: &Path, wasm: &Path) -> anyhow::Result<()> {
     let temporary = wasm.with_extension("wasm.opt");
-    let status = Command::new("wasm-opt")
+    let status = Command::new(wasm_opt)
         .args(wasm_opt_args(WASM_OPT_LEVEL, wasm, &temporary))
         .status()
-        .context("spawning wasm-opt (is it on PATH?)")?;
+        .with_context(|| format!("spawning {}", wasm_opt.display()))?;
     if !status.success() {
         bail!("wasm-opt failed ({status}) for {}", wasm.display());
     }
-    std::fs::rename(temporary, wasm)?;
+    fs::rename(temporary, wasm)?;
     Ok(())
 }
-
 fn path_for(bytes: &[u8], extension: &str) -> String {
-    format!("pkg/{}.{}", digest(bytes), extension)
+    format!("pkg/{}.{}", csr_bundle::digest(bytes), extension)
 }
-fn representation(path: String, bytes: Vec<u8>) -> Representation {
+
+fn representation(path: String, bytes: &[u8]) -> Representation {
     Representation {
         path,
-        sha256: digest(&bytes),
+        sha256: csr_bundle::digest(bytes),
     }
+}
+
+fn write_representations(
+    root: &Path,
+    path: &str,
+    bytes: &[u8],
+    compressed: bool,
+) -> anyhow::Result<BTreeMap<String, Representation>> {
+    fs::write(root.join(path), bytes)?;
+    let mut representations =
+        BTreeMap::from([("identity".into(), representation(path.into(), bytes))]);
+    if compressed {
+        let gzip = gzip_compress(bytes)?;
+        let brotli = brotli_compress(bytes)?;
+        for (encoding, suffix, compressed_bytes) in [("gzip", "gz", gzip), ("br", "br", brotli)] {
+            let compressed_path = format!("{path}.{suffix}");
+            fs::write(root.join(&compressed_path), &compressed_bytes)?;
+            representations.insert(
+                encoding.into(),
+                representation(compressed_path, &compressed_bytes),
+            );
+        }
+    }
+    Ok(representations)
 }
 
 #[derive(Debug)]
@@ -359,9 +384,9 @@ fn relative_js_imports(source: &str, importer: &Path) -> anyhow::Result<Vec<Path
 fn require_acyclic_complete_graph(glue: &Path, sources: &[PathBuf]) -> anyhow::Result<()> {
     fn visit(
         path: &Path,
-        sources: &std::collections::BTreeSet<PathBuf>,
-        visiting: &mut std::collections::BTreeSet<PathBuf>,
-        visited: &mut std::collections::BTreeSet<PathBuf>,
+        sources: &BTreeSet<PathBuf>,
+        visiting: &mut BTreeSet<PathBuf>,
+        visited: &mut BTreeSet<PathBuf>,
     ) -> anyhow::Result<()> {
         if visited.contains(path) {
             return Ok(());
@@ -369,7 +394,7 @@ fn require_acyclic_complete_graph(glue: &Path, sources: &[PathBuf]) -> anyhow::R
         if !visiting.insert(path.to_owned()) {
             bail!("cyclic runtime import graph includes {}", path.display());
         }
-        let source = std::fs::read_to_string(path)
+        let source = fs::read_to_string(path)
             .with_context(|| format!("reading runtime module {}", path.display()))?;
         for dependency in relative_js_imports(&source, path)? {
             anyhow::ensure!(
@@ -385,8 +410,8 @@ fn require_acyclic_complete_graph(glue: &Path, sources: &[PathBuf]) -> anyhow::R
     }
 
     let sources = sources.iter().cloned().collect();
-    let mut visiting = std::collections::BTreeSet::new();
-    let mut visited = std::collections::BTreeSet::new();
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
     visit(glue, &sources, &mut visiting, &mut visited)?;
     if visited.len() != sources.len() {
         bail!("wasm-bindgen output contains unreferenced runtime JS modules");
@@ -400,7 +425,7 @@ fn normalize(path: PathBuf) -> PathBuf {
 
 fn js_sources(directory: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let mut sources = Vec::new();
-    for entry in std::fs::read_dir(directory)? {
+    for entry in fs::read_dir(directory)? {
         let path = entry?.path();
         if path.is_dir() {
             sources.extend(js_sources(&path)?);
@@ -437,6 +462,26 @@ pub fn run(
     shape_section: Option<&str>,
     shape_section_count: u32,
 ) -> anyhow::Result<()> {
+    run_with_tools(
+        wasm,
+        out,
+        experiment_arm,
+        shape_section,
+        shape_section_count,
+        Path::new("wasm-bindgen"),
+        Path::new("wasm-opt"),
+    )
+}
+
+fn run_with_tools(
+    wasm: &Path,
+    out: &Path,
+    experiment_arm: Option<&str>,
+    shape_section: Option<&str>,
+    shape_section_count: u32,
+    wasm_bindgen: &Path,
+    wasm_opt: &Path,
+) -> anyhow::Result<()> {
     anyhow::ensure!(
         !out.exists(),
         "refusing to replace existing bundle root {}",
@@ -448,27 +493,27 @@ pub fn run(
         .tempdir_in(parent)?;
     let root = temporary.path();
     let generated = root.join("generated");
-    std::fs::create_dir(&generated)?;
-    let status = Command::new("wasm-bindgen")
+    fs::create_dir(&generated)?;
+    let status = Command::new(wasm_bindgen)
         .args(["--target", "web", "--out-dir"])
         .arg(&generated)
         .arg(wasm)
         .status()
-        .context("spawning wasm-bindgen (is it on PATH?)")?;
+        .with_context(|| format!("spawning {}", wasm_bindgen.display()))?;
     if !status.success() {
         bail!("wasm-bindgen failed ({status}) for {}", wasm.display());
     }
     let wasm_source = generated.join(IN_WASM);
-    run_wasm_opt(&wasm_source)?;
+    run_wasm_opt(wasm_opt, &wasm_source)?;
     if let Some(label) = shape_section {
         append_shape_sections(&wasm_source, label, shape_section_count)?;
     }
-    let wasm_bytes = std::fs::read(&wasm_source)?;
+    let wasm_bytes = fs::read(&wasm_source)?;
     let wasm_path = path_for(&wasm_bytes, "wasm");
     let glue_source = generated.join(IN_JS);
-    let glue = std::fs::read_to_string(&glue_source)?;
+    let glue = fs::read_to_string(&glue_source)?;
     ensure_promise_response_input_contract(&glue)?;
-    std::fs::write(
+    fs::write(
         &glue_source,
         append_measured_initializer(
             &glue.replace(IN_WASM, wasm_path.strip_prefix("pkg/").expect("pkg path")),
@@ -479,7 +524,7 @@ pub fn run(
     require_acyclic_complete_graph(&normalize(glue_source.clone()), &sources)?;
     let mut paths = HashMap::new();
     for source in &sources {
-        let bytes = std::fs::read(source)?;
+        let bytes = fs::read(source)?;
         paths.insert(source.clone(), path_for(&bytes, "js"));
     }
     // Iteration reaches a stable dependency-first naming because a module's
@@ -488,7 +533,7 @@ pub fn run(
     for _ in 0..sources.len() + 1 {
         let old = paths.clone();
         for source in &sources {
-            let rewritten = rewrite_js_imports(&std::fs::read_to_string(source)?, source, &old)?;
+            let rewritten = rewrite_js_imports(&fs::read_to_string(source)?, source, &old)?;
             paths.insert(source.clone(), path_for(rewritten.as_bytes(), "js"));
         }
         if paths == old {
@@ -496,96 +541,54 @@ pub fn run(
         }
     }
     for source in &sources {
-        let rewritten = rewrite_js_imports(&std::fs::read_to_string(source)?, source, &paths)?;
+        let rewritten = rewrite_js_imports(&fs::read_to_string(source)?, source, &paths)?;
         anyhow::ensure!(
             path_for(rewritten.as_bytes(), "js") == paths[source],
             "cyclic runtime import graph includes {}",
             source.display()
         );
     }
-    let pkg = root.join("pkg");
-    std::fs::create_dir(&pkg)?;
+    fs::create_dir(root.join("pkg"))?;
     let mut assets = Vec::new();
     for source in sources {
         let bytes =
-            rewrite_js_imports(&std::fs::read_to_string(&source)?, &source, &paths)?.into_bytes();
+            rewrite_js_imports(&fs::read_to_string(&source)?, &source, &paths)?.into_bytes();
         let path = paths.remove(&source).expect("source path assigned");
-        std::fs::write(root.join(&path), &bytes)?;
-        let mut representations = BTreeMap::from([(
-            "identity".into(),
-            representation(path.clone(), bytes.clone()),
-        )]);
-        if source == normalize(glue_source.clone()) {
-            let gz = gzip_compress(&bytes)?;
-            let br = brotli_compress(&bytes)?;
-            representations.insert(
-                "gzip".into(),
-                representation(format!("{path}.gz"), gz.clone()),
-            );
-            representations.insert(
-                "br".into(),
-                representation(format!("{path}.br"), br.clone()),
-            );
-            std::fs::write(root.join(format!("{path}.gz")), gz)?;
-            std::fs::write(root.join(format!("{path}.br")), br)?;
-            assets.push(Asset {
-                role: Some(Role::Glue),
-                path,
-                sha256: digest(&bytes),
-                representations,
-            });
-        } else {
-            assets.push(Asset {
-                role: None,
-                path,
-                sha256: digest(&bytes),
-                representations,
-            });
-        }
+        let is_glue = source == normalize(glue_source.clone());
+        let representations = write_representations(root, &path, &bytes, is_glue)?;
+        assets.push(Asset {
+            role: is_glue.then_some(Role::Glue),
+            path,
+            sha256: csr_bundle::digest(&bytes),
+            representations,
+        });
     }
-    let wasm_gz = gzip_compress(&wasm_bytes)?;
-    let wasm_br = brotli_compress(&wasm_bytes)?;
-    std::fs::write(root.join(&wasm_path), &wasm_bytes)?;
-    std::fs::write(root.join(format!("{wasm_path}.gz")), &wasm_gz)?;
-    std::fs::write(root.join(format!("{wasm_path}.br")), &wasm_br)?;
+    let wasm_representations = write_representations(root, &wasm_path, &wasm_bytes, true)?;
     assets.push(Asset {
         role: Some(Role::Wasm),
-        path: wasm_path.clone(),
-        sha256: digest(&wasm_bytes),
-        representations: BTreeMap::from([
-            (
-                "identity".into(),
-                representation(wasm_path.clone(), wasm_bytes),
-            ),
-            (
-                "gzip".into(),
-                representation(format!("{wasm_path}.gz"), wasm_gz),
-            ),
-            (
-                "br".into(),
-                representation(format!("{wasm_path}.br"), wasm_br),
-            ),
-        ]),
+        path: wasm_path,
+        sha256: csr_bundle::digest(&wasm_bytes),
+        representations: wasm_representations,
     });
     let manifest = Manifest {
-        version: VERSION,
+        version: csr_bundle::VERSION,
         assets,
     };
     manifest
         .verify_bundle(root)
         .context("verifying generated CSR bundle")?;
-    std::fs::write(root.join("manifest.json"), manifest.to_json()?)?;
-    std::fs::write(
+    fs::write(root.join("manifest.json"), manifest.to_json()?)?;
+    fs::write(
         root.join("index.html"),
         render_shell(
             &format!("/{}", manifest.role(Role::Glue)?.path),
             &format!("/{}", manifest.role(Role::Wasm)?.path),
         )?,
     )?;
-    std::fs::remove_dir_all(&generated)?;
+    fs::remove_dir_all(&generated)?;
     let published_temp = temporary.keep();
-    if let Err(error) = std::fs::rename(&published_temp, out) {
-        if let Err(cleanup) = std::fs::remove_dir_all(&published_temp) {
+    if let Err(error) = fs::rename(&published_temp, out) {
+        if let Err(cleanup) = fs::remove_dir_all(&published_temp) {
             bail!(
                 "publishing bundle root {}: {error}; removing temporary bundle {}: {cleanup}",
                 out.display(),
@@ -599,8 +602,57 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
 
+    fn write_executable(path: &Path, source: &str) {
+        fs::write(path, source).unwrap();
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    fn fixture_tools(directory: &Path) -> (PathBuf, PathBuf) {
+        let wasm_bindgen = directory.join("wasm-bindgen");
+        write_executable(
+            &wasm_bindgen,
+            r#"#!/bin/sh
+set -eu
+out="$4"
+mkdir -p "$out/deps"
+printf '%s\n' "import './deps/dep.js'; const wasm_path = 'csr_bg.wasm'; async function __wbg_load(module, imports) { if (typeof Response === 'function' && module instanceof Response) {} await WebAssembly.instantiateStreaming(module, imports); const bytes = await module.arrayBuffer(); return WebAssembly.instantiate(bytes, imports); } async function __wbg_init(module_or_path) { fetch(module_or_path); return __wbg_load(await module_or_path, imports); } export { __wbg_init };" > "$out/csr.js"
+printf '%s\n' "export const dependency = true;" > "$out/deps/dep.js"
+cp "$5" "$out/csr_bg.wasm"
+"#,
+        );
+        let wasm_opt = directory.join("wasm-opt");
+        write_executable(
+            &wasm_opt,
+            r#"#!/bin/sh
+set -eu
+while [ "$1" != "-o" ]; do
+    input="$1"
+    shift
+done
+cp "$input" "$2"
+"#,
+        );
+        (wasm_bindgen, wasm_opt)
+    }
+
+    fn produce_fixture(directory: &Path, name: &str) -> PathBuf {
+        let input = directory.join("input.wasm");
+        fs::write(&input, b"\0asm\x01\0\0\0").unwrap();
+        let (wasm_bindgen, wasm_opt) = fixture_tools(directory);
+        let output = directory.join(name);
+        run_with_tools(&input, &output, None, None, 0, &wasm_bindgen, &wasm_opt).unwrap();
+        output
+    }
+
+    fn fixture_manifest(root: &Path) -> Manifest {
+        Manifest::from_json(&fs::read(root.join("manifest.json")).unwrap()).unwrap()
+    }
     #[test]
     fn gzip_is_deterministic() {
         assert_eq!(
@@ -610,39 +662,85 @@ mod tests {
     }
 
     #[test]
-    fn measured_initializer_retains_delivery_and_shape_telemetry_contract() {
-        let js = append_measured_initializer("export { __wbg_init };", Some("arm"));
-        for fragment in [
-            "const __jaunderWasmModuleShape = (module)",
-            "WebAssembly.Module.imports(module)",
-            "WebAssembly.Module.exports(module)",
-            "WebAssembly.Module.customSections(module, \"jaunder.shape\")",
-            "const startedAt = performance.now()",
-            "const result = await original.apply(this, args)",
-            "path = successfulPath",
-            "apiMs = performance.now() - startedAt",
-            "if (path !== null && apiMs !== null)",
-            "detail: { path, apiMs, experimentArm: __jaunderWasmExperimentArm, moduleShape }",
-            "WebAssembly.instantiateStreaming = originalStreaming",
-            "WebAssembly.instantiate = originalInstantiate",
-        ] {
-            assert!(js.contains(fragment), "missing {fragment:?}");
+    fn producer_fixture_is_deterministic_and_rewrites_the_runtime_graph() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = produce_fixture(directory.path(), "first");
+        let second = produce_fixture(directory.path(), "second");
+
+        assert_eq!(
+            fs::read(first.join("manifest.json")).unwrap(),
+            fs::read(second.join("manifest.json")).unwrap()
+        );
+
+        let manifest = fixture_manifest(&first);
+        manifest.verify_bundle(&first).unwrap();
+        for role in [Role::Glue, Role::Wasm] {
+            assert_eq!(
+                manifest.role(role).unwrap().representations.len(),
+                3,
+                "{role:?} has every required representation"
+            );
         }
-        assert!(js.contains("const __jaunderWasmExperimentArm = \"arm\";"));
+
+        let glue = manifest.role(Role::Glue).unwrap();
+        let glue_source = fs::read_to_string(first.join(&glue.path)).unwrap();
+        let imports = static_module_specifiers(&glue_source, Path::new(&glue.path)).unwrap();
+        let dependency = manifest
+            .assets
+            .iter()
+            .find(|asset| asset.role.is_none())
+            .unwrap();
+        assert_eq!(
+            imports
+                .into_iter()
+                .map(|specifier| specifier.value)
+                .collect::<Vec<_>>(),
+            vec![format!(
+                "./{}",
+                dependency.path.strip_prefix("pkg/").unwrap()
+            )]
+        );
+    }
+
+    #[test]
+    fn producer_fixture_rejects_duplicate_roles() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = produce_fixture(directory.path(), "bundle");
+        let mut manifest = fixture_manifest(&root);
+        let duplicate = manifest.role(Role::Glue).unwrap().clone();
+        manifest.assets.push(duplicate);
+
+        assert!(matches!(
+            manifest.verify_bundle(&root),
+            Err(csr_bundle::Error::DuplicateRole(Role::Glue))
+        ));
+    }
+
+    #[test]
+    fn producer_fixture_rejects_on_disk_digest_mismatch() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = produce_fixture(directory.path(), "bundle");
+        let manifest = fixture_manifest(&root);
+        let glue_path = manifest.role(Role::Glue).unwrap().path.clone();
+        fs::write(root.join(&glue_path), b"tampered bundle bytes").unwrap();
+
+        assert!(matches!(
+            manifest.verify_bundle(&root),
+            Err(csr_bundle::Error::DigestMismatch { path, .. }) if path == glue_path
+        ));
     }
     #[test]
     fn nested_imports_use_final_dependency_names() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("a.js");
         let dep = directory.path().join("deep/b.js");
-        std::fs::create_dir(dep.parent().unwrap()).unwrap();
-        std::fs::write(&source, "import './deep/b.js'").unwrap();
+        fs::create_dir(dep.parent().unwrap()).unwrap();
+        fs::write(&source, "import './deep/b.js'").unwrap();
 
-        std::fs::write(&dep, "export const b = 1").unwrap();
+        fs::write(&dep, "export const b = 1").unwrap();
         let files = HashMap::from([(normalize(dep), "pkg/final.js".into())]);
         assert_eq!(
-            rewrite_js_imports(&std::fs::read_to_string(&source).unwrap(), &source, &files)
-                .unwrap(),
+            rewrite_js_imports(&fs::read_to_string(&source).unwrap(), &source, &files).unwrap(),
             "import './final.js'"
         );
     }
@@ -652,7 +750,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("a.js");
         let dependency = directory.path().join("b.js");
-        std::fs::write(&dependency, "export {}").unwrap();
+        fs::write(&dependency, "export {}").unwrap();
         let files = HashMap::from([(normalize(dependency), "pkg/final.js".into())]);
         let input = "import './b.js'; export { x } from './b.js'; export * from './b.js';";
         assert_eq!(
@@ -666,7 +764,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("a.js");
         let dependency = directory.path().join("b.js");
-        std::fs::write(&dependency, "export {}").unwrap();
+        fs::write(&dependency, "export {}").unwrap();
         let files = HashMap::from([(normalize(dependency), "pkg/final.js".into())]);
         let input = "// './b.js'\nconst note = \"./b.js\"; const café = '✓'; import './b\\x2ejs';";
         assert_eq!(
@@ -691,8 +789,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let glue = directory.path().join("csr.js");
         let other = directory.path().join("other.js");
-        std::fs::write(&glue, "import './other.js'").unwrap();
-        std::fs::write(&other, "import './csr.js'").unwrap();
+        fs::write(&glue, "import './other.js'").unwrap();
+        fs::write(&other, "import './csr.js'").unwrap();
         let error = require_acyclic_complete_graph(
             &normalize(glue.clone()),
             &[normalize(glue), normalize(other)],
@@ -706,8 +804,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let glue = directory.path().join("csr.js");
         let extra = directory.path().join("extra.js");
-        std::fs::write(&glue, "export const glue = true").unwrap();
-        std::fs::write(&extra, "export const extra = true").unwrap();
+        fs::write(&glue, "export const glue = true").unwrap();
+        fs::write(&extra, "export const extra = true").unwrap();
         let error = require_acyclic_complete_graph(
             &normalize(glue.clone()),
             &[normalize(glue), normalize(extra)],
@@ -726,6 +824,6 @@ mod tests {
     #[test]
     fn final_hash_observes_rewritten_bytes() {
         let path = path_for(b"import './dependency.js'", "js");
-        assert!(path.contains(&digest(b"import './dependency.js'")));
+        assert!(path.contains(&csr_bundle::digest(b"import './dependency.js'")));
     }
 }

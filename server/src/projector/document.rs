@@ -7,27 +7,29 @@ use host::etag;
 use web::app;
 use web::posts;
 
+use crate::bundle;
+
 use super::Shell;
 
 /// Assemble a document from a server-resolved public presentation.
 #[must_use]
 pub fn document_presentation(presentation: &PublicPresentation<PageSeed>) -> String {
-    document_with_urls(presentation, crate::bundle::boot_urls())
+    document_with_urls(presentation, bundle::boot_urls())
 }
 
 fn document_with_urls(
     presentation: &PublicPresentation<PageSeed>,
-    urls: Option<crate::bundle::BootUrls>,
+    urls: Option<bundle::BootUrls>,
 ) -> String {
     // Both arrive as `Markup` (trust is type-carried across the crate boundary);
     // this is where they exit to the untyped response body.
     let seed = &presentation.page;
-    let early_fetch = urls.map(crate::bundle::early_wasm_fetch_script);
+    let early_fetch = urls.map(bundle::early_wasm_fetch_script);
     let head = app::render_head(seed, early_fetch.as_deref()).into_string();
     let body = app::render_shell(presentation).into_string();
     let blob = serde_json::to_string(presentation).unwrap_or_else(|_| "null".to_string());
     let boot = urls.map_or_else(String::new, |urls| {
-        crate::bundle::module_init_script(urls, app::MODULE_BEFORE_INIT_MARK)
+        bundle::module_init_script(urls, app::MODULE_BEFORE_INIT_MARK)
     });
     format!(
         concat!(

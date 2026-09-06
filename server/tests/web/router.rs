@@ -88,7 +88,7 @@ async fn spa_fallback_serves_embedded_shell_without_disk_index_html(#[case] back
         "text/html; charset=utf-8"
     );
     let body = body_string(response).await;
-    assert!(body.contains("CSR bundle unavailable"), "{body}");
+    assert!(body.starts_with("<!doctype html>"), "{body}");
 }
 
 #[apply(backends)]

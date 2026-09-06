@@ -19,7 +19,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use build_staging::prepare_staging_with;
+use build_staging::{prepare_staging_with, stage_bundle};
 use csr_bundle::{Manifest, Role};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -76,10 +76,8 @@ fn main() {
                 |path| fs::remove_dir_all(path),
                 |path| fs::create_dir_all(path),
                 || {
-                    stage_bundle(&bundle_root, &site_dir, &manifest);
-                    if public_src.is_dir() {
-                        copy_tree(&public_src, &site_dir);
-                    }
+                    stage_bundle(&bundle_root, &site_dir, &public_src, &manifest)
+                        .unwrap_or_else(|error| panic!("{error}"));
                 },
             )
             .unwrap_or_else(|error| panic!("{error}"));
@@ -95,9 +93,8 @@ fn main() {
                 |path| fs::remove_dir_all(path),
                 |path| fs::create_dir_all(path),
                 || {
-                    if public_src.is_dir() {
-                        copy_tree(&public_src, &site_dir);
-                    }
+                    build_staging::stage_public_tree(&public_src, &site_dir)
+                        .unwrap_or_else(|error| panic!("{error}"));
                 },
             )
             .unwrap_or_else(|error| panic!("{error}"));
@@ -124,21 +121,6 @@ fn load_bundle(root: &Path) -> Manifest {
         root.display()
     );
     manifest
-}
-
-fn stage_bundle(root: &Path, site: &Path, manifest: &Manifest) {
-    copy_file(&root.join("index.html"), &site.join("index.html"));
-    for asset in &manifest.assets {
-        copy_file(&root.join(&asset.path), &site.join(&asset.path));
-        for representation in asset.representations.values() {
-            if representation.path != asset.path {
-                copy_file(
-                    &root.join(&representation.path),
-                    &site.join(&representation.path),
-                );
-            }
-        }
-    }
 }
 
 fn write_generated_data(path: &Path, manifest: Option<&Manifest>) {
@@ -169,34 +151,4 @@ fn write_generated_data(path: &Path, manifest: Option<&Manifest>) {
         "pub const GLUE_URL: Option<&str> = None;\npub const WASM_URL: Option<&str> = None;\npub const MANIFEST_PATHS: &[&str] = &[];\n".to_owned()
     };
     fs::write(path, source).unwrap_or_else(|error| panic!("writing {}: {error}", path.display()));
-}
-
-fn copy_file(src: &Path, dst: &Path) {
-    let parent = dst
-        .parent()
-        .unwrap_or_else(|| panic!("staged path {} has no parent", dst.display()));
-    fs::create_dir_all(parent)
-        .unwrap_or_else(|error| panic!("creating {}: {error}", parent.display()));
-    fs::copy(src, dst)
-        .unwrap_or_else(|error| panic!("copying {} to {}: {error}", src.display(), dst.display()));
-}
-
-fn copy_tree(src: &Path, dst: &Path) {
-    fs::create_dir_all(dst).unwrap_or_else(|error| panic!("creating {}: {error}", dst.display()));
-    for entry in
-        fs::read_dir(src).unwrap_or_else(|error| panic!("reading {}: {error}", src.display()))
-    {
-        let entry = entry.unwrap_or_else(|error| panic!("reading {}: {error}", src.display()));
-        let path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if entry
-            .file_type()
-            .unwrap_or_else(|error| panic!("stating {}: {error}", path.display()))
-            .is_dir()
-        {
-            copy_tree(&path, &dst_path);
-        } else {
-            copy_file(&path, &dst_path);
-        }
-    }
 }

@@ -100,7 +100,7 @@ let
     "jaunder-wasm-test-cargo-source"
     (pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
-      filter = cargoTargetSource [ "client" "common" "macros" ];
+      filter = cargoTargetSource [ "client" "common" "macros" "tools/csr_bundle" ];
     })
     [ "csr" "host" "server" "storage" "test-support" "web" ];
 

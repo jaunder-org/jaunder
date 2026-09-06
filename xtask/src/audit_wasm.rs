@@ -4,10 +4,10 @@
 //! and sizes the manifest-selected identity artifacts. Pure size/format helpers
 //! are unit-tested; the `nix`/filesystem I/O lives in `run`/`resolve_site_path`.
 
-use std::io::Write;
-use std::path::Path;
+use std::{fs, io::Write, path::Path};
 
 use anyhow::{Context, Result};
+use csr_bundle::{Manifest, Role};
 use serde::Serialize;
 
 use crate::nix_build;
@@ -148,8 +148,8 @@ fn verify_generated_shell(index_html: &str, glue_path: &str, wasm_path: &str) ->
 /// selected artifact fail before any size measurement can hide the drift.
 fn bundle_boot_artifacts(root: &Path) -> Result<Vec<String>> {
     let manifest_path = root.join("manifest.json");
-    let manifest = csr_bundle::Manifest::from_json(
-        &std::fs::read(&manifest_path)
+    let manifest = Manifest::from_json(
+        &fs::read(&manifest_path)
             .with_context(|| format!("reading CSR bundle manifest {}", manifest_path.display()))?,
     )
     .with_context(|| format!("parsing CSR bundle manifest {}", manifest_path.display()))?;
@@ -157,10 +157,10 @@ fn bundle_boot_artifacts(root: &Path) -> Result<Vec<String>> {
         .verify_bundle(root)
         .with_context(|| format!("verifying CSR bundle {}", root.display()))?;
 
-    let glue_path = manifest.role(csr_bundle::Role::Glue)?.path.clone();
-    let wasm_path = manifest.role(csr_bundle::Role::Wasm)?.path.clone();
+    let glue_path = manifest.role(Role::Glue)?.path.clone();
+    let wasm_path = manifest.role(Role::Wasm)?.path.clone();
     let index_path = root.join("index.html");
-    let index_html = std::fs::read_to_string(&index_path)
+    let index_html = fs::read_to_string(&index_path)
         .with_context(|| format!("reading generated CSR shell {}", index_path.display()))?;
     verify_generated_shell(&index_html, &glue_path, &wasm_path)?;
     Ok(vec![wasm_path, glue_path])
@@ -174,7 +174,7 @@ pub fn run(site_path: Option<&str>) -> Result<AuditReport> {
     let mut artifacts = Vec::new();
     for name in &names {
         let path = Path::new(&site_path).join(name);
-        let bytes = std::fs::read(&path)
+        let bytes = fs::read(&path)
             .with_context(|| format!("reading manifest-selected artifact {}", path.display()))?;
         // Guard the strip (#836). `wasm-opt` drops the name section unless `-g` is
         // passed, so its reappearance means the optimisation pass was weakened or
@@ -219,8 +219,7 @@ fn resolve_breakdown_path(explicit: Option<&str>) -> Result<String> {
 /// Attribute a wasm artifact's bytes to sections and crates.
 pub fn breakdown(wasm_path: Option<&str>) -> Result<BreakdownReport> {
     let artifact = resolve_breakdown_path(wasm_path)?;
-    let bytes =
-        std::fs::read(&artifact).with_context(|| format!("reading wasm artifact {artifact}"))?;
+    let bytes = fs::read(&artifact).with_context(|| format!("reading wasm artifact {artifact}"))?;
     let sections = crate::wasm_sections::section_sizes(&bytes)
         .with_context(|| format!("parsing sections of {artifact}"))?;
     let code_bytes = sections

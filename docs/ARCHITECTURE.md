@@ -1927,9 +1927,9 @@ override.
   (`public/favicon.ico` → `favicon.ico`). `devtool csr-bundle` emits the
   role-tagged manifest that defines the runtime inventory; `server/build.rs`
   validates that manifest and stages the tree at compile time from
-  `JAUNDER_CSR_BUNDLE_DIR` (Nix) or `target/site/pkg` (host build). The rendered
-  SPA and public-projector shells consume the same manifest, so no source
-  literal or filename heuristic duplicates asset identity
+  `JAUNDER_CSR_BUNDLE_DIR` (Nix) or `target/site` (host build). The rendered SPA
+  and public-projector shells consume the same manifest, so no source literal or
+  filename heuristic duplicates asset identity
   ([content-addressed CSR bundle manifest](adr/drafts/content-addressed-csr-bundle-manifest.md)).
 
 Only the two base stylesheets are embedded separately. ADR-0003 also anticipated
