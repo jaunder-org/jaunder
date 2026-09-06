@@ -1,4 +1,4 @@
-use common::ids::{PostId, UserId};
+use common::ids::{AudienceId, PostId, SubscriptionId, UserId};
 use common::media::MediaSource;
 use common::post_title::PostTitle;
 use common::slug::Slug;
@@ -44,6 +44,10 @@ pub struct BackupFixtureIds {
     pub public_post_title: PostTitle,
     /// A post targeted at a `Named` audience the viewer belongs to.
     pub named_post: PostId,
+    /// The named audience assigned to `named_post` and containing `viewer`.
+    pub audience: AudienceId,
+    /// The subscription linking `viewer` to `author`, used by the audience member.
+    pub subscription: SubscriptionId,
     /// The publisher generation, advanced from its migration-seeded value to prove
     /// backup and restore replace the target singleton row.
     pub publisher_generation: PublisherGeneration,
@@ -110,7 +114,8 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         .seed(&state)
         .await;
 
-    let (viewer, named_post) = seed_named_audience_post(&state, author, &password).await;
+    let (viewer, audience, subscription, named_post) =
+        seed_named_audience_post(&state, author, &password).await;
     seed_side_tables(&state, author).await;
 
     std::fs::write(args.storage_path.join("media").join("avatar.txt"), "media")
@@ -122,19 +127,21 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         public_post_slug: public.slug,
         public_post_title: public.title,
         named_post,
+        audience,
+        subscription,
         publisher_generation,
     }
 }
 
 /// Seeds a non-author subscriber and a `Named`-audience post they belong to,
-/// returning `(viewer_id, named_post_id)`. These visibility rows
+/// returning `(viewer_id, audience_id, subscription_id, named_post_id)`. These visibility rows
 /// (`subscriptions`, `audiences`, `audience_members`, `post_audiences`) must
 /// survive restore so the subscriber still resolves the private post (issue #4).
 async fn seed_named_audience_post(
     state: &Arc<AppState>,
     author: UserId,
     password: &Password,
-) -> (UserId, PostId) {
+) -> (UserId, AudienceId, SubscriptionId, PostId) {
     let viewer_name: Username = "viewer".parse().expect("valid username");
     let users = Arc::clone(&state.users);
     let display_name = parse_display_name("Viewer");
@@ -197,7 +204,7 @@ async fn seed_named_audience_post(
         .seed(state)
         .await
         .post_id;
-    (viewer, named_post)
+    (viewer, audience, subscription, named_post)
 }
 
 /// Seeds the side tables: a `user_config` row, a media-table row, and a

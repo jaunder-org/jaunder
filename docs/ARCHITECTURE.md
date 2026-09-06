@@ -294,17 +294,24 @@ fields ([ADR-0136](adr/0136-local-post-lifecycle.md),
 [ADR-0064](adr/0064-backup-target-auto-derivation.md)).
 
 **Compatibility is explicit and independent of package chronology.** The
-manifest format version and exact database schema version are the restore
-authorities: exports identify format 1, and legacy manifests with no
-format-version member are format 1. Package version and the backend-specific
-schema checksum remain provenance only, so older and newer packages restore
-silently when those authorities match. An unsupported format or schema mismatch
-is a typed incompatibility that fails before database or media mutation,
-distinct from malformed backup content and relational constraint failure.
-Typed-domain invariant violations instead retain #725's restore-and-report
-behavior: data and media restore, then the command reports current-domain
-violations. This policy is recorded in the
-[backup format and schema compatibility decision](adr/0174-backup-format-and-schema-compatibility.md).
+manifest format version governs wire readability: exports identify format 1, and
+legacy manifests with no format-version member are format 1. The
+[test-owned corpus](../server/tests/misc/backup_corpus/README.md) is
+[ADR-0174](adr/0174-backup-format-and-schema-compatibility.md)'s independent
+reader/writer enforcement mechanism: immutable historical inputs exercise public
+restore, while a raw-wire oracle checks current exports without sharing
+production encoding expectations.
+
+Format compatibility is separate from live schema/migration compatibility. A
+restore also requires an exact current database schema version, but no schema
+transformation is implied and a migration change does not itself establish a
+format change. Package version and the backend-specific schema checksum remain
+provenance only, so older and newer packages restore silently when the format
+and exact-schema authorities match. An unsupported format or schema mismatch is
+a typed incompatibility that fails before database or media mutation, distinct
+from malformed backup content and relational constraint failure. Typed-domain
+invariant violations instead retain #725's restore-and-report behavior: data and
+media restore, then the command reports current-domain violations.
 
 Restore is authoritative and order-independent: both backends clear every target
 table in a first pass, then load all rows in a second, with FK enforcement
