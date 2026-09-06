@@ -62,16 +62,45 @@ fn AppShell() -> impl IntoView {
                     .token()
             }
         >
-            <div class="j-shell">
-                <Sidebar />
-                <div class="j-main-region">
-                    <BackupBanner />
-                    <SiteBaseUrlBanner />
-                    <main class="j-main">
-                        <Outlet />
-                    </main>
-                </div>
-            </div>
+            {move || {
+                if common::theme::is_public_presentation_path(&location.pathname.get()) {
+                    view! {
+                        <div id="j-trusted-chrome" class="j-trusted-chrome">
+                            <BackupBanner />
+                            <SiteBaseUrlBanner />
+                        </div>
+                        <div class="j-theme-clip" data-jaunder-theme-clip>
+                            <div
+                                class="j-shell"
+                                data-jaunder-theme-surface
+                                data-jaunder-style-contract="1"
+                            >
+                                <Sidebar />
+                                <div class="j-main-region">
+                                    <main class="j-main" data-jaunder-part="main">
+                                        <Outlet />
+                                    </main>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                        .into_any()
+                } else {
+                    view! {
+                        <div class="j-shell">
+                            <Sidebar />
+                            <div class="j-main-region">
+                                <BackupBanner />
+                                <SiteBaseUrlBanner />
+                                <main class="j-main">
+                                    <Outlet />
+                                </main>
+                            </div>
+                        </div>
+                    }
+                        .into_any()
+                }
+            }}
         </div>
     }
 }

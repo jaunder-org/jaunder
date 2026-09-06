@@ -5,20 +5,19 @@ use common::seed::TagSummary;
 use crate::html::Markup;
 use crate::taglist::TagCtx;
 
-/// The footer tag chips: a `<span class="j-tag-list">` of `<span class="j-tag-cell">`
-/// chips, each a `#display` link to `/tags/:slug`, plus the "· here" link under
-/// [`TagCtx::ForUser`]. The single renderer for these chips — the server projector
-/// and the CSR client both inject it, so there is no twin to keep coincident (#301).
+/// The footer tag chips: a `ul` of tag links plus any profile-local "here" link.
+/// The single renderer for these chips — the server projector and the CSR client
+/// both inject it, so there is no twin to keep coincident (#301).
 #[must_use]
 pub(crate) fn render(tags: &[TagSummary], ctx: &TagCtx) -> Markup {
     if tags.is_empty() {
         return Markup::empty();
     }
     Markup::new(html! {
-        span class="j-tag-list" {
+        ul class="j-tag-list" data-jaunder-part="tag-list" {
             @for tag in tags {
-                span class="j-tag-cell" {
-                    a class="j-tag" href={ "/tags/" (tag.slug) } { "#" (tag.display) }
+                li class="j-tag-cell" {
+                    a class="j-tag" data-jaunder-part="tag" href={ "/tags/" (tag.slug) } { "#" (tag.display) }
                     @if let TagCtx::ForUser(username) = ctx {
                         a class="j-tag-here"
                             href={ "/~" (username) "/tags/" (tag.slug) }
@@ -50,8 +49,8 @@ mod tests {
         let html = render(&tags, &TagCtx::SiteWide);
         assert_eq!(
             html,
-            "<span class=\"j-tag-list\"><span class=\"j-tag-cell\">\
-             <a class=\"j-tag\" href=\"/tags/rust\">#Rust</a></span></span>"
+            "<ul class=\"j-tag-list\" data-jaunder-part=\"tag-list\"><li class=\"j-tag-cell\">\
+             <a class=\"j-tag\" data-jaunder-part=\"tag\" href=\"/tags/rust\">#Rust</a></li></ul>"
         );
     }
 

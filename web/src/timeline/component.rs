@@ -148,38 +148,48 @@ pub fn TimelineRows(
     let read_in_flight = move || state.status.get().is_in_flight();
     view! {
         <div class="j-scroll">
-            {move || {
-                let rows = read_rows();
-                if rows.is_empty() {
-                    view! { <p>{empty_text}</p> }.into_any()
-                } else {
-                    rows.iter()
-                        .map(|p| {
+            <div data-jaunder-part="post-list">
+                {move || {
+                    let rows = read_rows();
+                    if rows.is_empty() {
+                        view! { <p>{empty_text}</p> }.into_any()
+                    } else {
+                        rows.iter()
+                            .map(|p| {
+                                view! {
+                                    <PostCard
+                                        post=p
+                                        banner=None
+                                        tag_context=&tag_context
+                                        on_mutate=on_mutate
+                                    />
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .into_any()
+                    }
+                }}
+                {move || {
+                    read_has_more()
+                        .then(|| {
                             view! {
-                                <PostCard
-                                    post=p
-                                    banner=None
-                                    tag_context=&tag_context
-                                    on_mutate=on_mutate
-                                />
+                                <button
+                                    data-jaunder-part="continuation"
+                                    on:click=move |_| on_load_more.run(())
+                                    disabled=read_in_flight
+                                >
+                                    {move || {
+                                        if read_in_flight() {
+                                            "Loading\u{2026}"
+                                        } else {
+                                            "Load more"
+                                        }
+                                    }}
+                                </button>
                             }
                         })
-                        .collect::<Vec<_>>()
-                        .into_any()
-                }
-            }}
-            {move || {
-                read_has_more()
-                    .then(|| {
-                        view! {
-                            <button on:click=move |_| on_load_more.run(()) disabled=read_in_flight>
-                                {move || {
-                                    if read_in_flight() { "Loading\u{2026}" } else { "Load more" }
-                                }}
-                            </button>
-                        }
-                    })
-            }}
+                }}
+            </div>
         </div>
     }
 }

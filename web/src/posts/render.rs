@@ -171,7 +171,7 @@ pub(crate) struct PostView<'a> {
 #[must_use]
 pub(crate) fn render_post_article(view: &PostView) -> Markup {
     Markup::new(html! {
-        article class="j-post" { (post_inner(view)) }
+        article class="j-post" data-jaunder-part="post" { (post_inner(view)) }
     })
 }
 
@@ -182,13 +182,13 @@ pub(crate) fn render_post_article(view: &PostView) -> Markup {
 pub(crate) fn post_inner(view: &PostView) -> Markup {
     Markup::new(html! {
         (avatar::render(view.username, 38))
-        div style="min-width:0;display:flex;gap:8px;align-items:flex-start" {
-            div style="flex:1;min-width:0" { (post_content(view)) }
+        div class="j-post-layout" {
+            div class="j-post-content" { (post_content(view)) }
         }
     })
 }
 
-/// The inner HTML of the post's content column (`<div style="flex:1;min-width:0">`):
+/// The inner HTML of the post's content column (`<div class="j-post-content">`):
 /// header, title, optional draft banner, summary, body, footer. Shared by the
 /// anonymous [`post_inner`] and the reactive author layout, which slots
 /// this into the same content `<div>` via `inner_html` and overlays the reactive
@@ -199,14 +199,14 @@ pub(crate) fn post_inner(view: &PostView) -> Markup {
 #[must_use]
 pub(crate) fn post_content(view: &PostView) -> Markup {
     Markup::new(html! {
-        header class="j-post-head" {
-            span class="j-post-name" { (view.username) }
-            span class="j-post-handle" { "@" (view.username) }
+        header class="j-post-head" data-jaunder-part="post-header" {
+            span class="j-post-name" data-jaunder-part="author-name" { (view.username) }
+            span class="j-post-handle" data-jaunder-part="author-handle" { "@" (view.username) }
             span class="j-spacer" {}
-            span class="j-post-time" { (view.time) }
+            time class="j-post-time" data-jaunder-part="published-time" { (view.time) }
         }
         @if let Some(title) = view.title {
-            div class="j-post-title" {
+            h2 class="j-post-title" data-jaunder-part="post-title" {
                 @if let Some(permalink) = view.permalink {
                     a href=(&**permalink) { (title) }
                 } @else {
@@ -218,13 +218,13 @@ pub(crate) fn post_content(view: &PostView) -> Markup {
             p class="draft-banner" { (banner) }
         }
         @if let Some(summary) = view.summary {
-            p class="j-post-summary" { (summary) }
+            p class="j-post-summary" data-jaunder-part="post-summary" { (summary) }
         }
         // The one place trusted HTML enters the markup layer. `rendered_html` is a
         // `RenderedHtml`, so the door is the only way to spell this and the
         // `raw-html-door` gate accounts for it.
-        div class="j-post-body" { (Markup::from_rendered_html(view.rendered_html)) }
-        footer class="j-post-foot" {
+        div class="j-post-body" data-jaunder-part="post-body" { (Markup::from_rendered_html(view.rendered_html)) }
+        footer class="j-post-foot" data-jaunder-part="post-footer" {
             (taglist::render(view.tags, view.tag_ctx))
             span class="j-spacer" {}
         }
@@ -248,11 +248,13 @@ fn render_timeline_page(
     Markup::new(html! {
         (chrome)
         div class="j-scroll" {
-            @if posts.is_empty() {
-                p { (empty_text) }
-            } @else {
-                (render_posts(posts, tag_ctx))
-                (crate::timeline::render::load_more(has_more))
+            div data-jaunder-part="post-list" {
+                @if posts.is_empty() {
+                    p { (empty_text) }
+                } @else {
+                    (render_posts(posts, tag_ctx))
+                    (crate::timeline::render::load_more(has_more))
+                }
             }
         }
     })
@@ -383,7 +385,9 @@ mod tests {
         // The timestamp stays in the header — the specific divergence #181 fixed. The
         // projector painted it anonymously, so the authed content column must too.
         assert!(
-            content.contains("<span class=\"j-post-time\">2026-01-01 00:00</span>"),
+            content.contains(
+                "<time class=\"j-post-time\" data-jaunder-part=\"published-time\">2026-01-01 00:00</time>"
+            ),
             "content column must keep the header time to coincide: {content}"
         );
         // The anonymous inner the projector paints embeds that exact content column
@@ -451,12 +455,11 @@ mod tests {
             page: one_post_page(),
         })
         .into_string();
-        // Tag pages render the Topbar (h1 + sub), then a bare j-scroll > posts (flush,
-        // no j-page — matches TimelineRows and the home test below).
+        // Tag pages render the public masthead, then a bare j-scroll > post list.
         assert!(site.contains("<h1>#rust</h1>"), "{site}");
         assert!(site.contains("Posts on this instance"), "{site}");
         assert!(
-            site.contains("<div class=\"j-scroll\"><article class=\"j-post\">"),
+            site.contains("<div class=\"j-scroll\"><div data-jaunder-part=\"post-list\"><article class=\"j-post\" data-jaunder-part=\"post\">"),
             "{site}"
         );
         assert!(site.contains("First"), "expected post rendered: {site}");
@@ -486,9 +489,9 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("<div class=\"j-hero\">"), "{html}");
-        // Posts sit directly in j-scroll for the home page (no inner j-page wrapper).
+        // Posts sit inside the semantic post list for the home page.
         assert!(
-            html.contains("<div class=\"j-scroll\"><article class=\"j-post\">"),
+            html.contains("<div class=\"j-scroll\"><div data-jaunder-part=\"post-list\"><article class=\"j-post\" data-jaunder-part=\"post\">"),
             "{html}"
         );
     }
@@ -498,10 +501,53 @@ mod tests {
         let mut page = one_post_page();
         page.has_more = true;
         let with = body(&PageSeed::SiteTimeline(page)).into_string();
-        assert!(with.contains("<button>Load more</button>"), "{with}");
+        assert!(
+            with.contains("<button data-jaunder-part=\"continuation\">Load more</button>"),
+            "{with}"
+        );
 
         let without = body(&PageSeed::SiteTimeline(one_post_page())).into_string();
         assert!(!without.contains("Load more"), "{without}");
+    }
+
+    #[test]
+    fn style_contract_hooks_preserve_route_presence_and_post_landmarks() {
+        let timeline = body(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        for hook in [
+            "masthead",
+            "site-title",
+            "post-list",
+            "post",
+            "post-header",
+            "author-name",
+            "author-handle",
+            "published-time",
+            "post-title",
+            "post-summary",
+            "post-body",
+            "post-footer",
+        ] {
+            assert!(
+                timeline.contains(&format!("data-jaunder-part=\"{hook}\"")),
+                "missing {hook}: {timeline}"
+            );
+        }
+        assert_eq!(
+            timeline.matches("data-jaunder-part=\"post-list\"").count(),
+            1
+        );
+        assert!(
+            !timeline.contains("style=\"min-width:0;display:flex;gap:8px;align-items:flex-start\"")
+                && !timeline.contains("style=\"flex:1;min-width:0\""),
+            "post layout must be CSS-owned: {timeline}"
+        );
+
+        let permalink = body(&PageSeed::Permalink(sample_post())).into_string();
+        assert!(
+            !permalink.contains("data-jaunder-part=\"post-list\""),
+            "{permalink}"
+        );
+        assert!(permalink.contains("<article class=\"j-post\" data-jaunder-part=\"post\">"));
     }
 
     #[test]
@@ -534,7 +580,7 @@ mod tests {
         );
         assert!(
             html.starts_with(
-                "<div class=\"j-scroll\"><div class=\"j-page\"><article class=\"j-post\">"
+                "<div class=\"j-scroll\"><div class=\"j-page\"><article class=\"j-post\" data-jaunder-part=\"post\">"
             ),
             "{html}"
         );

@@ -160,10 +160,13 @@ pub fn render_shell(presentation: &PublicPresentation<PageSeed>) -> Markup {
         .unwrap_or("");
     Markup::new(html! {
         div class="j-root" data-theme=(presentation.theme.as_ref()) {
-            div class="j-shell" {
-                aside class="j-sidebar" { (crate::sidebar::render_sidebar(active_key)) }
-                div class="j-main-region" {
-                    main class="j-main" { (crate::posts::render::body(seed)) }
+            div id="j-trusted-chrome" class="j-trusted-chrome" {}
+            div class="j-theme-clip" data-jaunder-theme-clip {
+                div class="j-shell" data-jaunder-theme-surface data-jaunder-style-contract="1" {
+                    aside class="j-sidebar" { (crate::sidebar::render_sidebar(active_key)) }
+                    div class="j-main-region" {
+                        main class="j-main" data-jaunder-part="main" { (crate::posts::render::body(seed)) }
+                    }
                 }
             }
         }
@@ -309,26 +312,41 @@ mod tests {
     }
 
     #[test]
-    fn shell_wraps_body_in_j_root_with_sidebar_and_main() {
+    fn shell_has_one_versioned_theme_surface_inside_a_paint_clip() {
         let html = render_shell(&PublicPresentation {
             theme: common::theme::Theme::Studio,
             page: PageSeed::SiteTimeline(one_post_page()),
         })
         .into_string();
+        assert_eq!(
+            html.matches("data-jaunder-theme-surface").count(),
+            1,
+            "{html}"
+        );
+        assert_eq!(
+            html.matches("data-jaunder-part=\"primary-navigation\"")
+                .count(),
+            1,
+            "{html}"
+        );
+        assert_eq!(
+            html.matches("data-jaunder-part=\"main\"").count(),
+            1,
+            "{html}"
+        );
         assert!(
             html.starts_with(
-                "<div class=\"j-root\" data-theme=\"studio\"><div class=\"j-shell\">\
-                 <aside class=\"j-sidebar\">"
+                "<div class=\"j-root\" data-theme=\"studio\"><div id=\"j-trusted-chrome\" class=\"j-trusted-chrome\"></div>\
+                 <div class=\"j-theme-clip\" data-jaunder-theme-clip><div class=\"j-shell\" \
+                 data-jaunder-theme-surface data-jaunder-style-contract=\"1\"><aside class=\"j-sidebar\">"
             ),
             "{html}"
         );
-        // Sidebar inner is present, then the main region.
-        assert!(html.contains("j-brand-text"), "{html}");
         assert!(
-            html.contains("</aside><div class=\"j-main-region\"><main class=\"j-main\">"),
+            html.contains("</aside><div class=\"j-main-region\"><main class=\"j-main\" data-jaunder-part=\"main\">"),
             "{html}"
         );
-        assert!(html.ends_with("</main></div></div></div>"), "{html}");
+        assert!(html.ends_with("</main></div></div></div></div>"), "{html}");
     }
 
     #[test]

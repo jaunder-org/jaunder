@@ -1,8 +1,9 @@
+use leptos::children::ToChildren;
+use leptos::portal::{Portal, PortalProps};
 use leptos::prelude::*;
 use leptos_router::NavigateOptions;
 use leptos_router::hooks::use_navigate;
 
-use crate::avatar::Avatar;
 use crate::error::WebError;
 use crate::posts;
 use crate::posts::{Delete, Publish, SavedPost, Unpublish};
@@ -20,17 +21,12 @@ use super::support;
 pub fn PostDisplay<'a>(
     post: &'a RenderedPost,
     banner: Option<&'a str>,
-    /// Linking context for the tag chips in the footer; defaults to
-    /// site-wide.
+    /// Linking context for the tag chips in the footer; defaults to site-wide.
     #[prop(default = &TagCtx::SiteWide)]
     tag_context: &'a TagCtx,
-    #[prop(optional)] children: Option<Children>,
+    #[prop(optional)] has_owner_actions: bool,
 ) -> impl IntoView + use<> {
     let time_label = posts::render::format_post_time(post.display_time());
-    // Built once and shared by both arms so the authored content column is the SAME
-    // pure, viewer-independent render the projector paints (#181, ADR-0044 D4) — no
-    // hand-rebuilt markup and no is_author-driven content change that could diverge
-    // and reintroduce a flash. The action column is layered on additively.
     let view = posts::render::PostView {
         username: &post.username,
         title: post.title.as_ref(),
@@ -42,38 +38,29 @@ pub fn PostDisplay<'a>(
         tags: &post.tags,
         tag_ctx: tag_context,
     };
-    match children {
-        // Anonymous / no-action layout: the WHOLE article inner is produced by the
-        // pure `render` layer — the SAME code the public projector server-renders
-        // (#179) — and injected via `inner_html`, so a seeded first paint and this
-        // reactive re-render are byte-identical (flash-free). "Share the pure fn,
-        // not the component" (ADR-0041 §4). The projector only ever renders this
-        // anonymous view, so this is the only path that must coincide.
-        None => {
-            let inner = posts::render::post_inner(&view);
-            inner
-                .inject_into(leptos::html::article().class("j-post"))
-                .into_any()
+    let inner = posts::render::post_inner(&view);
+    let article_id = format!("j-post-{}", i64::from(post.post_id));
+    if has_owner_actions {
+        view! {
+            <article id=article_id.clone() class="j-post" data-jaunder-part="post">
+                {inner.inject_into(leptos::html::div().class("j-contents"))}
+                <span
+                    class="j-post-actions-anchor"
+                    data-jaunder-owner-actions-for=article_id.clone()
+                    aria-hidden="true"
+                ></span>
+            </article>
         }
-        // Authored layout (own posts, with the action column). The content column is
-        // the SAME `post_content` the anonymous arm wraps, injected via
-        // `inner_html` so it coincides with the projector's paint (#181); only the
-        // reactive action column (`children`, carrying edit/delete handlers that
-        // `inner_html` can't) overlays it as a sibling — hand-rebuilt reactive
-        // markup here would diverge from the projector and reintroduce the flash.
-        Some(children) => {
-            let inner_content = posts::render::post_content(&view);
-            view! {
-                <article class="j-post">
-                    <Avatar name=&post.username size=38 />
-                    <div style="min-width:0;display:flex;gap:8px;align-items:flex-start">
-                        {inner_content.inject_into(leptos::html::div().style("flex:1;min-width:0"))}
-                        {children()}
-                    </div>
-                </article>
-            }
+        .into_any()
+    } else {
+        inner
+            .inject_into(
+                leptos::html::article()
+                    .id(article_id)
+                    .class("j-post")
+                    .attr("data-jaunder-part", "post"),
+            )
             .into_any()
-        }
     }
 }
 
@@ -166,7 +153,12 @@ fn post_action_column(
 ) -> Option<AnyView> {
     is_author.then(move || {
         view! {
-            <div class="j-post-acts">
+            <div
+                class="j-post-acts"
+                data-jaunder-owner-controls
+                aria-label="Post actions"
+                aria-controls=format!("j-post-{}", i64::from(post_id))
+            >
                 <a class="j-btn" href=edit_url.to_string()>
                     "Edit"
                 </a>
@@ -192,6 +184,53 @@ fn post_action_column(
             </div>
         }
         .into_any()
+    })
+}
+
+#[component]
+fn TrustedPostActions(
+    author: Username,
+    is_draft: bool,
+    edit_url: RootRelativeUrl,
+    history_url: String,
+    delete_action: ServerAction<Delete>,
+    publish_action: ServerAction<Publish>,
+    unpublish_action: ServerAction<Unpublish>,
+    post_id: PostId,
+) -> impl IntoView {
+    let article_id = format!("j-post-{}", i64::from(post_id));
+    let trusted_chrome = leptos::web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id("j-trusted-chrome"));
+    trusted_chrome.map(move |mount| {
+        let render_actions = move || {
+            let primary_action =
+                primary_post_action(is_draft, post_id, publish_action, unpublish_action);
+            let actions = post_action_column(
+                true,
+                edit_url.clone(),
+                history_url.clone(),
+                primary_action,
+                delete_action,
+                post_id,
+            );
+            view! {
+                <section
+                    class="j-post-action-tray"
+                    aria-label=format!("Actions for @{author}")
+                    aria-controls=article_id.clone()
+                >
+                    <p class="j-post-action-tray-title">"Actions for @" {author.to_string()}</p>
+                    {actions}
+                </section>
+            }
+        };
+        Portal(
+            PortalProps::builder()
+                .mount(mount)
+                .children(ToChildren::to_children(render_actions))
+                .build(),
+        )
     })
 }
 
@@ -271,16 +310,20 @@ pub fn PostCard<'a>(
         },
     );
 
-    let primary_action = primary_post_action(is_draft, post_id, publish_action, unpublish_action);
-
-    let action_col = post_action_column(
-        is_author,
-        edit_url,
-        history_url,
-        primary_action,
-        delete_action,
-        post_id,
-    );
+    let trusted_actions = is_author.then(|| {
+        view! {
+            <TrustedPostActions
+                author=post.username.clone()
+                is_draft
+                edit_url=edit_url.clone()
+                history_url=history_url.clone()
+                delete_action
+                publish_action
+                unpublish_action
+                post_id
+            />
+        }
+    });
 
     view! {
         {move || {
@@ -319,8 +362,7 @@ pub fn PostCard<'a>(
                     )
                 })
         }}
-        <PostDisplay post=post banner=banner tag_context=tag_context>
-            {action_col}
-        </PostDisplay>
+        <PostDisplay post=post banner=banner tag_context=tag_context has_owner_actions=is_author />
+        {trusted_actions}
     }
 }

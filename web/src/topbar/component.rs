@@ -9,8 +9,11 @@ pub fn Topbar(
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
     view! {
-        <div class="j-topbar">
+        <header class="j-topbar" data-jaunder-part="masthead">
             <div>
+                <span class="j-site-identity" data-jaunder-part="site-title">
+                    "Jaunder"
+                </span>
                 <h1>{move || title.get()}</h1>
                 {sub
                     .map(|s| {
@@ -18,6 +21,6 @@ pub fn Topbar(
                     })}
             </div>
             <div class="j-topbar-right">{children.map(|c| c())}</div>
-        </div>
+        </header>
     }
 }
