@@ -42,6 +42,7 @@ mod smtp;
 pub mod sql;
 mod sqlite;
 mod subscriptions;
+mod themes;
 mod user_config;
 mod users;
 mod write_scope;
@@ -103,6 +104,7 @@ pub use sqlite::{
     SqliteUserConfigStorage, SqliteUserStorage,
 };
 pub use subscriptions::*;
+pub use themes::*;
 pub use user_config::*;
 pub use users::*;
 pub use write_scope::*;

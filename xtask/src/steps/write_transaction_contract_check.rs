@@ -16,7 +16,7 @@ use crate::steps::scan::run_source_scan;
 
 const POLICED_ROOTS: &[&str] = &["storage/src", "server/src", "web/src"];
 
-/// The authoritative, closed application-mutation census. Counts add to 63.
+/// The authoritative, closed application-mutation census. Counts add to 74.
 const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     (
         "AudienceStorage",
@@ -106,6 +106,24 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     ),
     ("SubscriptionStorage", &["subscribe", "unsubscribe"]),
     ("UserConfigStorage", &["set", "delete"]),
+    (
+        "ThemeStorage",
+        &[
+            "create_theme",
+            "replace_draft",
+            "rename_theme",
+            "record_revision",
+            "upsert_content_eligibility",
+            "set_selection",
+            "remove_theme",
+            "replace_role_binding",
+            "replace_header_pool",
+            "admit_theme",
+            "attach_revision_content",
+            "detach_revision_content",
+            "collect_retained_content",
+        ],
+    ),
     (
         "UserStorage",
         &[

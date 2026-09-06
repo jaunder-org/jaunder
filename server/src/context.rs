@@ -17,8 +17,8 @@ use leptos::prelude::provide_context;
 use storage::{
     AppState, AudienceStorage, EmailVerificationStorage, FeedEventStorage, InviteStorage,
     MediaContentLocks, MediaManager, MediaStorage, PasswordResetStorage, PostStorage,
-    SessionStorage, SiteConfigStorage, SubscriptionStorage, UserConfigStorage, UserStorage,
-    WriteScope,
+    SessionStorage, SiteConfigStorage, SubscriptionStorage, ThemeStorage, UserConfigStorage,
+    UserStorage, WriteScope,
 };
 use web::websub::WebsubPublisher;
 
@@ -39,6 +39,7 @@ pub fn provide_app_state_contexts(state: &Arc<AppState>, publisher: &Arc<Publish
     provide_context::<Arc<dyn MediaStorage>>(state.media.clone());
     provide_context::<Arc<dyn UserConfigStorage>>(state.user_config.clone());
     provide_context::<Arc<dyn SiteConfigStorage>>(state.site_config.clone());
+    provide_context::<Arc<dyn ThemeStorage>>(state.themes.clone());
     provide_context::<Arc<dyn FeedEventStorage>>(state.feed_events.clone());
     provide_context(Arc::clone(publisher));
     provide_context::<Arc<dyn WebsubPublisher>>(publisher.clone());

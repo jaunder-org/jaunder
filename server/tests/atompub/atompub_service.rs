@@ -80,6 +80,7 @@ fn with_overrides(
         feed_cache: state.feed_cache.clone(),
         feed_events: state.feed_events.clone(),
         publisher: state.publisher.clone(),
+        themes: state.themes.clone(),
         write_scope: state.write_scope.clone(),
     })
 }

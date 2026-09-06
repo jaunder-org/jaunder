@@ -258,7 +258,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            32
+            33
         );
         assert_eq!(
             db.pool
@@ -315,6 +315,38 @@ mod tests {
                 .unwrap(),
             0,
             "legacy cache rows cannot establish semantic identity"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0033_backfills_legacy_builtin_theme_selections(#[case] backend: Backend) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(32).await.unwrap();
+        db.pool
+            .execute("INSERT INTO site_config (key, value) VALUES ('site.theme', 'reader')")
+            .await
+            .unwrap();
+
+        db.migrate_current().await.unwrap();
+
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM theme_selections \
+                     WHERE catalog_owner_key = 'site' AND builtin_theme = 'reader' AND theme_id IS NULL",
+                )
+                .await
+                .unwrap(),
+            1,
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM site_config WHERE key = 'site.theme'")
+                .await
+                .unwrap(),
+            1,
+            "the deployable legacy configuration remains readable until Task 5",
         );
     }
 
@@ -786,7 +818,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            32
+            33
         );
         assert_eq!(
             db.pool

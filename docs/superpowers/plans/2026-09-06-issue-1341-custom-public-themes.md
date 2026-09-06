@@ -53,7 +53,7 @@ Out:
     boundary; deterministic byte fixtures plus dependency/license and common
     wasm-closure gates prove the host-only boundary.
 
-- [ ] Task 3: Establish the typed theme aggregate and relational contract.
+- [x] Task 3: Establish the typed theme aggregate and relational contract.
   - Contract: `common` owns wasm-safe `ThemeId`,
     `PublicThemeSelection::{BuiltIn, Custom}`, and role-tagged public
     digest/value types. Paired additive migrations create owner catalog, draft,

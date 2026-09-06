@@ -8,8 +8,8 @@ use super::{
     FeedCacheStorage, FeedCacheStore, FeedEventStorage, FeedEventStore, InviteStorage, InviteStore,
     MediaStorage, MediaStore, PasswordResetStorage, PasswordResetStore, PostStorage, PostStore,
     PublisherStorage, PublisherStore, SessionStorage, SessionStore, SiteConfigStorage,
-    SiteConfigStore, SubscriptionStorage, SubscriptionStore, UserConfigStorage, UserConfigStore,
-    UserStorage, UserStore, WriteScope,
+    SiteConfigStore, SubscriptionStorage, SubscriptionStore, ThemeStorage, ThemeStore,
+    UserConfigStorage, UserConfigStore, UserStorage, UserStore, WriteScope,
 };
 
 /// Bundle of every storage handle the application needs.
@@ -55,6 +55,8 @@ pub struct AppState {
     pub feed_events: Arc<dyn FeedEventStorage>,
     /// Coherent publisher configuration, hub mutation, and generation-fenced cache writes.
     pub publisher: Arc<dyn PublisherStorage>,
+    /// Interface for custom public-theme catalogs and immutable revision rows.
+    pub themes: Arc<dyn ThemeStorage>,
     /// Factory-minted boundary for composing application storage writes.
     pub write_scope: WriteScope,
 }
@@ -81,6 +83,7 @@ where
     FeedCacheStore<DB>: FeedCacheStorage,
     FeedEventStore<DB>: FeedEventStorage,
     PublisherStore<DB>: PublisherStorage,
+    ThemeStore<DB>: ThemeStorage,
 {
     Arc::new(AppState {
         site_config: Arc::new(SiteConfigStore::new(pool.clone())),
@@ -100,6 +103,7 @@ where
         feed_cache: Arc::new(FeedCacheStore::new(pool.clone())),
         feed_events: Arc::new(FeedEventStore::new(pool.clone())),
         publisher: Arc::new(PublisherStore::new(pool.clone())),
+        themes: Arc::new(ThemeStore::new(pool.clone())),
         write_scope: DB::write_scope(pool),
     })
 }
@@ -145,6 +149,7 @@ mod tests {
             state.feed_cache.as_ref(),
             state.feed_events.as_ref(),
             state.publisher.as_ref(),
+            state.themes.as_ref(),
         );
         assert!(
             state
