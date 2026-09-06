@@ -265,7 +265,6 @@ fn map_delete_error(err: anyhow::Error) -> HandlerError {
 }
 #[cfg(test)]
 mod tests {
-    use std::error::Error as _;
 
     use super::*;
 
@@ -281,8 +280,8 @@ mod tests {
             .downcast_ref::<storage::DeleteMediaError>()
             .expect("handler retains the typed deletion failure");
         assert!(matches!(
-            delete.source().and_then(|source| source.downcast_ref()),
-            Some(sqlx::Error::RowNotFound)
+            delete,
+            storage::DeleteMediaError::Internal(sqlx::Error::RowNotFound)
         ));
     }
 
