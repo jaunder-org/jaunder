@@ -1,0 +1,663 @@
+/*
+ * Official reference: https://wordpress.org/themes/generatepress/
+ * GeneratePress traits reproduced: a lightweight system-font hierarchy, restrained blue accent,
+ * roomy white header with horizontal navigation, pale page canvas, separate white article panels,
+ * and a conventional content/right-widget-column layout at desktop widths.
+ */
+
+.prototype-surface {
+ --gp-canvas: oklch(0.965 0.006 250);
+ --gp-surface: oklch(0.995 0.002 250);
+ --gp-ink: oklch(0.24 0.018 250);
+ --gp-muted: oklch(0.5 0.014 250);
+ --gp-line: oklch(0.89 0.008 250);
+ --gp-accent: oklch(0.55 0.15 248);
+ --gp-accent-hover: oklch(0.45 0.14 248);
+ --gp-on-accent: oklch(0.98 0.004 250);
+ --gp-focus: oklch(0.67 0.17 78);
+ --gp-space-1: 0.25rem;
+ --gp-space-2: 0.5rem;
+ --gp-space-3: 0.75rem;
+ --gp-space-4: 1rem;
+ --gp-space-5: 1.5rem;
+ --gp-space-6: 2rem;
+ --gp-space-7: 2.5rem;
+ --gp-space-8: 3rem;
+ --gp-header-height: 5.5rem;
+ --gp-content: 52rem;
+ --gp-sidebar: 18rem;
+ --gp-page: 74rem;
+ --gp-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+ --gp-transition: 120ms ease-in-out;
+ min-height: 100dvh;
+ color: var(--gp-ink);
+ background: var(--gp-canvas);
+ font-family: var(--gp-font);
+}
+
+.prototype-surface,
+.prototype-surface *,
+.prototype-surface *::before,
+.prototype-surface *::after {
+ box-sizing: border-box;
+}
+
+.prototype-surface .j-root,
+.prototype-surface .j-root * {
+ color: inherit;
+ font-family: inherit;
+}
+
+.prototype-surface>.j-root {
+ display: block;
+ width: 100%;
+ height: auto;
+ min-height: 100dvh;
+ overflow: visible;
+ color: var(--gp-ink);
+ background:
+  linear-gradient(to bottom,
+   var(--gp-surface) 0,
+   var(--gp-surface) var(--gp-header-height),
+   var(--gp-canvas) var(--gp-header-height),
+   var(--gp-canvas) 100%);
+ font-family: var(--gp-font);
+ font-size: 1.0625rem;
+ line-height: 1.5;
+}
+
+.prototype-surface .j-shell {
+ display: grid;
+ grid-template-columns: minmax(0, var(--gp-content)) minmax(14rem, var(--gp-sidebar));
+ grid-template-rows: var(--gp-header-height) auto auto 1fr;
+ gap: var(--gp-space-5) var(--gp-space-6);
+ width: min(100%, var(--gp-page));
+ height: auto;
+ min-height: 100dvh;
+ margin: 0 auto;
+ padding: 0 var(--gp-space-4) var(--gp-space-8);
+}
+
+/* `display: contents` lets the existing header regions supply both site chrome and sidebar widgets. */
+.prototype-surface .j-sidebar {
+ display: contents;
+}
+
+.prototype-surface .j-brand {
+ grid-column: 1;
+ grid-row: 1;
+ display: inline-flex;
+ align-items: center;
+ align-self: center;
+ justify-self: start;
+ gap: var(--gp-space-3);
+ min-width: 0;
+ padding: 0;
+ color: var(--gp-ink);
+ text-decoration: none;
+}
+
+.prototype-surface .j-brand-mark {
+ display: grid;
+ width: var(--gp-space-6);
+ height: var(--gp-space-6);
+ place-items: center;
+ flex: 0 0 var(--gp-space-6);
+ color: var(--gp-on-accent);
+ background: var(--gp-ink);
+ border-radius: 50%;
+ font-size: 1rem;
+ font-weight: 700;
+ line-height: 1;
+}
+
+.prototype-surface .j-brand-text {
+ font-size: 1.5625rem;
+ font-weight: 700;
+ letter-spacing: -0.025em;
+ line-height: 1.2;
+}
+
+.prototype-surface .j-nav {
+ grid-column: 2;
+ grid-row: 1;
+ display: flex;
+ flex-direction: row;
+ gap: 0;
+ align-items: stretch;
+ align-self: stretch;
+ justify-content: flex-end;
+ min-width: 0;
+}
+
+.prototype-surface .j-nav a {
+ display: inline-flex;
+ align-items: center;
+ padding: 0 var(--gp-space-3);
+ color: var(--gp-ink);
+ background: transparent;
+ border: 0;
+ border-bottom: 0.125rem solid var(--gp-surface);
+ font-size: 0.9375rem;
+ font-weight: 400;
+ line-height: 1.4;
+ text-decoration: none;
+ transition: color var(--gp-transition), border-color var(--gp-transition);
+}
+
+.prototype-surface .j-nav a:hover,
+.prototype-surface .j-nav a.is-active {
+ color: var(--gp-accent);
+ border-bottom-color: var(--gp-accent);
+}
+
+.prototype-surface .j-search,
+.prototype-surface .j-sources,
+.prototype-surface .j-sb-foot {
+ grid-column: 2;
+ align-self: start;
+ width: 100%;
+ margin: 0;
+ padding: var(--gp-space-7);
+ color: var(--gp-muted);
+ background: var(--gp-surface);
+}
+
+.prototype-surface .j-search {
+ grid-row: 2;
+ display: flex;
+ align-items: center;
+ gap: var(--gp-space-2);
+ min-width: 0;
+ min-height: var(--gp-space-8);
+ border: 0.0625rem solid var(--gp-line);
+ font-size: 0.875rem;
+}
+
+.prototype-surface .j-search>span:first-child {
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+
+.prototype-surface .j-kbd {
+ margin-left: auto;
+ padding: var(--gp-space-1) var(--gp-space-2);
+ color: var(--gp-muted);
+ background: var(--gp-canvas);
+ border: 0.0625rem solid var(--gp-line);
+ font-size: 0.6875rem;
+ line-height: 1.2;
+}
+
+.prototype-surface .j-sources {
+ grid-row: 3;
+}
+
+.prototype-surface .j-sb-head,
+.prototype-surface .j-sb-head h2 {
+ margin: 0;
+}
+
+.prototype-surface .j-sb-head {
+ padding: 0 0 var(--gp-space-4);
+ color: var(--gp-ink);
+ border-bottom: 0.0625rem solid var(--gp-line);
+}
+
+.prototype-surface .j-sb-head h2 {
+ font-size: 1.25rem;
+ font-weight: 400;
+ line-height: 1.5;
+}
+
+.prototype-surface .j-source {
+ display: grid;
+ grid-template-columns: auto minmax(0, 1fr);
+ align-items: center;
+ gap: var(--gp-space-3);
+ padding: var(--gp-space-4) 0 0;
+ color: var(--gp-ink);
+ text-decoration: none;
+}
+
+.prototype-surface .j-source>span:last-child {
+ display: grid;
+ min-width: 0;
+}
+
+.prototype-surface .j-dot {
+ width: var(--gp-space-2);
+ height: var(--gp-space-2);
+ background: var(--gp-accent);
+ border-radius: 50%;
+}
+
+.prototype-surface .j-source-name {
+ color: var(--gp-ink);
+ font-size: 0.9375rem;
+ font-weight: 600;
+}
+
+.prototype-surface .j-source-sub {
+ color: var(--gp-muted);
+ font-size: 0.75rem;
+}
+
+.prototype-surface .j-sb-foot {
+ grid-row: 4;
+ color: var(--gp-muted);
+ font-size: 0.875rem;
+ line-height: 1.6;
+}
+
+.prototype-surface .j-main {
+ grid-column: 1;
+ grid-row: 2 / 5;
+ display: flex;
+ flex-direction: column;
+ min-width: 0;
+ height: auto;
+ min-height: 0;
+ gap: var(--gp-space-5);
+ overflow: visible;
+ background: transparent;
+}
+
+.prototype-surface .j-topbar {
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ gap: var(--gp-space-5);
+ flex: 0 0 auto;
+ padding: var(--gp-space-7);
+ color: var(--gp-ink);
+ background: var(--gp-surface);
+ border: 0;
+}
+
+.prototype-surface .j-topbar h1 {
+ margin: 0;
+ font-size: clamp(2rem, 4vw, 2.625rem);
+ font-weight: 400;
+ letter-spacing: -0.025em;
+ line-height: 1.2;
+}
+
+.prototype-surface .j-topbar .j-sub {
+ margin: var(--gp-space-2) 0 0;
+ color: var(--gp-muted);
+ font-size: 0.9375rem;
+}
+
+.prototype-surface .j-topbar-right {
+ margin-left: auto;
+}
+
+.prototype-surface .j-btn,
+.prototype-surface .j-load-more {
+ display: inline-flex;
+ align-items: center;
+ justify-content: center;
+ min-height: var(--gp-space-7);
+ padding: var(--gp-space-2) var(--gp-space-5);
+ color: var(--gp-on-accent);
+ background: var(--gp-accent);
+ border: 0.0625rem solid var(--gp-accent);
+ border-radius: 0;
+ font-size: 0.9375rem;
+ font-weight: 400;
+ line-height: 1.4;
+ text-decoration: none;
+ transition: background-color var(--gp-transition), border-color var(--gp-transition);
+}
+
+.prototype-surface .j-btn:hover,
+.prototype-surface .j-load-more:hover {
+ color: var(--gp-on-accent);
+ background: var(--gp-accent-hover);
+ border-color: var(--gp-accent-hover);
+}
+
+.prototype-surface .j-scroll {
+ display: flex;
+ flex: none;
+ flex-direction: column;
+ gap: var(--gp-space-5);
+ min-height: 0;
+ overflow: visible;
+ background: transparent;
+}
+
+.prototype-surface .j-post {
+ display: grid;
+ grid-template-columns: var(--gp-space-7) minmax(0, 1fr);
+ gap: var(--gp-space-4);
+ padding: var(--gp-space-7);
+ color: var(--gp-ink);
+ background: var(--gp-surface);
+ border: 0;
+}
+
+.prototype-surface .j-av {
+ display: grid;
+ width: var(--gp-space-7);
+ height: var(--gp-space-7);
+ place-items: center;
+ color: var(--gp-on-accent);
+ background: var(--gp-accent);
+ border-radius: 50%;
+ font-size: 0.6875rem;
+ font-weight: 700;
+ line-height: 1;
+}
+
+.prototype-surface .j-post-content {
+ min-width: 0;
+}
+
+.prototype-surface .j-post-head {
+ display: flex;
+ flex-wrap: wrap;
+ align-items: baseline;
+ gap: var(--gp-space-2);
+ margin: 0 0 var(--gp-space-2);
+ color: var(--gp-muted);
+ font-size: 0.8125rem;
+ line-height: 1.5;
+}
+
+.prototype-surface .j-post-name {
+ color: var(--gp-ink);
+ font-size: inherit;
+ font-weight: 600;
+}
+
+.prototype-surface .j-post-handle,
+.prototype-surface .j-post-time {
+ color: var(--gp-muted);
+ font-size: inherit;
+}
+
+.prototype-surface .j-spacer {
+ flex: 1 1 auto;
+}
+
+.prototype-surface .j-post-title {
+ margin: 0 0 var(--gp-space-3);
+ color: var(--gp-ink);
+ font-size: clamp(1.75rem, 3vw, 2.1875rem);
+ font-weight: 400;
+ letter-spacing: -0.025em;
+ line-height: 1.2;
+ text-wrap: balance;
+}
+
+.prototype-surface .j-post-title a {
+ color: inherit;
+ text-decoration: none;
+ transition: color var(--gp-transition);
+}
+
+.prototype-surface .j-post-title a:hover {
+ color: var(--gp-accent);
+}
+
+.prototype-surface .j-post-summary {
+ margin: 0 0 var(--gp-space-5);
+ color: var(--gp-muted);
+ font-size: 1.125rem;
+ line-height: 1.55;
+}
+
+.prototype-surface .j-post-body {
+ margin: 0;
+ color: var(--gp-ink);
+ font-size: 1.0625rem;
+ line-height: 1.65;
+ text-wrap: pretty;
+}
+
+.prototype-surface .j-post-body p {
+ margin: 0 0 var(--gp-space-5);
+}
+
+.prototype-surface .j-post-body p:last-child {
+ margin-bottom: 0;
+}
+
+.prototype-surface .j-post-body h3 {
+ margin: var(--gp-space-6) 0 var(--gp-space-3);
+ font-size: 1.5rem;
+ font-weight: 400;
+ line-height: 1.3;
+}
+
+.prototype-surface .j-post-body blockquote {
+ margin: var(--gp-space-6) 0;
+ padding: var(--gp-space-4) var(--gp-space-5);
+ color: var(--gp-muted);
+ background: var(--gp-canvas);
+ border-left: var(--gp-space-1) solid var(--gp-accent);
+ font-size: 1.125rem;
+ font-style: italic;
+ line-height: 1.6;
+}
+
+.prototype-surface .j-post-media {
+ margin: 0 0 var(--gp-space-6);
+}
+
+.prototype-surface .prototype-image {
+ width: 100%;
+ aspect-ratio: 16 / 9;
+ min-height: 14rem;
+ background-color: var(--gp-line);
+}
+
+.prototype-surface .prototype-image--salt {
+ background:
+  linear-gradient(176deg, transparent 0 58%, oklch(0.83 0.025 78) 58% 61%, transparent 61%),
+  linear-gradient(to bottom, oklch(0.83 0.06 232) 0 55%, oklch(0.94 0.025 82) 55% 100%);
+}
+
+.prototype-surface .prototype-image--window {
+ background:
+  linear-gradient(112deg, transparent 0 44%, oklch(0.89 0.13 80 / 0.74) 44% 66%, transparent 66%),
+  linear-gradient(90deg, oklch(0.28 0.025 65) 0 11%, transparent 11% 48%, oklch(0.32 0.025 65) 48% 54%, transparent 54%),
+  oklch(0.68 0.045 65);
+}
+
+.prototype-surface .j-post-media figcaption {
+ padding-top: var(--gp-space-2);
+ color: var(--gp-muted);
+ font-size: 0.75rem;
+ line-height: 1.5;
+ text-align: center;
+}
+
+.prototype-surface .j-post-foot {
+ display: flex;
+ align-items: center;
+ gap: var(--gp-space-4);
+ margin-top: var(--gp-space-6);
+ color: var(--gp-muted);
+ font-size: 0.8125rem;
+}
+
+.prototype-surface .j-tag-list {
+ display: inline-flex;
+ flex-wrap: wrap;
+ gap: var(--gp-space-2);
+}
+
+.prototype-surface .j-tag-cell {
+ display: inline-flex;
+}
+
+.prototype-surface .j-tag {
+ padding: 0;
+ color: var(--gp-accent);
+ background: transparent;
+ border: 0;
+ border-radius: 0;
+ font-size: inherit;
+ text-decoration: none;
+}
+
+.prototype-surface .j-tag:hover {
+ color: var(--gp-accent-hover);
+ text-decoration: underline;
+ text-underline-offset: var(--gp-space-1);
+}
+
+.prototype-surface .j-load-more {
+ align-self: flex-start;
+ margin: 0 0 var(--gp-space-8);
+}
+
+.prototype-surface .j-brand:focus-visible,
+.prototype-surface .j-nav a:focus-visible,
+.prototype-surface .j-source:focus-visible,
+.prototype-surface .j-btn:focus-visible,
+.prototype-surface .j-post-title a:focus-visible,
+.prototype-surface .j-tag:focus-visible,
+.prototype-surface .j-load-more:focus-visible {
+ outline: 0.1875rem solid var(--gp-focus);
+ outline-offset: var(--gp-space-1);
+}
+
+@media (max-width: 48rem) {
+ .prototype-surface>.j-root {
+  background: var(--gp-canvas);
+ }
+
+ .prototype-surface .j-shell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gp-space-4);
+  width: 100%;
+  padding: 0 0 var(--gp-space-8);
+ }
+
+ .prototype-surface .j-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  padding: 0;
+  overflow: visible;
+  background: var(--gp-surface);
+  border: 0;
+ }
+
+ .prototype-surface .j-brand {
+  align-self: stretch;
+  padding: var(--gp-space-5) var(--gp-space-4) var(--gp-space-4);
+ }
+
+ .prototype-surface .j-nav {
+  order: 2;
+  align-self: stretch;
+  justify-content: flex-start;
+  overflow-x: auto;
+  border-top: 0.0625rem solid var(--gp-line);
+  scrollbar-width: none;
+ }
+
+ .prototype-surface .j-nav::-webkit-scrollbar {
+  display: none;
+ }
+
+ .prototype-surface .j-nav a {
+  flex: 0 0 auto;
+  min-height: var(--gp-space-8);
+  padding: 0 var(--gp-space-4);
+ }
+
+ .prototype-surface .j-search,
+ .prototype-surface .j-sources,
+ .prototype-surface .j-sb-foot {
+  width: auto;
+  margin: var(--gp-space-4) var(--gp-space-4) 0;
+  padding: var(--gp-space-5);
+  border: 0.0625rem solid var(--gp-line);
+ }
+
+ .prototype-surface .j-search {
+  order: 3;
+ }
+
+ .prototype-surface .j-sources {
+  order: 4;
+ }
+
+ .prototype-surface .j-sb-foot {
+  order: 5;
+  margin-bottom: var(--gp-space-4);
+ }
+
+ .prototype-surface .j-main {
+  width: 100%;
+  gap: var(--gp-space-4);
+ }
+
+ .prototype-surface .j-topbar,
+ .prototype-surface .j-post {
+  padding: var(--gp-space-5) var(--gp-space-4);
+ }
+
+ .prototype-surface .j-topbar {
+  align-items: flex-start;
+ }
+
+ .prototype-surface .j-topbar .j-sub {
+  max-width: 13rem;
+ }
+
+ .prototype-surface .j-scroll {
+  gap: var(--gp-space-4);
+ }
+
+ .prototype-surface .j-post {
+  grid-template-columns: 2rem minmax(0, 1fr);
+  gap: var(--gp-space-3);
+ }
+
+ .prototype-surface .j-av {
+  width: 2rem;
+  height: 2rem;
+  font-size: 0.625rem;
+ }
+
+ .prototype-surface .j-post-title {
+  font-size: 1.75rem;
+ }
+
+ .prototype-surface .prototype-image {
+  min-height: 0;
+ }
+}
+
+@media (max-width: 26rem) {
+ .prototype-surface .j-topbar {
+  flex-wrap: wrap;
+ }
+
+ .prototype-surface .j-topbar-right {
+  width: 100%;
+  margin-left: 0;
+ }
+
+ .prototype-surface .j-btn {
+  width: 100%;
+ }
+
+ .prototype-surface .j-post {
+  display: block;
+ }
+
+ .prototype-surface .j-av {
+  margin-bottom: var(--gp-space-3);
+ }
+}

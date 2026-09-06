@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PROTOTYPE — CSS-only public themes</title>
+  <link rel="stylesheet" href="../../../server/assets/jaunder.css" />
+  <link rel="stylesheet" href="../../../server/assets/jaunder-themes.css" />
+  <link id="variant-css" rel="stylesheet" />
+  <style>
+    .prototype-switcher {
+      position: fixed;
+      z-index: 10000;
+      left: 50%;
+      bottom: 18px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      transform: translateX(-50%);
+      padding: 8px 10px;
+      border: 1px solid #fff4;
+      border-radius: 999px;
+      color: white;
+      background: #111e;
+      box-shadow: 0 8px 30px #0006;
+      font: 600 13px/1.2 system-ui, sans-serif;
+      backdrop-filter: blur(12px);
+    }
+
+    .prototype-switcher button {
+      width: 34px;
+      height: 34px;
+      border: 0;
+      border-radius: 50%;
+      color: #111;
+      background: white;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .prototype-switcher output {
+      min-width: 210px;
+      text-align: center;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- PROTOTYPE: Six CSS-only arrangements of one minimal semantic public document, switchable via ?variant=. -->
+  <div class="prototype-surface">
+    <div class="j-root" data-theme="studio">
+      <div class="j-shell">
+        <header class="j-sidebar">
+          <a class="j-brand" href="#"><span class="j-brand-mark">j</span><span class="j-brand-text">Field
+              Notes</span></a>
+          <div class="j-search"><span>Search this publication</span><span class="j-kbd">⌘K</span></div>
+          <nav class="j-nav" aria-label="Primary navigation">
+            <a class="is-active" href="#">Latest</a><a href="#">Essays</a><a href="#">Photographs</a><a
+              href="#">About</a>
+          </nav>
+          <section class="j-sources" aria-labelledby="elsewhere-heading">
+            <div class="j-sb-head">
+              <h2 id="elsewhere-heading">Elsewhere</h2>
+            </div>
+            <a class="j-source" href="#"><span class="j-dot"></span><span><strong class="j-source-name">Syndication
+                  Feed</strong><small class="j-source-sub">Atom · RSS · JSON</small></span></a>
+          </section>
+          <p class="j-sb-foot">A small publication about tools, places, and attention.</p>
+        </header>
+
+        <main class="j-main">
+          <header class="j-topbar">
+            <div>
+              <h1>Field Notes</h1>
+              <p class="j-sub">Dispatches from the edge of the map</p>
+            </div>
+            <div class="j-topbar-right"><a class="j-btn is-primary" href="#">Subscribe</a></div>
+          </header>
+
+          <section class="j-scroll" aria-label="Posts">
+            <article class="j-post">
+              <div class="j-av" aria-hidden="true">MD</div>
+              <div class="j-post-content">
+                <header class="j-post-head"><span class="j-post-name">Morgan Dorman</span><span
+                    class="j-post-handle">@mdorman</span><span class="j-spacer"></span><time
+                    class="j-post-time">September 6</time></header>
+                <h2 class="j-post-title"><a href="#">The road that disappears into the salt</a></h2>
+                <p class="j-post-summary">A week following old survey markers through a landscape that refuses to hold
+                  still.</p>
+                <div class="j-post-body">
+                  <figure class="j-post-media">
+                    <div class="prototype-image prototype-image--salt" role="img"
+                      aria-label="Salt flats below a wide sky"></div>
+                    <figcaption>Forty miles beyond the last marked turning.</figcaption>
+                  </figure>
+                  <p>The map promised a road. By noon it had become two pale lines, then a memory pressed into the basin
+                    floor.</p>
+                  <blockquote>Distances behave differently when there is nothing nearby to measure them against.
+                  </blockquote>
+                </div>
+                <footer class="j-post-foot"><span class="j-tag-list"><span class="j-tag-cell"><a class="j-tag"
+                        href="#">#travel</a></span><span class="j-tag-cell"><a class="j-tag"
+                        href="#">#fieldwork</a></span></span></footer>
+              </div>
+            </article>
+
+            <article class="j-post">
+              <div class="j-av" aria-hidden="true">MD</div>
+              <div class="j-post-content">
+                <header class="j-post-head"><span class="j-post-name">Morgan Dorman</span><span
+                    class="j-post-handle">@mdorman</span><span class="j-spacer"></span><time
+                    class="j-post-time">September 2</time></header>
+                <h2 class="j-post-title"><a href="#">A workshop built around one good window</a></h2>
+                <p class="j-post-summary">The architecture of a room where the light determines the work.</p>
+                <div class="j-post-body">
+                  <figure class="j-post-media">
+                    <div class="prototype-image prototype-image--window" role="img"
+                      aria-label="Sunlight crossing a workshop table"></div>
+                    <figcaption>North light at half past four.</figcaption>
+                  </figure>
+                  <p>Everything frequently used sits within the bright rectangle. The rest of the room is storage and
+                    passage.</p>
+                </div>
+                <footer class="j-post-foot"><span class="j-tag-list"><span class="j-tag-cell"><a class="j-tag"
+                        href="#">#making</a></span><span class="j-tag-cell"><a class="j-tag"
+                        href="#">#spaces</a></span></span></footer>
+              </div>
+            </article>
+
+            <article class="j-post">
+              <div class="j-av" aria-hidden="true">MD</div>
+              <div class="j-post-content">
+                <header class="j-post-head"><span class="j-post-name">Morgan Dorman</span><span
+                    class="j-post-handle">@mdorman</span><span class="j-spacer"></span><time class="j-post-time">August
+                    28</time></header>
+                <h2 class="j-post-title"><a href="#">Three objects worth repairing</a></h2>
+                <p class="j-post-summary">A field guide to hinges, handles, and mechanisms that tell you how they
+                  failed.</p>
+                <div class="j-post-body">
+                  <p>The best candidates are legible. Their fasteners are visible, their materials ordinary, and their
+                    wear tells a coherent story.</p>
+                  <h3>Start with the hinge</h3>
+                  <p>Movement reveals more than appearance. Load the joint gently and watch where the gap opens.</p>
+                </div>
+                <footer class="j-post-foot"><span class="j-tag-list"><span class="j-tag-cell"><a class="j-tag"
+                        href="#">#repair</a></span></span></footer>
+              </div>
+            </article>
+
+            <button class="j-load-more" type="button">Load older notes</button>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div class="prototype-switcher" role="group" aria-label="Prototype variants">
+    <button id="previous" type="button" aria-label="Previous variant">←</button>
+    <output id="variant-label"></output>
+    <button id="next" type="button" aria-label="Next variant">→</button>
+  </div>
+  <script>
+    const variants = [
+      {key: "a", name: "Broadsheet", file: "variant-a-broadsheet.css"},
+      {key: "b", name: "Gallery", file: "variant-b-gallery.css"},
+      {key: "c", name: "Zine", file: "variant-c-zine.css"},
+      {key: "d", name: "Astra-inspired", file: "variant-d-astra.css"},
+      {key: "e", name: "GeneratePress-inspired", file: "variant-e-generatepress.css"},
+      {
+        key: "f",
+        name: "Twenty Twenty-Five-inspired",
+        file: "variant-f-twenty-twenty-five.css",
+      },
+    ];
+    const params = new URLSearchParams(location.search);
+    let index = Math.max(0, variants.findIndex((item) => item.key === params.get("variant")));
+    const apply = () => {
+      const variant = variants[index];
+      document.querySelector("#variant-css").href = variant.file;
+      document.querySelector("#variant-label").value = `${variant.key.toUpperCase()} — ${variant.name}`;
+      const nextUrl = new URL(location.href);
+      nextUrl.searchParams.set("variant", variant.key);
+      history.replaceState(null, "", nextUrl);
+    };
+    const cycle = (delta) => {index = (index + delta + variants.length) % variants.length; apply();};
+    document.querySelector("#previous").addEventListener("click", () => cycle(-1));
+    document.querySelector("#next").addEventListener("click", () => cycle(1));
+    addEventListener("keydown", (event) => {
+      if (["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable) return;
+      if (event.key === "ArrowLeft") cycle(-1);
+      if (event.key === "ArrowRight") cycle(1);
+    });
+    apply();
+  </script>
+</body>
+
+</html>
