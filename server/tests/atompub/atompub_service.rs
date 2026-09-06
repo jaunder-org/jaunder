@@ -53,14 +53,22 @@ fn accept_values(collection: &str) -> Vec<&str> {
         .collect()
 }
 
-fn with_site_config(
+#[derive(Default)]
+struct AppStateOverrides {
+    site_config: Option<Arc<dyn storage::SiteConfigStorage>>,
+    sessions: Option<Arc<dyn storage::SessionStorage>>,
+}
+
+fn with_overrides(
     state: &Arc<storage::AppState>,
-    site_config: Arc<dyn storage::SiteConfigStorage>,
+    overrides: AppStateOverrides,
 ) -> Arc<storage::AppState> {
     Arc::new(storage::AppState {
-        site_config,
+        site_config: overrides
+            .site_config
+            .unwrap_or_else(|| state.site_config.clone()),
         users: state.users.clone(),
-        sessions: state.sessions.clone(),
+        sessions: overrides.sessions.unwrap_or_else(|| state.sessions.clone()),
         invites: state.invites.clone(),
         email_verifications: state.email_verifications.clone(),
         password_resets: state.password_resets.clone(),
@@ -76,27 +84,30 @@ fn with_site_config(
     })
 }
 
+fn with_site_config(
+    state: &Arc<storage::AppState>,
+    site_config: Arc<dyn storage::SiteConfigStorage>,
+) -> Arc<storage::AppState> {
+    with_overrides(
+        state,
+        AppStateOverrides {
+            site_config: Some(site_config),
+            ..Default::default()
+        },
+    )
+}
+
 fn with_sessions(
     state: &Arc<storage::AppState>,
     sessions: Arc<dyn storage::SessionStorage>,
 ) -> Arc<storage::AppState> {
-    Arc::new(storage::AppState {
-        site_config: state.site_config.clone(),
-        users: state.users.clone(),
-        sessions,
-        invites: state.invites.clone(),
-        email_verifications: state.email_verifications.clone(),
-        password_resets: state.password_resets.clone(),
-        posts: state.posts.clone(),
-        subscriptions: state.subscriptions.clone(),
-        audiences: state.audiences.clone(),
-        media: state.media.clone(),
-        user_config: state.user_config.clone(),
-        feed_cache: state.feed_cache.clone(),
-        feed_events: state.feed_events.clone(),
-        publisher: state.publisher.clone(),
-        write_scope: state.write_scope.clone(),
-    })
+    with_overrides(
+        state,
+        AppStateOverrides {
+            sessions: Some(sessions),
+            ..Default::default()
+        },
+    )
 }
 
 #[apply(backends)]

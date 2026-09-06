@@ -1,7 +1,7 @@
-use axum::Router;
 use axum::http::{StatusCode, header};
 use axum::response::Response;
 use axum::routing::{get, post};
+use axum::{Router, middleware};
 
 use super::{media, posts, rsd, service};
 
@@ -30,9 +30,9 @@ where
             "/atompub/{username}/media/{sha}/{filename}",
             get(media::member_get).delete(media::member_delete),
         )
-        .layer(axum::middleware::from_fn(add_basic_auth_challenge))
+        .layer(middleware::from_fn(add_basic_auth_challenge))
         .route("/~{username}/rsd.xml", get(rsd::rsd_document))
-        .layer(axum::middleware::from_fn(record_atompub_request))
+        .layer(middleware::from_fn(record_atompub_request))
 }
 
 /// Projects authentication failures from protected `AtomPub` routes onto the
