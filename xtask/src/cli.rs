@@ -192,6 +192,11 @@ pub enum Command {
     /// Coverage tooling — the source-filter drift probe (#241).
     #[command(subcommand)]
     Coverage(CoverageCommand),
+    /// Reconcile the independent Chromium and Firefox Playwright/WASM coverage
+    /// evidence. Both producers run before a verdict; raw profiles are merged only
+    /// when both retained status documents pass and identify the same module/toolchain.
+    #[command(subcommand)]
+    WasmCoverage(WasmCoverageCommand),
     /// Nix maintenance commands that evaluate repository derivation boundaries.
     #[command(subcommand)]
     Nix(NixCommand),
@@ -349,6 +354,16 @@ pub enum CoverageCommand {
     #[command(after_help = "EXAMPLES:\n  cargo xtask coverage probe-source")]
     ProbeSource,
 }
+/// `wasm-coverage` subcommands.
+#[derive(Subcommand)]
+pub enum WasmCoverageCommand {
+    /// Realize each browser evidence producer, retain and validate its archive, then
+    /// conditionally count-sum their profiles with the matching pinned LLVM tools.
+    /// The aggregate is always written to `.xtask/wasm-coverage/status.json`.
+    #[command(after_help = "EXAMPLES:\n  cargo xtask wasm-coverage probe")]
+    Probe,
+}
+
 /// `nix` subcommands.
 #[derive(Subcommand)]
 pub enum NixCommand {
@@ -453,6 +468,7 @@ impl Cli {
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
+            Command::WasmCoverage(WasmCoverageCommand::Probe) => "wasm-coverage-probe",
             Command::Nix(NixCommand::ProbeSource) => "nix-probe-source",
             Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate) => {
                 steps::server_fn_coverage_check::REGENERATE_STEP
@@ -1056,6 +1072,16 @@ mod tests {
                 command,
             } if name == "demo"
                 && command == ["site-config", "get", "site.title"]
+        ));
+    }
+
+    #[test]
+    fn wasm_coverage_probe_parses() {
+        let cli = Cli::try_parse_from(["xtask", "wasm-coverage", "probe"]).unwrap();
+        assert_eq!(cli.command_name(), "wasm-coverage-probe");
+        assert!(matches!(
+            cli.command,
+            Command::WasmCoverage(WasmCoverageCommand::Probe)
         ));
     }
 }

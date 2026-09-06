@@ -7,11 +7,11 @@ use crate::{
     adr, adr_readme, audit_wasm, census,
     cli::{
         AdrCommand, Cli, Command, CoverageCommand, NixCommand, PrCommand, ServerFnCoverageCommand,
-        TracesCommand,
+        TracesCommand, WasmCoverageCommand,
     },
     coverage, gate, issue, lifecycle, nix_probe, pr,
     result::{CommandResult, Mode, StepResult},
-    server_fn_coverage, steps, traces,
+    server_fn_coverage, steps, traces, wasm_coverage,
 };
 
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
@@ -205,6 +205,39 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let mut result = CommandResult::new("coverage-probe-source");
             let step_start = Instant::now();
             result.push(coverage::probe::probe_source().with_duration(step_start.elapsed()));
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::WasmCoverage(WasmCoverageCommand::Probe) => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("wasm-coverage-probe");
+            let step_start = Instant::now();
+            match wasm_coverage::probe() {
+                Ok(aggregate) => {
+                    let ok = aggregate.verdict == wasm_coverage::Verdict::Passed;
+                    let detail = if ok {
+                        "both browser reports map executed original Rust lines; merged evidence retained"
+                            .to_owned()
+                    } else {
+                        aggregate.blockers.join("; ")
+                    };
+                    result.wasm_coverage = Some(aggregate);
+                    result.push(
+                        if ok {
+                            StepResult::ok("wasm-coverage-probe")
+                        } else {
+                            StepResult::fail("wasm-coverage-probe")
+                        }
+                        .detail(detail)
+                        .with_duration(step_start.elapsed()),
+                    );
+                }
+                Err(error) => result.push(
+                    StepResult::fail("wasm-coverage-probe")
+                        .detail(format!("{error:#}"))
+                        .with_duration(step_start.elapsed()),
+                ),
+            }
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }

@@ -1161,7 +1161,17 @@ guards what CI/PRs carry, not local uncommitted edits. Subtlety worth knowing: a
 _new_ file must be `git add`-ed to be measured — nix ignores untracked files
 even on a dirty tree. The probe runs in CI (the `validate-no-e2e` job) and on
 request; it is deliberately **not** part of per-commit `check`/`validate`
-(#241).
+(#241). **Playwright/WASM coverage evidence
+(`cargo xtask wasm-coverage probe`).** This manual host command realizes the
+independent Chromium and Firefox diagnostic producers before deciding its
+outcome. It retains each unpacked producer root under `.xtask/wasm-coverage/`,
+validates the `v1` status documents and complete digest manifests fail-closed,
+and writes the aggregate verdict to `.xtask/wasm-coverage/status.json` even when
+one browser fails. It only invokes the compiler-matched
+`llvm-profdata`/`llvm-cov` from `.#wasm-coverage-csr` to count-sum profiles when
+both browsers passed with matching module and toolchain identities; otherwise no
+merged evidence is produced. The command exits zero only for two source-mapped
+browser reports and a valid merged Rust-line report.
 
 **Nix invalidation-boundary guard (`cargo xtask nix probe-source`).** The
 hermetic static surface is two semantic derivations, not a singular

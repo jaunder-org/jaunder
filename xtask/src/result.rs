@@ -182,6 +182,9 @@ pub struct CommandResult {
     /// collector itself failed, in which case its completed cells are retained.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub census: Option<crate::census::CensusReport>,
+    /// The versioned reconciliation payload emitted by `wasm-coverage probe`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wasm_coverage: Option<crate::wasm_coverage::Aggregate>,
 }
 
 fn render_pr_summary(pr: &crate::pr::PrReport) -> String {
@@ -226,6 +229,7 @@ impl CommandResult {
             pr: None,
             issue: None,
             census: None,
+            wasm_coverage: None,
         }
     }
 

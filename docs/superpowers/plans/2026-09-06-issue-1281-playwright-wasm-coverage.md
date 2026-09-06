@@ -65,7 +65,7 @@ Out:
     writes its status, exhaustive diagnostic manifest, and exact blocker before
     returning control.
 
-- [ ] Task 3: Reconcile browser evidence and prove conditional profile union.
+- [x] Task 3: Reconcile browser evidence and prove conditional profile union.
   - Contract: a host `cargo xtask wasm-coverage probe` command realizes both Nix
     producers before deriving its verdict. Its versioned aggregate payload has
     exactly `chromium` and `firefox` entries copied from validated producer
