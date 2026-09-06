@@ -96,7 +96,9 @@ pub enum PostFormat {
 pub struct RenderedHtml(pub(crate) String);
 
 /// The single allowlist every [`sanitize`] call scrubs against. It is ammonia's
-/// audited default, widened only to retain fenced-code language markers.
+/// audited default, widened for fenced-code language markers and the bounded
+/// non-executable media surface recorded by
+/// `docs/adr/drafts/rendered-html-media-elements.md`.
 ///
 /// Re-admitting `class` without narrowing its values would let attacker-supplied
 /// markup borrow application CSS. Only `language-*` tokens survive on `<pre>` and
@@ -104,6 +106,11 @@ pub struct RenderedHtml(pub(crate) String);
 #[cfg(feature = "sanitize")]
 static SANITIZER: std::sync::LazyLock<ammonia::Builder<'static>> = std::sync::LazyLock::new(|| {
     let mut builder = ammonia::Builder::default();
+    builder.add_tags(["audio", "video", "source", "track"]);
+    builder.add_tag_attributes("audio", ["src", "controls"]);
+    builder.add_tag_attributes("video", ["src", "controls", "poster", "width", "height"]);
+    builder.add_tag_attributes("source", ["src", "type"]);
+    builder.add_tag_attributes("track", ["src", "kind", "srclang", "label", "default"]);
     builder.add_tag_attributes("code", ["class"]);
     builder.add_tag_attributes("pre", ["class"]);
     builder.attribute_filter(|_element, attribute, value| {
@@ -541,6 +548,90 @@ mod tests {
                 html.contains(expected),
                 "{expected} was stripped from: {html}"
             );
+        }
+    }
+
+    #[cfg(feature = "sanitize")]
+    #[test]
+    fn sanitize_preserves_safe_media_without_active_playback_markup() {
+        let html = sanitize(
+            r#"<audio src="/media/audio.mp3" controls lang="en" title="Audio"
+                      autoplay loop muted preload="auto" onplay="alert(1)"></audio>
+               <video src="https://example.com/video.mp4" controls
+                      poster="/media/poster.jpg" width="640" height="360"></video>
+               <source src="//example.com/video.webm" type="video/webm">
+               <track src="/media/captions.vtt" kind="captions" srclang="en"
+                      label="English" default>
+               <video srcset="javascript:alert(1) 1x"
+                      src="javascript:alert(1)"
+                      poster="data:text/html,active"></video>"#,
+        );
+
+        for expected in [
+            "<audio",
+            r#"src="/media/audio.mp3""#,
+            "controls",
+            r#"lang="en""#,
+            r#"title="Audio""#,
+            "<video",
+            r#"src="https://example.com/video.mp4""#,
+            r#"poster="/media/poster.jpg""#,
+            r#"width="640""#,
+            r#"height="360""#,
+            "<source",
+            r#"src="//example.com/video.webm""#,
+            r#"type="video/webm""#,
+            "<track",
+            r#"src="/media/captions.vtt""#,
+            r#"kind="captions""#,
+            r#"srclang="en""#,
+            r#"label="English""#,
+            "default",
+        ] {
+            assert!(
+                html.contains(expected),
+                "{expected} was stripped from: {html}"
+            );
+        }
+        for forbidden in [
+            "autoplay",
+            "loop",
+            "muted",
+            "preload",
+            "onplay",
+            "srcset",
+            "javascript:",
+            "data:",
+            "alert(1)",
+        ] {
+            assert!(!html.contains(forbidden), "{forbidden} survived in: {html}");
+        }
+
+        for (element, attribute) in [
+            ("audio", "src"),
+            ("video", "src"),
+            ("video", "poster"),
+            ("source", "src"),
+            ("track", "src"),
+        ] {
+            for url in [
+                "/media/item",
+                "http://example.com/item",
+                "https://example.com/item",
+            ] {
+                let html = sanitize(&format!(r#"<{element} {attribute}="{url}"></{element}>"#));
+                assert!(
+                    html.contains(&format!(r#"{attribute}="{url}""#)),
+                    "{element}[{attribute}] stripped {url}: {html}"
+                );
+            }
+            for url in ["javascript:alert(1)", "data:text/plain,active"] {
+                let html = sanitize(&format!(r#"<{element} {attribute}="{url}"></{element}>"#));
+                assert!(
+                    !html.contains(url),
+                    "{element}[{attribute}] retained {url}: {html}"
+                );
+            }
         }
     }
 
