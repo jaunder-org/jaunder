@@ -39,6 +39,14 @@ jaunder serve
 
 Additional configuration can then be done via the web interface.
 
+Stop a ready local instance with `jaunder shut-down`. The command targets the
+instance identified by the selected storage directory (for example,
+`jaunder shut-down --storage-path ./data`), verifies its exact process identity,
+and returns only after that process exits and relinquishes `runtime.json`. It
+refuses missing, malformed, stale, or still-starting identities without changing
+them. The wait defaults to 30 seconds; `--timeout <seconds>` accepts a positive
+override, and timeout reports failure without escalating the shutdown signal.
+
 By default, `Jaunder` will listen on http://localhost:3000/. To make this
 publically accessible, you need to have a reverse proxy (`Caddy` is recommended)
 that will listen on a publically accessible IP address and handle HTTPS.

@@ -12,7 +12,7 @@
 use anyhow::{Context, Result};
 use host::error;
 use std::fs::{self, File, OpenOptions};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 /// Serializes `{ "ip", "port", "pid", "start_time" }` and writes it to `path`
@@ -88,6 +88,47 @@ pub(crate) fn holder_is_live(pid: u32, recorded: u64) -> std::io::Result<bool> {
 pub(crate) fn canonical_runtime_path(storage_path: &Path) -> PathBuf {
     storage_path.join("runtime.json")
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RuntimeProcessIdentity {
+    pub(crate) pid: u32,
+    pub(crate) start_time: u64,
+}
+
+pub(crate) struct RuntimeRecord {
+    pub(crate) process: RuntimeProcessIdentity,
+    pub(crate) port: u16,
+}
+
+fn decode_process_identity(value: &serde_json::Value) -> Result<RuntimeProcessIdentity> {
+    let pid = value["pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .filter(|pid| *pid != 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid pid"))?;
+    let start_time = value["start_time"]
+        .as_u64()
+        .ok_or_else(|| anyhow::anyhow!("invalid start-time"))?;
+    Ok(RuntimeProcessIdentity { pid, start_time })
+}
+
+fn decode_runtime_process_identity(contents: &[u8]) -> Result<RuntimeProcessIdentity> {
+    let value: serde_json::Value = serde_json::from_slice(contents)?;
+    decode_process_identity(&value)
+}
+
+pub(crate) fn decode_runtime_record(contents: &[u8]) -> Result<RuntimeRecord> {
+    let value: serde_json::Value = serde_json::from_slice(contents)?;
+    let process = decode_process_identity(&value)?;
+    let port = value["port"]
+        .as_u64()
+        .and_then(|port| u16::try_from(port).ok())
+        .ok_or_else(|| anyhow::anyhow!("invalid port"))?;
+    value["ip"]
+        .as_str()
+        .and_then(|ip| ip.parse::<IpAddr>().ok())
+        .ok_or_else(|| anyhow::anyhow!("invalid ip"))?;
+    Ok(RuntimeRecord { process, port })
+}
 
 /// Outcome of the start-up mutex check.
 pub(crate) enum StartupCheck {
@@ -120,29 +161,15 @@ pub(crate) fn check_startup_mutex(path: &Path) -> std::io::Result<StartupCheck> 
             return Ok(StartupCheck::Stale);
         }
     };
-    let decoded = serde_json::from_str::<serde_json::Value>(&contents);
-    let (pid, recorded) = match decoded {
-        Ok(value) => {
-            let pid = value["pid"]
-                .as_u64()
-                .and_then(|pid| u32::try_from(pid).ok());
-            let recorded = value["start_time"].as_u64();
-            if let (Some(pid), Some(recorded)) = (pid, recorded) {
-                (pid, recorded)
-            } else {
-                let error = std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "runtime file has invalid identity fields",
-                );
-                report_runtime_decode(&error);
-                return Ok(StartupCheck::Stale);
-            }
-        }
+    let process = match decode_runtime_process_identity(contents.as_bytes()) {
+        Ok(process) => process,
         Err(error) => {
-            report_runtime_decode(&error);
+            report_runtime_decode(error.as_ref());
             return Ok(StartupCheck::Stale);
         }
     };
+    let pid = process.pid;
+    let recorded = process.start_time;
     Ok(if holder_is_live(pid, recorded)? {
         StartupCheck::Refuse { pid }
     } else {
@@ -326,6 +353,47 @@ mod tests {
 
     fn addr() -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 34567)
+    }
+    #[test]
+    fn runtime_record_decoder_validates_the_complete_schema() {
+        let record =
+            decode_runtime_record(br#"{"ip":"127.0.0.1","port":3000,"pid":41,"start_time":101}"#)
+                .expect("canonical runtime identity");
+        assert_eq!(
+            record.process,
+            RuntimeProcessIdentity {
+                pid: 41,
+                start_time: 101
+            }
+        );
+        assert_eq!(record.port, 3000);
+
+        for (contents, category) in [
+            (
+                r#"{"ip":"127.0.0.1","port":3000,"pid":0,"start_time":101}"#,
+                "invalid pid",
+            ),
+            (
+                r#"{"ip":"127.0.0.1","port":3000,"pid":41,"start_time":"bad"}"#,
+                "invalid start-time",
+            ),
+            (
+                r#"{"ip":"127.0.0.1","port":70000,"pid":41,"start_time":101}"#,
+                "invalid port",
+            ),
+            (
+                r#"{"ip":"not-an-address","port":3000,"pid":41,"start_time":101}"#,
+                "invalid ip",
+            ),
+        ] {
+            let error = decode_runtime_record(contents.as_bytes())
+                .err()
+                .expect("invalid runtime identity");
+            assert!(
+                error.to_string().contains(category),
+                "{category} category missing from {error:#}"
+            );
+        }
     }
 
     #[derive(Clone)]
@@ -682,6 +750,19 @@ mod tests {
         write_runtime(
             &p,
             &serde_json::json!({"ip":"127.0.0.1","port":1,"pid":me,"start_time":own_start_time()}),
+        );
+        assert!(
+            matches!(check_startup_mutex(&p).unwrap(), StartupCheck::Refuse { pid } if pid == me)
+        );
+        // Presentation fields do not weaken the live process-ownership check.
+        write_runtime(
+            &p,
+            &serde_json::json!({
+                "ip":"invalid",
+                "port":70000,
+                "pid":me,
+                "start_time":own_start_time()
+            }),
         );
         assert!(
             matches!(check_startup_mutex(&p).unwrap(), StartupCheck::Refuse { pid } if pid == me)
