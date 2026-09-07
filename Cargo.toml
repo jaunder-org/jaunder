@@ -88,6 +88,7 @@ base64 = "0.22"
 bytes = "1"
 rand = "0.9"
 sha2 = "0.10"
+unicode-casefold = "0.2"
 rpassword = "7"
 rustix = { version = "1.1.4", default-features = false, features = ["event", "process", "std"] }
 email_address = "0.2"

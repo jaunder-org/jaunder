@@ -400,10 +400,10 @@ impl ThemeAssetManager {
                 Self::sync_directory(staging).await?;
                 Self::verify(&existing, &blob.digest).map(|()| false)
             }
-            Err(error) => {
-                let _ = fs::remove_file(&temporary).await;
-                Err(error.into())
-            }
+            Err(error) => Err(finish_install_failure(
+                error,
+                fs::remove_file(&temporary).await,
+            )),
         }
     }
 
@@ -592,9 +592,20 @@ impl ThemeAssetManager {
     }
 }
 
+fn finish_install_failure(primary: io::Error, cleanup: Result<(), io::Error>) -> ThemeAssetError {
+    crate::helpers::preserve_after_secondary(
+        primary,
+        cleanup,
+        host::error::ErrorKind::Internal,
+        host::error::ErrorClass::Transient,
+        "storage.theme_asset.install_cleanup_unlink",
+    )
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{fs, sync::Arc};
+    use std::{fs, io, sync::Arc};
 
     use common::{MutationOutcome, ids::ThemeId, theme::ThemeContentDigest};
     use rstest::*;
@@ -602,7 +613,7 @@ mod tests {
     use sha2::{Digest, Sha256};
     use tempfile::TempDir;
 
-    use super::ThemeAssetManager;
+    use super::{ThemeAssetError, ThemeAssetManager, finish_install_failure};
     use crate::{
         MockThemeStorage, ThemeContentCharge, ThemeContentEligibility, ThemeOwner,
         ThemeQuotaLimits,
@@ -612,6 +623,22 @@ mod tests {
             mock_write_scope_with_commit_acknowledgement_loss, theme_quota_limits as limits,
         },
     };
+    #[test]
+    fn install_failure_preserves_primary_and_reports_cleanup_failure() {
+        let (error, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_install_failure(
+                io::Error::other("primary rename failure"),
+                Err(io::Error::other("cleanup unlink failure")),
+            )
+        });
+        assert!(matches!(error, ThemeAssetError::Filesystem(_)));
+        assert!(error.to_string().contains("primary rename failure"));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.theme_asset.install_cleanup_unlink",
+        );
+    }
+
     #[test]
     fn complete_content_path_requires_matching_lowercase_digest_shards() {
         let digest = "ab12aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

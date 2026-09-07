@@ -15,6 +15,7 @@ use lightningcss::{
     visitor::{Visit, VisitTypes, Visitor},
 };
 use sha2::{Digest, Sha256};
+use unicode_casefold::UnicodeCaseFold;
 
 use super::{ThemePackageError, ThemePackageLimits};
 
@@ -195,7 +196,7 @@ fn namespace_fonts(
                         ));
                     }
                     let original = custom_font_family_name(family)?;
-                    let key = original.to_ascii_lowercase();
+                    let key = original.chars().case_fold().collect();
                     let renamed = format!("jaunder-{namespace}-{original}");
                     if names.insert(key, renamed.clone()).is_some() {
                         return Err(ThemePackageError::Css("duplicate @font-face family".into()));
@@ -268,9 +269,11 @@ fn rewrite_font_families(
         }
     }
     if let Some(original) = referenced {
-        let renamed = names.get(&original.to_ascii_lowercase()).ok_or_else(|| {
-            ThemePackageError::Css(format!("undeclared font-family reference: {original}"))
-        })?;
+        let renamed = names
+            .get(&original.chars().case_fold().collect::<String>())
+            .ok_or_else(|| {
+                ThemePackageError::Css(format!("undeclared font-family reference: {original}"))
+            })?;
         let replacement = font_family_from_name(renamed)?;
         for family in families {
             if matches!(family, FontFamily::FamilyName(_)) {
@@ -603,15 +606,15 @@ mod tests {
     }
 
     #[test]
-    fn matches_authored_font_families_case_insensitively() {
+    fn matches_authored_font_families_with_unicode_default_case_folding() {
         let compiled = compile(
-            "@font-face { font-family: Brand; src: url(font.woff2) } .a { font-family: brand, serif }",
+            "@font-face { font-family: Straße; src: url(font.woff2) } .a { font-family: STRASSE, serif }",
             &BTreeMap::from([("font.woff2".to_owned(), "/theme-assets/font".to_owned())]),
         )
         .unwrap();
         let css = std::str::from_utf8(compiled.bytes()).unwrap();
-        assert!(css.contains("jaunder-0707070707070707-Brand"), "{css}");
-        assert!(!css.contains("font-family:brand"), "{css}");
+        assert!(css.contains("jaunder-0707070707070707-Straße"), "{css}");
+        assert!(!css.contains("font-family:STRASSE"), "{css}");
     }
 
     #[test]
