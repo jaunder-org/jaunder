@@ -585,7 +585,7 @@ write succeeds with a broken link and no record; otherwise a matching source
 under that lock materializes before unlock. After a conditional delete refuses,
 classification and its unique ascending owner current/Deleted Post/Revision IDs
 come from that same locked decision. The
-[per-user Media Record policy](adr/drafts/per-user-media-records-from-local-post-references.md)
+[per-user Media Record policy](adr/0183-per-user-media-records-from-local-post-references.md)
 retains ADR-0136's owner history guard: web force may knowingly delete the
 owner's final record past it, but never overrides global safety.
 
@@ -685,7 +685,7 @@ foreign/unknown/legacy global safety overridable, and qualifying cross-user
 references use independent records rather than pinning the owner's record. A
 Media Record survives removal of its references and Post deletion until explicit
 owner deletion
-([per-user Media Record policy](adr/drafts/per-user-media-records-from-local-post-references.md)).
+([per-user Media Record policy](adr/0183-per-user-media-records-from-local-post-references.md)).
 
 Revision records have no product mutators: only top-level Post mutation and
 whole-store backup/restore write them. Authenticated owners can list global
@@ -830,7 +830,7 @@ way ([ADR-0089](adr/0089-upstream-atom-document-io.md)). The renderer's public
 time seams use domain or Jiff types. `atom_syndication` and `rss` may still
 bring Chrono transitively through their upstream models; their Chrono-backed
 values convert at the protocol adapter and do not define a first-party time seam
-([Jiff time model](adr/drafts/jiff-time-model.md)).
+([Jiff time model](adr/0182-jiff-time-model.md)).
 
 The authenticated Collection (`server/src/atompub/router.rs:16-33`:
 `/atompub/service`, the per-user post collection and member routes, the media
@@ -1430,8 +1430,8 @@ not compressed, because the artifact is a compiler input rather than a download;
 the ceiling keeps explicit headroom that sits below what the next weaker
 optimisation level would produce, and a unit test asserts that relationship so
 widening it is deliberate. The recalibration required by the
-[proposed Jiff time model](adr/drafts/jiff-time-model.md) admits the bundled
-IANA TZDB while retaining that optimisation-level guard.
+[proposed Jiff time model](adr/0182-jiff-time-model.md) admits the bundled IANA
+TZDB while retaining that optimisation-level guard.
 
 ### Module layout — the per-vertical file split
 
@@ -2033,7 +2033,7 @@ mismatched, and port-zero identities are refused without mutation. Repeated
 SIGTERM is non-escalating so concurrent automation joins the same drain; a
 further SIGINT retains interactive forced exit. The bounded wait never escalates
 on timeout. No administration secret or network control channel exists
-([identity-verified local shutdown](adr/drafts/identity-verified-local-shutdown.md)).
+([identity-verified local shutdown](adr/0181-identity-verified-local-shutdown.md)).
 
 - `StaticAssets` (`server/src/assets.rs:3-5`, `#[folder = "assets/"]`) carries
   the base stylesheets `jaunder.css` and `jaunder-themes.css`, mounted at
@@ -2575,7 +2575,7 @@ ADR-0027's visibility behavior. Direct first-party Chrono and chrono-tz
 dependencies and uses are removed. Chrono may remain transitively through
 unavoidable third-party implementation dependencies, including the current
 non-protocol roots `axum-embed`, `croner`, and `tokio-cron-scheduler`
-([Jiff time model](adr/drafts/jiff-time-model.md)).
+([Jiff time model](adr/0182-jiff-time-model.md)).
 
 **URLs.** The `url` crate is the sanctioned absolute-URL parser and normalizer,
 and it is a direct dependency of `common` (`common/Cargo.toml:24`) — which means
@@ -2808,7 +2808,7 @@ child closes the pipe so the driver can drain that journal-equivalent input
 before invoking the shared zero-panic verifier.
 
 The same host process-control seam also serves interactive UX sandboxes
-([host UX sandbox lifecycle](adr/drafts/host-ux-sandbox-lifecycle.md)).
+([host UX sandbox lifecycle](adr/0180-host-ux-sandbox-lifecycle.md)).
 `cargo xtask sandbox [NAME]` builds current host artifacts, starts on an
 ephemeral loopback port, prints the discovered URL, and owns foreground signal
 handling. Omitted names use disposable storage; named workspaces persist

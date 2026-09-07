@@ -1,6 +1,6 @@
-# ADR-DRAFT: Identity-verified local shutdown
+# ADR-0181: Identity-verified local shutdown
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-06
 - Issue: [#142](https://github.com/jaunder-org/jaunder/issues/142)
 
@@ -61,6 +61,6 @@ a new decision; this ADR does not pre-authorize a network or socket control
 surface.
 
 This decision narrows the deferred local-control direction in
-[ADR-0035](../0035-elisp-live-integration-harness.md) and preserves the
-canonical storage-scoped ownership contract in
-[ADR-0167](../0167-bounded-transient-data-retention.md).
+[ADR-0035](0035-elisp-live-integration-harness.md) and preserves the canonical
+storage-scoped ownership contract in
+[ADR-0167](0167-bounded-transient-data-retention.md).

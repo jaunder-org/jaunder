@@ -73,7 +73,7 @@ Jaunder's public and persistence boundaries.
   supported-range backups retain their representation and restore behavior;
   out-of-range values fail only at the decode, export, or restore operation that
   reaches them.
-- The new proposed, numberless ADR draft at `docs/adr/drafts/jiff-time-model.md`
+- The new proposed, numberless ADR draft at `docs/adr/0182-jiff-time-model.md`
   owns this architecture decision. It supersedes only the Chrono-specific
   implementation portions of ADR-0056, ADR-0072, and ADR-0153 (including
   ADR-0153's obsolete SQLx conclusion); their retained domain, module, and

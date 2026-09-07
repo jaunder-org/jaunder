@@ -206,6 +206,10 @@ convention). See the Status column below for each ADR's current status.
 | [0177](adr/0177-registration-policy-separates-invitation-authority.md) | Registration Policy Separates Invitation Authority                                                           | accepted   |
 | [0178](adr/0178-split-hermetic-static-check-boundaries.md)             | Split hermetic static checks at the documentation boundary                                                   | accepted   |
 | [0179](adr/0179-rendered-html-media-elements.md)                       | Rendered HTML admits bounded media elements                                                                  | accepted   |
+| [0180](adr/0180-host-ux-sandbox-lifecycle.md)                          | Host UX Sandboxes Own Persistent Workspace Lifecycles                                                        | accepted   |
+| [0181](adr/0181-identity-verified-local-shutdown.md)                   | Identity-verified local shutdown                                                                             | accepted   |
+| [0182](adr/0182-jiff-time-model.md)                                    | Jiff time model                                                                                              | accepted   |
+| [0183](adr/0183-per-user-media-records-from-local-post-references.md)  | Per-user Media Records from local Post references                                                            | accepted   |
 
 <!-- adr-table:end -->
 
