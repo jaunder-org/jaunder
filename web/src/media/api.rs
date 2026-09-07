@@ -75,8 +75,13 @@ pub async fn get_uploads_enabled() -> WebResult<bool> {
 pub enum MediaDeletion {
     Deleted,
     Missing,
-    OwnerRetainedHistory { post_ids: Vec<PostId> },
-    GlobalSafety,
+    OwnerRetainedHistory {
+        post_ids: Vec<PostId>,
+        theme_reference_count: u64,
+    },
+    GlobalSafety {
+        theme_reference_count: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,13 +173,17 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MutationOutcome<Me
         .await
         .map_err(map_delete_error)?;
 
+    let theme_reference_count = result.referenced_theme_bindings();
     Ok(result.into_outcome().map(|outcome| match outcome {
         TryDeleteOutcome::Deleted => MediaDeletion::Deleted,
         TryDeleteOutcome::Missing => MediaDeletion::Missing,
-        TryDeleteOutcome::OwnerRetainedHistory(post_ids) => {
-            MediaDeletion::OwnerRetainedHistory { post_ids }
-        }
-        TryDeleteOutcome::GlobalSafety => MediaDeletion::GlobalSafety,
+        TryDeleteOutcome::OwnerRetainedHistory(post_ids) => MediaDeletion::OwnerRetainedHistory {
+            post_ids,
+            theme_reference_count,
+        },
+        TryDeleteOutcome::GlobalSafety => MediaDeletion::GlobalSafety {
+            theme_reference_count,
+        },
     }))
 }
 

@@ -890,39 +890,8 @@ fn ThemePresentationEditor(
     status: RwSignal<Option<String>>,
     pool_paths: NodeRef<leptos::html::Textarea>,
 ) -> impl IntoView {
-    let pool = move |_| {
-        if let Some(id) = selected.get_untracked() {
-            let paths = pool_paths
-                .get()
-                .map(|input| input.value())
-                .unwrap_or_default();
-            let entries = paths
-                .lines()
-                .filter(|path| !path.trim().is_empty())
-                .map(|path| ThemePoolInput::PackageAsset(path.trim().to_owned()))
-                .collect();
-            let current_scope = scope.get_untracked();
-            task::spawn_local(async move {
-                settle(
-                    api::replace_pool(current_scope, id, entries, fresh_seed()).await,
-                    refresh,
-                    status,
-                );
-            });
-        }
-    };
-    let shuffle = move |_| {
-        if let Some(id) = selected.get_untracked() {
-            let current_scope = scope.get_untracked();
-            task::spawn_local(async move {
-                settle(
-                    api::shuffle(current_scope, id, fresh_seed()).await,
-                    refresh,
-                    status,
-                );
-            });
-        }
-    };
+    let pool = move |_| update_pool(scope, selected, refresh, status, pool_paths);
+    let shuffle = move |_| shuffle_presentation(scope, selected, refresh, status);
     view! {
         <fieldset class="j-theme-presentation">
             <legend>"Presentation media"</legend>
@@ -998,6 +967,64 @@ fn ThemePresentationEditor(
     }
 }
 
+fn update_pool(
+    scope: RwSignal<OwnershipScope>,
+    selected: RwSignal<Option<ThemeId>>,
+    refresh: Invalidator,
+    status: RwSignal<Option<String>>,
+    pool_paths: NodeRef<leptos::html::Textarea>,
+) {
+    let Some(id) = selected.get_untracked() else {
+        return;
+    };
+    let paths = pool_paths
+        .get()
+        .map(|input| input.value())
+        .unwrap_or_default();
+    let entries = paths
+        .lines()
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| ThemePoolInput::PackageAsset(path.trim().to_owned()))
+        .collect();
+    let current_scope = scope.get_untracked();
+    let seed = match fresh_seed() {
+        Ok(seed) => seed,
+        Err(error) => {
+            status.set(Some(error));
+            return;
+        }
+    };
+    task::spawn_local(async move {
+        settle(
+            api::replace_pool(current_scope, id, entries, seed).await,
+            refresh,
+            status,
+        );
+    });
+}
+
+fn shuffle_presentation(
+    scope: RwSignal<OwnershipScope>,
+    selected: RwSignal<Option<ThemeId>>,
+    refresh: Invalidator,
+    status: RwSignal<Option<String>>,
+) {
+    let Some(id) = selected.get_untracked() else {
+        return;
+    };
+    let current_scope = scope.get_untracked();
+    let seed = match fresh_seed() {
+        Ok(seed) => seed,
+        Err(error) => {
+            status.set(Some(error));
+            return;
+        }
+    };
+    task::spawn_local(async move {
+        settle(api::shuffle(current_scope, id, seed).await, refresh, status);
+    });
+}
+
 fn replace_role(
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
@@ -1018,12 +1045,17 @@ fn replace_role(
     }
 }
 
-fn fresh_seed() -> [u8; 32] {
+fn fresh_seed() -> Result<[u8; 32], String> {
+    let window = leptos::web_sys::window()
+        .ok_or_else(|| "Could not access browser entropy for the shuffle.".to_owned())?;
+    let crypto = window
+        .crypto()
+        .map_err(|_| "Could not access browser entropy for the shuffle.".to_owned())?;
     let mut seed = [0; 32];
-    let _ = leptos::web_sys::window()
-        .and_then(|window| window.crypto().ok())
-        .and_then(|crypto| crypto.get_random_values_with_u8_array(&mut seed).ok());
-    seed
+    crypto
+        .get_random_values_with_u8_array(&mut seed)
+        .map_err(|_| "Could not generate browser entropy for the shuffle.".to_owned())?;
+    Ok(seed)
 }
 
 fn download_package(filename: &str, bytes: &[u8]) -> Result<(), String> {

@@ -2982,7 +2982,7 @@ mod tests {
     }
     #[apply(backends)]
     #[tokio::test]
-    async fn concurrent_theme_removal_and_media_delete_leave_no_dangling_reference(
+    async fn concurrent_fixed_role_removal_and_media_delete_leave_no_dangling_reference(
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
@@ -3025,17 +3025,23 @@ mod tests {
         );
 
         let (removal, deletion) = tokio::join!(
-            themes.remove_theme(actor, ThemeOwner::Site, theme_id, 200),
+            themes.replace_role(
+                actor,
+                ThemeOwner::Site,
+                theme_id,
+                ThemeImageRole::Logo,
+                ThemeRoleInput::ExplicitAbsent,
+            ),
             manager.delete_media(actor, &media, false),
         );
-        assert!(removal.is_ok(), "theme removal must complete");
-        assert!(
+        assert!(removal.is_ok(), "fixed-role removal must complete");
+        assert_eq!(
             env.state
                 .themes
-                .list_themes(ThemeOwner::Site)
+                .role_binding(ThemeOwner::Site, theme_id, ThemeImageRole::Logo)
                 .await
-                .expect("read site themes")
-                .is_empty()
+                .expect("read role binding"),
+            None,
         );
         let deletion = deletion.expect("concurrent delete returns a guarded outcome");
         assert!(matches!(

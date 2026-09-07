@@ -195,8 +195,9 @@ fn namespace_fonts(
                         ));
                     }
                     let original = custom_font_family_name(family)?;
+                    let key = original.to_ascii_lowercase();
                     let renamed = format!("jaunder-{namespace}-{original}");
-                    if names.insert(original, renamed.clone()).is_some() {
+                    if names.insert(key, renamed.clone()).is_some() {
                         return Err(ThemePackageError::Css("duplicate @font-face family".into()));
                     }
                     *family = font_family_from_name(&renamed)?;
@@ -267,7 +268,7 @@ fn rewrite_font_families(
         }
     }
     if let Some(original) = referenced {
-        let renamed = names.get(&original).ok_or_else(|| {
+        let renamed = names.get(&original.to_ascii_lowercase()).ok_or_else(|| {
             ThemePackageError::Css(format!("undeclared font-family reference: {original}"))
         })?;
         let replacement = font_family_from_name(renamed)?;
@@ -602,6 +603,18 @@ mod tests {
     }
 
     #[test]
+    fn matches_authored_font_families_case_insensitively() {
+        let compiled = compile(
+            "@font-face { font-family: Brand; src: url(font.woff2) } .a { font-family: brand, serif }",
+            &BTreeMap::from([("font.woff2".to_owned(), "/theme-assets/font".to_owned())]),
+        )
+        .unwrap();
+        let css = std::str::from_utf8(compiled.bytes()).unwrap();
+        assert!(css.contains("jaunder-0707070707070707-Brand"), "{css}");
+        assert!(!css.contains("font-family:brand"), "{css}");
+    }
+
+    #[test]
     fn pins_lightningcss_family_name_serde_schema() {
         let stylesheet = StyleSheet::parse(
             ".a { font-family: \"Display Sans\" }",
@@ -628,6 +641,7 @@ mod tests {
             ".a { font-family: var(--font) }",
             "@font-face { font-family: serif; src: url(font.woff2) }",
             "@font-face { font-family: Brand; src: url(font.woff2) } @font-face { font-family: Brand; src: url(font.woff2) }",
+            "@font-face { font-family: Brand; src: url(font.woff2) } @font-face { font-family: brand; src: url(font.woff2) }",
         ] {
             assert!(
                 compile(

@@ -107,7 +107,7 @@ impl ThemeAssetManager {
             .expired_retained_content(now_unix_seconds)
             .await?
         {
-            let _ = self.collect(owner, &digest, now_unix_seconds).await;
+            self.collect(owner, &digest, now_unix_seconds).await?;
         }
 
         // Reload after collection: only content that remains eligible may block
@@ -262,8 +262,15 @@ impl ThemeAssetManager {
                     ThemeAssetError::Storage(error)
                 }
             })?;
-        if matches!(outcome, MutationOutcome::Confirmed(())) {
-            let _ = self.unlink_if_present(digest).await;
+        if matches!(outcome, MutationOutcome::Confirmed(()))
+            && let Err(error) = self.unlink_if_present(digest).await
+        {
+            host::error::report_swallowed(
+                host::error::ErrorKind::Internal,
+                host::error::ErrorClass::Transient,
+                "storage.theme_asset.collect_unlink",
+                host::error::SwallowedSource::Error(&error),
+            );
         }
         Ok(outcome)
     }
@@ -438,15 +445,24 @@ impl ThemeAssetManager {
     }
     async fn cleanup_newly_installed(&self, digests: &[ThemeContentDigest]) {
         for digest in digests {
-            if self
-                .themes
-                .content_eligibility(digest)
-                .await
-                .ok()
-                .flatten()
-                .is_none()
-            {
-                let _ = fs::remove_file(self.content_path(digest.as_ref())).await;
+            match self.themes.content_eligibility(digest).await {
+                Ok(None) => {
+                    if let Err(error) = self.unlink_if_present(digest).await {
+                        host::error::report_swallowed(
+                            host::error::ErrorKind::Internal,
+                            host::error::ErrorClass::Transient,
+                            "storage.theme_asset.publish_cleanup_unlink",
+                            host::error::SwallowedSource::Error(&error),
+                        );
+                    }
+                }
+                Ok(Some(_)) => {}
+                Err(error) => host::error::report_swallowed(
+                    host::error::ErrorKind::Storage,
+                    host::error::ErrorClass::Transient,
+                    "storage.theme_asset.publish_cleanup_eligibility",
+                    host::error::SwallowedSource::Error(&error),
+                ),
             }
         }
     }
@@ -866,6 +882,30 @@ mod tests {
             .expect_expired_retained_content()
             .once()
             .returning(|_| Ok(Vec::new()));
+        let manager = ThemeAssetManager::new(
+            Arc::new(storage),
+            mock_write_scope(),
+            Arc::new(fixture.path().to_path_buf()),
+        );
+
+        assert!(manager.reconcile_startup().await.is_err());
+    }
+
+    // guard:no-backend — mocked storage isolates startup collection failure propagation
+    #[tokio::test]
+    async fn reconciliation_propagates_expired_content_collection_failure() {
+        let digest = digest(b"expired content");
+        let mut storage = MockThemeStorage::new();
+        let expired = digest.clone();
+        storage
+            .expect_expired_retained_content()
+            .once()
+            .returning(move |_| Ok(vec![(ThemeOwner::Site, expired.clone())]));
+        storage
+            .expect_collect_retained_content()
+            .once()
+            .returning(|_, _, _, _| Err(sqlx::Error::RowNotFound));
+        let fixture = TempDir::new().expect("create fixture");
         let manager = ThemeAssetManager::new(
             Arc::new(storage),
             mock_write_scope(),

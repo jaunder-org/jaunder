@@ -12,7 +12,10 @@ use std::{
 };
 
 use image::{ImageFormat, ImageReader};
-use serde::Deserialize;
+use serde::{
+    Deserialize,
+    de::{DeserializeSeed, IgnoredAny, MapAccess, Visitor},
+};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zip::ZipArchive;
@@ -153,6 +156,82 @@ struct Defaults {
     header: Option<Vec<String>>,
 }
 
+/// Deserializes only enough of the root object to reject duplicate asset keys
+/// before serde's map representation would collapse them.
+struct ManifestAssetsUnique;
+
+impl<'de> Deserialize<'de> for ManifestAssetsUnique {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_map(ManifestVisitor)
+    }
+}
+
+struct ManifestVisitor;
+
+impl<'de> Visitor<'de> for ManifestVisitor {
+    type Value = ManifestAssetsUnique;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a theme manifest object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        while let Some(key) = map.next_key::<String>()? {
+            if key == "assets" {
+                map.next_value_seed(UniqueObject)?;
+            } else {
+                map.next_value::<IgnoredAny>()?;
+            }
+        }
+        Ok(ManifestAssetsUnique)
+    }
+}
+
+struct UniqueObject;
+
+impl<'de> DeserializeSeed<'de> for UniqueObject {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_map(UniqueObjectVisitor)
+    }
+}
+
+struct UniqueObjectVisitor;
+
+impl<'de> Visitor<'de> for UniqueObjectVisitor {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("an assets object with unique member names")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut names = BTreeSet::new();
+        while let Some(name) = map.next_key::<String>()? {
+            if !names.insert(name.clone()) {
+                return Err(serde::de::Error::custom(format!(
+                    "duplicate assets member `{name}`"
+                )));
+            }
+            map.next_value::<IgnoredAny>()?;
+        }
+        Ok(())
+    }
+}
+
 /// Streams a ZIP archive without extracting an archive-selected filesystem path.
 ///
 /// # Errors
@@ -187,11 +266,26 @@ fn read_archive_entries(
     input: &[u8],
     limits: ThemePackageLimits,
 ) -> Result<BTreeMap<String, Vec<u8>>, ThemePackageError> {
-    validate_central_directory_names(input)?;
+    let central_start = validate_central_directory_names(input)?;
     let mut archive = ZipArchive::new(Cursor::new(input)).map_err(|error| zip_error(&error))?;
     if archive.len() > limits.max_files {
         return Err(limit("file count"));
     }
+    let mut member_starts = (0..archive.len())
+        .map(|index| {
+            archive
+                .by_index(index)
+                .map_err(|error| zip_error(&error))
+                .and_then(|file| {
+                    usize::try_from(file.header_start()).map_err(|_| {
+                        ThemePackageError::Archive(
+                            "local header offset exceeds platform limit".into(),
+                        )
+                    })
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    member_starts.sort_unstable();
     let mut entries = BTreeMap::new();
     let mut compressed = 0_u64;
     let mut expanded = 0_usize;
@@ -210,6 +304,8 @@ fn read_archive_entries(
         let header_start = usize::try_from(file.header_start()).map_err(|_| {
             ThemePackageError::Archive("local header offset exceeds platform limit".into())
         })?;
+        let actual_compressed =
+            compressed_member_bytes(input, header_start, &member_starts, central_start)?;
         validate_local_header(
             input,
             header_start,
@@ -220,7 +316,7 @@ fn read_archive_entries(
             file.size(),
         )?;
         compressed = compressed
-            .checked_add(file.compressed_size())
+            .checked_add(actual_compressed)
             .ok_or_else(|| limit("compressed bytes"))?;
         let file_size = usize::try_from(file.size()).map_err(|_| limit("per-file bytes"))?;
         if compressed > limits.max_compressed_bytes || file_size > limits.max_file_bytes {
@@ -262,6 +358,8 @@ fn take_required_entries(
 }
 
 fn parse_manifest(raw_manifest: &[u8]) -> Result<(Manifest, Vec<u8>), ThemePackageError> {
+    serde_json::from_slice::<ManifestAssetsUnique>(raw_manifest)
+        .map_err(|error| ThemePackageError::Manifest(error.to_string()))?;
     let manifest: Manifest = serde_json::from_slice(raw_manifest)
         .map_err(|error| ThemePackageError::Manifest(error.to_string()))?;
     if manifest.schema != 1
@@ -613,6 +711,34 @@ fn validate_member_name(path: &str) -> Result<(), ThemePackageError> {
     }
     Ok(())
 }
+
+/// Charges every byte between a member's data payload and the following local
+/// header (or central directory), including data descriptors and padding.
+fn compressed_member_bytes(
+    input: &[u8],
+    start: usize,
+    member_starts: &[usize],
+    central_start: usize,
+) -> Result<u64, ThemePackageError> {
+    let header = input
+        .get(start..start + 30)
+        .ok_or_else(|| ThemePackageError::Archive("truncated local header".into()))?;
+    let name_len = usize::from(u16::from_le_bytes([header[26], header[27]]));
+    let extra_len = usize::from(u16::from_le_bytes([header[28], header[29]]));
+    let data_start = start
+        .checked_add(30 + name_len + extra_len)
+        .ok_or_else(|| ThemePackageError::Archive("local header overflow".into()))?;
+    let boundary = member_starts
+        .iter()
+        .copied()
+        .find(|candidate| *candidate > start)
+        .unwrap_or(central_start);
+    let bytes = boundary
+        .checked_sub(data_start)
+        .ok_or_else(|| ThemePackageError::Archive("local member overlaps boundary".into()))?;
+    u64::try_from(bytes)
+        .map_err(|_| ThemePackageError::Archive("member exceeds platform limit".into()))
+}
 fn validate_asset_path(path: &str) -> Result<(), ThemePackageError> {
     validate_member_name(path)?;
     if !path.starts_with("assets/") {
@@ -688,7 +814,7 @@ fn validate_local_header(
 
 /// ZIP readers may index duplicate names by one entry; reject them from the
 /// central directory before the reader has a chance to collapse that distinction.
-fn validate_central_directory_names(input: &[u8]) -> Result<(), ThemePackageError> {
+fn validate_central_directory_names(input: &[u8]) -> Result<usize, ThemePackageError> {
     let end = input
         .windows(4)
         .rposition(|window| window == b"PK\x05\x06")
@@ -725,7 +851,7 @@ fn validate_central_directory_names(input: &[u8]) -> Result<(), ThemePackageErro
             .checked_add(46 + name_len + extra_len + comment_len)
             .ok_or_else(|| ThemePackageError::Archive("central directory overflow".into()))?;
     }
-    Ok(())
+    Ok(central_start)
 }
 fn source_digest(manifest: &[u8], css: &[u8], assets: &BTreeMap<String, ThemeAsset>) -> [u8; 32] {
     let mut hash = Sha256::new();
@@ -747,6 +873,7 @@ fn revision_digest(
 ) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(REVISION_DOMAIN);
+
     hash.update((assets.len() as u64).to_be_bytes());
     frame(&mut hash, manifest);
     hash.update(css_digest);
@@ -1076,6 +1203,24 @@ mod tests {
             validate_local_header(&header, 0, "y", zip::CompressionMethod::Stored, 0, 0, 0,)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn rejects_duplicate_assets_members_before_canonicalization() {
+        let raw = br#"{"schema":1,"name":"Paper","style_contract":1,"assets":{"assets/a.png":"image/png","assets/a.png":"image/jpeg"},"defaults":{}}"#;
+        assert!(matches!(
+            parse_manifest(raw),
+            Err(ThemePackageError::Manifest(_))
+        ));
+    }
+
+    #[test]
+    fn charges_member_padding_against_compressed_limit() {
+        let mut input = vec![0_u8; 100];
+        input[..4].copy_from_slice(b"PK\x03\x04");
+        input[26..28].copy_from_slice(&1_u16.to_le_bytes());
+        input[30] = b'x';
+        assert_eq!(compressed_member_bytes(&input, 0, &[0], 100).unwrap(), 69,);
     }
     #[test]
     fn rejects_manifest_version_and_unexpected_asset_members() {

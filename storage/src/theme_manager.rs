@@ -80,6 +80,7 @@ impl ThemeManager {
         }
         let binding = Self::binding(actor, theme_id, role, input);
         let expected_binding = binding.clone();
+        let _content_locks = self.content_locks.acquire(media.iter()).await?;
         let themes = Arc::clone(&self.themes);
         let themes_for_revalidation = Arc::clone(&self.themes);
         let media_storage = Arc::clone(&self.media);

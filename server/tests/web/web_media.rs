@@ -409,6 +409,7 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
         confirmed_media_deletion(&body_str),
         MediaDeletion::OwnerRetainedHistory {
             post_ids: vec![post.post_id],
+            theme_reference_count: 0,
         },
         "delete without force should report the referencing post"
     );
@@ -464,6 +465,7 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
         confirmed_media_deletion(&body),
         MediaDeletion::OwnerRetainedHistory {
             post_ids: vec![owned.post_id],
+            theme_reference_count: 0,
         }
     );
     assert_eq!(
@@ -499,7 +501,9 @@ async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(
         confirmed_media_deletion(&body),
-        MediaDeletion::GlobalSafety,
+        MediaDeletion::GlobalSafety {
+            theme_reference_count: 0,
+        },
         "unknown foreign ownership fails closed"
     );
     let calls = resolver.calls();
@@ -573,7 +577,10 @@ async fn delete_refusal_reports_locked_classification_including_concurrent_post(
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert_eq!(
         confirmed_media_deletion(&body),
-        MediaDeletion::OwnerRetainedHistory { post_ids: expected },
+        MediaDeletion::OwnerRetainedHistory {
+            post_ids: expected,
+            theme_reference_count: 0,
+        },
         "classification under the delete lock includes the concurrent retained Post"
     );
     assert_ne!(original.post_id, later.post_id);
