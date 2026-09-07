@@ -82,7 +82,7 @@ Out:
     only if both map executed original Rust lines and the merged report shows
     their union.
 
-- [ ] Task 4: Measure overhead on a quiescent host and publish the viability
+- [x] Task 4: Measure overhead on a quiescent host and publish the viability
       finding.
   - Contract: after Tasks 1–3 establish functional viability, coordinate the
     quiescent window with the user. Alternate five warmed same-nightly baseline
