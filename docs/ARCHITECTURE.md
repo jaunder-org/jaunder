@@ -2117,11 +2117,12 @@ while database errors propagate. The stored tokens and parser come from the
 closed-enum convention rather than a config-specific matcher
 ([ADR-0091](adr/0091-text-enum-closed-string-enum-convention.md)).
 
-The same closed `Theme` type backs `site.theme` in `SiteConfigStorage` and an
-optional `theme` override in `UserConfigStorage`. Operators alone manage the
-site setting; each authenticated author manages only their own override.
-Removing an override is the explicit `Site default` choice, so later site-theme
-changes flow through inherited author pages without a browser-local preference.
+`ThemeStorage` owns typed site and author theme selections. A selection is
+either one of the closed built-ins or a stable custom Theme ID; public
+resolution reads the site selection first, then lets an author selection
+override it. Missing, unpublished, deleted, or malformed persisted selections
+fall back to Studio or the resolved site presentation as appropriate, while
+storage failures propagate.
 
 Deployment is configured by clap flags with matching `JAUNDER_*` environment
 fallbacks and documented defaults

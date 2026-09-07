@@ -98,7 +98,7 @@ Out:
     rows-plus-content backup/restore round trips cover missing and corrupt blob
     failure without public eligibility.
 
-- [ ] Task 5: Cut selection and public presentation over to custom identities.
+- [x] Task 5: Cut selection and public presentation over to custom identities.
   - Contract: one final wasm-safe published-presentation DTO contains built-in
     or custom identity, current published revision, immutable stylesheet URL,
     and optional route-resolved logo/header URLs. `resolve_public_theme` returns

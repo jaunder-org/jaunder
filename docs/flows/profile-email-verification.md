@@ -14,11 +14,6 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#profile-and-email-verification`
 - `endpoint:/api/profile/update`
 - `endpoint:/api/profile/get_default_post_format`
 - `endpoint:/api/profile/set_default_post_format`
-- `endpoint:/api/profile/get_your_pages_theme`
-- `endpoint:/api/profile/set_your_pages_theme`
-- `endpoint:/api/profile/reset_your_pages_theme`
-- `endpoint:/api/profile/get_site_theme`
-- `endpoint:/api/profile/set_site_theme`
 - `endpoint:/api/email/request_verification`
 - `endpoint:/api/email/verify`
 

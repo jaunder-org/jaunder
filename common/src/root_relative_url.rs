@@ -29,6 +29,14 @@ pub struct RootRelativeUrl(String);
 #[error("not a valid root-relative URL (must begin with '/' and be host-less)")]
 pub struct InvalidRootRelativeUrl;
 
+impl RootRelativeUrl {
+    /// The immutable built-in Theme stylesheet served by Jaunder.
+    #[must_use]
+    pub(crate) fn built_in_theme_stylesheet() -> Self {
+        Self("/style/jaunder-themes.css".to_owned())
+    }
+}
+
 impl FromStr for RootRelativeUrl {
     type Err = InvalidRootRelativeUrl;
 

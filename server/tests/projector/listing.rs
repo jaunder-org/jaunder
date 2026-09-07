@@ -4,7 +4,7 @@ use axum::http::{StatusCode, header};
 use tower::ServiceExt;
 
 use common::seed::{Page, PageSeed, PublicPresentation};
-use common::theme::Theme;
+use common::theme::{PublishedThemePresentation, Theme};
 use common::time::{PermalinkDate, UtcInstant};
 use common::visibility::ViewerIdentity;
 use rstest::*;
@@ -18,8 +18,8 @@ use storage::{
 };
 
 use super::fixtures::{
-    TEST_SHELL, assert_sanitized_internal_server_error, failing_site_config, get, projector_app,
-    projector_app_with_dependencies, seed_published_post,
+    TEST_SHELL, assert_sanitized_internal_server_error, failing_site_theme_selection, get,
+    projector_app, projector_app_with_dependencies, seed_published_post,
 };
 
 #[apply(backends)]
@@ -135,8 +135,7 @@ async fn site_timeline_theme_failure_keeps_500_and_reports_boundary_once(#[case]
     let app = projector_app_with_dependencies(
         Arc::clone(&state.posts),
         Arc::clone(&state.users),
-        failing_site_config("injected site timeline theme failure"),
-        Arc::clone(&state.user_config),
+        failing_site_theme_selection("injected site timeline theme failure"),
     );
 
     let (response, event) = crate::assert_error_signal!(
@@ -211,8 +210,7 @@ async fn profile_owner_lookup_failure_keeps_500_and_reports_boundary_once(
     let app = projector_app_with_dependencies(
         Arc::clone(&state.posts),
         Arc::new(users) as Arc<dyn UserStorage>,
-        Arc::clone(&state.site_config),
-        Arc::clone(&state.user_config),
+        Arc::clone(&state.themes),
     );
 
     let (response, event) = crate::assert_error_signal!(
@@ -242,8 +240,7 @@ async fn profile_theme_failure_keeps_500_and_reports_boundary_once(#[case] backe
     let app = projector_app_with_dependencies(
         Arc::clone(&state.posts),
         Arc::clone(&state.users),
-        failing_site_config("injected profile theme failure"),
-        Arc::clone(&state.user_config),
+        failing_site_theme_selection("injected profile theme failure"),
     );
 
     let (response, event) = crate::assert_error_signal!(
@@ -321,7 +318,7 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
             PageSeed::Permalink(_) => "permalink",
         };
         let presentation = PublicPresentation {
-            theme: Theme::Studio,
+            theme: PublishedThemePresentation::built_in(Theme::Studio),
             page: seed,
         };
         let json = serde_json::to_string(&presentation)

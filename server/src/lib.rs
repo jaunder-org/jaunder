@@ -209,6 +209,7 @@ where
     let users = state.users.clone();
     let user_config = state.user_config.clone();
     let site_config = state.site_config.clone();
+    let themes = state.themes.clone();
     let media = state.media.clone();
     let feed_cache = state.feed_cache.clone();
     let feed_events = state.feed_events.clone();
@@ -263,6 +264,7 @@ where
         .layer(axum::Extension(audiences))
         .layer(axum::Extension(users))
         .layer(axum::Extension(user_config))
+        .layer(axum::Extension(themes))
         .layer(axum::Extension(site_config))
         .layer(axum::Extension(media))
         .layer(axum::Extension(feed_cache))

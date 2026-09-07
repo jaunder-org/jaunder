@@ -101,6 +101,53 @@ pub enum PublicThemeSelection {
     Custom(crate::ids::ThemeId),
 }
 
+/// The identity selected for a resolved public presentation.
+///
+/// Custom identities remain stable as their display names and published revisions change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum PublishedThemeIdentity {
+    BuiltIn(Theme),
+    Custom(crate::ids::ThemeId),
+}
+
+/// The complete theme information needed to render one public route.
+///
+/// This is deliberately wasm-safe: all serving and selection work is complete before this
+/// DTO crosses the server boundary. A custom selection names its stable theme identity while
+/// `revision` pins the immutable content currently presented for that identity.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PublishedThemePresentation {
+    pub identity: PublishedThemeIdentity,
+    pub revision: Option<ThemeRevisionDigest>,
+    pub stylesheet_url: crate::root_relative_url::RootRelativeUrl,
+    pub logo_url: Option<crate::root_relative_url::RootRelativeUrl>,
+    pub header_url: Option<crate::root_relative_url::RootRelativeUrl>,
+}
+
+impl PublishedThemePresentation {
+    /// The built-in fallback presentation used when no valid selection is available.
+    #[must_use]
+    pub fn built_in(theme: Theme) -> Self {
+        Self {
+            identity: PublishedThemeIdentity::BuiltIn(theme),
+            revision: None,
+            stylesheet_url: crate::root_relative_url::RootRelativeUrl::built_in_theme_stylesheet(),
+            logo_url: None,
+            header_url: None,
+        }
+    }
+
+    /// Stable root attribute value understood by the built-in stylesheet.
+    #[must_use]
+    pub fn data_theme(&self) -> String {
+        match self.identity {
+            PublishedThemeIdentity::BuiltIn(theme) => theme.token().to_owned(),
+            PublishedThemeIdentity::Custom(_) => "custom".to_owned(),
+        }
+    }
+}
+
 /// The two Style Contract image roles a Theme Package may supply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -211,5 +258,37 @@ mod tests {
         assert_eq!(ThemeImageBindingMode::PackageAsset.token(), "package_asset");
         assert_eq!(ThemeImageBindingMode::Media.token(), "media");
         assert_eq!(ThemeImageBindingMode::HeaderPool.token(), "pool");
+    }
+
+    #[test]
+    fn published_theme_presentation_serde_fixtures_are_complete() {
+        let built_in = PublishedThemePresentation::built_in(Theme::Reader);
+        let custom = PublishedThemePresentation {
+            identity: PublishedThemeIdentity::Custom(crate::ids::ThemeId::from(42)),
+            revision: Some("a".repeat(64).parse().unwrap()),
+            stylesheet_url: format!("/themes/{}", "b".repeat(64)).parse().unwrap(),
+            logo_url: Some(format!("/themes/{}", "c".repeat(64)).parse().unwrap()),
+            header_url: Some(format!("/themes/{}", "d".repeat(64)).parse().unwrap()),
+        };
+
+        let built_in_fixture = r#"{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null}"#;
+        let custom_fixture = format!(
+            r#"{{"identity":{{"kind":"custom","value":42}},"revision":"{}","stylesheet_url":"/themes/{}","logo_url":"/themes/{}","header_url":"/themes/{}"}}"#,
+            "a".repeat(64),
+            "b".repeat(64),
+            "c".repeat(64),
+            "d".repeat(64),
+        );
+
+        assert_eq!(serde_json::to_string(&built_in).unwrap(), built_in_fixture);
+        assert_eq!(
+            serde_json::from_str::<PublishedThemePresentation>(built_in_fixture).unwrap(),
+            built_in
+        );
+        assert_eq!(serde_json::to_string(&custom).unwrap(), custom_fixture);
+        assert_eq!(
+            serde_json::from_str::<PublishedThemePresentation>(&custom_fixture).unwrap(),
+            custom
+        );
     }
 }

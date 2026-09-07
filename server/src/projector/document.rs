@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
@@ -25,7 +27,17 @@ fn document_with_urls(
     // this is where they exit to the untyped response body.
     let seed = &presentation.page;
     let early_fetch = urls.map(bundle::early_wasm_fetch_script);
-    let head = app::render_head(seed, early_fetch.as_deref()).into_string();
+    let mut head = app::render_head(seed, early_fetch.as_deref()).into_string();
+    if matches!(
+        presentation.theme.identity,
+        common::theme::PublishedThemeIdentity::Custom(_)
+    ) {
+        let _ = write!(
+            head,
+            r#"<link rel="stylesheet" href="{}">"#,
+            presentation.theme.stylesheet_url
+        );
+    }
     let body = app::render_shell(presentation).into_string();
     let blob = serde_json::to_string(presentation).unwrap_or_else(|_| "null".to_string());
     let boot = urls.map_or_else(String::new, |urls| {
@@ -95,7 +107,7 @@ pub(super) fn permalink_response(
     result: web::error::InternalResult<Option<storage::PostRecord>>,
     headers: &HeaderMap,
     shell: &Shell,
-    theme: common::theme::Theme,
+    theme: common::theme::PublishedThemePresentation,
 ) -> Response {
     match result {
         // Anonymous viewer ⇒ never the author, so `is_author = false`.
@@ -129,7 +141,7 @@ mod tests {
 
     fn presentation(theme: Theme) -> PublicPresentation<PageSeed> {
         PublicPresentation {
-            theme,
+            theme: common::theme::PublishedThemePresentation::built_in(theme),
             page: PageSeed::SiteTimeline(Page {
                 posts: vec![],
                 next_cursor: None,
@@ -145,7 +157,7 @@ mod tests {
             Err(web::error::InternalError::validation("boom")),
             &HeaderMap::new(),
             &shell,
-            Theme::Studio,
+            common::theme::PublishedThemePresentation::built_in(Theme::Studio),
         );
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -153,7 +165,12 @@ mod tests {
     #[test]
     fn absent_public_permalink_serves_shell() {
         let shell = Shell("shell".into());
-        let response = permalink_response(Ok(None), &HeaderMap::new(), &shell, Theme::Studio);
+        let response = permalink_response(
+            Ok(None),
+            &HeaderMap::new(),
+            &shell,
+            common::theme::PublishedThemePresentation::built_in(Theme::Studio),
+        );
         assert_eq!(response.status(), StatusCode::OK);
     }
 

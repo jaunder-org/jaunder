@@ -57,7 +57,7 @@ use {
         self, AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MediaContentLocks,
         PerformUpdateError, PostBookkeepingExpectation, PostCreation, PostLifecycle, PostRecord,
         PostRevisionDetail, PostRevisionMetadata, PostStorage, PostUpdate, PublishUpdate,
-        SiteConfigStorage, UserConfigStorage, WriteScope,
+        SiteConfigStorage, ThemeStorage, WriteScope,
     },
 };
 
@@ -606,12 +606,10 @@ async fn public_post_presentation(
     post: PostRecord,
     is_author: bool,
 ) -> crate::error::InternalResult<PublicPresentation<AuthoredPost>> {
-    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    let user_config = expect_context::<Arc<dyn UserConfigStorage>>();
+    let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let theme = storage::resolve_public_theme(
         storage::PublicThemeOwner::Author(post.user_id),
-        site_config.as_ref(),
-        user_config.as_ref(),
+        themes.as_ref(),
     )
     .await?;
     Ok(PublicPresentation {

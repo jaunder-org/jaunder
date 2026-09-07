@@ -16,11 +16,6 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::profile::Update>();
         server_fn::axum::register_explicit::<web::profile::GetDefaultPostFormat>();
         server_fn::axum::register_explicit::<web::profile::SetDefaultPostFormat>();
-        server_fn::axum::register_explicit::<web::profile::GetYourPagesTheme>();
-        server_fn::axum::register_explicit::<web::profile::SetYourPagesTheme>();
-        server_fn::axum::register_explicit::<web::profile::ResetYourPagesTheme>();
-        server_fn::axum::register_explicit::<web::profile::GetSiteTheme>();
-        server_fn::axum::register_explicit::<web::profile::SetSiteTheme>();
         server_fn::axum::register_explicit::<web::sessions::List>();
         server_fn::axum::register_explicit::<web::sessions::Revoke>();
         server_fn::axum::register_explicit::<web::sessions::CreateAppPassword>();

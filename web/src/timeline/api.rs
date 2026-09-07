@@ -29,21 +29,16 @@ use {
     common::time::UtcInstant,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{self, PostStorage, SiteConfigStorage, UserConfigStorage, UserStorage},
+    storage::{self, PostStorage, ThemeStorage, UserStorage},
 };
 
 #[cfg(feature = "server")]
 async fn site_presentation(
     page: Page<RenderedPost>,
 ) -> InternalResult<PublicPresentation<Page<RenderedPost>>> {
-    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    let user_config = expect_context::<Arc<dyn UserConfigStorage>>();
-    let theme = storage::resolve_public_theme(
-        storage::PublicThemeOwner::Site,
-        site_config.as_ref(),
-        user_config.as_ref(),
-    )
-    .await?;
+    let themes = expect_context::<Arc<dyn ThemeStorage>>();
+    let theme =
+        storage::resolve_public_theme(storage::PublicThemeOwner::Site, themes.as_ref()).await?;
     Ok(PublicPresentation { theme, page })
 }
 
@@ -53,16 +48,14 @@ async fn author_presentation(
     page: Page<RenderedPost>,
 ) -> InternalResult<PublicPresentation<Page<RenderedPost>>> {
     let users = expect_context::<Arc<dyn UserStorage>>();
-    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    let user_config = expect_context::<Arc<dyn UserConfigStorage>>();
+    let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let owner = users
         .get_user_by_username(username)
         .await?
         .map_or(storage::PublicThemeOwner::Site, |author| {
             storage::PublicThemeOwner::Author(author.user_id)
         });
-    let theme =
-        storage::resolve_public_theme(owner, site_config.as_ref(), user_config.as_ref()).await?;
+    let theme = storage::resolve_public_theme(owner, themes.as_ref()).await?;
     Ok(PublicPresentation { theme, page })
 }
 

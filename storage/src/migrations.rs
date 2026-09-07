@@ -258,7 +258,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            33
+            34
         );
         assert_eq!(
             db.pool
@@ -320,11 +320,29 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn migration_0033_backfills_legacy_builtin_theme_selections(#[case] backend: Backend) {
+    async fn migration_0034_removes_legacy_theme_rows_after_0033_backfill(
+        #[case] backend: Backend,
+    ) {
         let db = MigrationDatabase::new(backend).await;
         db.migrate_to(32).await.unwrap();
         db.pool
             .execute("INSERT INTO site_config (key, value) VALUES ('site.theme', 'reader')")
+            .await
+            .unwrap();
+        let insert_user = match &db.pool {
+            CloseablePool::Sqlite(_) => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) \
+                 VALUES (101, 'theme-cutover-user', 'hash', CURRENT_TIMESTAMP)"
+            }
+            CloseablePool::Postgres(_) => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) \
+                 OVERRIDING SYSTEM VALUE \
+                 VALUES (101, 'theme-cutover-user', 'hash', CURRENT_TIMESTAMP)"
+            }
+        };
+        db.pool.execute(insert_user).await.unwrap();
+        db.pool
+            .execute("INSERT INTO user_config (user_id, key, value) VALUES (101, 'user.theme', 'terminal')")
             .await
             .unwrap();
 
@@ -339,14 +357,36 @@ mod tests {
                 .await
                 .unwrap(),
             1,
+            "site selection survives the cutover",
         );
         assert_eq!(
             db.pool
-                .scalar_i64("SELECT COUNT(*) FROM site_config WHERE key = 'site.theme'")
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM theme_selections \
+                     WHERE catalog_owner_key = 'user:101' AND builtin_theme = 'terminal' AND theme_id IS NULL",
+                )
                 .await
                 .unwrap(),
             1,
-            "the deployable legacy configuration remains readable until Task 5",
+            "author selection survives the cutover",
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT (SELECT COUNT(*) FROM site_config WHERE key = 'site.theme') \
+                     + (SELECT COUNT(*) FROM user_config WHERE key = 'user.theme')",
+                )
+                .await
+                .unwrap(),
+            0,
+            "0034 removes legacy theme rows after their selections are materialized",
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
+                .await
+                .unwrap(),
+            34,
         );
     }
 
@@ -818,7 +858,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            33
+            34
         );
         assert_eq!(
             db.pool

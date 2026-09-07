@@ -159,7 +159,7 @@ pub fn render_shell(presentation: &PublicPresentation<PageSeed>) -> Markup {
         .and_then(crate::sidebar::active_key)
         .unwrap_or("");
     Markup::new(html! {
-        div class="j-root" data-theme=(presentation.theme.as_ref()) {
+        div class="j-root" data-theme=(presentation.theme.data_theme()) {
             div id="j-trusted-chrome" class="j-trusted-chrome" {}
             div class="j-theme-clip" data-jaunder-theme-clip {
                 div class="j-shell" data-jaunder-theme-surface data-jaunder-style-contract="1" {
@@ -314,7 +314,9 @@ mod tests {
     #[test]
     fn shell_has_one_versioned_theme_surface_inside_a_paint_clip() {
         let html = render_shell(&PublicPresentation {
-            theme: common::theme::Theme::Studio,
+            theme: common::theme::PublishedThemePresentation::built_in(
+                common::theme::Theme::Studio,
+            ),
             page: PageSeed::SiteTimeline(one_post_page()),
         })
         .into_string();
@@ -352,7 +354,9 @@ mod tests {
     #[test]
     fn shell_marks_home_active_only_for_the_site_timeline() {
         let root = render_shell(&PublicPresentation {
-            theme: common::theme::Theme::Studio,
+            theme: common::theme::PublishedThemePresentation::built_in(
+                common::theme::Theme::Studio,
+            ),
             page: PageSeed::SiteTimeline(one_post_page()),
         })
         .into_string();
@@ -362,7 +366,9 @@ mod tests {
         );
 
         let non_root = render_shell(&PublicPresentation {
-            theme: common::theme::Theme::Studio,
+            theme: common::theme::PublishedThemePresentation::built_in(
+                common::theme::Theme::Studio,
+            ),
             page: PageSeed::Profile {
                 username: parse_username("bob"),
                 page: one_post_page(),

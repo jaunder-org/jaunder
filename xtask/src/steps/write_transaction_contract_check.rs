@@ -100,7 +100,6 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
             "set_media_uploads_enabled",
             "set_backup_config",
             "set_default_audience",
-            "set_theme",
             "update_smtp_config",
         ],
     ),

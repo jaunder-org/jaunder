@@ -133,7 +133,7 @@ pub struct AuthoredPost {
 /// ownership, never from the viewer or browser-local state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicPresentation<Page> {
-    pub theme: crate::theme::Theme,
+    pub theme: crate::theme::PublishedThemePresentation,
     pub page: Page,
 }
 
@@ -255,13 +255,13 @@ mod tests {
     #[test]
     fn public_presentation_serializes_the_server_resolved_theme_with_the_page() {
         let presentation = PublicPresentation {
-            theme: crate::theme::Theme::Reader,
+            theme: crate::theme::PublishedThemePresentation::built_in(crate::theme::Theme::Reader),
             page: PageSeed::SiteTimeline(page(None)),
         };
 
         assert_eq!(
             serde_json::to_string(&presentation).unwrap(),
-            r#"{"theme":"reader","page":{"SiteTimeline":{"posts":[],"next_cursor":null,"has_more":false}}}"#
+            r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"posts":[],"next_cursor":null,"has_more":false}}}"#
         );
     }
 }

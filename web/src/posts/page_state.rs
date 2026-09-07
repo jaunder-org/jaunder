@@ -35,7 +35,7 @@ use common::revision_history::{
 use common::root_relative_url::RootRelativeUrl;
 use common::seed::{AuthoredPost, Page, PageCursor, PageSeed, PublicPresentation, RenderedPost};
 use common::tag::Tag;
-use common::theme::Theme;
+use common::theme::PublishedThemePresentation;
 use common::username::Username;
 use common::visibility::AudienceSelection;
 use common::{MutationOutcome, ids::PostId, permalink_route::PermalinkRoute};
@@ -158,7 +158,9 @@ pub fn tag_query(tag: Option<Tag>) -> WebResult<Tag> {
 /// Deconstructs one server-resolved public destination so wasm route wiring can
 /// commit its theme and content together without recreating resolution rules.
 #[must_use]
-pub fn public_destination<Page>(presentation: PublicPresentation<Page>) -> (Theme, Page) {
+pub fn public_destination<Page>(
+    presentation: PublicPresentation<Page>,
+) -> (PublishedThemePresentation, Page) {
     (presentation.theme, presentation.page)
 }
 
@@ -171,7 +173,7 @@ pub fn public_destination<Page>(presentation: PublicPresentation<Page>) -> (Them
 pub async fn user_destination<Page, Fetch, FetchFuture>(
     username: Option<Username>,
     fetch: Fetch,
-) -> WebResult<(Theme, Page)>
+) -> WebResult<(PublishedThemePresentation, Page)>
 where
     Fetch: FnOnce(Username) -> FetchFuture,
     FetchFuture: Future<Output = WebResult<PublicPresentation<Page>>>,
@@ -188,7 +190,7 @@ where
 pub async fn tag_destination<Page, Fetch, FetchFuture>(
     tag: Option<Tag>,
     fetch: Fetch,
-) -> WebResult<(Theme, Page)>
+) -> WebResult<(PublishedThemePresentation, Page)>
 where
     Fetch: FnOnce(Tag) -> FetchFuture,
     FetchFuture: Future<Output = WebResult<PublicPresentation<Page>>>,
@@ -206,7 +208,7 @@ pub async fn user_tag_destination<Page, Fetch, FetchFuture>(
     username: Option<Username>,
     tag: Option<Tag>,
     fetch: Fetch,
-) -> WebResult<(Theme, Page)>
+) -> WebResult<(PublishedThemePresentation, Page)>
 where
     Fetch: FnOnce(Username, Tag) -> FetchFuture,
     FetchFuture: Future<Output = WebResult<PublicPresentation<Page>>>,
@@ -224,7 +226,7 @@ where
 pub async fn permalink_destination<Fetch, FetchFuture>(
     route: Option<PermalinkRoute>,
     fetch: Fetch,
-) -> WebResult<(Theme, AuthoredPost)>
+) -> WebResult<(PublishedThemePresentation, AuthoredPost)>
 where
     Fetch: FnOnce(PermalinkRoute) -> FetchFuture,
     FetchFuture: Future<Output = WebResult<PublicPresentation<AuthoredPost>>>,
@@ -793,7 +795,12 @@ mod tests {
         parse_post_body, parse_root_relative_url, parse_slug, parse_tag, parse_tag_label,
         parse_username, parse_utc_instant,
     };
+    use common::theme::Theme;
     use common::time::UtcInstant;
+
+    fn theme(theme: Theme) -> PublishedThemePresentation {
+        PublishedThemePresentation::built_in(theme)
+    }
 
     fn page(has_more: bool) -> Page<RenderedPost> {
         Page {
@@ -846,12 +853,12 @@ mod tests {
 
     #[test]
     fn public_destination_preserves_route_theme_and_page() {
-        let (theme, page) = public_destination(PublicPresentation {
-            theme: Theme::Reader,
+        let (presentation, page) = public_destination(PublicPresentation {
+            theme: theme(Theme::Reader),
             page: page(true),
         });
 
-        assert_eq!(theme, Theme::Reader);
+        assert_eq!(presentation, theme(Theme::Reader));
         assert!(page.has_more);
     }
 
@@ -862,24 +869,24 @@ mod tests {
             user_destination(Some(alice()), |username| async move {
                 assert_eq!(username, alice());
                 Ok(PublicPresentation {
-                    theme: Theme::Terminal,
+                    theme: theme(Theme::Terminal),
                     page: user_page,
                 })
             })
             .await,
-            Ok((Theme::Terminal, page(true)))
+            Ok((theme(Theme::Terminal), page(true)))
         );
 
         assert_eq!(
             tag_destination(Some(rust()), |tag| async move {
                 assert_eq!(tag, rust());
                 Ok(PublicPresentation {
-                    theme: Theme::Reader,
+                    theme: theme(Theme::Reader),
                     page: page(false),
                 })
             })
             .await,
-            Ok((Theme::Reader, page(false)))
+            Ok((theme(Theme::Reader), page(false)))
         );
 
         assert_eq!(
@@ -887,12 +894,12 @@ mod tests {
                 assert_eq!(username, alice());
                 assert_eq!(tag, rust());
                 Ok(PublicPresentation {
-                    theme: Theme::Studio,
+                    theme: theme(Theme::Studio),
                     page: page(true),
                 })
             })
             .await,
-            Ok((Theme::Studio, page(true)))
+            Ok((theme(Theme::Studio), page(true)))
         );
 
         let route =
@@ -902,13 +909,13 @@ mod tests {
             permalink_destination(Some(route.clone()), |actual| async move {
                 assert_eq!(actual, route);
                 Ok(PublicPresentation {
-                    theme: Theme::Reader,
+                    theme: theme(Theme::Reader),
                     page: expected_post.clone(),
                 })
             })
             .await,
             Ok((
-                Theme::Reader,
+                theme(Theme::Reader),
                 crate::posts::render::test_fixtures::sample_post()
             ))
         );

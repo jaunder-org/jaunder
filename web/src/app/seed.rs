@@ -35,14 +35,15 @@ mod tests {
 
     #[test]
     fn valid_presentation_retains_the_server_resolved_destination_theme() {
-        let json = r#"{"theme":"reader","page":{"SiteTimeline":{"posts":[],"has_more":false,"next_cursor":null}}}"#;
+        let json = r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"posts":[],"has_more":false,"next_cursor":null}}}"#;
 
+        let decoded = decode_projector_seed(Some(json)).expect("valid presentation");
         assert!(matches!(
-            decode_projector_seed(Some(json)),
-            Ok(Some(PublicPresentation {
-                theme: common::theme::Theme::Reader,
+            decoded,
+            Some(PublicPresentation {
+                theme,
                 page: PageSeed::SiteTimeline(_),
-            }))
+            }) if theme == common::theme::PublishedThemePresentation::built_in(common::theme::Theme::Reader)
         ));
     }
 }

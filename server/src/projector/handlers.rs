@@ -16,7 +16,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::soft_path::SoftPath;
 use std::{future::Future, sync::Arc};
-use storage::{PostStorage, SiteConfigStorage, UserConfigStorage, UserStorage};
+use storage::{PostStorage, ThemeStorage, UserStorage};
 use web::error::{self, SwallowedSource};
 use web::timeline;
 
@@ -63,8 +63,7 @@ impl<'de> Deserialize<'de> for PermalinkPath {
 
 async fn permalink(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
-    Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
+    Extension(themes): Extension<Arc<dyn ThemeStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
     Path(PermalinkPath(route)): Path<PermalinkPath>,
@@ -95,8 +94,7 @@ async fn permalink(
     };
     let theme = match storage::resolve_public_theme(
         storage::PublicThemeOwner::Author(record.user_id),
-        site_config.as_ref(),
-        user_config.as_ref(),
+        themes.as_ref(),
     )
     .await
     {
@@ -113,8 +111,7 @@ async fn permalink(
 
 async fn site_timeline(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
-    Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
+    Extension(themes): Extension<Arc<dyn ThemeStorage>>,
     headers: HeaderMap,
 ) -> Response {
     let page = match timeline::fetch_local_timeline(
@@ -133,21 +130,17 @@ async fn site_timeline(
             return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    let theme = match storage::resolve_public_theme(
-        storage::PublicThemeOwner::Site,
-        site_config.as_ref(),
-        user_config.as_ref(),
-    )
-    .await
-    {
-        Ok(theme) => theme,
-        Err(error) => {
-            web::error::InternalError::from(error)
-                .with_context("boundary", "server.projector.timeline_theme")
-                .emit_boundary_failure();
-            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+    let theme =
+        match storage::resolve_public_theme(storage::PublicThemeOwner::Site, themes.as_ref()).await
+        {
+            Ok(theme) => theme,
+            Err(error) => {
+                web::error::InternalError::from(error)
+                    .with_context("boundary", "server.projector.timeline_theme")
+                    .emit_boundary_failure();
+                return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
     document::cacheable_presentation(
         &headers,
         &PublicPresentation {
@@ -159,8 +152,7 @@ async fn site_timeline(
 
 struct ThemeStores<'a> {
     users: &'a dyn UserStorage,
-    site_config: &'a dyn SiteConfigStorage,
-    user_config: &'a dyn UserConfigStorage,
+    themes: &'a dyn ThemeStorage,
 }
 
 /// Project a username-keyed public page with the route owner's effective theme.
@@ -205,24 +197,22 @@ where
             return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    let theme =
-        match storage::resolve_public_theme(owner, stores.site_config, stores.user_config).await {
-            Ok(theme) => theme,
-            Err(error) => {
-                error::InternalError::from(error)
-                    .with_context("boundary", context)
-                    .emit_boundary_failure();
-                return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-        };
+    let theme = match storage::resolve_public_theme(owner, stores.themes).await {
+        Ok(theme) => theme,
+        Err(error) => {
+            error::InternalError::from(error)
+                .with_context("boundary", context)
+                .emit_boundary_failure();
+            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
     document::cacheable_presentation(headers, &PublicPresentation { theme, page: seed })
 }
 
 async fn profile(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(users): Extension<Arc<dyn UserStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
-    Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
+    Extension(themes): Extension<Arc<dyn ThemeStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
     Path(username): Path<SoftPath<Username>>,
@@ -234,8 +224,7 @@ async fn profile(
         "server.projector.profile",
         ThemeStores {
             users: users.as_ref(),
-            site_config: site_config.as_ref(),
-            user_config: user_config.as_ref(),
+            themes: themes.as_ref(),
         },
         |username| async move {
             timeline::fetch_user_posts(
@@ -254,8 +243,7 @@ async fn profile(
 
 async fn site_tag(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
-    Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
+    Extension(themes): Extension<Arc<dyn ThemeStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
     // malformed segment is parsed *inside* the handler and falls back to the SPA
@@ -282,8 +270,7 @@ async fn site_tag(
         Ok(page) => {
             let theme = match storage::resolve_public_theme(
                 storage::PublicThemeOwner::Site,
-                site_config.as_ref(),
-                user_config.as_ref(),
+                themes.as_ref(),
             )
             .await
             {
@@ -318,8 +305,7 @@ async fn site_tag(
 async fn user_tag(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(users): Extension<Arc<dyn UserStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
-    Extension(user_config): Extension<Arc<dyn UserConfigStorage>>,
+    Extension(themes): Extension<Arc<dyn ThemeStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
     Path((username, tag)): Path<(SoftPath<Username>, SoftPath<Tag>)>,
@@ -335,8 +321,7 @@ async fn user_tag(
         "server.projector.user_tag",
         ThemeStores {
             users: users.as_ref(),
-            site_config: site_config.as_ref(),
-            user_config: user_config.as_ref(),
+            themes: themes.as_ref(),
         },
         |username| async move {
             timeline::fetch_user_posts_by_tag(

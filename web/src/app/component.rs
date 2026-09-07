@@ -24,7 +24,7 @@ use crate::sidebar::Sidebar;
 use crate::site::{SiteBaseUrlBanner, SiteSettingsPage};
 use crate::smtp::SmtpSettingsPage;
 use crate::websub::WebsubPage;
-use common::theme::Theme;
+use common::theme::{PublishedThemePresentation, Theme};
 use leptos::prelude::*;
 use leptos_meta::{Title, provide_meta_context};
 use leptos_router::{
@@ -33,8 +33,9 @@ use leptos_router::{
     hooks::use_location,
 };
 #[must_use]
-pub fn public_theme() -> RwSignal<Theme> {
-    use_context::<RwSignal<Theme>>().unwrap_or_else(|| RwSignal::new(Theme::Studio))
+pub fn public_theme() -> RwSignal<PublishedThemePresentation> {
+    use_context::<RwSignal<PublishedThemePresentation>>()
+        .unwrap_or_else(|| RwSignal::new(PublishedThemePresentation::built_in(Theme::Studio)))
 }
 
 #[component]
@@ -55,11 +56,10 @@ fn AppShell() -> impl IntoView {
             class="j-root"
             data-theme=move || {
                 if common::theme::is_public_presentation_path(&location.pathname.get()) {
-                    theme.get()
+                    theme.get().data_theme()
                 } else {
-                    Theme::Studio
+                    Theme::Studio.token().to_owned()
                 }
-                    .token()
             }
         >
             {move || {

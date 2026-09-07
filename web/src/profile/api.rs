@@ -8,7 +8,7 @@
 use crate::error::WebResult;
 use common::{
     MutationOutcome, bio::Bio, display_name::DisplayName, email::Email, render::PostFormat,
-    theme::Theme, username::Username,
+    username::Username,
 };
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,7 @@ use {
     crate::error::{InternalError, from_write_scope_error},
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{ProfileUpdate, SiteConfigStorage, UserConfigStorage, UserStorage, WriteScope},
+    storage::{ProfileUpdate, UserConfigStorage, UserStorage, WriteScope},
 };
 
 /// Profile data returned by [`get`].
@@ -110,125 +110,15 @@ pub async fn set_default_post_format(format: PostFormat) -> WebResult<MutationOu
         .map_err(from_write_scope_error)
 }
 
-/// Retrieves the caller's optional public-pages theme override.
-#[macros::server]
-pub async fn get_your_pages_theme() -> WebResult<Option<Theme>> {
-    let auth = auth::require_auth().await?;
-    let config = expect_context::<Arc<dyn UserConfigStorage>>();
-    Ok(storage::get_theme_override(config.as_ref(), auth.user_id).await?)
-}
-
-/// Persists a public-pages theme override for the authenticated author.
-#[macros::server]
-pub async fn set_your_pages_theme(theme: Theme) -> WebResult<MutationOutcome<()>> {
-    let auth = auth::require_auth().await?;
-    let write_scope = expect_context::<WriteScope>();
-    let config = expect_context::<Arc<dyn UserConfigStorage>>();
-    write_scope
-        .run(|transaction| {
-            Box::pin(async move {
-                storage::set_theme_override(config.as_ref(), transaction, auth.user_id, theme)
-                    .await
-                    .map_err(InternalError::storage)
-            })
-        })
-        .await
-        .map_err(from_write_scope_error)
-}
-
-/// Deletes the authenticated author's override, restoring site-theme inheritance.
-#[macros::server]
-pub async fn reset_your_pages_theme() -> WebResult<MutationOutcome<()>> {
-    let auth = auth::require_auth().await?;
-    let write_scope = expect_context::<WriteScope>();
-    let config = expect_context::<Arc<dyn UserConfigStorage>>();
-    write_scope
-        .run(|transaction| {
-            Box::pin(async move {
-                storage::delete_theme_override(config.as_ref(), transaction, auth.user_id)
-                    .await
-                    .map_err(InternalError::storage)
-            })
-        })
-        .await
-        .map_err(from_write_scope_error)
-}
-
-/// Retrieves the operator-owned default public theme.
-#[macros::server]
-pub async fn get_site_theme() -> WebResult<Theme> {
-    auth::require_operator().await?;
-    let config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    Ok(config.get_theme().await?)
-}
-
-/// Persists the operator-owned default public theme.
-#[macros::server]
-pub async fn set_site_theme(theme: Theme) -> WebResult<MutationOutcome<()>> {
-    auth::require_operator().await?;
-    let write_scope = expect_context::<WriteScope>();
-    let config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    write_scope
-        .run(|transaction| {
-            Box::pin(async move {
-                config
-                    .set_theme(transaction, theme)
-                    .await
-                    .map_err(InternalError::storage)
-            })
-        })
-        .await
-        .map_err(from_write_scope_error)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{SetDefaultPostFormat, SetSiteTheme, SetYourPagesTheme};
-    use common::{render::PostFormat, theme::Theme};
-
-    #[cfg(feature = "server")]
-    use {
-        super::get_your_pages_theme,
-        crate::test_support::auth_parts,
-        common::ids::UserId,
-        leptos::prelude::*,
-        std::sync::Arc,
-        storage::{MockUserConfigStorage, UserConfigStorage},
-    };
+    use super::SetDefaultPostFormat;
+    use common::render::PostFormat;
 
     #[test]
     fn set_default_post_format_wire_rejects_unknown_token() {
         let ok: SetDefaultPostFormat = serde_qs::from_str("format=markdown").unwrap();
         assert_eq!(ok.format, PostFormat::Markdown);
         assert!(serde_qs::from_str::<SetDefaultPostFormat>("format=bogus").is_err());
-    }
-
-    #[test]
-    fn theme_mutation_wires_reject_unknown_tokens() {
-        let author: SetYourPagesTheme = serde_qs::from_str("theme=terminal").unwrap();
-        let site: SetSiteTheme = serde_qs::from_str("theme=reader").unwrap();
-
-        assert_eq!(author.theme, Theme::Terminal);
-        assert_eq!(site.theme, Theme::Reader);
-        assert!(serde_qs::from_str::<SetYourPagesTheme>("theme=bogus").is_err());
-        assert!(serde_qs::from_str::<SetSiteTheme>("theme=bogus").is_err());
-    }
-
-    // guard:no-backend — isolates the authenticated endpoint's storage projection.
-    #[cfg(feature = "server")]
-    #[tokio::test]
-    async fn your_pages_theme_reads_the_authenticated_authors_override() {
-        let owner = Owner::new();
-        owner.set();
-        provide_context(auth_parts(UserId::from(7), "alice"));
-        let mut config = MockUserConfigStorage::new();
-        config
-            .expect_get()
-            .withf(|user_id, _| *user_id == UserId::from(7))
-            .times(1)
-            .return_once(|_, _| Ok(Some("reader".to_owned())));
-        provide_context(Arc::new(config) as Arc<dyn UserConfigStorage>);
-
-        assert_eq!(get_your_pages_theme().await, Ok(Some(Theme::Reader)));
     }
 }
