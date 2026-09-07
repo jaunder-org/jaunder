@@ -5,7 +5,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::{WriteTransaction, postgres_connection, sqlite_connection};
+use crate::WriteTransaction;
+use crate::write_scope;
 use async_trait::async_trait;
 use common::{
     ids::{ThemeId, UserId},
@@ -483,7 +484,7 @@ impl<DB: sqlx::Database> ThemeStore<DB> {
 }
 
 macro_rules! impl_theme_storage {
-    ($db:ty, $conn:ident) => {
+    ($db:ty, $conn:path) => {
         #[async_trait]
         impl ThemeStorage for ThemeStore<$db> {
             async fn create_theme(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, name: &str, draft: &ThemeDraft, limits: ThemeQuotaLimits) -> Result<ThemeId, sqlx::Error> {
@@ -2811,5 +2812,5 @@ mod tests {
     }
 }
 
-impl_theme_storage!(sqlx::Sqlite, sqlite_connection);
-impl_theme_storage!(sqlx::Postgres, postgres_connection);
+impl_theme_storage!(sqlx::Sqlite, write_scope::sqlite_connection);
+impl_theme_storage!(sqlx::Postgres, write_scope::postgres_connection);

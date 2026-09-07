@@ -1,6 +1,6 @@
 //! Wasm-only private Studio journey for Theme Package management.
 
-use std::str::FromStr;
+use std::{borrow::Cow, str::FromStr};
 
 use common::{
     MutationOutcome,
@@ -8,13 +8,13 @@ use common::{
     theme::{PublicThemeSelection, Theme, ThemeImageRole},
 };
 use leptos::prelude::*;
-use leptos::task::spawn_local;
+use leptos::task;
 use strum::VariantArray;
 
 use crate::{auth, error::WebError, reactive::Invalidator, topbar::Topbar};
 
-use super::page_state::{Revalidation, ScopeAvailability, ThemePageState, draft_from_editor};
-use super::{CatalogEntry, OwnershipScope, ThemeBindingInput, ThemePoolInput, api, revalidation};
+use super::page_state::{self, Revalidation, ScopeAvailability, ThemePageState};
+use super::{CatalogEntry, OwnershipScope, ThemeBindingInput, ThemePoolInput, api};
 
 /// The authenticated Studio route. It deliberately only renders server-provided preview
 /// bytes inside a sandboxed iframe; no draft CSS is ever inserted into Studio's document.
@@ -175,7 +175,7 @@ fn create_theme_card(
                     on:click=move |_| {
                         let name = name.get().map(|input| input.value()).unwrap_or_default();
                         let scope = scope.get_untracked();
-                        spawn_local(async move {
+                        task::spawn_local(async move {
                             let result = api::import_css(scope, name, Vec::new()).await;
                             settle(result, refresh, status);
                         });
@@ -228,7 +228,7 @@ fn css_import_card(
                             .map(|input| input.value().into_bytes())
                             .unwrap_or_default();
                         let scope = scope.get_untracked();
-                        spawn_local(async move {
+                        task::spawn_local(async move {
                             settle(api::import_css(scope, name, stylesheet).await, refresh, status);
                         });
                     }
@@ -334,7 +334,7 @@ fn import_package_zip(
         status.set(Some("Could not prepare the package upload.".into()));
         return;
     }
-    spawn_local(async move { settle(api::import_zip(form.into()).await, refresh, status) });
+    task::spawn_local(async move { settle(api::import_zip(form.into()).await, refresh, status) });
 }
 
 fn settle<T>(
@@ -342,7 +342,7 @@ fn settle<T>(
     refresh: Invalidator,
     status: RwSignal<Option<String>>,
 ) {
-    match revalidation(result) {
+    match page_state::revalidation(result) {
         Revalidation::Confirmed => {
             refresh.notify();
             status.set(Some("Saved. Catalog state was reloaded.".into()));
@@ -462,7 +462,9 @@ fn ThemeSelection(
                 .ok()
                 .map(PublicThemeSelection::Custom)
         };
-        spawn_local(async move { settle(api::select(current_scope, next).await, refresh, status) });
+        task::spawn_local(async move {
+            settle(api::select(current_scope, next).await, refresh, status);
+        });
     };
     view! {
         <div class="j-theme-selection">
@@ -613,7 +615,9 @@ fn rename_selected(
     if let Some(id) = selected.get_untracked() {
         let scope = scope.get_untracked();
         let name = name.get().map(|input| input.value()).unwrap_or_default();
-        spawn_local(async move { settle(api::rename(scope, id, name).await, refresh, status) });
+        task::spawn_local(
+            async move { settle(api::rename(scope, id, name).await, refresh, status) },
+        );
     }
 }
 
@@ -630,7 +634,9 @@ fn save_selected_css(
             .get()
             .map(|input| input.value().into_bytes())
             .unwrap_or_default();
-        spawn_local(async move { settle(api::replace_css(scope, id, css).await, refresh, status) });
+        task::spawn_local(async move {
+            settle(api::replace_css(scope, id, css).await, refresh, status);
+        });
     }
 }
 
@@ -642,18 +648,60 @@ fn preview_selected(
 ) {
     if let Some(id) = selected.get_untracked() {
         let scope = scope.get_untracked();
-        spawn_local(async move {
+        task::spawn_local(async move {
             match api::preview(scope, id).await {
                 Ok(preview) => {
-                    document.set(Some(format!(
-                        "<!doctype html><html><head><style>{}</style></head><body>{}</body></html>",
-                        preview.css, preview.html
-                    )));
+                    document.set(Some(preview_document(&preview.css, &preview.html)));
                     status.set(Some("Preview updated in an isolated document.".into()));
                 }
                 Err(error) => status.set(Some(error.to_string())),
             }
         });
+    }
+}
+
+/// Builds the sandboxed preview document without allowing stylesheet bytes to terminate its
+/// HTML raw-text element. `\3C ` is a CSS escape for `<`, including within CSS strings.
+fn preview_document(css: &str, html: &str) -> String {
+    format!(
+        "<!doctype html><html><head><style>{}</style></head><body>{html}</body></html>",
+        html_style_text(css)
+    )
+}
+
+fn html_style_text(css: &str) -> Cow<'_, str> {
+    const STYLE_END: &str = "</style";
+    let is_style_end = |offset| {
+        css[offset..]
+            .get(..STYLE_END.len())
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(STYLE_END))
+    };
+    let Some(first) = css
+        .match_indices('<')
+        .map(|(offset, _)| offset)
+        .find(|&offset| is_style_end(offset))
+    else {
+        return Cow::Borrowed(css);
+    };
+
+    let mut escaped = String::with_capacity(css.len());
+    let mut copied_through = 0;
+    let mut next = first;
+    loop {
+        escaped.push_str(&css[copied_through..next]);
+        escaped.push_str(r"\3C ");
+        escaped.push_str(&css[next + 1..next + STYLE_END.len()]);
+        copied_through = next + STYLE_END.len();
+
+        let Some(offset) = css[copied_through..]
+            .match_indices('<')
+            .map(|(offset, _)| copied_through + offset)
+            .find(|&offset| is_style_end(offset))
+        else {
+            escaped.push_str(&css[copied_through..]);
+            return Cow::Owned(escaped);
+        };
+        next = offset;
     }
 }
 
@@ -664,7 +712,7 @@ fn export_selected(
 ) {
     if let Some(id) = selected.get_untracked() {
         let scope = scope.get_untracked();
-        spawn_local(async move {
+        task::spawn_local(async move {
             match api::export(scope, id).await {
                 Ok(package) => match download_package(&package.filename, &package.bytes) {
                     Ok(()) => status.set(Some("Theme Package download started.".into())),
@@ -684,7 +732,7 @@ fn publish_selected(
 ) {
     if let Some(id) = selected.get_untracked() {
         let scope = scope.get_untracked();
-        spawn_local(async move { settle(api::publish(scope, id).await, refresh, status) });
+        task::spawn_local(async move { settle(api::publish(scope, id).await, refresh, status) });
     }
 }
 
@@ -697,7 +745,7 @@ fn remove_selected(
     if let Some(id) = selected.get_untracked() {
         selected.set(None);
         let scope = scope.get_untracked();
-        spawn_local(async move { settle(api::remove(scope, id).await, refresh, status) });
+        task::spawn_local(async move { settle(api::remove(scope, id).await, refresh, status) });
     }
 }
 
@@ -780,10 +828,10 @@ fn DraftPackageForm(
             .get()
             .map(|input| input.value())
             .unwrap_or_default();
-        match draft_from_editor(manifest, stylesheet, &assets) {
+        match page_state::draft_from_editor(manifest, stylesheet, &assets) {
             Ok(package) => {
                 let scope = scope.get_untracked();
-                spawn_local(async move {
+                task::spawn_local(async move {
                     settle(
                         api::import_package(scope, id, package).await,
                         refresh,
@@ -854,7 +902,7 @@ fn ThemePresentationEditor(
                 .map(|path| ThemePoolInput::PackageAsset(path.trim().to_owned()))
                 .collect();
             let current_scope = scope.get_untracked();
-            spawn_local(async move {
+            task::spawn_local(async move {
                 settle(
                     api::replace_pool(current_scope, id, entries, fresh_seed()).await,
                     refresh,
@@ -866,7 +914,7 @@ fn ThemePresentationEditor(
     let shuffle = move |_| {
         if let Some(id) = selected.get_untracked() {
             let current_scope = scope.get_untracked();
-            spawn_local(async move {
+            task::spawn_local(async move {
                 settle(
                     api::shuffle(current_scope, id, fresh_seed()).await,
                     refresh,
@@ -960,7 +1008,7 @@ fn replace_role(
 ) {
     if let Some(id) = selected.get_untracked() {
         let current_scope = scope.get_untracked();
-        spawn_local(async move {
+        task::spawn_local(async move {
             settle(
                 api::replace_binding(current_scope, id, role, input).await,
                 refresh,
@@ -1016,4 +1064,48 @@ fn selection_token(selection: Option<PublicThemeSelection>) -> String {
 
 fn aria_pressed(pressed: bool) -> &'static str {
     if pressed { "true" } else { "false" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{html_style_text, preview_document};
+
+    #[test]
+    fn preview_stylesheet_cannot_close_its_html_style_element() {
+        let css = r#"
+.preview::after { content: "</StYlE><img src=https://example.invalid>"; }
+.preview { color: rebeccapurple; }
+/* </STYLE><img src=https://example.invalid> */
+"#;
+        let document = preview_document(css, r#"<main class="preview">Preview</main>"#);
+        let escaped_css = html_style_text(css);
+
+        assert_eq!(
+            escaped_css,
+            r#"
+.preview::after { content: "\3C /StYlE><img src=https://example.invalid>"; }
+.preview { color: rebeccapurple; }
+/* \3C /STYLE><img src=https://example.invalid> */
+"#
+        );
+        assert!(
+            document.contains(
+                r#"<style>
+.preview::after { content: "\3C /StYlE>"#
+            ),
+            "{document}"
+        );
+        assert!(!document.contains("</StYlE>"), "{document}");
+        assert!(!document.contains("</STYLE>"), "{document}");
+        assert!(
+            document.contains(".preview { color: rebeccapurple; }"),
+            "{document}"
+        );
+        assert!(
+            document.ends_with(
+                r#"</style></head><body><main class="preview">Preview</main></body></html>"#
+            ),
+            "{document}"
+        );
+    }
 }

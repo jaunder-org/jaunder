@@ -1,9 +1,12 @@
 //! Validated, compiled custom-theme fixture for storage tests and browser seeding.
 
-use std::{collections::BTreeMap, fmt::Write as _, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
-use common::ids::ThemeId;
-use host::theme_package::{CompiledThemeRevision, ThemePackageLimits, validate_theme_package};
+use common::{MutationOutcome, ids::ThemeId};
+use host::{
+    theme_package,
+    theme_package::{CompiledThemeRevision, ThemePackageLimits},
+};
 
 use crate::{ThemeDraft, ThemeDraftAsset, ThemeOwner, ThemeQuotaLimits, ThemeStorage, WriteScope};
 
@@ -16,6 +19,14 @@ fn crc32(bytes: &[u8]) -> u32 {
         }
     }
     !crc
+}
+
+fn digest_to_lowercase_hex(digest: &[u8]) -> String {
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
+    }
+    hex
 }
 
 fn push_u16(bytes: &mut Vec<u8>, value: u16) {
@@ -116,8 +127,10 @@ fn stored_theme_package() -> anyhow::Result<Vec<u8>> {
 ///
 /// Returns an error if the static fixture no longer satisfies the Theme Package contract.
 pub fn try_compiled_theme_fixture() -> anyhow::Result<CompiledThemeRevision> {
-    let validated =
-        validate_theme_package(&stored_theme_package()?, ThemePackageLimits::default())?;
+    let validated = theme_package::validate_theme_package(
+        &stored_theme_package()?,
+        ThemePackageLimits::default(),
+    )?;
     Ok(validated.compile(&BTreeMap::new(), ThemePackageLimits::default())?)
 }
 
@@ -150,18 +163,11 @@ pub async fn try_create_theme(
     owner: ThemeOwner,
     compiled: &CompiledThemeRevision,
 ) -> anyhow::Result<ThemeId> {
-    let digest = compiled.source_digest();
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        let _ = write!(hex, "{byte:02x}");
-    }
+    let hex = digest_to_lowercase_hex(&compiled.source_digest());
     let assets = compiled
         .assets()
         .map(|(path, mime, bytes, digest)| {
-            let mut hex = String::with_capacity(digest.len() * 2);
-            for byte in digest {
-                let _ = write!(hex, "{byte:02x}");
-            }
+            let hex = digest_to_lowercase_hex(&digest);
             Ok(ThemeDraftAsset {
                 path: path.to_owned(),
                 mime: mime.to_owned(),
@@ -197,8 +203,8 @@ pub async fn try_create_theme(
         })
         .await?;
     match outcome {
-        common::MutationOutcome::Confirmed(theme_id) => Ok(theme_id),
-        common::MutationOutcome::CommitIndeterminate(_) => {
+        MutationOutcome::Confirmed(theme_id) => Ok(theme_id),
+        MutationOutcome::CommitIndeterminate(_) => {
             Err(anyhow::anyhow!("fixture theme commit was indeterminate"))
         }
     }

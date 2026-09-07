@@ -95,7 +95,7 @@ pub struct ThemePresentation {
 use {
     crate::{
         auth,
-        error::{InternalError, from_write_scope_error},
+        error::{self, InternalError},
     },
     common::{media::MediaRef, theme},
     host::{
@@ -221,13 +221,17 @@ fn draft_from_input(theme_id: ThemeId, input: Draft) -> Result<ThemeDraft, Inter
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let manifest = package.canonical_manifest().to_vec();
+    let stylesheet = package.authored_css().to_vec();
+    let source_digest = digest_hex(&package.source_digest())
+        .parse()
+        .map_err(|_| InternalError::validation("invalid package digest"))?;
+    validate_draft_css(package)?;
     Ok(ThemeDraft {
         theme_id,
-        manifest: package.canonical_manifest().to_vec(),
-        stylesheet: package.authored_css().to_vec(),
-        source_digest: digest_hex(&package.source_digest())
-            .parse()
-            .map_err(|_| InternalError::validation("invalid package digest"))?,
+        manifest,
+        stylesheet,
+        source_digest,
         assets,
     })
 }
@@ -252,13 +256,17 @@ fn draft_from_archive(theme_id: ThemeId, archive: &[u8]) -> Result<ThemeDraft, I
             })
         })
         .collect::<Result<Vec<_>, InternalError>>()?;
+    let manifest = package.canonical_manifest().to_vec();
+    let stylesheet = package.authored_css().to_vec();
+    let source_digest = digest_hex(&package.source_digest())
+        .parse()
+        .map_err(|_| InternalError::server_message("validated source digest"))?;
+    validate_draft_css(package)?;
     Ok(ThemeDraft {
         theme_id,
-        manifest: package.canonical_manifest().to_vec(),
-        stylesheet: package.authored_css().to_vec(),
-        source_digest: digest_hex(&package.source_digest())
-            .parse()
-            .map_err(|_| InternalError::server_message("validated source digest"))?,
+        manifest,
+        stylesheet,
+        source_digest,
         assets,
     })
 }
@@ -275,6 +283,15 @@ fn package_asset_urls(
             Ok((path.to_owned(), format!("/themes/{}", digest_hex(&digest))))
         })
         .collect()
+}
+
+#[cfg(feature = "server")]
+fn validate_draft_css(package: ValidatedThemePackage) -> Result<(), InternalError> {
+    let asset_urls = package_asset_urls(&package)?;
+    package
+        .compile(&asset_urls, ThemePackageLimits::default())
+        .map_err(|error| InternalError::validation_source("invalid theme package", error))?;
+    Ok(())
 }
 
 #[cfg(feature = "server")]
@@ -570,7 +587,7 @@ pub async fn create(
             })
         })
         .await
-        .map_err(from_write_scope_error)?;
+        .map_err(error::from_write_scope_error)?;
     Ok(outcome.map(|id| CatalogEntry {
         id,
         name,
@@ -602,7 +619,7 @@ pub async fn import_package(
             })
         })
         .await
-        .map_err(from_write_scope_error)?;
+        .map_err(error::from_write_scope_error)?;
     Ok(outcome)
 }
 
@@ -698,7 +715,7 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
             })
         })
         .await
-        .map_err(from_write_scope_error)?;
+        .map_err(error::from_write_scope_error)?;
     no_store();
     Ok(outcome.map(|id| CatalogEntry {
         id,
@@ -748,7 +765,7 @@ pub async fn import_css(
             })
         })
         .await
-        .map_err(from_write_scope_error)?;
+        .map_err(error::from_write_scope_error)?;
     no_store();
     Ok(outcome.map(|id| CatalogEntry {
         id,
@@ -787,7 +804,7 @@ pub async fn replace_css(
             })
         })
         .await
-        .map_err(from_write_scope_error)
+        .map_err(error::from_write_scope_error)
 }
 
 /// Exports the exact owned draft package without relational Media bindings.
@@ -857,7 +874,7 @@ pub async fn rename(
             })
         })
         .await
-        .map_err(from_write_scope_error)
+        .map_err(error::from_write_scope_error)
 }
 
 /// Removes an owned catalog atomically with its Media bindings.
@@ -950,7 +967,7 @@ pub async fn select(
             })
         })
         .await
-        .map_err(from_write_scope_error)
+        .map_err(error::from_write_scope_error)
 }
 
 /// Replaces a fixed logo or header binding.

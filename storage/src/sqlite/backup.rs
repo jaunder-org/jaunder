@@ -13,7 +13,6 @@ use crate::backup::{
     self, BINARY_WIRE_KEY, BackupError, BackupManifest, BackupMode, BackupRowJson,
     CatalogColumnName, CatalogDefinition, CatalogTableName, CatalogTypeName, ColumnInfo,
     MigrationVersion, RestoreBindValue, RestoreText, RestoreValidationReport, is_binary_column,
-    restore_bind_value as parse_restore_value,
 };
 use crate::helpers;
 use crate::sql;
@@ -291,7 +290,7 @@ async fn import_table(
                         "table {table} row is missing column {column_name}"
                     ))
                 })?;
-                parse_restore_value(column, value)
+                backup::restore_bind_value(column, value)
             })
             .collect::<Result<Vec<_>, _>>()?;
         bound_rows.push(values);
