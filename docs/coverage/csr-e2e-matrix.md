@@ -42,6 +42,7 @@ only in that row.
 | `/admin/backups`, `/admin/site`, `/admin/websub`                                                                               | [Administration](#administration)                                                   |
 | `/posts/new`, `/drafts`, `/posts/:post_id/edit`, `/history`, `/posts/:post_id/history`, `/posts/:post_id/history/:revision_id` | [Post authoring lifecycle](#post-authoring-lifecycle)                               |
 | `/media`                                                                                                                       | [Media management](#media-management)                                               |
+| `/studio/themes`                                                                                                               | [Theme management](#theme-management)                                               |
 | `/forgot-password`, `/reset-password?token=...`                                                                                | [Password reset](#password-reset)                                                   |
 | `/tags/:tag`, `/:username/tags/:tag`                                                                                           | [Tag browsing](#tag-browsing) — canonical user path: `/~:username/tags/:tag`        |
 | `/:username`                                                                                                                   | [Public reading](#public-reading) — canonical user path: `/~:username`              |
@@ -206,12 +207,32 @@ measures both tag-route timeline presentations, while
 [`end2end/tests/feeds.spec.ts`](../../end2end/tests/feeds.spec.ts) asserts
 client-side navigation from a tag chip.
 
+### Theme management
+
+**Paths and entry points:** `/studio/themes`; authenticated sidebar Themes
+navigation. Authors manage their own catalog. Operators can switch to the
+server-authorized site catalog. The private Studio route never admits a custom
+stylesheet into its own document; the real public preview is isolated.
+
+**Evidence:**
+[`end2end/tests/theme-management.spec.ts`](../../end2end/tests/theme-management.spec.ts)
+proves the authenticated mounted route's Studio root, keyboard-addressable
+author and operator scope controls, accessibility, parent-document stylesheet
+isolation, and the author lifecycle through CSS import, rename, invalid editor
+feedback, lossless asset editing, fixed and pooled presentation Media, shuffle,
+isolated responsive preview, publish and custom selection, fresh-context
+survival, export, atomic delete fallback, and ZIP re-import. Endpoint ownership,
+multipart transport, and detailed error mapping remain separately evidenced by
+the transport suite below.
+
 ## API transport evidence
 
 ### Theme management API transport
 
-**Paths and entry points:** no mounted CSR route exists yet; the Task 8 surface
-is the authenticated `/api/themes/` server-function transport.
+**Paths and entry points:** the authenticated `/api/themes/` server-function
+transport; it supports the mounted `/studio/themes` route and is also covered
+directly where browser UI setup cannot prove transport-specific headers and
+multipart ordering.
 
 **Evidence:**
 [`end2end/tests/theme-api.spec.ts`](../../end2end/tests/theme-api.spec.ts)
@@ -223,10 +244,7 @@ replace_binding/replace_pool/shuffle, export/remove, and preview. Each confirmed
 mutation is followed by an observable catalog, draft, presentation, or selection
 reread; removal proves selection fallback. It also covers private `no-store`
 responses, preview isolation, owner-only draft assets, anonymous denial, and
-ordered multipart ZIP routing/authentication/validation. There is no mounted CSR
-route yet: this is Playwright API-transport evidence, not CSR UI evidence. The
-endpoint census lives in
-[`docs/flows/theme-management.md`](../flows/theme-management.md).
+ordered multipart ZIP routing/authentication/validation.
 
 | Endpoint                       | Evidence disposition |
 | ------------------------------ | -------------------- |
@@ -248,8 +266,6 @@ endpoint census lives in
 | `/api/themes/replace_pool`     | API transport        |
 | `/api/themes/shuffle`          | API transport        |
 | `/api/themes/preview`          | API transport        |
-
-No row above should be read as evidence of a mounted route or browser UI flow.
 
 ## Maintenance workflow
 

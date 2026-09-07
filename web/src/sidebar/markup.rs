@@ -17,7 +17,7 @@ pub(super) struct NavItem {
     pub(super) requires_operator: bool,
 }
 
-pub(super) static NAV_ITEMS: LazyLock<[NavItem; 18]> = LazyLock::new(|| {
+pub(super) static NAV_ITEMS: LazyLock<[NavItem; 19]> = LazyLock::new(|| {
     [
         NavItem {
             key: "home",
@@ -116,6 +116,14 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 18]> = LazyLock::new(|| {
             label: "Audiences",
             icon_path: Icons::BOOKMARK,
             href: Some(root_relative_url("/audiences")),
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "themes",
+            label: "Themes",
+            icon_path: Icons::COG,
+            href: Some(root_relative_url("/studio/themes")),
             requires_auth: true,
             requires_operator: false,
         },

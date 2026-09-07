@@ -10,7 +10,7 @@
     error = InvalidTheme,
     message = "theme must be \"terminal\", \"studio\", or \"reader\""
 )]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, strum::VariantArray)]
 #[strum(serialize_all = "snake_case")]
 pub enum Theme {
     Terminal,

@@ -174,7 +174,7 @@ Out:
     Server-fn registrar entries, flow endpoint ownership, CSR evidence rows, and
     focused Playwright transport checks land in this task's commit.
 
-- [ ] Task 9: Build the accessible Studio theme-management journey.
+- [x] Task 9: Build the accessible Studio theme-management journey.
   - Contract: one mounted private route lets an author manage their catalog and
     an operator manage the site catalog, with programmatically distinct scopes.
     It supports create/rename/delete, CSS editing, package import/export, asset

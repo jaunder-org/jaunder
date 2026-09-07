@@ -1,9 +1,13 @@
-//! Owner-authorized Theme Package management API.
+//! Owner-authorized Theme Package management API and private Studio journey.
 //!
-//! This vertical contains server functions and wire DTOs only. Studio routes and
-//! components intentionally belong to the following UI task.
+//! Draft CSS is returned only to the browser component and previewed in a
+//! sandboxed document; it never joins the Studio cascade.
 
 mod api;
+mod page_state;
+
+#[cfg(target_arch = "wasm32")]
+mod component;
 
 pub use api::{
     CatalogEntry, Create, Draft, Export, ExportedPackage, GetDraft, GetPresentation, GetSelection,
@@ -13,3 +17,10 @@ pub use api::{
     get_presentation, get_selection, import_css, import_package, import_zip, list, preview,
     publish, remove, rename, replace_binding, replace_css, replace_pool, select, shuffle,
 };
+
+pub use page_state::{
+    Revalidation, ScopeAvailability, ThemePageState, draft_from_editor, revalidation,
+};
+
+#[cfg(target_arch = "wasm32")]
+pub use component::ThemesPage;

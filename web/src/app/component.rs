@@ -23,6 +23,7 @@ use crate::sessions::SessionsPage;
 use crate::sidebar::Sidebar;
 use crate::site::{SiteBaseUrlBanner, SiteSettingsPage};
 use crate::smtp::SmtpSettingsPage;
+use crate::themes::ThemesPage;
 use crate::websub::WebsubPage;
 use std::{cell::RefCell, rc::Rc};
 
@@ -443,6 +444,10 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("drafts") view=DraftsPage />
                     <Route path=StaticSegment("scheduled") view=ScheduledPage />
                     <Route path=StaticSegment("media") view=MediaPage />
+                    <Route
+                        path=(StaticSegment("studio"), StaticSegment("themes"))
+                        view=ThemesPage
+                    />
                     <Route path=StaticSegment("history") view=HistoryPage />
                     <Route
                         path=(

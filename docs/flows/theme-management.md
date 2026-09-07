@@ -4,9 +4,15 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#theme-management-api-transport`
 
 ## Routes
 
-No mounted CSR route exists yet. Theme management is an authenticated
-server-function transport surface; Studio and administration UI ownership
-remains a later task.
+`/studio/themes` is an authenticated Studio route. It begins in the session
+owner's author catalog; an operator may deliberately switch to the distinct site
+catalog. The server remains authoritative for the selected scope and returns an
+authorization error if site operations are attempted without operator status.
+
+The route loads catalog, selection, draft and presentation data through the
+owner-authorized API. Its custom-theme preview is isolated from Studio: draft
+CSS is returned only to a sandboxed preview document and is never inserted into
+the private route's stylesheet cascade.
 
 ## Endpoint census
 
@@ -32,8 +38,9 @@ remains a later task.
 | `endpoint:/api/themes/preview`          | API transport | Renders an owned draft through the Style Contract renderer without changing selection.               |
 | `/themes/draft/{theme_id}/{path}`       | API transport | Serves an owned draft asset only to its author owner or an operator owning its site draft.           |
 
-Task 8 provides API transport, authorization, and Playwright transport evidence
-for this census. It does not claim CSR route or mounted-component coverage: no
-theme-management page is mounted yet. Site-owned operations require an operator;
-author-owned operations require the authenticated author, and every draft,
-package, preview, asset, and binding read remains owner-scoped.
+The mounted `/studio/themes` journey consumes this complete census. Every
+confirmed mutation rereads the affected catalog state; an indeterminate commit
+also rereads and leaves an explicit status message that the owner must review
+the reloaded state. Site-owned operations require an operator; author-owned
+operations require the authenticated author, and every draft, package, preview,
+asset, and binding read remains owner-scoped.
