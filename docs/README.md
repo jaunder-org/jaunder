@@ -16,6 +16,7 @@ definitive working hub for humans and agents.
 | [ROADMAP](ROADMAP.md)                                         | Completed-milestone ledger and direction.                                          |
 | [observability](observability.md)                             | OpenTelemetry tracing for backend + e2e.                                           |
 | [web-style-guide](web-style-guide.md)                         | Conventions for the `web/` Leptos components and widgets.                          |
+| [themes](themes.md)                                           | Create, test, modify, publish, and deploy custom public themes.                    |
 | [atompub-marsedit-acceptance](atompub-marsedit-acceptance.md) | Manual MarsEdit/AtomPub (RFC 5023) acceptance checklist.                           |
 
 ## Architecture Decision Records

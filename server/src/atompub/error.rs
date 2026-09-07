@@ -49,36 +49,54 @@ pub enum HandlerError {
 #[derive(Debug)]
 pub(super) enum MediaDeleteConflict {
     /// The authenticated owner's live Posts reference the media.
-    OwnerReferences(Vec<PostId>),
+    OwnerReferences {
+        post_ids: Vec<PostId>,
+        theme_reference_count: u64,
+    },
     /// Global reference evidence makes deletion unsafe without reportable owner IDs.
-    GlobalSafety,
+    GlobalSafety { theme_reference_count: u64 },
 }
 
 impl MediaDeleteConflict {
     /// Builds an owner-reference conflict whose Post IDs are safe to disclose.
-    pub(super) fn owner_references(post_ids: impl IntoIterator<Item = PostId>) -> Self {
+    pub(super) fn owner_references(
+        post_ids: impl IntoIterator<Item = PostId>,
+        theme_reference_count: u64,
+    ) -> Self {
         let mut post_ids: Vec<_> = post_ids.into_iter().collect();
         post_ids.sort_unstable_by_key(|post_id| i64::from(*post_id));
         post_ids.dedup();
-        Self::OwnerReferences(post_ids)
+        Self::OwnerReferences {
+            post_ids,
+            theme_reference_count,
+        }
     }
 
     /// Builds a global safety conflict without disclosing any Post IDs.
-    pub(super) const fn global_safety() -> Self {
-        Self::GlobalSafety
+    pub(super) const fn global_safety(theme_reference_count: u64) -> Self {
+        Self::GlobalSafety {
+            theme_reference_count,
+        }
     }
 }
 
 impl IntoResponse for MediaDeleteConflict {
     fn into_response(self) -> Response {
-        let (detail, post_ids) = match self {
-            Self::OwnerReferences(post_ids) => (
+        let (detail, post_ids, theme_reference_count) = match self {
+            Self::OwnerReferences {
+                post_ids,
+                theme_reference_count,
+            } => (
                 "Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.",
                 post_ids,
+                theme_reference_count,
             ),
-            Self::GlobalSafety => (
+            Self::GlobalSafety {
+                theme_reference_count,
+            } => (
                 "Media deletion is blocked because Jaunder cannot prove that removing this record would preserve referenced media.",
                 Vec::new(),
+                theme_reference_count,
             ),
         };
         let mut response = Json(MediaDeleteProblem {
@@ -87,6 +105,7 @@ impl IntoResponse for MediaDeleteConflict {
             status: StatusCode::CONFLICT.as_u16(),
             detail,
             post_ids,
+            theme_reference_count,
         })
         .into_response();
         *response.status_mut() = StatusCode::CONFLICT;
@@ -107,6 +126,7 @@ struct MediaDeleteProblem {
     status: u16,
     detail: &'static str,
     post_ids: Vec<PostId>,
+    theme_reference_count: u64,
 }
 
 impl IntoResponse for HandlerError {
@@ -282,13 +302,16 @@ mod tests {
 
     #[tokio::test]
     async fn owner_media_delete_conflict_is_a_problem_document_with_sorted_unique_post_ids() {
-        let response = MediaDeleteConflict::owner_references([
-            PostId::from(7),
-            PostId::from(2),
-            PostId::from(7),
-            PostId::from(12),
-            PostId::from(2),
-        ])
+        let response = MediaDeleteConflict::owner_references(
+            [
+                PostId::from(7),
+                PostId::from(2),
+                PostId::from(7),
+                PostId::from(12),
+                PostId::from(2),
+            ],
+            3,
+        )
         .into_response();
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
@@ -301,13 +324,13 @@ mod tests {
             .expect("read problem response body");
         assert_eq!(
             body.as_ref(),
-            br#"{"type":"https://jaunder.org/problems/media-delete-conflict","title":"Media deletion refused","status":409,"detail":"Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.","post_ids":[2,7,12]}"#
+            br#"{"type":"https://jaunder.org/problems/media-delete-conflict","title":"Media deletion refused","status":409,"detail":"Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.","post_ids":[2,7,12],"theme_reference_count":3}"#
         );
     }
 
     #[tokio::test]
     async fn global_media_delete_conflict_is_a_problem_document_without_post_ids() {
-        let response = MediaDeleteConflict::global_safety().into_response();
+        let response = MediaDeleteConflict::global_safety(0).into_response();
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(
@@ -319,7 +342,7 @@ mod tests {
             .expect("read problem response body");
         assert_eq!(
             body.as_ref(),
-            br#"{"type":"https://jaunder.org/problems/media-delete-conflict","title":"Media deletion refused","status":409,"detail":"Media deletion is blocked because Jaunder cannot prove that removing this record would preserve referenced media.","post_ids":[]}"#
+            br#"{"type":"https://jaunder.org/problems/media-delete-conflict","title":"Media deletion refused","status":409,"detail":"Media deletion is blocked because Jaunder cannot prove that removing this record would preserve referenced media.","post_ids":[],"theme_reference_count":0}"#
         );
     }
 

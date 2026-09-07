@@ -5,7 +5,7 @@
 
 use common::{
     seed::{Page, PublicPresentation, RenderedPost},
-    theme::Theme,
+    theme::PublishedThemePresentation,
 };
 
 /// Splits the server-owned site destination into the two values the reactive
@@ -13,7 +13,7 @@ use common::{
 #[must_use]
 pub fn site_destination(
     presentation: PublicPresentation<Page<RenderedPost>>,
-) -> (Theme, Page<RenderedPost>) {
+) -> (PublishedThemePresentation, Page<RenderedPost>) {
     (presentation.theme, presentation.page)
 }
 
@@ -22,13 +22,13 @@ mod tests {
     use super::site_destination;
     use common::{
         seed::{Page, PublicPresentation},
-        theme::Theme,
+        theme::{PublishedThemePresentation, Theme},
     };
 
     #[test]
     fn destination_keeps_the_server_resolved_theme() {
         let (theme, page) = site_destination(PublicPresentation {
-            theme: Theme::Reader,
+            theme: PublishedThemePresentation::built_in(Theme::Reader),
             page: Page {
                 posts: vec![],
                 next_cursor: None,
@@ -36,7 +36,7 @@ mod tests {
             },
         });
 
-        assert_eq!(theme, Theme::Reader);
+        assert_eq!(theme, PublishedThemePresentation::built_in(Theme::Reader));
         assert!(page.posts.is_empty());
     }
 }

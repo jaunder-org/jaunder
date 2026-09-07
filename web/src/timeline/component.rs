@@ -37,20 +37,33 @@ where
     });
 }
 
-/// Wire a page's initial-fetch `Resource` into the shared timeline state: the one
-/// canonical CSR resolve, replacing the identical `Effect` four pages carried.
+/// Adopt a route presentation and page only after the current resource resolves
+/// and its custom stylesheet becomes active.
 ///
-/// The `Effect` itself is irreducibly wasm-only — it does not run in a host test
-/// (`web::reactive`) — but everything it decides lives in the host-tested
-/// `TimelineState::apply`.
-pub fn wire_timeline_resolve(
+/// `Resource` publishes only the latest keyed destination; observing its pending
+/// state also cancels any staged stylesheet as soon as navigation supersedes it.
+pub fn wire_timeline_destination(
     state: TimelineState,
-    initial_page: Resource<WebResult<Page<RenderedPost>>>,
+    destination: Resource<
+        WebResult<(
+            common::theme::PublishedThemePresentation,
+            Page<RenderedPost>,
+        )>,
+    >,
+    presentation: crate::app::ThemePresentationCoordinator,
 ) {
-    Effect::new(move |_| {
-        if let Some(result) = initial_page.try_get().flatten() {
-            state.apply(result);
+    Effect::new(move |_| match destination.try_get().flatten() {
+        Some(Ok((theme, page))) => {
+            spawn_local(async move {
+                match presentation.adopt(theme).await {
+                    Ok(crate::app::ThemeAdoption::Applied) => state.apply(Ok(page)),
+                    Ok(crate::app::ThemeAdoption::Superseded) => {}
+                    Err(error) => state.apply(Err(error)),
+                }
+            });
         }
+        Some(Err(error)) => state.apply(Err(error)),
+        None => presentation.begin_navigation(),
     });
 }
 
@@ -148,38 +161,48 @@ pub fn TimelineRows(
     let read_in_flight = move || state.status.get().is_in_flight();
     view! {
         <div class="j-scroll">
-            {move || {
-                let rows = read_rows();
-                if rows.is_empty() {
-                    view! { <p>{empty_text}</p> }.into_any()
-                } else {
-                    rows.iter()
-                        .map(|p| {
+            <div data-jaunder-part="post-list">
+                {move || {
+                    let rows = read_rows();
+                    if rows.is_empty() {
+                        view! { <p>{empty_text}</p> }.into_any()
+                    } else {
+                        rows.iter()
+                            .map(|p| {
+                                view! {
+                                    <PostCard
+                                        post=p
+                                        banner=None
+                                        tag_context=&tag_context
+                                        on_mutate=on_mutate
+                                    />
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .into_any()
+                    }
+                }}
+                {move || {
+                    read_has_more()
+                        .then(|| {
                             view! {
-                                <PostCard
-                                    post=p
-                                    banner=None
-                                    tag_context=&tag_context
-                                    on_mutate=on_mutate
-                                />
+                                <button
+                                    data-jaunder-part="continuation"
+                                    on:click=move |_| on_load_more.run(())
+                                    disabled=read_in_flight
+                                >
+                                    {move || {
+                                        if read_in_flight() {
+                                            "Loading\u{2026}"
+                                        } else {
+                                            "Load more"
+                                        }
+                                    }}
+                                </button>
                             }
                         })
-                        .collect::<Vec<_>>()
-                        .into_any()
-                }
-            }}
-            {move || {
-                read_has_more()
-                    .then(|| {
-                        view! {
-                            <button on:click=move |_| on_load_more.run(()) disabled=read_in_flight>
-                                {move || {
-                                    if read_in_flight() { "Loading\u{2026}" } else { "Load more" }
-                                }}
-                            </button>
-                        }
-                    })
-            }}
+                }}
+            </div>
         </div>
     }
 }

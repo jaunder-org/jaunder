@@ -459,8 +459,10 @@ mod tests {
     #[test]
     fn delete_invalidation_covers_confirmed_and_indeterminate_mutations_only() {
         let deleted = MutationOutcome::Confirmed(MediaDeletion::Deleted);
-        let refused =
-            MutationOutcome::Confirmed(MediaDeletion::OwnerRetainedHistory { post_ids: vec![] });
+        let refused = MutationOutcome::Confirmed(MediaDeletion::OwnerRetainedHistory {
+            post_ids: vec![],
+            theme_reference_count: 0,
+        });
         let indeterminate = MutationOutcome::CommitIndeterminate(MediaDeletion::Deleted);
 
         assert!(delete_invalidates_media_resources(&deleted));

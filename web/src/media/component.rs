@@ -343,17 +343,26 @@ fn MediaDeleteOutcome(
                         view! { <p class="success">"Media deleted."</p> }.into_any()
                     }
                     Ok(
-                        MutationOutcome::Confirmed(MediaDeletion::OwnerRetainedHistory { post_ids }),
+                        MutationOutcome::Confirmed(
+                            MediaDeletion::OwnerRetainedHistory { post_ids, theme_reference_count },
+                        ),
                     ) => {
                         let ids = post_ids
                             .iter()
                             .map(ToString::to_string)
                             .collect::<Vec<_>>()
                             .join(", ");
+                        let theme_note = (theme_reference_count > 0)
+                            .then(|| {
+                                format!(
+                                    " This media is also used by {theme_reference_count} of your theme binding(s).",
+                                )
+                            });
                         view! {
                             <p class="error">
                                 {format!(
-                                    "Cannot delete: referenced in retained post(s) {ids}. Use force delete to remove anyway.",
+                                    "Cannot delete: referenced in retained post(s) {ids}. Use force delete to remove anyway.{}",
+                                    theme_note.unwrap_or_default(),
                                 )}
                             </p>
                             {move || {
@@ -364,10 +373,23 @@ fn MediaDeleteOutcome(
                         }
                             .into_any()
                     }
-                    Ok(MutationOutcome::Confirmed(MediaDeletion::GlobalSafety)) => {
+                    Ok(
+                        MutationOutcome::Confirmed(
+                            MediaDeletion::GlobalSafety { theme_reference_count },
+                        ),
+                    ) => {
+                        let theme_note = (theme_reference_count > 0)
+                            .then(|| {
+                                format!(
+                                    " Your theme uses this media in {theme_reference_count} binding(s).",
+                                )
+                            });
                         view! {
                             <p class="error">
-                                "Cannot delete: Jaunder cannot prove that this media is safe to remove."
+                                {format!(
+                                    "Cannot delete: Jaunder cannot prove that this media is safe to remove.{}",
+                                    theme_note.unwrap_or_default(),
+                                )}
                             </p>
                         }
                             .into_any()

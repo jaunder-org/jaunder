@@ -176,6 +176,35 @@ export async function seedPostsViaTool(
     execFileSync("test-support", args, { stdio: "pipe", env: process.env });
   });
 }
+/**
+ * Publish and select the shared compiled custom-theme fixture for one author
+ * through the live server's database and immutable-content root.
+ */
+export async function seedThemeViaTool(authorUsername: string): Promise<void> {
+  await withTimedAction(null, "tool.themes.seed", async () => {
+    execFileSync(
+      "test-support",
+      ["seed-theme", "--author-username", authorUsername],
+      {
+        stdio: "pipe",
+        env: process.env,
+      },
+    );
+  });
+}
+/** Restore selections changed by {@link seedThemeViaTool}. */
+export async function resetThemeViaTool(authorUsername: string): Promise<void> {
+  await withTimedAction(null, "tool.themes.reset", async () => {
+    execFileSync(
+      "test-support",
+      ["seed-theme", "--author-username", authorUsername, "--reset"],
+      {
+        stdio: "pipe",
+        env: process.env,
+      },
+    );
+  });
+}
 
 /** Seed terminal WebSub events through the real feed-event lifecycle. */
 export async function seedDeadLettersViaTool(

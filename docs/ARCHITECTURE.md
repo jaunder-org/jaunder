@@ -1301,6 +1301,50 @@ session, or browser state: identical route content and effective theme produce
 the same representation bytes and cache identity, while a different effective
 theme changes that representation.
 
+### Custom public themes
+
+The custom-theme architecture is governed by the proposed
+[`css-package-public-themes` ADR](adr/drafts/css-package-public-themes.md).
+
+Public markup exposes a versioned semantic Style Contract shared by built-in and
+custom themes; accessible source order and exact concept hooks are stable while
+incidental wrappers are not. Custom CSS is scoped inside an unthemeable
+paint-containment/low-stacking boundary, with authenticated owner mutation
+controls in a sibling trusted-chrome stacking context above it. A Theme Package
+contains a closed manifest, one parser-validated stylesheet, and allowlisted
+local WOFF2 or raster-image assets. Bounded import and transformation reject
+unsafe archives, unscopable CSS, global-name collisions, external resources, and
+executable content. Publication uses raw full SHA-256 content hashes for
+immutable same-origin CSS/assets and separate non-circular framed hashes for
+source-package and revision identity. Publishing advances the stable Theme ID,
+so a selected theme adopts its new revision without a second selection mutation
+while prior bytes remain unchanged. Issued content remains addressable while
+live and through the one-year asset lifetime plus five-minute HTML freshness
+window after its last reference is detached; collection requires both no live
+reference and the elapsed deadline.
+
+The operator and each author own separate custom-theme catalogs. An effective
+public selection is either a built-in `Theme` or an owner-valid custom Theme ID;
+the site/author precedence above remains unchanged. Every draft-derived read is
+owner-authorized, anonymous-denying, and `private, no-store`, and never mutates
+selection; Studio surfaces never load custom CSS. Removing a selected site theme
+resets the site selection to Studio, while removing a selected author theme
+restores site inheritance. Missing or corrupt values follow those fallbacks, but
+database read failures remain errors.
+
+Theme/revision counts and retained bytes are admitted atomically against
+per-owner and site-wide quotas, with detached content charged until collection.
+Per-principal rate limits and one in-flight package operation per owner bound
+repeated parsing and publication.
+
+Published presentation can bind the Style Contract's decorative `logo` and
+`header` roles to package images or exact owner Media. A versioned header-pool
+hash over typed canonical route and persisted revision/pool/shuffle state lets
+routes vary while identical route state remains byte-identical. Binding and
+guarded deletion share the exact Media-key lock, making these presentation
+references race-free and distinct from Post Media references derived from
+`RenderedHtml`.
+
 Markup is built with **maud's `html!`**
 ([ADR-0093](adr/0093-web-render-html-macro.md)), and the trusted-HTML invariant
 is carried by one crate-local newtype, `web::html::Markup` (`web/src/html.rs`),
@@ -2071,11 +2115,12 @@ while database errors propagate. The stored tokens and parser come from the
 closed-enum convention rather than a config-specific matcher
 ([ADR-0091](adr/0091-text-enum-closed-string-enum-convention.md)).
 
-The same closed `Theme` type backs `site.theme` in `SiteConfigStorage` and an
-optional `theme` override in `UserConfigStorage`. Operators alone manage the
-site setting; each authenticated author manages only their own override.
-Removing an override is the explicit `Site default` choice, so later site-theme
-changes flow through inherited author pages without a browser-local preference.
+`ThemeStorage` owns typed site and author theme selections. A selection is
+either one of the closed built-ins or a stable custom Theme ID; public
+resolution reads the site selection first, then lets an author selection
+override it. Missing, unpublished, deleted, or malformed persisted selections
+fall back to Studio or the resolved site presentation as appropriate, while
+storage failures propagate.
 
 Deployment is configured by clap flags with matching `JAUNDER_*` environment
 fallbacks and documented defaults

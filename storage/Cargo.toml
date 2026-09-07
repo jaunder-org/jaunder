@@ -58,11 +58,11 @@ mockall.workspace = true
 default = ["sqlx"]
 sqlx = []
 test-utils = ["dep:mockall", "host/test-utils"]
-# `seed-posts` gates only `seed_post_input` (the shared timeline-post recipe)
-# and pulls NO extra deps, so the `test-support` binary can link the recipe
-# without the heavy scaffolding. `test-support` implies it.
+# Narrow fixture features keep the out-of-process e2e binary free of the
+# backend test harness and its native-only dependencies.
 seed-posts = []
-test-support = ["seed-posts", "dep:tempfile", "dep:rstest_reuse", "common/test-support", "host/test-support"]
+seed-themes = []
+test-support = ["seed-posts", "seed-themes", "dep:tempfile", "dep:rstest_reuse", "common/test-support", "host/test-support"]
 
 [lints]
 workspace = true

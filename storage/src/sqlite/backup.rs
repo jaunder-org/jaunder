@@ -10,9 +10,9 @@ use sha2::{Digest, Sha256};
 use sqlx::{AssertSqlSafe, Row, SqliteConnection, SqlitePool, error::ErrorKind};
 
 use crate::backup::{
-    self, BackupError, BackupManifest, BackupMode, BackupRowJson, CatalogColumnName,
-    CatalogDefinition, CatalogTableName, CatalogTypeName, ColumnInfo, MigrationVersion,
-    RestoreBindValue, RestoreText, RestoreValidationReport,
+    self, BINARY_WIRE_KEY, BackupError, BackupManifest, BackupMode, BackupRowJson,
+    CatalogColumnName, CatalogDefinition, CatalogTableName, CatalogTypeName, ColumnInfo,
+    MigrationVersion, RestoreBindValue, RestoreText, RestoreValidationReport, is_binary_column,
 };
 use crate::helpers;
 use crate::sql;
@@ -133,9 +133,30 @@ pub(crate) async fn restore_database(
     source_path: &Path,
     manifest: &BackupManifest,
 ) -> Result<RestoreValidationReport, BackupError> {
+    restore_database_transaction(pool, source_path, manifest, true).await
+}
+
+pub(crate) async fn preflight_restore_database(
+    pool: &SqlitePool,
+    source_path: &Path,
+    manifest: &BackupManifest,
+) -> Result<(), BackupError> {
+    restore_database_transaction(pool, source_path, manifest, false)
+        .await
+        .map(|_| ())
+}
+
+async fn restore_database_transaction(
+    pool: &SqlitePool,
+    source_path: &Path,
+    manifest: &BackupManifest,
+    commit: bool,
+) -> Result<RestoreValidationReport, BackupError> {
     let mut connection = pool.acquire().await?;
     let schema_version = schema_version(&mut connection).await?;
     backup::ensure_schema_version(manifest, schema_version)?;
+    let schema_checksum = schema_checksum(&mut connection).await?;
+    backup::ensure_schema_checksum(manifest, &schema_checksum)?;
     backup::validate_instance_identity_backup(source_path, manifest)?;
     // Disable FK enforcement for the bulk import so rows need not be inserted in
     // referential order; integrity is verified once at the end via
@@ -185,7 +206,11 @@ pub(crate) async fn restore_database(
 
     match result {
         Ok(validation_report) => {
-            sqlx::query("COMMIT").execute(&mut *connection).await?;
+            if commit {
+                sqlx::query("COMMIT").execute(&mut *connection).await?;
+            } else {
+                sqlx::query("ROLLBACK").execute(&mut *connection).await?;
+            }
             sqlx::query("PRAGMA foreign_keys = ON")
                 .execute(&mut *connection)
                 .await?;
@@ -246,14 +271,35 @@ async fn import_table(
     let insert = Arc::new(insert_sql(table, &column_names));
     // The validated catalog contributes only quoted table/column names and generated placeholders.
 
-    for row in rows {
-        backup::validate_restore_row(table, &row, validation_report);
+    let mut bound_rows = Vec::with_capacity(rows.len());
+    for row in &rows {
+        backup::validate_restore_row(table, row, validation_report);
+        let values = column_names
+            .iter()
+            .map(|column_name| {
+                let column = columns
+                    .iter()
+                    .find(|column| column.name == *column_name)
+                    .ok_or_else(|| {
+                        BackupError::InvalidBackup(format!(
+                            "table {table} restore column {column_name} is missing catalog metadata"
+                        ))
+                    })?;
+                let value = row.get(column_name).ok_or_else(|| {
+                    BackupError::InvalidBackup(format!(
+                        "table {table} row is missing column {column_name}"
+                    ))
+                })?;
+                backup::restore_bind_value(column, value)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        bound_rows.push(values);
+    }
+
+    for values in bound_rows {
         let mut query = sqlx::query(AssertSqlSafe(Arc::clone(&insert)));
-        for column in &column_names {
-            let value = row.get(column).ok_or_else(|| {
-                BackupError::InvalidBackup(format!("table {table} row is missing column {column}"))
-            })?;
-            query = bind_restore_value(query, RestoreBindValue::from_json(value));
+        for value in values {
+            query = bind_restore_value(query, value);
         }
         query
             .execute(&mut *connection)
@@ -292,6 +338,7 @@ fn bind_restore_value(
         RestoreBindValue::Real { value, .. } => query.bind_storage(value),
         RestoreBindValue::Text(value) => query.bind_storage(value),
         RestoreBindValue::Json(value) => query.bind_storage(value),
+        RestoreBindValue::Binary(value) => query.bind_storage(value),
     }
 }
 
@@ -364,13 +411,17 @@ fn json_select(table: &str, columns: &[ColumnInfo]) -> String {
         .iter()
         .map(|column| {
             let name = sql::quote_literal(&column.name);
-            let value = if is_bool_column(column) {
+            let column_name = sql::quote_identifier(&column.name);
+            let value = if is_binary_column(column) {
                 format!(
-                    "CASE WHEN {column_name} IS NULL THEN NULL WHEN {column_name} THEN json('true') ELSE json('false') END",
-                    column_name = sql::quote_identifier(&column.name)
+                    "CASE WHEN {column_name} IS NULL THEN NULL ELSE json_object('{BINARY_WIRE_KEY}', lower(hex({column_name}))) END"
+                )
+            } else if is_bool_column(column) {
+                format!(
+                    "CASE WHEN {column_name} IS NULL THEN NULL WHEN {column_name} THEN json('true') ELSE json('false') END"
                 )
             } else {
-                sql::quote_identifier(&column.name)
+                column_name
             };
             format!("{name}, {value}")
         })
@@ -517,6 +568,10 @@ mod tests {
                     type_name: "integer".to_owned(),
                 },
                 ColumnInfo {
+                    name: "binary".to_owned(),
+                    type_name: "blob".to_owned(),
+                },
+                ColumnInfo {
                     name: "is_operator".to_owned(),
                     type_name: "boolean".to_owned(),
                 },
@@ -525,6 +580,7 @@ mod tests {
 
         assert!(sql.contains("json('true')"));
         assert!(sql.contains("ORDER BY \"user_id\""));
+        assert!(sql.contains("json_object('$jaunder_binary_hex', lower(hex(\"binary\")))"));
     }
 
     #[test]

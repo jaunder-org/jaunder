@@ -3,17 +3,23 @@ use std::sync::Arc;
 use axum::http::{StatusCode, header};
 use tower::ServiceExt;
 
-use common::{MutationOutcome, theme::Theme};
+use common::{
+    MutationOutcome,
+    theme::{PublicThemeSelection, Theme},
+};
 use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::body_string;
 
-use storage::test_support::{Backend, TestEnv, backends};
+use storage::{
+    ThemeOwner,
+    test_support::{Backend, TestEnv, backends},
+};
 
 use super::fixtures::{
-    TEST_SHELL, assert_sanitized_internal_server_error, failing_site_config, get, projector_app,
-    projector_app_with_dependencies, seed_tagged_post,
+    TEST_SHELL, assert_sanitized_internal_server_error, failing_site_theme_selection, get,
+    projector_app, projector_app_with_dependencies, seed_tagged_post,
 };
 
 #[apply(backends)]
@@ -59,20 +65,25 @@ async fn user_tag_projects_the_authors_override_into_initial_markup(#[case] back
         .await
         .expect("author lookup")
         .expect("seeded author");
-    let site_config = Arc::clone(&state.site_config);
-    let user_config = Arc::clone(&state.user_config);
+    let themes = Arc::clone(&state.themes);
     let outcome = state
         .write_scope
         .run(|transaction| {
             Box::pin(async move {
-                site_config.set_theme(transaction, Theme::Terminal).await?;
-                storage::set_theme_override(
-                    user_config.as_ref(),
-                    transaction,
-                    author.user_id,
-                    Theme::Reader,
-                )
-                .await
+                themes
+                    .set_selection(
+                        transaction,
+                        ThemeOwner::Site,
+                        Some(PublicThemeSelection::BuiltIn(Theme::Terminal)),
+                    )
+                    .await?;
+                themes
+                    .set_selection(
+                        transaction,
+                        ThemeOwner::Author(author.user_id),
+                        Some(PublicThemeSelection::BuiltIn(Theme::Reader)),
+                    )
+                    .await
             })
         })
         .await
@@ -91,7 +102,7 @@ async fn user_tag_projects_the_authors_override_into_initial_markup(#[case] back
         "author override reaches initial markup: {html}"
     );
     assert!(
-        html.contains(r#""theme":"reader""#),
+        html.contains(r#""identity":{"kind":"built_in","value":"reader"}"#),
         "author override reaches projector seed: {html}"
     );
 }
@@ -203,8 +214,7 @@ async fn site_tag_theme_failure_keeps_500_and_reports_boundary_once(#[case] back
     let app = projector_app_with_dependencies(
         Arc::clone(&state.posts),
         Arc::clone(&state.users),
-        failing_site_config("injected site tag theme failure"),
-        Arc::clone(&state.user_config),
+        failing_site_theme_selection("injected site tag theme failure"),
     );
 
     let (response, event) = crate::assert_error_signal!(

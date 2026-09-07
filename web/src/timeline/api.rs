@@ -29,40 +29,36 @@ use {
     common::time::UtcInstant,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{self, PostStorage, SiteConfigStorage, UserConfigStorage, UserStorage},
+    storage::{self, PostStorage, ThemeStorage, UserStorage},
 };
 
 #[cfg(feature = "server")]
 async fn site_presentation(
+    route: common::theme::PublicThemeRoute,
     page: Page<RenderedPost>,
 ) -> InternalResult<PublicPresentation<Page<RenderedPost>>> {
-    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    let user_config = expect_context::<Arc<dyn UserConfigStorage>>();
-    let theme = storage::resolve_public_theme(
-        storage::PublicThemeOwner::Site,
-        site_config.as_ref(),
-        user_config.as_ref(),
-    )
-    .await?;
+    let themes = expect_context::<Arc<dyn ThemeStorage>>();
+    let theme =
+        storage::resolve_public_theme(storage::PublicThemeOwner::Site, &route, themes.as_ref())
+            .await?;
     Ok(PublicPresentation { theme, page })
 }
 
 #[cfg(feature = "server")]
 async fn author_presentation(
     username: &Username,
+    route: common::theme::PublicThemeRoute,
     page: Page<RenderedPost>,
 ) -> InternalResult<PublicPresentation<Page<RenderedPost>>> {
     let users = expect_context::<Arc<dyn UserStorage>>();
-    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
-    let user_config = expect_context::<Arc<dyn UserConfigStorage>>();
+    let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let owner = users
         .get_user_by_username(username)
         .await?
         .map_or(storage::PublicThemeOwner::Site, |author| {
             storage::PublicThemeOwner::Author(author.user_id)
         });
-    let theme =
-        storage::resolve_public_theme(owner, site_config.as_ref(), user_config.as_ref()).await?;
+    let theme = storage::resolve_public_theme(owner, &route, themes.as_ref()).await?;
     Ok(PublicPresentation { theme, page })
 }
 
@@ -83,7 +79,12 @@ pub async fn list_by_user(
         limit,
     )
     .await?;
-    author_presentation(&username, page).await
+    author_presentation(
+        &username,
+        common::theme::PublicThemeRoute::author(&username),
+        page,
+    )
+    .await
 }
 
 #[macros::server(input = Json)]
@@ -101,7 +102,7 @@ pub async fn list_local_timeline(
         limit,
     )
     .await?;
-    site_presentation(page).await
+    site_presentation(common::theme::PublicThemeRoute::site(), page).await
 }
 
 /// Lists published, non-deleted posts by the authenticated user using cursor pagination.
@@ -148,7 +149,7 @@ pub async fn list_by_tag(
         limit,
     )
     .await?;
-    site_presentation(page).await
+    site_presentation(common::theme::PublicThemeRoute::site_tag(&tag), page).await
 }
 
 /// Lists published, non-deleted posts by `username` carrying `tag`.
@@ -172,5 +173,10 @@ pub async fn list_by_user_and_tag(
         limit,
     )
     .await?;
-    author_presentation(&username, page).await
+    author_presentation(
+        &username,
+        common::theme::PublicThemeRoute::author_tag(&username, &tag),
+        page,
+    )
+    .await
 }

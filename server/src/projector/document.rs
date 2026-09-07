@@ -3,6 +3,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
 };
 use common::seed::{PageSeed, PublicPresentation};
+use common::theme::PublishedThemePresentation;
 use host::etag;
 use web::app;
 use web::posts;
@@ -25,7 +26,8 @@ fn document_with_urls(
     // this is where they exit to the untyped response body.
     let seed = &presentation.page;
     let early_fetch = urls.map(bundle::early_wasm_fetch_script);
-    let head = app::render_head(seed, early_fetch.as_deref()).into_string();
+    let mut head = app::render_head(seed, early_fetch.as_deref()).into_string();
+    head.push_str(&app::render_theme_stylesheet(&presentation.theme).into_string());
     let body = app::render_shell(presentation).into_string();
     let blob = serde_json::to_string(presentation).unwrap_or_else(|_| "null".to_string());
     let boot = urls.map_or_else(String::new, |urls| {
@@ -95,7 +97,7 @@ pub(super) fn permalink_response(
     result: web::error::InternalResult<Option<storage::PostRecord>>,
     headers: &HeaderMap,
     shell: &Shell,
-    theme: common::theme::Theme,
+    theme: PublishedThemePresentation,
 ) -> Response {
     match result {
         // Anonymous viewer ⇒ never the author, so `is_author = false`.
@@ -129,12 +131,42 @@ mod tests {
 
     fn presentation(theme: Theme) -> PublicPresentation<PageSeed> {
         PublicPresentation {
-            theme,
+            theme: common::theme::PublishedThemePresentation::built_in(theme),
             page: PageSeed::SiteTimeline(Page {
                 posts: vec![],
                 next_cursor: None,
                 has_more: false,
             }),
+        }
+    }
+
+    fn custom_presentation(
+        revision: char,
+        stylesheet: char,
+        logo: char,
+        header: char,
+    ) -> PublicPresentation<PageSeed> {
+        PublicPresentation {
+            theme: common::theme::PublishedThemePresentation {
+                identity: common::theme::PublishedThemeIdentity::Custom(
+                    common::ids::ThemeId::from(42),
+                ),
+                revision: Some(revision.to_string().repeat(64).parse().unwrap()),
+                stylesheet_url: format!("/theme/{}", stylesheet.to_string().repeat(64))
+                    .parse()
+                    .unwrap(),
+                logo_url: Some(
+                    format!("/theme/{}", logo.to_string().repeat(64))
+                        .parse()
+                        .unwrap(),
+                ),
+                header_url: Some(
+                    format!("/theme/{}", header.to_string().repeat(64))
+                        .parse()
+                        .unwrap(),
+                ),
+            },
+            page: presentation(Theme::Studio).page,
         }
     }
 
@@ -145,15 +177,60 @@ mod tests {
             Err(web::error::InternalError::validation("boom")),
             &HeaderMap::new(),
             &shell,
-            Theme::Studio,
+            common::theme::PublishedThemePresentation::built_in(Theme::Studio),
         );
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[test]
+    fn custom_revision_and_role_bindings_change_document_bytes_and_etag() {
+        let baseline = custom_presentation('a', 'b', 'c', 'd');
+        let revision_changed = custom_presentation('e', 'b', 'c', 'd');
+        let binding_changed = custom_presentation('a', 'b', 'f', 'd');
+        let pool_changed = custom_presentation('a', 'b', 'c', 'f');
+
+        for changed in [&revision_changed, &binding_changed, &pool_changed] {
+            assert_ne!(
+                document_presentation(&baseline),
+                document_presentation(changed)
+            );
+            let baseline_etag = cacheable_presentation(&HeaderMap::new(), &baseline);
+            let changed_etag = cacheable_presentation(&HeaderMap::new(), changed);
+            assert_ne!(
+                baseline_etag.headers()[header::ETAG],
+                changed_etag.headers()[header::ETAG]
+            );
+        }
+    }
+
+    #[test]
+    fn custom_presentation_puts_marked_css_in_head_and_decorations_in_shell() {
+        let document = document_presentation(&custom_presentation('a', 'b', 'c', 'd'));
+        let stylesheet = document
+            .find("data-jaunder-theme-stylesheet")
+            .expect("custom stylesheet");
+        assert!(
+            stylesheet < document.find("<body>").expect("body"),
+            "{document}"
+        );
+        assert_eq!(document.matches("data-jaunder-part=\"logo\"").count(), 1);
+        assert_eq!(
+            document
+                .matches("data-jaunder-part=\"header-image\"")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn absent_public_permalink_serves_shell() {
         let shell = Shell("shell".into());
-        let response = permalink_response(Ok(None), &HeaderMap::new(), &shell, Theme::Studio);
+        let response = permalink_response(
+            Ok(None),
+            &HeaderMap::new(),
+            &shell,
+            common::theme::PublishedThemePresentation::built_in(Theme::Studio),
+        );
         assert_eq!(response.status(), StatusCode::OK);
     }
 

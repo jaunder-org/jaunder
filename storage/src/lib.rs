@@ -42,9 +42,15 @@ mod smtp;
 pub mod sql;
 mod sqlite;
 mod subscriptions;
+mod theme_asset_manager;
+mod theme_manager;
+mod themes;
 mod user_config;
 mod users;
 mod write_scope;
+
+#[cfg(any(test, feature = "seed-themes", feature = "test-support"))]
+pub mod seed_theme_fixture;
 
 // Both-backend test harness (ADR-0033): available to `storage`'s own tests via
 // `cfg(test)` and to external test crates (`server`) via the `test-support`
@@ -103,6 +109,11 @@ pub use sqlite::{
     SqliteUserConfigStorage, SqliteUserStorage,
 };
 pub use subscriptions::*;
+pub use theme_asset_manager::{
+    THEME_CONTENT_RETENTION_SECONDS, ThemeAssetError, ThemeAssetManager, ThemeContentReconciliation,
+};
+pub use theme_manager::{ThemeManager, ThemePoolInput, ThemeRoleInput};
+pub use themes::*;
 pub use user_config::*;
 pub use users::*;
 pub use write_scope::*;

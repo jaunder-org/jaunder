@@ -20,6 +20,8 @@ mod scheduled_worker;
 mod server_fn_response;
 pub mod site;
 mod soft_path;
+pub mod theme_content;
+
 pub mod websub;
 
 #[doc(hidden)]
@@ -42,8 +44,9 @@ use crate::{
 };
 use ::storage::{
     AppState, InstanceId, MediaContentLocks, MediaManager, MediaReferenceOwnershipResolver,
-    PostMediaOwnership, SessionStorage, WriteScope,
+    PostMediaOwnership, SessionStorage, ThemeAssetManager, ThemeManager, WriteScope,
 };
+use host::theme_operations::ThemeOperationCoordinator;
 
 async fn retire_session_cookie(
     axum::extract::State(secure): axum::extract::State<bool>,
@@ -118,6 +121,7 @@ where
         .nest_service("/style", ServeEmbed::<StaticAssets>::new())
         .merge(crate::media::router())
         .merge(crate::atompub::router())
+        .merge(crate::theme_content::router())
         .merge(client_telemetry)
         .route(
             "/api/{*fn_name}",
@@ -197,6 +201,18 @@ where
         instance_id,
         media_ownership_resolver,
     ));
+    let theme_asset_manager = Arc::new(ThemeAssetManager::new(
+        state.themes.clone(),
+        state.write_scope.clone(),
+        Arc::clone(&storage_path),
+    ));
+    let theme_operation_coordinator = Arc::new(ThemeOperationCoordinator::new());
+    let theme_manager = Arc::new(ThemeManager::new(
+        state.themes.clone(),
+        state.media.clone(),
+        state.write_scope.clone(),
+        Arc::clone(&media_content_locks),
+    ));
     let sessions = state.sessions.clone();
     let write_scope = state.write_scope.clone();
     let posts = state.posts.clone();
@@ -204,6 +220,7 @@ where
     let users = state.users.clone();
     let user_config = state.user_config.clone();
     let site_config = state.site_config.clone();
+    let themes = state.themes.clone();
     let media = state.media.clone();
     let feed_cache = state.feed_cache.clone();
     let feed_events = state.feed_events.clone();
@@ -213,7 +230,8 @@ where
         let media_content_locks = Arc::clone(&media_content_locks);
         let media_manager = Arc::clone(&media_manager);
         let post_media_ownership = post_media_ownership.clone();
-
+        let theme_operation_coordinator = Arc::clone(&theme_operation_coordinator);
+        let theme_manager = Arc::clone(&theme_manager);
         move || {
             prelude::provide_context(post_media_ownership.clone());
             context::provide_app_state_contexts(&state, &publisher_service);
@@ -221,6 +239,9 @@ where
             context::provide_mailer_context(&mailer);
             provide_additional_contexts();
             context::provide_media_manager_context(&media_manager);
+            context::provide_theme_asset_manager_context(&theme_asset_manager);
+            context::provide_theme_operation_coordinator_context(&theme_operation_coordinator);
+            context::provide_theme_manager_context(&theme_manager);
             prelude::provide_context(web::auth::CookieSettings {
                 secure: secure_cookies,
             });
@@ -257,6 +278,7 @@ where
         .layer(axum::Extension(audiences))
         .layer(axum::Extension(users))
         .layer(axum::Extension(user_config))
+        .layer(axum::Extension(themes))
         .layer(axum::Extension(site_config))
         .layer(axum::Extension(media))
         .layer(axum::Extension(feed_cache))

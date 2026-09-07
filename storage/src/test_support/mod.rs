@@ -20,6 +20,7 @@ mod post_service;
 mod postgres;
 mod posts;
 mod subscriptions;
+mod themes;
 mod users;
 
 pub use backend::{
@@ -54,4 +55,5 @@ pub use posts::{
     SeedPost, SeedRawPost, SeededPost, UpdateRawPost, create_posts_confirmed, seed_posts,
 };
 pub use subscriptions::seed_local_subscription;
+pub use themes::{compiled_theme_fixture, create_site_theme, theme_quota_limits};
 pub use users::{SeedUser, SeededUser, seed_users};

@@ -2,17 +2,19 @@ use maud::html;
 
 use crate::html::Markup;
 
-/// The `<div class="j-topbar">` bar, mirroring the reactive [`Topbar`].
+/// The public masthead, mirroring the reactive [`Topbar`].
 ///
 /// `right` fills the `j-topbar-right` slot (e.g. the home Sign-in / Register
 /// buttons). It is a [`Markup`], so the "this is trusted HTML" claim is carried by
 /// the type rather than by a comment asking callers to be careful; `title`/`sub`
 /// are plain text and maud escapes them.
 #[must_use]
-pub(crate) fn render(title: &str, sub: Option<&str>, right: &Markup) -> Markup {
+pub(crate) fn render(title: &str, sub: Option<&str>, right: &Markup, logo: &Markup) -> Markup {
     Markup::new(html! {
-        div class="j-topbar" {
+        header class="j-topbar" data-jaunder-part="masthead" {
             div {
+                span class="j-site-identity" data-jaunder-part="site-title" { "Jaunder" }
+                (logo)
                 h1 { (title) }
                 @if let Some(s) = sub {
                     div class="j-sub" { (s) }
@@ -36,19 +38,26 @@ mod tests {
     #[test]
     fn topbar_with_sub_markup_is_stable() {
         assert_eq!(
-            render("Title", Some("Subtitle"), &Markup::empty()),
-            "<div class=\"j-topbar\"><div><h1>Title</h1>\
-             <div class=\"j-sub\">Subtitle</div></div>\
-             <div class=\"j-topbar-right\"></div></div>"
+            render(
+                "Title",
+                Some("Subtitle"),
+                &Markup::empty(),
+                &Markup::empty()
+            ),
+            "<header class=\"j-topbar\" data-jaunder-part=\"masthead\"><div>\
+             <span class=\"j-site-identity\" data-jaunder-part=\"site-title\">Jaunder</span>\
+             <h1>Title</h1><div class=\"j-sub\">Subtitle</div></div>\
+             <div class=\"j-topbar-right\"></div></header>"
         );
     }
 
     #[test]
     fn topbar_without_sub_markup_is_stable() {
         assert_eq!(
-            render("Title", None, &Markup::empty()),
-            "<div class=\"j-topbar\"><div><h1>Title</h1></div>\
-             <div class=\"j-topbar-right\"></div></div>"
+            render("Title", None, &Markup::empty(), &Markup::empty()),
+            "<header class=\"j-topbar\" data-jaunder-part=\"masthead\"><div>\
+             <span class=\"j-site-identity\" data-jaunder-part=\"site-title\">Jaunder</span>\
+             <h1>Title</h1></div><div class=\"j-topbar-right\"></div></header>"
         );
     }
 }

@@ -23,7 +23,7 @@ pub(crate) fn is_not_modified(
     if_modified_since(headers).is_some_and(|date| last_modified <= date)
 }
 
-fn if_none_match_matches(headers: &HeaderMap, current_etag: &[u8]) -> bool {
+pub(crate) fn if_none_match_matches(headers: &HeaderMap, current_etag: &[u8]) -> bool {
     let mut condition = EntityTagCondition::default();
 
     for value in &headers.get_all(header::IF_NONE_MATCH) {

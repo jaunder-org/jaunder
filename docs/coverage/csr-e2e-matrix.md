@@ -42,6 +42,7 @@ only in that row.
 | `/admin/backups`, `/admin/site`, `/admin/websub`                                                                               | [Administration](#administration)                                                   |
 | `/posts/new`, `/drafts`, `/posts/:post_id/edit`, `/history`, `/posts/:post_id/history`, `/posts/:post_id/history/:revision_id` | [Post authoring lifecycle](#post-authoring-lifecycle)                               |
 | `/media`                                                                                                                       | [Media management](#media-management)                                               |
+| `/themes`                                                                                                                      | [Theme management](#theme-management)                                               |
 | `/forgot-password`, `/reset-password?token=...`                                                                                | [Password reset](#password-reset)                                                   |
 | `/tags/:tag`, `/:username/tags/:tag`                                                                                           | [Tag browsing](#tag-browsing) — canonical user path: `/~:username/tags/:tag`        |
 | `/:username`                                                                                                                   | [Public reading](#public-reading) — canonical user path: `/~:username`              |
@@ -205,6 +206,82 @@ asserts site and per-user tag listings, empty tags, and tag-edit transitions.
 measures both tag-route timeline presentations, while
 [`end2end/tests/feeds.spec.ts`](../../end2end/tests/feeds.spec.ts) asserts
 client-side navigation from a tag chip.
+
+### Public custom theme presentation
+
+**Paths and entry points:** fresh public author routes and client-side
+navigation back to the site route. Site selection, author override/inheritance,
+and invalid-selection fallback are resolved by the existing storage precedence
+suite.
+
+**Evidence:** [`end2end/tests/theme.spec.ts`](../../end2end/tests/theme.spec.ts)
+publishes the shared hostile-but-valid package, then proves its immutable
+stylesheet, package defaults, cold anonymous load, and custom identity survive
+rendering. The fixture uses fixed positioning, viewport inset, extreme
+`z-index`, transforms, filters, visible overflow, and an oversized positioned
+descendant; the authenticated owner's trusted action remains visible and
+receives pointer hit-testing above it. In-app navigation removes all custom
+presentation from the private site surface.
+
+### Theme management
+
+**Paths and entry points:** `/themes`; authenticated sidebar Themes navigation.
+Authors manage their own catalog. Operators can switch to the server-authorized
+site catalog. The private Studio route never admits a custom stylesheet into its
+own document; the real public preview is isolated.
+
+**Evidence:**
+[`end2end/tests/theme-management.spec.ts`](../../end2end/tests/theme-management.spec.ts)
+proves the authenticated mounted route's Studio root, keyboard-addressable
+author and operator scope controls, accessibility, parent-document stylesheet
+isolation, and the author lifecycle through CSS import, rename, invalid editor
+feedback, lossless asset editing, fixed and pooled presentation Media, shuffle,
+isolated responsive preview, publish and custom selection, fresh-context
+survival, export, atomic delete fallback, and ZIP re-import. Endpoint ownership,
+multipart transport, and detailed error mapping remain separately evidenced by
+the transport suite below.
+
+## API transport evidence
+
+### Theme management API transport
+
+**Paths and entry points:** the authenticated `/api/themes/` server-function
+transport; it supports the mounted `/themes` route and is also covered directly
+where browser UI setup cannot prove transport-specific headers and multipart
+ordering.
+
+**Evidence:**
+[`end2end/tests/theme-api.spec.ts`](../../end2end/tests/theme-api.spec.ts)
+`theme API transport preserves author ownership, private responses, imports, mutations, and preview isolation`
+uses a browser context's authenticated `page.request` transport to cover every
+author theme endpoint: create/list/import_css/import_package/import_zip,
+get_draft/get_presentation/get_selection, replace_css/rename/publish/select,
+replace_binding/replace_pool/shuffle, export/remove, and preview. Each confirmed
+mutation is followed by an observable catalog, draft, presentation, or selection
+reread; removal proves selection fallback. It also covers private `no-store`
+responses, preview isolation, owner-only draft assets, anonymous denial, and
+ordered multipart ZIP routing/authentication/validation.
+
+| Endpoint                       | Evidence disposition |
+| ------------------------------ | -------------------- |
+| `/api/themes/list`             | API transport        |
+| `/api/themes/get_draft`        | API transport        |
+| `/api/themes/get_presentation` | API transport        |
+| `/api/themes/get_selection`    | API transport        |
+| `/api/themes/create`           | API transport        |
+| `/api/themes/import_package`   | API transport        |
+| `/api/themes/import_zip`       | API transport        |
+| `/api/themes/import_css`       | API transport        |
+| `/api/themes/replace_css`      | API transport        |
+| `/api/themes/export`           | API transport        |
+| `/api/themes/rename`           | API transport        |
+| `/api/themes/remove`           | API transport        |
+| `/api/themes/publish`          | API transport        |
+| `/api/themes/select`           | API transport        |
+| `/api/themes/replace_binding`  | API transport        |
+| `/api/themes/replace_pool`     | API transport        |
+| `/api/themes/shuffle`          | API transport        |
+| `/api/themes/preview`          | API transport        |
 
 ## Maintenance workflow
 

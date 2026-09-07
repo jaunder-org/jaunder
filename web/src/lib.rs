@@ -46,6 +46,7 @@ pub mod taglist;
 pub mod tags;
 #[cfg(all(test, feature = "server"))]
 mod test_support;
+pub mod themes;
 pub mod timeline;
 pub mod topbar;
 pub mod viewer;

@@ -17,7 +17,7 @@ pub(super) struct NavItem {
     pub(super) requires_operator: bool,
 }
 
-pub(super) static NAV_ITEMS: LazyLock<[NavItem; 18]> = LazyLock::new(|| {
+pub(super) static NAV_ITEMS: LazyLock<[NavItem; 19]> = LazyLock::new(|| {
     [
         NavItem {
             key: "home",
@@ -116,6 +116,14 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 18]> = LazyLock::new(|| {
             label: "Audiences",
             icon_path: Icons::BOOKMARK,
             href: Some(root_relative_url("/audiences")),
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "themes",
+            label: "Themes",
+            icon_path: Icons::COG,
+            href: Some(root_relative_url("/themes")),
             requires_auth: true,
             requires_operator: false,
         },
@@ -219,7 +227,7 @@ pub(crate) const SIDEBAR_SOURCES: &[(&str, &str, &str)] = &[
 #[must_use]
 pub(crate) fn render_sidebar(active_key: &str) -> Markup {
     Markup::new(html! {
-        a class="j-brand" href="/" style="text-decoration:none;color:inherit" {
+        a class="j-brand" href="/" {
             div class="j-brand-mark" { "j" }
             div class="j-brand-text" { "Jaunder" }
         }
@@ -228,7 +236,7 @@ pub(crate) fn render_sidebar(active_key: &str) -> Markup {
             span { "Search" }
             span class="j-kbd" { "\u{2318}K" }
         }
-        nav class="j-nav" {
+        nav class="j-nav" data-jaunder-part="primary-navigation" {
             @for item in nav_items(RegistrationPolicy::Closed, false) {
                 @if let Some(href) = &item.href {
                     @if !item.requires_auth {
@@ -249,11 +257,8 @@ pub(crate) fn render_sidebar(active_key: &str) -> Markup {
             }
             @for &(proto, name, sub) in SIDEBAR_SOURCES {
                 div class="j-source" {
-                    span class="j-dot"
-                        style={
-                            "width:8px;height:8px;border-radius:4px;background:var(--c-" (proto) ")"
-                        } {}
-                    div style="flex:1;min-width:0" {
+                    span class="j-dot" data-jaunder-protocol=(proto) {}
+                    div class="j-source-body" {
                         div class="j-source-name" { (name) }
                         div class="j-source-sub" { (sub) }
                     }
@@ -284,6 +289,12 @@ mod tests {
         assert!(html.contains("<span>Home</span>"), "{html}");
         // Auth-required items and non-link placeholders must NOT appear for the
         // anonymous sidebar.
+        assert_eq!(
+            html.matches("data-jaunder-part=\"primary-navigation\"")
+                .count(),
+            1,
+            "{html}"
+        );
         assert!(!html.contains(">Feed<"), "{html}");
         assert!(!html.contains(">Compose<"), "{html}");
         assert!(!html.contains(">Drafts<"), "{html}");

@@ -258,7 +258,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            32
+            36
         );
         assert_eq!(
             db.pool
@@ -315,6 +315,78 @@ mod tests {
                 .unwrap(),
             0,
             "legacy cache rows cannot establish semantic identity"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0034_removes_legacy_theme_rows_after_0033_backfill(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(32).await.unwrap();
+        db.pool
+            .execute("INSERT INTO site_config (key, value) VALUES ('site.theme', 'reader')")
+            .await
+            .unwrap();
+        let insert_user = match &db.pool {
+            CloseablePool::Sqlite(_) => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) \
+                 VALUES (101, 'theme-cutover-user', 'hash', CURRENT_TIMESTAMP)"
+            }
+            CloseablePool::Postgres(_) => {
+                "INSERT INTO users (user_id, username, password_hash, created_at) \
+                 OVERRIDING SYSTEM VALUE \
+                 VALUES (101, 'theme-cutover-user', 'hash', CURRENT_TIMESTAMP)"
+            }
+        };
+        db.pool.execute(insert_user).await.unwrap();
+        db.pool
+            .execute("INSERT INTO user_config (user_id, key, value) VALUES (101, 'user.theme', 'terminal')")
+            .await
+            .unwrap();
+
+        db.migrate_current().await.unwrap();
+
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM theme_selections \
+                     WHERE catalog_owner_key = 'site' AND builtin_theme = 'reader' AND theme_id IS NULL",
+                )
+                .await
+                .unwrap(),
+            1,
+            "site selection survives the cutover",
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM theme_selections \
+                     WHERE catalog_owner_key = 'user:101' AND builtin_theme = 'terminal' AND theme_id IS NULL",
+                )
+                .await
+                .unwrap(),
+            1,
+            "author selection survives the cutover",
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT (SELECT COUNT(*) FROM site_config WHERE key = 'site.theme') \
+                     + (SELECT COUNT(*) FROM user_config WHERE key = 'user.theme')",
+                )
+                .await
+                .unwrap(),
+            0,
+            "0034 removes legacy theme rows after their selections are materialized",
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
+                .await
+                .unwrap(),
+            36,
         );
     }
 
@@ -786,7 +858,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            32
+            36
         );
         assert_eq!(
             db.pool

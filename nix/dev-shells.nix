@@ -44,6 +44,7 @@ let
       pkgs.nodejs
       pkgs.openssl
       pkgs.pkg-config
+      pkgs.dav1d
       pkgs.playwright-test
       pkgs.postgresql_16
       # `cargo xtask e2e-local` supervises this pinned collector for its
@@ -100,7 +101,7 @@ let
     E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
     E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
     shellHook = ''
-      export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
+      export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:$LD_LIBRARY_PATH"
 
       # Provision end2end/node_modules (the tsc type-dep closure) so the
       # devShell `tsc` and IDEs can type-check end2end/ offline in this

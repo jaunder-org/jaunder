@@ -33,6 +33,8 @@ pub mod stored_password_hash;
 pub mod telemetry;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+pub mod theme_operations;
+pub mod theme_package;
 pub mod token;
 
 /// True only when test-only cheap Argon2 parameters are compiled in.

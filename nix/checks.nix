@@ -6,6 +6,7 @@ let
     toolchain
     craneLib
     commonArgs
+    hostArgs
     wasmTestSrc
     appOfflineCargoHome
     toolsOfflineCargoHome
@@ -135,6 +136,7 @@ e2eRunAndCapture =
       + "${extraEnv}"
       + " JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture"
       + " JAUNDER_DB=${jaunderDb}"
+      + " JAUNDER_STORAGE_PATH=/var/lib/jaunder/data"
       + " JAUNDER_E2E_TRACE_ID=${traceId}"
       + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
       + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"
@@ -685,7 +687,7 @@ static-code =
       nativeBuildInputs = [
         pkgs.stdenv.cc
       ]
-      ++ commonArgs.nativeBuildInputs
+      ++ hostArgs.nativeBuildInputs
       ++ [
         devtoolBin
         toolchain
@@ -697,7 +699,7 @@ static-code =
         pkgs.typescript
         emacsForCi
       ];
-      buildInputs = commonArgs.buildInputs;
+      buildInputs = hostArgs.buildInputs;
       # ert needs a zone DB (#160); tsc needs BOTH node-dep envs
       # (`devtool provision-node-modules`'s resolver errors on each when
       # unset).
@@ -716,7 +718,7 @@ static-code =
       touch $out
     '';
 coverage = craneLib.mkCargoDerivation (
-  commonArgs
+  hostArgs
   // {
     src = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
@@ -771,7 +773,7 @@ coverage = craneLib.mkCargoDerivation (
     # release `jaunderBin` uses; `build.rs` copies from these paths.
     JAUNDER_CSR_BUNDLE_DIR = "${csrWasmBundle}";
     JAUNDER_PUBLIC_DIR = "${../public}";
-    nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
+    nativeBuildInputs = hostArgs.nativeBuildInputs ++ [
       devtoolBin
       cargo-crap
       pkgs.cargo-llvm-cov
@@ -784,7 +786,7 @@ coverage = craneLib.mkCargoDerivation (
       pkgs.postgresql_16
     ];
     buildPhaseCargoCommand = ''
-      export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
+      export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
       mkdir -p emit-out
       # devtool always exits 0 after writing emit-out/status.json;
       # gating is the coverage-gate consumer derivation + host xtask.
@@ -841,18 +843,18 @@ coverage-gate =
 # these tests reaches the coverage profile: doctests deliberately do not
 # feed the ADR-0050 coverage gate (`llvm-cov --doctests` is unstable).
 doctests = craneLib.mkCargoDerivation (
-  commonArgs
+  hostArgs
   // {
-    cargoArtifacts = craneLib.buildDepsOnly (commonArgs // leanDevAndTestProfile);
+    cargoArtifacts = craneLib.buildDepsOnly (hostArgs // leanDevAndTestProfile);
     pname = "jaunder-doctests";
     # Doctest output comes from rustdoc/libtest diagnostics and the
     # fence reconciler, not DWARF. Keep the override local so manual
     # `cargo test --doc` remains fully debuggable.
     CARGO_PROFILE_DEV_DEBUG = "0";
     CARGO_PROFILE_TEST_DEBUG = "0";
-    nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ devtoolBin ];
+    nativeBuildInputs = hostArgs.nativeBuildInputs ++ [ devtoolBin ];
     buildPhaseCargoCommand = ''
-      export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
+      export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
       mkdir -p emit-out
       # devtool always exits 0 after writing emit-out/status.json;
       # gating is the doctests-gate consumer + host xtask.

@@ -17,7 +17,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Notify;
 
 use crate::InstanceId;
-use common::ids::UserId;
+use common::ids::{PostId, UserId};
 use common::media::{
     self, ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaRef, MediaSource,
     UploadedMedia, UserQuota,
@@ -96,11 +96,15 @@ pub struct ManagedUpload {
 #[derive(Debug)]
 pub struct MediaDeletionResult {
     outcome: MutationOutcome<TryDeleteOutcome>,
+    theme_reference_count: u64,
 }
 
 impl MediaDeletionResult {
-    fn new(outcome: MutationOutcome<TryDeleteOutcome>) -> Self {
-        Self { outcome }
+    fn new(outcome: MutationOutcome<TryDeleteOutcome>, theme_reference_count: u64) -> Self {
+        Self {
+            outcome,
+            theme_reference_count,
+        }
     }
 
     /// Consume the guarded storage outcome.
@@ -113,6 +117,28 @@ impl MediaDeletionResult {
     #[must_use]
     pub fn outcome(&self) -> &MutationOutcome<TryDeleteOutcome> {
         &self.outcome
+    }
+
+    /// Return owner-scoped Posts that explain a retained-history refusal.
+    #[must_use]
+    pub fn referenced_post_ids(&self) -> Vec<PostId> {
+        match self.outcome.value() {
+            TryDeleteOutcome::OwnerRetainedHistory(post_ids) => post_ids.clone(),
+            TryDeleteOutcome::Deleted
+            | TryDeleteOutcome::Missing
+            | TryDeleteOutcome::GlobalSafety => Vec::new(),
+        }
+    }
+
+    /// Return the number of this owner's theme bindings that explain a refusal.
+    #[must_use]
+    pub fn referenced_theme_bindings(&self) -> u64 {
+        match self.outcome.value() {
+            TryDeleteOutcome::OwnerRetainedHistory(_) | TryDeleteOutcome::GlobalSafety => {
+                self.theme_reference_count
+            }
+            TryDeleteOutcome::Deleted | TryDeleteOutcome::Missing => 0,
+        }
     }
 }
 
@@ -747,6 +773,12 @@ impl MediaManager {
             })
             .await
             .map_err(Self::scope_error)?;
+        let theme_reference_count = match outcome.value() {
+            TryDeleteOutcome::OwnerRetainedHistory(_) | TryDeleteOutcome::GlobalSafety => {
+                self.media.theme_reference_count(user_id, media).await?
+            }
+            TryDeleteOutcome::Deleted | TryDeleteOutcome::Missing => 0,
+        };
 
         if matches!(
             outcome,
@@ -796,7 +828,7 @@ impl MediaManager {
                 return Err(Self::scope_error(error));
             }
         }
-        Ok(MediaDeletionResult::new(outcome))
+        Ok(MediaDeletionResult::new(outcome, theme_reference_count))
     }
 
     /// Removes a reclaimed canonical media file while its storage guard remains live.
@@ -887,14 +919,19 @@ mod tests {
         MediaReferenceEvidence, MediaReferenceSnapshot, PersistedMediaReference,
     };
     use crate::test_support::{
-        Backend, SeedUser, backends, create_post_via_service, media_row_exists, media_url_for,
+        Backend, SeedUser, backends, compiled_theme_fixture, confirmed, create_post_via_service,
+        create_site_theme, media_row_exists, media_url_for, seed_media,
     };
-    use crate::{ForeignEvidenceSink, MediaReferenceOwnershipResolver};
+    use crate::{
+        ForeignEvidenceSink, MediaReferenceOwnershipResolver, ThemeManager, ThemeOwner,
+        ThemeRoleInput,
+    };
     use common::ids::PostId;
     use common::media::{MaxFileSize, MediaRef, UserQuota};
     use common::test_support::{
         parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_post_body,
     };
+    use common::theme::ThemeImageRole;
     use rstest::*;
     use rstest_reuse::*;
     use tempfile::TempDir;
@@ -1311,16 +1348,31 @@ mod tests {
     }
 
     #[test]
-    fn deletion_result_retains_storage_owner_history_classification() {
-        let result = MediaDeletionResult::new(MutationOutcome::Confirmed(
-            TryDeleteOutcome::OwnerRetainedHistory(vec![PostId::from(1), PostId::from(2)]),
-        ));
-
+    fn deletion_result_preserves_storage_classification_and_theme_report() {
+        let result = MediaDeletionResult::new(
+            MutationOutcome::Confirmed(TryDeleteOutcome::OwnerRetainedHistory(vec![
+                PostId::from(1),
+                PostId::from(2),
+            ])),
+            2,
+        );
+        assert_eq!(
+            result.referenced_post_ids(),
+            vec![PostId::from(1), PostId::from(2)]
+        );
+        assert_eq!(result.referenced_theme_bindings(), 2);
         assert!(matches!(
             result.into_outcome(),
             MutationOutcome::Confirmed(TryDeleteOutcome::OwnerRetainedHistory(post_ids))
                 if post_ids == vec![PostId::from(1), PostId::from(2)]
         ));
+
+        let global = MediaDeletionResult::new(
+            MutationOutcome::Confirmed(TryDeleteOutcome::GlobalSafety),
+            1,
+        );
+        assert!(global.referenced_post_ids().is_empty());
+        assert_eq!(global.referenced_theme_bindings(), 1);
     }
 
     #[test]
@@ -2846,5 +2898,166 @@ mod tests {
             "different filename entry for the same hash remains served"
         );
         assert!(media_row_exists(&env.state, user_id, &second_media).await);
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn theme_binding_blocks_guarded_media_delete_and_is_reported(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let actor = SeedUser::new().seed(&env.state).await.user_id;
+        let media = seed_media(&env.state, actor, "theme-logo.png").await;
+        let compiled = compiled_theme_fixture();
+        let theme_id = create_site_theme(
+            Arc::clone(&env.state.themes),
+            env.state.write_scope.clone(),
+            &compiled,
+        )
+        .await;
+        let locks = Arc::new(env.media_content_locks());
+        let themes = ThemeManager::new(
+            Arc::clone(&env.state.themes),
+            Arc::clone(&env.state.media),
+            env.state.write_scope.clone(),
+            Arc::clone(&locks),
+        );
+        assert!(matches!(
+            themes
+                .replace_role(
+                    actor,
+                    ThemeOwner::Site,
+                    theme_id,
+                    ThemeImageRole::Logo,
+                    ThemeRoleInput::Media(media.clone()),
+                )
+                .await
+                .unwrap(),
+            MutationOutcome::Confirmed(())
+        ));
+        let manager = MediaManager::new(
+            Arc::clone(&env.state.media),
+            Arc::clone(&env.state.posts),
+            Arc::clone(&env.state.site_config),
+            env.state.write_scope.clone(),
+            locks,
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
+        );
+
+        let refused = manager.delete_media(actor, &media, false).await.unwrap();
+        assert!(matches!(
+            refused.outcome(),
+            MutationOutcome::Confirmed(TryDeleteOutcome::GlobalSafety)
+        ));
+        assert_eq!(refused.referenced_theme_bindings(), 1);
+        assert!(media_row_exists(&env.state, actor, &media).await);
+
+        let force_refused = manager.delete_media(actor, &media, true).await.unwrap();
+        assert!(matches!(
+            force_refused.outcome(),
+            MutationOutcome::Confirmed(TryDeleteOutcome::GlobalSafety)
+        ));
+        assert_eq!(force_refused.referenced_theme_bindings(), 1);
+        assert!(media_row_exists(&env.state, actor, &media).await);
+
+        assert!(matches!(
+            themes
+                .replace_role(
+                    actor,
+                    ThemeOwner::Site,
+                    theme_id,
+                    ThemeImageRole::Logo,
+                    ThemeRoleInput::ExplicitAbsent,
+                )
+                .await
+                .unwrap(),
+            MutationOutcome::Confirmed(())
+        ));
+        assert!(matches!(
+            manager
+                .delete_media(actor, &media, false)
+                .await
+                .unwrap()
+                .into_outcome(),
+            MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
+        ));
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn concurrent_fixed_role_removal_and_media_delete_leave_no_dangling_reference(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let actor = SeedUser::new().seed(&env.state).await.user_id;
+        let media = seed_media(&env.state, actor, "theme-race.png").await;
+        let compiled = compiled_theme_fixture();
+        let theme_id = create_site_theme(
+            Arc::clone(&env.state.themes),
+            env.state.write_scope.clone(),
+            &compiled,
+        )
+        .await;
+        let locks = Arc::new(env.media_content_locks());
+        let themes = ThemeManager::new(
+            Arc::clone(&env.state.themes),
+            Arc::clone(&env.state.media),
+            env.state.write_scope.clone(),
+            Arc::clone(&locks),
+        );
+        confirmed(
+            themes
+                .replace_role(
+                    actor,
+                    ThemeOwner::Site,
+                    theme_id,
+                    ThemeImageRole::Logo,
+                    ThemeRoleInput::Media(media.clone()),
+                )
+                .await
+                .expect("bind theme media"),
+        );
+        let manager = MediaManager::new(
+            Arc::clone(&env.state.media),
+            Arc::clone(&env.state.posts),
+            Arc::clone(&env.state.site_config),
+            env.state.write_scope.clone(),
+            locks,
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
+        );
+
+        let (removal, deletion) = tokio::join!(
+            themes.replace_role(
+                actor,
+                ThemeOwner::Site,
+                theme_id,
+                ThemeImageRole::Logo,
+                ThemeRoleInput::ExplicitAbsent,
+            ),
+            manager.delete_media(actor, &media, false),
+        );
+        assert!(removal.is_ok(), "fixed-role removal must complete");
+        assert_eq!(
+            env.state
+                .themes
+                .role_binding(ThemeOwner::Site, theme_id, ThemeImageRole::Logo)
+                .await
+                .expect("read role binding"),
+            None,
+        );
+        let deletion = deletion.expect("concurrent delete returns a guarded outcome");
+        assert!(matches!(
+            deletion.outcome(),
+            MutationOutcome::Confirmed(TryDeleteOutcome::Deleted | TryDeleteOutcome::GlobalSafety)
+        ));
+        if media_row_exists(&env.state, actor, &media).await {
+            assert!(matches!(
+                manager
+                    .delete_media(actor, &media, false)
+                    .await
+                    .expect("retry delete after removal")
+                    .into_outcome(),
+                MutationOutcome::Confirmed(TryDeleteOutcome::Deleted)
+            ));
+        }
+        assert!(!media_row_exists(&env.state, actor, &media).await);
     }
 }

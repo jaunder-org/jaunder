@@ -13,12 +13,13 @@ use std::sync::Arc;
 
 use crate::publisher::PublisherService;
 use common::mailer::MailSender;
+use host::theme_operations::ThemeOperationCoordinator;
 use leptos::prelude::provide_context;
 use storage::{
     AppState, AudienceStorage, EmailVerificationStorage, FeedEventStorage, InviteStorage,
     MediaContentLocks, MediaManager, MediaStorage, PasswordResetStorage, PostStorage,
-    SessionStorage, SiteConfigStorage, SubscriptionStorage, UserConfigStorage, UserStorage,
-    WriteScope,
+    SessionStorage, SiteConfigStorage, SubscriptionStorage, ThemeAssetManager, ThemeManager,
+    ThemeStorage, UserConfigStorage, UserStorage, WriteScope,
 };
 use web::websub::WebsubPublisher;
 
@@ -39,6 +40,7 @@ pub fn provide_app_state_contexts(state: &Arc<AppState>, publisher: &Arc<Publish
     provide_context::<Arc<dyn MediaStorage>>(state.media.clone());
     provide_context::<Arc<dyn UserConfigStorage>>(state.user_config.clone());
     provide_context::<Arc<dyn SiteConfigStorage>>(state.site_config.clone());
+    provide_context::<Arc<dyn ThemeStorage>>(state.themes.clone());
     provide_context::<Arc<dyn FeedEventStorage>>(state.feed_events.clone());
     provide_context(Arc::clone(publisher));
     provide_context::<Arc<dyn WebsubPublisher>>(publisher.clone());
@@ -53,6 +55,21 @@ pub fn provide_media_content_locks_context(content_locks: &Arc<MediaContentLocks
 /// Places the shared media operation manager in the current Leptos request context.
 pub fn provide_media_manager_context(manager: &Arc<MediaManager>) {
     provide_context(Arc::clone(manager));
+}
+
+/// Places immutable Theme content lifecycle operations in the request context.
+pub fn provide_theme_asset_manager_context(manager: &Arc<ThemeAssetManager>) {
+    provide_context(Arc::clone(manager));
+}
+
+/// Places theme binding/removal orchestration in the request context.
+pub fn provide_theme_manager_context(manager: &Arc<ThemeManager>) {
+    provide_context(Arc::clone(manager));
+}
+
+/// Places principal-scoped Theme Package admission in the request context.
+pub fn provide_theme_operation_coordinator_context(coordinator: &Arc<ThemeOperationCoordinator>) {
+    provide_context(Arc::clone(coordinator));
 }
 
 /// Place the mailer in the current Leptos context. Server functions that

@@ -11,8 +11,9 @@ use crate::helpers::body_string;
 use storage::test_support::{Backend, TestEnv, backends};
 
 use super::fixtures::{
-    assert_sanitized_internal_server_error, failing_site_config, failing_user_config, get,
-    projector_app, projector_app_with_dependencies, seed_published_post,
+    assert_sanitized_internal_server_error, failing_author_theme_selection,
+    failing_site_theme_selection, get, projector_app, projector_app_with_dependencies,
+    seed_published_post,
 };
 
 #[apply(backends)]
@@ -188,8 +189,7 @@ async fn permalink_site_theme_failure_keeps_500_and_reports_boundary_once(
     let app = projector_app_with_dependencies(
         Arc::clone(&state.posts),
         Arc::clone(&state.users),
-        failing_site_config("injected permalink theme failure"),
-        Arc::clone(&state.user_config),
+        failing_site_theme_selection("injected permalink site selection failure"),
     );
 
     let (response, event) = crate::assert_error_signal!(
@@ -204,7 +204,7 @@ async fn permalink_site_theme_failure_keeps_500_and_reports_boundary_once(
     );
 
     assert_sanitized_internal_server_error(response).await;
-    assert!(event.contains("injected permalink theme failure"));
+    assert!(event.contains("injected permalink site selection failure"));
 }
 
 #[apply(backends)]
@@ -218,8 +218,7 @@ async fn permalink_author_theme_failure_keeps_500_and_reports_boundary_once(
     let app = projector_app_with_dependencies(
         Arc::clone(&state.posts),
         Arc::clone(&state.users),
-        Arc::clone(&state.site_config),
-        failing_user_config("injected permalink author theme failure"),
+        failing_author_theme_selection("injected permalink author selection failure"),
     );
 
     let (response, event) = crate::assert_error_signal!(
@@ -234,5 +233,5 @@ async fn permalink_author_theme_failure_keeps_500_and_reports_boundary_once(
     );
 
     assert_sanitized_internal_server_error(response).await;
-    assert!(event.contains("injected permalink author theme failure"));
+    assert!(event.contains("injected permalink author selection failure"));
 }

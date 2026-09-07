@@ -43,7 +43,15 @@ pub(crate) fn restore_table_order(tables: &[String]) -> Vec<&str> {
     let mut ordered = tables.iter().map(String::as_str).collect::<Vec<_>>();
     ordered.sort_by_key(|table| match *table {
         "users" | "channels" | "subscription_statuses" | "target_kinds" => 1,
-        "audiences" | "subscriptions" | "media" | "posts" | "user_config" => 2,
+        "audiences"
+        | "subscriptions"
+        | "media"
+        | "posts"
+        | "themes"
+        | "theme_content_eligibility"
+        | "theme_draft_content_charges"
+        | "theme_retained_content_charges"
+        | "user_config" => 2,
         "audience_members"
         | "email_verifications"
         | "idempotency_keys"
@@ -51,8 +59,19 @@ pub(crate) fn restore_table_order(tables: &[String]) -> Vec<&str> {
         | "post_audiences"
         | "post_tags"
         | "sessions"
-        | "post_revisions" => 3,
-        "post_revision_audiences" | "post_revision_tags" => 4,
+        | "post_revisions"
+        | "theme_draft_charges"
+        | "theme_drafts"
+        | "theme_revisions"
+        | "theme_role_bindings"
+        | "theme_header_pool"
+        | "theme_selections"
+        | "theme_owner_quotas"
+        | "theme_site_quota" => 3,
+        "post_revision_audiences"
+        | "post_revision_tags"
+        | "theme_draft_assets"
+        | "theme_revision_assets" => 4,
         "post_media" => 5,
         _ => 0,
     });
@@ -161,6 +180,16 @@ pub(crate) fn ensure_schema_version(
             backup_version: manifest.schema_version,
             target_version,
         });
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_schema_checksum(
+    manifest: &BackupManifest,
+    target_checksum: &str,
+) -> Result<(), BackupError> {
+    if manifest.schema_checksum != target_checksum {
+        return Err(BackupError::SchemaChecksumMismatch);
     }
     Ok(())
 }

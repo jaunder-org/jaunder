@@ -13,7 +13,7 @@ use common::{feed::FeedSurface, pagination::PageSize};
 
 #[component]
 pub fn HomePage() -> impl IntoView {
-    let theme = crate::app::public_theme();
+    let presentation = crate::app::theme_presentation();
     let state = TimelineState::default();
 
     // Public projector seed (#178/#179): `/` is the anonymous site (Local) timeline
@@ -45,13 +45,9 @@ pub fn HomePage() -> impl IntoView {
             timeline::list_local_timeline(None, Some(PageSize::default()))
                 .await
                 .map(super::site_destination)
-                .map(|(destination_theme, page)| {
-                    theme.set(destination_theme);
-                    page
-                })
         },
     );
-    timeline::wire_timeline_resolve(state, initial_page);
+    timeline::wire_timeline_destination(state, initial_page, presentation);
 
     let on_load_more = Callback::new(move |()| {
         timeline::spawn_load_more(state, move |cursor, limit| async move {
@@ -69,7 +65,7 @@ pub fn HomePage() -> impl IntoView {
     // and shown for the anonymous visitor. Single-mode Local (#181, D10): `/` is
     // always the enhanced public timeline; the owner's own posts gain the
     // client-side action column reactively via `TimelineRows`/`PostCard`.
-    let masthead = super::render::masthead();
+    let theme = crate::app::public_theme();
 
     view! {
         <FeedDiscovery surface=&FeedSurface::Site />
@@ -78,7 +74,14 @@ pub fn HomePage() -> impl IntoView {
         // `Loading → Rows` rather than rebuilding it, which matters here because it
         // is projector-coincident markup (ADR-0041 §2).
         <TimelineGate state=state on_mutate=on_mutate on_load_more=on_load_more>
-            {masthead.clone().inject_into(leptos::html::div().style("display:contents"))}
+            {move || {
+                super::render::masthead(&crate::app::render_theme_logo(&theme.get()))
+                    .inject_into(leptos::html::div().class("j-contents"))
+            }}
+            {move || {
+                crate::app::render_theme_header(&theme.get())
+                    .inject_into(leptos::html::div().class("j-contents"))
+            }}
         </TimelineGate>
     }
 }

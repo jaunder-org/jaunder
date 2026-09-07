@@ -242,14 +242,15 @@ pub(super) async fn member_delete(
         .delete_media(auth_user.user_id, &media_ref, false)
         .await
         .map_err(map_delete_error)?;
+    let theme_reference_count = result.referenced_theme_bindings();
     match super::mutation::confirmed_or_accepted(result.into_outcome()) {
         Ok(storage::TryDeleteOutcome::Deleted) => Ok(StatusCode::NO_CONTENT.into_response()),
         Ok(storage::TryDeleteOutcome::Missing) => Err(HandlerError::NotFound),
-        Ok(storage::TryDeleteOutcome::OwnerRetainedHistory(post_ids)) => {
-            Ok(MediaDeleteConflict::owner_references(post_ids).into_response())
-        }
+        Ok(storage::TryDeleteOutcome::OwnerRetainedHistory(post_ids)) => Ok(
+            MediaDeleteConflict::owner_references(post_ids, theme_reference_count).into_response(),
+        ),
         Ok(storage::TryDeleteOutcome::GlobalSafety) => {
-            Ok(MediaDeleteConflict::global_safety().into_response())
+            Ok(MediaDeleteConflict::global_safety(theme_reference_count).into_response())
         }
         Err(status) => Ok(status.into_response()),
     }

@@ -8,12 +8,10 @@ use axum::{
     response::Response,
 };
 use common::post_title::PostTitle;
+use common::theme::{PublicThemeSelection, Theme};
 use jiff::tz::Offset;
 use storage::test_support::{SeedRawPost, SeedUser};
-use storage::{
-    MockSiteConfigStorage, MockUserConfigStorage, PostStorage, RenderedHtml, SiteConfigStorage,
-    UserConfigStorage, UserStorage,
-};
+use storage::{MockThemeStorage, PostStorage, RenderedHtml, ThemeOwner, ThemeStorage, UserStorage};
 
 /// A recognizable stand-in for the real `index.html`, so tests can tell a
 /// shell-fallback response apart from a projected one.
@@ -29,8 +27,7 @@ pub(super) fn projector_app(state: &Arc<storage::AppState>) -> Router {
     projector_app_with_dependencies(
         Arc::clone(&state.posts),
         Arc::clone(&state.users),
-        Arc::clone(&state.site_config),
-        Arc::clone(&state.user_config),
+        Arc::clone(&state.themes),
     )
 }
 
@@ -42,35 +39,36 @@ pub(super) fn projector_app(state: &Arc<storage::AppState>) -> Router {
 pub(super) fn projector_app_with_dependencies(
     posts: Arc<dyn PostStorage>,
     users: Arc<dyn UserStorage>,
-    site_config: Arc<dyn SiteConfigStorage>,
-    user_config: Arc<dyn UserConfigStorage>,
+    themes: Arc<dyn ThemeStorage>,
 ) -> Router {
     let shell = jaunder::projector::Shell(TEST_SHELL.into());
     jaunder::projector::register(Router::new(), shell)
         .layer(Extension(posts))
         .layer(Extension(users))
-        .layer(Extension(user_config))
-        .layer(Extension(site_config))
+        .layer(Extension(themes))
 }
 
-/// A site-theme store whose read fails after the route's content query succeeds.
-pub(super) fn failing_site_config(message: &'static str) -> Arc<dyn SiteConfigStorage> {
-    let mut site_config = MockSiteConfigStorage::new();
-    site_config
-        .expect_get_theme()
+/// A site selection store whose read fails after the route's content query succeeds.
+pub(super) fn failing_site_theme_selection(message: &'static str) -> Arc<dyn ThemeStorage> {
+    let mut themes = MockThemeStorage::new();
+    themes
+        .expect_selection()
         .times(1)
-        .return_once(move || Err(sqlx::Error::Io(std::io::Error::other(message))));
-    Arc::new(site_config)
+        .return_once(move |_| Err(sqlx::Error::Io(std::io::Error::other(message))));
+    Arc::new(themes)
 }
 
-/// An author-theme store whose read fails after the site theme is available.
-pub(super) fn failing_user_config(message: &'static str) -> Arc<dyn UserConfigStorage> {
-    let mut user_config = MockUserConfigStorage::new();
-    user_config
-        .expect_get()
-        .times(1)
-        .return_once(move |_, _| Err(sqlx::Error::Io(std::io::Error::other(message))));
-    Arc::new(user_config)
+/// An author selection store that resolves the site selection before failing.
+pub(super) fn failing_author_theme_selection(message: &'static str) -> Arc<dyn ThemeStorage> {
+    let mut themes = MockThemeStorage::new();
+    themes
+        .expect_selection()
+        .times(2)
+        .returning(move |owner| match owner {
+            ThemeOwner::Site => Ok(Some(PublicThemeSelection::BuiltIn(Theme::Studio))),
+            ThemeOwner::Author(_) => Err(sqlx::Error::Io(std::io::Error::other(message))),
+        });
+    Arc::new(themes)
 }
 
 /// Seed a published, `rust`-tagged post; returns the seeded user's username and the

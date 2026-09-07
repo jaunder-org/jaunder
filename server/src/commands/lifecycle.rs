@@ -26,7 +26,7 @@ use crate::scheduled_worker::ScheduledWorkerGuard;
 use host::config_key::SiteConfigKey;
 use storage::{
     AppState, DbConnectOptions, DbPoolObserver, InstanceId, MediaManager, SiteConfigStorage,
-    StorageRuntimeConfig,
+    StorageRuntimeConfig, ThemeAssetManager,
 };
 
 use super::support;
@@ -447,6 +447,14 @@ pub async fn prepare_server(
         instance_id,
         pool_observer,
     } = open_server_database(storage, &runtime, prod).await?;
+    ThemeAssetManager::new(
+        db.themes.clone(),
+        db.write_scope.clone(),
+        Arc::new(storage.storage_path.clone()),
+    )
+    .reconcile_startup()
+    .await
+    .context("theme immutable-content reconciliation failed")?;
 
     let maintenance = DatabaseMaintenance::new(
         db.posts.clone(),

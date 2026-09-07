@@ -43,6 +43,10 @@ pub struct RevisionId(i64);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
 pub struct FeedEventId(i64);
 
+/// A custom public theme's stable row id.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, IdNewtype)]
+pub struct ThemeId(i64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +185,15 @@ mod tests {
         assert!("nope".parse::<FeedEventId>().is_err());
         assert_eq!(serde_json::to_string(&id).unwrap(), "9");
         assert_eq!(serde_json::from_str::<FeedEventId>("9").unwrap(), id);
+    }
+
+    #[test]
+    fn theme_id_exercises_the_generated_surface() {
+        let id = ThemeId::from(9);
+        assert_eq!(i64::from(id), 9);
+        assert_eq!(id.to_string(), "9");
+        assert_eq!("9".parse::<ThemeId>().unwrap(), id);
+        assert_eq!(serde_json::to_string(&id).unwrap(), "9");
+        assert_eq!(serde_json::from_str::<ThemeId>("9").unwrap(), id);
     }
 }

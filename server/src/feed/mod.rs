@@ -1,4 +1,4 @@
-mod conditional;
+pub(crate) mod conditional;
 pub mod handlers;
 pub mod regenerate;
 pub mod worker;

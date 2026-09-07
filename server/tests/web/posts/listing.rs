@@ -786,7 +786,10 @@ async fn list_user_posts_for_unknown_user_keeps_empty_profile_with_site_theme(
     let (status, body) = list_user_posts(&state, "nobody", None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let presentation: PublicPresentation<Page<RenderedPost>> = serde_json::from_str(&body).unwrap();
-    assert_eq!(presentation.theme, Theme::Studio);
+    assert_eq!(
+        presentation.theme,
+        common::theme::PublishedThemePresentation::built_in(Theme::Studio)
+    );
     assert!(presentation.page.posts.is_empty());
 }
 

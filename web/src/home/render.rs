@@ -31,7 +31,7 @@ fn render_hero() -> Markup {
 /// The links carry `j-anon-only` so the authed owner's pre-painted masthead hides
 /// them (ADR-0044); an anonymous viewer (no `html.authed`) still sees them.
 #[must_use]
-pub(crate) fn masthead() -> Markup {
+pub(crate) fn masthead(logo: &Markup) -> Markup {
     let cta = Markup::new(html! {
         a href="/login" class="j-btn j-anon-only" { "Sign in" }
         a href="/register" class="j-btn is-primary j-anon-only" { "Register" }
@@ -41,6 +41,7 @@ pub(crate) fn masthead() -> Markup {
             "jaunder.local",
             Some("Read-only \u{00b7} posts originating on this instance"),
             &cta,
+            logo,
         ))
         (render_hero())
     })
@@ -49,10 +50,11 @@ pub(crate) fn masthead() -> Markup {
 #[cfg(test)]
 mod tests {
     use super::masthead;
+    use crate::html::Markup;
 
     #[test]
     fn home_masthead_has_topbar_hero_and_anon_only_cta() {
-        let markup = masthead();
+        let markup = masthead(&Markup::empty());
         let html = markup.as_str();
         assert!(html.contains("<h1>jaunder.local</h1>"), "{html}");
         assert!(

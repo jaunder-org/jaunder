@@ -319,11 +319,11 @@ test("authenticated sidebar orders Compose after Feed", async ({
   await waitForSelector(page, '.j-nav a[href="/drafts"]');
   await waitForSelector(page, '.j-nav a[href="/scheduled"]');
   // Home, Feed (/app cockpit, #181), Compose, Drafts, Scheduled, History, Media,
-  // Audiences, and Settings have hrefs.
+  // Audiences, Themes, and Settings have hrefs.
   await waitForSelector(page, '.j-nav a[href="/audiences"]');
   await waitForSelector(page, '.j-nav a[href="/history"]');
   const navAnchors = page.locator(".j-nav a");
-  await expect(navAnchors).toHaveCount(9);
+  await expect(navAnchors).toHaveCount(10);
   const navHrefs = await navAnchors.evaluateAll((links) =>
     links.map((link) => link.getAttribute("href")),
   );
@@ -336,6 +336,7 @@ test("authenticated sidebar orders Compose after Feed", async ({
     "/history",
     "/media",
     "/audiences",
+    "/themes",
     "/profile",
   ]);
   await expect(page.locator('.j-nav a[href="/posts/new"]')).toHaveText(

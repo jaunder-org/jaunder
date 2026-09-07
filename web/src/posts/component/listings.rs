@@ -33,6 +33,7 @@ pub fn UserTimelinePage() -> impl IntoView {
     });
 
     let mutate_version = RwSignal::new(0u32);
+    let presentation = crate::app::theme_presentation();
     let theme = crate::app::public_theme();
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
@@ -43,10 +44,6 @@ pub fn UserTimelinePage() -> impl IntoView {
                 timeline::list_by_user(username, None, Some(PageSize::default()))
             })
             .await
-            .map(|(destination_theme, page)| {
-                theme.set(destination_theme);
-                page
-            })
         },
     );
 
@@ -61,7 +58,7 @@ pub fn UserTimelinePage() -> impl IntoView {
         &ListingRoute::Profile(username.get_untracked()),
     ));
 
-    timeline::wire_timeline_resolve(state, initial_page);
+    timeline::wire_timeline_destination(state, initial_page, presentation);
 
     let on_load_more = Callback::new(move |()| {
         if let Ok(username) = posts::user_query(username.get_untracked()) {
@@ -89,6 +86,10 @@ pub fn UserTimelinePage() -> impl IntoView {
                 })
         }}
         <Topbar title=move || format!("Posts by {}", display_username()) sub="User timeline" />
+        {move || {
+            crate::app::render_theme_header(&theme.get())
+                .inject_into(leptos::html::div().class("j-contents"))
+        }}
         {move || { username.get().map(|username| view! { <SubscribeButton username=username /> }) }}
         <TimelineGate
             state=state
@@ -110,6 +111,7 @@ pub fn SiteTagPage() -> impl IntoView {
     let tag = Memo::new(move |_| params.get().get("tag").and_then(|s| s.parse::<Tag>().ok()));
 
     let mutate_version = RwSignal::new(0u32);
+    let presentation = crate::app::theme_presentation();
     let theme = crate::app::public_theme();
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
@@ -120,10 +122,6 @@ pub fn SiteTagPage() -> impl IntoView {
                 timeline::list_by_tag(tag, None, Some(PageSize::default()))
             })
             .await
-            .map(|(destination_theme, page)| {
-                theme.set(destination_theme);
-                page
-            })
         },
     );
 
@@ -137,7 +135,7 @@ pub fn SiteTagPage() -> impl IntoView {
         &ListingRoute::SiteTag(tag.get_untracked()),
     ));
 
-    timeline::wire_timeline_resolve(state, initial_page);
+    timeline::wire_timeline_destination(state, initial_page, presentation);
 
     let on_load_more = Callback::new(move |()| {
         if let Ok(tag_value) = posts::tag_query(tag.get_untracked()) {
@@ -161,6 +159,10 @@ pub fn SiteTagPage() -> impl IntoView {
                 })
         }}
         <Topbar title=move || format!("#{}", read_tag()) sub="Posts on this instance" />
+        {move || {
+            crate::app::render_theme_header(&theme.get())
+                .inject_into(leptos::html::div().class("j-contents"))
+        }}
         <TimelineGate
             state=state
             on_mutate=on_mutate
@@ -191,6 +193,7 @@ pub fn UserTagPage() -> impl IntoView {
     let tag = Memo::new(move |_| params.get().get("tag").and_then(|s| s.parse::<Tag>().ok()));
 
     let mutate_version = RwSignal::new(0u32);
+    let presentation = crate::app::theme_presentation();
     let theme = crate::app::public_theme();
     let on_mutate = Callback::new(move |()| mutate_version.update(|v| *v += 1));
 
@@ -201,10 +204,6 @@ pub fn UserTagPage() -> impl IntoView {
                 timeline::list_by_user_and_tag(username, tag, None, Some(PageSize::default()))
             })
             .await
-            .map(|(destination_theme, page)| {
-                theme.set(destination_theme);
-                page
-            })
         },
     );
 
@@ -217,7 +216,7 @@ pub fn UserTagPage() -> impl IntoView {
         &ListingRoute::UserTag(username.get_untracked(), tag.get_untracked()),
     ));
 
-    timeline::wire_timeline_resolve(state, initial_page);
+    timeline::wire_timeline_destination(state, initial_page, presentation);
 
     let on_load_more = Callback::new(move |()| {
         if let Ok((username_value, tag_value)) =
@@ -254,6 +253,10 @@ pub fn UserTagPage() -> impl IntoView {
             title=move || format!("#{}", read_tag())
             sub=move || format!("Posts by ~{}", read_username())
         />
+        {move || {
+            crate::app::render_theme_header(&theme.get())
+                .inject_into(leptos::html::div().class("j-contents"))
+        }}
         <TimelineGate
             state=state
             on_mutate=on_mutate

@@ -13,7 +13,7 @@ use crate::html::Markup;
 pub(crate) fn load_more(has_more: bool) -> Markup {
     Markup::new(html! {
         @if has_more {
-            button { "Load more" }
+            button data-jaunder-part="continuation" { "Load more" }
         }
     })
 }
@@ -24,7 +24,10 @@ mod tests {
 
     #[test]
     fn load_more_placeholder_renders_when_more_rows_exist() {
-        assert_eq!(load_more(true), "<button>Load more</button>");
+        assert_eq!(
+            load_more(true),
+            "<button data-jaunder-part=\"continuation\">Load more</button>"
+        );
     }
 
     #[test]

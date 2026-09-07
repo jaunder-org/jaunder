@@ -42,11 +42,10 @@ fn SidebarNavItem(
 /// A static source row in the sidebar sources section.
 #[component]
 fn SidebarSource(proto: &'static str, name: &'static str, sub: &'static str) -> impl IntoView {
-    let dot_style = format!("width:8px;height:8px;border-radius:4px;background:var(--c-{proto})");
     view! {
         <div class="j-source">
-            <span class="j-dot" style=dot_style></span>
-            <div style="flex:1;min-width:0">
+            <span class="j-dot" data-jaunder-protocol=proto></span>
+            <div class="j-source-body">
                 <div class="j-source-name">{name}</div>
                 <div class="j-source-sub">{sub}</div>
             </div>
@@ -85,7 +84,7 @@ pub fn Sidebar() -> impl IntoView {
                 match session.get() {
                     None => {
                         markup::render_sidebar(active_key)
-                            .inject_into(leptos::html::div().style("display:contents"))
+                            .inject_into(leptos::html::div().class("j-contents"))
                             .into_any()
                     }
                     Some(user) => {
@@ -116,8 +115,8 @@ fn authed_sidebar(
     let active_key = active_key.to_string();
     let username = username.clone();
     view! {
-        <div style="display:contents">
-            <a class="j-brand" href="/" style="text-decoration:none;color:inherit">
+        <div class="j-contents">
+            <a class="j-brand" href="/">
                 <div class="j-brand-mark">"j"</div>
                 <div class="j-brand-text">"Jaunder"</div>
             </a>
@@ -126,7 +125,7 @@ fn authed_sidebar(
                 <span>"Search"</span>
                 <span class="j-kbd">"⌘K"</span>
             </div>
-            <nav class="j-nav">
+            <nav class="j-nav" data-jaunder-part="primary-navigation">
                 {markup::nav_items(policy, is_operator)
                     .map(|item| {
                         let is_active = item.key == active_key.as_str();
@@ -156,10 +155,10 @@ fn authed_sidebar(
             </div>
             <div class="j-sb-foot">
                 <Avatar name=&username size=28 />
-                <div style="font-size:13px;flex:1;min-width:0">
-                    <div style="font-weight:500">{username.to_string()}</div>
+                <div class="j-sb-foot-body">
+                    <div class="j-sb-foot-name">{username.to_string()}</div>
                 </div>
-                <a href="/logout" style="font-size:11px;color:var(--muted)">
+                <a class="j-sign-out" href="/logout">
                     "Sign out"
                 </a>
             </div>

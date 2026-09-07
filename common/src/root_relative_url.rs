@@ -29,17 +29,27 @@ pub struct RootRelativeUrl(String);
 #[error("not a valid root-relative URL (must begin with '/' and be host-less)")]
 pub struct InvalidRootRelativeUrl;
 
+impl RootRelativeUrl {
+    /// Constructs a root-relative URL from a crate-owned path whose validity is
+    /// established alongside its declaration.
+    pub(crate) fn from_trusted_path(path: &str) -> Self {
+        debug_assert!(Self::is_valid(path));
+        Self(path.to_owned())
+    }
+
+    fn is_valid(path: &str) -> bool {
+        path.starts_with('/')
+            && !path.starts_with("//")
+            && !path.contains(|c: char| c.is_whitespace() || c.is_control())
+    }
+}
+
 impl FromStr for RootRelativeUrl {
     type Err = InvalidRootRelativeUrl;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
-        // Root-relative: a single leading slash — host-less, not protocol-relative
-        // (`//host`), not an absolute `scheme://` — and no whitespace/control chars.
-        if !s.starts_with('/')
-            || s.starts_with("//")
-            || s.contains(|c: char| c.is_whitespace() || c.is_control())
-        {
+        if !Self::is_valid(s) {
             return Err(InvalidRootRelativeUrl);
         }
         Ok(Self(s.to_owned()))

@@ -16,11 +16,6 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::profile::Update>();
         server_fn::axum::register_explicit::<web::profile::GetDefaultPostFormat>();
         server_fn::axum::register_explicit::<web::profile::SetDefaultPostFormat>();
-        server_fn::axum::register_explicit::<web::profile::GetYourPagesTheme>();
-        server_fn::axum::register_explicit::<web::profile::SetYourPagesTheme>();
-        server_fn::axum::register_explicit::<web::profile::ResetYourPagesTheme>();
-        server_fn::axum::register_explicit::<web::profile::GetSiteTheme>();
-        server_fn::axum::register_explicit::<web::profile::SetSiteTheme>();
         server_fn::axum::register_explicit::<web::sessions::List>();
         server_fn::axum::register_explicit::<web::sessions::Revoke>();
         server_fn::axum::register_explicit::<web::sessions::CreateAppPassword>();
@@ -75,6 +70,24 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::audiences::AddSubscriber>();
         server_fn::axum::register_explicit::<web::audiences::RemoveSubscriber>();
         server_fn::axum::register_explicit::<web::audiences::ListMembers>();
+        server_fn::axum::register_explicit::<web::themes::List>();
+        server_fn::axum::register_explicit::<web::themes::GetDraft>();
+        server_fn::axum::register_explicit::<web::themes::GetPresentation>();
+        server_fn::axum::register_explicit::<web::themes::GetSelection>();
+        server_fn::axum::register_explicit::<web::themes::Create>();
+        server_fn::axum::register_explicit::<web::themes::ImportPackage>();
+        server_fn::axum::register_explicit::<web::themes::ImportZip>();
+        server_fn::axum::register_explicit::<web::themes::ImportCss>();
+        server_fn::axum::register_explicit::<web::themes::ReplaceCss>();
+        server_fn::axum::register_explicit::<web::themes::Export>();
+        server_fn::axum::register_explicit::<web::themes::Rename>();
+        server_fn::axum::register_explicit::<web::themes::Remove>();
+        server_fn::axum::register_explicit::<web::themes::Publish>();
+        server_fn::axum::register_explicit::<web::themes::Select>();
+        server_fn::axum::register_explicit::<web::themes::ReplaceBinding>();
+        server_fn::axum::register_explicit::<web::themes::ReplacePool>();
+        server_fn::axum::register_explicit::<web::themes::Shuffle>();
+        server_fn::axum::register_explicit::<web::themes::Preview>();
     });
     LazyLock::force(&REGISTRATIONS);
 }
@@ -91,4 +104,4 @@ pub fn ensure_server_fns_registered() {
 /// fn in `web/src`; this constant tracks the list; and
 /// `server_fn_wire::every_server_fn_path_is_api_vertical_ident_and_distinct`
 /// checks itself against the constant. Each link is short enough to keep honest.
-pub const REGISTERED_SERVER_FN_COUNT: usize = 73;
+pub const REGISTERED_SERVER_FN_COUNT: usize = 91;
