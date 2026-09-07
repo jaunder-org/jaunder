@@ -321,13 +321,13 @@ mod tests {
     use std::{fmt::Write as _, fs, path::Path, sync::Arc};
 
     use crate::{
-        StorageRuntimeConfig, ThemeAssetManager, ThemeOwner,
+        StorageRuntimeConfig, ThemeAssetManager, ThemeManager, ThemeOwner, ThemePoolInput,
         test_support::{
-            Backend, backends, compiled_theme_fixture, confirmed, create_site_theme,
-            recorded_postgres_url, sqlite_url, theme_quota_limits,
+            Backend, SeedUser, backends, compiled_theme_fixture, confirmed, create_site_theme,
+            recorded_postgres_url, seed_media, sqlite_url, theme_quota_limits,
         },
     };
-    use common::theme::ThemeContentDigest;
+    use common::theme::{ThemeContentDigest, ThemeImageRole};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -405,6 +405,37 @@ mod tests {
                 )
                 .await
                 .expect("publish fixture theme"),
+        );
+        let actor = SeedUser::new().seed(&source.state).await.user_id;
+        let media = seed_media(&source.state, actor, "backup-theme-header.png").await;
+        let media_file = source_media_path.join(common::media::path(
+            &media.source,
+            &media.sha256,
+            &media.filename,
+        ));
+        fs::create_dir_all(media_file.parent().expect("media file parent"))
+            .expect("create media file parent");
+        fs::write(&media_file, b"theme header").expect("write media fixture");
+        let theme_manager = ThemeManager::new(
+            Arc::clone(&source.state.themes),
+            Arc::clone(&source.state.media),
+            source.state.write_scope.clone(),
+            Arc::new(source.media_content_locks()),
+        );
+        confirmed(
+            theme_manager
+                .replace_header_pool(
+                    actor,
+                    ThemeOwner::Site,
+                    theme_id,
+                    vec![
+                        ThemePoolInput::PackageAsset("assets/pixel.png".to_owned()),
+                        ThemePoolInput::Media(media),
+                    ],
+                    [7; 32],
+                )
+                .await
+                .expect("bind backup theme pool"),
         );
         let backup = source.base.path().join("backup");
         let runtime = StorageRuntimeConfig::default();
@@ -645,6 +676,22 @@ mod tests {
             .string_quintuples(asset_query)
             .await
             .expect("read source revision assets");
+        let expected_binding = source
+            .state
+            .themes
+            .role_binding(
+                ThemeOwner::Site,
+                expected_revision.theme_id,
+                ThemeImageRole::Header,
+            )
+            .await
+            .expect("read source header binding");
+        let expected_pool = source
+            .state
+            .themes
+            .header_pool(ThemeOwner::Site, expected_revision.theme_id)
+            .await
+            .expect("read source header pool");
 
         let target = backend.setup().await;
         let target_database = backup_database_options(backend, &target.base);
@@ -685,7 +732,7 @@ mod tests {
                 .list_revisions(ThemeOwner::Site, expected_revision.theme_id)
                 .await
                 .expect("read restored revisions"),
-            vec![expected_revision]
+            vec![expected_revision.clone()]
         );
         assert_eq!(
             target
@@ -695,6 +742,28 @@ mod tests {
                 .await
                 .expect("read restored revision assets"),
             expected_assets
+        );
+        assert_eq!(
+            target
+                .state
+                .themes
+                .role_binding(
+                    ThemeOwner::Site,
+                    expected_revision.theme_id,
+                    ThemeImageRole::Header,
+                )
+                .await
+                .expect("read restored header binding"),
+            expected_binding
+        );
+        assert_eq!(
+            target
+                .state
+                .themes
+                .header_pool(ThemeOwner::Site, expected_revision.theme_id)
+                .await
+                .expect("read restored header pool"),
+            expected_pool
         );
         assert_eq!(
             target

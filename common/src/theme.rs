@@ -19,6 +19,7 @@ pub enum Theme {
     Reader,
 }
 
+use sha2::{Digest, Sha256};
 use std::str::FromStr;
 
 use thiserror::Error;
@@ -191,6 +192,198 @@ impl ThemeImageBindingMode {
     }
 }
 
+/// Canonical, query-free identity of one public presentation route.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PublicThemeRoute(String);
+
+#[derive(Debug, Error)]
+#[error("theme route must be a canonical root-relative public path")]
+pub struct InvalidPublicThemeRoute;
+
+impl PublicThemeRoute {
+    /// Accepts only the canonical path emitted by a typed public route formatter.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidPublicThemeRoute`] for non-root-relative paths or paths
+    /// containing an authority, query, or fragment.
+    pub fn new(path: String) -> Result<Self, InvalidPublicThemeRoute> {
+        if path.starts_with('/')
+            && !path.starts_with("//")
+            && !path.contains('?')
+            && !path.contains('#')
+            && !path.contains("://")
+        {
+            Ok(Self(path))
+        } else {
+            Err(InvalidPublicThemeRoute)
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One member of an explicit header-image pool.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ThemePoolEntry {
+    Package(String),
+    Media {
+        source: String,
+        digest: ThemeContentDigest,
+        filename: String,
+    },
+}
+
+impl ThemePoolEntry {
+    /// The versioned, unambiguous pool encoding.
+    #[must_use]
+    pub fn canonical_encoding(&self) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        match self {
+            Self::Package(path) => {
+                encoded.push(0);
+                push_length_prefixed(&mut encoded, path.as_bytes());
+            }
+            Self::Media {
+                source,
+                digest,
+                filename,
+            } => {
+                encoded.push(1);
+                push_length_prefixed(&mut encoded, source.as_bytes());
+                let raw_digest = hex_digest(digest.as_ref());
+                encoded.extend(raw_digest);
+                push_length_prefixed(&mut encoded, filename.as_bytes());
+            }
+        }
+        encoded
+    }
+}
+
+/// Canonicalized explicit header pool, its stable revision digest, and selection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThemeHeaderPool {
+    entries: Vec<ThemePoolEntry>,
+    revision: ThemePoolRevisionDigest,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum InvalidThemeHeaderPool {
+    #[error("theme header pool must not be empty")]
+    Empty,
+    #[error("theme header pool contains a duplicate canonical entry")]
+    Duplicate,
+    #[error("theme header pool digest could not be represented")]
+    Digest,
+}
+
+impl ThemeHeaderPool {
+    /// Canonicalizes an explicit header pool and derives its revision digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidThemeHeaderPool::Empty`] for an empty pool,
+    /// [`InvalidThemeHeaderPool::Duplicate`] for duplicate canonical entries,
+    /// or [`InvalidThemeHeaderPool::Digest`] if the derived digest cannot be
+    /// represented by the validated digest type.
+    pub fn new(mut entries: Vec<ThemePoolEntry>) -> Result<Self, InvalidThemeHeaderPool> {
+        if entries.is_empty() {
+            return Err(InvalidThemeHeaderPool::Empty);
+        }
+        entries.sort_by_key(ThemePoolEntry::canonical_encoding);
+        if entries
+            .windows(2)
+            .any(|pair| pair[0].canonical_encoding() == pair[1].canonical_encoding())
+        {
+            return Err(InvalidThemeHeaderPool::Duplicate);
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(b"jaunder-theme-pool-v1");
+        hasher.update((entries.len() as u64).to_be_bytes());
+        for entry in &entries {
+            let encoded = entry.canonical_encoding();
+            push_length_prefixed_hash(&mut hasher, &encoded);
+        }
+        let revision = digest_hex(hasher.finalize().as_slice())
+            .parse()
+            .map_err(|_| InvalidThemeHeaderPool::Digest)?;
+        Ok(Self { entries, revision })
+    }
+
+    #[must_use]
+    pub fn entries(&self) -> &[ThemePoolEntry] {
+        &self.entries
+    }
+
+    #[must_use]
+    pub fn revision(&self) -> &ThemePoolRevisionDigest {
+        &self.revision
+    }
+
+    #[must_use]
+    pub fn select(
+        &self,
+        route: &PublicThemeRoute,
+        published_revision: &ThemeRevisionDigest,
+        shuffle_seed: &[u8; 32],
+    ) -> &ThemePoolEntry {
+        let mut hasher = Sha256::new();
+        hasher.update(b"jaunder-theme-assignment-v1");
+        push_length_prefixed_hash(&mut hasher, route.as_str().as_bytes());
+        hasher.update(hex_digest(published_revision.as_ref()));
+        hasher.update(hex_digest(self.revision.as_ref()));
+        hasher.update(shuffle_seed);
+        let digest = hasher.finalize();
+        let mut remainder = 0_usize;
+        for byte in digest {
+            remainder = (remainder * 256 + usize::from(byte)) % self.entries.len();
+        }
+        &self.entries[remainder]
+    }
+}
+
+fn push_length_prefixed(target: &mut Vec<u8>, value: &[u8]) {
+    target.extend((value.len() as u64).to_be_bytes());
+    target.extend(value);
+}
+
+fn push_length_prefixed_hash(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
+}
+
+fn hex_digest(value: &str) -> [u8; 32] {
+    let mut bytes = [0; 32];
+    let mut encoded = value.bytes();
+    for byte in &mut bytes {
+        let high = encoded.next().map(hex_nibble).unwrap_or_default();
+        let low = encoded.next().map(hex_nibble).unwrap_or_default();
+        *byte = (high << 4) | low;
+    }
+    bytes
+}
+
+fn hex_nibble(value: u8) -> u8 {
+    if value.is_ascii_digit() {
+        value - b'0'
+    } else {
+        value - b'a' + 10
+    }
+}
+
+fn digest_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+
+    let mut value = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(&mut value, "{byte:02x}");
+    }
+    value
+}
+
 impl Theme {
     /// Stable token used by the public `data-theme` attribute and wire formats.
     #[must_use]
@@ -290,5 +483,62 @@ mod tests {
             serde_json::from_str::<PublishedThemePresentation>(&custom_fixture).unwrap(),
             custom
         );
+    }
+    #[test]
+    fn header_pool_v1_encoding_digest_and_assignment_match_vectors() {
+        let package = ThemePoolEntry::Package("images/header.png".to_owned());
+        let media = ThemePoolEntry::Media {
+            source: "upload".to_owned(),
+            digest: "b".repeat(64).parse().unwrap(),
+            filename: "hero.jpg".to_owned(),
+        };
+        assert_eq!(
+            digest_hex(&package.canonical_encoding()),
+            "000000000000000011696d616765732f6865616465722e706e67"
+        );
+        assert_eq!(
+            digest_hex(&media.canonical_encoding()),
+            concat!(
+                "01000000000000000675706c6f6164",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "00000000000000086865726f2e6a7067"
+            )
+        );
+
+        let pool = ThemeHeaderPool::new(vec![media.clone(), package.clone()]).unwrap();
+        assert_eq!(
+            pool.revision().as_ref(),
+            "0cc494a6b66c4e3e70894c72c4b9dc98a10643c9b85c197d02ae1c8fb07ac0f3"
+        );
+        assert_eq!(pool.entries(), &[package, media.clone()]);
+
+        let route = PublicThemeRoute::new("/~alice/post".to_owned()).unwrap();
+        let revision = "c".repeat(64).parse().unwrap();
+        let mut seed = [0; 32];
+        for (index, byte) in seed.iter_mut().enumerate() {
+            *byte = u8::try_from(index).unwrap();
+        }
+        assert_eq!(pool.select(&route, &revision, &seed), &media);
+    }
+
+    #[test]
+    fn header_pool_rejects_duplicates_and_noncanonical_routes() {
+        let entry = ThemePoolEntry::Package("images/header.png".to_owned());
+        assert_eq!(
+            ThemeHeaderPool::new(vec![entry.clone(), entry]).unwrap_err(),
+            InvalidThemeHeaderPool::Duplicate
+        );
+        assert_eq!(
+            ThemeHeaderPool::new(Vec::new()).unwrap_err(),
+            InvalidThemeHeaderPool::Empty
+        );
+        for route in [
+            "https://example.com/",
+            "//example.com/post",
+            "/tags/rust?view=grid",
+            "/~alice#bio",
+        ] {
+            assert!(PublicThemeRoute::new(route.to_owned()).is_err(), "{route}");
+        }
     }
 }

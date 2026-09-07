@@ -14,7 +14,7 @@ use crate::InstanceId;
 use crate::WriteTransaction;
 use crate::backend::Backend;
 use crate::posts::media::MediaReferenceEvidence;
-use crate::sql::{QueryBuilderStorageExt, QueryStorageExt};
+use crate::sql::{QueryBuilderStorageExt, QueryStorageExt, RowCount};
 use thiserror::Error;
 
 /// A media metadata record returned by [`MediaStorage`] queries.
@@ -239,6 +239,9 @@ pub trait MediaStorage: Send + Sync {
         sha256: &ContentHash,
         source: &MediaSource,
     ) -> Result<Option<MediaRecord>>;
+
+    /// Counts this owner's live theme bindings for an exact Media identity.
+    async fn theme_reference_count(&self, user_id: UserId, media: &MediaRef) -> Result<u64>;
 }
 
 /// Backend-specific divergence for [`MediaStore`].
@@ -558,6 +561,29 @@ where
         .bind_storage(*source)
         .fetch_optional(&self.pool)
         .await
+    }
+
+    async fn theme_reference_count(&self, user_id: UserId, media: &MediaRef) -> Result<u64> {
+        let count: RowCount = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM (
+                SELECT media_user_id, media_source, media_digest, media_filename
+                FROM theme_role_bindings
+                UNION ALL
+                SELECT media_user_id, media_source, media_digest, media_filename
+                FROM theme_header_pool
+            ) theme_media
+            WHERE media_user_id = $1
+              AND media_source = $2
+              AND media_digest = $3
+              AND media_filename = $4",
+        )
+        .bind_storage(user_id)
+        .bind_storage(media.source)
+        .bind_storage(&media.sha256)
+        .bind_storage(&media.filename)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count.into_u64())
     }
 
     #[tracing::instrument(

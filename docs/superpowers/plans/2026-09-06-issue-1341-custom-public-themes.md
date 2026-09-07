@@ -114,7 +114,7 @@ Out:
     failures; serde fixtures pin the final DTO; symbol-aware caller migration
     and built-in API/browser regressions prove the old path is gone.
 
-- [ ] Task 6: Add race-free image roles, pools, shuffle, and atomic removal.
+- [x] Task 6: Add race-free image roles, pools, shuffle, and atomic removal.
   - Contract: package bindings validate against the candidate revision. For
     Media operations, acquire all `MediaContentLocks` in ascending content-hash
     order before `WriteScope`; inside it, acquire

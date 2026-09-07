@@ -389,6 +389,51 @@ pub(crate) fn push_other_owner_media_reference_from_where<DB>(
         .push_storage_bind(media.filename.clone());
 }
 
+pub(crate) enum ThemeMediaOwner {
+    Any,
+    Exact(UserId),
+    Other(UserId),
+}
+
+/// Extends the guarded Media reference checks with presentation-theme bindings.
+///
+/// Theme references have no foreign-instance evidence: their ownership is
+/// persisted on the binding row itself and mutations hold the same exact
+/// `MediaRef` lock as guarded deletion.
+pub(crate) fn push_theme_media_reference_predicate<DB>(
+    query: &mut QueryBuilder<DB>,
+    media: &MediaRef,
+    owner: &ThemeMediaOwner,
+) where
+    DB: Database,
+    for<'q> i64: Encode<'q, DB> + Type<DB>,
+    for<'q> &'q str: Encode<'q, DB> + Type<DB>,
+    String: Type<DB>,
+    for<'q> String: Encode<'q, DB>,
+{
+    query
+        .push(" AND NOT EXISTS (SELECT 1 FROM (SELECT media_user_id, media_source, media_digest, media_filename FROM theme_role_bindings UNION ALL SELECT media_user_id, media_source, media_digest, media_filename FROM theme_header_pool) theme_media WHERE theme_media.media_source = ")
+        .push_storage_bind(media.source)
+        .push(" AND theme_media.media_digest = ")
+        .push_storage_bind(media.sha256.clone())
+        .push(" AND theme_media.media_filename = ")
+        .push_storage_bind(media.filename.clone());
+    match owner {
+        ThemeMediaOwner::Any => {}
+        ThemeMediaOwner::Exact(user_id) => {
+            query
+                .push(" AND theme_media.media_user_id = ")
+                .push_storage_bind(*user_id);
+        }
+        ThemeMediaOwner::Other(user_id) => {
+            query
+                .push(" AND theme_media.media_user_id <> ")
+                .push_storage_bind(*user_id);
+        }
+    }
+    query.push(")");
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, macros::SqlxBridge)]
 pub(crate) struct MediaAdvisoryLockKey(i64);
 

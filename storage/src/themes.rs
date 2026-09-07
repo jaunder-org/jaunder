@@ -3,10 +3,13 @@
 //! This module deliberately stores compiler output as opaque validated values. Archive
 //! parsing, CSS transformation, and filesystem materialization live outside storage.
 
+use std::collections::BTreeSet;
+
 use crate::{WriteTransaction, postgres_connection, sqlite_connection};
 use async_trait::async_trait;
 use common::{
     ids::{ThemeId, UserId},
+    media::{ContentHash, Filename, MediaRef, MediaSource},
     theme::{
         PublicThemeSelection, ThemeAssetDigest, ThemeContentDigest, ThemeImageBindingMode,
         ThemeImageRole, ThemePoolRevisionDigest, ThemeRevisionDigest, ThemeSourceDigest,
@@ -89,6 +92,13 @@ pub struct ThemeHeaderPoolEntry {
     pub media_source: Option<String>,
     pub media_digest: Option<ThemeContentDigest>,
     pub media_filename: Option<String>,
+}
+
+/// One exact Media reference persisted by a theme binding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThemeMediaReference {
+    pub user_id: UserId,
+    pub media: MediaRef,
 }
 
 /// Counters used by the centralized owner admission lock.
@@ -202,11 +212,14 @@ pub trait ThemeStorage: Send + Sync {
         &self,
         owner: ThemeOwner,
     ) -> Result<Option<PublicThemeSelection>, sqlx::Error>;
+    /// Removes a catalog and all its revisions while retaining their content
+    /// accounting through the supplied deadline.
     async fn remove_theme(
         &self,
         transaction: &mut WriteTransaction,
         owner: ThemeOwner,
         theme_id: ThemeId,
+        retained_until_unix_seconds: i64,
     ) -> Result<(), sqlx::Error>;
     async fn replace_role_binding(
         &self,
@@ -232,6 +245,22 @@ pub trait ThemeStorage: Send + Sync {
         owner: ThemeOwner,
         theme_id: ThemeId,
     ) -> Result<Vec<ThemeHeaderPoolEntry>, sqlx::Error>;
+    /// Locks a theme aggregate in the caller's transaction and returns its
+    /// complete, canonically ordered Media reference set.
+    async fn locked_media_references(
+        &self,
+        transaction: &mut WriteTransaction,
+        owner: ThemeOwner,
+        theme_id: ThemeId,
+    ) -> Result<Vec<ThemeMediaReference>, sqlx::Error>;
+    /// Changes only the seed of an existing header pool binding.
+    async fn shuffle_header_pool(
+        &self,
+        transaction: &mut WriteTransaction,
+        owner: ThemeOwner,
+        theme_id: ThemeId,
+        shuffle_seed: [u8; 32],
+    ) -> Result<(), sqlx::Error>;
     async fn owner_quota(&self, owner: ThemeOwner) -> Result<Option<ThemeOwnerQuota>, sqlx::Error>;
     async fn site_quota(&self) -> Result<ThemeSiteQuota, sqlx::Error>;
     /// Atomically admits one active catalog entry under the centralized quota lock.
@@ -397,15 +426,39 @@ macro_rules! impl_theme_storage {
                     })
                 }))
             }
-            async fn remove_theme(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, theme_id: ThemeId) -> Result<(), sqlx::Error> {
+            async fn remove_theme(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, theme_id: ThemeId, retained_until_unix_seconds: i64) -> Result<(), sqlx::Error> {
                 let connection = $conn(transaction)?;
-                let owned: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM themes WHERE id = $1 AND catalog_owner_key = $2)")
-                    .bind(i64::from(theme_id)).bind(catalog_owner_key(owner)).fetch_one(&mut *connection).await?;
-                if !owned.0 {
-                    return Err(sqlx::Error::RowNotFound);
+                let owner_key = catalog_owner_key(owner);
+                // Keep the same site → owner → digest order used for revision
+                // admission/detachment. The grouped UNION preserves multiplicity:
+                // one digest may occur in several revisions or assets.
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
+                sqlx::query("UPDATE theme_owner_quotas SET retained_revisions = retained_revisions WHERE catalog_owner_key = $1").bind(&owner_key).execute(&mut *connection).await?;
+                let owned: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM themes WHERE id = $1 AND catalog_owner_key = $2)").bind(i64::from(theme_id)).bind(&owner_key).fetch_one(&mut *connection).await?;
+                if !owned.0 { return Err(sqlx::Error::RowNotFound); }
+                let (revision_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM theme_revisions WHERE theme_id = $1").bind(i64::from(theme_id)).fetch_one(&mut *connection).await?;
+                let charges: Vec<(String, i64)> = sqlx::query_as("SELECT content_digest, COUNT(*) FROM (SELECT revision.digest AS revision_digest, revision.stylesheet_digest AS content_digest FROM theme_revisions revision WHERE revision.theme_id = $1 UNION SELECT asset.revision_digest, asset.digest AS content_digest FROM theme_revision_assets asset WHERE asset.theme_id = $1) content GROUP BY content_digest ORDER BY content_digest").bind(i64::from(theme_id)).fetch_all(&mut *connection).await?;
+                for (digest, _) in &charges {
+                    sqlx::query("UPDATE theme_content_eligibility SET digest = digest WHERE digest = $1").bind(digest).execute(&mut *connection).await?;
+                    sqlx::query("UPDATE theme_retained_content_charges SET live_references = live_references WHERE catalog_owner_key = $1 AND digest = $2").bind(&owner_key).bind(digest).execute(&mut *connection).await?;
                 }
-                sqlx::query("DELETE FROM theme_selections WHERE theme_id = $1").bind(i64::from(theme_id)).execute(&mut *connection).await?;
-                sqlx::query("DELETE FROM themes WHERE id = $1").bind(i64::from(theme_id)).execute(&mut *connection).await?;
+                if revision_count > 0 {
+                    let site = sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions - $1 WHERE singleton = 1 AND retained_revisions >= $1").bind(revision_count).execute(&mut *connection).await?;
+                    let owner_quota = sqlx::query("UPDATE theme_owner_quotas SET retained_revisions = retained_revisions - $1 WHERE catalog_owner_key = $2 AND retained_revisions >= $1").bind(revision_count).bind(&owner_key).execute(&mut *connection).await?;
+                    if site.rows_affected() != 1 || owner_quota.rows_affected() != 1 { return Err(sqlx::Error::RowNotFound); }
+                }
+                for (digest, count) in &charges {
+                    let charged = sqlx::query("UPDATE theme_retained_content_charges SET live_references = live_references - $1 WHERE catalog_owner_key = $2 AND digest = $3 AND live_references >= $1").bind(count).bind(&owner_key).bind(digest).execute(&mut *connection).await?;
+                    let eligible = sqlx::query("UPDATE theme_content_eligibility SET live_references = live_references - $1, retained_until_unix_seconds = CASE WHEN retained_until_unix_seconds > $2 THEN retained_until_unix_seconds ELSE $2 END WHERE digest = $3 AND live_references >= $1").bind(count).bind(retained_until_unix_seconds).bind(digest).execute(&mut *connection).await?;
+                    if charged.rows_affected() != 1 || eligible.rows_affected() != 1 { return Err(sqlx::Error::RowNotFound); }
+                }
+                let detached_selection = sqlx::query("DELETE FROM theme_selections WHERE theme_id = $1").bind(i64::from(theme_id)).execute(&mut *connection).await?;
+                if owner == ThemeOwner::Site && detached_selection.rows_affected() == 1 {
+                    sqlx::query("INSERT INTO theme_selections (catalog_owner_key, builtin_theme, theme_id) VALUES ('site', 'studio', NULL) ON CONFLICT (catalog_owner_key) DO UPDATE SET builtin_theme = excluded.builtin_theme, theme_id = NULL").execute(&mut *connection).await?;
+                }
+                let removed = sqlx::query("DELETE FROM themes WHERE id = $1 AND catalog_owner_key = $2").bind(i64::from(theme_id)).bind(&owner_key).execute(&mut *connection).await?;
+                let active = sqlx::query("UPDATE theme_owner_quotas SET active_themes = active_themes - 1 WHERE catalog_owner_key = $1 AND active_themes > 0").bind(&owner_key).execute(&mut *connection).await?;
+                if removed.rows_affected() != 1 || active.rows_affected() != 1 { return Err(sqlx::Error::RowNotFound); }
                 Ok(())
             }
             async fn replace_role_binding(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, binding: &ThemeRoleBinding) -> Result<(), sqlx::Error> {
@@ -415,6 +468,31 @@ macro_rules! impl_theme_storage {
                 let owned: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM themes WHERE id = $1 AND catalog_owner_key = $2)")
                     .bind(i64::from(binding.theme_id)).bind(catalog_owner_key(owner)).fetch_one(&mut *connection).await?;
                 if !owned.0 { return Err(sqlx::Error::RowNotFound); }
+                if binding.mode == ThemeImageBindingMode::PackageAsset {
+                    let valid: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM theme_revision_assets asset JOIN themes theme ON theme.id = asset.theme_id AND theme.current_revision_digest = asset.revision_digest WHERE asset.theme_id = $1 AND asset.path = $2)")
+                        .bind(i64::from(binding.theme_id))
+                        .bind(binding.package_path.as_deref())
+                        .fetch_one(&mut *connection)
+                        .await?;
+                    if !valid.0 {
+                        return Err(sqlx::Error::RowNotFound);
+                    }
+                }
+                if binding.mode == ThemeImageBindingMode::Media {
+                    let valid: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM media WHERE user_id = $1 AND source = $2 AND sha256 = $3 AND filename = $4)")
+                        .bind(binding.media_user_id.map(i64::from))
+                        .bind(binding.media_source.as_deref())
+                        .bind(binding.media_digest.as_ref().map(AsRef::as_ref))
+                        .bind(binding.media_filename.as_deref())
+                        .fetch_one(&mut *connection)
+                        .await?;
+                    if !valid.0 {
+                        return Err(sqlx::Error::RowNotFound);
+                    }
+                }
+                if binding.role == ThemeImageRole::Header && binding.mode != ThemeImageBindingMode::HeaderPool {
+                    sqlx::query("DELETE FROM theme_header_pool WHERE theme_id = $1").bind(i64::from(binding.theme_id)).execute(&mut *connection).await?;
+                }
                 sqlx::query("INSERT INTO theme_role_bindings (theme_id, role, mode, package_path, media_user_id, media_source, media_digest, media_filename, pool_revision_digest, shuffle_seed) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (theme_id, role) DO UPDATE SET mode = excluded.mode, package_path = excluded.package_path, media_user_id = excluded.media_user_id, media_source = excluded.media_source, media_digest = excluded.media_digest, media_filename = excluded.media_filename, pool_revision_digest = excluded.pool_revision_digest, shuffle_seed = excluded.shuffle_seed")
                     .bind(i64::from(binding.theme_id)).bind(binding.role.token()).bind(binding.mode.token()).bind(&binding.package_path).bind(binding.media_user_id.map(i64::from)).bind(&binding.media_source).bind(binding.media_digest.as_ref().map(AsRef::as_ref)).bind(&binding.media_filename).bind(binding.pool_revision.as_ref().map(AsRef::as_ref)).bind(binding.shuffle_seed.map(Vec::from)).execute(&mut *connection).await?;
                 Ok(())
@@ -425,17 +503,74 @@ macro_rules! impl_theme_storage {
             }
             async fn replace_header_pool(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, theme_id: ThemeId, entries: &[ThemeHeaderPoolEntry]) -> Result<(), sqlx::Error> {
                 let author_user_id = author_user_id(owner);
-                if author_user_id.is_some() && entries.iter().any(|entry| entry.media_user_id.map(i64::from) != author_user_id && entry.media_user_id.is_some()) { return Err(sqlx::Error::RowNotFound); }
+                if entries.is_empty() || author_user_id.is_some() && entries.iter().any(|entry| entry.media_user_id.map(i64::from) != author_user_id && entry.media_user_id.is_some()) {
+                    return Err(sqlx::Error::RowNotFound);
+                }
                 let connection = $conn(transaction)?;
                 let owned: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM themes WHERE id = $1 AND catalog_owner_key = $2)").bind(i64::from(theme_id)).bind(catalog_owner_key(owner)).fetch_one(&mut *connection).await?;
                 if !owned.0 { return Err(sqlx::Error::RowNotFound); }
+                let mut canonical = Vec::with_capacity(entries.len());
+                let mut encodings = BTreeSet::new();
+                for entry in entries {
+                    let encoding = header_pool_entry_encoding(entry)?;
+                    if !encodings.insert(encoding.clone()) {
+                        return Err(sqlx::Error::RowNotFound);
+                    }
+                    let valid: (bool,) = match (&entry.package_path, entry.media_user_id, &entry.media_source, &entry.media_digest, &entry.media_filename) {
+                        (Some(path), None, None, None, None) => sqlx::query_as("SELECT EXISTS (SELECT 1 FROM theme_revision_assets asset JOIN themes theme ON theme.id = asset.theme_id AND theme.current_revision_digest = asset.revision_digest WHERE asset.theme_id = $1 AND asset.path = $2)").bind(i64::from(theme_id)).bind(path).fetch_one(&mut *connection).await?,
+                        (None, Some(user_id), Some(source), Some(digest), Some(filename)) => sqlx::query_as("SELECT EXISTS (SELECT 1 FROM media WHERE user_id = $1 AND source = $2 AND sha256 = $3 AND filename = $4)").bind(i64::from(user_id)).bind(source).bind(digest.as_ref()).bind(filename).fetch_one(&mut *connection).await?,
+                        _ => return Err(sqlx::Error::RowNotFound),
+                    };
+                    if !valid.0 {
+                        return Err(sqlx::Error::RowNotFound);
+                    }
+                    canonical.push((encoding, entry));
+                }
+                canonical.sort_by(|left, right| left.0.cmp(&right.0));
                 sqlx::query("DELETE FROM theme_header_pool WHERE theme_id = $1").bind(i64::from(theme_id)).execute(&mut *connection).await?;
-                for entry in entries { sqlx::query("INSERT INTO theme_header_pool (theme_id, entry_ordinal, package_path, media_user_id, media_source, media_digest, media_filename) VALUES ($1, $2, $3, $4, $5, $6, $7)").bind(i64::from(theme_id)).bind(entry.ordinal).bind(&entry.package_path).bind(entry.media_user_id.map(i64::from)).bind(&entry.media_source).bind(entry.media_digest.as_ref().map(AsRef::as_ref)).bind(&entry.media_filename).execute(&mut *connection).await?; }
+                for (ordinal, (_, entry)) in canonical.into_iter().enumerate() {
+                    let ordinal = i64::try_from(ordinal).map_err(|_| sqlx::Error::RowNotFound)?;
+                    sqlx::query("INSERT INTO theme_header_pool (theme_id, entry_ordinal, package_path, media_user_id, media_source, media_digest, media_filename) VALUES ($1, $2, $3, $4, $5, $6, $7)").bind(i64::from(theme_id)).bind(ordinal).bind(&entry.package_path).bind(entry.media_user_id.map(i64::from)).bind(&entry.media_source).bind(entry.media_digest.as_ref().map(AsRef::as_ref)).bind(&entry.media_filename).execute(&mut *connection).await?;
+                }
                 Ok(())
             }
             async fn header_pool(&self, owner: ThemeOwner, theme_id: ThemeId) -> Result<Vec<ThemeHeaderPoolEntry>, sqlx::Error> {
                 let rows: Vec<(i64, Option<String>, Option<i64>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as("SELECT p.entry_ordinal, p.package_path, p.media_user_id, p.media_source, p.media_digest, p.media_filename FROM theme_header_pool p JOIN themes t ON t.id = p.theme_id WHERE p.theme_id = $1 AND t.catalog_owner_key = $2 ORDER BY p.entry_ordinal").bind(i64::from(theme_id)).bind(catalog_owner_key(owner)).fetch_all(&self.pool).await?;
                 Ok(rows.into_iter().map(|(ordinal, package_path, media_user_id, media_source, media_digest, media_filename)| ThemeHeaderPoolEntry { ordinal, package_path, media_user_id: media_user_id.map(UserId::from), media_source, media_digest: media_digest.and_then(|value| value.parse().ok()), media_filename }).collect())
+            }
+            async fn locked_media_references(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, theme_id: ThemeId) -> Result<Vec<ThemeMediaReference>, sqlx::Error> {
+                let connection = $conn(transaction)?;
+                let locked = sqlx::query("UPDATE themes SET id = id WHERE id = $1 AND catalog_owner_key = $2")
+                    .bind(i64::from(theme_id))
+                    .bind(catalog_owner_key(owner))
+                    .execute(&mut *connection)
+                    .await?;
+                if locked.rows_affected() != 1 {
+                    return Err(sqlx::Error::RowNotFound);
+                }
+                let rows: Vec<(i64, String, String, String)> = sqlx::query_as("SELECT media_user_id, media_source, media_digest, media_filename FROM (SELECT media_user_id, media_source, media_digest, media_filename FROM theme_role_bindings WHERE theme_id = $1 AND media_user_id IS NOT NULL UNION SELECT media_user_id, media_source, media_digest, media_filename FROM theme_header_pool WHERE theme_id = $1 AND media_user_id IS NOT NULL) theme_media ORDER BY media_digest, media_source, media_filename, media_user_id")
+                    .bind(i64::from(theme_id))
+                    .fetch_all(&mut *connection)
+                    .await?;
+                rows.into_iter()
+                    .map(|(user_id, source, digest, filename)| {
+                        Ok(ThemeMediaReference {
+                            user_id: UserId::from(user_id),
+                            media: MediaRef {
+                                source: source.parse::<MediaSource>().map_err(|_| sqlx::Error::RowNotFound)?,
+                                sha256: digest.parse::<ContentHash>().map_err(|_| sqlx::Error::RowNotFound)?,
+                                filename: filename.parse::<Filename>().map_err(|_| sqlx::Error::RowNotFound)?,
+                            },
+                        })
+                    })
+                    .collect()
+            }
+            async fn shuffle_header_pool(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, theme_id: ThemeId, shuffle_seed: [u8; 32]) -> Result<(), sqlx::Error> {
+                let connection = $conn(transaction)?;
+                let updated = sqlx::query("UPDATE theme_role_bindings SET shuffle_seed = $1 WHERE theme_id = $2 AND role = 'header' AND mode = 'pool' AND EXISTS (SELECT 1 FROM themes WHERE id = $2 AND catalog_owner_key = $3)")
+                    .bind(Vec::from(shuffle_seed)).bind(i64::from(theme_id)).bind(catalog_owner_key(owner)).execute(&mut *connection).await?;
+                if updated.rows_affected() != 1 { return Err(sqlx::Error::RowNotFound); }
+                Ok(())
             }
             async fn owner_quota(&self, owner: ThemeOwner) -> Result<Option<ThemeOwnerQuota>, sqlx::Error> {
                 let row: Option<(i64, i64, i64)> = sqlx::query_as("SELECT active_themes, retained_revisions, logical_bytes FROM theme_owner_quotas WHERE catalog_owner_key = $1").bind(catalog_owner_key(owner)).fetch_optional(&self.pool).await?;
@@ -473,6 +608,18 @@ macro_rules! impl_theme_storage {
                     Some((Some(digest),)) if digest == revision.digest.as_ref() => return Ok(()),
                     Some(_) => {}
                     None => return Err(sqlx::Error::RowNotFound),
+                }
+                // Bindings name assets in the candidate revision, not the revision
+                // that happened to be current when the draft was edited.  This check
+                // deliberately executes in the publication transaction before the
+                // current-revision pointer is advanced.
+                let candidate_paths = assets.iter().map(|asset| asset.path.as_str()).collect::<BTreeSet<_>>();
+                let role_paths: Vec<(String,)> = sqlx::query_as("SELECT package_path FROM theme_role_bindings WHERE theme_id = $1 AND mode = 'package_asset' AND package_path IS NOT NULL")
+                    .bind(i64::from(revision.theme_id)).fetch_all(&mut *connection).await?;
+                let pool_paths: Vec<(String,)> = sqlx::query_as("SELECT package_path FROM theme_header_pool WHERE theme_id = $1 AND package_path IS NOT NULL")
+                    .bind(i64::from(revision.theme_id)).fetch_all(&mut *connection).await?;
+                if role_paths.iter().chain(pool_paths.iter()).any(|(path,)| !candidate_paths.contains(path.as_str())) {
+                    return Err(sqlx::Error::RowNotFound);
                 }
                 for eligibility in eligibilities {
                     sqlx::query("INSERT INTO theme_content_eligibility (digest, mime, retained_until_unix_seconds) VALUES ($1, $2, $3) ON CONFLICT (digest) DO UPDATE SET mime = excluded.mime, retained_until_unix_seconds = CASE WHEN excluded.retained_until_unix_seconds > theme_content_eligibility.retained_until_unix_seconds THEN excluded.retained_until_unix_seconds ELSE theme_content_eligibility.retained_until_unix_seconds END").bind(eligibility.digest.as_ref()).bind(&eligibility.mime).bind(eligibility.retained_until_unix_seconds).execute(&mut *connection).await?;
@@ -562,6 +709,48 @@ macro_rules! impl_theme_storage {
             }
         }
     }
+}
+
+fn header_pool_entry_encoding(entry: &ThemeHeaderPoolEntry) -> Result<Vec<u8>, sqlx::Error> {
+    let mut encoded = Vec::new();
+    match (
+        &entry.package_path,
+        &entry.media_source,
+        &entry.media_digest,
+        &entry.media_filename,
+    ) {
+        (Some(path), None, None, None) if entry.media_user_id.is_none() => {
+            encoded.push(0);
+            push_theme_pool_field(&mut encoded, path.as_bytes());
+        }
+        (None, Some(source), Some(digest), Some(filename)) if entry.media_user_id.is_some() => {
+            encoded.push(1);
+            push_theme_pool_field(&mut encoded, source.as_bytes());
+            let raw = theme_digest_bytes(digest.as_ref())?;
+            encoded.extend(raw);
+            push_theme_pool_field(&mut encoded, filename.as_bytes());
+        }
+        _ => return Err(sqlx::Error::RowNotFound),
+    }
+    Ok(encoded)
+}
+
+fn push_theme_pool_field(target: &mut Vec<u8>, value: &[u8]) {
+    target.extend((value.len() as u64).to_be_bytes());
+    target.extend(value);
+}
+
+fn theme_digest_bytes(value: &str) -> Result<[u8; 32], sqlx::Error> {
+    if value.len() != 64 {
+        return Err(sqlx::Error::RowNotFound);
+    }
+    let mut bytes = [0; 32];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        let offset = index * 2;
+        *byte = u8::from_str_radix(&value[offset..offset + 2], 16)
+            .map_err(|_| sqlx::Error::RowNotFound)?;
+    }
+    Ok(bytes)
 }
 
 fn author_user_id(owner: ThemeOwner) -> Option<i64> {
@@ -664,6 +853,39 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+
+        let themes = Arc::clone(&env.state.themes);
+        let revision = ThemeRevision {
+            theme_id: created,
+            digest: "b".repeat(64).parse().unwrap(),
+            stylesheet_digest: "c".repeat(64).parse().unwrap(),
+            manifest: b"{}".to_vec(),
+        };
+        let assets = vec![
+            ThemePackageAsset {
+                path: "assets/header.webp".to_owned(),
+                digest: "d".repeat(64).parse().unwrap(),
+                mime: "image/webp".to_owned(),
+            },
+            ThemePackageAsset {
+                path: "assets/logo.webp".to_owned(),
+                digest: "e".repeat(64).parse().unwrap(),
+                mime: "image/webp".to_owned(),
+            },
+        ];
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .record_revision(transaction, ThemeOwner::Site, &revision, &assets)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
         );
 
         let themes = Arc::clone(&env.state.themes);
