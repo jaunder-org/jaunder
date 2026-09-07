@@ -17,8 +17,8 @@ use leptos::prelude::provide_context;
 use storage::{
     AppState, AudienceStorage, EmailVerificationStorage, FeedEventStorage, InviteStorage,
     MediaContentLocks, MediaManager, MediaStorage, PasswordResetStorage, PostStorage,
-    SessionStorage, SiteConfigStorage, SubscriptionStorage, ThemeStorage, UserConfigStorage,
-    UserStorage, WriteScope,
+    SessionStorage, SiteConfigStorage, SubscriptionStorage, ThemeAssetManager, ThemeStorage,
+    UserConfigStorage, UserStorage, WriteScope,
 };
 use web::websub::WebsubPublisher;
 
@@ -53,6 +53,11 @@ pub fn provide_media_content_locks_context(content_locks: &Arc<MediaContentLocks
 
 /// Places the shared media operation manager in the current Leptos request context.
 pub fn provide_media_manager_context(manager: &Arc<MediaManager>) {
+    provide_context(Arc::clone(manager));
+}
+
+/// Places immutable Theme content lifecycle operations in the request context.
+pub fn provide_theme_asset_manager_context(manager: &Arc<ThemeAssetManager>) {
     provide_context(Arc::clone(manager));
 }
 

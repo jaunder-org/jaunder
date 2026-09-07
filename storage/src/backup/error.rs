@@ -34,6 +34,8 @@ pub enum BackupError {
         backup_version: i64,
         target_version: i64,
     },
+    #[error("backup schema checksum does not match target schema checksum")]
+    SchemaChecksumMismatch,
     #[error("restored database failed constraint validation: {0}")]
     ConstraintViolation(String),
 }

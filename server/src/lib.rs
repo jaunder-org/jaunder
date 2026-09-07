@@ -42,7 +42,7 @@ use crate::{
 };
 use ::storage::{
     AppState, InstanceId, MediaContentLocks, MediaManager, MediaReferenceOwnershipResolver,
-    PostMediaOwnership, SessionStorage, WriteScope,
+    PostMediaOwnership, SessionStorage, ThemeAssetManager, WriteScope,
 };
 
 async fn retire_session_cookie(
@@ -197,6 +197,11 @@ where
         instance_id,
         media_ownership_resolver,
     ));
+    let theme_asset_manager = Arc::new(ThemeAssetManager::new(
+        state.themes.clone(),
+        state.write_scope.clone(),
+        Arc::clone(&storage_path),
+    ));
     let sessions = state.sessions.clone();
     let write_scope = state.write_scope.clone();
     let posts = state.posts.clone();
@@ -221,6 +226,7 @@ where
             context::provide_mailer_context(&mailer);
             provide_additional_contexts();
             context::provide_media_manager_context(&media_manager);
+            context::provide_theme_asset_manager_context(&theme_asset_manager);
             prelude::provide_context(web::auth::CookieSettings {
                 secure: secure_cookies,
             });

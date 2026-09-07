@@ -70,7 +70,7 @@ Out:
     allowance; explicit restore ordering, typed-column inventory, and relational
     backup fixture shape.
 
-- [ ] Task 4: Materialize, publish, retain, and collect immutable theme content.
+- [x] Task 4: Materialize, publish, retain, and collect immutable theme content.
   - Contract: `ThemeAssetManager` consumes compiler-minted values and owns this
     idempotent protocol: install exact immutable blobs under sorted content
     locks before database visibility; then, in one short `WriteScope`, call the

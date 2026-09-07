@@ -119,6 +119,7 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
             "replace_role_binding",
             "replace_header_pool",
             "admit_theme",
+            "admit_publication",
             "attach_revision_content",
             "detach_revision_content",
             "collect_retained_content",

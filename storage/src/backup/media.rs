@@ -30,7 +30,12 @@ fn restore_media_entries(
     for entry in fs::read_dir(source_dir)? {
         let entry = entry?;
         let file_name = entry.file_name();
-        let child_relative_path = relative_path.join(file_name);
+        if source_root.file_name().is_some_and(|name| name == "themes")
+            && matches!(file_name.to_str(), Some(".staging" | ".locks"))
+        {
+            continue;
+        }
+        let child_relative_path = relative_path.join(&file_name);
         let source_path = entry.path();
         let destination_path = destination_root.join(&child_relative_path);
         let metadata = entry.metadata()?;
@@ -77,11 +82,17 @@ fn mirror_media_entries(
     for entry in fs::read_dir(source_dir)? {
         let entry = entry?;
         let file_name = entry.file_name();
-        let child_relative_path = relative_path.join(file_name);
+        // Theme installation staging and lock files are process-local crash
+        // recovery state, never backup payload.
+        if source_root.file_name().is_some_and(|name| name == "themes")
+            && matches!(file_name.to_str(), Some(".staging" | ".locks"))
+        {
+            continue;
+        }
+        let child_relative_path = relative_path.join(&file_name);
         let source_path = entry.path();
         let destination_path = destination_root.join(&child_relative_path);
         let metadata = entry.metadata()?;
-
         if metadata.is_dir() {
             fs::create_dir_all(&destination_path)?;
             mirror_media_entries(

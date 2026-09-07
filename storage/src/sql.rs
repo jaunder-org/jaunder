@@ -3,8 +3,8 @@
 use std::fmt::Display;
 
 use crate::backup::{
-    CatalogColumnName, CatalogTableName, RestoreBoolean, RestoreInteger, RestoreJson, RestoreReal,
-    RestoreText,
+    CatalogColumnName, CatalogTableName, RestoreBinary, RestoreBoolean, RestoreInteger,
+    RestoreJson, RestoreReal, RestoreText,
 };
 use crate::feed_cache::{
     FeedCacheGeneratedAt, FeedCacheRepresentationModifiedAt, StoredFeedBody,
@@ -242,6 +242,7 @@ approve_storage_binds!(
     UserConfigKey,
     CatalogColumnName,
     CatalogTableName,
+    RestoreBinary,
     RestoreBoolean,
     RestoreInteger,
     RestoreJson,

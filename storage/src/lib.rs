@@ -42,6 +42,7 @@ mod smtp;
 pub mod sql;
 mod sqlite;
 mod subscriptions;
+mod theme_asset_manager;
 mod themes;
 mod user_config;
 mod users;
@@ -104,6 +105,9 @@ pub use sqlite::{
     SqliteUserConfigStorage, SqliteUserStorage,
 };
 pub use subscriptions::*;
+pub use theme_asset_manager::{
+    THEME_CONTENT_RETENTION_SECONDS, ThemeAssetError, ThemeAssetManager, ThemeContentReconciliation,
+};
 pub use themes::*;
 pub use user_config::*;
 pub use users::*;

@@ -10,9 +10,10 @@ use sha2::{Digest, Sha256};
 use sqlx::{AssertSqlSafe, Error, PgConnection, PgPool, Postgres, Row, query::Query};
 
 use crate::backup::{
-    self, BackupError, BackupManifest, BackupMode, BackupRowJson, CatalogColumnName,
-    CatalogNullability, CatalogTableName, CatalogTypeName, ColumnInfo, MigrationVersion,
-    RestoreBindValue, RestoreText, RestoreValidationReport,
+    self, BINARY_WIRE_KEY, BackupError, BackupManifest, BackupMode, BackupRowJson,
+    CatalogColumnName, CatalogNullability, CatalogTableName, CatalogTypeName, ColumnInfo,
+    MigrationVersion, RestoreBindValue, RestoreText, RestoreValidationReport, is_binary_column,
+    restore_bind_value as parse_restore_value,
 };
 use crate::helpers;
 use crate::sql;
@@ -118,9 +119,30 @@ pub(crate) async fn restore_database(
     source_path: &Path,
     manifest: &BackupManifest,
 ) -> Result<RestoreValidationReport, BackupError> {
+    restore_database_transaction(pool, source_path, manifest, true).await
+}
+
+pub(crate) async fn preflight_restore_database(
+    pool: &PgPool,
+    source_path: &Path,
+    manifest: &BackupManifest,
+) -> Result<(), BackupError> {
+    restore_database_transaction(pool, source_path, manifest, false)
+        .await
+        .map(|_| ())
+}
+
+async fn restore_database_transaction(
+    pool: &PgPool,
+    source_path: &Path,
+    manifest: &BackupManifest,
+    commit: bool,
+) -> Result<RestoreValidationReport, BackupError> {
     let mut connection = pool.acquire().await?;
     let schema_version = schema_version(&mut connection).await?;
     backup::ensure_schema_version(manifest, schema_version)?;
+    let schema_checksum = schema_checksum(&mut connection).await?;
+    backup::ensure_schema_checksum(manifest, &schema_checksum)?;
     backup::validate_instance_identity_backup(source_path, manifest)?;
     sqlx::query("BEGIN")
         .execute(&mut *connection)
@@ -140,7 +162,10 @@ pub(crate) async fn restore_database(
         // *checks*, not `ON DELETE CASCADE` *actions*
         // (docs/adr/0115-clear-then-load-restore.md).
         // Restore table names originate in the validated catalog and are PostgreSQL-quoted.
-        for table in &manifest.tables {
+        for table in backup::restore_table_order(&manifest.tables)
+            .into_iter()
+            .rev()
+        {
             sqlx::query(AssertSqlSafe(format!(
                 "DELETE FROM {}",
                 sql::quote_identifier(table)
@@ -168,15 +193,25 @@ pub(crate) async fn restore_database(
 
     match result {
         Ok(validation_report) => {
-            // Deferred foreign keys are checked here, at COMMIT, so a dangling-FK
-            // restore fails on this statement (Postgres aborts the transaction
-            // automatically). Route it through `map_restore_error` so class-23
-            // surfaces as `ConstraintViolation`, identical to SQLite's
-            // end-of-import `foreign_key_check`, rather than a raw `Sqlx` error.
-            sqlx::query("COMMIT")
-                .execute(&mut *connection)
-                .await
-                .map_err(map_restore_error)?;
+            if commit {
+                // Deferred foreign keys are checked here, at COMMIT, so a dangling-FK
+                // restore fails on this statement (Postgres aborts the transaction
+                // automatically). Route it through `map_restore_error` so class-23
+                // surfaces as `ConstraintViolation`, identical to SQLite's
+                // end-of-import `foreign_key_check`, rather than a raw `Sqlx` error.
+                sqlx::query("COMMIT")
+                    .execute(&mut *connection)
+                    .await
+                    .map_err(map_restore_error)?;
+            } else {
+                // Force deferred constraints before the rollback so preflight has
+                // the same relational validity gate as a committing restore.
+                sqlx::query("SET CONSTRAINTS ALL IMMEDIATE")
+                    .execute(&mut *connection)
+                    .await
+                    .map_err(map_restore_error)?;
+                sqlx::query("ROLLBACK").execute(&mut *connection).await?;
+            }
             Ok(validation_report)
         }
         Err(error) => finish_restore_rollback(
@@ -227,17 +262,28 @@ async fn import_table(
     let insert = Arc::new(insert_sql(table, &column_names));
     // The validated catalog contributes only quoted table/column names, generated casts, and placeholders.
 
-    for row in rows {
-        backup::validate_restore_row(table, &row, validation_report);
+    let mut bound_rows = Vec::with_capacity(rows.len());
+    for row in &rows {
+        backup::validate_restore_row(table, row, validation_report);
+        let values = column_names
+            .iter()
+            .map(|column| {
+                let value = row.get(&column.name).ok_or_else(|| {
+                    BackupError::InvalidBackup(format!(
+                        "table {table} row is missing column {}",
+                        column.name
+                    ))
+                })?;
+                parse_restore_value(column, value)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        bound_rows.push(values);
+    }
+
+    for values in bound_rows {
         let mut query = sqlx::query(AssertSqlSafe(Arc::clone(&insert)));
-        for column in &column_names {
-            let value = row.get(&column.name).ok_or_else(|| {
-                BackupError::InvalidBackup(format!(
-                    "table {table} row is missing column {}",
-                    column.name
-                ))
-            })?;
-            query = bind_restore_value(query, RestoreBindValue::from_json(value));
+        for value in values {
+            query = bind_restore_value(query, value);
         }
         query
             .execute(&mut *connection)
@@ -259,6 +305,7 @@ fn bind_restore_value(
         RestoreBindValue::Real { text, .. } => query.bind_storage(text),
         RestoreBindValue::Text(value) => query.bind_storage(value),
         RestoreBindValue::Json(value) => query.bind_storage(value),
+        RestoreBindValue::Binary(value) => query.bind_storage(value),
     }
 }
 
@@ -292,6 +339,7 @@ fn insert_sql(table: &str, columns: &[ColumnInfo]) -> String {
 
 fn restore_type(column: &ColumnInfo) -> &'static str {
     match column.type_name.as_str() {
+        "bytea" => "BYTEA",
         "bool" => "BOOLEAN",
         "int2" => "SMALLINT",
         "int4" => "INTEGER",
@@ -393,7 +441,16 @@ async fn export_table(
 fn json_select(table: &str, columns: &[ColumnInfo]) -> String {
     let column_list = columns
         .iter()
-        .map(|column| sql::quote_identifier(&column.name))
+        .map(|column| {
+            let name = sql::quote_identifier(&column.name);
+            if is_binary_column(column) {
+                format!(
+                    "CASE WHEN {name} IS NULL THEN NULL ELSE jsonb_build_object('{BINARY_WIRE_KEY}', encode({name}, 'hex')) END AS {name}"
+                )
+            } else {
+                name
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ");
     format!(
@@ -650,5 +707,19 @@ mod tests {
 
         assert!(sql.contains("to_jsonb(export_row)::text"));
         assert!(sql.contains("ORDER BY \"post_id\", \"tag_id\""));
+    }
+
+    #[test]
+    fn binary_columns_use_deterministic_hex_wire_form_and_bytea_restore_type() {
+        let column = ColumnInfo {
+            name: "payload".to_owned(),
+            type_name: "bytea".to_owned(),
+        };
+
+        let sql = json_select("binary_probe", std::slice::from_ref(&column));
+        assert!(
+            sql.contains("jsonb_build_object('$jaunder_binary_hex', encode(\"payload\", 'hex'))")
+        );
+        assert_eq!(restore_type(&column), "BYTEA");
     }
 }

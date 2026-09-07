@@ -402,6 +402,17 @@ impl CompiledThemeRevision {
             .get(path)
             .map(|asset| (asset.mime.as_str(), asset.bytes.as_slice(), asset.digest))
     }
+    /// Iterates package assets in their canonical normalized-path order.
+    pub fn assets(&self) -> impl Iterator<Item = (&str, &str, &[u8], [u8; 32])> {
+        self.assets.iter().map(|(path, asset)| {
+            (
+                path.as_str(),
+                asset.mime.as_str(),
+                asset.bytes.as_slice(),
+                asset.digest,
+            )
+        })
+    }
 }
 
 fn validate_asset(

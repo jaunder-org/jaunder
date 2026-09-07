@@ -179,6 +179,16 @@ pub(crate) fn ensure_schema_version(
     Ok(())
 }
 
+pub(crate) fn ensure_schema_checksum(
+    manifest: &BackupManifest,
+    target_checksum: &str,
+) -> Result<(), BackupError> {
+    if manifest.schema_checksum != target_checksum {
+        return Err(BackupError::SchemaChecksumMismatch);
+    }
+    Ok(())
+}
+
 pub(crate) fn read_table_rows(
     source_path: &Path,
     table: &str,

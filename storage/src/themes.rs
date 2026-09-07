@@ -124,17 +124,31 @@ pub struct ThemeContentCharge {
     pub physical_bytes: i64,
 }
 
+/// All inputs admitted atomically for a published immutable theme revision.
+#[derive(Clone, Copy, Debug)]
+pub struct ThemePublicationAdmission<'a> {
+    pub owner: ThemeOwner,
+    pub limits: ThemeQuotaLimits,
+    pub revision: &'a ThemeRevision,
+    pub assets: &'a [ThemePackageAsset],
+    pub eligibilities: &'a [ThemeContentEligibility],
+    pub charges: &'a [ThemeContentCharge],
+}
+
 /// Async relational operations used by publication, selection, and Media-role services.
 /// Every mutation joins the caller-owned transaction capability.
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait ThemeStorage: Send + Sync {
+    /// Creates a catalog entry after admitting its active-theme quota in this
+    /// transaction. Publication never changes that catalog count.
     async fn create_theme(
         &self,
         transaction: &mut WriteTransaction,
         owner: ThemeOwner,
         name: &str,
         draft: &ThemeDraft,
+        limits: ThemeQuotaLimits,
     ) -> Result<ThemeId, sqlx::Error>;
     async fn list_themes(&self, owner: ThemeOwner) -> Result<Vec<ThemeCatalogEntry>, sqlx::Error>;
     async fn get_draft(
@@ -176,6 +190,8 @@ pub trait ThemeStorage: Send + Sync {
         &self,
         digest: &ThemeContentDigest,
     ) -> Result<Option<ThemeContentEligibility>, sqlx::Error>;
+    /// Lists every digest that is eligible for immutable serving or retention.
+    async fn list_content_eligibility(&self) -> Result<Vec<ThemeContentEligibility>, sqlx::Error>;
     async fn set_selection(
         &self,
         transaction: &mut WriteTransaction,
@@ -218,12 +234,22 @@ pub trait ThemeStorage: Send + Sync {
     ) -> Result<Vec<ThemeHeaderPoolEntry>, sqlx::Error>;
     async fn owner_quota(&self, owner: ThemeOwner) -> Result<Option<ThemeOwnerQuota>, sqlx::Error>;
     async fn site_quota(&self) -> Result<ThemeSiteQuota, sqlx::Error>;
-    /// Atomically admits one active theme under the centralized quota lock.
+    /// Atomically admits one active catalog entry under the centralized quota lock.
     async fn admit_theme(
         &self,
         transaction: &mut WriteTransaction,
         owner: ThemeOwner,
         limits: ThemeQuotaLimits,
+    ) -> Result<(), sqlx::Error>;
+    /// Atomically admits a new immutable revision and all of its serving content.
+    ///
+    /// The implementation locks the site quota, the owner quota, and content
+    /// rows in digest order before it observes the current revision. Republishing
+    /// that current digest is deliberately a no-op.
+    async fn admit_publication<'a>(
+        &self,
+        transaction: &mut WriteTransaction,
+        admission: ThemePublicationAdmission<'a>,
     ) -> Result<(), sqlx::Error>;
     /// Attaches sorted retained content identities and admits one revision.
     async fn attach_revision_content(
@@ -249,6 +275,11 @@ pub trait ThemeStorage: Send + Sync {
         digest: &ThemeContentDigest,
         now_unix_seconds: i64,
     ) -> Result<(), sqlx::Error>;
+    /// Lists expired owner charges with no remaining live references.
+    async fn expired_retained_content(
+        &self,
+        now_unix_seconds: i64,
+    ) -> Result<Vec<(ThemeOwner, ThemeContentDigest)>, sqlx::Error>;
 }
 
 /// Concrete storage handle; its backend implementations deliberately remain separate.
@@ -267,7 +298,8 @@ macro_rules! impl_theme_storage {
     ($db:ty, $conn:ident) => {
         #[async_trait]
         impl ThemeStorage for ThemeStore<$db> {
-            async fn create_theme(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, name: &str, draft: &ThemeDraft) -> Result<ThemeId, sqlx::Error> {
+            async fn create_theme(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, name: &str, draft: &ThemeDraft, limits: ThemeQuotaLimits) -> Result<ThemeId, sqlx::Error> {
+                self.admit_theme(transaction, owner, limits).await?;
                 let catalog_owner_key = catalog_owner_key(owner);
                 let name_key = canonical_theme_name_key(name);
                 let connection = $conn(transaction)?;
@@ -325,6 +357,10 @@ macro_rules! impl_theme_storage {
             }
             async fn upsert_content_eligibility(&self, transaction: &mut WriteTransaction, eligibility: &ThemeContentEligibility) -> Result<(), sqlx::Error> { let connection = $conn(transaction)?; sqlx::query("INSERT INTO theme_content_eligibility (digest, mime, retained_until_unix_seconds) VALUES ($1, $2, $3) ON CONFLICT (digest) DO UPDATE SET mime = excluded.mime, retained_until_unix_seconds = CASE WHEN excluded.retained_until_unix_seconds > theme_content_eligibility.retained_until_unix_seconds THEN excluded.retained_until_unix_seconds ELSE theme_content_eligibility.retained_until_unix_seconds END").bind(eligibility.digest.as_ref()).bind(&eligibility.mime).bind(eligibility.retained_until_unix_seconds).execute(&mut *connection).await?; Ok(()) }
             async fn content_eligibility(&self, digest: &ThemeContentDigest) -> Result<Option<ThemeContentEligibility>, sqlx::Error> { let row: Option<(String, i64)> = sqlx::query_as("SELECT mime, retained_until_unix_seconds FROM theme_content_eligibility WHERE digest = $1").bind(digest.as_ref()).fetch_optional(&self.pool).await?; Ok(row.map(|(mime, retained_until_unix_seconds)| ThemeContentEligibility { digest: digest.clone(), mime, retained_until_unix_seconds })) }
+            async fn list_content_eligibility(&self) -> Result<Vec<ThemeContentEligibility>, sqlx::Error> {
+                let rows: Vec<(String, String, i64)> = sqlx::query_as("SELECT digest, mime, retained_until_unix_seconds FROM theme_content_eligibility ORDER BY digest").fetch_all(&self.pool).await?;
+                rows.into_iter().map(|(digest, mime, retained_until_unix_seconds)| digest.parse().map(|digest| ThemeContentEligibility { digest, mime, retained_until_unix_seconds }).map_err(|_| sqlx::Error::RowNotFound)).collect()
+            }
             async fn set_selection(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, selection: Option<PublicThemeSelection>) -> Result<(), sqlx::Error> {
                 let catalog_owner_key = catalog_owner_key(owner);
                 let connection = $conn(transaction)?;
@@ -417,6 +453,33 @@ macro_rules! impl_theme_storage {
                 if result.rows_affected() == 0 { return Err(sqlx::Error::RowNotFound); }
                 Ok(())
             }
+            async fn admit_publication<'a>(&self, transaction: &mut WriteTransaction, admission: ThemePublicationAdmission<'a>) -> Result<(), sqlx::Error> {
+                let ThemePublicationAdmission { owner, limits, revision, assets, eligibilities, charges } = admission;
+                if charges.windows(2).any(|pair| pair[0].digest.as_ref() >= pair[1].digest.as_ref()) {
+                    return Err(sqlx::Error::RowNotFound);
+                }
+                let connection = $conn(transaction)?;
+                let key = catalog_owner_key(owner);
+                // This is the shared site → owner → sorted-content lock order for
+                // both backends. PostgreSQL's no-op updates take row locks;
+                // SQLite's write transaction serializes the same critical section.
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
+                sqlx::query("UPDATE theme_owner_quotas SET retained_revisions = retained_revisions WHERE catalog_owner_key = $1").bind(&key).execute(&mut *connection).await?;
+                for charge in charges {
+                    sqlx::query("UPDATE theme_content_eligibility SET digest = digest WHERE digest = $1").bind(charge.digest.as_ref()).execute(&mut *connection).await?;
+                }
+                let current: Option<(Option<String>,)> = sqlx::query_as("SELECT current_revision_digest FROM themes WHERE id = $1 AND catalog_owner_key = $2").bind(i64::from(revision.theme_id)).bind(&key).fetch_optional(&mut *connection).await?;
+                match current {
+                    Some((Some(digest),)) if digest == revision.digest.as_ref() => return Ok(()),
+                    Some(_) => {}
+                    None => return Err(sqlx::Error::RowNotFound),
+                }
+                for eligibility in eligibilities {
+                    sqlx::query("INSERT INTO theme_content_eligibility (digest, mime, retained_until_unix_seconds) VALUES ($1, $2, $3) ON CONFLICT (digest) DO UPDATE SET mime = excluded.mime, retained_until_unix_seconds = CASE WHEN excluded.retained_until_unix_seconds > theme_content_eligibility.retained_until_unix_seconds THEN excluded.retained_until_unix_seconds ELSE theme_content_eligibility.retained_until_unix_seconds END").bind(eligibility.digest.as_ref()).bind(&eligibility.mime).bind(eligibility.retained_until_unix_seconds).execute(&mut *connection).await?;
+                }
+                self.attach_revision_content(transaction, owner, limits, charges).await?;
+                self.record_revision(transaction, owner, revision, assets).await
+            }
             async fn attach_revision_content(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, limits: ThemeQuotaLimits, charges: &[ThemeContentCharge]) -> Result<(), sqlx::Error> {
                 if charges.windows(2).any(|pair| pair[0].digest.as_ref() >= pair[1].digest.as_ref()) { return Err(sqlx::Error::RowNotFound); }
                 let connection = $conn(transaction)?;
@@ -493,6 +556,10 @@ macro_rules! impl_theme_storage {
                 }
                 Ok(())
             }
+            async fn expired_retained_content(&self, now_unix_seconds: i64) -> Result<Vec<(ThemeOwner, ThemeContentDigest)>, sqlx::Error> {
+                let rows: Vec<(String, String)> = sqlx::query_as("SELECT c.catalog_owner_key, c.digest FROM theme_retained_content_charges c JOIN theme_content_eligibility e ON e.digest = c.digest WHERE c.live_references = 0 AND e.live_references = 0 AND e.retained_until_unix_seconds <= $1 ORDER BY c.catalog_owner_key, c.digest").bind(now_unix_seconds).fetch_all(&self.pool).await?;
+                rows.into_iter().map(|(owner, digest)| Ok((theme_owner_from_key(&owner).ok_or(sqlx::Error::RowNotFound)?, digest.parse().map_err(|_| sqlx::Error::RowNotFound)?))).collect()
+            }
         }
     }
 }
@@ -519,6 +586,17 @@ fn catalog_owner_key(owner: ThemeOwner) -> String {
     match owner {
         ThemeOwner::Site => "site".to_owned(),
         ThemeOwner::Author(user_id) => format!("user:{}", i64::from(user_id)),
+    }
+}
+
+fn theme_owner_from_key(key: &str) -> Option<ThemeOwner> {
+    match key {
+        "site" => Some(ThemeOwner::Site),
+        value => value
+            .strip_prefix("user:")
+            .and_then(|id| id.parse::<i64>().ok())
+            .map(UserId::from)
+            .map(ThemeOwner::Author),
     }
 }
 
@@ -559,7 +637,19 @@ mod tests {
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
-                            .create_theme(transaction, ThemeOwner::Site, "Paper", &draft)
+                            .create_theme(
+                                transaction,
+                                ThemeOwner::Site,
+                                "Paper",
+                                &draft,
+                                ThemeQuotaLimits {
+                                    active_themes: 1,
+                                    retained_revisions: 2,
+                                    logical_bytes: 3,
+                                    site_retained_revisions: 2,
+                                    site_physical_bytes: 3,
+                                },
+                            )
                             .await
                     })
                 })
@@ -669,27 +759,6 @@ mod tests {
             Some(PublicThemeSelection::BuiltIn(Theme::Reader))
         );
 
-        let themes = Arc::clone(&env.state.themes);
-        let limits = ThemeQuotaLimits {
-            active_themes: 1,
-            retained_revisions: 2,
-            logical_bytes: 3,
-            site_retained_revisions: 2,
-            site_physical_bytes: 3,
-        };
-        confirmed(
-            env.state
-                .write_scope
-                .run(move |transaction| {
-                    Box::pin(async move {
-                        themes
-                            .admit_theme(transaction, ThemeOwner::Site, limits)
-                            .await
-                    })
-                })
-                .await
-                .unwrap(),
-        );
         assert_eq!(
             env.state
                 .themes
@@ -853,6 +922,331 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn owner_and_site_quota_reject_at_exact_boundaries(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let limits = ThemeQuotaLimits {
+            active_themes: 1,
+            retained_revisions: 10,
+            logical_bytes: 4,
+            site_retained_revisions: 10,
+            site_physical_bytes: 4,
+        };
+        let site = ThemeOwner::Site;
+        let first_author = ThemeOwner::Author(UserId::from(1));
+        let second_author = ThemeOwner::Author(UserId::from(2));
+        for owner in [site, first_author, second_author] {
+            let themes = Arc::clone(&env.state.themes);
+            confirmed(
+                env.state
+                    .write_scope
+                    .run(move |transaction| {
+                        Box::pin(
+                            async move { themes.admit_theme(transaction, owner, limits).await },
+                        )
+                    })
+                    .await
+                    .expect("admit owner at active-theme boundary"),
+            );
+        }
+        let themes = Arc::clone(&env.state.themes);
+        assert!(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move { themes.admit_theme(transaction, site, limits).await })
+                })
+                .await
+                .is_err()
+        );
+
+        let first_digest = "d".repeat(64).parse::<ThemeContentDigest>().unwrap();
+        let second_digest = "e".repeat(64).parse::<ThemeContentDigest>().unwrap();
+        for digest in [&first_digest, &second_digest] {
+            let themes = Arc::clone(&env.state.themes);
+            let eligibility = ThemeContentEligibility {
+                digest: digest.clone(),
+                mime: "image/png".into(),
+                retained_until_unix_seconds: 0,
+            };
+            confirmed(
+                env.state
+                    .write_scope
+                    .run(move |transaction| {
+                        Box::pin(async move {
+                            themes
+                                .upsert_content_eligibility(transaction, &eligibility)
+                                .await
+                        })
+                    })
+                    .await
+                    .expect("make content eligible"),
+            );
+        }
+        let first_charge = ThemeContentCharge {
+            digest: first_digest.clone(),
+            logical_bytes: 4,
+            physical_bytes: 4,
+        };
+        let themes = Arc::clone(&env.state.themes);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .attach_revision_content(transaction, site, limits, &[first_charge])
+                            .await
+                    })
+                })
+                .await
+                .expect("admit exact owner and site byte boundary"),
+        );
+        let duplicate_charge = ThemeContentCharge {
+            digest: first_digest,
+            logical_bytes: 4,
+            physical_bytes: 4,
+        };
+        let themes = Arc::clone(&env.state.themes);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .attach_revision_content(
+                                transaction,
+                                first_author,
+                                limits,
+                                &[duplicate_charge],
+                            )
+                            .await
+                    })
+                })
+                .await
+                .expect("same content does not consume site bytes twice"),
+        );
+        let second_charge = ThemeContentCharge {
+            digest: second_digest.clone(),
+            logical_bytes: 1,
+            physical_bytes: 1,
+        };
+        let themes = Arc::clone(&env.state.themes);
+        assert!(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .attach_revision_content(
+                                transaction,
+                                first_author,
+                                limits,
+                                &[second_charge],
+                            )
+                            .await
+                    })
+                })
+                .await
+                .is_err()
+        );
+        let second_charge = ThemeContentCharge {
+            digest: second_digest,
+            logical_bytes: 1,
+            physical_bytes: 1,
+        };
+        let themes = Arc::clone(&env.state.themes);
+        assert!(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .attach_revision_content(
+                                transaction,
+                                second_author,
+                                limits,
+                                &[second_charge],
+                            )
+                            .await
+                    })
+                })
+                .await
+                .is_err()
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn competing_owners_can_attach_identical_content(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let limits = ThemeQuotaLimits {
+            active_themes: 1,
+            retained_revisions: 1,
+            logical_bytes: 4,
+            site_retained_revisions: 2,
+            site_physical_bytes: 4,
+        };
+        let owners = [ThemeOwner::Site, ThemeOwner::Author(UserId::from(1))];
+        for owner in owners {
+            let themes = Arc::clone(&env.state.themes);
+            confirmed(
+                env.state
+                    .write_scope
+                    .run(move |transaction| {
+                        Box::pin(
+                            async move { themes.admit_theme(transaction, owner, limits).await },
+                        )
+                    })
+                    .await
+                    .expect("admit competing owner"),
+            );
+        }
+        let digest = "f".repeat(64).parse::<ThemeContentDigest>().unwrap();
+        let eligibility = ThemeContentEligibility {
+            digest: digest.clone(),
+            mime: "image/png".into(),
+            retained_until_unix_seconds: 0,
+        };
+        let themes = Arc::clone(&env.state.themes);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .upsert_content_eligibility(transaction, &eligibility)
+                            .await
+                    })
+                })
+                .await
+                .expect("make shared content eligible"),
+        );
+        let first_themes = Arc::clone(&env.state.themes);
+        let second_themes = Arc::clone(&env.state.themes);
+        let first_scope = env.state.write_scope.clone();
+        let second_scope = env.state.write_scope.clone();
+        let first_charge = ThemeContentCharge {
+            digest: digest.clone(),
+            logical_bytes: 4,
+            physical_bytes: 4,
+        };
+        let second_charge = first_charge.clone();
+        let (first, second) = tokio::join!(
+            first_scope.run(move |transaction| {
+                Box::pin(async move {
+                    first_themes
+                        .attach_revision_content(transaction, owners[0], limits, &[first_charge])
+                        .await
+                })
+            }),
+            second_scope.run(move |transaction| {
+                Box::pin(async move {
+                    second_themes
+                        .attach_revision_content(transaction, owners[1], limits, &[second_charge])
+                        .await
+                })
+            })
+        );
+        confirmed(first.expect("first competing attachment"));
+        confirmed(second.expect("second competing attachment"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn same_blob_site_physical_charge_is_deduplicated_across_owners(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let limits = ThemeQuotaLimits {
+            active_themes: 1,
+            retained_revisions: 1,
+            logical_bytes: 4,
+            site_retained_revisions: 2,
+            site_physical_bytes: 4,
+        };
+        let owners = [ThemeOwner::Site, ThemeOwner::Author(UserId::from(1))];
+        for owner in owners {
+            let themes = Arc::clone(&env.state.themes);
+            confirmed(
+                env.state
+                    .write_scope
+                    .run(move |transaction| {
+                        Box::pin(
+                            async move { themes.admit_theme(transaction, owner, limits).await },
+                        )
+                    })
+                    .await
+                    .expect("admit owner"),
+            );
+        }
+        let digest = "a".repeat(64).parse::<ThemeContentDigest>().unwrap();
+        let eligibility = ThemeContentEligibility {
+            digest: digest.clone(),
+            mime: "image/png".into(),
+            retained_until_unix_seconds: 0,
+        };
+        let themes = Arc::clone(&env.state.themes);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .upsert_content_eligibility(transaction, &eligibility)
+                            .await
+                    })
+                })
+                .await
+                .expect("make shared content eligible"),
+        );
+        for owner in owners {
+            let themes = Arc::clone(&env.state.themes);
+            let charge = ThemeContentCharge {
+                digest: digest.clone(),
+                logical_bytes: 4,
+                physical_bytes: 4,
+            };
+            confirmed(
+                env.state
+                    .write_scope
+                    .run(move |transaction| {
+                        Box::pin(async move {
+                            themes
+                                .attach_revision_content(transaction, owner, limits, &[charge])
+                                .await
+                        })
+                    })
+                    .await
+                    .expect("attach shared content"),
+            );
+        }
+        assert_eq!(
+            env.state
+                .themes
+                .site_quota()
+                .await
+                .expect("read site quota"),
+            ThemeSiteQuota {
+                retained_revisions: 2,
+                physical_bytes: 4,
+            }
+        );
+        for owner in owners {
+            assert_eq!(
+                env.state
+                    .themes
+                    .owner_quota(owner)
+                    .await
+                    .expect("read owner quota")
+                    .expect("owner quota exists")
+                    .logical_bytes,
+                4
+            );
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn catalog_owner_keys_isolate_signed_user_ids_and_site(#[case] backend: Backend) {
         let env = backend.setup().await;
         let draft = ThemeDraft {
@@ -875,7 +1269,19 @@ mod tests {
                     .run(move |transaction| {
                         Box::pin(async move {
                             themes
-                                .create_theme(transaction, owner, "Same name", &draft)
+                                .create_theme(
+                                    transaction,
+                                    owner,
+                                    "Same name",
+                                    &draft,
+                                    ThemeQuotaLimits {
+                                        active_themes: 8,
+                                        retained_revisions: 8,
+                                        logical_bytes: i64::MAX,
+                                        site_retained_revisions: 8,
+                                        site_physical_bytes: i64::MAX,
+                                    },
+                                )
                                 .await
                         })
                     })
