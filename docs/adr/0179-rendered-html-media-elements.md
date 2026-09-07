@@ -1,22 +1,22 @@
-# ADR-DRAFT: Rendered HTML admits bounded media elements
+# ADR-0179: Rendered HTML admits bounded media elements
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-06
 - Issue: [#743](https://github.com/jaunder-org/jaunder/issues/743)
 
 ## Context
 
-[ADR-0079](../0079-rendered-html-sanitization.md) made
-`common::render::sanitize` the only public production door to `RenderedHtml` and
-fixed its allowlist to ammonia's audited default plus filtered fenced-code
-classes. That policy prevents stored XSS, but ammonia's default strips `audio`,
-`video`, `source`, and `track`, so an author cannot publish ordinary playable
-media or accessible WebVTT captions in any Post format.
+[ADR-0079](0079-rendered-html-sanitization.md) made `common::render::sanitize`
+the only public production door to `RenderedHtml` and fixed its allowlist to
+ammonia's audited default plus filtered fenced-code classes. That policy
+prevents stored XSS, but ammonia's default strips `audio`, `video`, `source`,
+and `track`, so an author cannot publish ordinary playable media or accessible
+WebVTT captions in any Post format.
 
 These elements fetch or play resources but do not execute author-supplied code.
 Admitting them still expands a security boundary: URL attributes must retain
 scheme filtering, event handlers and playback-triggering attributes must remain
-absent, and [ADR-0090](../0090-media-references-extracted-at-render.md) requires
+absent, and [ADR-0090](0090-media-references-extracted-at-render.md) requires
 every admitted attribute to be classified for Media reference extraction.
 
 ## Decision
@@ -39,7 +39,7 @@ reference table.
 Classify `audio[src]`, `video[src]`, `video[poster]`, `source[src]`, and
 `track[src]` as Media-bearing pairs. Classify every other newly admitted
 attribute as inert for reference extraction. Existing Media identity parsing and
-[ADR-0154](../0154-media-reference-live-ownership.md) remain authoritative; this
+[ADR-0154](0154-media-reference-live-ownership.md) remain authoritative; this
 decision changes where references may appear, not what they identify or how live
 ownership is resolved.
 

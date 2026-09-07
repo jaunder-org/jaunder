@@ -517,7 +517,7 @@ generic `lang` and `title`. Autoplay, loop, muted, preload, `srcset`, event
 handlers, and unsafe URL schemes remain excluded. This preserves the
 no-executable-markup invariant while allowing playable media, alternate
 encodings, posters, and accessible WebVTT tracks
-([bounded media-element allowlist](adr/drafts/rendered-html-media-elements.md)).
+([bounded media-element allowlist](adr/0179-rendered-html-media-elements.md)).
 
 **A Post's media references are derived from that sanitized HTML, never
 supplied** ([ADR-0090](adr/0090-media-references-extracted-at-render.md)).
