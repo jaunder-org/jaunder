@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use common::theme;
 use lightningcss::{
     properties::{
         Property, PropertyId, animation::AnimationName, custom::CustomPropertyName,
@@ -55,9 +56,9 @@ pub fn compile_stylesheet(
         .map_err(|error| ThemePackageError::Css(format!("stylesheet is not UTF-8: {error}")))?;
     let stylesheet_source = format!(
         "[{}][{}=\"{}\"] {{}}{authored_css}",
-        common::theme::STYLE_CONTRACT_SURFACE_ATTRIBUTE,
-        common::theme::STYLE_CONTRACT_VERSION_ATTRIBUTE,
-        common::theme::STYLE_CONTRACT_VERSION_TOKEN,
+        theme::STYLE_CONTRACT_SURFACE_ATTRIBUTE,
+        theme::STYLE_CONTRACT_VERSION_ATTRIBUTE,
+        theme::STYLE_CONTRACT_VERSION_TOKEN,
     );
     let mut stylesheet = StyleSheet::parse(&stylesheet_source, ParserOptions::default())
         .map_err(|error| ThemePackageError::Css(error.to_string()))?;

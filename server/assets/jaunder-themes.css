@@ -14,21 +14,23 @@
 
   --accent: #c96a1c;
   --accent-ink: #873d05;
-  --accent-soft: rgba(201,106,28,0.12);
+  --accent-soft: rgba(201, 106, 28, 0.12);
   --on-accent: #fbf8f1;
-  --ok:   #3d7a3a;
+  --ok: #3d7a3a;
   --warn: #a05d00;
-  --err:  #9d2218;
+  --err: #9d2218;
 
-  --font-body:    'IBM Plex Mono', 'JetBrains Mono', ui-monospace, Menlo, monospace;
-  --font-display: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, Menlo, monospace;
-  --font-mono:    'IBM Plex Mono', ui-monospace, Menlo, monospace;
-  --font-meta:    'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  --font-body:
+    "IBM Plex Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --font-display:
+    "IBM Plex Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --font-meta: "IBM Plex Mono", ui-monospace, Menlo, monospace;
 
   --radius-sm: 2px;
-  --radius:    2px;
+  --radius: 2px;
   --radius-lg: 2px;
-  --pill:      2px;
+  --pill: 2px;
 
   --fs-head: 22px;
   --tracking-head: -0.2px;
@@ -37,9 +39,9 @@
 
   --post-pad-y: 12px;
   --post-pad-x: 18px;
-  --post-gap:   12px;
-  --avatar-sz:  28px;
-  --fs-post:    13px;
+  --post-gap: 12px;
+  --avatar-sz: 28px;
+  --fs-post: 13px;
 
   --card-shadow: none;
 }
@@ -62,19 +64,19 @@
   --accent-ink: #3a2fc9;
   --accent-soft: #eeecff;
   --on-accent: #ffffff;
-  --ok:   #2f9c5b;
+  --ok: #2f9c5b;
   --warn: #c88a2a;
-  --err:  #dc2626;
+  --err: #dc2626;
 
-  --font-body:    'Geist', 'Inter', system-ui, -apple-system, sans-serif;
-  --font-display: 'Geist', 'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono:    'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
-  --font-meta:    'Geist', 'Inter', sans-serif;
+  --font-body: "Geist", "Inter", system-ui, -apple-system, sans-serif;
+  --font-display: "Geist", "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+  --font-meta: "Geist", "Inter", sans-serif;
 
   --radius-sm: 6px;
-  --radius:    10px;
+  --radius: 10px;
   --radius-lg: 14px;
-  --pill:      999px;
+  --pill: 999px;
 
   --fs-head: 28px;
   --tracking-head: -0.7px;
@@ -83,9 +85,9 @@
 
   --post-pad-y: 20px;
   --post-pad-x: 28px;
-  --post-gap:   14px;
-  --avatar-sz:  38px;
-  --fs-post:    14.5px;
+  --post-gap: 14px;
+  --avatar-sz: 38px;
+  --fs-post: 14.5px;
 }
 
 /* Theme: Reader — editorial, serif-forward, paper tones, italic sources. */
@@ -106,19 +108,19 @@
   --accent-ink: #8a2b1f;
   --accent-soft: #efe1dc;
   --on-accent: #fbf8f1;
-  --ok:   #4a6b34;
+  --ok: #4a6b34;
   --warn: #a05d00;
-  --err:  #a83232;
+  --err: #a83232;
 
-  --font-body:    'Source Serif 4', 'Charter', Georgia, serif;
-  --font-display: 'Source Serif 4', 'Charter', Georgia, serif;
-  --font-mono:    'Source Code Pro', ui-monospace, Menlo, monospace;
-  --font-meta:    'Inter', system-ui, sans-serif;
+  --font-body: "Source Serif 4", "Charter", Georgia, serif;
+  --font-display: "Source Serif 4", "Charter", Georgia, serif;
+  --font-mono: "Source Code Pro", ui-monospace, Menlo, monospace;
+  --font-meta: "Inter", system-ui, sans-serif;
 
   --radius-sm: 2px;
-  --radius:    2px;
+  --radius: 2px;
   --radius-lg: 2px;
-  --pill:      999px;
+  --pill: 999px;
 
   --fs-head: 34px;
   --tracking-head: -0.6px;
@@ -130,7 +132,7 @@
 
   --post-pad-y: 22px;
   --post-pad-x: 32px;
-  --post-gap:   18px;
-  --avatar-sz:  42px;
-  --fs-post:    15.5px;
+  --post-gap: 18px;
+  --avatar-sz: 42px;
+  --fs-post: 15.5px;
 }

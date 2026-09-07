@@ -1,8 +1,28 @@
-//! Closed ZIP/manifest/media boundary for portable public Theme Packages.
+//! Validation, compilation, and export for portable public Theme Packages.
 //!
-//! CSS AST transformation is intentionally delegated to the sibling `css`
-//! module. This module owns the archive, canonical manifest, decoded assets,
-//! and non-circular digest framing shared with storage.
+//! A package is a ZIP containing required `theme.json` and `style.css` members
+//! plus manifest-declared files below `assets/`. The manifest is closed and
+//! versioned independently along two axes: `schema` defines its serialized data
+//! shape, while `style_contract` selects the public document hooks its CSS may
+//! target.
+//!
+//! [`validate_theme_package`] is the untrusted-input boundary. It streams archive
+//! members without extracting paths, rejects duplicate or ambiguous ZIP metadata,
+//! enforces archive/member/media limits, canonicalizes the manifest, verifies
+//! declared MIME types by decoding asset bytes, and validates every package path.
+//! Successful validation mints [`ValidatedThemePackage`]; callers cannot construct
+//! one from unchecked bytes.
+//!
+//! [`ValidatedThemePackage::compile`] delegates parser-backed CSS isolation to the
+//! sibling `css` module. Compilation rejects external or undeclared resources,
+//! namespaces global CSS identifiers, rewrites package asset references to
+//! immutable content URLs, and produces deterministic source, stylesheet, asset,
+//! and revision digests. The framing domains are part of the published identity
+//! contract and must change if their encoding changes.
+//!
+//! [`export_theme_package`] writes only portable source members in deterministic
+//! order. Runtime Media bindings and owner selection state remain relational and
+//! are intentionally excluded from exported packages.
 
 mod css;
 
@@ -11,6 +31,7 @@ use std::{
     io::{Cursor, Read, Write},
 };
 
+use common::theme;
 use image::{ImageFormat, ImageReader};
 use serde::{
     Deserialize,
@@ -363,7 +384,7 @@ fn parse_manifest(raw_manifest: &[u8]) -> Result<(Manifest, Vec<u8>), ThemePacka
     let manifest: Manifest = serde_json::from_slice(raw_manifest)
         .map_err(|error| ThemePackageError::Manifest(error.to_string()))?;
     if manifest.schema != 1
-        || manifest.style_contract != common::theme::STYLE_CONTRACT_VERSION
+        || manifest.style_contract != theme::STYLE_CONTRACT_VERSION
         || manifest.name.trim().is_empty()
     {
         return Err(ThemePackageError::Manifest(

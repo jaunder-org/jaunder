@@ -30,10 +30,17 @@ pub struct RootRelativeUrl(String);
 pub struct InvalidRootRelativeUrl;
 
 impl RootRelativeUrl {
-    /// The immutable built-in Theme stylesheet served by Jaunder.
-    #[must_use]
-    pub(crate) fn built_in_theme_stylesheet() -> Self {
-        Self("/style/jaunder-themes.css".to_owned())
+    /// Constructs a root-relative URL from a crate-owned path whose validity is
+    /// established alongside its declaration.
+    pub(crate) fn from_trusted_path(path: &str) -> Self {
+        debug_assert!(Self::is_valid(path));
+        Self(path.to_owned())
+    }
+
+    fn is_valid(path: &str) -> bool {
+        path.starts_with('/')
+            && !path.starts_with("//")
+            && !path.contains(|c: char| c.is_whitespace() || c.is_control())
     }
 }
 
@@ -42,12 +49,7 @@ impl FromStr for RootRelativeUrl {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
-        // Root-relative: a single leading slash — host-less, not protocol-relative
-        // (`//host`), not an absolute `scheme://` — and no whitespace/control chars.
-        if !s.starts_with('/')
-            || s.starts_with("//")
-            || s.contains(|c: char| c.is_whitespace() || c.is_control())
-        {
+        if !Self::is_valid(s) {
             return Err(InvalidRootRelativeUrl);
         }
         Ok(Self(s.to_owned()))

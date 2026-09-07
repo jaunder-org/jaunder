@@ -15,6 +15,7 @@ use crate::render::{self, PostFormat, RenderedHtml};
 use crate::root_relative_url::RootRelativeUrl;
 use crate::slug::Slug;
 use crate::tag::{Tag, TagLabel};
+use crate::theme::PublishedThemePresentation;
 use crate::time::UtcInstant;
 use crate::username::Username;
 
@@ -133,7 +134,7 @@ pub struct AuthoredPost {
 /// ownership, never from the viewer or browser-local state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicPresentation<Page> {
-    pub theme: crate::theme::PublishedThemePresentation,
+    pub theme: PublishedThemePresentation,
     pub page: Page,
 }
 

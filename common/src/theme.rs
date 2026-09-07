@@ -31,34 +31,19 @@ pub enum Theme {
     Reader,
 }
 
-use crate::{permalink_route::PermalinkRoute, tag::Tag, username::Username};
-
-use sha2::{Digest, Sha256};
 use std::str::FromStr;
 
+use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+use crate::{
+    ids::ThemeId, permalink_route::PermalinkRoute, root_relative_url::RootRelativeUrl, tag::Tag,
+    username::Username,
+};
 
 /// A full SHA-256 digest used to address immutable public Theme content.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, macros::StrNewtype)]
 pub struct ThemeContentDigest(String);
-
-/// The input was not the canonical lowercase hexadecimal representation of a
-/// SHA-256 digest.
-#[derive(Debug, Error)]
-#[error("theme content digest must be 64 lowercase hex characters")]
-pub struct InvalidThemeContentDigest;
-
-impl FromStr for ThemeContentDigest {
-    type Err = InvalidThemeContentDigest;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        if crate::media::is_valid_content_hash(value) {
-            Ok(Self(value.to_owned()))
-        } else {
-            Err(InvalidThemeContentDigest)
-        }
-    }
-}
 
 /// Canonical digest of validated editable Theme Package source bytes.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, macros::StrNewtype)]
@@ -101,6 +86,7 @@ macro_rules! theme_digest_from_str {
     };
 }
 
+theme_digest_from_str!(ThemeContentDigest);
 theme_digest_from_str!(ThemeSourceDigest);
 theme_digest_from_str!(ThemeRevisionDigest);
 theme_digest_from_str!(ThemeStylesheetDigest);
@@ -113,7 +99,7 @@ theme_digest_from_str!(ThemePoolRevisionDigest);
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum PublicThemeSelection {
     BuiltIn(Theme),
-    Custom(crate::ids::ThemeId),
+    Custom(ThemeId),
 }
 
 /// The identity selected for a resolved public presentation.
@@ -123,7 +109,7 @@ pub enum PublicThemeSelection {
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum PublishedThemeIdentity {
     BuiltIn(Theme),
-    Custom(crate::ids::ThemeId),
+    Custom(ThemeId),
 }
 
 /// The complete theme information needed to render one public route.
@@ -135,9 +121,9 @@ pub enum PublishedThemeIdentity {
 pub struct PublishedThemePresentation {
     pub identity: PublishedThemeIdentity,
     pub revision: Option<ThemeRevisionDigest>,
-    pub stylesheet_url: crate::root_relative_url::RootRelativeUrl,
-    pub logo_url: Option<crate::root_relative_url::RootRelativeUrl>,
-    pub header_url: Option<crate::root_relative_url::RootRelativeUrl>,
+    pub stylesheet_url: RootRelativeUrl,
+    pub logo_url: Option<RootRelativeUrl>,
+    pub header_url: Option<RootRelativeUrl>,
 }
 
 impl PublishedThemePresentation {
@@ -147,7 +133,7 @@ impl PublishedThemePresentation {
         Self {
             identity: PublishedThemeIdentity::BuiltIn(theme),
             revision: None,
-            stylesheet_url: crate::root_relative_url::RootRelativeUrl::built_in_theme_stylesheet(),
+            stylesheet_url: built_in_theme_stylesheet(),
             logo_url: None,
             header_url: None,
         }
@@ -161,6 +147,12 @@ impl PublishedThemePresentation {
             PublishedThemeIdentity::Custom(_) => "custom".to_owned(),
         }
     }
+}
+
+fn built_in_theme_stylesheet() -> RootRelativeUrl {
+    const PATH: &str = "/style/jaunder-themes.css";
+
+    RootRelativeUrl::from_trusted_path(PATH)
 }
 
 /// The two Style Contract image roles a Theme Package may supply.

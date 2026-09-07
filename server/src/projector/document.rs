@@ -3,6 +3,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
 };
 use common::seed::{PageSeed, PublicPresentation};
+use common::theme::PublishedThemePresentation;
 use host::etag;
 use web::app;
 use web::posts;
@@ -96,7 +97,7 @@ pub(super) fn permalink_response(
     result: web::error::InternalResult<Option<storage::PostRecord>>,
     headers: &HeaderMap,
     shell: &Shell,
-    theme: common::theme::PublishedThemePresentation,
+    theme: PublishedThemePresentation,
 ) -> Response {
     match result {
         // Anonymous viewer ⇒ never the author, so `is_author = false`.

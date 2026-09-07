@@ -2773,6 +2773,39 @@ mod tests {
         );
         assert_eq!(catalog_owner_key(ThemeOwner::Site), "site");
     }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn pool_binding_constraint_rejects_a_missing_shuffle_seed(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let theme_id = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_scalar::<_, i64>(
+                "INSERT INTO themes (catalog_owner_key, name, name_key) \
+                 VALUES ('site', 'Constraint fixture', 'constraint-fixture') \
+                 RETURNING id",
+            )
+            .fetch_one(pool)
+            .await
+            .expect("create constraint fixture theme")
+        });
+        let error = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(
+                "INSERT INTO theme_role_bindings \
+                 (theme_id, role, mode, pool_revision_digest) \
+                 VALUES ($1, 'header', 'pool', $2)",
+            )
+            .bind(theme_id)
+            .bind("a".repeat(64))
+            .execute(pool)
+            .await
+            .expect_err("pool binding without shuffle seed must violate its shape constraint")
+        });
+        assert!(
+            error
+                .as_database_error()
+                .is_some_and(sqlx::error::DatabaseError::is_check_violation)
+        );
+    }
+
     #[test]
     fn malformed_persisted_binding_columns_fail_conversion() {
         assert!(
