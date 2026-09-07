@@ -95,7 +95,7 @@ Out:
 - [x] Task 6: Complete direct-Chrono eradication and documentation/gate proof
   - Contract: remove direct `chrono`/`chrono-tz` manifest features, imports,
     public types, conversion paths, obsolete tests, and stale implementation
-    documentation. Keep `docs/adr/drafts/jiff-time-model.md` accurate about its
+    documentation. Keep `docs/adr/0182-jiff-time-model.md` accurate about its
     limited supersession of ADR-0056, ADR-0072, and ADR-0153; update
     architecture projections only as required by that decision.
   - Verification: manifest and first-party-source scans prove no direct Chrono

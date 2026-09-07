@@ -1,17 +1,17 @@
-# ADR-DRAFT: Per-user Media Records from local Post references
+# ADR-0183: Per-user Media Records from local Post references
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-27
 - Issue: [#755](https://github.com/jaunder-org/jaunder/issues/755)
 
 ## Context
 
-[ADR-0090](../0090-media-references-extracted-at-render.md) makes sanitized
+[ADR-0090](0090-media-references-extracted-at-render.md) makes sanitized
 rendered HTML authoritative for media references, and
-[ADR-0154](../0154-media-reference-live-ownership.md) establishes live-instance
+[ADR-0154](0154-media-reference-live-ownership.md) establishes live-instance
 proof for absolute and scheme-relative forms.
-[ADR-0136](../0136-local-post-lifecycle.md) retains current Deleted Posts and
-Post Revisions, and says their media references use the ordinary guard. None
+[ADR-0136](0136-local-post-lifecycle.md) retains current Deleted Posts and Post
+Revisions, and says their media references use the ordinary guard. None
 establishes the per-user record a cross-user reference retains, or reconciles
 that record with retained history.
 

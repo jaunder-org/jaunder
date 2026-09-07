@@ -1,6 +1,6 @@
-# ADR-DRAFT: Host UX Sandboxes Own Persistent Workspace Lifecycles
+# ADR-0180: Host UX Sandboxes Own Persistent Workspace Lifecycles
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-06
 - Issue: [#1395](https://github.com/jaunder-org/jaunder/issues/1395)
 
@@ -11,7 +11,7 @@ browser inspection, stop after observing a bug, and restart against the same
 state. `cargo xtask e2e-local` already builds, starts, discovers, waits for, and
 stops a host server, but it couples that process lifecycle to disposable e2e
 fixtures, tracing, Playwright, and unconditional teardown
-([ADR-0051](../0051-single-playwright-config.md)). The interactive Nix VM is the
+([ADR-0051](0051-single-playwright-config.md)). The interactive Nix VM is the
 deployment-fidelity adapter, not a persistent inner loop.
 
 Named persistence introduces lifecycle decisions that the disposable harness did
@@ -19,10 +19,10 @@ not need: where state lives, which process owns exclusion, whether resume
 mutates fixtures, and how destructive reset preserves the state under
 investigation when replacement preparation fails. The server already owns an
 OS-backed `<storage>/runtime.lock` and runtime-file publication
-([ADR-0035](../0035-elisp-live-integration-harness.md)); test-only
-out-of-process state manipulation already belongs in the `test-support` binary
-and must use real storage paths rather than raw SQL
-([ADR-0046](../0046-test-support-seed-binary.md)).
+([ADR-0035](0035-elisp-live-integration-harness.md)); test-only out-of-process
+state manipulation already belongs in the `test-support` binary and must use
+real storage paths rather than raw SQL
+([ADR-0046](0046-test-support-seed-binary.md)).
 
 A lock inside a workspace cannot serialize replacement of that workspace: after
 a directory rename it protects the old inode and path. Replacing a non-empty

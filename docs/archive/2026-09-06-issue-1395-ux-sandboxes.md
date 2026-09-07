@@ -238,7 +238,7 @@ Neither adapter reimplements process control.
 The shared component is internal xtask infrastructure, not a new Jaunder server
 API. Existing runtime-file and startup-mutex behavior remains authoritative. The
 durable workspace, split lock ownership, and recoverable reset protocol are
-recorded in `docs/adr/drafts/host-ux-sandbox-lifecycle.md`, preserving ADR-0035,
+recorded in `docs/adr/0180-host-ux-sandbox-lifecycle.md`, preserving ADR-0035,
 ADR-0046, and ADR-0051.
 
 ## Failure behavior

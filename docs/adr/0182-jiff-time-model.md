@@ -1,6 +1,6 @@
-# ADR-DRAFT: Jiff time model
+# ADR-0182: Jiff time model
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-06
 - Issue: [#1272](https://github.com/jaunder-org/jaunder/issues/1272)
 
@@ -62,10 +62,10 @@ semantics, and exact SQLite timestamp text. It uses `jiff-sqlx` 0.2 with SQLx
 integration alone does not provide.
 
 This decision supersedes only the Chrono-specific implementation portions of
-[ADR-0056](../0056-web-canonical-colocated-leptos.md),
-[ADR-0072](../0072-timestamps-cross-boundary-as-utcinstant.md), and
-[ADR-0153](../0153-storage-owned-instants.md). Their retained domain and
-boundary decisions remain in force.
+[ADR-0056](0056-web-canonical-colocated-leptos.md),
+[ADR-0072](0072-timestamps-cross-boundary-as-utcinstant.md), and
+[ADR-0153](0153-storage-owned-instants.md). Their retained domain and boundary
+decisions remain in force.
 
 ## Consequences
 
