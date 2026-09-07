@@ -111,7 +111,7 @@ pub fn validate_browser(root: &Path, expected_browser: &str) -> Result<BrowserSt
         bail!("requested browser identity does not match {expected_browser}");
     }
     let early_failure = matches!(status.actual_browser.as_str(), "unknown" | "not-started")
-        && status.csr_structural.outcome == Outcome::Failed
+        && status.csr_structural.outcome != Outcome::NotRun
         && status.diagnostic_export.outcome == Outcome::Failed
         && status.source_mapping.outcome == Outcome::NotRun
         && status.module_signature.is_none()
@@ -1179,10 +1179,13 @@ mod tests {
             serde_json::from_slice(&fs::read(root.path().join("status.json")).unwrap()).unwrap();
         value.actual_browser = "not-started".into();
         value.csr_structural = Stage {
+            outcome: Outcome::Passed,
+            blocker: None,
+        };
+        value.diagnostic_export = Stage {
             outcome: Outcome::Failed,
             blocker: Some("Playwright exited with status 1 before coverage capture".into()),
         };
-        value.diagnostic_export = value.csr_structural.clone();
         value.source_mapping = Stage {
             outcome: Outcome::NotRun,
             blocker: Some("diagnostic export did not run".into()),

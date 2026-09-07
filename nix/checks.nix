@@ -577,8 +577,13 @@ wasmCoverageMap = pkgs.writeText "wasm-coverage-map.py" ''
           if report.is_file()
           else ""
       )
+      try:
+          shutil.rmtree(root / "mapped")
+      except FileNotFoundError:
+          pass
+      except OSError as error:
+          detail = f"{detail}; failed to remove partial mapping evidence: {error}"
       mapping_log.write_text(f"{detail}\n{excerpt}")
-      shutil.rmtree(root / "mapped", ignore_errors=True)
       status["source_mapping"] = {"outcome": "failed", "blocker": detail}
       status["artifacts"]["mapping_diagnostics"] = artifact("diagnostics/mapping.log")
       status_path.write_text(json.dumps(status, indent=2) + "\n")
@@ -677,7 +682,6 @@ wasmCoverageFinalize = pkgs.writeText "wasm-coverage-finalize.py" ''
   blocker = f"Playwright exited with status {exit_status} before coverage capture"
   status.update({
       "actual_browser": "not-started",
-      "csr_structural": {"outcome": "failed", "blocker": blocker},
       "diagnostic_export": {"outcome": "failed", "blocker": blocker},
       "source_mapping": {
           "outcome": "not-run",
@@ -769,7 +773,7 @@ mkWasmCoverageProducer =
       )
       if "${failure}" == "early":
         machine.succeed(
-          "${pkgs.python3}/bin/python3 -c 'import json; status = json.load(open(\"/var/lib/jaunder/wasm-coverage/status.json\")); assert status[\"actual_browser\"] == \"not-started\"; assert status[\"diagnostic_export\"][\"outcome\"] == \"failed\"; assert status[\"diagnostic_export\"][\"blocker\"] == \"Playwright exited with status 73 before coverage capture\"; assert status[\"source_mapping\"][\"outcome\"] == \"not-run\"; assert set(status[\"artifacts\"]) == {\"module\", \"diagnostics\"}'"
+          "${pkgs.python3}/bin/python3 -c 'import json; status = json.load(open(\"/var/lib/jaunder/wasm-coverage/status.json\")); assert status[\"actual_browser\"] == \"not-started\"; assert status[\"csr_structural\"][\"outcome\"] == \"passed\"; assert status[\"diagnostic_export\"][\"outcome\"] == \"failed\"; assert status[\"diagnostic_export\"][\"blocker\"] == \"Playwright exited with status 73 before coverage capture\"; assert status[\"source_mapping\"][\"outcome\"] == \"not-run\"; assert set(status[\"artifacts\"]) == {\"module\", \"diagnostics\"}'"
         )
       machine.succeed("tar czf /tmp/wasm-coverage-${browser}.tar.gz -C /var/lib/jaunder wasm-coverage")
       machine.copy_from_machine("/tmp/wasm-coverage-${browser}.tar.gz", "")
