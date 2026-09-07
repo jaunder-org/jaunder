@@ -638,6 +638,61 @@ wasmCoverageMap = pkgs.writeText "wasm-coverage-map.py" ''
   status_path.write_text(json.dumps(status, indent=2) + "\n")
 '';
 
+wasmCoverageFinalize = pkgs.writeText "wasm-coverage-finalize.py" ''
+  import hashlib
+  import json
+  import os
+  import pathlib
+  import shutil
+
+  root = pathlib.Path("/var/lib/jaunder/wasm-coverage")
+  status_path = root / "status.json"
+  status = json.loads(status_path.read_text())
+
+  def artifact(relative):
+      path = root / relative
+      return {
+          "path": relative,
+          "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+      }
+
+  # captureWasmCoverage has already recorded the precise export failure once a
+  # browser context existed. Preserve that status and retain the process output.
+  if status["actual_browser"] != "not-started":
+      status["artifacts"]["playwright_diagnostics"] = artifact("diagnostics/playwright.log")
+      status_path.write_text(json.dumps(status, indent=2) + "\n")
+      raise SystemExit(0)
+
+  capture_log = root / "diagnostics/capture.log"
+  if capture_log.exists():
+      capture_log.unlink()
+  for path in [root / "profiles", root / "mapped"]:
+      if path.exists():
+          shutil.rmtree(path)
+  mapping_log = root / "diagnostics/mapping.log"
+  if mapping_log.exists():
+      mapping_log.unlink()
+
+  exit_status = os.environ["JAUNDER_WASM_COVERAGE_PLAYWRIGHT_EXIT"]
+  blocker = f"Playwright exited with status {exit_status} before coverage capture"
+  status.update({
+      "actual_browser": "not-started",
+      "csr_structural": {"outcome": "failed", "blocker": blocker},
+      "diagnostic_export": {"outcome": "failed", "blocker": blocker},
+      "source_mapping": {
+          "outcome": "not-run",
+          "blocker": "diagnostic export did not run",
+      },
+      "module_signature": None,
+      "toolchain_identity": None,
+      "artifacts": {
+          "module": artifact("module/jaunder.wasm"),
+          "diagnostics": artifact("diagnostics/playwright.log"),
+      },
+  })
+  status_path.write_text(json.dumps(status, indent=2) + "\n")
+'';
+
 # Each producer owns one browser and one SQLite VM.  They deliberately are
 # separate derivations: evaluating Chromium must neither short-circuit Firefox
 # nor share an artifact directory with it.
@@ -676,21 +731,30 @@ mkWasmCoverageProducer =
       machine.wait_for_unit("jaunder.service", timeout=60)
       machine.wait_for_open_port(3000, timeout=30)
       machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
-      status, output = machine.execute(
-        "cd /tmp/e2e"
-        + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
-        + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-        + " JAUNDER_DB=sqlite:/var/lib/jaunder/data/jaunder.db"
-        + " FONTCONFIG_FILE=${visualFontConfig}"
-        + " JAUNDER_WASM_COVERAGE_INJECT_FAILURE=${failure}"
-        + " JAUNDER_WASM_COVERAGE_CSR=${self.packages.${system}.wasm-coverage-csr}"
-        + " JAUNDER_WASM_COVERAGE_OUT=/var/lib/jaunder/wasm-coverage"
-        + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
-        + " tests/wasm-coverage.spec.ts --config playwright.config.ts --project ${browser}",
-        timeout=300,
-      )
+      if "${failure}" == "early":
+        status, output = machine.execute(
+          "bash -o pipefail -c '{ printf \"%s\\n\" \"injected early Playwright failure\"; exit 73; } 2>&1 | tee /var/lib/jaunder/wasm-coverage/diagnostics/playwright.log'",
+          timeout=300,
+        )
+      else:
+        status, output = machine.execute(
+          "bash -o pipefail -c 'cd /tmp/e2e"
+          + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
+          + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+          + " JAUNDER_DB=sqlite:/var/lib/jaunder/data/jaunder.db"
+          + " FONTCONFIG_FILE=${visualFontConfig}"
+          + " JAUNDER_WASM_COVERAGE_INJECT_FAILURE=${failure}"
+          + " JAUNDER_WASM_COVERAGE_CSR=${self.packages.${system}.wasm-coverage-csr}"
+          + " JAUNDER_WASM_COVERAGE_OUT=/var/lib/jaunder/wasm-coverage"
+          + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
+          + " tests/wasm-coverage.spec.ts --config playwright.config.ts --project ${browser}"
+          + " 2>&1 | tee /var/lib/jaunder/wasm-coverage/diagnostics/playwright.log'",
+          timeout=300,
+        )
       print(output)
       # The browser helper writes a v1 result before surfacing any capture
+      # failure. If it never started, finalize the initialized sentinel with
+      # the retained Playwright output and exact exit status.
       map_status, map_output = machine.execute(
         "JAUNDER_WASM_COVERAGE_CSR=${self.packages.${system}.wasm-coverage-csr}"
         + " JAUNDER_WASM_COVERAGE_INJECT_FAILURE=${failure}"
@@ -698,14 +762,15 @@ mkWasmCoverageProducer =
         timeout=120,
       )
       print(map_output)
-      # failure.  An early Playwright/VM failure gets an equally explicit,
-      # retained fallback rather than disappearing as an absent producer.
-      machine.execute(
-        "if [ ! -f /var/lib/jaunder/wasm-coverage/status.json ]; then"
-        + " mkdir -p /var/lib/jaunder/wasm-coverage/diagnostics"
-        + " && printf '%s\\n' '{\"version\":\"v1\",\"requested_browser\":\"${browser}\",\"actual_browser\":\"unknown\",\"csr_structural\":{\"outcome\":\"failed\",\"blocker\":\"Playwright exited before status capture\"},\"diagnostic_export\":{\"outcome\":\"not-run\",\"blocker\":null},\"source_mapping\":{\"outcome\":\"not-run\",\"blocker\":null},\"module_signature\":null,\"toolchain_identity\":null,\"artifacts\":{}}' > /var/lib/jaunder/wasm-coverage/status.json;"
-        + " fi"
+      machine.succeed(
+        "JAUNDER_WASM_COVERAGE_PLAYWRIGHT_EXIT="
+        + str(status)
+        + " ${pkgs.python3}/bin/python3 ${wasmCoverageFinalize}"
       )
+      if "${failure}" == "early":
+        machine.succeed(
+          "${pkgs.python3}/bin/python3 -c 'import json; status = json.load(open(\"/var/lib/jaunder/wasm-coverage/status.json\")); assert status[\"actual_browser\"] == \"not-started\"; assert status[\"diagnostic_export\"][\"outcome\"] == \"failed\"; assert status[\"diagnostic_export\"][\"blocker\"] == \"Playwright exited with status 73 before coverage capture\"; assert status[\"source_mapping\"][\"outcome\"] == \"not-run\"; assert set(status[\"artifacts\"]) == {\"module\", \"diagnostics\"}'"
+        )
       machine.succeed("tar czf /tmp/wasm-coverage-${browser}.tar.gz -C /var/lib/jaunder wasm-coverage")
       machine.copy_from_machine("/tmp/wasm-coverage-${browser}.tar.gz", "")
     '';
@@ -787,6 +852,10 @@ wasm-coverage-chromium-export-failure = mkWasmCoverageProducer {
 wasm-coverage-firefox-mapping-failure = mkWasmCoverageProducer {
   browser = "firefox";
   failure = "mapping";
+};
+wasm-coverage-chromium-early-playwright-failure = mkWasmCoverageProducer {
+  browser = "chromium";
+  failure = "early";
 };
 }
 // pkgs.lib.optionalAttrs (measurementCacheBuster != "") {

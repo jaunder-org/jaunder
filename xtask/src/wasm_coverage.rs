@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::ErrorKind;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
@@ -106,8 +107,17 @@ pub fn validate_browser(root: &Path, expected_browser: &str) -> Result<BrowserSt
     if status.version != "v1" {
         bail!("unsupported status version {:?}", status.version);
     }
-    if status.requested_browser != expected_browser || status.actual_browser != expected_browser {
-        bail!("requested/actual browser identity does not match {expected_browser}");
+    if status.requested_browser != expected_browser {
+        bail!("requested browser identity does not match {expected_browser}");
+    }
+    let early_failure = matches!(status.actual_browser.as_str(), "unknown" | "not-started")
+        && status.csr_structural.outcome == Outcome::Failed
+        && status.diagnostic_export.outcome == Outcome::Failed
+        && status.source_mapping.outcome == Outcome::NotRun
+        && status.module_signature.is_none()
+        && status.toolchain_identity.is_none();
+    if status.actual_browser != expected_browser && !early_failure {
+        bail!("actual browser identity does not match {expected_browser}");
     }
     validate_stage("csr_structural", &status.csr_structural)?;
     validate_stage("diagnostic_export", &status.diagnostic_export)?;
@@ -332,9 +342,7 @@ pub fn probe() -> Result<Aggregate> {
 }
 
 fn probe_with(runner: &dyn CommandRunner) -> Result<Aggregate> {
-    if Path::new(ROOT).exists() {
-        fs::remove_dir_all(ROOT).context("clearing stale WASM coverage evidence")?;
-    }
+    clear_destination(Path::new(ROOT), "clearing stale WASM coverage evidence")?;
     fs::create_dir_all(ROOT)?;
     let mut roots = BTreeMap::new();
     let mut validation_blockers = Vec::new();
@@ -399,9 +407,7 @@ fn realize_and_unpack(runner: &dyn CommandRunner, browser: &str, root: &Path) ->
     let package = format!("wasm-coverage-{browser}");
     let output = Path::new(".xtask/gcroots").join(&package);
     fs::create_dir_all(".xtask/gcroots")?;
-    if root.exists() {
-        fs::remove_dir_all(root).with_context(|| format!("clearing stale {}", root.display()))?;
-    }
+    clear_destination(root, &format!("clearing stale {}", root.display()))?;
     let mut command = Command::new("nix");
     command
         .args(["build", "-L", "--accept-flake-config", "--out-link"])
@@ -418,8 +424,16 @@ fn realize_and_unpack(runner: &dyn CommandRunner, browser: &str, root: &Path) ->
     unpack_archive(&output.join(format!("{package}.tar.gz")), root)
 }
 
+fn clear_destination(destination: &Path, context: &str) -> Result<()> {
+    match fs::remove_dir_all(destination) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("{context}: {}", destination.display())),
+    }
+}
+
 fn unpack_archive(archive: &Path, destination: &Path) -> Result<()> {
-    let _ = fs::remove_dir_all(destination);
+    clear_destination(destination, "clearing archive destination")?;
     fs::create_dir_all(destination)?;
     let mut archive = Archive::new(GzDecoder::new(
         fs::File::open(archive).with_context(|| format!("opening {}", archive.display()))?,
@@ -526,67 +540,167 @@ fn merge_profiles(
         );
     }
     fs::write(&report, &result.stdout)?;
-    prove_count_union(
-        &fs::read_to_string(
-            roots["chromium"].join(&statuses["chromium"].artifacts["mapped_report"].path),
-        )?,
-        &fs::read_to_string(
-            roots["firefox"].join(&statuses["firefox"].artifacts["mapped_report"].path),
-        )?,
-        &fs::read_to_string(&report)?,
+    let chromium = export_region_counts(
+        runner,
+        &csr.join("tools/llvm-cov"),
+        &csr.join("instrumented/csr.wasm"),
+        &roots["chromium"].join(&statuses["chromium"].artifacts["profile_data"].path),
+        compiled,
+        "Chromium",
     )?;
+    let firefox = export_region_counts(
+        runner,
+        &csr.join("tools/llvm-cov"),
+        &csr.join("instrumented/csr.wasm"),
+        &roots["firefox"].join(&statuses["firefox"].artifacts["profile_data"].path),
+        compiled,
+        "Firefox",
+    )?;
+    let merged = export_region_counts(
+        runner,
+        &csr.join("tools/llvm-cov"),
+        &csr.join("instrumented/csr.wasm"),
+        &profdata,
+        compiled,
+        "merged",
+    )?;
+    prove_count_union(&chromium, &firefox, &merged)?;
     Ok(MergedEvidence {
         profile_data: profdata.display().to_string(),
         report: report.display().to_string(),
     })
 }
 
-fn coverage_counts(report: &str) -> Result<BTreeMap<(String, u64), u64>> {
+type Region = (String, u64, u64, u64, u64, u64, u64);
+
+fn export_region_counts(
+    runner: &dyn CommandRunner,
+    llvm_cov: &Path,
+    wasm: &Path,
+    profile: &Path,
+    compiled: &str,
+    label: &str,
+) -> Result<BTreeMap<Region, u64>> {
+    let mut export = Command::new(llvm_cov);
+    export
+        .arg("export")
+        .arg(wasm)
+        .arg(format!("-instr-profile={}", profile.display()))
+        .arg(format!(
+            "-path-equivalence={compiled},{}",
+            std::env::current_dir()?.display()
+        ));
+    let output = runner.run(&mut export)?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        bail!(
+            "llvm-cov export for {label} exited with {}: {stderr}",
+            output.status
+        );
+    }
+    region_counts(&output.stdout)
+        .with_context(|| format!("parsing llvm-cov export for {label}; stderr: {stderr}"))
+}
+
+fn region_counts(export: &[u8]) -> Result<BTreeMap<Region, u64>> {
+    let export: serde_json::Value = serde_json::from_slice(export)?;
     let mut counts = BTreeMap::new();
-    let mut file = String::new();
-    for line in report.lines() {
-        if !line.contains('|') && line.ends_with(':') {
-            file = line.trim_end_matches(':').to_owned();
-            continue;
+    let data = export
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .context("llvm-cov export lacks data")?;
+    for unit in data {
+        let functions = unit
+            .get("functions")
+            .and_then(serde_json::Value::as_array)
+            .context("llvm-cov export data lacks functions")?;
+        for function in functions {
+            let filenames = function
+                .get("filenames")
+                .and_then(serde_json::Value::as_array)
+                .context("llvm-cov export function lacks filenames")?;
+            let regions = function
+                .get("regions")
+                .and_then(serde_json::Value::as_array)
+                .context("llvm-cov export function lacks regions")?;
+            for region in regions {
+                let region = region
+                    .as_array()
+                    .filter(|region| region.len() >= 8)
+                    .context("llvm-cov export region is malformed")?;
+                let integer = |index: usize, field: &str| {
+                    region[index].as_u64().with_context(|| {
+                        format!("llvm-cov export {field} is not an unsigned integer")
+                    })
+                };
+                let file_id = integer(5, "region file ID")?;
+                let filename = filenames
+                    .get(usize::try_from(file_id).context("llvm-cov export file ID is too large")?)
+                    .and_then(serde_json::Value::as_str)
+                    .context("llvm-cov export region file ID is out of bounds")?;
+                let key = (
+                    filename.to_owned(),
+                    integer(0, "region start line")?,
+                    integer(1, "region start column")?,
+                    integer(2, "region end line")?,
+                    integer(3, "region end column")?,
+                    integer(6, "region expanded-file ID")?,
+                    integer(7, "region kind")?,
+                );
+                let count = integer(4, "region count")?;
+                if counts.insert(key.clone(), count).is_some() {
+                    bail!(
+                        "llvm-cov export repeats region {}:{}:{}-{}:{} (expanded file {}, kind {})",
+                        key.0,
+                        key.1,
+                        key.2,
+                        key.3,
+                        key.4,
+                        key.5,
+                        key.6,
+                    );
+                }
+            }
         }
-        let mut fields = line.split('|');
-        let Some(line_number) = fields.next().and_then(|field| field.trim().parse().ok()) else {
-            continue;
-        };
-        let Some(count) = fields.next().and_then(|field| field.trim().parse().ok()) else {
-            continue;
-        };
-        counts.insert((file.clone(), line_number), count);
+    }
+    if counts.is_empty() {
+        bail!("llvm-cov export has no regions");
     }
     Ok(counts)
 }
 
-fn prove_count_union(chromium: &str, firefox: &str, merged: &str) -> Result<()> {
-    let chromium = coverage_counts(chromium)?;
-    let firefox = coverage_counts(firefox)?;
-    let merged = coverage_counts(merged)?;
-    let lines: BTreeSet<_> = chromium
+fn prove_count_union(
+    chromium: &BTreeMap<Region, u64>,
+    firefox: &BTreeMap<Region, u64>,
+    merged: &BTreeMap<Region, u64>,
+) -> Result<()> {
+    let regions: BTreeSet<_> = chromium
         .keys()
         .chain(firefox.keys())
         .chain(merged.keys())
         .cloned()
         .collect();
     let mut overlapping_execution = false;
-    for line in lines {
-        let expected = chromium.get(&line).copied().unwrap_or_default()
-            + firefox.get(&line).copied().unwrap_or_default();
-        if expected != merged.get(&line).copied().unwrap_or_default() {
+    for region in regions {
+        let expected = chromium.get(&region).copied().unwrap_or_default()
+            + firefox.get(&region).copied().unwrap_or_default();
+        if expected != merged.get(&region).copied().unwrap_or_default() {
             bail!(
-                "merged report count for original Rust line {}:{} is not the browser-count sum",
-                line.0,
-                line.1
+                "merged region count for original Rust source {}:{}:{}-{}:{} (expanded file {}, kind {}) is not the browser-count sum",
+                region.0,
+                region.1,
+                region.2,
+                region.3,
+                region.4,
+                region.5,
+                region.6,
             );
         }
-        overlapping_execution |= chromium.get(&line).copied().unwrap_or_default() > 0
-            && firefox.get(&line).copied().unwrap_or_default() > 0;
+        overlapping_execution |= chromium.get(&region).copied().unwrap_or_default() > 0
+            && firefox.get(&region).copied().unwrap_or_default() > 0;
     }
     if !overlapping_execution {
-        bail!("merged report does not prove a line executed by both browsers");
+        bail!("merged export does not prove a region executed by both browsers");
     }
     Ok(())
 }
@@ -791,7 +905,7 @@ fn realize_measurement(
 }
 
 fn unpack_measurement_archive(archive: &Path, destination: &Path) -> Result<()> {
-    let _ = fs::remove_dir_all(destination);
+    clear_destination(destination, "clearing measurement archive destination")?;
     fs::create_dir_all(destination)?;
     let mut archive = Archive::new(GzDecoder::new(fs::File::open(archive)?));
     for entry in archive.entries()? {
@@ -1059,6 +1173,53 @@ mod tests {
     }
 
     #[test]
+    fn early_playwright_failure_is_validated_but_cannot_merge_or_pass() {
+        let root = valid_root("chromium");
+        let mut value: BrowserStatus =
+            serde_json::from_slice(&fs::read(root.path().join("status.json")).unwrap()).unwrap();
+        value.actual_browser = "not-started".into();
+        value.csr_structural = Stage {
+            outcome: Outcome::Failed,
+            blocker: Some("Playwright exited with status 1 before coverage capture".into()),
+        };
+        value.diagnostic_export = value.csr_structural.clone();
+        value.source_mapping = Stage {
+            outcome: Outcome::NotRun,
+            blocker: Some("diagnostic export did not run".into()),
+        };
+        value.module_signature = None;
+        value.toolchain_identity = None;
+        for name in ["profile", "profile_data", "mapped_report"] {
+            let artifact = value.artifacts.remove(name).unwrap();
+            fs::remove_file(root.path().join(artifact.path)).unwrap();
+        }
+        fs::write(
+            root.path().join("status.json"),
+            serde_json::to_vec_pretty(&value).unwrap(),
+        )
+        .unwrap();
+
+        let status = validate_browser(root.path(), "chromium").unwrap();
+        let statuses = BTreeMap::from([("chromium".into(), status)]);
+        assert_eq!(derive_verdict(&statuses).0, Verdict::Failed);
+        assert!(!merge_eligible(&statuses));
+    }
+
+    #[test]
+    fn unknown_browser_requires_the_wholly_failed_early_path() {
+        let root = valid_root("chromium");
+        let mut value: BrowserStatus =
+            serde_json::from_slice(&fs::read(root.path().join("status.json")).unwrap()).unwrap();
+        value.actual_browser = "unknown".into();
+        fs::write(
+            root.path().join("status.json"),
+            serde_json::to_vec_pretty(&value).unwrap(),
+        )
+        .unwrap();
+        assert!(validate_browser(root.path(), "chromium").is_err());
+    }
+
+    #[test]
     fn reconciliation_rejects_tampered_manifested_artifact() {
         let root = valid_root("firefox");
         fs::write(root.path().join("profiles/browser.profraw"), "tampered").unwrap();
@@ -1097,6 +1258,7 @@ mod tests {
         assert_eq!(verdict, Verdict::Failed);
         assert_eq!(blockers.len(), 2);
     }
+
     #[test]
     fn merge_requires_two_matching_passes() {
         let mut chromium = status("chromium");
@@ -1124,12 +1286,14 @@ mod tests {
         statuses.insert("firefox".into(), firefox);
         assert!(!merge_eligible(&statuses));
     }
+
     #[test]
     fn contained_relative_paths_reject_escape() {
         assert!(relative_path("profiles/browser.profraw").is_ok());
         assert!(relative_path("../profile").is_err());
         assert!(relative_path("/profile").is_err());
     }
+
     #[test]
     fn reconciliation_rejects_unmanifested_file() {
         let root = tempdir().unwrap();
@@ -1137,6 +1301,7 @@ mod tests {
         fs::write(root.path().join("extra"), "x").unwrap();
         assert!(reconcile_manifest(root.path(), &BTreeMap::new()).is_err());
     }
+
     #[test]
     fn conditional_references_are_enforced() {
         let mut value = status("chromium");
@@ -1168,11 +1333,80 @@ mod tests {
         assert!(validate_conditional_artifacts(&value).is_err());
     }
 
+    fn export_fixture(regions: serde_json::Value) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "data": [{
+                "functions": [{
+                    "filenames": ["src/lib.rs"],
+                    "regions": regions,
+                }],
+            }],
+        }))
+        .unwrap()
+    }
+
     #[test]
-    fn union_proof_requires_summed_overlapping_original_rust_line() {
-        assert!(prove_count_union("10|2| a\n", "10|3| a\n", "10|5| a\n").is_ok());
-        assert!(prove_count_union("10|2| a\n", "10|3| a\n", "10|4| a\n").is_err());
-        assert!(prove_count_union("10|2| a\n", "11|3| b\n", "10|2| a\n11|3| b\n").is_err());
+    fn union_proof_uses_exact_export_regions_without_counter_abbreviation() {
+        let chromium = region_counts(&export_fixture(serde_json::json!([
+            [10, 2, 10, 12, 1360, 0, 0, 0],
+            [12, 1, 12, 5, 0, 0, 0, 0],
+        ])))
+        .unwrap();
+        let firefox = region_counts(&export_fixture(serde_json::json!([
+            [10, 2, 10, 12, 1401, 0, 0, 0],
+            [12, 1, 12, 5, 7, 0, 0, 0],
+        ])))
+        .unwrap();
+        let merged = region_counts(&export_fixture(serde_json::json!([
+            [10, 2, 10, 12, 2761, 0, 0, 0],
+            [12, 1, 12, 5, 7, 0, 0, 0],
+        ])))
+        .unwrap();
+        assert!(prove_count_union(&chromium, &firefox, &merged).is_ok());
+        assert_eq!(chromium[&("src/lib.rs".into(), 10, 2, 10, 12, 0, 0)], 1360);
+
+        let file_id = region_counts(
+            &serde_json::to_vec(&serde_json::json!({
+                "data": [{
+                    "functions": [{
+                        "filenames": ["generated.rs", "src/lib.rs"],
+                        "regions": [[20, 1, 20, 8, 9, 1, 0, 0]],
+                    }],
+                }],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(file_id[&("src/lib.rs".into(), 20, 1, 20, 8, 0, 0)], 9);
+    }
+
+    #[test]
+    fn union_proof_rejects_missing_or_mismatched_regions() {
+        let chromium = region_counts(&export_fixture(serde_json::json!([[
+            10, 2, 10, 12, 2, 0, 0, 0
+        ]])))
+        .unwrap();
+        let firefox = region_counts(&export_fixture(serde_json::json!([[
+            10, 2, 10, 12, 3, 0, 0, 0
+        ]])))
+        .unwrap();
+        let merged = region_counts(&export_fixture(serde_json::json!([[
+            10, 2, 10, 12, 4, 0, 0, 0
+        ]])))
+        .unwrap();
+        assert!(prove_count_union(&chromium, &firefox, &merged).is_err());
+    }
+
+    #[test]
+    fn destination_cleanup_ignores_absence_but_retains_other_errors() {
+        let root = tempdir().unwrap();
+        let missing = root.path().join("missing");
+        assert!(clear_destination(&missing, "clearing test destination").is_ok());
+        let file = root.path().join("file");
+        fs::write(&file, "not a directory").unwrap();
+        let error = clear_destination(&file, "clearing test destination").unwrap_err();
+        assert!(error.to_string().contains("clearing test destination"));
+        assert!(error.to_string().contains(&file.display().to_string()));
     }
     fn measurement_manifest() -> MeasurementManifest {
         let mut runs = Vec::new();

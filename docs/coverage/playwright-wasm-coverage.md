@@ -36,13 +36,26 @@ are covered. The instrumented build used `-Cinstrument-coverage`,
 `-Zno-link`; pinned `rustc -Zlink-only` recreated Cargo's CSR/sysroot/minicov
 link graph.
 
-The retained formats are: raw LLVM instrumentation profiles
+The compiler and profile-tool semantics behind those flags are documented by
+rustc's [instrumentation-based coverage guide][rust-coverage], including its
+nightly profiler-runtime requirement, and the nightly-only
+[`-Z no-profiler-runtime`][rust-no-profiler-runtime],
+[`-Z no-link`][rust-no-link], and [`-Z link-only`][rust-link-only] flag
+references. They explain the toolchain contract; the retained evidence cited
+here establishes this experiment's actual outputs.
+
+The retained formats are raw LLVM instrumentation profiles
 `profiles/browser.profraw`; merged LLVM profile data `mapped/browser.profdata`
 and `merged/browser.profdata`; `llvm-cov` text line reports
 (`mapped/llvm-cov.txt`, `merged/llvm-cov.txt`); versioned browser and aggregate
 `status.json` payloads; the versioned measurement
 `measurement/manifest-v1.json`; and the retained source identity and
-source-mappable module relationship in the producer root.
+source-mappable module relationship in the producer root. LLVM's
+[instrumentation-profile format][llvm-profile-format],
+[`llvm-profdata merge`][llvm-profdata-merge], and [`llvm-cov` show/report/export
+documentation][llvm-cov] define the respective raw-profile, merge/count, and
+source-map/report/export tool semantics; the named files remain the evidence for
+this run.
 
 `instrumented/csr.wasm` is the source-mappable module (SHA-256
 `df8f4a9fbefe965e4cded0d6b7875ce012fa7febf7df51f6ac6c4e2f53b10436`). It is
@@ -61,6 +74,13 @@ in the input and remain after wasm-bindgen and after wasm-opt
 wasm-bindgen; after wasm-opt it remains absent. That expected transformation is
 distinct from preservation of the LLVM coverage sections.
 
+The documented roles of the [wasm-bindgen CLI][wasm-bindgen-cli] and [Binaryen
+`wasm-opt`][binaryen-wasm-opt] describe the two transformations; the
+metadata-preservation results above are observations from the retained
+`coverage-metadata.json`, not claims inferred from those documents. The [minicov
+0.3.8 API documentation][minicov-api] documents the profiler-runtime component
+included in the diagnostic link graph.
+
 The timing baseline intentionally used the same pinned nightly, source closure,
 wasm-bindgen/wasm-opt bundle, service, and focused browser flow as the
 diagnostic build. Its exact unavoidable deviations were: it omits
@@ -77,6 +97,11 @@ Both `.xtask/wasm-coverage/chromium/status.json` and
 actual browser identically, and record `passed` for CSR structural validation,
 diagnostic export, and source mapping with no blocker. They agree on module
 signature `14804279403455803896` and on the served-module digest above.
+
+[Playwright projects][playwright-projects] and its [browser-execution
+documentation][playwright-browsers] define the configured multi-browser
+execution mechanism. They do not establish the passed browser outcomes; the
+versioned status files and retained profiles/reports below do.
 
 | Browser  | CSR structural | Diagnostic export | Source mapping | Executed original Rust evidence                                                   |
 | -------- | -------------- | ----------------- | -------------- | --------------------------------------------------------------------------------- |
@@ -137,6 +162,13 @@ reconciliation, conditional count union, and measurement orchestration. This
 separation means host-side success is derived from retained evidence rather than
 from an unrecorded browser result.
 
+This allocation of responsibilities is consistent with Nix's [derivation
+model][nix-derivations] and its documented [`--impure` evaluation
+option][nix-impure]: Nix realizes declared build inputs, while the host
+orchestration validates the retained result. Those references define the
+ownership model only; the concrete browser and reconciliation outcomes remain
+local executable evidence.
+
 Remaining costs and risks are the 30,209-byte served-WASM overhead; the
 1,094,165 ms quiescent-host experiment wall time; two browser/Nix realization
 cost; continued compatibility of the pinned Rust/LLVM raw-profile, profdata, and
@@ -145,7 +177,43 @@ validate both complete browser evidence sets. A future permanent gate must keep
 those costs and the both-browser fail-closed condition; dropping either browser
 would not be supported by this finding.
 
-## Evidence index
+## Primary-source index
+
+- Rust/rustc: [instrumentation-based coverage][rust-coverage],
+  [`-Z no-profiler-runtime`][rust-no-profiler-runtime],
+  [`-Z no-link`][rust-no-link], and [`-Z link-only`][rust-link-only].
+- LLVM: [instrumentation-profile format][llvm-profile-format],
+  [`llvm-profdata merge`][llvm-profdata-merge], and [`llvm-cov`
+  show/report/export][llvm-cov].
+- WASM processing/runtime: [wasm-bindgen CLI][wasm-bindgen-cli], [minicov 0.3.8
+  API][minicov-api], and [Binaryen `wasm-opt`][binaryen-wasm-opt].
+- Browser execution: [Playwright projects][playwright-projects] and [Playwright
+  browser execution][playwright-browsers].
+- Nix: [derivations][nix-derivations] and [the `--impure` evaluation
+  option][nix-impure].
+
+[rust-coverage]: https://doc.rust-lang.org/rustc/instrument-coverage.html
+[rust-no-profiler-runtime]:
+  https://doc.rust-lang.org/beta/unstable-book/compiler-flags/no-profiler-runtime.html
+[rust-no-link]:
+  https://doc.rust-lang.org/beta/unstable-book/compiler-flags/no-link.html
+[rust-link-only]:
+  https://doc.rust-lang.org/beta/unstable-book/compiler-flags/link-only.html
+[llvm-profile-format]: https://llvm.org/docs/InstrProfileFormat.html
+[llvm-profdata-merge]:
+  https://llvm.org/docs/CommandGuide/llvm-profdata.html#profdata-merge
+[llvm-cov]: https://llvm.org/docs/CommandGuide/llvm-cov.html
+[wasm-bindgen-cli]:
+  https://rustwasm.github.io/docs/wasm-bindgen/reference/cli.html
+[minicov-api]: https://docs.rs/minicov/0.3.8/minicov/
+[binaryen-wasm-opt]: https://github.com/WebAssembly/binaryen#wasm-opt
+[playwright-projects]: https://playwright.dev/docs/test-projects
+[playwright-browsers]: https://playwright.dev/docs/browsers
+[nix-derivations]: https://nix.dev/manual/nix/stable/language/derivations.html
+[nix-impure]:
+  https://nix.dev/manual/nix/stable/command-ref/new-cli/nix.html#opt-impure
+
+## Local executable-evidence index
 
 - Primary producer evidence:
   `.xtask/gcroots/wasm-coverage-csr/{status.json,build-configuration.json,coverage-metadata.json,source-identity.json,toolchain-identity.json}`.
