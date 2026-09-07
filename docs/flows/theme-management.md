@@ -4,8 +4,8 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#theme-management-api-transport`
 
 ## Routes
 
-`/studio/themes` is an authenticated Studio route. It begins in the session
-owner's author catalog; an operator may deliberately switch to the distinct site
+`/themes` is an authenticated Studio route. It begins in the session owner's
+author catalog; an operator may deliberately switch to the distinct site
 catalog. The server remains authoritative for the selected scope and returns an
 authorization error if site operations are attempted without operator status.
 
@@ -36,11 +36,11 @@ the private route's stylesheet cascade.
 | `endpoint:/api/themes/replace_pool`     | API transport | Replaces the explicit header image pool and its deterministic shuffle seed.                          |
 | `endpoint:/api/themes/shuffle`          | API transport | Replaces only the persisted header-pool shuffle assignment.                                          |
 | `endpoint:/api/themes/preview`          | API transport | Renders an owned draft through the Style Contract renderer without changing selection.               |
-| `/themes/draft/{theme_id}/{path}`       | API transport | Serves an owned draft asset only to its author owner or an operator owning its site draft.           |
+| `/theme/draft/{theme_id}/{path}`        | API transport | Serves an owned draft asset only to its author owner or an operator owning its site draft.           |
 
-The mounted `/studio/themes` journey consumes this complete census. Every
-confirmed mutation rereads the affected catalog state; an indeterminate commit
-also rereads and leaves an explicit status message that the owner must review
-the reloaded state. Site-owned operations require an operator; author-owned
+The mounted `/themes` journey consumes this complete census. Every confirmed
+mutation rereads the affected catalog state; an indeterminate commit also
+rereads and leaves an explicit status message that the owner must review the
+reloaded state. Site-owned operations require an operator; author-owned
 operations require the authenticated author, and every draft, package, preview,
 asset, and binding read remains owner-scoped.

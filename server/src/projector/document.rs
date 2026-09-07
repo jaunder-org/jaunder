@@ -151,16 +151,16 @@ mod tests {
                     common::ids::ThemeId::from(42),
                 ),
                 revision: Some(revision.to_string().repeat(64).parse().unwrap()),
-                stylesheet_url: format!("/themes/{}", stylesheet.to_string().repeat(64))
+                stylesheet_url: format!("/theme/{}", stylesheet.to_string().repeat(64))
                     .parse()
                     .unwrap(),
                 logo_url: Some(
-                    format!("/themes/{}", logo.to_string().repeat(64))
+                    format!("/theme/{}", logo.to_string().repeat(64))
                         .parse()
                         .unwrap(),
                 ),
                 header_url: Some(
-                    format!("/themes/{}", header.to_string().repeat(64))
+                    format!("/theme/{}", header.to_string().repeat(64))
                         .parse()
                         .unwrap(),
                 ),

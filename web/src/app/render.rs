@@ -246,9 +246,9 @@ mod tests {
         common::theme::PublishedThemePresentation {
             identity: common::theme::PublishedThemeIdentity::Custom(common::ids::ThemeId::from(42)),
             revision: Some("a".repeat(64).parse().unwrap()),
-            stylesheet_url: format!("/themes/{}", "b".repeat(64)).parse().unwrap(),
-            logo_url: Some(format!("/themes/{}", "c".repeat(64)).parse().unwrap()),
-            header_url: Some(format!("/themes/{}", "d".repeat(64)).parse().unwrap()),
+            stylesheet_url: format!("/theme/{}", "b".repeat(64)).parse().unwrap(),
+            logo_url: Some(format!("/theme/{}", "c".repeat(64)).parse().unwrap()),
+            header_url: Some(format!("/theme/{}", "d".repeat(64)).parse().unwrap()),
         }
     }
 
@@ -259,7 +259,7 @@ mod tests {
         let decorations = render_theme_decorations(&theme).into_string();
 
         assert_eq!(stylesheet.matches(THEME_STYLESHEET_MARKER_ATTR).count(), 1);
-        assert!(stylesheet.contains(&format!("href=\"/themes/{}\"", "b".repeat(64))));
+        assert!(stylesheet.contains(&format!("href=\"/theme/{}\"", "b".repeat(64))));
         assert_eq!(decorations.matches("data-jaunder-part=\"logo\"").count(), 1);
         assert_eq!(
             decorations
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn theme_role_urls_are_escaped_in_shared_markup() {
         let mut theme = custom_theme();
-        theme.logo_url = Some("/themes/safe?x=%22%3E".parse().unwrap());
+        theme.logo_url = Some("/theme/safe?x=%22%3E".parse().unwrap());
         let logo = render_theme_logo(&theme).into_string();
         assert!(logo.contains("x=%22%3E"), "{logo}");
         assert!(!logo.contains("x=\"\">"), "{logo}");

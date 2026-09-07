@@ -126,7 +126,7 @@ async fn author_draft_asset_is_private_to_its_owner(#[case] backend: Backend) {
     );
     let storage = TempDir::new().expect("temporary content root");
     let app = make_app(&state, &storage);
-    let uri = format!("/themes/draft/{theme_id}/{}", asset.path);
+    let uri = format!("/theme/draft/{theme_id}/{}", asset.path);
 
     let owner_response = app
         .clone()
@@ -210,7 +210,7 @@ async fn public_theme_content_serves_stored_css_and_image_with_immutable_headers
             fixture.image.as_slice(),
         ),
     ] {
-        let response = get(&app, format!("/themes/{digest}")).await;
+        let response = get(&app, format!("/theme/{digest}")).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CONTENT_TYPE], expected_mime);
         assert_eq!(
@@ -231,7 +231,7 @@ async fn public_theme_content_serves_stored_css_and_image_with_immutable_headers
         assert_eq!(body.as_ref(), expected_body);
     }
     let encoded_alias = format!(
-        "/themes/%{:02X}{}",
+        "/theme/%{:02X}{}",
         fixture.stylesheet_digest.as_bytes()[0],
         &fixture.stylesheet_digest[1..]
     );
@@ -252,7 +252,7 @@ async fn public_theme_content_returns_not_modified_for_exact_etag(#[case] backen
     let etag = format!("\"sha256-{}\"", fixture.stylesheet_digest);
     for condition in [etag.clone(), format!("\"other\", W/{etag}"), "*".to_owned()] {
         let request = Request::builder()
-            .uri(format!("/themes/{}", fixture.stylesheet_digest))
+            .uri(format!("/theme/{}", fixture.stylesheet_digest))
             .header(header::IF_NONE_MATCH, condition)
             .body(Body::empty())
             .unwrap();
@@ -290,7 +290,7 @@ async fn only_eligible_theme_content_is_public(#[case] backend: Backend) {
     let app = make_app(&state, &storage);
 
     assert_eq!(
-        get(&app, format!("/themes/{digest}")).await.status(),
+        get(&app, format!("/theme/{digest}")).await.status(),
         StatusCode::NOT_FOUND
     );
 
@@ -316,7 +316,7 @@ async fn only_eligible_theme_content_is_public(#[case] backend: Backend) {
         .expect("admit content");
     confirmed_for(outcome, "integration test backend");
 
-    let response = get(&app, format!("/themes/{digest}")).await;
+    let response = get(&app, format!("/theme/{digest}")).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -327,7 +327,7 @@ async fn only_eligible_theme_content_is_public(#[case] backend: Backend) {
     );
     std::fs::remove_file(&file).expect("remove eligible backing bytes");
     assert_eq!(
-        get(&app, format!("/themes/{digest}")).await.status(),
+        get(&app, format!("/theme/{digest}")).await.status(),
         StatusCode::INTERNAL_SERVER_ERROR,
         "eligible missing content is an operational failure, not public absence"
     );
@@ -362,7 +362,7 @@ async fn removed_theme_content_remains_public_through_retention(#[case] backend:
     confirmed_for(outcome, "integration test backend");
 
     let app = make_app(&state, &storage);
-    let response = get(&app, format!("/themes/{}", fixture.image_digest)).await;
+    let response = get(&app, format!("/theme/{}", fixture.image_digest)).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -385,7 +385,7 @@ async fn public_theme_content_rejects_noncanonical_addresses(#[case] backend: Ba
         format!("{}/extra", "a".repeat(64)),
     ] {
         assert_eq!(
-            get(&app, format!("/themes/{address}")).await.status(),
+            get(&app, format!("/theme/{address}")).await.status(),
             StatusCode::NOT_FOUND
         );
     }

@@ -215,7 +215,7 @@ pub async fn seed_published_author_theme(
                 theme_id,
                 &compiled,
                 limits,
-                chrono::Utc::now().timestamp(),
+                Timestamp::now().as_second(),
             )
             .await?;
         confirmed_fixture_outcome(publication, "publish fixture author theme")?;
@@ -1108,7 +1108,7 @@ mod seed_tests {
                 site_theme,
                 &compiled,
                 storage::seed_theme_fixture::theme_quota_limits(i64::MAX),
-                chrono::Utc::now().timestamp(),
+                Timestamp::now().as_second(),
             )
             .await
             .expect("site fixture publishes");

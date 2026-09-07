@@ -102,6 +102,7 @@ use {
         theme_operations::{ThemeOperationCoordinator, ThemeOperationRejected},
         theme_package::{self, ThemePackageLimits, ValidatedThemePackage},
     },
+    jiff::Timestamp,
     leptos::prelude::*,
     leptos_axum::ResponseOptions,
     std::{
@@ -280,7 +281,7 @@ fn package_asset_urls(
             let (_, _, digest) = package
                 .asset(path)
                 .ok_or_else(|| InternalError::server_message("validated asset disappeared"))?;
-            Ok((path.to_owned(), format!("/themes/{}", digest_hex(&digest))))
+            Ok((path.to_owned(), format!("/theme/{}", digest_hex(&digest))))
         })
         .collect()
 }
@@ -305,7 +306,7 @@ fn draft_asset_urls(
             (
                 path.to_owned(),
                 format!(
-                    "/themes/draft/{theme_id}/{}",
+                    "/theme/draft/{theme_id}/{}",
                     percent_encode_draft_asset_path(path)
                 ),
             )
@@ -888,7 +889,7 @@ pub async fn remove(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Mutat
             actor,
             owner,
             theme_id,
-            chrono::Utc::now().timestamp() + storage::THEME_CONTENT_RETENTION_SECONDS,
+            Timestamp::now().as_second() + storage::THEME_CONTENT_RETENTION_SECONDS,
         )
         .await
         .map_err(manager_error)
@@ -929,7 +930,7 @@ pub async fn publish(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Muta
             theme_id,
             &compiled,
             ThemeQuotaLimits::production(),
-            chrono::Utc::now().timestamp(),
+            Timestamp::now().as_second(),
         )
         .await
         .map(|outcome| outcome.map(|_| ()))
@@ -1135,7 +1136,7 @@ pub async fn preview(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Them
         theme: common::theme::PublishedThemePresentation {
             identity: common::theme::PublishedThemeIdentity::Custom(theme_id),
             revision: Some(preview_revision),
-            stylesheet_url: format!("/themes/{}", "0".repeat(64))
+            stylesheet_url: format!("/theme/{}", "0".repeat(64))
                 .parse()
                 .map_err(|_| InternalError::server_message("preview stylesheet URL"))?,
             logo_url,

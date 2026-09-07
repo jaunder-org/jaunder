@@ -42,7 +42,7 @@ only in that row.
 | `/admin/backups`, `/admin/site`, `/admin/websub`                                                                               | [Administration](#administration)                                                   |
 | `/posts/new`, `/drafts`, `/posts/:post_id/edit`, `/history`, `/posts/:post_id/history`, `/posts/:post_id/history/:revision_id` | [Post authoring lifecycle](#post-authoring-lifecycle)                               |
 | `/media`                                                                                                                       | [Media management](#media-management)                                               |
-| `/studio/themes`                                                                                                               | [Theme management](#theme-management)                                               |
+| `/themes`                                                                                                                      | [Theme management](#theme-management)                                               |
 | `/forgot-password`, `/reset-password?token=...`                                                                                | [Password reset](#password-reset)                                                   |
 | `/tags/:tag`, `/:username/tags/:tag`                                                                                           | [Tag browsing](#tag-browsing) — canonical user path: `/~:username/tags/:tag`        |
 | `/:username`                                                                                                                   | [Public reading](#public-reading) — canonical user path: `/~:username`              |
@@ -225,10 +225,10 @@ presentation from the private site surface.
 
 ### Theme management
 
-**Paths and entry points:** `/studio/themes`; authenticated sidebar Themes
-navigation. Authors manage their own catalog. Operators can switch to the
-server-authorized site catalog. The private Studio route never admits a custom
-stylesheet into its own document; the real public preview is isolated.
+**Paths and entry points:** `/themes`; authenticated sidebar Themes navigation.
+Authors manage their own catalog. Operators can switch to the server-authorized
+site catalog. The private Studio route never admits a custom stylesheet into its
+own document; the real public preview is isolated.
 
 **Evidence:**
 [`end2end/tests/theme-management.spec.ts`](../../end2end/tests/theme-management.spec.ts)
@@ -246,9 +246,9 @@ the transport suite below.
 ### Theme management API transport
 
 **Paths and entry points:** the authenticated `/api/themes/` server-function
-transport; it supports the mounted `/studio/themes` route and is also covered
-directly where browser UI setup cannot prove transport-specific headers and
-multipart ordering.
+transport; it supports the mounted `/themes` route and is also covered directly
+where browser UI setup cannot prove transport-specific headers and multipart
+ordering.
 
 **Evidence:**
 [`end2end/tests/theme-api.spec.ts`](../../end2end/tests/theme-api.spec.ts)

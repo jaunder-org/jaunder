@@ -12,6 +12,7 @@ use common::{
     theme::{ThemeAssetDigest, ThemeContentDigest, ThemeRevisionDigest, ThemeStylesheetDigest},
 };
 use host::theme_package::CompiledThemeRevision;
+use jiff::Timestamp;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::{fs, io::AsyncWriteExt};
@@ -100,7 +101,7 @@ impl ThemeAssetManager {
         // through the same eligibility-first, lock-held detachment path. Do this
         // before checking bytes, because an expired zero-reference row can safely
         // be detached even when its now-unservable file is missing or corrupt.
-        let now_unix_seconds = chrono::Utc::now().timestamp();
+        let now_unix_seconds = Timestamp::now().as_second();
         for (owner, digest) in self
             .themes
             .expired_retained_content(now_unix_seconds)

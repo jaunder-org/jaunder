@@ -30,7 +30,7 @@ test("theme management mounts as Studio without a public theme stylesheet", asyn
   page,
 }) => {
   await signInAsNewUser(page);
-  await goto(page, "/studio/themes");
+  await goto(page, "/themes");
 
   await expect(
     page.getByRole("heading", { name: "Catalog scope" }),
@@ -49,7 +49,7 @@ test("invalid authored CSS is rejected before draft persistence", async ({
   page,
 }) => {
   await signInAsNewUser(page);
-  await goto(page, "/studio/themes");
+  await goto(page, "/themes");
   const cssImport = page.locator("section").filter({ hasText: "Import CSS" });
   await cssImport.getByLabel("Theme name").fill("Rejected external");
   await cssImport
@@ -78,7 +78,7 @@ test("author completes the custom theme lifecycle through Studio", async ({
   tracedContext,
 }) => {
   const username = await signInAsNewUser(page);
-  await goto(page, "/studio/themes");
+  await goto(page, "/themes");
   const mutation = (endpoint: ThemeEndpoint) =>
     page.waitForResponse(
       (response) =>
@@ -189,7 +189,7 @@ test("author completes the custom theme lifecycle through Studio", async ({
   const freshContext = await tracedContext();
   const freshPage = await freshContext.newPage();
   await signInAs(freshPage, username);
-  await goto(freshPage, "/studio/themes");
+  await goto(freshPage, "/themes");
   await expect(freshPage.getByLabel("Public selection")).toHaveValue(themeId!);
   await freshContext.close();
 
@@ -227,7 +227,7 @@ test("operator manages the site catalog through public selection and fallback", 
   tracedContext,
 }) => {
   await signInAs(page, "testoperator");
-  await goto(page, "/studio/themes");
+  await goto(page, "/themes");
   const mutation = (endpoint: ThemeEndpoint) =>
     page.waitForResponse(
       (response) =>

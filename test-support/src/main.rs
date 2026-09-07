@@ -9,8 +9,8 @@ use host::{capture, feed::FeedEventPhase};
 use storage::{DbConnectOptions, StorageRuntimeConfig};
 use test_support::{
     SandboxProfile, create_session_for_user, create_user, reset_author_theme_fixture, reset_mail,
-    reset_public_theme_fixture, sandbox_profile_anchor, seed_dead_letters, seed_posts_for_user,
-    seed_published_author_theme, seed_published_site_theme, seed_sandbox_profile, seed_user,
+    sandbox_profile_anchor, seed_dead_letters, seed_posts_for_user, seed_published_author_theme,
+    seed_sandbox_profile, seed_user,
 };
 
 #[derive(Parser)]

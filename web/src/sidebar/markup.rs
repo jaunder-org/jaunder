@@ -123,7 +123,7 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 19]> = LazyLock::new(|| {
             key: "themes",
             label: "Themes",
             icon_path: Icons::COG,
-            href: Some(root_relative_url("/studio/themes")),
+            href: Some(root_relative_url("/themes")),
             requires_auth: true,
             requires_operator: false,
         },

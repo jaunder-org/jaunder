@@ -86,7 +86,7 @@ test("published custom author theme survives cold load and in-app navigation", a
     });
 
     expect(presentation.dataTheme).toBe("custom");
-    expect(presentation.stylesheetHref).toMatch(/^\/themes\/[0-9a-f]{64}$/);
+    expect(presentation.stylesheetHref).toMatch(/^\/theme\/[0-9a-f]{64}$/);
     expect(presentation.ready).toBe("rgb(1, 2, 3)");
     expect(presentation.position).toBe("fixed");
     expect(presentation.inset).toBe("0px");

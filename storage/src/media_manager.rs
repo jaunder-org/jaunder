@@ -26,9 +26,6 @@ use common::time::UtcInstant;
 use host::metrics::{self, UploadOutcome};
 
 use crate::media_ownership::resolve_media_reference_ownership;
-use crate::posts::media::{
-    MediaReferenceEvidence, MediaReferenceSnapshot, PersistedMediaReference,
-};
 use crate::{
     CreateMediaError, MediaContentLocks, MediaDeleteMode, MediaRecord,
     MediaReferenceOwnershipResolver, MediaStorage, PostStorage, SiteConfigStorage,
@@ -99,22 +96,13 @@ pub struct ManagedUpload {
 #[derive(Debug)]
 pub struct MediaDeletionResult {
     outcome: MutationOutcome<TryDeleteOutcome>,
-    references: MediaReferenceSnapshot,
-    evidence: MediaReferenceEvidence,
     theme_reference_count: u64,
 }
 
 impl MediaDeletionResult {
-    fn new(
-        outcome: MutationOutcome<TryDeleteOutcome>,
-        references: MediaReferenceSnapshot,
-        evidence: MediaReferenceEvidence,
-        theme_reference_count: u64,
-    ) -> Self {
+    fn new(outcome: MutationOutcome<TryDeleteOutcome>, theme_reference_count: u64) -> Self {
         Self {
             outcome,
-            references,
-            evidence,
             theme_reference_count,
         }
     }
@@ -130,33 +118,26 @@ impl MediaDeletionResult {
     pub fn outcome(&self) -> &MutationOutcome<TryDeleteOutcome> {
         &self.outcome
     }
-    /// Return owner-scoped Posts that explain a retained-reference refusal.
+
+    /// Return owner-scoped Posts that explain a retained-history refusal.
     #[must_use]
-    pub fn referenced_post_ids(&self, user_id: UserId) -> Vec<PostId> {
-        if !matches!(self.outcome.value(), TryDeleteOutcome::RefusedReferenced) {
-            return Vec::new();
+    pub fn referenced_post_ids(&self) -> Vec<PostId> {
+        match self.outcome.value() {
+            TryDeleteOutcome::OwnerRetainedHistory(post_ids) => post_ids.clone(),
+            TryDeleteOutcome::Deleted
+            | TryDeleteOutcome::Missing
+            | TryDeleteOutcome::GlobalSafety => Vec::new(),
         }
-        let mut post_ids = self
-            .references
-            .references()
-            .iter()
-            .filter(|reference| {
-                reference.owner_id() == Some(user_id) && !self.evidence.proves_foreign(reference)
-            })
-            .map(PersistedMediaReference::post_id)
-            .collect::<Vec<_>>();
-        post_ids.sort_unstable();
-        post_ids.dedup();
-        post_ids
     }
 
     /// Return the number of this owner's theme bindings that explain a refusal.
     #[must_use]
     pub fn referenced_theme_bindings(&self) -> u64 {
-        if matches!(self.outcome.value(), TryDeleteOutcome::RefusedReferenced) {
-            self.theme_reference_count
-        } else {
-            0
+        match self.outcome.value() {
+            TryDeleteOutcome::OwnerRetainedHistory(_) | TryDeleteOutcome::GlobalSafety => {
+                self.theme_reference_count
+            }
+            TryDeleteOutcome::Deleted | TryDeleteOutcome::Missing => 0,
         }
     }
 }
@@ -792,12 +773,12 @@ impl MediaManager {
             })
             .await
             .map_err(Self::scope_error)?;
-        let theme_reference_count =
-            if matches!(outcome.value(), TryDeleteOutcome::RefusedReferenced) {
+        let theme_reference_count = match outcome.value() {
+            TryDeleteOutcome::OwnerRetainedHistory(_) | TryDeleteOutcome::GlobalSafety => {
                 self.media.theme_reference_count(user_id, media).await?
-            } else {
-                0
-            };
+            }
+            TryDeleteOutcome::Deleted | TryDeleteOutcome::Missing => 0,
+        };
 
         if matches!(
             outcome,
@@ -847,12 +828,7 @@ impl MediaManager {
                 return Err(Self::scope_error(error));
             }
         }
-        Ok(MediaDeletionResult::new(
-            outcome,
-            references,
-            evidence,
-            theme_reference_count,
-        ))
+        Ok(MediaDeletionResult::new(outcome, theme_reference_count))
     }
 
     /// Removes a reclaimed canonical media file while its storage guard remains live.
@@ -1372,90 +1348,31 @@ mod tests {
     }
 
     #[test]
-    fn deletion_result_reports_only_owned_nonforeign_posts_on_refusal() {
-        let instance_id: InstanceId = "123e4567-e89b-12d3-a456-426614174000"
-            .parse()
-            .expect("canonical instance ID");
-        let parsed =
-            common::media::parse_media_url(&media_url_for("photo.jpg")).expect("media form parses");
-        let owner_id = UserId::from(7);
-        let foreign = PersistedMediaReference::new(
-            PostId::from(3),
-            parsed.media().clone(),
-            parsed.kind(),
-            parsed.reference_form().clone(),
-        )
-        .with_owner(owner_id);
-        let references = MediaReferenceSnapshot::new(
-            vec![
-                PersistedMediaReference::new(
-                    PostId::from(2),
-                    parsed.media().clone(),
-                    parsed.kind(),
-                    parsed.reference_form().clone(),
-                )
-                .with_owner(owner_id),
-                PersistedMediaReference::new(
-                    PostId::from(1),
-                    parsed.media().clone(),
-                    parsed.kind(),
-                    parsed.reference_form().clone(),
-                )
-                .with_owner(owner_id),
-                PersistedMediaReference::new(
-                    PostId::from(1),
-                    parsed.media().clone(),
-                    parsed.kind(),
-                    parsed.reference_form().clone(),
-                )
-                .with_owner(owner_id),
-                PersistedMediaReference::new(
-                    PostId::from(4),
-                    parsed.media().clone(),
-                    parsed.kind(),
-                    parsed.reference_form().clone(),
-                )
-                .with_owner(UserId::from(8)),
-                foreign.clone(),
-            ],
-            false,
-        );
-        let mut evidence = MediaReferenceEvidence::new(instance_id.clone());
-        assert!(evidence.insert(ProvenForeignReference::new(foreign, instance_id)));
-        let result = MediaDeletionResult::new(
-            MutationOutcome::Confirmed(TryDeleteOutcome::RefusedReferenced),
-            references,
-            evidence,
-            2,
-        );
-
-        assert_eq!(
-            result.referenced_post_ids(owner_id),
-            vec![PostId::from(1), PostId::from(2)]
-        );
-        assert_eq!(result.referenced_theme_bindings(), 2);
-        assert!(matches!(
-            result.outcome(),
-            MutationOutcome::Confirmed(TryDeleteOutcome::RefusedReferenced)
-        ));
-    }
-
-    #[test]
-    fn deletion_result_retains_storage_owner_history_classification() {
+    fn deletion_result_preserves_storage_classification_and_theme_report() {
         let result = MediaDeletionResult::new(
             MutationOutcome::Confirmed(TryDeleteOutcome::OwnerRetainedHistory(vec![
                 PostId::from(1),
                 PostId::from(2),
             ])),
-            MediaReferenceSnapshot::new(Vec::new(), false),
-            MediaReferenceEvidence::new(test_instance_id()),
-            0,
+            2,
         );
+        assert_eq!(
+            result.referenced_post_ids(),
+            vec![PostId::from(1), PostId::from(2)]
+        );
+        assert_eq!(result.referenced_theme_bindings(), 2);
         assert!(matches!(
             result.into_outcome(),
             MutationOutcome::Confirmed(TryDeleteOutcome::OwnerRetainedHistory(post_ids))
                 if post_ids == vec![PostId::from(1), PostId::from(2)]
         ));
+
+        let global = MediaDeletionResult::new(
+            MutationOutcome::Confirmed(TryDeleteOutcome::GlobalSafety),
+            1,
+        );
+        assert!(global.referenced_post_ids().is_empty());
+        assert_eq!(global.referenced_theme_bindings(), 1);
     }
 
     #[test]
@@ -3028,7 +2945,7 @@ mod tests {
         let refused = manager.delete_media(actor, &media, false).await.unwrap();
         assert!(matches!(
             refused.outcome(),
-            MutationOutcome::Confirmed(TryDeleteOutcome::RefusedReferenced)
+            MutationOutcome::Confirmed(TryDeleteOutcome::GlobalSafety)
         ));
         assert_eq!(refused.referenced_theme_bindings(), 1);
         assert!(media_row_exists(&env.state, actor, &media).await);
@@ -3036,7 +2953,7 @@ mod tests {
         let force_refused = manager.delete_media(actor, &media, true).await.unwrap();
         assert!(matches!(
             force_refused.outcome(),
-            MutationOutcome::Confirmed(TryDeleteOutcome::RefusedReferenced)
+            MutationOutcome::Confirmed(TryDeleteOutcome::GlobalSafety)
         ));
         assert_eq!(force_refused.referenced_theme_bindings(), 1);
         assert!(media_row_exists(&env.state, actor, &media).await);
@@ -3123,9 +3040,7 @@ mod tests {
         let deletion = deletion.expect("concurrent delete returns a guarded outcome");
         assert!(matches!(
             deletion.outcome(),
-            MutationOutcome::Confirmed(
-                TryDeleteOutcome::Deleted | TryDeleteOutcome::RefusedReferenced
-            )
+            MutationOutcome::Confirmed(TryDeleteOutcome::Deleted | TryDeleteOutcome::GlobalSafety)
         ));
         if media_row_exists(&env.state, actor, &media).await {
             assert!(matches!(

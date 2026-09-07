@@ -117,7 +117,7 @@ async fn resolve_custom(
         None
     };
     let stylesheet_url =
-        RootRelativeUrl::try_from(format!("/themes/{}", revision.stylesheet_digest))
+        RootRelativeUrl::try_from(format!("/theme/{}", revision.stylesheet_digest))
             .map_err(|_| sqlx::Error::RowNotFound)?;
     let logo_url = resolve_role(
         logo.as_ref(),
@@ -320,7 +320,7 @@ pub async fn resolve_draft_theme_images(
 
 fn package_url(assets: &[ThemePackageAsset], path: &str) -> Option<RootRelativeUrl> {
     let asset = assets.iter().find(|asset| asset.path == path)?;
-    format!("/themes/{}", asset.digest).parse().ok()
+    format!("/theme/{}", asset.digest).parse().ok()
 }
 
 fn media_url_parts(source: &str, digest: &str, filename: &str) -> Option<RootRelativeUrl> {
@@ -602,7 +602,7 @@ mod tests {
             PublishedThemePresentation {
                 identity: PublishedThemeIdentity::Custom(theme_id),
                 revision: Some("a".repeat(64).parse().unwrap()),
-                stylesheet_url: format!("/themes/{}", "b".repeat(64)).parse().unwrap(),
+                stylesheet_url: format!("/theme/{}", "b".repeat(64)).parse().unwrap(),
                 logo_url: None,
                 header_url: None,
             }
@@ -742,7 +742,7 @@ mod tests {
             )
             .unwrap()
             .as_ref(),
-            format!("/themes/{}", "c".repeat(64))
+            format!("/theme/{}", "c".repeat(64))
         );
     }
 
@@ -795,8 +795,8 @@ mod tests {
         assert_eq!(site, site_again);
         assert!(
             [
-                format!("/themes/{}", "d".repeat(64)),
-                format!("/themes/{}", "e".repeat(64)),
+                format!("/theme/{}", "d".repeat(64)),
+                format!("/theme/{}", "e".repeat(64)),
             ]
             .contains(&site.unwrap().to_string())
         );

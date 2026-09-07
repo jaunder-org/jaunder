@@ -63,7 +63,10 @@ fn permalink_seed_matches_route(seed: &AuthoredPost, route: Option<&PermalinkRou
         route
             == &PermalinkRoute {
                 username: seed.post.username.clone(),
-                date: seed.post.display_time().value().date_naive().into(),
+                date: jiff::tz::Offset::UTC
+                    .to_datetime(seed.post.display_time().value())
+                    .date()
+                    .into(),
                 slug: seed.post.slug.clone(),
             }
     })

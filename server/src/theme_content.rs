@@ -28,7 +28,7 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new().nest(
-        "/themes",
+        "/theme",
         Router::new()
             .route(
                 "/draft/{theme_id}/{*path}",
@@ -106,7 +106,7 @@ async fn serve(
     request_headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
     let Path(digest) = digest.map_err(|_| StatusCode::NOT_FOUND)?;
-    if uri.path().strip_prefix("/themes/") != Some(digest.as_ref()) {
+    if uri.path().strip_prefix("/theme/") != Some(digest.as_ref()) {
         return Err(StatusCode::NOT_FOUND);
     }
 

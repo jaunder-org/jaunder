@@ -336,7 +336,7 @@ test("theme API transport preserves package bindings, deterministic pools, and d
   expect(previewResponse.html).toContain("data-jaunder-theme-surface");
   expect(previewResponse.css).toContain("teal");
   expect(previewResponse.html).toContain(
-    `/themes/draft/${assetTheme.id}/${ASSET_PATH}`,
+    `/theme/draft/${assetTheme.id}/${ASSET_PATH}`,
   );
 
   const selectionAfterPreview = await postForm(
@@ -406,7 +406,7 @@ test("theme API transport preserves package bindings, deterministic pools, and d
     header_pool: [{ kind: "package_asset", value: ASSET_PATH }],
     shuffle_seed: shuffledSeed,
   });
-  const assetUrl = `${BASE_URL}/themes/draft/${assetTheme.id}/${ASSET_PATH}`;
+  const assetUrl = `${BASE_URL}/theme/draft/${assetTheme.id}/${ASSET_PATH}`;
 
   const ownerAsset = await page.request.get(assetUrl);
   expect(ownerAsset.status()).toBe(200);

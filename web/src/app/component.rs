@@ -444,10 +444,7 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("drafts") view=DraftsPage />
                     <Route path=StaticSegment("scheduled") view=ScheduledPage />
                     <Route path=StaticSegment("media") view=MediaPage />
-                    <Route
-                        path=(StaticSegment("studio"), StaticSegment("themes"))
-                        view=ThemesPage
-                    />
+                    <Route path=StaticSegment("themes") view=ThemesPage />
                     <Route path=StaticSegment("history") view=HistoryPage />
                     <Route
                         path=(

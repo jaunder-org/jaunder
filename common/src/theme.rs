@@ -212,12 +212,26 @@ impl PublicThemeRoute {
 
     #[must_use]
     pub fn permalink(route: &PermalinkRoute) -> Self {
-        Self(format!(
-            "/~{}/{}/{}",
-            route.username,
-            route.date.value().format("%Y/%m/%d"),
-            route.slug
-        ))
+        let date = route.date.value();
+        let year = date.year();
+        if year < 0 {
+            Self(format!(
+                "/~{}/-{:06}/{:02}/{:02}/{}",
+                route.username,
+                year.unsigned_abs(),
+                date.month(),
+                date.day(),
+                route.slug
+            ))
+        } else {
+            Self(format!(
+                "/~{}/{year:04}/{:02}/{:02}/{}",
+                route.username,
+                date.month(),
+                date.day(),
+                route.slug
+            ))
+        }
     }
 
     #[must_use]
@@ -448,14 +462,14 @@ mod tests {
         let custom = PublishedThemePresentation {
             identity: PublishedThemeIdentity::Custom(crate::ids::ThemeId::from(42)),
             revision: Some("a".repeat(64).parse().unwrap()),
-            stylesheet_url: format!("/themes/{}", "b".repeat(64)).parse().unwrap(),
-            logo_url: Some(format!("/themes/{}", "c".repeat(64)).parse().unwrap()),
-            header_url: Some(format!("/themes/{}", "d".repeat(64)).parse().unwrap()),
+            stylesheet_url: format!("/theme/{}", "b".repeat(64)).parse().unwrap(),
+            logo_url: Some(format!("/theme/{}", "c".repeat(64)).parse().unwrap()),
+            header_url: Some(format!("/theme/{}", "d".repeat(64)).parse().unwrap()),
         };
 
         let built_in_fixture = r#"{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null}"#;
         let custom_fixture = format!(
-            r#"{{"identity":{{"kind":"custom","value":42}},"revision":"{}","stylesheet_url":"/themes/{}","logo_url":"/themes/{}","header_url":"/themes/{}"}}"#,
+            r#"{{"identity":{{"kind":"custom","value":42}},"revision":"{}","stylesheet_url":"/theme/{}","logo_url":"/theme/{}","header_url":"/theme/{}"}}"#,
             "a".repeat(64),
             "b".repeat(64),
             "c".repeat(64),
@@ -528,6 +542,7 @@ mod tests {
         let alice = "alice".parse().unwrap();
         let rust = "rust".parse().unwrap();
         let permalink = PermalinkRoute::parse("alice", "2026", "01", "02", "hello").unwrap();
+        let negative_year = PermalinkRoute::parse("alice", "-0001", "01", "02", "hello").unwrap();
 
         assert_eq!(PublicThemeRoute::site().as_str(), "/");
         assert_eq!(PublicThemeRoute::site_tag(&rust).as_str(), "/tags/rust");
@@ -539,6 +554,10 @@ mod tests {
         assert_eq!(
             PublicThemeRoute::permalink(&permalink).as_str(),
             "/~alice/2026/01/02/hello"
+        );
+        assert_eq!(
+            PublicThemeRoute::permalink(&negative_year).as_str(),
+            "/~alice/-000001/01/02/hello"
         );
     }
 }
