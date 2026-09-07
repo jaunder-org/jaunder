@@ -1,4 +1,4 @@
-//! The closed set of public presentation themes.
+//! Built-in and custom public presentation theme identities and content metadata.
 
 /// A built-in public presentation theme.
 ///

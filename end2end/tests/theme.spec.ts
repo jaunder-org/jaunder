@@ -57,12 +57,13 @@ test(
 
 test("published custom author theme survives cold load and in-app navigation", async ({
   page,
+  tracedContext,
 }) => {
   const username = await signInAsNewUser(page);
   await seedPostsViaTool(username, 1, "Visual Theme Navigation");
 
-  const expectCustomPresentation = async () => {
-    const presentation = await page.evaluate(() => {
+  const expectCustomPresentation = async (target = page) => {
+    const presentation = await target.evaluate(() => {
       const root = document.querySelector(".j-root");
       const surface = document.querySelector(
         '[data-jaunder-theme-surface][data-jaunder-style-contract="1"]',
@@ -70,19 +71,32 @@ test("published custom author theme survives cold load and in-app navigation", a
       const stylesheet = document.querySelector(
         "link[data-jaunder-theme-stylesheet]",
       );
+      const style = surface ? getComputedStyle(surface) : null;
       return {
         dataTheme: root?.getAttribute("data-theme"),
         stylesheetHref: stylesheet?.getAttribute("href"),
-        ready: surface ? getComputedStyle(surface).outlineColor : "",
+        ready: style?.outlineColor ?? "",
+        position: style?.position ?? "",
+        inset: style?.inset ?? "",
+        zIndex: style?.zIndex ?? "",
+        transform: style?.transform ?? "",
+        filter: style?.filter ?? "",
+        overflow: style?.overflow ?? "",
       };
     });
 
     expect(presentation.dataTheme).toBe("custom");
     expect(presentation.stylesheetHref).toMatch(/^\/themes\/[0-9a-f]{64}$/);
     expect(presentation.ready).toBe("rgb(1, 2, 3)");
-    await expect(page.locator('[data-jaunder-part="logo"]')).toBeVisible();
+    expect(presentation.position).toBe("fixed");
+    expect(presentation.inset).toBe("0px");
+    expect(presentation.zIndex).toBe("2147483647");
+    expect(presentation.transform).not.toBe("none");
+    expect(presentation.filter).not.toBe("none");
+    expect(presentation.overflow).toBe("visible");
+    await expect(target.locator('[data-jaunder-part="logo"]')).toBeVisible();
     await expect(
-      page.locator('[data-jaunder-part="header-image"]'),
+      target.locator('[data-jaunder-part="header-image"]'),
     ).toBeVisible();
   };
 
@@ -90,6 +104,21 @@ test("published custom author theme survives cold load and in-app navigation", a
     await seedThemeViaTool(username);
     await goto(page, `/~${username}`);
     await expectCustomPresentation();
+    const trustedEdit = page.getByRole("link", { name: "Edit" }).first();
+    await expect(trustedEdit).toBeVisible();
+    await trustedEdit.click({ trial: true });
+
+    const anonymousContext = await tracedContext();
+    try {
+      const anonymousPage = await anonymousContext.newPage();
+      await goto(anonymousPage, `/~${username}`);
+      await expectCustomPresentation(anonymousPage);
+      await expect(
+        anonymousPage.locator(".j-trusted-chrome .j-post-action-tray"),
+      ).toHaveCount(0);
+    } finally {
+      await anonymousContext.close();
+    }
 
     await navigateInApp(
       page,

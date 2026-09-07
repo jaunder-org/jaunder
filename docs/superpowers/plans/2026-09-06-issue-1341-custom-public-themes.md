@@ -188,7 +188,7 @@ Out:
     binding/pool/shuffle, responsive preview, and survival in a fresh browser
     context.
 
-- [ ] Task 10: Close cross-surface evidence and documentation.
+- [x] Task 10: Close cross-surface evidence and documentation.
   - Contract: extend the existing theme precedence suite rather than creating a
     second convention; complete route journey and aggregate e2e evidence; retain
     the approved ADR/architecture/glossary projection; remove obsolete

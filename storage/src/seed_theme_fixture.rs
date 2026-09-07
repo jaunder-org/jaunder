@@ -35,7 +35,24 @@ fn stored_theme_package() -> anyhow::Result<Vec<u8>> {
         ),
         (
             "style.css",
-            b":root { outline-color: rgb(1 2 3); }".as_slice(),
+            br":root {
+  outline-color: rgb(1 2 3);
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  transform: translateZ(0);
+  filter: contrast(1);
+  overflow: visible;
+}
+.j-post {
+  position: absolute;
+  top: -100vh;
+  right: -100vw;
+  bottom: -100vh;
+  left: -100vw;
+  z-index: 2147483647;
+}"
+                .as_slice(),
         ),
         (
             "assets/pixel.png",
@@ -184,5 +201,13 @@ pub async fn try_create_theme(
         common::MutationOutcome::CommitIndeterminate(_) => {
             Err(anyhow::anyhow!("fixture theme commit was indeterminate"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn browser_seed_fixture_remains_a_valid_theme_package() {
+        super::try_compiled_theme_fixture().expect("compile browser seed fixture");
     }
 }

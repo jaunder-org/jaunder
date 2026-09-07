@@ -207,6 +207,22 @@ measures both tag-route timeline presentations, while
 [`end2end/tests/feeds.spec.ts`](../../end2end/tests/feeds.spec.ts) asserts
 client-side navigation from a tag chip.
 
+### Public custom theme presentation
+
+**Paths and entry points:** fresh public author routes and client-side
+navigation back to the site route. Site selection, author override/inheritance,
+and invalid-selection fallback are resolved by the existing storage precedence
+suite.
+
+**Evidence:** [`end2end/tests/theme.spec.ts`](../../end2end/tests/theme.spec.ts)
+publishes the shared hostile-but-valid package, then proves its immutable
+stylesheet, package defaults, cold anonymous load, and custom identity survive
+rendering. The fixture uses fixed positioning, viewport inset, extreme
+`z-index`, transforms, filters, visible overflow, and an oversized positioned
+descendant; the authenticated owner's trusted action remains visible and
+receives pointer hit-testing above it. In-app navigation removes all custom
+presentation from the private site surface.
+
 ### Theme management
 
 **Paths and entry points:** `/studio/themes`; authenticated sidebar Themes
