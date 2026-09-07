@@ -6,7 +6,7 @@
 > boundary, public cache identity, and cross-projector/CSR contracts.
 
 Authoritative spec:
-`docs/superpowers/specs/2026-09-06-issue-1341-custom-public-themes.md`
+`docs/archive/2026-09-06-issue-1341-custom-public-themes-spec.md`
 
 ## Scope
 
