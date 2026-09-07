@@ -9,11 +9,12 @@ use crate::html::Markup;
 /// the type rather than by a comment asking callers to be careful; `title`/`sub`
 /// are plain text and maud escapes them.
 #[must_use]
-pub(crate) fn render(title: &str, sub: Option<&str>, right: &Markup) -> Markup {
+pub(crate) fn render(title: &str, sub: Option<&str>, right: &Markup, logo: &Markup) -> Markup {
     Markup::new(html! {
         header class="j-topbar" data-jaunder-part="masthead" {
             div {
                 span class="j-site-identity" data-jaunder-part="site-title" { "Jaunder" }
+                (logo)
                 h1 { (title) }
                 @if let Some(s) = sub {
                     div class="j-sub" { (s) }
@@ -37,7 +38,12 @@ mod tests {
     #[test]
     fn topbar_with_sub_markup_is_stable() {
         assert_eq!(
-            render("Title", Some("Subtitle"), &Markup::empty()),
+            render(
+                "Title",
+                Some("Subtitle"),
+                &Markup::empty(),
+                &Markup::empty()
+            ),
             "<header class=\"j-topbar\" data-jaunder-part=\"masthead\"><div>\
              <span class=\"j-site-identity\" data-jaunder-part=\"site-title\">Jaunder</span>\
              <h1>Title</h1><div class=\"j-sub\">Subtitle</div></div>\
@@ -48,7 +54,7 @@ mod tests {
     #[test]
     fn topbar_without_sub_markup_is_stable() {
         assert_eq!(
-            render("Title", None, &Markup::empty()),
+            render("Title", None, &Markup::empty(), &Markup::empty()),
             "<header class=\"j-topbar\" data-jaunder-part=\"masthead\"><div>\
              <span class=\"j-site-identity\" data-jaunder-part=\"site-title\">Jaunder</span>\
              <h1>Title</h1></div><div class=\"j-topbar-right\"></div></header>"

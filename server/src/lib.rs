@@ -20,6 +20,8 @@ mod scheduled_worker;
 mod server_fn_response;
 pub mod site;
 mod soft_path;
+pub mod theme_content;
+
 pub mod websub;
 
 #[doc(hidden)]
@@ -118,6 +120,7 @@ where
         .nest_service("/style", ServeEmbed::<StaticAssets>::new())
         .merge(crate::media::router())
         .merge(crate::atompub::router())
+        .merge(crate::theme_content::router())
         .merge(client_telemetry)
         .route(
             "/api/{*fn_name}",

@@ -16,4 +16,5 @@ mod feed;
 mod misc;
 mod projector;
 mod storage;
+mod theme_content;
 mod web;

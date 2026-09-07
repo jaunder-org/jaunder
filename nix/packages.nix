@@ -247,6 +247,14 @@ let
       pname = "test-support";
       cargoExtraArgs = "-p test-support";
       doCheck = false;
+      nativeBuildInputs =
+        hostArgs.nativeBuildInputs
+        ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
+      postFixup = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+        patchelf --add-rpath \
+          "${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}" \
+          "$out/bin/test-support"
+      '';
     }
   );
 

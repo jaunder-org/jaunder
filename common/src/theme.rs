@@ -19,6 +19,8 @@ pub enum Theme {
     Reader,
 }
 
+use crate::{permalink_route::PermalinkRoute, tag::Tag, username::Username};
+
 use sha2::{Digest, Sha256};
 use std::str::FromStr;
 
@@ -192,32 +194,42 @@ impl ThemeImageBindingMode {
     }
 }
 
-/// Canonical, query-free identity of one public presentation route.
+/// Canonical identity of one public presentation route.
+///
+/// Construction is closed over the public router's typed route values, preventing
+/// callers from inventing alternate spellings for deterministic header selection.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PublicThemeRoute(String);
 
-#[derive(Debug, Error)]
-#[error("theme route must be a canonical root-relative public path")]
-pub struct InvalidPublicThemeRoute;
-
 impl PublicThemeRoute {
-    /// Accepts only the canonical path emitted by a typed public route formatter.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InvalidPublicThemeRoute`] for non-root-relative paths or paths
-    /// containing an authority, query, or fragment.
-    pub fn new(path: String) -> Result<Self, InvalidPublicThemeRoute> {
-        if path.starts_with('/')
-            && !path.starts_with("//")
-            && !path.contains('?')
-            && !path.contains('#')
-            && !path.contains("://")
-        {
-            Ok(Self(path))
-        } else {
-            Err(InvalidPublicThemeRoute)
-        }
+    #[must_use]
+    pub fn site() -> Self {
+        Self("/".to_owned())
+    }
+
+    #[must_use]
+    pub fn site_tag(tag: &Tag) -> Self {
+        Self(format!("/tags/{tag}"))
+    }
+
+    #[must_use]
+    pub fn author(username: &Username) -> Self {
+        Self(format!("/~{username}"))
+    }
+
+    #[must_use]
+    pub fn author_tag(username: &Username, tag: &Tag) -> Self {
+        Self(format!("/~{username}/tags/{tag}"))
+    }
+
+    #[must_use]
+    pub fn permalink(route: &PermalinkRoute) -> Self {
+        Self(format!(
+            "/~{}/{}/{}",
+            route.username,
+            route.date.value().format("%Y/%m/%d"),
+            route.slug
+        ))
     }
 
     #[must_use]
@@ -512,7 +524,7 @@ mod tests {
         );
         assert_eq!(pool.entries(), &[package, media.clone()]);
 
-        let route = PublicThemeRoute::new("/~alice/post".to_owned()).unwrap();
+        let route = PublicThemeRoute::author(&"alice".parse().unwrap());
         let revision = "c".repeat(64).parse().unwrap();
         let mut seed = [0; 32];
         for (index, byte) in seed.iter_mut().enumerate() {
@@ -522,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn header_pool_rejects_duplicates_and_noncanonical_routes() {
+    fn header_pool_rejects_duplicates() {
         let entry = ThemePoolEntry::Package("images/header.png".to_owned());
         assert_eq!(
             ThemeHeaderPool::new(vec![entry.clone(), entry]).unwrap_err(),
@@ -532,13 +544,24 @@ mod tests {
             ThemeHeaderPool::new(Vec::new()).unwrap_err(),
             InvalidThemeHeaderPool::Empty
         );
-        for route in [
-            "https://example.com/",
-            "//example.com/post",
-            "/tags/rust?view=grid",
-            "/~alice#bio",
-        ] {
-            assert!(PublicThemeRoute::new(route.to_owned()).is_err(), "{route}");
-        }
+    }
+
+    #[test]
+    fn public_theme_routes_have_exact_canonical_spellings() {
+        let alice = "alice".parse().unwrap();
+        let rust = "rust".parse().unwrap();
+        let permalink = PermalinkRoute::parse("alice", "2026", "01", "02", "hello").unwrap();
+
+        assert_eq!(PublicThemeRoute::site().as_str(), "/");
+        assert_eq!(PublicThemeRoute::site_tag(&rust).as_str(), "/tags/rust");
+        assert_eq!(PublicThemeRoute::author(&alice).as_str(), "/~alice");
+        assert_eq!(
+            PublicThemeRoute::author_tag(&alice, &rust).as_str(),
+            "/~alice/tags/rust"
+        );
+        assert_eq!(
+            PublicThemeRoute::permalink(&permalink).as_str(),
+            "/~alice/2026/01/02/hello"
+        );
     }
 }

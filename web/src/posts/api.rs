@@ -605,10 +605,12 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<SavedPost>> {
 async fn public_post_presentation(
     post: PostRecord,
     is_author: bool,
+    route: &common::theme::PublicThemeRoute,
 ) -> crate::error::InternalResult<PublicPresentation<AuthoredPost>> {
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let theme = storage::resolve_public_theme(
         storage::PublicThemeOwner::Author(post.user_id),
+        route,
         themes.as_ref(),
     )
     .await?;
@@ -629,13 +631,19 @@ pub async fn get(
     let now = UtcInstant::now();
 
     let viewer = viewer::viewer_identity().await?;
+    let theme_route =
+        common::theme::PublicThemeRoute::permalink(&common::permalink_route::PermalinkRoute {
+            username: username.clone(),
+            date,
+            slug: slug.clone(),
+        });
     if let Some(post) =
         storage::fetch_post_record(posts.as_ref(), &viewer, &username, date, &slug, now).await?
     {
         let is_author = auth::require_auth()
             .await
             .is_ok_and(|auth| auth.user_id == post.user_id);
-        return public_post_presentation(post, is_author).await;
+        return public_post_presentation(post, is_author, &theme_route).await;
     }
 
     // The visibility-filtered lookup above found nothing public at this
@@ -655,7 +663,7 @@ pub async fn get(
         .await?
         .ok_or_else(server::not_found_error)?;
 
-    public_post_presentation(post, true).await
+    public_post_presentation(post, true, &theme_route).await
 }
 
 /// Retrieves a Post and a same-response time snapshot for its authenticated

@@ -9,6 +9,7 @@ use common::pagination::PageSize;
 use common::permalink_route::PermalinkRoute;
 use common::seed::{PageSeed, PublicPresentation};
 use common::tag::Tag;
+use common::theme::PublicThemeRoute;
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
@@ -94,6 +95,7 @@ async fn permalink(
     };
     let theme = match storage::resolve_public_theme(
         storage::PublicThemeOwner::Author(record.user_id),
+        &PublicThemeRoute::permalink(&route),
         themes.as_ref(),
     )
     .await
@@ -130,17 +132,21 @@ async fn site_timeline(
             return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    let theme =
-        match storage::resolve_public_theme(storage::PublicThemeOwner::Site, themes.as_ref()).await
-        {
-            Ok(theme) => theme,
-            Err(error) => {
-                web::error::InternalError::from(error)
-                    .with_context("boundary", "server.projector.timeline_theme")
-                    .emit_boundary_failure();
-                return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-        };
+    let theme = match storage::resolve_public_theme(
+        storage::PublicThemeOwner::Site,
+        &PublicThemeRoute::site(),
+        themes.as_ref(),
+    )
+    .await
+    {
+        Ok(theme) => theme,
+        Err(error) => {
+            web::error::InternalError::from(error)
+                .with_context("boundary", "server.projector.timeline_theme")
+                .emit_boundary_failure();
+            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
     document::cacheable_presentation(
         &headers,
         &PublicPresentation {
@@ -159,16 +165,18 @@ struct ThemeStores<'a> {
 ///
 /// The route fetch remains authoritative for unknown-user semantics: profiles
 /// project an empty page, while user-tag routes soft-fall back to the shell.
-async fn username_page_response<F, Fut>(
+async fn username_page_response<F, R, Fut>(
     username: SoftPath<Username>,
     headers: &HeaderMap,
     shell: &Shell,
     context: &'static str,
     stores: ThemeStores<'_>,
+    route: R,
     fetch_seed: F,
 ) -> Response
 where
     F: FnOnce(Username) -> Fut,
+    R: FnOnce(&Username) -> PublicThemeRoute,
     Fut: Future<Output = web::error::InternalResult<PageSeed>>,
 {
     let Some(username): Option<Username> = username.into() else {
@@ -197,7 +205,8 @@ where
             return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    let theme = match storage::resolve_public_theme(owner, stores.themes).await {
+    let theme_route = route(&lookup_username);
+    let theme = match storage::resolve_public_theme(owner, &theme_route, stores.themes).await {
         Ok(theme) => theme,
         Err(error) => {
             error::InternalError::from(error)
@@ -226,6 +235,7 @@ async fn profile(
             users: users.as_ref(),
             themes: themes.as_ref(),
         },
+        PublicThemeRoute::author,
         |username| async move {
             timeline::fetch_user_posts(
                 posts.as_ref(),
@@ -270,6 +280,7 @@ async fn site_tag(
         Ok(page) => {
             let theme = match storage::resolve_public_theme(
                 storage::PublicThemeOwner::Site,
+                &PublicThemeRoute::site_tag(&tag),
                 themes.as_ref(),
             )
             .await
@@ -310,10 +321,11 @@ async fn user_tag(
     headers: HeaderMap,
     Path((username, tag)): Path<(SoftPath<Username>, SoftPath<Tag>)>,
 ) -> Response {
-    let Some(tag) = tag.into() else {
+    let Some(tag): Option<Tag> = tag.into() else {
         return document::shell_response(&shell);
     };
     let fetch_users = Arc::clone(&users);
+    let route_tag = tag.clone();
     username_page_response(
         username,
         &headers,
@@ -323,6 +335,7 @@ async fn user_tag(
             users: users.as_ref(),
             themes: themes.as_ref(),
         },
+        move |username| PublicThemeRoute::author_tag(username, &route_tag),
         |username| async move {
             timeline::fetch_user_posts_by_tag(
                 posts.as_ref(),

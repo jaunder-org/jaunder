@@ -38,6 +38,11 @@ thiserror.workspace = true
 tracing = { workspace = true }
 tokio = { workspace = true, optional = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true
+web-sys = { workspace = true, features = ["Document", "Element", "Event", "EventTarget", "HtmlHeadElement", "HtmlLinkElement", "Node", "Window"] }
+futures-channel = "0.3"
+
 [dev-dependencies]
 common = { workspace = true, features = ["test-support", "test-utils"] }
 host = { path = "../host", features = ["test-utils"] }

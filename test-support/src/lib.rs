@@ -11,7 +11,7 @@
 //! content-shaped slugs/bodies that the module helper's fixed `seed-{i}` /
 //! `# Post {i}` scheme cannot give.
 
-use std::sync::Arc;
+use std::{fmt::Write as _, path::Path, sync::Arc};
 
 use common::display_name::DisplayName;
 use common::ids::{FeedEventId, PostId, UserId};
@@ -19,6 +19,7 @@ use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::site::SiteTitle;
 use common::slug::Slug;
+use common::theme::{PublicThemeSelection, Theme, ThemeImageBindingMode, ThemeImageRole};
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::AudienceTarget;
@@ -27,8 +28,8 @@ use host::feed::{FeedEventPhase, FeedPath};
 use jiff::{Timestamp, ToSpan};
 use storage::{
     AppState, OperatorStatus, PostBookkeepingExpectation, PostFormat, PostStorage,
-    RenderedPostContent, SiteConfigStorage, UserStorage, WriteScope, render_post_input,
-    seed_post_input,
+    RenderedPostContent, SiteConfigStorage, ThemeAssetManager, ThemeOwner, ThemeRoleBinding,
+    UserStorage, WriteScope, render_post_input, seed_post_input,
 };
 
 pub mod panic_gate;
@@ -124,7 +125,174 @@ pub async fn seed_posts_for_user(
         })
         .await
         .map_err(|error| anyhow::anyhow!("batch seed of {count} posts failed: {error}"))?;
+
     confirmed_fixture_outcome(outcome, format_args!("batch seed of {count} posts"))
+}
+async fn site_fixture_theme(
+    state: &Arc<AppState>,
+    compiled: &host::theme_package::CompiledThemeRevision,
+) -> anyhow::Result<(common::ids::ThemeId, bool)> {
+    let existing = state
+        .themes
+        .list_themes(ThemeOwner::Site)
+        .await?
+        .into_iter()
+        .find(|entry| entry.name == "Test");
+    let already_published = existing
+        .as_ref()
+        .and_then(|entry| entry.current_revision.as_ref())
+        .is_some_and(|revision| {
+            let mut compiled_revision = String::with_capacity(64);
+            for byte in compiled.revision_digest() {
+                let _ = write!(compiled_revision, "{byte:02x}");
+            }
+            revision.as_ref() == compiled_revision
+        });
+    let theme_id = match existing {
+        Some(entry) => entry.id,
+        None => {
+            storage::seed_theme_fixture::try_create_site_theme(
+                Arc::clone(&state.themes),
+                state.write_scope.clone(),
+                compiled,
+            )
+            .await?
+        }
+    };
+    Ok((theme_id, already_published))
+}
+
+/// Publish the shared compiled fixture as the site's selected custom theme.
+///
+/// This is deliberately an out-of-process e2e fixture: it uses the same
+/// immutable asset publisher and transactional selection write as production,
+/// against the exact storage root used by the live server.
+///
+/// # Errors
+///
+/// Returns `Err` if the fixture cannot be published, selected, or its commit
+/// acknowledgement is indeterminate.
+pub async fn seed_published_site_theme(
+    state: &Arc<AppState>,
+    storage_path: &Path,
+    author_username: &str,
+) -> anyhow::Result<()> {
+    let author_username = author_username
+        .parse::<Username>()
+        .map_err(|_| anyhow::anyhow!("invalid username: {author_username}"))?;
+    let author = state
+        .users
+        .get_user_by_username(&author_username)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no such user: {author_username}"))?;
+    let compiled = storage::seed_theme_fixture::try_compiled_theme_fixture()?;
+    let (theme_id, already_published) = site_fixture_theme(state, &compiled).await?;
+    let content_bytes = compiled
+        .css()
+        .bytes()
+        .len()
+        .checked_add(compiled.assets().map(|(_, _, bytes, _)| bytes.len()).sum())
+        .and_then(|bytes| i64::try_from(bytes).ok())
+        .ok_or_else(|| anyhow::anyhow!("fixture theme content exceeds quota size"))?;
+    let manager = ThemeAssetManager::new(
+        Arc::clone(&state.themes),
+        state.write_scope.clone(),
+        Arc::new(storage_path.to_path_buf()),
+    );
+    if !already_published {
+        let publication = manager
+            .publish(
+                ThemeOwner::Site,
+                theme_id,
+                &compiled,
+                storage::seed_theme_fixture::theme_quota_limits(content_bytes),
+                chrono::Utc::now().timestamp(),
+            )
+            .await?;
+        confirmed_fixture_outcome(publication, "publish fixture site theme")?;
+    }
+
+    let bindings = [ThemeImageRole::Logo, ThemeImageRole::Header].map(|role| ThemeRoleBinding {
+        theme_id,
+        role,
+        mode: ThemeImageBindingMode::PackagedDefault,
+        package_path: None,
+        media_user_id: None,
+        media_source: None,
+        media_digest: None,
+        media_filename: None,
+        pool_revision: None,
+        shuffle_seed: None,
+    });
+    let themes = Arc::clone(&state.themes);
+    let selection = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                for binding in &bindings {
+                    themes
+                        .replace_role_binding(transaction, ThemeOwner::Site, binding)
+                        .await?;
+                }
+                themes
+                    .set_selection(
+                        transaction,
+                        ThemeOwner::Author(author.user_id),
+                        Some(PublicThemeSelection::BuiltIn(Theme::Terminal)),
+                    )
+                    .await?;
+                themes
+                    .set_selection(
+                        transaction,
+                        ThemeOwner::Site,
+                        Some(PublicThemeSelection::Custom(theme_id)),
+                    )
+                    .await
+            })
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("select fixture site theme failed: {error}"))?;
+    confirmed_fixture_outcome(selection, "select fixture site theme")?;
+    Ok(())
+}
+/// Restore public selections changed by [`seed_published_site_theme`].
+///
+/// # Errors
+///
+/// Returns `Err` when the author is unknown or either selection cannot be reset.
+pub async fn reset_public_theme_fixture(
+    state: &Arc<AppState>,
+    author_username: &str,
+) -> anyhow::Result<()> {
+    let author_username = author_username
+        .parse::<Username>()
+        .map_err(|_| anyhow::anyhow!("invalid username: {author_username}"))?;
+    let author = state
+        .users
+        .get_user_by_username(&author_username)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no such user: {author_username}"))?;
+    let themes = Arc::clone(&state.themes);
+    let reset = state
+        .write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                themes
+                    .set_selection(transaction, ThemeOwner::Author(author.user_id), None)
+                    .await?;
+                themes
+                    .set_selection(
+                        transaction,
+                        ThemeOwner::Site,
+                        Some(PublicThemeSelection::BuiltIn(Theme::Studio)),
+                    )
+                    .await
+            })
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("reset fixture theme selections failed: {error}"))?;
+    confirmed_fixture_outcome(reset, "reset fixture theme selections")?;
+    Ok(())
 }
 
 /// Seed terminal feed events through the same storage lifecycle used by the

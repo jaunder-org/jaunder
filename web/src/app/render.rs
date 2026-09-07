@@ -42,6 +42,57 @@ pub const PREPAINT_SCRIPT: &str = concat!(
 /// surfaces and drift-guarded in tests (#870).
 pub const MODULE_BEFORE_INIT_MARK: &str = "jaunder.module.before_init";
 
+/// Stable selector for the one custom stylesheet managed by the projector and
+/// CSR presentation reconciler.
+pub const THEME_STYLESHEET_MARKER_ATTR: &str = "data-jaunder-theme-stylesheet";
+
+/// Render the custom presentation stylesheet, if this is a custom theme.
+///
+/// The marker makes the server-emitted node adoptable at boot and lets CSR
+/// replace it without disturbing the two base stylesheets.
+#[must_use]
+pub fn render_theme_stylesheet(theme: &common::theme::PublishedThemePresentation) -> Markup {
+    if matches!(
+        theme.identity,
+        common::theme::PublishedThemeIdentity::Custom(_)
+    ) {
+        Markup::new(html! {
+            link data-jaunder-theme-stylesheet rel="stylesheet" href=(theme.stylesheet_url);
+        })
+    } else {
+        Markup::empty()
+    }
+}
+
+/// Render the optional decorative logo role without replacing text identity.
+#[must_use]
+pub fn render_theme_logo(theme: &common::theme::PublishedThemePresentation) -> Markup {
+    Markup::new(html! {
+        @if let Some(logo_url) = &theme.logo_url {
+            img data-jaunder-part="logo" src=(logo_url) alt="";
+        }
+    })
+}
+
+/// Render the optional decorative header-image role.
+#[must_use]
+pub fn render_theme_header(theme: &common::theme::PublishedThemePresentation) -> Markup {
+    Markup::new(html! {
+        @if let Some(header_url) = &theme.header_url {
+            img data-jaunder-part="header-image" src=(header_url) alt="";
+        }
+    })
+}
+
+/// Render all decorative presentation roles for focused markup tests.
+#[must_use]
+pub fn render_theme_decorations(theme: &common::theme::PublishedThemePresentation) -> Markup {
+    Markup::new(html! {
+        (render_theme_logo(theme))
+        (render_theme_header(theme))
+    })
+}
+
 /// The document `<head>` inner HTML: the host supplies the generated early
 /// wasm fetch script, keeping final runtime asset identity outside `web`.
 #[must_use]
@@ -165,7 +216,13 @@ pub fn render_shell(presentation: &PublicPresentation<PageSeed>) -> Markup {
                 div class="j-shell" data-jaunder-theme-surface data-jaunder-style-contract="1" {
                     aside class="j-sidebar" { (crate::sidebar::render_sidebar(active_key)) }
                     div class="j-main-region" {
-                        main class="j-main" data-jaunder-part="main" { (crate::posts::render::body(seed)) }
+                        main class="j-main" data-jaunder-part="main" {
+                            (crate::posts::render::body_with_logo(
+                                seed,
+                                &render_theme_logo(&presentation.theme),
+                                &render_theme_header(&presentation.theme),
+                            ))
+                        }
                     }
                 }
             }
@@ -181,6 +238,61 @@ mod tests {
     use crate::posts::render::test_fixtures::{one_post_page, sample_post};
     use common::local_storage_key::LocalStorageKey;
     use common::test_support::parse_username;
+
+    fn custom_theme() -> common::theme::PublishedThemePresentation {
+        common::theme::PublishedThemePresentation {
+            identity: common::theme::PublishedThemeIdentity::Custom(common::ids::ThemeId::from(42)),
+            revision: Some("a".repeat(64).parse().unwrap()),
+            stylesheet_url: format!("/themes/{}", "b".repeat(64)).parse().unwrap(),
+            logo_url: Some(format!("/themes/{}", "c".repeat(64)).parse().unwrap()),
+            header_url: Some(format!("/themes/{}", "d".repeat(64)).parse().unwrap()),
+        }
+    }
+
+    #[test]
+    fn custom_presentation_markup_has_marked_stylesheet_and_decorative_roles() {
+        let theme = custom_theme();
+        let stylesheet = render_theme_stylesheet(&theme).into_string();
+        let decorations = render_theme_decorations(&theme).into_string();
+
+        assert_eq!(stylesheet.matches(THEME_STYLESHEET_MARKER_ATTR).count(), 1);
+        assert!(stylesheet.contains(&format!("href=\"/themes/{}\"", "b".repeat(64))));
+        assert_eq!(decorations.matches("data-jaunder-part=\"logo\"").count(), 1);
+        assert_eq!(
+            decorations
+                .matches("data-jaunder-part=\"header-image\"")
+                .count(),
+            1
+        );
+        assert_eq!(decorations.matches("alt=\"\"").count(), 2);
+    }
+
+    #[test]
+    fn theme_role_urls_are_escaped_in_shared_markup() {
+        let mut theme = custom_theme();
+        theme.logo_url = Some("/themes/safe?x=%22%3E".parse().unwrap());
+        let logo = render_theme_logo(&theme).into_string();
+        assert!(logo.contains("x=%22%3E"), "{logo}");
+        assert!(!logo.contains("x=\"\">"), "{logo}");
+    }
+
+    #[test]
+    fn shell_places_each_decorative_role_once_without_replacing_site_identity() {
+        let html = render_shell(&PublicPresentation {
+            theme: custom_theme(),
+            page: PageSeed::SiteTimeline(one_post_page()),
+        })
+        .into_string();
+        assert_eq!(html.matches("data-jaunder-part=\"logo\"").count(), 1);
+        assert_eq!(
+            html.matches("data-jaunder-part=\"header-image\"").count(),
+            1
+        );
+        assert!(
+            html.contains("data-jaunder-part=\"site-title\">Jaunder"),
+            "{html}"
+        );
+    }
 
     #[test]
     fn discovery_links_carry_the_marker_per_surface() {

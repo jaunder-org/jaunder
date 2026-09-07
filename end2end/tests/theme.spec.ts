@@ -1,6 +1,12 @@
 import { test, expect } from "./fixtures";
 import { goto } from "./helpers";
-import { seedPostsViaTool, seedUserViaTool } from "./seed";
+import { navigateInApp } from "./navigate";
+import {
+  resetThemeViaTool,
+  seedPostsViaTool,
+  seedThemeViaTool,
+  seedUserViaTool,
+} from "./seed";
 import { expectVisual } from "./visual";
 import { expectAccessible } from "./accessibility";
 
@@ -48,3 +54,61 @@ test(
     await expectAccessible(page);
   },
 );
+
+test("published custom site theme survives cold load and in-app navigation", async ({
+  page,
+}) => {
+  await seedUserViaTool("themenav", "visualpassword123");
+  await seedPostsViaTool("themenav", 1, "Visual Theme Navigation");
+
+  const expectCustomPresentation = async () => {
+    const presentation = await page.evaluate(() => {
+      const root = document.querySelector(".j-root");
+      const surface = document.querySelector(
+        '[data-jaunder-theme-surface][data-jaunder-style-contract="1"]',
+      );
+      const stylesheet = document.querySelector(
+        "link[data-jaunder-theme-stylesheet]",
+      );
+      return {
+        dataTheme: root?.getAttribute("data-theme"),
+        stylesheetHref: stylesheet?.getAttribute("href"),
+        ready: surface ? getComputedStyle(surface).outlineColor : "",
+      };
+    });
+
+    expect(presentation.dataTheme).toBe("custom");
+    expect(presentation.stylesheetHref).toMatch(/^\/themes\/[0-9a-f]{64}$/);
+    expect(presentation.ready).toBe("rgb(1, 2, 3)");
+    await expect(page.locator('[data-jaunder-part="logo"]')).toBeVisible();
+    await expect(
+      page.locator('[data-jaunder-part="header-image"]'),
+    ).toBeVisible();
+  };
+
+  try {
+    await seedThemeViaTool("themenav");
+    await goto(page, "/");
+    await expectCustomPresentation();
+
+    await navigateInApp(
+      page,
+      () =>
+        page.evaluate(() => {
+          history.pushState({}, "", "/~themenav");
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        }),
+      { url: "/~themenav", ready: '.j-root[data-theme="terminal"]' },
+    );
+    await expect(page.locator(".j-topbar h1")).toHaveText("Posts by themenav");
+    await expect(
+      page.locator("link[data-jaunder-theme-stylesheet]"),
+    ).toHaveCount(0);
+    await expect(page.locator('[data-jaunder-part="logo"]')).toHaveCount(0);
+    await expect(
+      page.locator('[data-jaunder-part="header-image"]'),
+    ).toHaveCount(0);
+  } finally {
+    await resetThemeViaTool("themenav");
+  }
+});

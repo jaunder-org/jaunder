@@ -191,6 +191,13 @@ pub trait ThemeStorage: Send + Sync {
         owner: ThemeOwner,
         theme_id: ThemeId,
     ) -> Result<Vec<ThemeRevision>, sqlx::Error>;
+    /// Lists immutable package assets for one owned published revision.
+    async fn revision_assets(
+        &self,
+        owner: ThemeOwner,
+        theme_id: ThemeId,
+        revision: &ThemeRevisionDigest,
+    ) -> Result<Vec<ThemePackageAsset>, sqlx::Error>;
     async fn upsert_content_eligibility(
         &self,
         transaction: &mut WriteTransaction,
@@ -384,6 +391,11 @@ macro_rules! impl_theme_storage {
                 let rows: Vec<(String, String, Vec<u8>)> = sqlx::query_as("SELECT r.digest, r.stylesheet_digest, r.manifest FROM theme_revisions r JOIN themes t ON t.id = r.theme_id WHERE r.theme_id = $1 AND t.catalog_owner_key = $2 ORDER BY r.id DESC").bind(i64::from(theme_id)).bind(catalog_owner_key(owner)).fetch_all(&self.pool).await?;
                 Ok(rows.into_iter().filter_map(|(digest, stylesheet_digest, manifest)| Some(ThemeRevision { theme_id, digest: digest.parse().ok()?, stylesheet_digest: stylesheet_digest.parse().ok()?, manifest })).collect())
             }
+            async fn revision_assets(&self, owner: ThemeOwner, theme_id: ThemeId, revision: &ThemeRevisionDigest) -> Result<Vec<ThemePackageAsset>, sqlx::Error> {
+                let rows: Vec<(String, String, String)> = sqlx::query_as("SELECT asset.path, asset.digest, asset.mime FROM theme_revision_assets asset JOIN themes theme ON theme.id = asset.theme_id WHERE asset.theme_id = $1 AND asset.revision_digest = $2 AND theme.catalog_owner_key = $3 ORDER BY asset.path")
+                    .bind(i64::from(theme_id)).bind(revision.as_ref()).bind(catalog_owner_key(owner)).fetch_all(&self.pool).await?;
+                rows.into_iter().map(|(path, digest, mime)| digest.parse().map(|digest| ThemePackageAsset { path, digest, mime }).map_err(|_| sqlx::Error::RowNotFound)).collect()
+            }
             async fn upsert_content_eligibility(&self, transaction: &mut WriteTransaction, eligibility: &ThemeContentEligibility) -> Result<(), sqlx::Error> { let connection = $conn(transaction)?; sqlx::query("INSERT INTO theme_content_eligibility (digest, mime, retained_until_unix_seconds) VALUES ($1, $2, $3) ON CONFLICT (digest) DO UPDATE SET mime = excluded.mime, retained_until_unix_seconds = CASE WHEN excluded.retained_until_unix_seconds > theme_content_eligibility.retained_until_unix_seconds THEN excluded.retained_until_unix_seconds ELSE theme_content_eligibility.retained_until_unix_seconds END").bind(eligibility.digest.as_ref()).bind(&eligibility.mime).bind(eligibility.retained_until_unix_seconds).execute(&mut *connection).await?; Ok(()) }
             async fn content_eligibility(&self, digest: &ThemeContentDigest) -> Result<Option<ThemeContentEligibility>, sqlx::Error> { let row: Option<(String, i64)> = sqlx::query_as("SELECT mime, retained_until_unix_seconds FROM theme_content_eligibility WHERE digest = $1").bind(digest.as_ref()).fetch_optional(&self.pool).await?; Ok(row.map(|(mime, retained_until_unix_seconds)| ThemeContentEligibility { digest: digest.clone(), mime, retained_until_unix_seconds })) }
             async fn list_content_eligibility(&self) -> Result<Vec<ThemeContentEligibility>, sqlx::Error> {
@@ -499,7 +511,31 @@ macro_rules! impl_theme_storage {
             }
             async fn role_binding(&self, owner: ThemeOwner, theme_id: ThemeId, role: ThemeImageRole) -> Result<Option<ThemeRoleBinding>, sqlx::Error> {
                 let row: Option<(String, Option<String>, Option<i64>, Option<String>, Option<String>, Option<String>, Option<String>, Option<Vec<u8>>)> = sqlx::query_as("SELECT b.mode, b.package_path, b.media_user_id, b.media_source, b.media_digest, b.media_filename, b.pool_revision_digest, b.shuffle_seed FROM theme_role_bindings b JOIN themes t ON t.id = b.theme_id WHERE b.theme_id = $1 AND b.role = $2 AND t.catalog_owner_key = $3").bind(i64::from(theme_id)).bind(role.token()).bind(catalog_owner_key(owner)).fetch_optional(&self.pool).await?;
-                Ok(row.and_then(|(mode, package_path, media_user_id, media_source, media_digest, media_filename, pool_revision, shuffle_seed)| Some(ThemeRoleBinding { theme_id, role, mode: parse_binding_mode(&mode)?, package_path, media_user_id: media_user_id.map(UserId::from), media_source, media_digest: media_digest.and_then(|value| value.parse().ok()), media_filename, pool_revision: pool_revision.and_then(|value| value.parse().ok()), shuffle_seed: shuffle_seed.and_then(|seed| seed.try_into().ok()) })))
+                let Some((mode, package_path, media_user_id, media_source, media_digest, media_filename, pool_revision, shuffle_seed)) = row else {
+                    return Ok(None);
+                };
+                let mode = parse_binding_mode(&mode).ok_or(sqlx::Error::RowNotFound)?;
+                let media_digest = media_digest
+                    .map(|value| value.parse().map_err(|_| sqlx::Error::RowNotFound))
+                    .transpose()?;
+                let pool_revision = pool_revision
+                    .map(|value| value.parse().map_err(|_| sqlx::Error::RowNotFound))
+                    .transpose()?;
+                let shuffle_seed = shuffle_seed
+                    .map(|seed| seed.try_into().map_err(|_| sqlx::Error::RowNotFound))
+                    .transpose()?;
+                Ok(Some(ThemeRoleBinding {
+                    theme_id,
+                    role,
+                    mode,
+                    package_path,
+                    media_user_id: media_user_id.map(UserId::from),
+                    media_source,
+                    media_digest,
+                    media_filename,
+                    pool_revision,
+                    shuffle_seed,
+                }))
             }
             async fn replace_header_pool(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, theme_id: ThemeId, entries: &[ThemeHeaderPoolEntry]) -> Result<(), sqlx::Error> {
                 let author_user_id = author_user_id(owner);
@@ -874,6 +910,8 @@ mod tests {
                 mime: "image/webp".to_owned(),
             },
         ];
+        let expected_assets = assets.clone();
+        let revision_digest = revision.digest.clone();
         confirmed(
             env.state
                 .write_scope
@@ -886,6 +924,14 @@ mod tests {
                 })
                 .await
                 .unwrap(),
+        );
+        assert_eq!(
+            env.state
+                .themes
+                .revision_assets(ThemeOwner::Site, created, &revision_digest)
+                .await
+                .unwrap(),
+            expected_assets
         );
 
         let themes = Arc::clone(&env.state.themes);

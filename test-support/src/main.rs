@@ -8,8 +8,9 @@ use common::display_name::DisplayName;
 use host::{capture, feed::FeedEventPhase};
 use storage::{DbConnectOptions, StorageRuntimeConfig};
 use test_support::{
-    SandboxProfile, create_session_for_user, create_user, reset_mail, sandbox_profile_anchor,
-    seed_dead_letters, seed_posts_for_user, seed_sandbox_profile, seed_user,
+    SandboxProfile, create_session_for_user, create_user, reset_mail, reset_public_theme_fixture,
+    sandbox_profile_anchor, seed_dead_letters, seed_posts_for_user, seed_published_site_theme,
+    seed_sandbox_profile, seed_user,
 };
 
 #[derive(Parser)]
@@ -50,6 +51,21 @@ enum Commands {
         /// Fixed sandbox profile to create.
         #[arg(long, value_enum)]
         profile: SandboxProfileArg,
+    },
+    /// Publish and select the compiled custom-theme fixture for public browser proof.
+    SeedTheme {
+        /// Database URL (`sqlite:...` or `postgres://...`) — the server's `--db`.
+        #[arg(long, env = "JAUNDER_DB")]
+        db: DbConnectOptions,
+        /// Immutable theme-content root used by the live server.
+        #[arg(long, env = "JAUNDER_STORAGE_PATH")]
+        storage_path: std::path::PathBuf,
+        /// Existing author whose public route uses the navigation fixture theme.
+        #[arg(long)]
+        author_username: String,
+        /// Restore the built-in site and inherited author selections instead of seeding.
+        #[arg(long)]
+        reset: bool,
     },
     /// Seed terminal `WebSub` feed events through the real storage lifecycle.
     SeedDeadLetters {
@@ -225,6 +241,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let storage_runtime = sandbox_storage_runtime(&db)?;
             cmd_seed_sandbox_profile(&db, &storage_runtime, profile.into()).await
         }
+        Commands::SeedTheme {
+            db,
+            storage_path,
+            author_username,
+            reset,
+        } => cmd_seed_theme(&db, &storage_path, &author_username, reset).await,
         Commands::SeedDeadLetters { db, phase, count } => {
             let storage_runtime = storage_runtime_config(&db)?;
             cmd_seed_dead_letters(&db, &storage_runtime, phase, count).await
@@ -343,6 +365,21 @@ async fn cmd_seed_posts(
     let ids = seed_posts_for_user(&state, username, count, published, body_prefix).await?;
     eprintln!("seeded {} posts for {username}", ids.len());
     Ok(())
+}
+/// Publish and select the compiled custom-theme fixture through the real storage path.
+async fn cmd_seed_theme(
+    db: &DbConnectOptions,
+    storage_path: &std::path::Path,
+    author_username: &str,
+    reset: bool,
+) -> anyhow::Result<()> {
+    let runtime = storage_runtime_config(db)?;
+    let state = storage::open_existing_database(db, &runtime).await?;
+    if reset {
+        reset_public_theme_fixture(&state, author_username).await
+    } else {
+        seed_published_site_theme(&state, storage_path, author_username).await
+    }
 }
 
 /// Seed terminal `WebSub` dead letters through the storage lifecycle.

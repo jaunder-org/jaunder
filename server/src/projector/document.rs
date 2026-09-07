@@ -1,5 +1,3 @@
-use std::fmt::Write;
-
 use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
@@ -28,16 +26,7 @@ fn document_with_urls(
     let seed = &presentation.page;
     let early_fetch = urls.map(bundle::early_wasm_fetch_script);
     let mut head = app::render_head(seed, early_fetch.as_deref()).into_string();
-    if matches!(
-        presentation.theme.identity,
-        common::theme::PublishedThemeIdentity::Custom(_)
-    ) {
-        let _ = write!(
-            head,
-            r#"<link rel="stylesheet" href="{}">"#,
-            presentation.theme.stylesheet_url
-        );
-    }
+    head.push_str(&app::render_theme_stylesheet(&presentation.theme).into_string());
     let body = app::render_shell(presentation).into_string();
     let blob = serde_json::to_string(presentation).unwrap_or_else(|_| "null".to_string());
     let boot = urls.map_or_else(String::new, |urls| {
@@ -150,6 +139,36 @@ mod tests {
         }
     }
 
+    fn custom_presentation(
+        revision: char,
+        stylesheet: char,
+        logo: char,
+        header: char,
+    ) -> PublicPresentation<PageSeed> {
+        PublicPresentation {
+            theme: common::theme::PublishedThemePresentation {
+                identity: common::theme::PublishedThemeIdentity::Custom(
+                    common::ids::ThemeId::from(42),
+                ),
+                revision: Some(revision.to_string().repeat(64).parse().unwrap()),
+                stylesheet_url: format!("/themes/{}", stylesheet.to_string().repeat(64))
+                    .parse()
+                    .unwrap(),
+                logo_url: Some(
+                    format!("/themes/{}", logo.to_string().repeat(64))
+                        .parse()
+                        .unwrap(),
+                ),
+                header_url: Some(
+                    format!("/themes/{}", header.to_string().repeat(64))
+                        .parse()
+                        .unwrap(),
+                ),
+            },
+            page: presentation(Theme::Studio).page,
+        }
+    }
+
     #[test]
     fn permalink_storage_error_maps_to_500() {
         let shell = Shell("shell".into());
@@ -160,6 +179,46 @@ mod tests {
             common::theme::PublishedThemePresentation::built_in(Theme::Studio),
         );
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn custom_revision_and_role_bindings_change_document_bytes_and_etag() {
+        let baseline = custom_presentation('a', 'b', 'c', 'd');
+        let revision_changed = custom_presentation('e', 'b', 'c', 'd');
+        let binding_changed = custom_presentation('a', 'b', 'f', 'd');
+        let pool_changed = custom_presentation('a', 'b', 'c', 'f');
+
+        for changed in [&revision_changed, &binding_changed, &pool_changed] {
+            assert_ne!(
+                document_presentation(&baseline),
+                document_presentation(changed)
+            );
+            let baseline_etag = cacheable_presentation(&HeaderMap::new(), &baseline);
+            let changed_etag = cacheable_presentation(&HeaderMap::new(), changed);
+            assert_ne!(
+                baseline_etag.headers()[header::ETAG],
+                changed_etag.headers()[header::ETAG]
+            );
+        }
+    }
+
+    #[test]
+    fn custom_presentation_puts_marked_css_in_head_and_decorations_in_shell() {
+        let document = document_presentation(&custom_presentation('a', 'b', 'c', 'd'));
+        let stylesheet = document
+            .find("data-jaunder-theme-stylesheet")
+            .expect("custom stylesheet");
+        assert!(
+            stylesheet < document.find("<body>").expect("body"),
+            "{document}"
+        );
+        assert_eq!(document.matches("data-jaunder-part=\"logo\"").count(), 1);
+        assert_eq!(
+            document
+                .matches("data-jaunder-part=\"header-image\"")
+                .count(),
+            1
+        );
     }
 
     #[test]

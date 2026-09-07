@@ -13,7 +13,7 @@ name = "test-support"
 path = "src/main.rs"
 
 [dependencies]
-storage = { workspace = true, features = ["seed-posts"] }
+storage = { workspace = true, features = ["seed-posts", "seed-themes"] }
 common = { workspace = true }
 host = { workspace = true }
 clap = { workspace = true }
@@ -23,11 +23,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 jiff.workspace = true
 
-# The binary shares storage's `seed_post_input` recipe via the lightweight
-# `seed-posts` feature above (no extra deps). The heavy `test-support`
-# scaffolding (`storage::test_support`, tempfile, rstest_reuse) is a
-# dev-dependency ONLY, for the smoke tests below — the shipped binary never
-# links it.
 [dev-dependencies]
 storage = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }

@@ -136,6 +136,7 @@ e2eRunAndCapture =
       + "${extraEnv}"
       + " JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture"
       + " JAUNDER_DB=${jaunderDb}"
+      + " JAUNDER_STORAGE_PATH=/var/lib/jaunder/data"
       + " JAUNDER_E2E_TRACE_ID=${traceId}"
       + " JAUNDER_E2E_TRACEPARENT=${traceParent}"
       + " JAUNDER_E2E_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces"

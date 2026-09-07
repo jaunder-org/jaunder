@@ -5503,6 +5503,7 @@ dependencies = [
  "axum",
  "client",
  "common",
+ "futures-channel",
  "host",
  "http",
  "httparse",
@@ -5528,6 +5529,8 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

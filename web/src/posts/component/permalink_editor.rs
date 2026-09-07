@@ -25,15 +25,27 @@ use super::support;
 /// First-paint view for [`PostPage`]'s `Suspense`: the projector-seeded content
 /// (flash-free) when the server painted this permalink, or a spinner while the
 /// reactive fetch runs (client-side navigation, no seed).
-fn permalink_first_paint(seed_post: Option<AuthoredPost>) -> AnyView {
+fn permalink_first_paint(
+    seed_post: Option<AuthoredPost>,
+    theme: RwSignal<common::theme::PublishedThemePresentation>,
+) -> AnyView {
     match seed_post {
         Some(seed) => {
-            // Just the article — this fallback sits inside the reactive PostPage's
-            // own `j-scroll`/`j-page`. `display:contents` keeps the host wrapper out
-            // of the layout so it coincides with the projector's permalink page.
+            let title = format!("Post by {}", seed.post.username);
             let html = posts::render::permalink_article(&seed.post);
-            html.inject_into(leptos::html::div().style("display:contents"))
-                .into_any()
+            view! {
+                <Topbar title=title />
+                {move || {
+                    crate::app::render_theme_header(&theme.get())
+                        .inject_into(leptos::html::div().class("j-contents"))
+                }}
+                <div class="j-scroll">
+                    <div class="j-page">
+                        {html.inject_into(leptos::html::div().class("j-contents"))}
+                    </div>
+                </div>
+            }
+            .into_any()
         }
         None => view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any(),
     }
@@ -45,58 +57,21 @@ fn permalink_first_paint(seed_post: Option<AuthoredPost>) -> AnyView {
 /// fetcher's parameter reads as one thing.
 type PermalinkFetchKey = (Option<PermalinkRoute>, u32);
 
-#[component]
-pub fn PostPage() -> impl IntoView {
-    let theme = crate::app::public_theme();
-    // Public projector seed (#178/#179): the content the server painted for this
-    // permalink. Adopted as the `Suspense` fallback below so first paint shows
-    // real content (flash-free) instead of a spinner. The reactive fetch still
-    // runs and takes over — restoring the author's edit/delete affordances when
-    // the viewer owns the post — so this *enhances* rather than *replaces*.
-    let seed_post = match use_context::<Option<PageSeed>>().flatten() {
-        Some(PageSeed::Permalink(post)) => Some(post),
-        _ => None,
-    };
-
-    let params = use_params_map();
-
-    let route = move || {
-        let params = params.get();
-        // Decode the permalink route params into typed values client-side so
-        // `get` takes a typed `Slug`/`Username` (ADR-0063 §4). The pure
-        // all-or-nothing decoder is host-tested in `crate::posts::parse`.
-        posts::parse_permalink_route(
-            params.get("username").as_deref(),
-            params.get("year").as_deref(),
-            params.get("month").as_deref(),
-            params.get("day").as_deref(),
-            params.get("slug").as_deref(),
-        )
-    };
-
-    // Bump to force a refetch when the post mutates in place (a same-URL publish, where
-    // navigation is a no-op — see the publish effect in `PostCard`). Folded into the
-    // resource key alongside the route (#592).
-    let refetch = RwSignal::new(0u32);
-    let post = Resource::new(
-        move || (route(), refetch.get()),
-        move |(route, _): PermalinkFetchKey| async move {
-            posts::permalink_destination(route, |route| {
-                posts::get(route.username, route.date, route.slug)
-            })
-            .await
-            .map(|(destination_theme, page)| {
-                theme.set(destination_theme);
-                page
-            })
-        },
-    );
-
-    // Keep the author on the Post after unpublishing. The server returns the canonical
-    // draft permalink, which may move back to the Post's creation date (#783).
+/// The projector seed is valid only for the exact typed permalink now mounted.
+fn permalink_seed_matches_route(seed: &AuthoredPost, route: Option<&PermalinkRoute>) -> bool {
+    route.is_some_and(|route| {
+        route
+            == &PermalinkRoute {
+                username: seed.post.username.clone(),
+                date: seed.post.display_time().value().date_naive().into(),
+                slug: seed.post.slug.clone(),
+            }
+    })
+}
+fn permalink_unpublish_callback(refetch: RwSignal<u32>) -> Callback<SavedPost> {
     let location = hooks::use_location();
     let navigate = use_navigate();
-    let on_unpublish = Callback::new(move |unpublished: SavedPost| {
+    Callback::new(move |unpublished: SavedPost| {
         posts::refetch_unpublished_post_if_needed(
             &location.pathname.get_untracked(),
             &unpublished.permalink,
@@ -109,19 +84,68 @@ pub fn PostPage() -> impl IntoView {
                 ..NavigateOptions::default()
             },
         );
+    })
+}
+
+#[component]
+pub fn PostPage() -> impl IntoView {
+    let presentation = crate::app::theme_presentation();
+    let theme = crate::app::public_theme();
+    // The projector seed is a fallback only for its exact typed permalink route.
+    let seed_post = match use_context::<Option<PageSeed>>().flatten() {
+        Some(PageSeed::Permalink(post)) => Some(post),
+        _ => None,
+    };
+
+    let params = use_params_map();
+
+    let route = move || {
+        let params = params.get();
+        // Keep the public API boundary typed (ADR-0063 §4).
+        posts::parse_permalink_route(
+            params.get("username").as_deref(),
+            params.get("year").as_deref(),
+            params.get("month").as_deref(),
+            params.get("day").as_deref(),
+            params.get("slug").as_deref(),
+        )
+    };
+    let fallback_route = route;
+
+    // Force a refetch after an in-place mutation such as same-URL publication (#592).
+    let refetch = RwSignal::new(0u32);
+    let post = Resource::new(
+        move || (route(), refetch.get()),
+        move |(route, _): PermalinkFetchKey| async move {
+            posts::permalink_destination(route, |route| {
+                posts::get(route.username, route.date, route.slug)
+            })
+            .await
+        },
+    );
+    Effect::new(move |_| {
+        if post.try_get().flatten().is_none() {
+            presentation.begin_navigation();
+        }
     });
+
+    let on_unpublish = permalink_unpublish_callback(refetch);
     // Publish-only: refetch this page in place when navigation is a no-op (#592).
     let on_publish = Callback::new(move |()| refetch.update(|v| *v += 1));
 
     view! {
-        <div class="j-scroll">
-            <div class="j-page">
-                <Suspense fallback=move || permalink_first_paint(
-                    seed_post.clone(),
-                )>
-                    {move || Suspend::new(async move {
-                        match post.await {
-                            Ok(fetched) => {
+        <Suspense fallback=move || {
+            let current_route = fallback_route();
+            let matching_seed = seed_post
+                .clone()
+                .filter(|seed| permalink_seed_matches_route(seed, current_route.as_ref()));
+            permalink_first_paint(matching_seed, theme)
+        }>
+            {move || Suspend::new(async move {
+                match post.await {
+                    Ok((fetched_theme, fetched)) => {
+                        match presentation.adopt(fetched_theme).await {
+                            Ok(crate::app::ThemeAdoption::Applied) => {
                                 let banner = fetched
                                     .post
                                     .is_draft()
@@ -131,22 +155,37 @@ pub fn PostPage() -> impl IntoView {
                                 // now, so an inline temporary would be dropped inside
                                 // the macro expansion (E0716).
                                 view! {
-                                    <PostCard
-                                        post=&fetched.post
-                                        banner=banner.as_deref()
-                                        tag_context=&tag_context
-                                        on_unpublish=on_unpublish
-                                        on_publish=on_publish
-                                    />
+                                    <Topbar title=format!("Post by {}", fetched.post.username) />
+                                    {move || {
+                                        crate::app::render_theme_header(&theme.get())
+                                            .inject_into(leptos::html::div().class("j-contents"))
+                                    }}
+                                    <div class="j-scroll">
+                                        <div class="j-page">
+                                            <PostCard
+                                                post=&fetched.post
+                                                banner=banner.as_deref()
+                                                tag_context=&tag_context
+                                                on_unpublish=on_unpublish
+                                                on_publish=on_publish
+                                            />
+                                        </div>
+                                    </div>
                                 }
                                     .into_any()
                             }
-                            Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                            Ok(crate::app::ThemeAdoption::Superseded) => {
+                                view! { <p class="j-loading">"Loading\u{2026}"</p> }.into_any()
+                            }
+                            Err(error) => {
+                                view! { <p class="error">{error.to_string()}</p> }.into_any()
+                            }
                         }
-                    })}
-                </Suspense>
-            </div>
-        </div>
+                    }
+                    Err(err) => view! { <p class="error">{err.to_string()}</p> }.into_any(),
+                }
+            })}
+        </Suspense>
     }
     .into_any()
 }

@@ -34,17 +34,20 @@ use {
 
 #[cfg(feature = "server")]
 async fn site_presentation(
+    route: common::theme::PublicThemeRoute,
     page: Page<RenderedPost>,
 ) -> InternalResult<PublicPresentation<Page<RenderedPost>>> {
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let theme =
-        storage::resolve_public_theme(storage::PublicThemeOwner::Site, themes.as_ref()).await?;
+        storage::resolve_public_theme(storage::PublicThemeOwner::Site, &route, themes.as_ref())
+            .await?;
     Ok(PublicPresentation { theme, page })
 }
 
 #[cfg(feature = "server")]
 async fn author_presentation(
     username: &Username,
+    route: common::theme::PublicThemeRoute,
     page: Page<RenderedPost>,
 ) -> InternalResult<PublicPresentation<Page<RenderedPost>>> {
     let users = expect_context::<Arc<dyn UserStorage>>();
@@ -55,7 +58,7 @@ async fn author_presentation(
         .map_or(storage::PublicThemeOwner::Site, |author| {
             storage::PublicThemeOwner::Author(author.user_id)
         });
-    let theme = storage::resolve_public_theme(owner, themes.as_ref()).await?;
+    let theme = storage::resolve_public_theme(owner, &route, themes.as_ref()).await?;
     Ok(PublicPresentation { theme, page })
 }
 
@@ -76,7 +79,12 @@ pub async fn list_by_user(
         limit,
     )
     .await?;
-    author_presentation(&username, page).await
+    author_presentation(
+        &username,
+        common::theme::PublicThemeRoute::author(&username),
+        page,
+    )
+    .await
 }
 
 #[macros::server(input = Json)]
@@ -94,7 +102,7 @@ pub async fn list_local_timeline(
         limit,
     )
     .await?;
-    site_presentation(page).await
+    site_presentation(common::theme::PublicThemeRoute::site(), page).await
 }
 
 /// Lists published, non-deleted posts by the authenticated user using cursor pagination.
@@ -141,7 +149,7 @@ pub async fn list_by_tag(
         limit,
     )
     .await?;
-    site_presentation(page).await
+    site_presentation(common::theme::PublicThemeRoute::site_tag(&tag), page).await
 }
 
 /// Lists published, non-deleted posts by `username` carrying `tag`.
@@ -165,5 +173,10 @@ pub async fn list_by_user_and_tag(
         limit,
     )
     .await?;
-    author_presentation(&username, page).await
+    author_presentation(
+        &username,
+        common::theme::PublicThemeRoute::author_tag(&username, &tag),
+        page,
+    )
+    .await
 }

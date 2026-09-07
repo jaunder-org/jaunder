@@ -7,10 +7,14 @@ pub use seed::decode_projector_seed;
 
 mod render;
 pub use render::{
-    DISCOVERY_MARKER_ATTR, MODULE_BEFORE_INIT_MARK, PREPAINT_SCRIPT, render_head, render_shell,
+    DISCOVERY_MARKER_ATTR, MODULE_BEFORE_INIT_MARK, PREPAINT_SCRIPT, THEME_STYLESHEET_MARKER_ATTR,
+    render_head, render_shell, render_theme_decorations, render_theme_header, render_theme_logo,
+    render_theme_stylesheet,
 };
 
 #[cfg(target_arch = "wasm32")]
 mod component;
 #[cfg(target_arch = "wasm32")]
-pub use component::{App, public_theme};
+pub use component::{
+    App, ThemeAdoption, ThemePresentationCoordinator, public_theme, theme_presentation,
+};

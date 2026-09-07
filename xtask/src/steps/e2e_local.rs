@@ -762,8 +762,8 @@ fn run_lifecycle(
     }
     result.push(StepResult::ok(&seed_step).with_duration(seed_start.elapsed()));
 
-    // Playwright uses the environment resolved before any subprocess. The DB,
-    // capture directory, and target/debug-prefixed PATH match the VM contract.
+    // Playwright uses the same DB, storage root, capture directory, and
+    // target/debug-prefixed PATH as the server and VM contract.
     sh.change_dir(root.join("end2end"));
     let playwright_start = std::time::Instant::now();
     let mut playwright_result = Ok(());
@@ -772,6 +772,7 @@ fn run_lifecycle(
             .args(&invocation.args)
             .env("JAUNDER_E2E_BASE_URL", &base_url)
             .env("JAUNDER_DB", &db)
+            .env("JAUNDER_STORAGE_PATH", storage.path())
             .env("JAUNDER_CAPTURE_DIR", &capture)
             .env(
                 "JAUNDER_E2E_OTLP_HTTP_ENDPOINT",

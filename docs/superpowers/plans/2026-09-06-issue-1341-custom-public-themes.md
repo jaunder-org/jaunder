@@ -136,7 +136,7 @@ Out:
     commit-indeterminate revalidation; cross-owner, owner-report, and backup
     coverage.
 
-- [ ] Task 7: Serve and render deterministic published custom presentation.
+- [x] Task 7: Serve and render deterministic published custom presentation.
   - Contract: public handlers resolve a hash through Task 4's
     published-or-retained eligibility—not raw file existence—then serve compiled
     CSS/assets with stored MIME, `nosniff`, ETag, and one-year immutable

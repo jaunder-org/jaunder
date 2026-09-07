@@ -51,18 +51,21 @@ pub fn edit_post_url(post_id: PostId) -> RootRelativeUrl {
 /// page's markup (Topbar + wrappers + posts + load-more) so the seeded first paint
 /// coincides. Split from [`crate::app::render_shell`] so the permalink Suspense
 /// fallback can reuse just [`permalink_article`].
+#[cfg(test)]
 pub(crate) fn body(seed: &PageSeed) -> Markup {
+    body_with_logo(seed, &Markup::empty(), &Markup::empty())
+}
+
+pub(crate) fn body_with_logo(seed: &PageSeed, logo: &Markup, header: &Markup) -> Markup {
     match seed {
-        // Permalink: no Topbar; a single article inside `j-scroll`/`j-page`.
         PageSeed::Permalink(authored) => Markup::new(html! {
-            div class="j-scroll" {
-                div class="j-page" { (permalink_article(&authored.post)) }
-            }
+            (topbar::render(&format!("Post by {}", authored.post.username), None, &Markup::empty(), logo))
+            (header)
+            div class="j-scroll" { div class="j-page" { (permalink_article(&authored.post)) } }
         }),
-        // Home (anonymous "Local" mode): the shared masthead as the leading chrome,
-        // then the same flush timeline body as the profile/tag pages.
         PageSeed::SiteTimeline(page) => render_timeline_page(
-            &render::masthead(),
+            &render::masthead(logo),
+            header,
             &page.posts,
             page.has_more,
             &TagCtx::SiteWide,
@@ -73,7 +76,9 @@ pub(crate) fn body(seed: &PageSeed) -> Markup {
                 &format!("Posts by {username}"),
                 Some("User timeline"),
                 &Markup::empty(),
+                logo,
             ),
+            header,
             &page.posts,
             page.has_more,
             &TagCtx::ForUser(username.clone()),
@@ -84,7 +89,9 @@ pub(crate) fn body(seed: &PageSeed) -> Markup {
                 &format!("#{tag}"),
                 Some("Posts on this instance"),
                 &Markup::empty(),
+                logo,
             ),
+            header,
             &page.posts,
             page.has_more,
             &TagCtx::SiteWide,
@@ -99,7 +106,9 @@ pub(crate) fn body(seed: &PageSeed) -> Markup {
                 &format!("#{tag}"),
                 Some(&format!("Posts by ~{username}")),
                 &Markup::empty(),
+                logo,
             ),
+            header,
             &page.posts,
             page.has_more,
             &TagCtx::ForUser(username.clone()),
@@ -240,6 +249,7 @@ pub(crate) fn post_content(view: &PostView) -> Markup {
 #[must_use]
 fn render_timeline_page(
     chrome: &Markup,
+    header: &Markup,
     posts: &[RenderedPost],
     has_more: bool,
     tag_ctx: &TagCtx,
@@ -247,6 +257,7 @@ fn render_timeline_page(
 ) -> Markup {
     Markup::new(html! {
         (chrome)
+        (header)
         div class="j-scroll" {
             div data-jaunder-part="post-list" {
                 @if posts.is_empty() {
@@ -547,6 +558,16 @@ mod tests {
             !permalink.contains("data-jaunder-part=\"post-list\""),
             "{permalink}"
         );
+        assert_eq!(
+            permalink.matches("data-jaunder-part=\"masthead\"").count(),
+            1
+        );
+        assert_eq!(
+            permalink
+                .matches("data-jaunder-part=\"site-title\"")
+                .count(),
+            1
+        );
         assert!(permalink.contains("<article class=\"j-post\" data-jaunder-part=\"post\">"));
     }
 
@@ -572,14 +593,14 @@ mod tests {
     }
 
     #[test]
-    fn permalink_body_has_no_topbar_and_wraps_article_in_page() {
+    fn permalink_body_has_masthead_and_wraps_article_in_page() {
         let html = body(&PageSeed::Permalink(sample_post())).into_string();
         assert!(
-            !html.contains("j-topbar"),
-            "permalink has no topbar: {html}"
+            html.contains("j-topbar"),
+            "permalink needs masthead: {html}"
         );
         assert!(
-            html.starts_with(
+            html.contains(
                 "<div class=\"j-scroll\"><div class=\"j-page\"><article class=\"j-post\" data-jaunder-part=\"post\">"
             ),
             "{html}"
