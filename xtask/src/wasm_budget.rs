@@ -9,34 +9,33 @@
 
 use serde::Serialize;
 
-/// Raw bytes of the manifest-selected WASM identity artifact after Jiff's
-/// bundled IANA TZDB landed (#1272), still using `wasm-opt -Oz`.
+/// Raw bytes of the manifest-selected WASM identity artifact after the custom
+/// Theme Package management surface landed (#1341), still using `wasm-opt -Oz`.
 ///
 /// `validate` reports observed size as a drift against this. **A drift of a few
 /// bytes is build noise, not erosion**: the artifact is not bit-reproducible
 /// across builds — a docs-only commit was observed to move it by 13 bytes. Read
 /// the drift for its order of magnitude, not its sign; kilobytes mean something
 /// changed.
-pub const WASM_RAW_ACHIEVED_BYTES: u64 = 3_102_495;
+pub const WASM_RAW_ACHIEVED_BYTES: u64 = 3_335_708;
 
 /// The ceiling `cargo xtask validate` enforces.
 ///
-/// Headroom is **3.1%** over [`WASM_RAW_ACHIEVED_BYTES`]. The three optimisation
-/// levels were re-measured on the Jiff bundled-TZDB bundle:
+/// Headroom remains **3.1%** over [`WASM_RAW_ACHIEVED_BYTES`]. The achieved
+/// value was deliberately recalibrated when #1341 added the complete private
+/// theme catalog, package editor, presentation controls, and preview workflow
+/// to the CSR artifact:
 ///
 /// | build                      | raw bytes |
 /// | -------------------------- | --------- |
-/// | `-Oz` (achieved)           | 3 102 495 |
-/// | **ceiling**                | **3 200 000** |
-/// | `-Os`                      | 3 236 295 |
-/// | `-O2`                      | 3 279 507 |
+/// | `-Oz` (achieved)           | 3 335 708 |
+/// | **ceiling**                | **3 440 000** |
 ///
-/// The ceiling leaves ordinary headroom but remains below both weaker
-/// optimisation levels, so losing `-Oz` still fails rather than being hidden by
-/// the feature-driven recalibration.
+/// The next weaker measured output is `-Os` at 3 474 240 bytes, so losing
+/// `-Oz` remains outside the ceiling rather than hiding inside its headroom.
 ///
 /// Lower it deliberately, in the same commit as the win that earned it.
-pub const WASM_RAW_CEILING_BYTES: u64 = 3_200_000;
+pub const WASM_RAW_CEILING_BYTES: u64 = 3_440_000;
 
 #[derive(Debug, Serialize)]
 pub struct BudgetVerdict {
@@ -106,11 +105,12 @@ mod tests {
     }
 
     /// Raw bytes of the shipped wasm at the weaker `wasm-opt` levels, remeasured
-    /// on the Jiff bundled-TZDB bundle. `NO_WASM_OPT_BYTES` retains the pre-#836
-    /// historical guard. The next three tests run the real predicate over them.
+    /// after the custom Theme Package management surface landed. `NO_WASM_OPT_BYTES`
+    /// retains the pre-#836 historical guard. The next three tests run the real
+    /// predicate over them.
     const NO_WASM_OPT_BYTES: u64 = 5_350_591;
-    const O2_LEVEL_BYTES: u64 = 3_279_507;
-    const OS_LEVEL_BYTES: u64 = 3_236_295;
+    const O2_LEVEL_BYTES: u64 = 3_522_092;
+    const OS_LEVEL_BYTES: u64 = 3_474_240;
 
     #[test]
     fn the_achieved_size_passes_its_own_budget() {

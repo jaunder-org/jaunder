@@ -169,6 +169,7 @@ test("AtomPub media deletion refuses a retained Post reference and preserves the
     detail:
       "Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.",
     post_ids: [Number(postId)],
+    theme_reference_count: 0,
   });
 
   const preserved = await request.get(mediaMemberUrl, {
