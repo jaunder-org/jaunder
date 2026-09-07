@@ -4,12 +4,12 @@ use super::confirmed_for;
 use crate::AppState;
 use crate::feed_cache::FeedCacheRow;
 
-use chrono::Timelike;
 use common::{etag::ETag, feed::FeedFormat, test_support::parse_etag, time::UtcInstant};
 use host::{
     etag::FeedSemanticFingerprint,
     feed::{FeedPath, SyndicationFeedRepresentation},
 };
+use jiff::Timestamp;
 use std::sync::Arc;
 
 /// A coherent cached feed row whose representation metadata is derived from its
@@ -134,11 +134,9 @@ impl SeedFeedCache {
     }
 }
 fn storage_instant(instant: UtcInstant) -> UtcInstant {
-    let instant = instant.value();
     UtcInstant::from(
-        instant
-            .with_nanosecond(instant.nanosecond() / 1_000 * 1_000)
-            .expect("truncated nanoseconds are valid"),
+        Timestamp::from_microsecond(instant.value().as_microsecond())
+            .expect("truncated microseconds are valid"),
     )
 }
 

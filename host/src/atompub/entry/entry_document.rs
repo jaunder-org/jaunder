@@ -173,12 +173,9 @@ mod tests {
     }
 
     fn sample_entry() -> Entry {
-        Entry {
-            id: "tag:example.com,2026:post/1".to_string(),
-            title: Text::plain("Hello"),
-            updated: chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z").unwrap(),
-            ..Default::default()
-        }
+        r#"<entry xmlns="http://www.w3.org/2005/Atom"><id>tag:example.com,2026:post/1</id><title>Hello</title><updated>2026-01-02T00:00:00Z</updated><published>2026-01-01T00:00:00Z</published></entry>"#
+            .parse()
+            .expect("valid Atom entry")
     }
 
     #[test]
@@ -206,8 +203,6 @@ mod tests {
                 ..Default::default()
             },
         ];
-        entry.published =
-            Some(chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap());
 
         let out = entry_to_xml(&entry).expect("serialize");
         assert!(out.contains("type=\"text\""), "out: {out}");

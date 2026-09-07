@@ -7,7 +7,7 @@ use common::{
 };
 use jaunder::{feed::regenerate::render, publisher::PublisherService};
 
-use chrono::{TimeZone, Utc};
+use jiff::Timestamp;
 use rstest::*;
 use rstest_reuse::*;
 
@@ -36,8 +36,8 @@ async fn render_feed(
 
 fn fixed_instant(day: u32) -> UtcInstant {
     UtcInstant::from(
-        Utc.with_ymd_and_hms(2024, 1, day, 0, 0, 0)
-            .single()
+        format!("2024-01-{day:02}T00:00:00Z")
+            .parse::<Timestamp>()
             .expect("fixed test instant"),
     )
 }

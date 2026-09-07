@@ -178,12 +178,9 @@ mod tests {
     use super::super::entry_document::entry_to_xml;
 
     fn sample_entry() -> Entry {
-        Entry {
-            id: "tag:example.com,2026:post/1".to_string(),
-            title: Text::plain("Hello"),
-            updated: chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z").unwrap(),
-            ..Default::default()
-        }
+        r#"<entry xmlns="http://www.w3.org/2005/Atom"><id>tag:example.com,2026:post/1</id><title>Hello</title><updated>2026-01-02T00:00:00Z</updated></entry>"#
+            .parse()
+            .expect("valid Atom entry")
     }
 
     fn extension_with_text(uri: &str, local: &str, prefix: &str, text: &str) -> Extension {
@@ -259,7 +256,9 @@ mod tests {
 
     #[test]
     fn draft_and_html_round_trip_through_serialize_then_parse() {
-        let mut entry = sample_entry();
+        let mut entry: Entry = r#"<entry xmlns="http://www.w3.org/2005/Atom"><id>tag:example.com,2026:post/1</id><title>Hello</title><updated>2026-01-02T00:00:00Z</updated><published>2026-01-01T00:00:00Z</published></entry>"#
+            .parse()
+            .expect("valid Atom entry");
         entry.title = Text::plain("RT");
         entry.summary = Some(Text::plain("s"));
         entry.content = Some(Content {
@@ -282,8 +281,6 @@ mod tests {
             href: "https://h/atompub/alice/posts/1".to_string(),
             ..Default::default()
         }];
-        entry.published =
-            Some(chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z").unwrap());
         set_draft(&mut entry, true);
         set_j_slug(&mut entry, "my-post");
         let parsed = entry_to_xml(&entry)

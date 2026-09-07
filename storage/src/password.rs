@@ -1,7 +1,7 @@
 //! Password reset token storage.
 
 use async_trait::async_trait;
-use chrono::Duration;
+use jiff::ToSpan;
 
 use sqlx::{Database, Pool};
 use thiserror::Error;
@@ -165,7 +165,13 @@ where
         Err(helpers::password_reset_claim_error(row, now))
     }
     async fn prune_password_resets(&self, now: UtcInstant) -> sqlx::Result<u64> {
-        let unused_cutoff = UtcInstant::from(now.value() - Duration::hours(24));
+        // At the earliest representable instant, no unused row is older than
+        // the retention window, so clamping the cutoff preserves expiry policy.
+        let unused_cutoff = UtcInstant::from(
+            now.value()
+                .saturating_sub(24.hours())
+                .map_or(jiff::Timestamp::MIN, std::convert::identity),
+        );
         let mut deleted = 0;
 
         loop {
@@ -202,8 +208,8 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{Backend, SeedUser, backends, confirmed_for};
-    use chrono::Duration;
     use host::token;
+    use jiff::ToSpan;
     use rstest::*;
     use rstest_reuse::*;
     use std::sync::Arc;
@@ -259,8 +265,16 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
-        let expired_at = UtcInstant::from(now.value() - Duration::hours(24));
-        let valid_until = UtcInstant::from(now.value() + Duration::hours(1));
+        let expired_at = UtcInstant::from(
+            now.value()
+                .checked_sub(24.hours())
+                .expect("fixture is within Timestamp range"),
+        );
+        let valid_until = UtcInstant::from(
+            now.value()
+                .checked_add(1.hour())
+                .expect("fixture is within Timestamp range"),
+        );
 
         let password_resets = Arc::clone(&env.state.password_resets);
         let outcome = env

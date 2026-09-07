@@ -1,11 +1,11 @@
 use std::{sync::Arc, time::Duration};
 
 use crate::storage::fixtures::{password, username};
-use chrono::Utc;
 use common::MutationOutcome;
 use common::test_support::parse_display_name;
 use common::time::UtcInstant;
 use host::invite::InviteCode;
+use jiff::ToSpan;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, CloseablePool, SeedUser, backends, confirmed_for};
@@ -19,7 +19,12 @@ async fn create_invite_and_list_invites_includes_it(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
 
-    let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
+    let expires_at = UtcInstant::from(
+        UtcInstant::now()
+            .value()
+            .checked_add(24.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let code = create_invite(state, expires_at).await;
 
     let list = state.invites.list_invites().await.unwrap();
@@ -278,7 +283,12 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
     // alice exists before the invite is used
     let user = SeedUser::new().seed(state).await;
 
-    let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
+    let expires_at = UtcInstant::from(
+        UtcInstant::now()
+            .value()
+            .checked_add(24.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let code = create_invite(state, expires_at).await;
 
     let err = create_user_with_invite_result(
@@ -357,8 +367,16 @@ async fn invite_list_operations(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let now = UtcInstant::now();
-    let future = UtcInstant::from(now.value() + chrono::Duration::hours(1));
-    let past = UtcInstant::from(now.value() - chrono::Duration::hours(1));
+    let future = UtcInstant::from(
+        now.value()
+            .checked_add(1.hour())
+            .expect("fixture is within Timestamp range"),
+    );
+    let past = UtcInstant::from(
+        now.value()
+            .checked_sub(1.hour())
+            .expect("fixture is within Timestamp range"),
+    );
 
     let _invite1 = create_invite(state, future).await;
 

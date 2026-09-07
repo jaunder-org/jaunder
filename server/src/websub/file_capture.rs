@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::Utc;
+use common::time::UtcInstant;
 use std::{
     io::{self, Write},
     path::{Path, PathBuf},
@@ -42,7 +42,7 @@ impl FileCapturingWebSubClient {
         let mut line = serde_json::json!({
             "hub_url": hub_url,
             "feed_url": feed_url,
-            "sent_at": Utc::now().to_rfc3339(),
+            "sent_at": UtcInstant::now().to_string(),
         })
         .to_string();
         line.push('\n');

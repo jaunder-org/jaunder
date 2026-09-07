@@ -1,7 +1,7 @@
 //! Invite code storage.
 
 use async_trait::async_trait;
-use chrono::Duration;
+use jiff::ToSpan;
 use thiserror::Error;
 
 use host::{
@@ -268,7 +268,13 @@ where
     }
 
     async fn prune_invites(&self, now: UtcInstant) -> sqlx::Result<u64> {
-        let unused_cutoff = UtcInstant::from(now.value() - Duration::hours(24));
+        // At the earliest representable instant, no unused row is older than
+        // the retention window, so clamping the cutoff preserves expiry policy.
+        let unused_cutoff = UtcInstant::from(
+            now.value()
+                .saturating_sub(24.hours())
+                .map_or(jiff::Timestamp::MIN, std::convert::identity),
+        );
         let mut deleted = 0;
 
         loop {
@@ -305,7 +311,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{Backend, TestEnv, backends, confirmed_for};
-    use chrono::{Duration, Utc};
+    use jiff::ToSpan;
     use rstest::*;
     use rstest_reuse::*;
     use sqlx::Error as SqlxError;
@@ -317,7 +323,12 @@ mod tests {
         // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let expires_at = UtcInstant::from(Utc::now() + Duration::days(7));
+        let expires_at = UtcInstant::from(
+            UtcInstant::now()
+                .value()
+                .checked_add(168.hours())
+                .expect("fixture is within Timestamp range"),
+        );
 
         // `create_invite` binds a typed `InviteCode`; `list_invites` decodes the
         // `code` column straight back into `InviteCode` — exercising both bridge
@@ -343,7 +354,11 @@ mod tests {
     async fn list_invites_rejects_a_malformed_code_column(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         let now = UtcInstant::now();
-        let expires_at = UtcInstant::from(now.value() + Duration::days(7));
+        let expires_at = UtcInstant::from(
+            now.value()
+                .checked_add(168.hours())
+                .expect("fixture is within Timestamp range"),
+        );
 
         // Seed a row whose `code` column holds a value `InviteCode::from_str`
         // rejects (a space is not a base64url character).
@@ -385,8 +400,16 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
-        let eligible_at = UtcInstant::from(now.value() - Duration::hours(24));
-        let valid_until = UtcInstant::from(now.value() + Duration::hours(1));
+        let eligible_at = UtcInstant::from(
+            now.value()
+                .checked_sub(24.hours())
+                .expect("fixture is within Timestamp range"),
+        );
+        let valid_until = UtcInstant::from(
+            now.value()
+                .checked_add(1.hour())
+                .expect("fixture is within Timestamp range"),
+        );
 
         let invites = Arc::clone(&env.state.invites);
         env.state
@@ -416,7 +439,11 @@ mod tests {
     async fn prune_invites_uses_the_supplied_instant_for_consumed_rows(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
-        let valid_until = UtcInstant::from(now.value() + Duration::hours(1));
+        let valid_until = UtcInstant::from(
+            now.value()
+                .checked_add(1.hour())
+                .expect("fixture is within Timestamp range"),
+        );
         let invites = Arc::clone(&state.invites);
         let outcome = state
             .write_scope

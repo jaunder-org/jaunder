@@ -1,5 +1,6 @@
 use super::{FeedMinDays, FeedMinItems};
-use chrono::{DateTime, Duration, Utc};
+use common::time::UtcInstant;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HybridWindow {
@@ -8,21 +9,26 @@ pub struct HybridWindow {
 }
 
 pub trait HasPublishedAt {
-    fn published_at(&self) -> DateTime<Utc>;
+    fn published_at(&self) -> UtcInstant;
 }
 
 impl HybridWindow {
     /// Returns `None` when the cutoff predates all representable timestamps.
     #[must_use]
-    pub fn cutoff_date(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        now.checked_sub_signed(Duration::days(i64::from(self.min_days.value())))
+    pub fn cutoff_date(&self, now: UtcInstant) -> Option<UtcInstant> {
+        now.value()
+            .checked_sub(Duration::from_secs(
+                u64::from(self.min_days.value()) * 86_400,
+            ))
+            .ok()
+            .map(UtcInstant::from)
     }
 
     /// `posts` must be ordered by `published_at DESC`.
     /// Returns the prefix of posts where, for index `i`, `i < min_items` or
     /// the cutoff is unrepresentable or `published_at >= cutoff_date`.
     #[must_use]
-    pub fn select<'a, P: HasPublishedAt>(&self, posts: &'a [P], now: DateTime<Utc>) -> &'a [P] {
+    pub fn select<'a, P: HasPublishedAt>(&self, posts: &'a [P], now: UtcInstant) -> &'a [P] {
         let cutoff = self.cutoff_date(now);
         let min_items = usize::try_from(self.min_items.value()).unwrap_or(usize::MAX);
         let mut end = 0usize;
@@ -42,10 +48,17 @@ mod tests {
     use super::*;
     use crate::test_support::{parse_feed_min_days, parse_feed_min_items};
 
+    fn days_ago(now: UtcInstant, days: i64) -> UtcInstant {
+        now.value()
+            .checked_sub(Duration::from_secs(days.unsigned_abs() * 86_400))
+            .expect("test instant remains representable")
+            .into()
+    }
+
     #[derive(Debug)]
-    struct P(DateTime<Utc>);
+    struct P(UtcInstant);
     impl HasPublishedAt for P {
-        fn published_at(&self) -> DateTime<Utc> {
+        fn published_at(&self) -> UtcInstant {
             self.0
         }
     }
@@ -53,23 +66,23 @@ mod tests {
     #[derive(Debug)]
     struct IdentifiedP {
         id: u8,
-        published_at: DateTime<Utc>,
+        published_at: UtcInstant,
     }
     impl HasPublishedAt for IdentifiedP {
-        fn published_at(&self) -> DateTime<Utc> {
+        fn published_at(&self) -> UtcInstant {
             self.published_at
         }
     }
 
-    fn identified_at(id: u8, days_ago: i64, now: DateTime<Utc>) -> IdentifiedP {
+    fn identified_at(id: u8, days: i64, now: UtcInstant) -> IdentifiedP {
         IdentifiedP {
             id,
-            published_at: now - Duration::days(days_ago),
+            published_at: days_ago(now, days),
         }
     }
 
-    fn at(days_ago: i64, now: DateTime<Utc>) -> P {
-        P(now - Duration::days(days_ago))
+    fn at(days: i64, now: UtcInstant) -> P {
+        P(days_ago(now, days))
     }
 
     #[test]
@@ -82,14 +95,14 @@ mod tests {
     #[test]
     fn empty_input_returns_empty() {
         let w = HybridWindow::default();
-        let now = Utc::now();
+        let now = UtcInstant::now();
         assert!(w.select::<P>(&[], now).is_empty());
     }
 
     #[test]
     fn fewer_than_min_items_returns_all() {
         let w = HybridWindow::default();
-        let now = Utc::now();
+        let now = UtcInstant::now();
         let posts: Vec<P> = (0..5).map(|i| at(i, now)).collect();
         assert_eq!(w.select(&posts, now).len(), 5);
     }
@@ -97,7 +110,7 @@ mod tests {
     #[test]
     fn quiet_blog_includes_min_items_even_if_all_older_than_min_days() {
         let w = HybridWindow::default();
-        let now = Utc::now();
+        let now = UtcInstant::now();
         // 25 posts, all 100+ days ago
         let posts: Vec<P> = (0..25).map(|i| at(100 + i, now)).collect();
         // First 20 included because i < min_items; remaining 5 dropped (both predicates fail)
@@ -107,7 +120,7 @@ mod tests {
     #[test]
     fn busy_blog_includes_full_day_window_beyond_min_items() {
         let w = HybridWindow::default();
-        let now = Utc::now();
+        let now = UtcInstant::now();
         // 50 posts all within the last 30 days
         let posts: Vec<P> = (0..50).map(|i| at(i / 2, now)).collect();
         assert_eq!(w.select(&posts, now).len(), 50);
@@ -119,7 +132,7 @@ mod tests {
             min_items: parse_feed_min_items("1"),
             min_days: parse_feed_min_days("30"),
         };
-        let now = Utc::now();
+        let now = UtcInstant::now();
         let posts = vec![
             identified_at(1, 1, now),
             identified_at(2, 30, now),
@@ -134,7 +147,7 @@ mod tests {
             .iter()
             .map(|post| (post.id, post.published_at))
             .collect();
-        let expected = vec![(1, now - Duration::days(1)), (2, now - Duration::days(30))];
+        let expected = vec![(1, days_ago(now, 1)), (2, days_ago(now, 30))];
         assert_eq!(actual, expected);
     }
 
@@ -144,7 +157,7 @@ mod tests {
             min_items: parse_feed_min_items("1"),
             min_days: parse_feed_min_days(&u32::MAX.to_string()),
         };
-        let now = Utc::now();
+        let now = UtcInstant::now();
         let posts = vec![
             identified_at(1, 1, now),
             identified_at(2, 31, now),
@@ -158,9 +171,9 @@ mod tests {
             .map(|post| (post.id, post.published_at))
             .collect();
         let expected = vec![
-            (1, now - Duration::days(1)),
-            (2, now - Duration::days(31)),
-            (3, now - Duration::days(365)),
+            (1, days_ago(now, 1)),
+            (2, days_ago(now, 31)),
+            (3, days_ago(now, 365)),
         ];
         assert_eq!(actual, expected);
     }

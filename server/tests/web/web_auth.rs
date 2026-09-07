@@ -1,11 +1,11 @@
 use axum::http::StatusCode;
-use chrono::Utc;
 use common::registration::RegistrationPolicy;
 use common::session_label::MAX_SESSION_LABEL_CHARS;
 use common::time::UtcInstant;
 use common::token::RawToken;
 use common::username::Username;
 use host::password::Password;
+use jiff::ToSpan;
 use server_fn::ServerFn;
 
 use rstest::*;
@@ -158,7 +158,12 @@ async fn post_register(
 
 async fn create_registration_invite(state: &storage::AppState) -> host::invite::InviteCode {
     let invites = std::sync::Arc::clone(&state.invites);
-    let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
+    let expires_at = UtcInstant::from(
+        UtcInstant::now()
+            .value()
+            .checked_add(24.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     storage::test_support::confirmed_for(
         state
             .write_scope
@@ -369,7 +374,12 @@ async fn register_nested_request_maps_invite_code(#[case] backend: Backend) {
         .registration(RegistrationPolicy::OperatorInvites)
         .await;
     let invites = std::sync::Arc::clone(&state.invites);
-    let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
+    let expires_at = UtcInstant::from(
+        UtcInstant::now()
+            .value()
+            .checked_add(24.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let outcome = state
         .write_scope
         .run(|transaction| {
@@ -483,7 +493,12 @@ async fn register_invite_session_failure_rolls_back_user_and_invite(#[case] back
         .registration(RegistrationPolicy::OperatorInvites)
         .await;
     let invites = std::sync::Arc::clone(&state.invites);
-    let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
+    let expires_at = UtcInstant::from(
+        UtcInstant::now()
+            .value()
+            .checked_add(24.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let code = storage::test_support::confirmed_for(
         state
             .write_scope
@@ -610,7 +625,12 @@ async fn register_operator_invites_expired_code_returns_error(#[case] backend: B
 
     // Create an already-expired invite.
     let invites = std::sync::Arc::clone(&state.invites);
-    let expires_at = UtcInstant::from(Utc::now() - chrono::Duration::hours(24));
+    let expires_at = UtcInstant::from(
+        UtcInstant::now()
+            .value()
+            .checked_sub(24.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let outcome = state
         .write_scope
         .run(|transaction| {

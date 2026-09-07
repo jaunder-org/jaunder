@@ -243,10 +243,13 @@ fn prune_backups(destination_root: &Path, retention_count: usize) -> std::io::Re
 }
 
 fn timestamped_backup_name() -> String {
-    format!("backup-{}", chrono::Utc::now().format("%Y%m%dT%H%M%SZ"))
+    format!(
+        "backup-{}",
+        UtcInstant::now().value().strftime("%Y%m%dT%H%M%SZ")
+    )
 }
 
-fn backup_path_for_mode(destination_root: &Path, mode: BackupMode) -> PathBuf {
+pub(crate) fn backup_path_for_mode(destination_root: &Path, mode: BackupMode) -> PathBuf {
     let name = timestamped_backup_name();
     match mode {
         BackupMode::Directory => destination_root.join(name),
@@ -470,7 +473,7 @@ mod tests {
             .expect("timestamp scan")
             .expect("timestamp");
 
-        assert_eq!(timestamp.value().to_rfc3339(), "2026-01-02T00:00:00+00:00");
+        assert_eq!(timestamp.to_string(), "2026-01-02T00:00:00Z");
     }
 
     #[test]
@@ -485,7 +488,7 @@ mod tests {
             .expect("timestamp scan")
             .expect("timestamp");
 
-        assert_eq!(timestamp.value().to_rfc3339(), "2026-01-02T00:00:00+00:00");
+        assert_eq!(timestamp.to_string(), "2026-01-02T00:00:00Z");
     }
 
     #[test]

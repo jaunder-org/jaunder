@@ -102,14 +102,14 @@ impl PostRecord {
     /// Uses the publication timestamp if published; otherwise falls back to the creation timestamp.
     #[must_use]
     pub fn permalink(&self) -> RootRelativeUrl {
-        use chrono::Datelike;
-        let timestamp = self.published_at.unwrap_or(self.created_at).value();
+        let date = jiff::tz::TimeZone::UTC
+            .to_datetime(self.published_at.unwrap_or(self.created_at).value());
         let Ok(url) = format!(
             "/~{}/{:04}/{:02}/{:02}/{}",
             self.author_username,
-            timestamp.year(),
-            timestamp.month(),
-            timestamp.day(),
+            date.year(),
+            date.month(),
+            date.day(),
             self.slug.as_ref()
         )
         .parse::<RootRelativeUrl>() else {
@@ -436,7 +436,6 @@ pub struct UpdatePostInput {
 #[cfg(test)]
 mod tests {
     use super::{PostRecord, PublishUpdate};
-    use chrono::{TimeZone, Utc};
     use common::ids::{PostId, UserId};
     use common::org::PublicationState;
     use common::render::PostFormat;
@@ -507,11 +506,9 @@ mod tests {
             body: parse_post_body("My body"),
             format: PostFormat::Markdown,
             rendered_html: rendered_html("<p>My body</p>"),
-            created_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
-            updated_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
-            published_at: Some(UtcInstant::from(
-                Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
-            )),
+            created_at: parse_utc_instant("2026-04-12T08:30:00Z"),
+            updated_at: parse_utc_instant("2026-04-12T08:30:00Z"),
+            published_at: Some(parse_utc_instant("2026-04-12T08:30:00Z")),
             deleted_at: None,
             summary: None,
             tags: vec![],

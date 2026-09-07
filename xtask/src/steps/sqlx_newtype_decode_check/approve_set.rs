@@ -1,5 +1,6 @@
 use super::macros_audit::{BRIDGE_ATTRIBUTES, BRIDGE_DERIVES};
 use super::scan::render;
+use std::collections::HashMap;
 
 /// Roots scanned for *declarations*, to build the approve-set. Wider than
 /// [`POLICED_ROOT`]: the domain types a `storage` decode targets are declared in `common`.
@@ -20,13 +21,9 @@ const CONTAINERS: &[&str] = &["Vec", "Option", "Box", "Cow", "Arc", "Rc"];
 /// Foreign types that are legitimate column targets but are declared outside this repo, so
 /// no declaration scan can find them.
 ///
-/// The only hand-maintained part of the approve-set, and small precisely because the ~35
-/// domain types derive automatically. Each entry is a deliberate statement that decoding a
-pub(super) const APPROVED_FOREIGN: &[(&str, &str)] = &[(
-    "DateTime",
-    "chrono timestamps — the correct target for temporal columns whose surrounding row \
-     shape already carries any needed role identity",
-)];
+/// Deliberately empty: every permitted column target has a repository declaration that the
+/// scan verifies carries the required SQLx bridge.
+pub(super) const APPROVED_FOREIGN: &[(&str, &str)] = &[];
 
 /// The types a decode may land in: domain types with a bridge, plus derived composites whose
 /// fields or tuple elements this gate polices separately.
@@ -45,7 +42,7 @@ pub(super) struct ApproveSet {
     /// generic type, while every decode names a role alias (#875) — and because the aliases
     /// are declared in `common/src` while the decodes they name sit in `storage/src`, this
     /// is collected under **every** declaration root, not the policed one alone.
-    aliases: std::collections::HashMap<String, String>,
+    aliases: HashMap<String, String>,
 }
 
 /// Whether `attrs` carry a bridge-emitting macro.
@@ -79,6 +76,74 @@ fn has_bridge(attrs: &[syn::Attribute]) -> bool {
             _ => false,
         }
     })
+}
+
+/// Identifies one capability of an explicit SQLx bridge for a concrete supported backend.
+///
+/// Derive-backed bridges are declared by their emitting macro. `UtcInstant` cannot use
+/// that macro because its Jiff representation delegates to `jiff-sqlx`, so its six
+/// concrete `Type`/`Encode`/`Decode` implementations are its equally explicit declaration.
+fn explicit_sqlx_bridge_component(item: &syn::ItemImpl) -> Option<(&syn::Ident, u16)> {
+    let Some((_, trait_path, _)) = &item.trait_ else {
+        return None;
+    };
+    if trait_path.leading_colon.is_some() || trait_path.segments.len() != 2 {
+        return None;
+    }
+    let (Some(sqlx), Some(trait_segment)) =
+        (trait_path.segments.first(), trait_path.segments.last())
+    else {
+        return None;
+    };
+    if sqlx.ident != "sqlx" {
+        return None;
+    }
+    let capability = if trait_segment.ident == "Type" {
+        1
+    } else if trait_segment.ident == "Encode" {
+        2
+    } else if trait_segment.ident == "Decode" {
+        4
+    } else {
+        return None;
+    };
+    let syn::PathArguments::AngleBracketed(arguments) = &trait_segment.arguments else {
+        return None;
+    };
+    let backend = arguments.args.iter().find_map(|argument| {
+        let syn::GenericArgument::Type(syn::Type::Path(path)) = argument else {
+            return None;
+        };
+        if path.qself.is_some()
+            || path.path.segments.len() != 2
+            || !path
+                .path
+                .segments
+                .first()
+                .is_some_and(|segment| segment.ident == "sqlx")
+        {
+            return None;
+        }
+        let backend = &path.path.segments.last()?.ident;
+        if backend == "Postgres" {
+            Some(8)
+        } else if backend == "Sqlite" {
+            Some(64)
+        } else {
+            None
+        }
+    })?;
+    let syn::Type::Path(self_type) = &*item.self_ty else {
+        return None;
+    };
+    (self_type.qself.is_none() && self_type.path.segments.len() == 1)
+        .then(|| {
+            self_type
+                .path
+                .get_ident()
+                .map(|ident| (ident, capability * backend))
+        })
+        .flatten()
 }
 
 /// Which kind of root a scanned declaration file sits under.
@@ -391,13 +456,13 @@ fn handwritten_from_row_proves(item: &syn::ItemImpl) -> bool {
     };
     methods.next().is_none() && from_row_has_flat_direct_gets(method)
 }
-
 /// `root` gates composites: bridge-carrying types are approved wherever declared because the
-/// bridge is the whole claim. Derived `FromRow` structs and tuple aliases are approved only
-/// under the policed root, where their fields or elements are checked. A hand-written
-/// `sqlx::FromRow` implementation is approved only when every matching implementation for its
-/// simple self type proves the same direct column boundary syntactically. Every other
-/// hand-written implementation remains unapproved.
+/// bridge is the whole claim. A derive marks its emitting macro; an explicit bridge must
+/// declare `Type`/`Encode`/`Decode` for both supported backends. Derived `FromRow` structs
+/// and tuple aliases are approved only under the policed root, where their fields or elements
+/// are checked. A hand-written `sqlx::FromRow` implementation is approved only when every
+/// matching implementation for its simple self type proves the same direct column boundary
+/// syntactically. Every other hand-written implementation remains unapproved.
 ///
 /// Only top-level `file.items` are read: a declaration inside an inline `mod` is not seen.
 /// That direction is safe — an unseen declaration is an unapproved type, so the gate bites
@@ -407,9 +472,12 @@ pub(super) fn collect_declarations(
     root: Root,
     set: &mut ApproveSet,
 ) -> Result<(), String> {
+    const COMPLETE_EXPLICIT_BRIDGE: u16 = 8 | 16 | 32 | 64 | 128 | 256;
+
     let policed = root == Root::Policed;
     let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
-    let mut handwritten = std::collections::HashMap::<String, bool>::new();
+    let mut handwritten = HashMap::<String, bool>::new();
+    let mut explicit_bridges = HashMap::<String, u16>::new();
     for item in &file.items {
         match item {
             syn::Item::Struct(s) if has_bridge(&s.attrs) => {
@@ -421,8 +489,11 @@ pub(super) fn collect_declarations(
             syn::Item::Struct(s) if policed && is_from_row(&s.attrs) => {
                 set.composites.insert(s.ident.to_string());
             }
-            syn::Item::Impl(i) if policed => {
-                if let Some(name) = handwritten_from_row_name(i) {
+            syn::Item::Impl(i) => {
+                if let Some((name, component)) = explicit_sqlx_bridge_component(i) {
+                    *explicit_bridges.entry(name.to_string()).or_default() |= component;
+                }
+                if policed && let Some(name) = handwritten_from_row_name(i) {
                     let proves = handwritten_from_row_proves(i);
                     handwritten
                         .entry(name.to_string())
@@ -442,6 +513,11 @@ pub(super) fn collect_declarations(
                 }
             }
             _ => {}
+        }
+    }
+    for (name, components) in explicit_bridges {
+        if components == COMPLETE_EXPLICIT_BRIDGE {
+            set.approved.insert(name);
         }
     }
     for (name, all_prove) in handwritten {
@@ -517,8 +593,8 @@ pub(super) fn unapproved_leaves(ty: &syn::Type, set: &ApproveSet) -> Vec<String>
 /// A synthetic approve-set, so the pure tests never touch the filesystem.
 ///
 /// The names here stand in for what the real declaration scan finds: `Slug`/`PostId`
-/// for bridge-carrying domain types, `DateTime` for [`APPROVED_FOREIGN`], and
-/// `PostRow`/`FeedCacheRowRecord` for composites approved by delegation.
+/// for bridge-carrying domain types and `PostRow`/`FeedCacheRowRecord` for composites
+/// approved by delegation.
 #[cfg(test)]
 pub(super) fn approve() -> ApproveSet {
     let names = |ns: &[&str]| ns.iter().map(|s| (*s).to_string()).collect();
@@ -532,10 +608,9 @@ pub(super) fn approve() -> ApproveSet {
             "FeedPath",
             "TagId",
             "Tag",
-            "DateTime",
         ]),
         composites: names(&["PostRow", "FeedCacheRowRecord"]),
-        aliases: std::collections::HashMap::new(),
+        aliases: HashMap::new(),
     }
 }
 
@@ -852,6 +927,37 @@ mod tests {
     }
 
     #[test]
+    fn explicit_dual_backend_sqlx_bridge_is_collected_from_declarations_only_root() {
+        let src = r#"
+            struct UtcInstant;
+            impl sqlx::Type<sqlx::Postgres> for UtcInstant {}
+            impl<'q> sqlx::Encode<'q, sqlx::Postgres> for UtcInstant {}
+            impl<'r> sqlx::Decode<'r, sqlx::Postgres> for UtcInstant {}
+            impl sqlx::Type<sqlx::Sqlite> for UtcInstant {}
+            impl<'q> sqlx::Encode<'q, sqlx::Sqlite> for UtcInstant {}
+            impl<'r> sqlx::Decode<'r, sqlx::Sqlite> for UtcInstant {}
+        "#;
+        let mut set = ApproveSet::default();
+        collect_declarations(src, Root::DeclarationsOnly, &mut set).expect("parses");
+        assert!(set.approved.contains("UtcInstant"));
+    }
+
+    #[test]
+    fn incomplete_explicit_sqlx_bridge_is_not_collected() {
+        let src = r#"
+            struct UtcInstant;
+            impl sqlx::Type<sqlx::Postgres> for UtcInstant {}
+            impl<'q> sqlx::Encode<'q, sqlx::Postgres> for UtcInstant {}
+            impl<'r> sqlx::Decode<'r, sqlx::Postgres> for UtcInstant {}
+            impl sqlx::Type<sqlx::Sqlite> for UtcInstant {}
+            impl<'q> sqlx::Encode<'q, sqlx::Sqlite> for UtcInstant {}
+        "#;
+        let mut set = ApproveSet::default();
+        collect_declarations(src, Root::DeclarationsOnly, &mut set).expect("parses");
+        assert!(!set.approved.contains("UtcInstant"));
+    }
+
+    #[test]
     fn resolves_an_alias_to_its_approved_underlying_newtype() {
         // `pub type HubUrl = TaggedUrl<Hub>;` — the decode names the alias, the bridge is on
         // the generic type. Without resolution every role alias would false-fail (#875).
@@ -942,7 +1048,7 @@ mod tests {
         let ty: syn::Type = syn::parse_quote!(Vec<(String, Option<PostId>)>);
         assert_eq!(unapproved_leaves(&ty, &set), vec!["String".to_string()]);
         let ty: syn::Type = syn::parse_quote!(Vec<(Slug, DateTime<Utc>)>);
-        assert!(unapproved_leaves(&ty, &set).is_empty());
+        assert_eq!(unapproved_leaves(&ty, &set), vec!["DateTime".to_string()]);
         let ty: syn::Type = syn::parse_quote!(Option<AudienceId>);
         assert!(unapproved_leaves(&ty, &set).is_empty());
     }

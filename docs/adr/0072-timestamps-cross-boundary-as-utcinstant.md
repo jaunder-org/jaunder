@@ -84,6 +84,12 @@ separate scope.
 > boundary type and timestamp contract remained unchanged. Current ownership:
 > [ARCHITECTURE.md](../ARCHITECTURE.md).
 
+> **Annotation (2026-09-06).** As of #1272, the Chrono backing, Chrono-serde
+> wire implementation, wasm-bundle rationale, and raw-internal-time exception
+> described here had been superseded. The `UtcInstant` domain boundary and its
+> retained UTC wire role remained intact. Current time-model truth:
+> [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - Every timestamp on the web boundary is validated in one place (`UtcInstant`),

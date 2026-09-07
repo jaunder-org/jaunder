@@ -100,7 +100,13 @@ let
     "jaunder-wasm-test-cargo-source"
     (pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
-      filter = cargoTargetSource [ "client" "common" "macros" "tools/csr_bundle" ];
+      filter =
+        path: type:
+        let
+          relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+        in
+        cargoTargetSource [ "client" "common" "macros" "tools/csr_bundle" ] path type
+        || pkgs.lib.hasPrefix "client/tests/" relative;
     })
     [ "csr" "host" "server" "storage" "test-support" "web" ];
 

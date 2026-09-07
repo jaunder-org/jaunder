@@ -1,12 +1,12 @@
 //! Typed fixtures shared by host Syndication Feed renderer tests.
 
-use chrono::{DateTime, Utc};
 use common::{
     feed::FeedSurface,
     ids::PostId,
     render::RenderedHtml,
     tagged_url::{FeedUrl, PermalinkUrl},
     test_support::{parse_site_title, parse_url, parse_utc_instant},
+    time::UtcInstant,
 };
 
 use super::{FeedItem, FeedMetadata, FeedTitle};
@@ -22,7 +22,7 @@ pub fn feed_metadata(self_url: FeedUrl) -> FeedMetadata {
         canonical_url: parse_url("https://example.com/"),
         self_url,
         hub_url: None,
-        representation_modified_at: parse_utc_instant("2026-01-01T00:00:00Z").into(),
+        representation_modified_at: parse_utc_instant("2026-01-01T00:00:00Z"),
     }
 }
 
@@ -34,7 +34,7 @@ pub fn feed_item(
     id: PostId,
     permalink: PermalinkUrl,
     content_html: RenderedHtml,
-    timestamp: DateTime<Utc>,
+    timestamp: UtcInstant,
 ) -> FeedItem {
     FeedItem {
         id,

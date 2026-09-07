@@ -47,17 +47,17 @@ application domain types. `web` and `csr` depend on `client`, never the reverse
 from all three, in `macros`
 ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).
 
-| Crate          | Target      | Responsibility                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| -------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `common`       | host + wasm | Dual-target domain types and operations reached by CSR or another dual-target consumer: validated newtypes including `ProfferedPassword`, `RenderedHtml`, `PostFormat`, ETag, Org normalization, croner, `BackupSchedule`, and the Syndication Feed grammar (`FeedFormat`, `FeedSurface`, `canonicalize`); its optional host-only `sanitize` capability establishes the `RenderedHtml` invariant without entering the CSR closure. |
-| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).                                                                                                                                                                                                                                                                                    |
-| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                                                                                                                                                                                                                                                     |
-| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                                                                                                                                                                                                                                                    |
-| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                                                                                                                                                                                                                                                      |
-| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, `Password`/`StoredPasswordHash` and hash operations, rendering/`RenderOutput`/media extraction/ETag construction, AtomPub wholesale, host-only Syndication Feed machinery, `SiteConfigKey`/`UserConfigKey`, invites, process telemetry, metrics, and SMTP relay configuration.                                                                  |
-| `client`       | host + wasm | Browser infrastructure: `localStorage`, dialogs, DOM/file-upload glue, reactive revalidation, CSR performance marks, and bounded client telemetry ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)).                                                                                                                                                                                                                           |
-| `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                                                                                                                                                                                                                                                   |
-| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                                                                                                                                                                                                                                                 |
+| Crate          | Target      | Responsibility                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `common`       | host + wasm | Dual-target domain types and operations reached by CSR or another dual-target consumer: validated newtypes including `UtcInstant` over Jiff's `Timestamp`, `ProfferedPassword`, `RenderedHtml`, `PostFormat`, ETag, Org normalization, croner, `BackupSchedule`, and the Syndication Feed grammar (`FeedFormat`, `FeedSurface`, `canonicalize`); its optional host-only `sanitize` capability establishes the `RenderedHtml` invariant without entering the CSR closure. |
+| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).                                                                                                                                                                                                                                                                                                                          |
+| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                                                                                                                                                                                                                                                                                           |
+| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                                                                                                                                                                                                                                                                                          |
+| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                                                                                                                                                                                                                                                                                            |
+| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, `Password`/`StoredPasswordHash` and hash operations, rendering/`RenderOutput`/media extraction/ETag construction, AtomPub wholesale, host-only Syndication Feed machinery, `SiteConfigKey`/`UserConfigKey`, invites, process telemetry, metrics, and SMTP relay configuration.                                                                                                        |
+| `client`       | host + wasm | Browser infrastructure: `localStorage`, dialogs, DOM/file-upload glue, reactive revalidation, CSR performance marks, and bounded client telemetry ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)).                                                                                                                                                                                                                                                                 |
+| `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                                                                                                                                                                                                                                                                                         |
+| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                                                                                                                                                                                                                                                                                       |
 
 Every `client` module that touches the browser carries
 `#[cfg(target_arch = "wasm32")]`, so a host build of the crate is an
@@ -826,7 +826,11 @@ regeneration promise
 
 The Atom feed document is built by upstream `atom_syndication` through the
 host-owned Syndication Feed renderer; RSS goes through the `rss` crate the same
-way ([ADR-0089](adr/0089-upstream-atom-document-io.md)).
+way ([ADR-0089](adr/0089-upstream-atom-document-io.md)). The renderer's public
+time seams use domain or Jiff types. `atom_syndication` and `rss` may still
+bring Chrono transitively through their upstream models; their Chrono-backed
+values convert at the protocol adapter and do not define a first-party time seam
+([Jiff time model](adr/drafts/jiff-time-model.md)).
 
 The authenticated Collection (`server/src/atompub/router.rs:16-33`:
 `/atompub/service`, the per-user post collection and member routes, the media
@@ -1377,11 +1381,13 @@ one early fetch, the fallback target, and initialization ordering without fixed
 The WASM artifact carries a hard budget
 ([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `cargo xtask validate` resolves
 the manifest's WASM role and fails when its **raw** byte count exceeds
-`WASM_RAW_CEILING_BYTES` (2 785 000 today, `xtask/src/wasm_budget.rs:39`). Raw,
+`WASM_RAW_CEILING_BYTES` (3 200 000 today, `xtask/src/wasm_budget.rs:39`). Raw,
 not compressed, because the artifact is a compiler input rather than a download;
 the ceiling keeps explicit headroom that sits below what the next weaker
 optimisation level would produce, and a unit test asserts that relationship so
-widening it is deliberate.
+widening it is deliberate. The recalibration required by the
+[proposed Jiff time model](adr/drafts/jiff-time-model.md) admits the bundled
+IANA TZDB while retaining that optimisation-level guard.
 
 ### Module layout — the per-vertical file split
 
@@ -2494,24 +2500,37 @@ will not decode fails the batch. Dual-backend tests assert the skip/purge
 behaviour per site.
 
 **Time.** `common::time::UtcInstant` is the domain type for absolute UTC
-instants at both the web and storage boundaries. It is a minimal Chrono-backed,
-instant-backed newtype: transparent serde retains its RFC 3339 wire form,
-`FromStr` canonicalizes offsets to UTC for the client-side `Field<T>` path,
-`now()` centralizes wall-clock construction, and its existing `value()`/`From`
-conversions remain available
-([ADR-0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md);
-[storage-owned instants use UtcInstant](adr/0153-storage-owned-instants.md)).
+instants at web and storage boundaries, wrapping `jiff::Timestamp`; its
+`value()` and `From` conversions are deliberate Jiff escape hatches. Transparent
+serde retains RFC 3339 at that boundary, where Jiff Temporal parsing
+deliberately accepts its broader valid input set; output is canonical UTC `Z`
+form (`:60` normalizes to `:59`). That broad parsing belongs only to
+`UtcInstant`, not to fixed outer grammars: `PermalinkDate` remains civil
+`YYYY-MM-DD`, HTML datetime-local remains minute with optional seconds, and Org
+remains structured `DATE`/weekday/time/TZ. `PermalinkDate` uses Jiff's civil
+`Date`, and public Syndication Feed time seams use domain or Jiff types. Each
+time-domain type uses its native Jiff range: `Date` spans `-009999-01-01`
+through `9999-12-31`, while `Timestamp` spans `-009999-01-02T01:59:59Z` through
+`9999-12-30T22:00:00.999999999Z`; an older out-of-range value fails at the
+decode or restore boundary that reaches it, without a preflight scan. IANA TZDB
+is always bundled. HTML datetime-local retains browser-normalizing, non-strict
+conversion for gaps; strict local-time seams, including Org, retain earlier-fold
+selection and reject gaps. These retain the domain boundary established by
+[ADR-0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md) and the
+storage-wide `UtcInstant` seam established by
+[ADR-0153](adr/0153-storage-owned-instants.md).
+
 Storage records and traits, private rows/cursors/inputs/dialects,
 `BackupManifest`, and storage fixtures carry `UtcInstant`; existing
-role-specific wrappers over it remain intact. Its plain SQLx bridge and
-dual-backend coverage preserve SQLite/Postgres schemas, physical values,
-backend-specific precision, and timezone semantics. Public-read APIs likewise
-take an explicit `UtcInstant` `now`, preserving ADR-0027's visibility behavior.
-`UtcInstant` remains Chrono-backed: Chrono's soft deprecation makes the named
-type a smaller future migration seam, not a claim of complete implementation
-isolation or a Jiff migration; Jiff has no native SQLx integration. Durations,
-local wall-clock values, `SystemTime` suffixes, SQL physical types and values,
-and non-storage protocol representations remain outside this decision.
+role-specific wrappers over it remain intact. A deliberate bridge with
+`jiff-sqlx` 0.2 and SQLx 0.9 preserves SQLite/Postgres schemas, physical values,
+backend-specific precision, timezone semantics, and exact SQLite timestamp text.
+Public-read APIs likewise take an explicit `UtcInstant` `now`, preserving
+ADR-0027's visibility behavior. Direct first-party Chrono and chrono-tz
+dependencies and uses are removed. Chrono may remain transitively through
+unavoidable third-party implementation dependencies, including the current
+non-protocol roots `axum-embed`, `croner`, and `tokio-cron-scheduler`
+([Jiff time model](adr/drafts/jiff-time-model.md)).
 
 **URLs.** The `url` crate is the sanctioned absolute-URL parser and normalizer,
 and it is a direct dependency of `common` (`common/Cargo.toml:24`) — which means

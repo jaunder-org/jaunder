@@ -3,7 +3,7 @@
 use crate::WriteTransaction;
 use crate::sql::QueryStorageExt;
 use async_trait::async_trait;
-use chrono::Duration;
+use jiff::ToSpan;
 
 use sqlx::{Database, Pool};
 use thiserror::Error;
@@ -235,7 +235,13 @@ where
     }
 
     async fn prune_email_verifications(&self, now: UtcInstant) -> sqlx::Result<u64> {
-        let unused_cutoff = UtcInstant::from(now.value() - Duration::hours(24));
+        // At the earliest representable instant, no unused row is older than
+        // the retention window, so clamping the cutoff preserves expiry policy.
+        let unused_cutoff = UtcInstant::from(
+            now.value()
+                .saturating_sub(24.hours())
+                .map_or(jiff::Timestamp::MIN, std::convert::identity),
+        );
         let mut deleted = 0;
 
         loop {
@@ -272,9 +278,9 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{Backend, SeedUser, TestEnv, backends, confirmed_for};
-    use chrono::Duration;
     use common::test_support::parse_email;
     use host::token;
+    use jiff::ToSpan;
     use rstest::*;
     use rstest_reuse::*;
     use sqlx::Error as SqlxError;
@@ -421,8 +427,16 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let email = parse_email("alice@example.com");
         let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
-        let expired_at = UtcInstant::from(now.value() - Duration::hours(24));
-        let valid_until = UtcInstant::from(now.value() + Duration::hours(1));
+        let expired_at = UtcInstant::from(
+            now.value()
+                .checked_sub(24.hours())
+                .expect("fixture is within Timestamp range"),
+        );
+        let valid_until = UtcInstant::from(
+            now.value()
+                .checked_add(1.hour())
+                .expect("fixture is within Timestamp range"),
+        );
 
         let expired_email = email.clone();
         let email_verifications = Arc::clone(&env.state.email_verifications);

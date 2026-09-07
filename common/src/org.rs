@@ -2,8 +2,7 @@
 
 use std::str::FromStr;
 
-use chrono::{LocalResult, NaiveDate, NaiveDateTime, TimeZone};
-use chrono_tz::Tz;
+use jiff::{civil, tz::TimeZone};
 use orgize::{
     Org,
     ast::{Document, Keyword},
@@ -507,22 +506,25 @@ fn parse_org_date(value: &str, timezone: &str) -> Result<UtcInstant, OrgMetadata
     if parts.len() != 3 {
         return invalid("invalid DATE");
     }
-    let date = NaiveDate::parse_from_str(parts[0], "%Y-%m-%d")
+    let date: civil::Date = parts[0]
+        .parse()
         .map_err(|_| OrgMetadataError::Invalid("invalid DATE".into()))?;
-    if date.format("%a").to_string() != parts[1] {
+    if date.strftime("%a").to_string() != parts[1] {
         return invalid("DATE weekday does not match date");
     }
-    let time =
-        NaiveDateTime::parse_from_str(&format!("{} {}", parts[0], parts[2]), "%Y-%m-%d %H:%M")
-            .map_err(|_| OrgMetadataError::Invalid("invalid DATE".into()))?;
-    let tz: Tz = timezone
+    let datetime: civil::DateTime = format!("{}T{}:00", parts[0], parts[2])
         .parse()
+        .map_err(|_| OrgMetadataError::Invalid("invalid DATE".into()))?;
+    let timezone = TimeZone::get(timezone)
         .map_err(|_| OrgMetadataError::Invalid("invalid Jaunder timezone".into()))?;
-    match tz.from_local_datetime(&time) {
-        LocalResult::Single(at) => Ok(at.with_timezone(&chrono::Utc).into()),
-        LocalResult::Ambiguous(earlier, _) => Ok(earlier.with_timezone(&chrono::Utc).into()),
-        LocalResult::None => invalid("DATE is in a DST gap"),
+    let timestamp = timezone
+        .to_ambiguous_timestamp(datetime)
+        .compatible()
+        .map_err(|_| OrgMetadataError::Invalid("invalid DATE".into()))?;
+    if timezone.to_datetime(timestamp) != datetime {
+        return invalid("DATE is in a DST gap");
     }
+    Ok(UtcInstant::from(timestamp))
 }
 
 fn choose<T>(structured: Presence<T>, header: Presence<T>) -> Presence<T> {
@@ -598,6 +600,12 @@ fn validate_operation(
 mod tests {
     use super::*;
 
+    const NAMED_ZONE_ORG_FIXTURE: &str = "\
+#+DATE: [2026-11-01 Sun 01:30]
+#+PROPERTY: JAUNDER_DATE_TZ America/New_York
+#+PROPERTY: JAUNDER_STATUS scheduled
+Body";
+
     fn clock() -> UtcInstant {
         "2026-08-26T12:00:00Z".parse().expect("valid fixed clock")
     }
@@ -635,6 +643,24 @@ mod tests {
             ),
             Err(OrgMetadataError::Invalid(_))
         ));
+    }
+
+    // `tzdb-zoneinfo` is absent from the workspace's Jiff feature set, so this
+    // native execution resolves the named zone from Jiff's bundled TZDB.
+    #[test]
+    fn named_zone_org_fixture_resolves_from_the_bundled_tzdb() {
+        let timezone = TimeZone::get("America/New_York").expect("bundled named zone");
+        let normalized = normalize(NAMED_ZONE_ORG_FIXTURE);
+
+        assert_eq!(timezone.iana_name(), Some("America/New_York"));
+        assert_eq!(
+            normalized.metadata.lifecycle,
+            Presence::Present(PublicationState::Scheduled(
+                "2026-11-01T05:30:00Z"
+                    .parse()
+                    .expect("expected UTC instant")
+            ))
+        );
     }
 
     #[test]

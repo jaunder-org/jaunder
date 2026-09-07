@@ -20,7 +20,12 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRep
                 .title(i.title.clone().map(String::from))
                 .link(Some(i.permalink.to_string()))
                 .description(Some(i.content_html.to_string()))
-                .pub_date(Some(i.published_at.to_rfc2822()))
+                .pub_date(Some(
+                    i.published_at
+                        .value()
+                        .strftime("%a, %d %b %Y %H:%M:%S %z")
+                        .to_string(),
+                ))
                 .guid(Some(
                     GuidBuilder::default()
                         .value(i.permalink.to_string())
@@ -55,7 +60,12 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRep
                 .map(ToString::to_string)
                 .unwrap_or_default(),
         )
-        .last_build_date(Some(meta.representation_modified_at.to_rfc2822()))
+        .last_build_date(Some(
+            meta.representation_modified_at
+                .value()
+                .strftime("%a, %d %b %Y %H:%M:%S %z")
+                .to_string(),
+        ))
         .atom_ext(Some(AtomExtension { links: atom_links }))
         .items(rss_items);
 
@@ -64,14 +74,12 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRep
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
-
     use super::*;
     use crate::feed::FeedDescription;
     use crate::feed::test_support::{feed_item, feed_metadata};
     use common::{
         ids::PostId,
-        test_support::{parse_post_title, parse_url, rendered_html},
+        test_support::{parse_post_title, parse_url, parse_utc_instant, rendered_html},
     };
 
     fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
@@ -89,7 +97,7 @@ mod tests {
                 PostId::from(1),
                 parse_url("https://example.com/~alice/posts/1"),
                 rendered_html("<p>hi</p>"),
-                chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+                parse_utc_instant("2026-01-01T00:00:00Z"),
             )
         }
     }
@@ -120,17 +128,18 @@ mod tests {
 
     #[test]
     fn uses_feed_representation_time_for_last_build_date() {
-        let representation_time = chrono::Utc.with_ymd_and_hms(2026, 2, 3, 4, 5, 6).unwrap();
+        let representation_time = parse_utc_instant("2026-02-03T04:05:06Z");
         let mut metadata = meta(None, Some("A site"));
         metadata.representation_modified_at = representation_time;
 
         let rendered = render_rss(&metadata, &[item(Some("Hello"))]);
         let channel = rss::Channel::read_from(rendered.body().as_bytes()).unwrap();
 
-        assert_eq!(
-            channel.last_build_date(),
-            Some(representation_time.to_rfc2822().as_str())
-        );
+        let expected = representation_time
+            .value()
+            .strftime("%a, %d %b %Y %H:%M:%S %z")
+            .to_string();
+        assert_eq!(channel.last_build_date(), Some(expected.as_str()));
     }
 
     #[test]

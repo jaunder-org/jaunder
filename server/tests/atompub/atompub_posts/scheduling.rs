@@ -247,8 +247,8 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
         .unwrap()
         .unwrap();
     assert_eq!(
-        rec.published_at.unwrap().value().to_rfc3339(),
-        "2099-01-01T00:00:00+00:00"
+        rec.published_at.unwrap().value().to_string(),
+        "2099-01-01T00:00:00Z"
     );
 
     let viewer = common::visibility::ViewerIdentity::Anonymous;
@@ -296,8 +296,8 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
         .unwrap()
         .unwrap();
     assert_eq!(
-        rec.published_at.unwrap().value().to_rfc3339(),
-        "2000-01-01T00:00:00+00:00"
+        rec.published_at.unwrap().value().to_string(),
+        "2000-01-01T00:00:00Z"
     );
 }
 
@@ -324,8 +324,8 @@ async fn create_with_explicit_draft_no_preserves_published_instant(#[case] backe
         .unwrap()
         .unwrap();
     assert_eq!(
-        rec.published_at.unwrap().value().to_rfc3339(),
-        "2000-01-01T00:00:00+00:00"
+        rec.published_at.unwrap().value().to_string(),
+        "2000-01-01T00:00:00Z"
     );
 }
 
@@ -361,8 +361,8 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
         .unwrap()
         .unwrap();
     assert_eq!(
-        rec.published_at.unwrap().value().to_rfc3339(),
-        "2099-06-01T00:00:00+00:00",
+        rec.published_at.unwrap().value().to_string(),
+        "2099-06-01T00:00:00Z",
         "update must honor the wire <published> timestamp"
     );
 }
@@ -395,7 +395,7 @@ async fn update_with_explicit_draft_no_preserves_published_instant(#[case] backe
         .unwrap()
         .unwrap();
     assert_eq!(
-        rec.published_at.unwrap().value().to_rfc3339(),
-        "2000-01-01T00:00:00+00:00"
+        rec.published_at.unwrap().value().to_string(),
+        "2000-01-01T00:00:00Z"
     );
 }

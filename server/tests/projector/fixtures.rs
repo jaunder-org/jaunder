@@ -7,8 +7,8 @@ use axum::{
     http::{Request, StatusCode, header},
     response::Response,
 };
-use chrono::Datelike;
 use common::post_title::PostTitle;
+use jiff::tz::Offset;
 use storage::test_support::{SeedRawPost, SeedUser};
 use storage::{
     MockSiteConfigStorage, MockUserConfigStorage, PostStorage, RenderedHtml, SiteConfigStorage,
@@ -93,11 +93,12 @@ pub(super) async fn seed_published_post(
     let user = SeedUser::new().seed(state).await;
     let post = SeedRawPost::new(user.user_id).seed(state).await;
     let published_at = post.published_at.expect("seeded post is published");
+    let published_date = Offset::UTC.to_datetime(published_at.value()).date();
     (
         user.username.to_string(),
-        published_at.value().year(),
-        published_at.value().month(),
-        published_at.value().day(),
+        i32::from(published_date.year()),
+        u32::try_from(published_date.month()).expect("Jiff civil month fits u32"),
+        u32::try_from(published_date.day()).expect("Jiff civil day fits u32"),
         post.slug.to_string(),
         post.title,
         post.rendered_html,

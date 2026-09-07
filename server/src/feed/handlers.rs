@@ -247,8 +247,10 @@ pub async fn feed_user_tag(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
-    use common::{test_support::parse_etag, time::UtcInstant};
+    use common::{
+        test_support::{parse_etag, parse_utc_instant},
+        time::UtcInstant,
+    };
     use http_body_util::BodyExt;
     use rstest::*;
     use rstest_reuse::*;
@@ -258,6 +260,10 @@ mod tests {
         PublisherStorageError,
         test_support::{Backend, SeedFeedCache, backends},
     };
+    fn sample_updated_at() -> UtcInstant {
+        parse_utc_instant("1994-11-06T08:49:37Z")
+    }
+
     fn sample_row(etag: &str, updated_at: UtcInstant) -> FeedCacheRow {
         SeedFeedCache::new("/feed.rss".parse().expect("valid feed path"))
             .body("<rss/>".to_owned())
@@ -375,11 +381,7 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_returns_a_metadata_complete_body_free_304_on_if_none_match() {
-        let updated_at = UtcInstant::from(
-            Utc.with_ymd_and_hms(1994, 11, 6, 8, 49, 37)
-                .single()
-                .expect("valid timestamp"),
-        );
+        let updated_at = sample_updated_at();
         let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
@@ -413,11 +415,7 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_returns_a_metadata_complete_200_on_nonmatching_if_none_match() {
-        let updated_at = UtcInstant::from(
-            Utc.with_ymd_and_hms(1994, 11, 6, 8, 49, 37)
-                .single()
-                .expect("valid timestamp"),
-        );
+        let updated_at = sample_updated_at();
         let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
@@ -455,11 +453,7 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_does_not_fall_back_to_if_modified_since_when_if_none_match_is_present() {
-        let updated_at = UtcInstant::from(
-            Utc.with_ymd_and_hms(1994, 11, 6, 8, 49, 37)
-                .single()
-                .expect("valid timestamp"),
-        );
+        let updated_at = sample_updated_at();
         let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
@@ -487,11 +481,7 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_returns_200_when_modified_since_is_stale() {
-        let updated_at = UtcInstant::from(
-            Utc.with_ymd_and_hms(1994, 11, 6, 8, 49, 37)
-                .single()
-                .expect("valid timestamp"),
-        );
+        let updated_at = sample_updated_at();
         let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()
@@ -518,11 +508,7 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_returns_304_on_if_modified_since() {
-        let updated_at = UtcInstant::from(
-            Utc.with_ymd_and_hms(1994, 11, 6, 8, 49, 37)
-                .single()
-                .expect("valid timestamp"),
-        );
+        let updated_at = sample_updated_at();
         let mut cache = MockFeedCacheStorage::new();
         cache
             .expect_get()

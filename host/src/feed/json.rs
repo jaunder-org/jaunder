@@ -11,8 +11,8 @@ pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRe
                 "id": &*i.permalink,
                 "url": &*i.permalink,
                 "content_html": &*i.content_html,
-                "date_published": i.published_at.to_rfc3339(),
-                "date_modified": i.updated_at.to_rfc3339(),
+                "date_published": i.published_at.to_string(),
+                "date_modified": i.updated_at.to_string(),
             });
             if let Some(t) = &i.title {
                 o["title"] = Value::String(t.to_string());
@@ -47,8 +47,6 @@ pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRe
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
-
     use super::*;
     use crate::feed::FeedDescription;
     use crate::feed::test_support::{feed_item, feed_metadata};
@@ -56,7 +54,9 @@ mod tests {
         ids::PostId,
         post_summary::PostSummary,
         post_title::PostTitle,
-        test_support::{parse_post_summary, parse_post_title, parse_url, rendered_html},
+        test_support::{
+            parse_post_summary, parse_post_title, parse_url, parse_utc_instant, rendered_html,
+        },
     };
 
     fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
@@ -84,7 +84,7 @@ mod tests {
                 PostId::from(1),
                 parse_url("https://example.com/~alice/posts/1"),
                 rendered_html("<p>hi</p>"),
-                chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+                parse_utc_instant("2026-01-01T00:00:00Z"),
             )
         }
     }
@@ -116,10 +116,9 @@ mod tests {
     #[test]
     fn has_no_feed_timestamp_and_retains_item_modification_time() {
         let mut metadata = meta(None, Some("A site"));
-        metadata.representation_modified_at =
-            chrono::Utc.with_ymd_and_hms(2026, 2, 3, 4, 5, 6).unwrap();
+        metadata.representation_modified_at = parse_utc_instant("2026-02-03T04:05:06Z");
         let item = item(Some(parse_post_title("t")), vec![]);
-        let expected_item_time = item.updated_at.to_rfc3339();
+        let expected_item_time = item.updated_at.to_string();
 
         let rendered = render_json(&metadata, &[item]);
         let value: Value = serde_json::from_str(rendered.body()).unwrap();

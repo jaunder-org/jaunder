@@ -11,7 +11,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
-chrono = { workspace = true, features = ["serde"] }
+jiff.workspace = true
 clap = { workspace = true, features = ["derive"] }
 croner.workspace = true
 flate2.workspace = true

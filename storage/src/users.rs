@@ -938,10 +938,10 @@ mod tests {
         assert_eq!(
             reread
                 .last_authenticated_at
-                .map(|instant| instant.value().timestamp_micros()),
+                .map(|instant| instant.value().as_microsecond()),
             authenticated
                 .last_authenticated_at
-                .map(|instant| instant.value().timestamp_micros())
+                .map(|instant| instant.value().as_microsecond())
         );
     }
 

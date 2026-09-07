@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use chrono::Datelike;
 use common::ids::{AudienceId, PostId, SubscriptionId, UserId};
 use common::seed::{AuthoredPost, Page, PublicPresentation, RenderedPost};
 use common::test_support::{parse_audience_name, parse_post_body};
+use jiff::ToSpan;
 use server_fn::ServerFn;
 use storage::PostFormat;
 use web::posts::{EditPostPreview, PostInputs, SavedPost};
@@ -25,6 +25,15 @@ use super::fixtures::{
     get_post_form, list_drafts, list_home_feed, list_local_timeline, list_scheduled,
     publish_post_form,
 };
+
+fn utc_permalink_date(timestamp: jiff::Timestamp) -> (i32, u32, u32) {
+    let date = jiff::tz::Offset::UTC.to_datetime(timestamp).date();
+    (
+        i32::from(date.year()),
+        u32::try_from(date.month()).expect("Jiff civil month fits u32"),
+        u32::try_from(date.day()).expect("Jiff civil day fits u32"),
+    )
+}
 
 async fn create_audience_confirmed(
     state: &Arc<storage::AppState>,
@@ -174,13 +183,14 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
         .await
         .unwrap()
         .unwrap();
+    let (year, month, day) = utc_permalink_date(record.created_at.value());
 
     let (status, body) = get_post_form(
         &state,
         &author.username,
-        record.created_at.value().year(),
-        record.created_at.value().month(),
-        record.created_at.value().day(),
+        year,
+        month,
+        day,
         &created.slug,
         None,
     )
@@ -191,9 +201,9 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
     let (status, body) = get_post_form(
         &state,
         &author.username,
-        record.created_at.value().year(),
-        record.created_at.value().month(),
-        record.created_at.value().day(),
+        year,
+        month,
+        day,
         &created.slug,
         Some(&stranger_cookie),
     )
@@ -204,9 +214,9 @@ async fn get_post_returns_draft_to_author_only(#[case] backend: Backend) {
     let (status, body) = get_post_form(
         &state,
         &author.username,
-        record.created_at.value().year(),
-        record.created_at.value().month(),
-        record.created_at.value().day(),
+        year,
+        month,
+        day,
         &created.slug,
         Some(&author_cookie),
     )
@@ -246,17 +256,17 @@ async fn get_post_preview_shows_draft_to_author_only(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created = confirmed_mutation::<SavedPost>(&body);
 
-    let before = chrono::Utc::now();
+    let before = common::time::UtcInstant::now();
     let (status, body) = get_post_preview_form(&state, created.post_id, Some(&author_cookie)).await;
-    let after = chrono::Utc::now();
+    let after = common::time::UtcInstant::now();
     assert_eq!(status, StatusCode::OK, "author preview failed: {body}");
 
     let preview: EditPostPreview = serde_json::from_str(&body).unwrap();
     assert_eq!(preview.post.post.post_id, created.post_id);
     assert_eq!(preview.post.body.as_ref(), "# Preview Draft\n\ndraft\n");
     assert!(preview.post.post.published_at.is_none());
-    assert!(preview.fetched_at.value() >= before);
-    assert!(preview.fetched_at.value() <= after);
+    assert!(preview.fetched_at >= before);
+    assert!(preview.fetched_at <= after);
 
     let (status, body) =
         get_post_preview_form(&state, created.post_id, Some(&stranger_cookie)).await;
@@ -296,12 +306,13 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
         .unwrap()
         .unwrap();
 
+    let (year, month, day) = utc_permalink_date(record.created_at.value());
     let (status, body) = get_post_form(
         &state,
         &author.username,
-        record.created_at.value().year(),
-        record.created_at.value().month(),
-        record.created_at.value().day(),
+        year,
+        month,
+        day,
         &created.slug,
         None,
     )
@@ -318,18 +329,24 @@ async fn get_post_returns_scheduled_post_at_canonical_permalink_to_author(
     let TestEnv { state, base: _base } = backend.setup().await;
     let author = create_user_and_session(&state).await;
     let cookie = author.cookie();
-    let scheduled_at = chrono::Utc::now() + chrono::Duration::days(30);
+    let scheduled_at = common::time::UtcInstant::from(
+        common::time::UtcInstant::now()
+            .value()
+            .checked_add(720.hours())
+            .expect("fixture is within Timestamp range"),
+    );
     let scheduled = SeedRawPost::new(author.user_id)
-        .published_at(common::time::UtcInstant::from(scheduled_at))
+        .published_at(scheduled_at)
         .seed(&state)
         .await;
 
+    let (year, month, day) = utc_permalink_date(scheduled_at.value());
     let (status, body) = get_post_form(
         &state,
         &author.username,
-        scheduled_at.year(),
-        scheduled_at.month(),
-        scheduled_at.day(),
+        year,
+        month,
+        day,
         scheduled.slug.as_ref(),
         Some(&cookie),
     )
@@ -542,11 +559,7 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
         .unwrap()
         .unwrap();
     let published = post.published_at.unwrap();
-    let (y, m, d) = (
-        published.value().year(),
-        published.value().month(),
-        published.value().day(),
-    );
+    let (y, m, d) = utc_permalink_date(published.value());
 
     // Anonymous → 404 (the resolution filter hides the subscribers-only post).
     let (status, _body) = get_post_form(

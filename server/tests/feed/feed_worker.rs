@@ -2,17 +2,38 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::helpers::CapturingWebSubClient;
-use chrono::Utc;
 use common::{
     tagged_url::HubUrl, test_support::parse_etag, time::UtcInstant, visibility::AudienceTarget,
 };
 use host::feed::FeedPath;
 use jaunder::feed::worker::FeedWorker;
+use jiff::{Span, Timestamp, ToSpan};
 use storage::MockPostStorage;
 use storage::test_support::{
     Backend, SeedFeedCache, SeedRawPost, SeedUser, TestEnv, backends, confirmed_for, fp,
 };
 
+fn fixed_instant(value: &str) -> UtcInstant {
+    UtcInstant::from(value.parse::<Timestamp>().expect("fixed test instant"))
+}
+
+fn add(instant: UtcInstant, span: Span) -> UtcInstant {
+    UtcInstant::from(
+        instant
+            .value()
+            .checked_add(span)
+            .expect("fixture is within Timestamp range"),
+    )
+}
+
+fn subtract(instant: UtcInstant, span: Span) -> UtcInstant {
+    UtcInstant::from(
+        instant
+            .value()
+            .checked_sub(span)
+            .expect("fixture is within Timestamp range"),
+    )
+}
 use rstest::*;
 use rstest_reuse::*;
 
@@ -125,7 +146,11 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
     let pending = event_write(&state, move |transaction| {
         Box::pin(async move {
             feed_events
-                .claim_pending_batch(transaction, 10, chrono::Duration::minutes(5))
+                .claim_pending_batch(
+                    transaction,
+                    10,
+                    std::time::Duration::from_secs((5 * 60) as u64),
+                )
                 .await
         })
     })
@@ -279,7 +304,7 @@ async fn grouped_regeneration_failure_leaves_publication_retry_in_its_phase(
     let reclaimed = event_write(&state, move |transaction| {
         Box::pin(async move {
             feed_events
-                .claim_pending_batch(transaction, 10, chrono::Duration::zero())
+                .claim_pending_batch(transaction, 10, std::time::Duration::ZERO)
                 .await
         })
     })
@@ -328,7 +353,11 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
     let immediately_claimable = event_write(&state, move |transaction| {
         Box::pin(async move {
             feed_events
-                .claim_pending_batch(transaction, 10, chrono::Duration::minutes(5))
+                .claim_pending_batch(
+                    transaction,
+                    10,
+                    std::time::Duration::from_secs((5 * 60) as u64),
+                )
                 .await
         })
     })
@@ -360,7 +389,6 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend: Backend) {
-    use chrono::{Duration, TimeZone};
     let TestEnv { state, base } = backend.setup().await;
     let worker = make_worker(
         &state,
@@ -370,35 +398,36 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
 
     let user = SeedUser::new().seed(&state).await;
 
-    let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
+    let t0 = fixed_instant("2026-06-26T10:00:00Z");
     // A cached site feed generated at t0 (stale).
     SeedFeedCache::new(fp("/feed.atom"))
         .body("stale".to_owned())
         .etag(parse_etag("\"etag\""))
-        .representation_modified_at(UtcInstant::from(t0))
-        .generated_at(UtcInstant::from(t0))
+        .representation_modified_at(t0)
+        .generated_at(t0)
         .seed(&state)
         .await;
 
     // A post that went live at t1 > t0 while the worker was "down".
-    let t1 = t0 + Duration::hours(1);
+    let t1 = add(t0, 1.hour());
     SeedRawPost::new(user.user_id)
-        .published_at(common::time::UtcInstant::from(t1))
+        .published_at(t1)
         .seed(&state)
         .await;
 
     // Restart: first go-live pass at t2 > t1 (last_tick == None => catch-up).
-    let t2 = t1 + Duration::hours(1);
-    worker
-        .go_live_pass(common::time::UtcInstant::from(t2))
-        .await
-        .expect("go-live pass");
+    let t2 = add(t1, 1.hour());
+    worker.go_live_pass(t2).await.expect("go-live pass");
 
     let feed_events = Arc::clone(&state.feed_events);
     let pending = event_write(&state, move |transaction| {
         Box::pin(async move {
             feed_events
-                .claim_pending_batch(transaction, 100, chrono::Duration::minutes(5))
+                .claim_pending_batch(
+                    transaction,
+                    100,
+                    std::time::Duration::from_secs((5 * 60) as u64),
+                )
                 .await
         })
     })
@@ -413,7 +442,6 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
 #[apply(backends)]
 #[tokio::test]
 async fn startup_catchup_ignores_nonpublic_posts(#[case] backend: Backend) {
-    use chrono::{Duration, TimeZone};
     let TestEnv { state, base } = backend.setup().await;
     let worker = make_worker(
         &state,
@@ -421,23 +449,23 @@ async fn startup_catchup_ignores_nonpublic_posts(#[case] backend: Backend) {
         Arc::new(CapturingWebSubClient::default()),
     );
     let user = SeedUser::new().seed(&state).await;
-    let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
+    let t0 = fixed_instant("2026-06-26T10:00:00Z");
     SeedFeedCache::new(fp("/feed.atom"))
         .body("stale".to_owned())
         .etag(parse_etag("\"etag\""))
-        .representation_modified_at(UtcInstant::from(t0))
-        .generated_at(UtcInstant::from(t0))
+        .representation_modified_at(t0)
+        .generated_at(t0)
         .seed(&state)
         .await;
-    let go_live = t0 + Duration::hours(1);
+    let go_live = add(t0, 1.hour());
     SeedRawPost::new(user.user_id)
-        .published_at(UtcInstant::from(go_live))
+        .published_at(go_live)
         .audiences(vec![AudienceTarget::Private])
         .seed(&state)
         .await;
 
     worker
-        .go_live_pass(UtcInstant::from(go_live + Duration::hours(1)))
+        .go_live_pass(add(go_live, 1.hour()))
         .await
         .expect("go-live pass");
 
@@ -445,7 +473,11 @@ async fn startup_catchup_ignores_nonpublic_posts(#[case] backend: Backend) {
     let pending = event_write(&state, move |transaction| {
         Box::pin(async move {
             feed_events
-                .claim_pending_batch(transaction, 100, chrono::Duration::minutes(5))
+                .claim_pending_batch(
+                    transaction,
+                    100,
+                    std::time::Duration::from_secs((5 * 60) as u64),
+                )
                 .await
         })
     })
@@ -461,7 +493,6 @@ async fn startup_catchup_ignores_nonpublic_posts(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend) {
-    use chrono::{Duration, TimeZone};
     let TestEnv { state, base } = backend.setup().await;
     let worker = make_worker(
         &state,
@@ -472,37 +503,35 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
     let user = SeedUser::new().seed(&state).await;
 
     // First pass seeds last_tick = t0 (startup branch; nothing cached/live).
-    let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
-    worker
-        .go_live_pass(common::time::UtcInstant::from(t0))
-        .await
-        .expect("seed last_tick");
+    let t0 = fixed_instant("2026-06-26T10:00:00Z");
+    worker.go_live_pass(t0).await.expect("seed last_tick");
 
     // A post that goes live between t0 and t1.
-    let go_live = t0 + Duration::minutes(30);
+    let go_live = add(t0, 30.minute());
     SeedRawPost::new(user.user_id)
-        .published_at(common::time::UtcInstant::from(go_live))
+        .published_at(go_live)
         .seed(&state)
         .await;
 
     let private_user = SeedUser::new().seed(&state).await;
     SeedRawPost::new(private_user.user_id)
-        .published_at(common::time::UtcInstant::from(go_live))
+        .published_at(go_live)
         .audiences(vec![AudienceTarget::Private])
         .seed(&state)
         .await;
 
-    let t1 = t0 + Duration::hours(1);
-    worker
-        .go_live_pass(common::time::UtcInstant::from(t1))
-        .await
-        .expect("window pass");
+    let t1 = add(t0, 1.hour());
+    worker.go_live_pass(t1).await.expect("window pass");
 
     let feed_events = Arc::clone(&state.feed_events);
     let pending = event_write(&state, move |transaction| {
         Box::pin(async move {
             feed_events
-                .claim_pending_batch(transaction, 100, chrono::Duration::minutes(5))
+                .claim_pending_batch(
+                    transaction,
+                    100,
+                    std::time::Duration::from_secs((5 * 60) as u64),
+                )
                 .await
         })
     })
@@ -552,7 +581,7 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
     // publication attempt one. Seed attempts two through nine with an elapsed
     // retry time. The next real ping failure is attempt ten, which consumes
     // the publication budget.
-    let past = UtcInstant::from(Utc::now() - chrono::Duration::hours(1));
+    let past = subtract(UtcInstant::now(), 1.hour());
     let feed_events = Arc::clone(&state.feed_events);
     for _ in 0..8 {
         let retry_publication_events = Arc::clone(&feed_events);
@@ -574,7 +603,11 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
     let claimable = event_write(&state, move |transaction| {
         Box::pin(async move {
             feed_events
-                .claim_pending_batch(transaction, 10, chrono::Duration::minutes(5))
+                .claim_pending_batch(
+                    transaction,
+                    10,
+                    std::time::Duration::from_secs((5 * 60) as u64),
+                )
                 .await
         })
     })

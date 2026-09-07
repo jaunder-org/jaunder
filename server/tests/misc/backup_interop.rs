@@ -5,7 +5,11 @@ use jaunder::commands::{cmd_backup, cmd_init, cmd_restore};
 use storage::BackupMode;
 use tempfile::TempDir;
 
-use crate::misc::backup_fixture::{assert_backup_fixture_restored, populate_backup_fixture};
+use crate::misc::backup_fixture::{
+    assert_backup_fixture_restored, assert_exported_backup_timestamp_bytes,
+    assert_supported_post_precedes_out_of_range_post, make_pre_jiff_backup_fixture,
+    populate_backup_fixture, replace_named_post_timestamp_with_out_of_range,
+};
 
 use storage::test_support::{PostgresDbGuard, PostgresTestConfig, unique_postgres_url};
 
@@ -51,6 +55,8 @@ async fn sqlite_backup_restores_into_postgres() {
     )
     .await
     .expect("sqlite backup");
+    assert_exported_backup_timestamp_bytes(&backup_path);
+    make_pre_jiff_backup_fixture(&backup_path);
 
     let (target_args, _pg_target) = postgres_storage_args(&base, "postgres-target").await;
     cmd_init(&target_args, false)
@@ -81,6 +87,8 @@ async fn postgres_backup_restores_into_sqlite() {
     )
     .await
     .expect("postgres backup");
+    assert_exported_backup_timestamp_bytes(&backup_path);
+    make_pre_jiff_backup_fixture(&backup_path);
 
     let target_args = sqlite_storage_args(&base, "sqlite-target");
     cmd_init(&target_args, false)
@@ -91,6 +99,128 @@ async fn postgres_backup_restores_into_sqlite() {
         .expect("restore into sqlite");
 
     assert_backup_fixture_restored(&target_args, &ids).await;
+}
+
+// guard:low-level-db — CLI backup/restore builds its own SQLite storage from StorageArgs, not a backend fixture
+#[tokio::test]
+async fn sqlite_backup_restores_into_sqlite() {
+    let base = TempDir::new().expect("temp dir");
+    let source_args = sqlite_storage_args(&base, "sqlite-source");
+    cmd_init(&source_args, false)
+        .await
+        .expect("init sqlite source");
+    let ids = populate_backup_fixture(&source_args).await;
+    let backup_path = base.path().join("sqlite-backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("sqlite backup");
+    assert_exported_backup_timestamp_bytes(&backup_path);
+    make_pre_jiff_backup_fixture(&backup_path);
+
+    let target_args = sqlite_storage_args(&base, "sqlite-target");
+    cmd_init(&target_args, false)
+        .await
+        .expect("init sqlite target");
+    cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore into sqlite");
+    assert_backup_fixture_restored(&target_args, &ids).await;
+}
+
+// guard:low-level-db — cross-backend interop; drives both engines in one body and needs a live Postgres
+#[tokio::test]
+async fn postgres_backup_restores_into_postgres() {
+    let base = TempDir::new().expect("temp dir");
+    let (source_args, _pg_source) = postgres_storage_args(&base, "postgres-source").await;
+    cmd_init(&source_args, false)
+        .await
+        .expect("init postgres source");
+    let ids = populate_backup_fixture(&source_args).await;
+    let backup_path = base.path().join("postgres-backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("postgres backup");
+    assert_exported_backup_timestamp_bytes(&backup_path);
+    make_pre_jiff_backup_fixture(&backup_path);
+
+    let (target_args, _pg_target) = postgres_storage_args(&base, "postgres-target").await;
+    cmd_init(&target_args, false)
+        .await
+        .expect("init postgres target");
+    cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore into postgres");
+    assert_backup_fixture_restored(&target_args, &ids).await;
+}
+
+// guard:low-level-db — the restore target is a live SQLite database driven through
+// the CLI, and the assertion must decode rows through the storage query seam.
+#[tokio::test]
+async fn sqlite_restore_defers_out_of_range_post_timestamp_until_that_row_is_read() {
+    let base = TempDir::new().expect("temp dir");
+    let source_args = sqlite_storage_args(&base, "sqlite-source");
+    cmd_init(&source_args, false)
+        .await
+        .expect("init sqlite source");
+    let ids = populate_backup_fixture(&source_args).await;
+    let backup_path = base.path().join("sqlite-backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("sqlite backup");
+    assert_exported_backup_timestamp_bytes(&backup_path);
+    replace_named_post_timestamp_with_out_of_range(&backup_path, ids.public_post, ids.named_post);
+
+    let target_args = sqlite_storage_args(&base, "sqlite-target");
+    cmd_init(&target_args, false)
+        .await
+        .expect("init sqlite target");
+    cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore defers row decoding");
+    assert_supported_post_precedes_out_of_range_post(&target_args, &ids).await;
+}
+
+// guard:low-level-db — verifies the same table-row decoder boundary after a
+// cross-backend restore into a live PostgreSQL target.
+#[tokio::test]
+async fn postgres_restore_defers_out_of_range_post_timestamp_until_that_row_is_read() {
+    let base = TempDir::new().expect("temp dir");
+    let source_args = sqlite_storage_args(&base, "sqlite-source");
+    cmd_init(&source_args, false)
+        .await
+        .expect("init sqlite source");
+    let ids = populate_backup_fixture(&source_args).await;
+    let backup_path = base.path().join("sqlite-backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("sqlite backup");
+    assert_exported_backup_timestamp_bytes(&backup_path);
+    replace_named_post_timestamp_with_out_of_range(&backup_path, ids.public_post, ids.named_post);
+
+    let (target_args, _pg_target) = postgres_storage_args(&base, "postgres-target").await;
+    cmd_init(&target_args, false)
+        .await
+        .expect("init postgres target");
+    cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore defers row decoding");
+    assert_supported_post_precedes_out_of_range_post(&target_args, &ids).await;
 }
 
 /// Assert two backup directories are byte-identical over `db/*.ndjson` and
@@ -153,6 +283,7 @@ async fn backup_round_trips_full_cycle_across_backends() {
     cmd_backup(&p1, BackupMode::Directory, Some(pg_seed_export.clone()))
         .await
         .expect("backup p1");
+    assert_exported_backup_timestamp_bytes(&pg_seed_export);
 
     // S1 (sqlite): restore, assert, export E_S1.
     let s1 = sqlite_storage_args(&base, "s1");
@@ -169,6 +300,7 @@ async fn backup_round_trips_full_cycle_across_backends() {
     )
     .await
     .expect("backup s1");
+    assert_exported_backup_timestamp_bytes(&sqlite_relay_export);
 
     // P2 (postgres): restore, assert, export E_P2.
     let (p2, _pg_p2) = postgres_storage_args(&base, "p2").await;
@@ -181,6 +313,7 @@ async fn backup_round_trips_full_cycle_across_backends() {
     cmd_backup(&p2, BackupMode::Directory, Some(pg_return_export.clone()))
         .await
         .expect("backup p2");
+    assert_exported_backup_timestamp_bytes(&pg_return_export);
 
     // S2 (sqlite): restore, assert, export E_S2.
     let s2 = sqlite_storage_args(&base, "s2");
@@ -197,6 +330,7 @@ async fn backup_round_trips_full_cycle_across_backends() {
     )
     .await
     .expect("backup s2");
+    assert_exported_backup_timestamp_bytes(&sqlite_final_export);
 
     // Both same-backend dump pairs are byte-identical — nothing drifts across the cycle.
     assert_backups_equal(&pg_seed_export, &pg_return_export);

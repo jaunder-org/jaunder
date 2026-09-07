@@ -2086,7 +2086,7 @@ where
         now: UtcInstant,
         viewer: &ViewerIdentity,
     ) -> Result<Vec<PostRecord>> {
-        let cutoff = window.cutoff_date(now.value()).map(UtcInstant::from);
+        let cutoff = window.cutoff_date(now);
         syndication::list_published_in_window_rows::<DB>(
             &self.pool,
             surface,
@@ -2169,7 +2169,6 @@ mod tests {
         update_post_body_via_service,
     };
 
-    use chrono::Utc;
     use common::post_body::PostBody;
     use common::render::PostFormat;
     use common::test_support::{
@@ -3652,21 +3651,22 @@ mod tests {
         let env = backend.setup().await;
         let state = &env.state;
         let author = SeedUser::new().seed(state).await.user_id;
-        let now = Utc::now();
-        SeedRawPost::new(author)
-            .published_at(UtcInstant::from(now))
-            .seed(state)
-            .await;
+        let now = UtcInstant::now();
+        SeedRawPost::new(author).published_at(now).seed(state).await;
 
         // Two stale cached feeds, both older than the post above, so both would need
         // catch-up if they were readable.
-        let stale = now - chrono::Duration::hours(1);
+        let stale = UtcInstant::from(
+            now.value()
+                .checked_sub(Duration::from_hours(1))
+                .expect("test instant remains representable"),
+        );
         for url in ["/feed.rss", "/feed.atom"] {
             SeedFeedCache::new(fp(url))
                 .body("<rss/>".to_owned())
                 .etag(parse_etag("\"sha256-deadbeef\""))
-                .representation_modified_at(UtcInstant::from(stale))
-                .generated_at(UtcInstant::from(stale))
+                .representation_modified_at(stale)
+                .generated_at(stale)
                 .seed(state)
                 .await;
         }
@@ -3691,7 +3691,7 @@ mod tests {
             .unwrap();
 
         let (needing, trace) = crate::helpers::swallowed_test::capture_async(
-            state.posts.feed_urls_needing_catchup(UtcInstant::from(now)),
+            state.posts.feed_urls_needing_catchup(now),
         )
         .await;
         let needing = needing.unwrap();
@@ -4738,12 +4738,16 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let uid = SeedUser::new().seed(&env.state).await.user_id;
-        let now = Utc::now();
+        let now = UtcInstant::now();
 
         let mk = |slug: &str, published: bool| {
             let builder = SeedRawPost::new(uid).slug(slug);
             if published {
-                builder.published_at(UtcInstant::from(now - chrono::Duration::minutes(30)))
+                builder.published_at(UtcInstant::from(
+                    now.value()
+                        .checked_sub(Duration::from_mins(30))
+                        .expect("test instant remains representable"),
+                ))
             } else {
                 builder.draft()
             }
@@ -4757,19 +4761,27 @@ mod tests {
         // Give distinct updated_at (post2 more recent than post1) and soft-delete post3.
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query("UPDATE posts SET updated_at = $1 WHERE post_id = $2")
-                .bind_storage(UtcInstant::from(now - chrono::Duration::hours(2)))
+                .bind_storage(UtcInstant::from(
+                    now.value()
+                        .checked_sub(Duration::from_hours(2))
+                        .expect("test instant remains representable"),
+                ))
                 .bind_storage(post1_id)
                 .execute(pool)
                 .await
                 .unwrap();
             sqlx::query("UPDATE posts SET updated_at = $1 WHERE post_id = $2")
-                .bind_storage(UtcInstant::from(now - chrono::Duration::hours(1)))
+                .bind_storage(UtcInstant::from(
+                    now.value()
+                        .checked_sub(Duration::from_hours(1))
+                        .expect("test instant remains representable"),
+                ))
                 .bind_storage(post2_id)
                 .execute(pool)
                 .await
                 .unwrap();
             sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
-                .bind_storage(UtcInstant::from(now))
+                .bind_storage(now)
                 .bind_storage(post3_id)
                 .execute(pool)
                 .await
@@ -4824,7 +4836,11 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let date = PermalinkDate::from(record.created_at.value().date_naive());
+        let date = PermalinkDate::from(
+            jiff::tz::Offset::UTC
+                .to_datetime(record.created_at.value())
+                .date(),
+        );
 
         // A published, public post is visible to an anonymous viewer at its permalink.
         let found = fetch_post_record(
@@ -5117,22 +5133,26 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let posts = &*env.state.posts;
-        let now = Utc::now();
-        let scheduled_at = now + chrono::Duration::days(30);
+        let now = UtcInstant::now();
+        let scheduled_at = UtcInstant::from(
+            now.value()
+                .checked_add(Duration::from_hours(720))
+                .expect("test instant remains representable"),
+        );
         let author = SeedUser::new().seed(&env.state).await.user_id;
         let other = SeedUser::new().seed(&env.state).await.user_id;
 
         let draft = SeedRawPost::new(author).draft().seed(&env.state).await;
         let scheduled = SeedRawPost::new(author)
-            .published_at(UtcInstant::from(scheduled_at))
+            .published_at(scheduled_at)
             .seed(&env.state)
             .await;
         let live_at_boundary = SeedRawPost::new(author)
-            .published_at(UtcInstant::from(now))
+            .published_at(now)
             .seed(&env.state)
             .await;
         let deleted = SeedRawPost::new(author)
-            .published_at(UtcInstant::from(scheduled_at))
+            .published_at(scheduled_at)
             .seed(&env.state)
             .await;
         soft_delete_post_confirmed(&env.state, deleted.post_id, author).await;
@@ -5142,27 +5162,25 @@ mod tests {
             .await
             .unwrap()
             .expect("author can read seeded draft");
-        let draft_date = PermalinkDate::from(draft_record.created_at.value().date_naive());
-        let scheduled_date = PermalinkDate::from(scheduled_at.date_naive());
+        let draft_date = PermalinkDate::from(
+            jiff::tz::Offset::UTC
+                .to_datetime(draft_record.created_at.value())
+                .date(),
+        );
+        let scheduled_date = PermalinkDate::from(
+            jiff::tz::Offset::UTC
+                .to_datetime(scheduled_at.value())
+                .date(),
+        );
 
         let found_draft = posts
-            .get_unpublished_post_by_permalink(
-                author,
-                draft_date,
-                &draft.slug,
-                UtcInstant::from(now),
-            )
+            .get_unpublished_post_by_permalink(author, draft_date, &draft.slug, now)
             .await
             .unwrap();
         assert_eq!(found_draft.map(|post| post.post_id), Some(draft.post_id));
 
         let found_scheduled = posts
-            .get_unpublished_post_by_permalink(
-                author,
-                scheduled_date,
-                &scheduled.slug,
-                UtcInstant::from(now),
-            )
+            .get_unpublished_post_by_permalink(author, scheduled_date, &scheduled.slug, now)
             .await
             .unwrap();
         assert_eq!(
@@ -5176,14 +5194,14 @@ mod tests {
             (author, scheduled_date, &missing),
             (
                 author,
-                PermalinkDate::from(now.date_naive()),
+                PermalinkDate::from(jiff::tz::Offset::UTC.to_datetime(now.value()).date()),
                 &live_at_boundary.slug,
             ),
             (author, scheduled_date, &deleted.slug),
         ] {
             assert!(
                 posts
-                    .get_unpublished_post_by_permalink(user_id, date, slug, UtcInstant::from(now))
+                    .get_unpublished_post_by_permalink(user_id, date, slug, now)
                     .await
                     .unwrap()
                     .is_none()

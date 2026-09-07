@@ -319,6 +319,54 @@ mod tests {
     }
 
     #[test]
+    fn pre_migration_manifest_bytes_remain_readable() {
+        const PRE_MIGRATION_MANIFEST: &[u8] = br#"{
+  "version": "0.1.0",
+  "schema_version": 1,
+  "schema_checksum": "checksum",
+  "timestamp": "2026-08-26T01:02:03.123456Z",
+  "mode": "directory",
+  "tables": []
+}"#;
+
+        let manifest: BackupManifest =
+            serde_json::from_slice(PRE_MIGRATION_MANIFEST).expect("legacy manifest parses");
+        assert_eq!(manifest.format_version, LEGACY_BACKUP_FORMAT_VERSION);
+        assert_eq!(
+            manifest.timestamp.to_string(),
+            "2026-08-26T01:02:03.123456Z"
+        );
+    }
+
+    #[test]
+    fn out_of_range_table_timestamp_fails_only_when_its_row_is_decoded() {
+        let temp = TempDir::new().expect("tempdir");
+        let db = temp.path().join("db");
+        fs::create_dir(&db).expect("create backup db directory");
+        fs::write(
+            db.join("posts.ndjson"),
+            concat!(
+                "{\"post_id\":1,\"published_at\":\"2026-08-26T01:02:03.123456+00:00\"}\n",
+                "{\"post_id\":2,\"published_at\":\"10000-01-01T00:00:00+00:00\"}\n",
+            ),
+        )
+        .expect("write post rows");
+
+        let rows = read_table_rows(temp.path(), "posts").expect("read raw backup rows");
+        let supported: UtcInstant = rows[0]["published_at"]
+            .as_str()
+            .expect("supported timestamp text")
+            .parse()
+            .expect("decode supported preceding row");
+        assert_eq!(supported.to_string(), "2026-08-26T01:02:03.123456Z");
+        rows[1]["published_at"]
+            .as_str()
+            .expect("out-of-range timestamp text")
+            .parse::<UtcInstant>()
+            .expect_err("decode fails only on the out-of-range row");
+    }
+
+    #[test]
     fn absent_format_version_is_legacy_v1_but_malformed_value_is_rejected() {
         let legacy = serde_json::json!({
             "version": "0.1.0",

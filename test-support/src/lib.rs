@@ -13,7 +13,6 @@
 
 use std::sync::Arc;
 
-use chrono::{Duration, Timelike};
 use common::display_name::DisplayName;
 use common::ids::{FeedEventId, PostId, UserId};
 use common::post_body::PostBody;
@@ -25,6 +24,7 @@ use common::username::Username;
 use common::visibility::AudienceTarget;
 use host::config_key::SiteConfigKey;
 use host::feed::{FeedEventPhase, FeedPath};
+use jiff::{Timestamp, ToSpan};
 use storage::{
     AppState, OperatorStatus, PostBookkeepingExpectation, PostFormat, PostStorage,
     RenderedPostContent, SiteConfigStorage, UserStorage, WriteScope, render_post_input,
@@ -308,10 +308,8 @@ The twelfth paragraph is the stable long-body terminus.";
 #[must_use]
 pub fn sandbox_profile_anchor() -> UtcInstant {
     let now = UtcInstant::now().value();
-    UtcInstant::from(
-        now - Duration::seconds(i64::from(now.second()))
-            - Duration::nanoseconds(i64::from(now.nanosecond())),
-    )
+    let minute = now.as_second().div_euclid(60) * 60;
+    UtcInstant::from(Timestamp::from_second(minute).map_or(now, std::convert::identity))
 }
 
 /// Produces the complete typed fixture manifest for a profile creation anchor.
@@ -340,7 +338,10 @@ pub fn sandbox_profile_manifest(anchor: UtcInstant) -> Vec<SandboxPost> {
                 body,
                 format,
                 published_at: Some(UtcInstant::from(
-                    anchor.value() - Duration::days(first_offset + sequence - 1),
+                    anchor
+                        .value()
+                        .saturating_sub(((first_offset + sequence - 1) * 24).hours())
+                        .map_or(Timestamp::MIN, std::convert::identity),
                 )),
             });
         }
@@ -650,14 +651,16 @@ mod sandbox_profile_tests {
         let offsets = actual
             .iter()
             .filter_map(|(_, _, _, _, _, published_at)| *published_at)
-            .map(|published_at| (anchor.value() - published_at.value()).num_days())
+            .map(|published_at| {
+                (anchor.value().as_second() - published_at.value().as_second()) / 86_400
+            })
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(offsets, (1_i64..=60).collect());
-        assert_eq!(anchor.value().second(), 0);
-        assert_eq!(anchor.value().nanosecond(), 0);
+        assert_eq!(anchor.value().as_second().rem_euclid(60), 0);
+        assert_eq!(anchor.value().subsec_nanosecond(), 0);
         let generated_anchor = sandbox_profile_anchor();
-        assert_eq!(generated_anchor.value().second(), 0);
-        assert_eq!(generated_anchor.value().nanosecond(), 0);
+        assert_eq!(generated_anchor.value().as_second().rem_euclid(60), 0);
+        assert_eq!(generated_anchor.value().subsec_nanosecond(), 0);
     }
 
     async fn assert_loginable(state: &Arc<AppState>, username: &str) {

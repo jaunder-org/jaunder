@@ -4,10 +4,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use jiff::Timestamp;
+
 use crate::publisher::{PublisherFinalizationGuard, PublisherService};
 use crate::scheduled_worker::{ScheduledWorkerGuard, WorkTracker};
 use crate::websub::{WebSubClient, WebSubError};
-use chrono::Utc;
 use common::ids::FeedEventId;
 use common::mutation::MutationOutcome;
 use common::tagged_url::{self, FeedUrl};
@@ -141,12 +142,7 @@ impl FeedWorker {
                 .run(move |transaction| {
                     Box::pin(async move {
                         feed_events
-                            .claim_pending_batch(
-                                transaction,
-                                BATCH_LIMIT,
-                                chrono::Duration::from_std(LEASE_TIMEOUT)
-                                    .unwrap_or(chrono::Duration::seconds(300)),
-                            )
+                            .claim_pending_batch(transaction, BATCH_LIMIT, LEASE_TIMEOUT)
                             .await
                     })
                 })
@@ -585,12 +581,13 @@ impl FeedWorker {
         }
         metrics::feed_regeneration(metrics::RegenResult::Error);
         for (next_index, ids) in retry_buckets {
+            // Retry delays are positive: at Jiff's upper boundary, preserve the
+            // "not before now" contract by saturating at the last representable instant.
             let next = UtcInstant::from(
-                Utc::now()
-                    + chrono::Duration::from_std(Duration::from_secs(
-                        REGEN_BACKOFFS_SECS[next_index],
-                    ))
-                    .unwrap_or(chrono::Duration::hours(24)),
+                UtcInstant::now()
+                    .value()
+                    .checked_add(Duration::from_secs(REGEN_BACKOFFS_SECS[next_index]))
+                    .unwrap_or(Timestamp::MAX),
             );
             let events = Arc::clone(&self.feed_events);
             let message = message.to_owned();
@@ -641,9 +638,13 @@ impl FeedWorker {
                 || Duration::from_secs(PUBLICATION_BACKOFFS_SECS[next_index]),
                 |delay| delay.min(Duration::from_hours(24)),
             );
+            // Retry delays are positive: at Jiff's upper boundary, preserve the
+            // "not before now" contract by saturating at the last representable instant.
             let next = UtcInstant::from(
-                Utc::now()
-                    + chrono::Duration::from_std(delay).unwrap_or(chrono::Duration::hours(24)),
+                UtcInstant::now()
+                    .value()
+                    .checked_add(delay)
+                    .unwrap_or(Timestamp::MAX),
             );
             let events = Arc::clone(&self.feed_events);
             let message = message.to_owned();
@@ -1570,14 +1571,22 @@ mod tests {
     }
     #[tokio::test]
     async fn publication_retry_after_overrides_backoff() {
-        let before = Utc::now();
+        let before = UtcInstant::now();
+        let lower = before
+            .value()
+            .checked_add(Duration::from_secs(2))
+            .expect("test deadline remains representable");
+        let upper = before
+            .value()
+            .checked_add(Duration::from_secs(4))
+            .expect("test deadline remains representable");
         let mut events = MockFeedEventStorage::new();
         events
             .expect_retry_publication()
             .times(1)
             .returning(move |_, _, _, next| {
-                assert!(next.value() >= before + chrono::Duration::seconds(2));
-                assert!(next.value() <= before + chrono::Duration::seconds(4));
+                assert!(next.value() >= lower);
+                assert!(next.value() <= upper);
                 Ok(())
             });
         let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));

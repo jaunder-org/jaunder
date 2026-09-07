@@ -21,7 +21,7 @@ use tokio::{
 
 use crate::backup;
 
-const FEED_CLAIM_LEASE_TIMEOUT: chrono::Duration = chrono::Duration::minutes(5);
+const FEED_CLAIM_LEASE_TIMEOUT: Duration = Duration::from_mins(5);
 const SATURATION_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
 
 fn measure_media_filesystem_bytes(root: &Path) -> io::Result<u64> {
@@ -209,7 +209,7 @@ impl SaturationSources {
                     return Ok(None);
                 };
                 backup::latest_successful_backup_timestamp(root)
-                    .map(|timestamp| timestamp.map(|timestamp| timestamp.value().timestamp()))
+                    .map(|timestamp| timestamp.map(|timestamp| timestamp.value().as_second()))
             }
             #[cfg(test)]
             SaturationSourcesInner::Fake(fake) => fake.read_backup_last_success_timestamp(),
@@ -1154,7 +1154,7 @@ mod tests {
         assert_eq!(snapshot.feed_queue_depth, Some(1));
         assert_eq!(
             snapshot.backup_last_success_timestamp,
-            Some(manifest.timestamp.value().timestamp())
+            Some(manifest.timestamp.value().as_second())
         );
         assert_eq!(snapshot.media_storage_bytes, Some(0));
         assert_eq!(snapshot.media_filesystem_bytes, Some(6));

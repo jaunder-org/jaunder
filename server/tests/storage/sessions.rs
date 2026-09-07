@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use chrono::{Duration, Utc};
 use common::MutationOutcome;
 use common::test_support::{parse_raw_token, parse_session_label};
 use common::time::UtcInstant;
 use common::token::TokenHash;
+use jiff::ToSpan;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, CloseablePool, SeedUser, TestEnv, backends, seed_users};
@@ -70,12 +70,22 @@ async fn stale_authenticate_refreshes_the_persisted_last_used_at(#[case] backend
         create_session(state.as_ref(), user_id, parse_session_label("test session")).await;
 
     let token_hash = host::token::hash(&raw_token).unwrap();
-    let stale = UtcInstant::from(Utc::now() - Duration::seconds(120));
+    let stale = UtcInstant::from(
+        UtcInstant::now()
+            .value()
+            .checked_sub(120.seconds())
+            .expect("fixture is within Timestamp range"),
+    );
     set_last_used_at(base.pool(), &token_hash, stale).await;
 
     let record = authenticate(state.as_ref(), raw_token).await;
     let persisted_after_auth = load_last_used_at(base.pool(), &token_hash).await;
-    let freshness_cutoff_after_auth = UtcInstant::from(Utc::now() - Duration::seconds(60));
+    let freshness_cutoff_after_auth = UtcInstant::from(
+        UtcInstant::now()
+            .value()
+            .checked_sub(60.seconds())
+            .expect("fixture is within Timestamp range"),
+    );
 
     assert!(record.last_used_at > stale);
     assert_eq!(record.last_used_at, persisted_after_auth);

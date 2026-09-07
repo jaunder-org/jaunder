@@ -2996,3 +2996,10 @@ Useful options:
 - `--json` for machine-readable output
 - `--site-path /nix/store/...-jaunder-site` to reuse a previously built site
   output
+
+The Jiff time-model migration (#1272, 2026-09-06) requires a bundled IANA TZDB
+for browser-local named-zone conversion. It increased the `-Oz` artifact to 3
+102 495 bytes, so the budget was deliberately recalibrated to 3 200 000 bytes
+(3.1% headroom). The ceiling remains below the same bundle's measured `-Os` (3
+236 295) and `-O2` (3 279 507) outputs; losing `-Oz` therefore still fails the
+gate. This is an intentional feature cost, not unexplained bundle drift.

@@ -32,7 +32,7 @@ use maud::html;
 /// coincide.
 #[must_use]
 pub(crate) fn format_post_time(ts: UtcInstant) -> String {
-    ts.value().format("%Y-%m-%d %H:%M").to_string()
+    ts.value().strftime("%Y-%m-%d %H:%M").to_string()
 }
 
 /// Builds the known-valid edit route for a typed post identifier.

@@ -195,7 +195,7 @@ mod tests {
     };
 
     fn post(post_id: i64) -> PostRecord {
-        let now = chrono::Utc::now();
+        let now = UtcInstant::now();
         PostRecord {
             post_id: PostId::from(post_id),
             user_id: UserId::from(1),
@@ -205,9 +205,9 @@ mod tests {
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
             rendered_html: common::test_support::rendered_html("<p>body</p>"),
-            created_at: UtcInstant::from(now),
-            updated_at: UtcInstant::from(now),
-            published_at: Some(UtcInstant::from(now)),
+            created_at: now,
+            updated_at: now,
+            published_at: Some(now),
             deleted_at: None,
             summary: None,
             tags: vec![],
