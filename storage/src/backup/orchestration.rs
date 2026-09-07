@@ -2,7 +2,6 @@
 
 use std::{
     collections::BTreeMap,
-    fmt::Write as _,
     fs,
     io::{BufRead, BufReader},
     path::Path,
@@ -304,7 +303,7 @@ fn validate_theme_content_backup(source_path: &Path) -> Result<(), BackupError> 
         let computed = Sha256::digest(&bytes);
         let mut actual = String::with_capacity(computed.len() * 2);
         for byte in computed {
-            let _ = write!(actual, "{byte:02x}");
+            let _ = std::fmt::Write::write_fmt(&mut actual, format_args!("{byte:02x}"));
         }
         if actual != digest {
             return Err(BackupError::InvalidBackup(format!(
@@ -318,7 +317,7 @@ fn validate_theme_content_backup(source_path: &Path) -> Result<(), BackupError> 
 #[cfg(test)]
 mod tests {
     use sha2::{Digest, Sha256};
-    use std::{fmt::Write as _, fs, path::Path, sync::Arc};
+    use std::{fs, path::Path, sync::Arc};
 
     use crate::{
         StorageRuntimeConfig, ThemeAssetManager, ThemeManager, ThemeOwner, ThemePoolInput,
@@ -351,7 +350,7 @@ mod tests {
         let digest = Sha256::digest(bytes);
         let mut hex = String::with_capacity(digest.len() * 2);
         for byte in digest {
-            let _ = write!(hex, "{byte:02x}");
+            let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
         }
         hex.parse().expect("SHA-256 is a valid theme digest")
     }

@@ -6,8 +6,7 @@ use common::{
     root_relative_url::RootRelativeUrl,
     theme::{
         PublicThemeRoute, PublicThemeSelection, PublishedThemeIdentity, PublishedThemePresentation,
-        Theme, ThemeHeaderPool, ThemeImageBindingMode, ThemeImageRole, ThemePoolEntry,
-        ThemeRevisionDigest,
+        Theme, ThemeHeaderPool, ThemeImageRole, ThemePoolEntry, ThemeRevisionDigest,
     },
 };
 use serde::Deserialize;
@@ -25,13 +24,15 @@ pub enum PublicThemeOwner {
 
 /// Resolve the effective presentation for one public route.
 ///
-/// A missing, unpublished, deleted, or corrupt site selection falls back to Studio. An
-/// invalid author selection inherits that already-resolved site presentation. Storage failures
-/// deliberately propagate rather than being rendered as a false fallback.
+/// A missing, unpublished, or deleted site selection falls back to Studio. An
+/// invalid author selection inherits that already-resolved site presentation.
+/// Malformed persisted bindings and database read failures deliberately propagate
+/// rather than being rendered as a false fallback.
 ///
 /// # Errors
 ///
-/// Returns an underlying database error when a selection or theme record cannot be read.
+/// Returns an underlying database error when a selection, theme record, or binding
+/// cannot be read.
 pub async fn resolve_public_theme(
     owner: PublicThemeOwner,
     route: &PublicThemeRoute,
@@ -67,23 +68,7 @@ async fn resolve_selection(
         }
     }
 }
-enum RoleBindingRead {
-    Valid(Option<ThemeRoleBinding>),
-    Corrupt,
-}
-
-async fn read_role_binding(
-    themes: &dyn ThemeStorage,
-    owner: ThemeOwner,
-    theme_id: ThemeId,
-    role: ThemeImageRole,
-) -> Result<RoleBindingRead, sqlx::Error> {
-    match themes.role_binding(owner, theme_id, role).await {
-        Ok(binding) => Ok(RoleBindingRead::Valid(binding)),
-        Err(sqlx::Error::RowNotFound) => Ok(RoleBindingRead::Corrupt),
-        Err(error) => Err(error),
-    }
-}
+const PACKAGED_DEFAULT_HEADER_SEED: [u8; 32] = [0; 32];
 
 async fn resolve_custom(
     owner: ThemeOwner,
@@ -113,41 +98,20 @@ async fn resolve_custom(
     let assets = themes
         .revision_assets(owner, theme_id, &revision.digest)
         .await?;
-    let logo = match read_role_binding(themes, owner, theme_id, ThemeImageRole::Logo).await? {
-        RoleBindingRead::Valid(binding) => binding,
-        RoleBindingRead::Corrupt => return Ok(None),
-    };
-    let header = match read_role_binding(themes, owner, theme_id, ThemeImageRole::Header).await? {
-        RoleBindingRead::Valid(binding) => binding,
-        RoleBindingRead::Corrupt => return Ok(None),
-    };
+    let logo = themes
+        .role_binding(owner, theme_id, ThemeImageRole::Logo)
+        .await?;
+    let header = themes
+        .role_binding(owner, theme_id, ThemeImageRole::Header)
+        .await?;
     let defaults = manifest_defaults(&revision.manifest);
     let logo_default = defaults
         .as_ref()
-        .and_then(|defaults| defaults.logo.as_deref());
-    let header_default = defaults
+        .and_then(|defaults| defaults.logo.as_ref());
+    let header_defaults = defaults
         .as_ref()
-        .and_then(|defaults| defaults.header.as_deref())
-        .and_then(|header| header.first().map(String::as_str));
-    if (logo
-        .as_ref()
-        .is_some_and(|binding| binding.mode == ThemeImageBindingMode::PackagedDefault)
-        && logo_default
-            .and_then(|path| package_url(&assets, path))
-            .is_none())
-        || (header
-            .as_ref()
-            .is_some_and(|binding| binding.mode == ThemeImageBindingMode::PackagedDefault)
-            && header_default
-                .and_then(|path| package_url(&assets, path))
-                .is_none())
-    {
-        return Ok(None);
-    }
-    let header_pool = if header
-        .as_ref()
-        .is_some_and(|binding| binding.mode == ThemeImageBindingMode::HeaderPool)
-    {
+        .and_then(|defaults| defaults.header.as_deref());
+    let header_pool = if matches!(&header, Some(ThemeRoleBinding::HeaderPool { .. })) {
         Some(themes.header_pool(owner, theme_id).await?)
     } else {
         None
@@ -161,7 +125,7 @@ async fn resolve_custom(
         &revision.digest,
         route,
         None,
-        logo_default,
+        logo_default.map(std::slice::from_ref),
     );
     let header_url = resolve_role(
         header.as_ref(),
@@ -169,7 +133,7 @@ async fn resolve_custom(
         &revision.digest,
         route,
         header_pool.as_deref(),
-        header_default,
+        header_defaults,
     );
     if role_is_invalid(logo.as_ref(), logo_url.as_ref())
         || role_is_invalid(header.as_ref(), header_url.as_ref())
@@ -190,37 +154,68 @@ fn resolve_role_with_package_url(
     revision: &ThemeRevisionDigest,
     route: &PublicThemeRoute,
     pool_entries: Option<&[crate::ThemeHeaderPoolEntry]>,
-    packaged_default: Option<&str>,
+    packaged_defaults: Option<&[String]>,
 ) -> Option<RootRelativeUrl> {
-    let binding = binding?;
-    match binding.mode {
-        ThemeImageBindingMode::PackagedDefault => packaged_default.and_then(package_url),
-        ThemeImageBindingMode::ExplicitAbsent => None,
-        ThemeImageBindingMode::PackageAsset => {
-            binding.package_path.as_deref().and_then(package_url)
+    match binding? {
+        ThemeRoleBinding::PackagedDefault { role, .. } => match role {
+            ThemeImageRole::Logo => packaged_defaults?
+                .first()
+                .and_then(|path| package_url(path)),
+            ThemeImageRole::Header => None,
+        },
+        ThemeRoleBinding::ExplicitAbsent { .. } => None,
+        ThemeRoleBinding::PackageAsset { package_path, .. } => package_url(package_path),
+        ThemeRoleBinding::Media { media, .. } => {
+            Some(media::url(&media.source, &media.sha256, &media.filename))
         }
-        ThemeImageBindingMode::Media => media_url(binding),
-        ThemeImageBindingMode::HeaderPool => {
-            if binding.role != ThemeImageRole::Header {
-                return None;
-            }
+        ThemeRoleBinding::HeaderPool {
+            pool_revision,
+            shuffle_seed,
+            ..
+        } => {
             let entries = pool_entries?;
             let pool =
                 ThemeHeaderPool::new(entries.iter().map(pool_entry).collect::<Option<Vec<_>>>()?)
                     .ok()?;
-            let shuffle_seed = binding.shuffle_seed?;
-            if binding.pool_revision.as_ref() != Some(pool.revision()) {
+            if pool_revision != pool.revision() {
                 return None;
             }
-            match pool.select(route, revision, &shuffle_seed) {
-                ThemePoolEntry::Package(path) => package_url(path),
-                ThemePoolEntry::Media {
-                    source,
-                    digest,
-                    filename,
-                } => media_url_parts(source, digest.as_ref(), filename),
-            }
+            resolve_pool_entry(pool.select(route, revision, shuffle_seed), package_url)
         }
+    }
+}
+
+fn resolve_packaged_header_default(
+    packaged_defaults: Option<&[String]>,
+    package_url: &dyn Fn(&str) -> Option<RootRelativeUrl>,
+    revision: &ThemeRevisionDigest,
+    route: &PublicThemeRoute,
+) -> Option<RootRelativeUrl> {
+    let pool = ThemeHeaderPool::new(
+        packaged_defaults?
+            .iter()
+            .cloned()
+            .map(ThemePoolEntry::Package)
+            .collect(),
+    )
+    .ok()?;
+    resolve_pool_entry(
+        pool.select(route, revision, &PACKAGED_DEFAULT_HEADER_SEED),
+        package_url,
+    )
+}
+
+fn resolve_pool_entry(
+    entry: &ThemePoolEntry,
+    package_url: &dyn Fn(&str) -> Option<RootRelativeUrl>,
+) -> Option<RootRelativeUrl> {
+    match entry {
+        ThemePoolEntry::Package(path) => package_url(path),
+        ThemePoolEntry::Media {
+            source,
+            digest,
+            filename,
+        } => media_url_parts(source, digest.as_ref(), filename),
     }
 }
 
@@ -230,22 +225,27 @@ fn resolve_role(
     revision: &ThemeRevisionDigest,
     route: &PublicThemeRoute,
     pool_entries: Option<&[crate::ThemeHeaderPoolEntry]>,
-    packaged_default: Option<&str>,
+    packaged_defaults: Option<&[String]>,
 ) -> Option<RootRelativeUrl> {
     let package_url = |path: &str| package_url(assets, path);
-    resolve_role_with_package_url(
-        binding,
-        &package_url,
-        revision,
-        route,
-        pool_entries,
-        packaged_default,
-    )
+    match binding {
+        Some(ThemeRoleBinding::PackagedDefault {
+            role: ThemeImageRole::Header,
+            ..
+        }) => resolve_packaged_header_default(packaged_defaults, &package_url, revision, route),
+        _ => resolve_role_with_package_url(
+            binding,
+            &package_url,
+            revision,
+            route,
+            pool_entries,
+            packaged_defaults,
+        ),
+    }
 }
+
 fn role_is_invalid(binding: Option<&ThemeRoleBinding>, url: Option<&RootRelativeUrl>) -> bool {
-    binding.is_some_and(|binding| {
-        binding.mode != ThemeImageBindingMode::ExplicitAbsent && url.is_none()
-    })
+    binding.is_some_and(|binding| !binding.is_explicit_absent() && url.is_none())
 }
 
 /// Resolves the effective logo and header for an owned draft preview.
@@ -265,18 +265,13 @@ pub async fn resolve_draft_theme_images(
     route: &PublicThemeRoute,
     themes: &dyn ThemeStorage,
 ) -> Result<(Option<RootRelativeUrl>, Option<RootRelativeUrl>), sqlx::Error> {
-    let logo = match read_role_binding(themes, owner, theme_id, ThemeImageRole::Logo).await? {
-        RoleBindingRead::Valid(binding) => binding,
-        RoleBindingRead::Corrupt => return Err(sqlx::Error::RowNotFound),
-    };
-    let header = match read_role_binding(themes, owner, theme_id, ThemeImageRole::Header).await? {
-        RoleBindingRead::Valid(binding) => binding,
-        RoleBindingRead::Corrupt => return Err(sqlx::Error::RowNotFound),
-    };
-    let header_pool = if header
-        .as_ref()
-        .is_some_and(|binding| binding.mode == ThemeImageBindingMode::HeaderPool)
-    {
+    let logo = themes
+        .role_binding(owner, theme_id, ThemeImageRole::Logo)
+        .await?;
+    let header = themes
+        .role_binding(owner, theme_id, ThemeImageRole::Header)
+        .await?;
+    let header_pool = if matches!(&header, Some(ThemeRoleBinding::HeaderPool { .. })) {
         Some(themes.header_pool(owner, theme_id).await?)
     } else {
         None
@@ -284,11 +279,10 @@ pub async fn resolve_draft_theme_images(
     let defaults = manifest_defaults(manifest);
     let logo_default = defaults
         .as_ref()
-        .and_then(|defaults| defaults.logo.as_deref());
-    let header_default = defaults
+        .and_then(|defaults| defaults.logo.as_ref());
+    let header_defaults = defaults
         .as_ref()
-        .and_then(|defaults| defaults.header.as_deref())
-        .and_then(|header| header.first().map(String::as_str));
+        .and_then(|defaults| defaults.header.as_deref());
     let package_url = |path: &str| {
         package_asset_urls
             .get(path)
@@ -300,16 +294,22 @@ pub async fn resolve_draft_theme_images(
         revision,
         route,
         None,
-        logo_default,
+        logo_default.map(std::slice::from_ref),
     );
-    let header_url = resolve_role_with_package_url(
-        header.as_ref(),
-        &package_url,
-        revision,
-        route,
-        header_pool.as_deref(),
-        header_default,
-    );
+    let header_url = match header.as_ref() {
+        Some(ThemeRoleBinding::PackagedDefault {
+            role: ThemeImageRole::Header,
+            ..
+        }) => resolve_packaged_header_default(header_defaults, &package_url, revision, route),
+        _ => resolve_role_with_package_url(
+            header.as_ref(),
+            &package_url,
+            revision,
+            route,
+            header_pool.as_deref(),
+            header_defaults,
+        ),
+    };
     if role_is_invalid(logo.as_ref(), logo_url.as_ref())
         || role_is_invalid(header.as_ref(), header_url.as_ref())
     {
@@ -321,14 +321,6 @@ pub async fn resolve_draft_theme_images(
 fn package_url(assets: &[ThemePackageAsset], path: &str) -> Option<RootRelativeUrl> {
     let asset = assets.iter().find(|asset| asset.path == path)?;
     format!("/themes/{}", asset.digest).parse().ok()
-}
-
-fn media_url(binding: &ThemeRoleBinding) -> Option<RootRelativeUrl> {
-    media_url_parts(
-        binding.media_source.as_deref()?,
-        binding.media_digest.as_ref()?.as_ref(),
-        binding.media_filename.as_deref()?,
-    )
 }
 
 fn media_url_parts(source: &str, digest: &str, filename: &str) -> Option<RootRelativeUrl> {
@@ -617,9 +609,9 @@ mod tests {
         );
     }
 
-    // guard:no-backend — corrupt persisted role data must not leak a partial custom theme
+    // guard:no-backend — malformed persistence must reach the storage error boundary
     #[tokio::test]
-    async fn corrupt_persisted_custom_site_role_falls_back_to_studio() {
+    async fn corrupt_persisted_custom_site_role_propagates_error() {
         let theme_id = ThemeId::from(9);
         let mut themes = crate::MockThemeStorage::new();
         themes
@@ -647,15 +639,14 @@ mod tests {
             .once()
             .returning(|_, _, _| Err(sqlx::Error::RowNotFound));
 
-        assert_eq!(
+        assert!(
             resolve_public_theme(PublicThemeOwner::Site, &PublicThemeRoute::site(), &themes)
                 .await
-                .unwrap(),
-            builtin(Theme::Studio)
+                .is_err()
         );
     }
 
-    // guard:no-backend — an invalid author custom theme inherits the resolved site presentation
+    // guard:no-backend — an unresolved custom role inherits the resolved site presentation
     #[tokio::test]
     async fn invalid_custom_author_role_inherits_site_theme() {
         let author = UserId::from(7);
@@ -688,9 +679,13 @@ mod tests {
             .expect_revision_assets()
             .return_once(|_, _, _| Ok(Vec::new()));
         themes.expect_role_binding().returning(move |_, _, role| {
-            let mut binding = binding(ThemeImageRole::Logo, ThemeImageBindingMode::PackageAsset);
-            binding.package_path = Some("missing.png".to_owned());
-            Ok((role == ThemeImageRole::Logo).then_some(binding))
+            Ok(
+                (role == ThemeImageRole::Logo).then_some(ThemeRoleBinding::PackageAsset {
+                    theme_id,
+                    role: ThemeImageRole::Logo,
+                    package_path: "missing.png".to_owned(),
+                }),
+            )
         });
 
         assert_eq!(
@@ -704,52 +699,38 @@ mod tests {
             builtin(Theme::Terminal)
         );
     }
+
     fn assets() -> Vec<ThemePackageAsset> {
-        vec![ThemePackageAsset {
-            path: "images/logo.png".to_owned(),
-            digest: "c".repeat(64).parse().unwrap(),
-            mime: "image/png".to_owned(),
-        }]
+        vec![
+            ThemePackageAsset {
+                path: "images/logo.png".to_owned(),
+                digest: "c".repeat(64).parse().unwrap(),
+                mime: "image/png".to_owned(),
+            },
+            ThemePackageAsset {
+                path: "images/header-a.png".to_owned(),
+                digest: "d".repeat(64).parse().unwrap(),
+                mime: "image/png".to_owned(),
+            },
+            ThemePackageAsset {
+                path: "images/header-b.png".to_owned(),
+                digest: "e".repeat(64).parse().unwrap(),
+                mime: "image/png".to_owned(),
+            },
+        ]
     }
 
     fn revision() -> ThemeRevisionDigest {
         "a".repeat(64).parse().unwrap()
     }
 
-    fn binding(role: ThemeImageRole, mode: ThemeImageBindingMode) -> ThemeRoleBinding {
-        ThemeRoleBinding {
-            theme_id: ThemeId::from(9),
-            role,
-            mode,
-            package_path: None,
-            media_user_id: None,
-            media_source: None,
-            media_digest: None,
-            media_filename: None,
-            pool_revision: None,
-            shuffle_seed: None,
-        }
-    }
-
-    #[test]
-    fn absent_role_has_no_url() {
-        assert_eq!(
-            resolve_role(
-                None,
-                &assets(),
-                &revision(),
-                &PublicThemeRoute::site(),
-                None,
-                None,
-            ),
-            None
-        );
-    }
-
     #[test]
     fn fixed_package_role_uses_current_revision_asset_digest() {
-        let mut binding = binding(ThemeImageRole::Logo, ThemeImageBindingMode::PackageAsset);
-        binding.package_path = Some("images/logo.png".to_owned());
+        let binding = ThemeRoleBinding::PackageAsset {
+            theme_id: ThemeId::from(9),
+            role: ThemeImageRole::Logo,
+            package_path: "images/logo.png".to_owned(),
+        };
         assert_eq!(
             resolve_role(
                 Some(&binding),
@@ -767,11 +748,16 @@ mod tests {
 
     #[test]
     fn fixed_media_role_uses_canonical_media_url() {
-        let mut binding = binding(ThemeImageRole::Header, ThemeImageBindingMode::Media);
-        binding.media_user_id = Some(UserId::from(1));
-        binding.media_source = Some("upload".to_owned());
-        binding.media_digest = Some("b".repeat(64).parse().unwrap());
-        binding.media_filename = Some("hero.jpg".to_owned());
+        let binding = ThemeRoleBinding::Media {
+            theme_id: ThemeId::from(9),
+            role: ThemeImageRole::Header,
+            user_id: UserId::from(1),
+            media: common::media::MediaRef {
+                source: "upload".parse().unwrap(),
+                sha256: "b".repeat(64).parse().unwrap(),
+                filename: "hero.jpg".parse().unwrap(),
+            },
+        };
         assert_eq!(
             resolve_role(
                 Some(&binding),
@@ -788,26 +774,58 @@ mod tests {
     }
 
     #[test]
-    fn mixed_header_pool_is_route_stable() {
-        let assets = assets();
-        let entries = vec![
-            crate::ThemeHeaderPoolEntry {
-                ordinal: 0,
-                package_path: Some("images/logo.png".to_owned()),
-                media_user_id: None,
-                media_source: None,
-                media_digest: None,
-                media_filename: None,
-            },
-            crate::ThemeHeaderPoolEntry {
-                ordinal: 1,
-                package_path: None,
-                media_user_id: Some(UserId::from(1)),
-                media_source: Some("upload".to_owned()),
-                media_digest: Some("b".repeat(64).parse().unwrap()),
-                media_filename: Some("hero.jpg".to_owned()),
-            },
+    fn packaged_header_defaults_select_from_complete_pool_per_route() {
+        let defaults = vec![
+            "images/header-a.png".to_owned(),
+            "images/header-b.png".to_owned(),
         ];
+        let package_url = |path: &str| package_url(&assets(), path);
+        let site = resolve_packaged_header_default(
+            Some(&defaults),
+            &package_url,
+            &revision(),
+            &PublicThemeRoute::site(),
+        );
+        let site_again = resolve_packaged_header_default(
+            Some(&defaults),
+            &package_url,
+            &revision(),
+            &PublicThemeRoute::site(),
+        );
+        assert_eq!(site, site_again);
+        assert!(
+            [
+                format!("/themes/{}", "d".repeat(64)),
+                format!("/themes/{}", "e".repeat(64)),
+            ]
+            .contains(&site.unwrap().to_string())
+        );
+        let selections = [
+            PublicThemeRoute::site(),
+            PublicThemeRoute::author(&"alice".parse().unwrap()),
+            PublicThemeRoute::author(&"bob".parse().unwrap()),
+            PublicThemeRoute::site_tag(&"rust".parse().unwrap()),
+        ]
+        .into_iter()
+        .map(|route| {
+            resolve_packaged_header_default(Some(&defaults), &package_url, &revision(), &route)
+                .unwrap()
+                .to_string()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(selections.len(), 2);
+    }
+
+    #[test]
+    fn mixed_header_pool_is_route_stable() {
+        let entries = vec![crate::ThemeHeaderPoolEntry {
+            ordinal: 0,
+            package_path: Some("images/logo.png".to_owned()),
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+        }];
         let pool = ThemeHeaderPool::new(
             entries
                 .iter()
@@ -816,27 +834,30 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let mut binding = binding(ThemeImageRole::Header, ThemeImageBindingMode::HeaderPool);
-        binding.pool_revision = Some(pool.revision().clone());
-        binding.shuffle_seed = Some([7; 32]);
+        let binding = ThemeRoleBinding::HeaderPool {
+            theme_id: ThemeId::from(9),
+            pool_revision: pool.revision().clone(),
+            shuffle_seed: [7; 32],
+        };
         let route = PublicThemeRoute::author(&"alice".parse().unwrap());
-        let first = resolve_role(
-            Some(&binding),
-            &assets,
-            &revision(),
-            &route,
-            Some(&entries),
-            None,
+        assert_eq!(
+            resolve_role(
+                Some(&binding),
+                &assets(),
+                &revision(),
+                &route,
+                Some(&entries),
+                None,
+            ),
+            resolve_role(
+                Some(&binding),
+                &assets(),
+                &revision(),
+                &route,
+                Some(&entries),
+                None,
+            )
         );
-        let second = resolve_role(
-            Some(&binding),
-            &assets,
-            &revision(),
-            &route,
-            Some(&entries),
-            None,
-        );
-        assert_eq!(first, second);
     }
 
     #[apply(backends)]

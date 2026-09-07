@@ -7,9 +7,7 @@ use common::{
     MutationOutcome,
     ids::{ThemeId, UserId},
     media::{ContentHash, Filename, MediaRef, MediaSource},
-    theme::{
-        ThemeContentDigest, ThemeHeaderPool, ThemeImageBindingMode, ThemeImageRole, ThemePoolEntry,
-    },
+    theme::{ThemeContentDigest, ThemeHeaderPool, ThemeImageRole, ThemePoolEntry},
 };
 
 use crate::{
@@ -80,9 +78,8 @@ impl ThemeManager {
             media.sort();
             media.dedup();
         }
-        let binding = Self::binding(actor, theme_id, role, input)?;
+        let binding = Self::binding(actor, theme_id, role, input);
         let expected_binding = binding.clone();
-        let _content_locks = self.content_locks.acquire(media.iter()).await?;
         let themes = Arc::clone(&self.themes);
         let themes_for_revalidation = Arc::clone(&self.themes);
         let media_storage = Arc::clone(&self.media);
@@ -136,17 +133,10 @@ impl ThemeManager {
         media.extend(expected.clone());
         media.sort();
         media.dedup();
-        let binding = ThemeRoleBinding {
+        let binding = ThemeRoleBinding::HeaderPool {
             theme_id,
-            role: ThemeImageRole::Header,
-            mode: ThemeImageBindingMode::HeaderPool,
-            package_path: None,
-            media_user_id: None,
-            media_source: None,
-            media_digest: None,
-            media_filename: None,
-            pool_revision: Some(pool.revision().clone()),
-            shuffle_seed: Some(shuffle_seed),
+            pool_revision: pool.revision().clone(),
+            shuffle_seed,
         };
         let expected_binding = binding.clone();
         let expected_entries = entries.clone();
@@ -217,15 +207,15 @@ impl ThemeManager {
             })
             .await
             .map_err(scope_error)?;
-        if matches!(outcome, MutationOutcome::CommitIndeterminate(()))
-            && themes_for_revalidation
+        if matches!(
+            themes_for_revalidation
                 .role_binding(owner, theme_id, ThemeImageRole::Header)
-                .await?
-                .is_some_and(|binding| {
-                    binding.mode == ThemeImageBindingMode::HeaderPool
-                        && binding.shuffle_seed == Some(shuffle_seed)
-                })
-        {
+                .await?,
+            Some(ThemeRoleBinding::HeaderPool {
+                shuffle_seed: actual_seed,
+                ..
+            }) if actual_seed == shuffle_seed
+        ) {
             return Ok(MutationOutcome::Confirmed(()));
         }
         Ok(outcome)
@@ -298,34 +288,22 @@ impl ThemeManager {
         theme_id: ThemeId,
         role: ThemeImageRole,
         input: ThemeRoleInput,
-    ) -> Result<ThemeRoleBinding> {
-        let mut binding = ThemeRoleBinding {
-            theme_id,
-            role,
-            mode: ThemeImageBindingMode::ExplicitAbsent,
-            package_path: None,
-            media_user_id: None,
-            media_source: None,
-            media_digest: None,
-            media_filename: None,
-            pool_revision: None,
-            shuffle_seed: None,
-        };
+    ) -> ThemeRoleBinding {
         match input {
-            ThemeRoleInput::PackagedDefault => {
-                binding.mode = ThemeImageBindingMode::PackagedDefault;
-            }
-            ThemeRoleInput::ExplicitAbsent => {}
-            ThemeRoleInput::PackageAsset(path) => {
-                binding.mode = ThemeImageBindingMode::PackageAsset;
-                binding.package_path = Some(path);
-            }
-            ThemeRoleInput::Media(media) => {
-                binding.mode = ThemeImageBindingMode::Media;
-                set_media_binding(&mut binding, actor, &media)?;
-            }
+            ThemeRoleInput::PackagedDefault => ThemeRoleBinding::PackagedDefault { theme_id, role },
+            ThemeRoleInput::ExplicitAbsent => ThemeRoleBinding::ExplicitAbsent { theme_id, role },
+            ThemeRoleInput::PackageAsset(package_path) => ThemeRoleBinding::PackageAsset {
+                theme_id,
+                role,
+                package_path,
+            },
+            ThemeRoleInput::Media(media) => ThemeRoleBinding::Media {
+                theme_id,
+                role,
+                user_id: actor,
+                media,
+            },
         }
-        Ok(binding)
     }
 
     fn pool(
@@ -381,24 +359,6 @@ impl ThemeManager {
     }
 }
 
-fn set_media_binding(
-    binding: &mut ThemeRoleBinding,
-    actor: UserId,
-    media: &MediaRef,
-) -> Result<()> {
-    binding.media_user_id = Some(actor);
-    binding.media_source = Some(media.source.to_string());
-    binding.media_digest = Some(
-        media
-            .sha256
-            .to_string()
-            .parse()
-            .context("media digest is not a theme content digest")?,
-    );
-    binding.media_filename = Some(media.filename.to_string());
-    Ok(())
-}
-
 fn pool_entry_for_media(media: &MediaRef) -> Result<ThemePoolEntry> {
     Ok(ThemePoolEntry::Media {
         source: media.source.to_string(),
@@ -444,27 +404,12 @@ async fn snapshot_for(
     theme_id: ThemeId,
 ) -> Result<Vec<MediaRef>> {
     let mut references = Vec::new();
-    if let Some(binding) = themes
-        .role_binding(owner, theme_id, ThemeImageRole::Logo)
-        .await?
-        .filter(|binding| binding.mode == ThemeImageBindingMode::Media)
-    {
-        references.push(reference_from_fields(
-            binding.media_source,
-            binding.media_digest,
-            binding.media_filename,
-        )?);
-    }
-    if let Some(binding) = themes
-        .role_binding(owner, theme_id, ThemeImageRole::Header)
-        .await?
-        .filter(|binding| binding.mode == ThemeImageBindingMode::Media)
-    {
-        references.push(reference_from_fields(
-            binding.media_source,
-            binding.media_digest,
-            binding.media_filename,
-        )?);
+    for role in [ThemeImageRole::Logo, ThemeImageRole::Header] {
+        if let Some(ThemeRoleBinding::Media { media, .. }) =
+            themes.role_binding(owner, theme_id, role).await?
+        {
+            references.push(media);
+        }
     }
     for entry in themes.header_pool(owner, theme_id).await? {
         if entry.media_user_id.is_some() {
@@ -540,7 +485,7 @@ async fn lock_media_refs(
 mod tests {
     use std::sync::Arc;
 
-    use common::theme::{ThemeImageBindingMode, ThemeImageRole};
+    use common::theme::ThemeImageRole;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -683,8 +628,11 @@ mod tests {
             .await
             .expect("read media binding")
             .expect("media binding exists");
-        assert_eq!(media_binding.mode, ThemeImageBindingMode::Media);
-        assert_eq!(media_binding.media_user_id, Some(actor));
+        assert!(matches!(
+            media_binding,
+            ThemeRoleBinding::Media { user_id, media: ref bound, .. }
+                if user_id == actor && bound == &media
+        ));
 
         assert!(
             manager
@@ -765,8 +713,13 @@ mod tests {
             .header_pool(ThemeOwner::Site, theme_id)
             .await
             .expect("read canonical pool");
-        assert_eq!(initial.mode, ThemeImageBindingMode::HeaderPool);
-        assert_eq!(initial.shuffle_seed, Some([1; 32]));
+        assert!(matches!(
+            &initial,
+            ThemeRoleBinding::HeaderPool {
+                shuffle_seed,
+                ..
+            } if *shuffle_seed == [1; 32]
+        ));
         assert_eq!(pool.len(), 2);
         assert_eq!(
             pool.iter()
@@ -788,8 +741,20 @@ mod tests {
             .await
             .expect("read shuffled binding")
             .expect("pool binding remains");
-        assert_eq!(shuffled.pool_revision, initial.pool_revision);
-        assert_eq!(shuffled.shuffle_seed, Some([2; 32]));
+        assert!(matches!(
+            (&initial, &shuffled),
+            (
+                ThemeRoleBinding::HeaderPool {
+                    pool_revision: initial_revision,
+                    ..
+                },
+                ThemeRoleBinding::HeaderPool {
+                    pool_revision: shuffled_revision,
+                    shuffle_seed,
+                    ..
+                }
+            ) if initial_revision == shuffled_revision && *shuffle_seed == [2; 32]
+        ));
         assert_eq!(
             env.state
                 .themes

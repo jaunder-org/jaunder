@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware,
     response::Response,
-    routing::get,
+    routing,
 };
 use common::{media::ContentHash, theme::ThemeContentDigest};
 use host::etag;
@@ -32,9 +32,9 @@ where
         Router::new()
             .route(
                 "/draft/{theme_id}/{*path}",
-                get(serve_draft).layer(middleware::map_response(private_no_store)),
+                routing::get(serve_draft).layer(middleware::map_response(private_no_store)),
             )
-            .route("/{digest}", get(serve))
+            .route("/{digest}", routing::get(serve))
             // Do not let malformed theme-content addresses fall through to the CSR
             // shell. The typed route above is the only public content address.
             .fallback(not_found),

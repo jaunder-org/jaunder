@@ -264,7 +264,10 @@ fn take_required_entries(
 fn parse_manifest(raw_manifest: &[u8]) -> Result<(Manifest, Vec<u8>), ThemePackageError> {
     let manifest: Manifest = serde_json::from_slice(raw_manifest)
         .map_err(|error| ThemePackageError::Manifest(error.to_string()))?;
-    if manifest.schema != 1 || manifest.style_contract != 1 || manifest.name.trim().is_empty() {
+    if manifest.schema != 1
+        || manifest.style_contract != common::theme::STYLE_CONTRACT_VERSION
+        || manifest.name.trim().is_empty()
+    {
         return Err(ThemePackageError::Manifest(
             "schema, style_contract, and name must be version 1 and non-empty".into(),
         ));
@@ -479,6 +482,10 @@ fn validate_asset(
         path: path.into(),
         declared: mime.as_str().into(),
     })?;
+    let frames = animation_frames(mime, bytes)?;
+    if frames > limits.max_image_frames {
+        return Err(limit("image frames"));
+    }
     let image = ImageReader::with_format(Cursor::new(bytes), format)
         .decode()
         .map_err(|_| ThemePackageError::Mime {
@@ -488,10 +495,6 @@ fn validate_asset(
     let (width, height) = (image.width(), image.height());
     if width > limits.max_image_width || height > limits.max_image_height {
         return Err(limit("image dimensions"));
-    }
-    let frames = animation_frames(mime, bytes)?;
-    if frames > limits.max_image_frames {
-        return Err(limit("image frames"));
     }
     let pixels = u64::from(width)
         .checked_mul(u64::from(height))
@@ -546,8 +549,51 @@ fn animation_frames(mime: AssetMime, bytes: &[u8]) -> Result<usize, ThemePackage
             .filter(|chunk| *chunk == b"ANMF")
             .count()
             .max(1)),
-        AssetMime::Avif | AssetMime::Jpeg => Ok(1),
+        AssetMime::Avif => {
+            let context =
+                mp4parse::read_avif(&mut Cursor::new(bytes), mp4parse::ParseStrictness::Normal)
+                    .map_err(|_| avif_mime_error())?;
+            if context.sequence.is_some() && !context.unsupported_features.is_empty() {
+                return Err(avif_mime_error());
+            }
+            context
+                .sequence
+                .as_ref()
+                .map_or(Ok(1), avif_sequence_frames)
+        }
+        AssetMime::Jpeg => Ok(1),
         AssetMime::Woff2 => Ok(0),
+    }
+}
+
+fn avif_sequence_frames(sequence: &mp4parse::MediaContext) -> Result<usize, ThemePackageError> {
+    let mut frames = None;
+    for track in sequence
+        .tracks
+        .iter()
+        .filter(|track| track.track_type == mp4parse::TrackType::Video)
+    {
+        let sample_count = track
+            .stts
+            .as_ref()
+            .ok_or_else(avif_mime_error)?
+            .samples
+            .iter()
+            .try_fold(0usize, |total, sample| {
+                total.checked_add(usize::try_from(sample.sample_count).ok()?)
+            })
+            .ok_or_else(avif_mime_error)?;
+        if sample_count == 0 || frames.replace(sample_count).is_some() {
+            return Err(avif_mime_error());
+        }
+    }
+    frames.ok_or_else(avif_mime_error)
+}
+
+fn avif_mime_error() -> ThemePackageError {
+    ThemePackageError::Mime {
+        path: "image".into(),
+        declared: "image/avif".into(),
     }
 }
 fn validate_member_name(path: &str) -> Result<(), ThemePackageError> {
@@ -1215,6 +1261,26 @@ mod tests {
             ),
             Err(ThemePackageError::Mime { .. })
         ));
+    }
+
+    #[test]
+    fn counts_animated_avif_video_samples_before_applying_frame_limits() {
+        let sequence = mp4parse::MediaContext {
+            tracks: mp4parse::TryVec::from(vec![mp4parse::Track {
+                track_type: mp4parse::TrackType::Video,
+                stts: Some(mp4parse::TimeToSampleBox {
+                    samples: mp4parse::TryVec::from(vec![mp4parse::Sample {
+                        sample_count: 2,
+                        sample_delta: 1,
+                    }]),
+                }),
+                ..mp4parse::Track::default()
+            }]),
+            ..mp4parse::MediaContext::default()
+        };
+
+        let frames = avif_sequence_frames(&sequence).unwrap();
+        assert!(frames > ThemePackageLimits::default().max_image_frames);
     }
 
     #[test]

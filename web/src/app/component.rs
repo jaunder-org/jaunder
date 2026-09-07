@@ -364,7 +364,7 @@ fn AppShell() -> impl IntoView {
                             <div
                                 class="j-shell"
                                 data-jaunder-theme-surface
-                                data-jaunder-style-contract="1"
+                                data-jaunder-style-contract=common::theme::STYLE_CONTRACT_VERSION
                             >
                                 <Sidebar />
                                 <div class="j-main-region">

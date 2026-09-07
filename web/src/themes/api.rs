@@ -97,25 +97,21 @@ use {
         auth,
         error::{InternalError, from_write_scope_error},
     },
-    common::{media::MediaRef, theme::ThemeImageBindingMode},
+    common::{media::MediaRef, theme},
     host::{
         theme_operations::{ThemeOperationCoordinator, ThemeOperationRejected},
-        theme_package::{
-            ThemePackageLimits, ValidatedThemePackage, export_theme_package, validate_theme_package,
-        },
+        theme_package::{self, ThemePackageLimits, ValidatedThemePackage},
     },
     leptos::prelude::*,
     leptos_axum::ResponseOptions,
     std::{
         collections::{BTreeMap, BTreeSet},
-        fmt::Write as _,
         sync::Arc,
     },
     storage::{
         PostStorage, ReplaceDraftError, ThemeAssetError, ThemeAssetManager, ThemeDraft,
-        ThemeDraftAsset, ThemeManager, ThemeOwner, ThemePoolInput as StorageThemePoolInput,
-        ThemeQuotaLimits, ThemeRoleInput, ThemeStorage, UserStorage, WriteScope,
-        validate_theme_catalog_name,
+        ThemeDraftAsset, ThemeManager, ThemeOwner, ThemeQuotaLimits, ThemeRoleInput, ThemeStorage,
+        UserStorage, WriteScope,
     },
 };
 #[cfg(feature = "server")]
@@ -125,7 +121,7 @@ fn plain_css_manifest(name: &str) -> Result<Vec<u8>, InternalError> {
         "defaults": {},
         "name": name,
         "schema": 1,
-        "style_contract": 1,
+        "style_contract": theme::STYLE_CONTRACT_VERSION,
     }))
     .map_err(InternalError::external)
 }
@@ -133,7 +129,7 @@ fn plain_css_manifest(name: &str) -> Result<Vec<u8>, InternalError> {
 fn digest_hex(bytes: &[u8]) -> String {
     let mut value = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        let _ = write!(&mut value, "{byte:02x}");
+        let _ = std::fmt::Write::write_fmt(&mut value, format_args!("{byte:02x}"));
     }
     value
 }
@@ -196,7 +192,7 @@ fn draft_from_input(theme_id: ThemeId, input: Draft) -> Result<ThemeDraft, Inter
             )));
         }
     }
-    let archive = export_theme_package(
+    let archive = theme_package::export_theme_package(
         &input.manifest,
         &input.stylesheet,
         &input
@@ -206,7 +202,7 @@ fn draft_from_input(theme_id: ThemeId, input: Draft) -> Result<ThemeDraft, Inter
             .collect(),
     )
     .map_err(|error| InternalError::validation_source("invalid theme package", error))?;
-    let package = validate_theme_package(&archive, ThemePackageLimits::default())
+    let package = theme_package::validate_theme_package(&archive, ThemePackageLimits::default())
         .map_err(|error| InternalError::validation_source("invalid theme package", error))?;
     let assets = input
         .assets
@@ -238,7 +234,7 @@ fn draft_from_input(theme_id: ThemeId, input: Draft) -> Result<ThemeDraft, Inter
 
 #[cfg(feature = "server")]
 fn draft_from_archive(theme_id: ThemeId, archive: &[u8]) -> Result<ThemeDraft, InternalError> {
-    let package = validate_theme_package(archive, ThemePackageLimits::default())
+    let package = theme_package::validate_theme_package(archive, ThemePackageLimits::default())
         .map_err(|error| InternalError::validation_source("invalid theme package", error))?;
     let assets = package
         .asset_paths()
@@ -350,7 +346,8 @@ fn replace_draft_error(error: ReplaceDraftError) -> InternalError {
 
 #[cfg(feature = "server")]
 fn theme_name(name: &str) -> Result<String, InternalError> {
-    validate_theme_catalog_name(name).map_err(|error| InternalError::validation(error.to_string()))
+    storage::validate_theme_catalog_name(name)
+        .map_err(|error| InternalError::validation(error.to_string()))
 }
 
 #[cfg(feature = "server")]
@@ -425,20 +422,20 @@ fn media_wire(
 
 #[cfg(feature = "server")]
 fn binding_wire(binding: storage::ThemeRoleBinding) -> Result<ThemeBindingInput, InternalError> {
-    match binding.mode {
-        ThemeImageBindingMode::PackagedDefault => Ok(ThemeBindingInput::PackagedDefault),
-        ThemeImageBindingMode::ExplicitAbsent => Ok(ThemeBindingInput::ExplicitAbsent),
-        ThemeImageBindingMode::PackageAsset => Ok(ThemeBindingInput::PackageAsset(
-            binding
-                .package_path
-                .ok_or_else(|| InternalError::server_message("missing package binding path"))?,
-        )),
-        ThemeImageBindingMode::Media => Ok(ThemeBindingInput::Media(media_wire(
-            binding.media_source,
-            binding.media_digest,
-            binding.media_filename,
-        )?)),
-        ThemeImageBindingMode::HeaderPool => Err(InternalError::server_message(
+    match binding {
+        storage::ThemeRoleBinding::PackagedDefault { .. } => Ok(ThemeBindingInput::PackagedDefault),
+        storage::ThemeRoleBinding::ExplicitAbsent { .. } => Ok(ThemeBindingInput::ExplicitAbsent),
+        storage::ThemeRoleBinding::PackageAsset { package_path, .. } => {
+            Ok(ThemeBindingInput::PackageAsset(package_path))
+        }
+        storage::ThemeRoleBinding::Media { media, .. } => {
+            Ok(ThemeBindingInput::Media(ThemeMediaInput {
+                source: media.source,
+                sha256: media.sha256,
+                filename: media.filename,
+            }))
+        }
+        storage::ThemeRoleBinding::HeaderPool { .. } => Err(InternalError::server_message(
             "header pool binding cannot be read as a fixed binding",
         )),
     }
@@ -504,13 +501,14 @@ pub async fn get_presentation(
         .role_binding(owner, theme_id, ThemeImageRole::Header)
         .await
         .map_err(InternalError::storage)?;
-    let shuffle_seed = header_binding
-        .as_ref()
-        .and_then(|binding| binding.shuffle_seed);
-    let header = header_binding
-        .filter(|binding| binding.mode != ThemeImageBindingMode::HeaderPool)
-        .map(binding_wire)
-        .transpose()?;
+    let shuffle_seed = match &header_binding {
+        Some(storage::ThemeRoleBinding::HeaderPool { shuffle_seed, .. }) => Some(*shuffle_seed),
+        _ => None,
+    };
+    let header = match header_binding {
+        Some(storage::ThemeRoleBinding::HeaderPool { .. }) => None,
+        binding => binding.map(binding_wire).transpose()?,
+    };
     let header_pool = themes
         .header_pool(owner, theme_id)
         .await
@@ -815,7 +813,7 @@ pub async fn export(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Expor
         .iter()
         .map(|asset| (asset.path.clone(), asset.bytes.clone()))
         .collect();
-    let bytes = export_theme_package(&draft.manifest, &draft.stylesheet, &assets)
+    let bytes = theme_package::export_theme_package(&draft.manifest, &draft.stylesheet, &assets)
         .map_err(InternalError::server)?;
     let filename = safe_filename(&entry.name);
     if let Some(options) = use_context::<ResponseOptions>() {
@@ -891,7 +889,7 @@ pub async fn publish(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Muta
         .await
         .map_err(InternalError::storage)?
         .ok_or_else(|| InternalError::not_found("theme"))?;
-    let archive = export_theme_package(
+    let archive = theme_package::export_theme_package(
         &draft.manifest,
         &draft.stylesheet,
         &draft
@@ -901,7 +899,7 @@ pub async fn publish(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Muta
             .collect(),
     )
     .map_err(InternalError::server)?;
-    let package = validate_theme_package(&archive, ThemePackageLimits::default())
+    let package = theme_package::validate_theme_package(&archive, ThemePackageLimits::default())
         .map_err(|error| InternalError::validation_source("invalid theme package", error))?;
     let urls = package_asset_urls(&package)?;
     let compiled = package
@@ -1006,8 +1004,10 @@ pub async fn replace_pool(
             inputs
                 .into_iter()
                 .map(|input| match input {
-                    ThemePoolInput::PackageAsset(path) => StorageThemePoolInput::PackageAsset(path),
-                    ThemePoolInput::Media(media) => StorageThemePoolInput::Media(MediaRef {
+                    ThemePoolInput::PackageAsset(path) => {
+                        storage::ThemePoolInput::PackageAsset(path)
+                    }
+                    ThemePoolInput::Media(media) => storage::ThemePoolInput::Media(MediaRef {
                         source: media.source,
                         sha256: media.sha256,
                         filename: media.filename,
@@ -1054,9 +1054,9 @@ pub async fn preview(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Them
         .iter()
         .map(|asset| (asset.path.clone(), asset.bytes.clone()))
         .collect::<BTreeMap<_, _>>();
-    let archive = export_theme_package(&draft.manifest, &draft.stylesheet, &assets)
+    let archive = theme_package::export_theme_package(&draft.manifest, &draft.stylesheet, &assets)
         .map_err(InternalError::server)?;
-    let package = validate_theme_package(&archive, ThemePackageLimits::default())
+    let package = theme_package::validate_theme_package(&archive, ThemePackageLimits::default())
         .map_err(|error| InternalError::validation_source("invalid theme package", error))?;
     let urls = draft_asset_urls(&package, theme_id);
     let compiled = package

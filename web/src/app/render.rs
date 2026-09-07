@@ -16,7 +16,10 @@
 //! tests. Leaf primitives it composes (`posts::render::body`, `render_sidebar`) live in
 //! their own modules and are called cross-module.
 
-use common::seed::{PageSeed, PublicPresentation};
+use common::{
+    seed::{PageSeed, PublicPresentation},
+    theme,
+};
 use maud::{PreEscaped, html};
 
 use crate::html::Markup;
@@ -213,7 +216,7 @@ pub fn render_shell(presentation: &PublicPresentation<PageSeed>) -> Markup {
         div class="j-root" data-theme=(presentation.theme.data_theme()) {
             div id="j-trusted-chrome" class="j-trusted-chrome" {}
             div class="j-theme-clip" data-jaunder-theme-clip {
-                div class="j-shell" data-jaunder-theme-surface data-jaunder-style-contract="1" {
+                div class="j-shell" data-jaunder-theme-surface data-jaunder-style-contract=(theme::STYLE_CONTRACT_VERSION) {
                     aside class="j-sidebar" { (crate::sidebar::render_sidebar(active_key)) }
                     div class="j-main-region" {
                         main class="j-main" data-jaunder-part="main" {

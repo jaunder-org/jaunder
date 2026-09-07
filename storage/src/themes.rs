@@ -11,9 +11,8 @@ use common::{
     ids::{ThemeId, UserId},
     media::{ContentHash, Filename, MediaRef, MediaSource},
     theme::{
-        PublicThemeSelection, ThemeAssetDigest, ThemeContentDigest, ThemeImageBindingMode,
-        ThemeImageRole, ThemePoolRevisionDigest, ThemeRevisionDigest, ThemeSourceDigest,
-        ThemeStylesheetDigest,
+        PublicThemeSelection, ThemeAssetDigest, ThemeContentDigest, ThemeImageRole,
+        ThemePoolRevisionDigest, ThemeRevisionDigest, ThemeSourceDigest, ThemeStylesheetDigest,
     },
 };
 
@@ -144,19 +143,65 @@ pub struct ThemeContentEligibility {
     pub retained_until_unix_seconds: i64,
 }
 
-/// One persisted logo/header binding. Package and Media values stay disjoint.
+/// One validated logo/header binding.
+///
+/// The nullable relational representation stays at the database boundary. Every
+/// value that reaches callers is one of these complete, role-valid alternatives.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ThemeRoleBinding {
-    pub theme_id: ThemeId,
-    pub role: ThemeImageRole,
-    pub mode: ThemeImageBindingMode,
-    pub package_path: Option<String>,
-    pub media_user_id: Option<UserId>,
-    pub media_source: Option<String>,
-    pub media_digest: Option<ThemeContentDigest>,
-    pub media_filename: Option<String>,
-    pub pool_revision: Option<ThemePoolRevisionDigest>,
-    pub shuffle_seed: Option<[u8; 32]>,
+pub enum ThemeRoleBinding {
+    PackagedDefault {
+        theme_id: ThemeId,
+        role: ThemeImageRole,
+    },
+    ExplicitAbsent {
+        theme_id: ThemeId,
+        role: ThemeImageRole,
+    },
+    PackageAsset {
+        theme_id: ThemeId,
+        role: ThemeImageRole,
+        package_path: String,
+    },
+    Media {
+        theme_id: ThemeId,
+        role: ThemeImageRole,
+        user_id: UserId,
+        media: MediaRef,
+    },
+    HeaderPool {
+        theme_id: ThemeId,
+        pool_revision: ThemePoolRevisionDigest,
+        shuffle_seed: [u8; 32],
+    },
+}
+
+impl ThemeRoleBinding {
+    #[must_use]
+    pub fn theme_id(&self) -> ThemeId {
+        match self {
+            Self::PackagedDefault { theme_id, .. }
+            | Self::ExplicitAbsent { theme_id, .. }
+            | Self::PackageAsset { theme_id, .. }
+            | Self::Media { theme_id, .. }
+            | Self::HeaderPool { theme_id, .. } => *theme_id,
+        }
+    }
+
+    #[must_use]
+    pub fn role(&self) -> ThemeImageRole {
+        match self {
+            Self::PackagedDefault { role, .. }
+            | Self::ExplicitAbsent { role, .. }
+            | Self::PackageAsset { role, .. }
+            | Self::Media { role, .. } => *role,
+            Self::HeaderPool { .. } => ThemeImageRole::Header,
+        }
+    }
+
+    #[must_use]
+    pub fn is_explicit_absent(&self) -> bool {
+        matches!(self, Self::ExplicitAbsent { .. })
+    }
 }
 
 /// A canonical member of an explicit header pool.
@@ -650,68 +695,50 @@ macro_rules! impl_theme_storage {
                 Ok(())
             }
             async fn replace_role_binding(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, binding: &ThemeRoleBinding) -> Result<(), sqlx::Error> {
-                let author_user_id = author_user_id(owner);
-                if author_user_id.is_some() && binding.media_user_id.map(i64::from) != author_user_id && binding.media_user_id.is_some() { return Err(sqlx::Error::RowNotFound); }
+                if let ThemeRoleBinding::Media { user_id, .. } = binding
+                    && author_user_id(owner).is_some_and(|author| i64::from(*user_id) != author)
+                {
+                    return Err(sqlx::Error::RowNotFound);
+                }
                 let connection = $conn(transaction)?;
                 let owned: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM themes WHERE id = $1 AND catalog_owner_key = $2)")
-                    .bind(i64::from(binding.theme_id)).bind(catalog_owner_key(owner)).fetch_one(&mut *connection).await?;
+                    .bind(i64::from(binding.theme_id())).bind(catalog_owner_key(owner)).fetch_one(&mut *connection).await?;
                 if !owned.0 { return Err(sqlx::Error::RowNotFound); }
-                if binding.mode == ThemeImageBindingMode::PackageAsset {
+                if let ThemeRoleBinding::PackageAsset { package_path, .. } = binding {
                     let valid: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM theme_draft_assets WHERE theme_id = $1 AND path = $2 AND mime LIKE 'image/%')")
-                        .bind(i64::from(binding.theme_id))
-                        .bind(binding.package_path.as_deref())
+                        .bind(i64::from(binding.theme_id()))
+                        .bind(package_path)
                         .fetch_one(&mut *connection)
                         .await?;
                     if !valid.0 {
                         return Err(sqlx::Error::RowNotFound);
                     }
                 }
-                if binding.mode == ThemeImageBindingMode::Media {
+                if let ThemeRoleBinding::Media { user_id, media, .. } = binding {
                     let valid: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM media WHERE user_id = $1 AND source = $2 AND sha256 = $3 AND filename = $4)")
-                        .bind(binding.media_user_id.map(i64::from))
-                        .bind(binding.media_source.as_deref())
-                        .bind(binding.media_digest.as_ref().map(AsRef::as_ref))
-                        .bind(binding.media_filename.as_deref())
+                        .bind(i64::from(*user_id))
+                        .bind(media.source.as_ref())
+                        .bind(media.sha256.as_ref())
+                        .bind(media.filename.as_ref())
                         .fetch_one(&mut *connection)
                         .await?;
                     if !valid.0 {
                         return Err(sqlx::Error::RowNotFound);
                     }
                 }
-                if binding.role == ThemeImageRole::Header && binding.mode != ThemeImageBindingMode::HeaderPool {
-                    sqlx::query("DELETE FROM theme_header_pool WHERE theme_id = $1").bind(i64::from(binding.theme_id)).execute(&mut *connection).await?;
+                if binding.role() == ThemeImageRole::Header
+                    && !matches!(binding, ThemeRoleBinding::HeaderPool { .. })
+                {
+                    sqlx::query("DELETE FROM theme_header_pool WHERE theme_id = $1").bind(i64::from(binding.theme_id())).execute(&mut *connection).await?;
                 }
+                let columns = binding_columns(binding);
                 sqlx::query("INSERT INTO theme_role_bindings (theme_id, role, mode, package_path, media_user_id, media_source, media_digest, media_filename, pool_revision_digest, shuffle_seed) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (theme_id, role) DO UPDATE SET mode = excluded.mode, package_path = excluded.package_path, media_user_id = excluded.media_user_id, media_source = excluded.media_source, media_digest = excluded.media_digest, media_filename = excluded.media_filename, pool_revision_digest = excluded.pool_revision_digest, shuffle_seed = excluded.shuffle_seed")
-                    .bind(i64::from(binding.theme_id)).bind(binding.role.token()).bind(binding.mode.token()).bind(&binding.package_path).bind(binding.media_user_id.map(i64::from)).bind(&binding.media_source).bind(binding.media_digest.as_ref().map(AsRef::as_ref)).bind(&binding.media_filename).bind(binding.pool_revision.as_ref().map(AsRef::as_ref)).bind(binding.shuffle_seed.map(Vec::from)).execute(&mut *connection).await?;
+                    .bind(i64::from(binding.theme_id())).bind(binding.role().token()).bind(columns.mode).bind(columns.package_path).bind(columns.media_user_id).bind(columns.media_source).bind(columns.media_digest).bind(columns.media_filename).bind(columns.pool_revision).bind(columns.shuffle_seed).execute(&mut *connection).await?;
                 Ok(())
             }
             async fn role_binding(&self, owner: ThemeOwner, theme_id: ThemeId, role: ThemeImageRole) -> Result<Option<ThemeRoleBinding>, sqlx::Error> {
-                let row: Option<(String, Option<String>, Option<i64>, Option<String>, Option<String>, Option<String>, Option<String>, Option<Vec<u8>>)> = sqlx::query_as("SELECT b.mode, b.package_path, b.media_user_id, b.media_source, b.media_digest, b.media_filename, b.pool_revision_digest, b.shuffle_seed FROM theme_role_bindings b JOIN themes t ON t.id = b.theme_id WHERE b.theme_id = $1 AND b.role = $2 AND t.catalog_owner_key = $3").bind(i64::from(theme_id)).bind(role.token()).bind(catalog_owner_key(owner)).fetch_optional(&self.pool).await?;
-                let Some((mode, package_path, media_user_id, media_source, media_digest, media_filename, pool_revision, shuffle_seed)) = row else {
-                    return Ok(None);
-                };
-                let mode = parse_binding_mode(&mode).ok_or(sqlx::Error::RowNotFound)?;
-                let media_digest = media_digest
-                    .map(|value| value.parse().map_err(|_| sqlx::Error::RowNotFound))
-                    .transpose()?;
-                let pool_revision = pool_revision
-                    .map(|value| value.parse().map_err(|_| sqlx::Error::RowNotFound))
-                    .transpose()?;
-                let shuffle_seed = shuffle_seed
-                    .map(|seed| seed.try_into().map_err(|_| sqlx::Error::RowNotFound))
-                    .transpose()?;
-                Ok(Some(ThemeRoleBinding {
-                    theme_id,
-                    role,
-                    mode,
-                    package_path,
-                    media_user_id: media_user_id.map(UserId::from),
-                    media_source,
-                    media_digest,
-                    media_filename,
-                    pool_revision,
-                    shuffle_seed,
-                }))
+                let row: Option<ThemeRoleBindingRow> = sqlx::query_as("SELECT b.mode, b.package_path, b.media_user_id, b.media_source, b.media_digest, b.media_filename, b.pool_revision_digest AS pool_revision, b.shuffle_seed FROM theme_role_bindings b JOIN themes t ON t.id = b.theme_id WHERE b.theme_id = $1 AND b.role = $2 AND t.catalog_owner_key = $3").bind(i64::from(theme_id)).bind(role.token()).bind(catalog_owner_key(owner)).fetch_optional(&self.pool).await?;
+                row.map(|row| binding_from_row(theme_id, role, row)).transpose()
             }
             async fn replace_header_pool(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, theme_id: ThemeId, entries: &[ThemeHeaderPoolEntry]) -> Result<(), sqlx::Error> {
                 let author_user_id = author_user_id(owner);
@@ -947,6 +974,198 @@ fn header_pool_entry_encoding(entry: &ThemeHeaderPoolEntry) -> Result<Vec<u8>, s
     Ok(encoded)
 }
 
+#[derive(Debug, macros::SqlxBridge)]
+struct StoredThemeBindingMode(String);
+
+#[derive(Debug, macros::SqlxBridge)]
+struct StoredThemePackagePath(String);
+
+#[derive(Debug, macros::SqlxBridge)]
+struct StoredThemePoolRevision(String);
+
+#[derive(Debug, macros::SqlxBridge)]
+struct StoredThemeShuffleSeed(Vec<u8>);
+
+#[derive(sqlx::FromRow)]
+struct ThemeRoleBindingRow {
+    mode: StoredThemeBindingMode,
+    package_path: Option<StoredThemePackagePath>,
+    media_user_id: Option<UserId>,
+    media_source: Option<MediaSource>,
+    media_digest: Option<ContentHash>,
+    media_filename: Option<Filename>,
+    pool_revision: Option<StoredThemePoolRevision>,
+    shuffle_seed: Option<StoredThemeShuffleSeed>,
+}
+
+fn binding_from_row(
+    theme_id: ThemeId,
+    role: ThemeImageRole,
+    row: ThemeRoleBindingRow,
+) -> Result<ThemeRoleBinding, sqlx::Error> {
+    let ThemeRoleBindingRow {
+        mode,
+        package_path,
+        media_user_id,
+        media_source,
+        media_digest,
+        media_filename,
+        pool_revision,
+        shuffle_seed,
+    } = row;
+    match mode.0.as_str() {
+        "packaged_default"
+            if package_path.is_none()
+                && media_user_id.is_none()
+                && media_source.is_none()
+                && media_digest.is_none()
+                && media_filename.is_none()
+                && pool_revision.is_none()
+                && shuffle_seed.is_none() =>
+        {
+            Ok(ThemeRoleBinding::PackagedDefault { theme_id, role })
+        }
+        "explicit_absent"
+            if package_path.is_none()
+                && media_user_id.is_none()
+                && media_source.is_none()
+                && media_digest.is_none()
+                && media_filename.is_none()
+                && pool_revision.is_none()
+                && shuffle_seed.is_none() =>
+        {
+            Ok(ThemeRoleBinding::ExplicitAbsent { theme_id, role })
+        }
+        "package_asset"
+            if media_user_id.is_none()
+                && media_source.is_none()
+                && media_digest.is_none()
+                && media_filename.is_none()
+                && pool_revision.is_none()
+                && shuffle_seed.is_none() =>
+        {
+            package_path
+                .map(|package_path| ThemeRoleBinding::PackageAsset {
+                    theme_id,
+                    role,
+                    package_path: package_path.0,
+                })
+                .ok_or(sqlx::Error::RowNotFound)
+        }
+        "media" if package_path.is_none() && pool_revision.is_none() && shuffle_seed.is_none() => {
+            let (Some(user_id), Some(source), Some(digest), Some(filename)) =
+                (media_user_id, media_source, media_digest, media_filename)
+            else {
+                return Err(sqlx::Error::RowNotFound);
+            };
+            Ok(ThemeRoleBinding::Media {
+                theme_id,
+                role,
+                user_id,
+                media: MediaRef {
+                    source,
+                    sha256: digest,
+                    filename,
+                },
+            })
+        }
+        "pool"
+            if role == ThemeImageRole::Header
+                && package_path.is_none()
+                && media_user_id.is_none()
+                && media_source.is_none()
+                && media_digest.is_none()
+                && media_filename.is_none() =>
+        {
+            let (Some(pool_revision), Some(shuffle_seed)) = (pool_revision, shuffle_seed) else {
+                return Err(sqlx::Error::RowNotFound);
+            };
+            Ok(ThemeRoleBinding::HeaderPool {
+                theme_id,
+                pool_revision: pool_revision
+                    .0
+                    .parse()
+                    .map_err(|_| sqlx::Error::RowNotFound)?,
+                shuffle_seed: shuffle_seed
+                    .0
+                    .try_into()
+                    .map_err(|_| sqlx::Error::RowNotFound)?,
+            })
+        }
+        _ => Err(sqlx::Error::RowNotFound),
+    }
+}
+
+struct ThemeRoleBindingColumns<'a> {
+    mode: &'static str,
+    package_path: Option<&'a str>,
+    media_user_id: Option<i64>,
+    media_source: Option<&'a str>,
+    media_digest: Option<&'a str>,
+    media_filename: Option<&'a str>,
+    pool_revision: Option<&'a str>,
+    shuffle_seed: Option<Vec<u8>>,
+}
+
+fn binding_columns(binding: &ThemeRoleBinding) -> ThemeRoleBindingColumns<'_> {
+    match binding {
+        ThemeRoleBinding::PackagedDefault { .. } => ThemeRoleBindingColumns {
+            mode: "packaged_default",
+            package_path: None,
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+            pool_revision: None,
+            shuffle_seed: None,
+        },
+        ThemeRoleBinding::ExplicitAbsent { .. } => ThemeRoleBindingColumns {
+            mode: "explicit_absent",
+            package_path: None,
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+            pool_revision: None,
+            shuffle_seed: None,
+        },
+        ThemeRoleBinding::PackageAsset { package_path, .. } => ThemeRoleBindingColumns {
+            mode: "package_asset",
+            package_path: Some(package_path),
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+            pool_revision: None,
+            shuffle_seed: None,
+        },
+        ThemeRoleBinding::Media { user_id, media, .. } => ThemeRoleBindingColumns {
+            mode: "media",
+            package_path: None,
+            media_user_id: Some(i64::from(*user_id)),
+            media_source: Some(media.source.as_ref()),
+            media_digest: Some(media.sha256.as_ref()),
+            media_filename: Some(media.filename.as_ref()),
+            pool_revision: None,
+            shuffle_seed: None,
+        },
+        ThemeRoleBinding::HeaderPool {
+            pool_revision,
+            shuffle_seed,
+            ..
+        } => ThemeRoleBindingColumns {
+            mode: "pool",
+            package_path: None,
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+            pool_revision: Some(pool_revision.as_ref()),
+            shuffle_seed: Some(shuffle_seed.to_vec()),
+        },
+    }
+}
+
 fn push_theme_pool_field(target: &mut Vec<u8>, value: &[u8]) {
     target.extend((value.len() as u64).to_be_bytes());
     target.extend(value);
@@ -969,17 +1188,6 @@ fn author_user_id(owner: ThemeOwner) -> Option<i64> {
     match owner {
         ThemeOwner::Site => None,
         ThemeOwner::Author(user_id) => Some(i64::from(user_id)),
-    }
-}
-
-fn parse_binding_mode(value: &str) -> Option<ThemeImageBindingMode> {
-    match value {
-        "packaged_default" => Some(ThemeImageBindingMode::PackagedDefault),
-        "explicit_absent" => Some(ThemeImageBindingMode::ExplicitAbsent),
-        "package_asset" => Some(ThemeImageBindingMode::PackageAsset),
-        "media" => Some(ThemeImageBindingMode::Media),
-        "pool" => Some(ThemeImageBindingMode::HeaderPool),
-        _ => None,
     }
 }
 
@@ -1030,7 +1238,7 @@ mod tests {
 
     use common::{
         ids::{ThemeId, UserId},
-        theme::{PublicThemeSelection, Theme, ThemeImageBindingMode, ThemeImageRole},
+        theme::{PublicThemeSelection, Theme, ThemeImageRole},
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -1223,17 +1431,10 @@ mod tests {
         );
 
         let themes = Arc::clone(&env.state.themes);
-        let binding = ThemeRoleBinding {
+        let binding = ThemeRoleBinding::PackageAsset {
             theme_id: created,
             role: ThemeImageRole::Logo,
-            mode: ThemeImageBindingMode::PackageAsset,
-            package_path: Some("assets/replacement.png".into()),
-            media_user_id: None,
-            media_source: None,
-            media_digest: None,
-            media_filename: None,
-            pool_revision: None,
-            shuffle_seed: None,
+            package_path: "assets/replacement.png".into(),
         };
         confirmed(
             env.state
@@ -1248,17 +1449,15 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        assert_eq!(
+        assert!(matches!(
             env.state
                 .themes
                 .role_binding(ThemeOwner::Site, created, ThemeImageRole::Logo)
                 .await
-                .unwrap()
-                .unwrap()
-                .package_path
-                .as_deref(),
-            Some("assets/replacement.png")
-        );
+                .unwrap(),
+            Some(ThemeRoleBinding::PackageAsset { package_path, .. })
+                if package_path == "assets/replacement.png"
+        ));
 
         let themes = Arc::clone(&env.state.themes);
         let pool = vec![ThemeHeaderPoolEntry {
@@ -1680,17 +1879,10 @@ mod tests {
                 .unwrap(),
         );
 
-        let binding = ThemeRoleBinding {
+        let binding = ThemeRoleBinding::PackageAsset {
             theme_id,
             role: ThemeImageRole::Logo,
-            mode: ThemeImageBindingMode::PackageAsset,
-            package_path: Some("assets/type.woff2".to_owned()),
-            media_user_id: None,
-            media_source: None,
-            media_digest: None,
-            media_filename: None,
-            pool_revision: None,
-            shuffle_seed: None,
+            package_path: "assets/type.woff2".to_owned(),
         };
         let themes = Arc::clone(&env.state.themes);
         assert!(
@@ -2579,6 +2771,43 @@ mod tests {
             "user:0"
         );
         assert_eq!(catalog_owner_key(ThemeOwner::Site), "site");
+    }
+    #[test]
+    fn malformed_persisted_binding_columns_fail_conversion() {
+        assert!(
+            binding_from_row(
+                ThemeId::from(9),
+                ThemeImageRole::Logo,
+                ThemeRoleBindingRow {
+                    mode: StoredThemeBindingMode("package_asset".to_owned()),
+                    package_path: None,
+                    media_user_id: None,
+                    media_source: None,
+                    media_digest: None,
+                    media_filename: None,
+                    pool_revision: None,
+                    shuffle_seed: None,
+                },
+            )
+            .is_err()
+        );
+        assert!(
+            binding_from_row(
+                ThemeId::from(9),
+                ThemeImageRole::Logo,
+                ThemeRoleBindingRow {
+                    mode: StoredThemeBindingMode("pool".to_owned()),
+                    package_path: None,
+                    media_user_id: None,
+                    media_source: None,
+                    media_digest: None,
+                    media_filename: None,
+                    pool_revision: Some(StoredThemePoolRevision("a".repeat(64))),
+                    shuffle_seed: Some(StoredThemeShuffleSeed(vec![0; 32])),
+                },
+            )
+            .is_err()
+        );
     }
 }
 

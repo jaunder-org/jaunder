@@ -1,5 +1,17 @@
 //! Built-in and custom public presentation theme identities and content metadata.
 
+/// The version token shared by Theme Package manifests and public Style Contract markup.
+pub const STYLE_CONTRACT_VERSION_TOKEN: &str = "1";
+
+/// The numeric form stored in Theme Package manifests.
+pub const STYLE_CONTRACT_VERSION: u8 = STYLE_CONTRACT_VERSION_TOKEN.as_bytes()[0] - b'0';
+
+/// The root hook isolating owner-authored presentation CSS.
+pub const STYLE_CONTRACT_SURFACE_ATTRIBUTE: &str = "data-jaunder-theme-surface";
+
+/// The root hook identifying the active Style Contract version.
+pub const STYLE_CONTRACT_VERSION_ATTRIBUTE: &str = "data-jaunder-style-contract";
+
 /// A built-in public presentation theme.
 ///
 /// `serialize_all = "snake_case"` supplies the durable configuration and wire tokens:
@@ -166,30 +178,6 @@ impl ThemeImageRole {
         match self {
             Self::Logo => "logo",
             Self::Header => "header",
-        }
-    }
-}
-
-/// The closed source of one presentation-image role.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ThemeImageBindingMode {
-    PackagedDefault,
-    ExplicitAbsent,
-    PackageAsset,
-    Media,
-    HeaderPool,
-}
-
-impl ThemeImageBindingMode {
-    #[must_use]
-    pub const fn token(self) -> &'static str {
-        match self {
-            Self::PackagedDefault => "packaged_default",
-            Self::ExplicitAbsent => "explicit_absent",
-            Self::PackageAsset => "package_asset",
-            Self::Media => "media",
-            Self::HeaderPool => "pool",
         }
     }
 }
@@ -452,17 +440,6 @@ mod tests {
         assert!("A".repeat(64).parse::<ThemeContentDigest>().is_err());
         assert_eq!(ThemeImageRole::Logo.token(), "logo");
         assert_eq!(ThemeImageRole::Header.token(), "header");
-        assert_eq!(
-            ThemeImageBindingMode::PackagedDefault.token(),
-            "packaged_default"
-        );
-        assert_eq!(
-            ThemeImageBindingMode::ExplicitAbsent.token(),
-            "explicit_absent"
-        );
-        assert_eq!(ThemeImageBindingMode::PackageAsset.token(), "package_asset");
-        assert_eq!(ThemeImageBindingMode::Media.token(), "media");
-        assert_eq!(ThemeImageBindingMode::HeaderPool.token(), "pool");
     }
 
     #[test]

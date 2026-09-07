@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use self::capture::{RetainedCapture, allocate_retained_capture, finalize_capture};
 use self::process::{CollectorGuard, CollectorStartError};
-use anyhow::Context as _;
+use anyhow::Context;
 use xshell::{Shell, cmd};
 
 use crate::result::{CommandResult, StepResult};

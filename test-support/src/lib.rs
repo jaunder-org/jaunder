@@ -19,7 +19,7 @@ use common::post_body::PostBody;
 use common::post_title::PostTitle;
 use common::site::SiteTitle;
 use common::slug::Slug;
-use common::theme::{PublicThemeSelection, Theme, ThemeImageBindingMode, ThemeImageRole};
+use common::theme::{PublicThemeSelection, ThemeImageRole};
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::AudienceTarget;
@@ -221,18 +221,8 @@ pub async fn seed_published_author_theme(
         confirmed_fixture_outcome(publication, "publish fixture author theme")?;
     }
 
-    let bindings = [ThemeImageRole::Logo, ThemeImageRole::Header].map(|role| ThemeRoleBinding {
-        theme_id,
-        role,
-        mode: ThemeImageBindingMode::PackagedDefault,
-        package_path: None,
-        media_user_id: None,
-        media_source: None,
-        media_digest: None,
-        media_filename: None,
-        pool_revision: None,
-        shuffle_seed: None,
-    });
+    let bindings = [ThemeImageRole::Logo, ThemeImageRole::Header]
+        .map(|role| ThemeRoleBinding::PackagedDefault { theme_id, role });
     let themes = Arc::clone(&state.themes);
     let selection = state
         .write_scope

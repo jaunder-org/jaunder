@@ -4,7 +4,7 @@
 //! service materializes those exact bytes before making their digest eligible for
 //! public serving, and keeps filesystem cleanup outside short database writes.
 
-use std::{collections::BTreeSet, fmt::Write as _, io, path::PathBuf, sync::Arc};
+use std::{collections::BTreeSet, io, path::PathBuf, sync::Arc};
 
 use common::{
     MutationOutcome,
@@ -549,7 +549,7 @@ impl ThemeAssetManager {
     fn hex(bytes: &[u8]) -> String {
         let mut output = String::with_capacity(bytes.len() * 2);
         for byte in bytes {
-            let _ = write!(output, "{byte:02x}");
+            let _ = std::fmt::Write::write_fmt(&mut output, format_args!("{byte:02x}"));
         }
         output
     }
@@ -577,7 +577,7 @@ impl ThemeAssetManager {
 
 #[cfg(test)]
 mod tests {
-    use std::{fmt::Write as _, fs, sync::Arc};
+    use std::{fs, sync::Arc};
 
     use common::{MutationOutcome, ids::ThemeId, theme::ThemeContentDigest};
     use rstest::*;
@@ -625,7 +625,7 @@ mod tests {
         let digest = Sha256::digest(bytes);
         let mut hex = String::with_capacity(digest.len() * 2);
         for byte in digest {
-            let _ = write!(hex, "{byte:02x}");
+            let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
         }
         hex.parse().expect("SHA-256 is a valid theme digest")
     }

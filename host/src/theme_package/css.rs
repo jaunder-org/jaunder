@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 
 use lightningcss::{
-    properties::{Property, animation::AnimationName, font::FontFamily},
+    properties::{
+        Property, PropertyId, animation::AnimationName, custom::CustomPropertyName,
+        font::FontFamily,
+    },
     rules::{CssRule, font_face::FontFaceProperty, keyframes::KeyframesName},
     selector::{Combinator, Component, Selector, SelectorList},
     stylesheet::{ParserOptions, PrinterOptions, StyleSheet},
@@ -14,8 +17,6 @@ use lightningcss::{
 use sha2::{Digest, Sha256};
 
 use super::{ThemePackageError, ThemePackageLimits};
-
-const SURFACE: &str = r#"[data-jaunder-theme-surface][data-jaunder-style-contract="1"]"#;
 
 /// The deterministic, isolated stylesheet and its raw content digest.
 #[derive(Debug)]
@@ -51,7 +52,12 @@ pub fn compile_stylesheet(
 ) -> Result<CompiledCss, ThemePackageError> {
     let authored_css = std::str::from_utf8(authored_css)
         .map_err(|error| ThemePackageError::Css(format!("stylesheet is not UTF-8: {error}")))?;
-    let stylesheet_source = format!("{SURFACE} {{}}{authored_css}");
+    let stylesheet_source = format!(
+        "[{}][{}=\"{}\"] {{}}{authored_css}",
+        common::theme::STYLE_CONTRACT_SURFACE_ATTRIBUTE,
+        common::theme::STYLE_CONTRACT_VERSION_ATTRIBUTE,
+        common::theme::STYLE_CONTRACT_VERSION_TOKEN,
+    );
     let mut stylesheet = StyleSheet::parse(&stylesheet_source, ParserOptions::default())
         .map_err(|error| ThemePackageError::Css(error.to_string()))?;
     let CssRule::Style(boundary_rule) = stylesheet.rules.0.remove(0) else {
@@ -376,6 +382,16 @@ fn rewrite_animation_names(
     Ok(())
 }
 
+fn is_global_reference_property(property: &PropertyId<'_>) -> bool {
+    matches!(
+        property,
+        PropertyId::FontFamily
+            | PropertyId::Font
+            | PropertyId::AnimationName(_)
+            | PropertyId::Animation(_)
+    )
+}
+
 struct AssetUrlVisitor<'a> {
     asset_urls: &'a BTreeMap<String, String>,
     fonts: &'a BTreeMap<String, String>,
@@ -386,7 +402,7 @@ impl<'i> Visitor<'i> for AssetUrlVisitor<'_> {
     type Error = ThemePackageError;
 
     fn visit_types(&self) -> VisitTypes {
-        visit_types!(URLS | PROPERTIES)
+        visit_types!(URLS | PROPERTIES | TOKENS)
     }
 
     fn visit_url(&mut self, url: &mut Url<'i>) -> Result<(), Self::Error> {
@@ -404,10 +420,13 @@ impl<'i> Visitor<'i> for AssetUrlVisitor<'_> {
 
     fn visit_property(&mut self, property: &mut Property<'i>) -> Result<(), Self::Error> {
         match property {
-            Property::Unparsed(_) | Property::Custom(_) => {
+            Property::Unparsed(unparsed) if is_global_reference_property(&unparsed.property_id) => {
                 return Err(ThemePackageError::Css(
                     "custom-property token streams cannot hide global references".into(),
                 ));
+            }
+            Property::Custom(custom) if !matches!(custom.name, CustomPropertyName::Custom(_)) => {
+                return Err(ThemePackageError::Css("unsupported property".into()));
             }
             Property::FontFamily(families) => rewrite_font_families(families, self.fonts)?,
             Property::Font(font) => rewrite_font_families(&mut font.family, self.fonts)?,
@@ -619,6 +638,42 @@ mod tests {
                 "{css}"
             );
         }
+    }
+
+    #[test]
+    fn accepts_custom_properties_and_rewrites_urls_in_their_token_streams() {
+        let assets = BTreeMap::from([(
+            "assets/logo.webp".to_owned(),
+            "/theme-assets/logo".to_owned(),
+        )]);
+        let compiled = compile(
+            ".a { --theme-gap: 1rem; --theme-logo: url(assets/logo.webp); background-image: var(--theme-logo); padding: var(--theme-gap) }",
+            &assets,
+        )
+        .unwrap();
+        let css = std::str::from_utf8(compiled.bytes()).unwrap();
+        assert!(css.contains("--theme-gap:1rem"), "{css}");
+        assert!(
+            css.contains("--theme-logo:url(/theme-assets/logo)"),
+            "{css}"
+        );
+        assert!(!css.contains("assets/logo.webp"), "{css}");
+    }
+
+    #[test]
+    fn rejects_urls_and_global_references_hidden_by_custom_properties() {
+        assert!(matches!(
+            compile(
+                ".a { --theme-logo: url(https://example.test/logo.webp) }",
+                &BTreeMap::new()
+            ),
+            Err(ThemePackageError::Url(_))
+        ));
+        assert!(compile(
+            "@keyframes pulse { to { opacity: 0 } } .a { --theme-animation: pulse; animation-name: var(--theme-animation) }",
+            &BTreeMap::new(),
+        )
+        .is_err());
     }
     #[test]
     fn rejects_every_external_and_opaque_url_scheme() {

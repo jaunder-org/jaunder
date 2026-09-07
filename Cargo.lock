@@ -1645,6 +1645,7 @@ dependencies = [
  "http",
  "jiff",
  "macros",
+ "mp4parse",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
