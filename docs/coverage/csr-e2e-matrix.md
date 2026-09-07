@@ -206,6 +206,51 @@ measures both tag-route timeline presentations, while
 [`end2end/tests/feeds.spec.ts`](../../end2end/tests/feeds.spec.ts) asserts
 client-side navigation from a tag chip.
 
+## API transport evidence
+
+### Theme management API transport
+
+**Paths and entry points:** no mounted CSR route exists yet; the Task 8 surface
+is the authenticated `/api/themes/` server-function transport.
+
+**Evidence:**
+[`end2end/tests/theme-api.spec.ts`](../../end2end/tests/theme-api.spec.ts)
+`theme API transport preserves author ownership, private responses, imports, mutations, and preview isolation`
+uses a browser context's authenticated `page.request` transport to cover every
+author theme endpoint: create/list/import_css/import_package/import_zip,
+get_draft/get_presentation/get_selection, replace_css/rename/publish/select,
+replace_binding/replace_pool/shuffle, export/remove, and preview. Each confirmed
+mutation is followed by an observable catalog, draft, presentation, or selection
+reread; removal proves selection fallback. It also covers private `no-store`
+responses, preview isolation, owner-only draft assets, anonymous denial, and
+ordered multipart ZIP routing/authentication/validation. There is no mounted CSR
+route yet: this is Playwright API-transport evidence, not CSR UI evidence. The
+endpoint census lives in
+[`docs/flows/theme-management.md`](../flows/theme-management.md).
+
+| Endpoint                       | Evidence disposition |
+| ------------------------------ | -------------------- |
+| `/api/themes/list`             | API transport        |
+| `/api/themes/get_draft`        | API transport        |
+| `/api/themes/get_presentation` | API transport        |
+| `/api/themes/get_selection`    | API transport        |
+| `/api/themes/create`           | API transport        |
+| `/api/themes/import_package`   | API transport        |
+| `/api/themes/import_zip`       | API transport        |
+| `/api/themes/import_css`       | API transport        |
+| `/api/themes/replace_css`      | API transport        |
+| `/api/themes/export`           | API transport        |
+| `/api/themes/rename`           | API transport        |
+| `/api/themes/remove`           | API transport        |
+| `/api/themes/publish`          | API transport        |
+| `/api/themes/select`           | API transport        |
+| `/api/themes/replace_binding`  | API transport        |
+| `/api/themes/replace_pool`     | API transport        |
+| `/api/themes/shuffle`          | API transport        |
+| `/api/themes/preview`          | API transport        |
+
+No row above should be read as evidence of a mounted route or browser UI flow.
+
 ## Maintenance workflow
 
 When a mounted route, stable CSR entry point, or Playwright behavior changes,

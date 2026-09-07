@@ -598,6 +598,7 @@ mod tests {
             manifest: compiled.canonical_manifest().to_vec(),
             stylesheet: b"body { color: black; }".to_vec(),
             source_digest: "a".repeat(64).parse().unwrap(),
+            assets: Vec::new(),
         };
         let themes = Arc::clone(&env.state.themes);
         let theme_id = confirmed(

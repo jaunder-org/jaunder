@@ -115,7 +115,7 @@ fn authed_sidebar(
     let active_key = active_key.to_string();
     let username = username.clone();
     view! {
-        <div class="j-sidebar-content">
+        <div class="j-contents">
             <a class="j-brand" href="/">
                 <div class="j-brand-mark">"j"</div>
                 <div class="j-brand-text">"Jaunder"</div>

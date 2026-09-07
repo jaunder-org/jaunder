@@ -88,6 +88,7 @@
 .j-root {
  display: flex;
  flex-direction: column;
+ position: relative;
  height: 100dvh;
  background: var(--bg);
  color: var(--ink);
@@ -127,15 +128,20 @@
 }
 
 .j-trusted-chrome {
- position: relative;
+ position: absolute;
  z-index: 1;
- display: flex;
+ top: 0;
+ right: 0;
+ display: none;
  flex-wrap: wrap;
+ justify-content: flex-end;
  align-items: center;
  gap: 8px;
+ max-width: 100%;
  padding: 8px 28px;
  background: var(--surface);
  border-bottom: 1px var(--border-style) var(--line);
+ pointer-events: none;
 }
 
 /* ─── layout shell ─── */
@@ -192,6 +198,23 @@
  font-weight: 600;
 }
 
+.j-trusted-chrome:has(.j-warn-banner, .j-post-action-tray) {
+ display: flex;
+}
+
+.j-trusted-chrome:has(.j-warn-banner) {
+ left: 0;
+}
+
+.j-trusted-chrome>* {
+ pointer-events: auto;
+}
+
+.j-trusted-chrome .j-warn-banner {
+ flex: 1 1 100%;
+}
+
+
 .j-topbar {
  padding: 14px 28px;
  border-bottom: 1px var(--border-style) var(--line);
@@ -203,7 +226,7 @@
 }
 
 .j-site-identity {
- display: block;
+ display: none;
  color: var(--muted);
  font-size: var(--fs-meta);
 }
@@ -356,6 +379,14 @@
  min-width: 0;
 }
 
+.j-source .j-dot {
+ width: 8px;
+ height: 8px;
+ border-radius: 4px;
+ flex-shrink: 0;
+}
+
+
 .j-source .j-dot[data-jaunder-protocol="atproto"] {
  background: var(--c-atproto);
 }
@@ -395,6 +426,22 @@
  align-items: center;
  gap: 10px;
 }
+
+.j-sb-foot-body {
+ flex: 1;
+ min-width: 0;
+ font-size: 13px;
+}
+
+.j-sb-foot-name {
+ font-weight: 500;
+}
+
+.j-sign-out {
+ color: var(--muted);
+ font-size: 11px;
+}
+
 
 /* ─── chips / filter bar ─── */
 .j-chip {

@@ -34,6 +34,56 @@ pub struct ThemeCatalogEntry {
     pub name: String,
     pub current_revision: Option<ThemeRevisionDigest>,
 }
+/// Maximum length of a human-visible custom theme catalog name, in Unicode scalar values.
+pub const THEME_CATALOG_NAME_MAX_LENGTH: usize = 100;
+
+/// Why a catalog name cannot be stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ThemeCatalogNameError {
+    #[error("theme name must not be empty")]
+    Empty,
+    #[error("theme name must not exceed {THEME_CATALOG_NAME_MAX_LENGTH} characters")]
+    TooLong,
+    #[error("theme name conflicts with a built-in theme")]
+    Reserved,
+}
+
+/// Trims and validates a display name before it is written to a custom-theme catalog.
+///
+/// Built-in theme names remain reserved case-insensitively so a custom entry cannot
+/// impersonate a fixed selection.
+///
+/// # Errors
+///
+/// Returns [`ThemeCatalogNameError`] when the trimmed name is empty, too long,
+/// or matches a built-in theme label.
+pub fn validate_theme_catalog_name(name: &str) -> Result<String, ThemeCatalogNameError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(ThemeCatalogNameError::Empty);
+    }
+    if name.chars().count() > THEME_CATALOG_NAME_MAX_LENGTH {
+        return Err(ThemeCatalogNameError::TooLong);
+    }
+    if ["terminal", "studio", "reader"]
+        .iter()
+        .any(|reserved| name.eq_ignore_ascii_case(reserved))
+    {
+        return Err(ThemeCatalogNameError::Reserved);
+    }
+    Ok(name.to_owned())
+}
+
+/// One validated package member retained with a mutable theme draft.
+///
+/// Draft reads return assets in canonical lexical path order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThemeDraftAsset {
+    pub path: String,
+    pub mime: String,
+    pub bytes: Vec<u8>,
+    pub digest: ThemeAssetDigest,
+}
 
 /// The single mutable package draft for a Theme ID.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +92,32 @@ pub struct ThemeDraft {
     pub manifest: Vec<u8>,
     pub stylesheet: Vec<u8>,
     pub source_digest: ThemeSourceDigest,
+    pub assets: Vec<ThemeDraftAsset>,
+}
+
+enum DraftAssetColumns {
+    Empty,
+    Asset(ThemeDraftAsset),
+}
+
+fn draft_asset_from_columns(
+    path: Option<String>,
+    mime: Option<String>,
+    bytes: Option<Vec<u8>>,
+    digest: Option<String>,
+) -> Option<DraftAssetColumns> {
+    match (path, mime, bytes, digest) {
+        (Some(path), Some(mime), Some(bytes), Some(digest)) => digest.parse().ok().map(|digest| {
+            DraftAssetColumns::Asset(ThemeDraftAsset {
+                path,
+                mime,
+                bytes,
+                digest,
+            })
+        }),
+        (None, None, None, None) => Some(DraftAssetColumns::Empty),
+        _ => None,
+    }
 }
 
 /// One immutable published theme revision.
@@ -109,6 +185,17 @@ pub struct ThemeOwnerQuota {
     pub logical_bytes: i64,
 }
 
+/// A rejected draft replacement that leaves the persisted draft untouched.
+#[derive(Debug, thiserror::Error)]
+pub enum ReplaceDraftError {
+    #[error("theme draft does not exist in this catalog")]
+    OwnerNotFound,
+    #[error("theme draft replacement exceeds quota")]
+    QuotaExceeded,
+    #[error(transparent)]
+    Storage(#[from] sqlx::Error),
+}
+
 /// Counters used by the site-wide admission lock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ThemeSiteQuota {
@@ -124,6 +211,24 @@ pub struct ThemeQuotaLimits {
     pub logical_bytes: i64,
     pub site_retained_revisions: i64,
     pub site_physical_bytes: i64,
+}
+/// Conservative production ceiling for all mutable and published theme content.
+///
+/// Composition roots may inject a stricter policy, but public endpoints must
+/// never turn quota accounting into an unbounded allocation policy.
+pub const PRODUCTION_THEME_QUOTA_LIMITS: ThemeQuotaLimits = ThemeQuotaLimits {
+    active_themes: 64,
+    retained_revisions: 256,
+    logical_bytes: 512 * 1024 * 1024,
+    site_retained_revisions: 4_096,
+    site_physical_bytes: 8 * 1024 * 1024 * 1024,
+};
+
+impl ThemeQuotaLimits {
+    #[must_use]
+    pub const fn production() -> Self {
+        PRODUCTION_THEME_QUOTA_LIMITS
+    }
 }
 
 /// A retained content identity and its durable owner/site byte charge.
@@ -166,12 +271,14 @@ pub trait ThemeStorage: Send + Sync {
         owner: ThemeOwner,
         theme_id: ThemeId,
     ) -> Result<Option<ThemeDraft>, sqlx::Error>;
+    /// Replaces a draft only after atomically admitting its new byte delta.
     async fn replace_draft(
         &self,
         transaction: &mut WriteTransaction,
         owner: ThemeOwner,
         draft: &ThemeDraft,
-    ) -> Result<(), sqlx::Error>;
+        limits: ThemeQuotaLimits,
+    ) -> Result<(), ReplaceDraftError>;
     async fn rename_theme(
         &self,
         transaction: &mut WriteTransaction,
@@ -335,14 +442,27 @@ macro_rules! impl_theme_storage {
         #[async_trait]
         impl ThemeStorage for ThemeStore<$db> {
             async fn create_theme(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, name: &str, draft: &ThemeDraft, limits: ThemeQuotaLimits) -> Result<ThemeId, sqlx::Error> {
-                self.admit_theme(transaction, owner, limits).await?;
-                let catalog_owner_key = catalog_owner_key(owner);
-                let name_key = canonical_theme_name_key(name);
+                let name = validate_theme_catalog_name(name)
+                    .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
                 let connection = $conn(transaction)?;
-                let (id,): (i64,) = sqlx::query_as("INSERT INTO themes (catalog_owner_key, name, name_key, current_revision_digest) VALUES ($1, $2, $3, NULL) RETURNING id")
-                    .bind(catalog_owner_key).bind(name).bind(name_key).fetch_one(&mut *connection).await?;
-                sqlx::query("INSERT INTO theme_drafts (theme_id, manifest, stylesheet, source_digest) VALUES ($1, $2, $3, $4)")
-                    .bind(id).bind(&draft.manifest).bind(&draft.stylesheet).bind(draft.source_digest.as_ref()).execute(&mut *connection).await?;
+                let owner_key = catalog_owner_key(owner);
+                let bytes = draft_storage_bytes(draft)?;
+                // A site lock serializes byte admission across both backends before
+                // either mutable-draft or published-content counters change.
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
+                let site: (i64,) = sqlx::query_as("SELECT physical_bytes FROM theme_site_quota WHERE singleton = 1").fetch_one(&mut *connection).await?;
+                let owner_quota: Option<(i64, i64)> = sqlx::query_as("SELECT active_themes, logical_bytes FROM theme_owner_quotas WHERE catalog_owner_key = $1").bind(&owner_key).fetch_optional(&mut *connection).await?;
+                let (active, logical) = owner_quota.unwrap_or((0, 0));
+                let source: Option<(i64,)> = sqlx::query_as("SELECT live_references FROM theme_draft_content_charges WHERE source_digest = $1").bind(draft.source_digest.as_ref()).fetch_optional(&mut *connection).await?;
+                if active >= limits.active_themes || logical > limits.logical_bytes - bytes || (source.is_none() && site.0 > limits.site_physical_bytes - bytes) { return Err(sqlx::Error::RowNotFound); }
+                if source.is_none() { sqlx::query("UPDATE theme_site_quota SET physical_bytes = physical_bytes + $1 WHERE singleton = 1").bind(bytes).execute(&mut *connection).await?; }
+                sqlx::query("INSERT INTO theme_owner_quotas (catalog_owner_key, active_themes, logical_bytes) VALUES ($1, 1, $2) ON CONFLICT (catalog_owner_key) DO UPDATE SET active_themes = theme_owner_quotas.active_themes + 1, logical_bytes = theme_owner_quotas.logical_bytes + $2").bind(&owner_key).bind(bytes).execute(&mut *connection).await?;
+                sqlx::query("INSERT INTO theme_draft_content_charges (source_digest, physical_bytes, live_references) VALUES ($1, $2, 1) ON CONFLICT (source_digest) DO UPDATE SET live_references = theme_draft_content_charges.live_references + 1").bind(draft.source_digest.as_ref()).bind(bytes).execute(&mut *connection).await?;
+                let name_key = canonical_theme_name_key(&name);
+                let (id,): (i64,) = sqlx::query_as("INSERT INTO themes (catalog_owner_key, name, name_key, current_revision_digest) VALUES ($1, $2, $3, NULL) RETURNING id").bind(&owner_key).bind(&name).bind(name_key).fetch_one(&mut *connection).await?;
+                sqlx::query("INSERT INTO theme_drafts (theme_id, manifest, stylesheet, source_digest) VALUES ($1, $2, $3, $4)").bind(id).bind(&draft.manifest).bind(&draft.stylesheet).bind(draft.source_digest.as_ref()).execute(&mut *connection).await?;
+                sqlx::query("INSERT INTO theme_draft_charges (theme_id, source_digest, logical_bytes, physical_bytes) VALUES ($1, $2, $3, $3)").bind(id).bind(draft.source_digest.as_ref()).bind(bytes).execute(&mut *connection).await?;
+                for asset in &draft.assets { sqlx::query("INSERT INTO theme_draft_assets (theme_id, path, mime, bytes, digest) VALUES ($1, $2, $3, $4, $5)").bind(id).bind(&asset.path).bind(&asset.mime).bind(&asset.bytes).bind(asset.digest.as_ref()).execute(&mut *connection).await?; }
                 Ok(ThemeId::from(id))
             }
             async fn list_themes(&self, owner: ThemeOwner) -> Result<Vec<ThemeCatalogEntry>, sqlx::Error> {
@@ -351,25 +471,68 @@ macro_rules! impl_theme_storage {
                 Ok(rows.into_iter().filter_map(|(id, name, digest)| Some(ThemeCatalogEntry { id: ThemeId::from(id), owner, name, current_revision: digest.and_then(|value| value.parse().ok()) })).collect())
             }
             async fn get_draft(&self, owner: ThemeOwner, theme_id: ThemeId) -> Result<Option<ThemeDraft>, sqlx::Error> {
-                let row: Option<(i64, Vec<u8>, Vec<u8>, String)> = sqlx::query_as("SELECT d.theme_id, d.manifest, d.stylesheet, d.source_digest FROM theme_drafts d JOIN themes t ON t.id = d.theme_id WHERE d.theme_id = $1 AND t.catalog_owner_key = $2")
-                    .bind(i64::from(theme_id)).bind(catalog_owner_key(owner)).fetch_optional(&self.pool).await?;
-                Ok(row.and_then(|(id, manifest, stylesheet, source_digest)| source_digest.parse().ok().map(|source_digest| ThemeDraft { theme_id: ThemeId::from(id), manifest, stylesheet, source_digest })))
+                let rows: Vec<(i64, Vec<u8>, Vec<u8>, String, Option<String>, Option<String>, Option<Vec<u8>>, Option<String>)> = sqlx::query_as("SELECT d.theme_id, d.manifest, d.stylesheet, d.source_digest, asset.path, asset.mime, asset.bytes, asset.digest FROM theme_drafts d JOIN themes t ON t.id = d.theme_id LEFT JOIN theme_draft_assets asset ON asset.theme_id = d.theme_id WHERE d.theme_id = $1 AND t.catalog_owner_key = $2 ORDER BY asset.path")
+                    .bind(i64::from(theme_id)).bind(catalog_owner_key(owner)).fetch_all(&self.pool).await?;
+                let mut rows = rows.into_iter();
+                let Some((id, manifest, stylesheet, source_digest, path, mime, bytes, digest)) = rows.next() else {
+                    return Ok(None);
+                };
+                let Ok(source_digest) = source_digest.parse() else {
+                    return Ok(None);
+                };
+                let mut assets = Vec::new();
+                let Some(asset) = draft_asset_from_columns(path, mime, bytes, digest) else {
+                    return Ok(None);
+                };
+                if let DraftAssetColumns::Asset(asset) = asset {
+                    assets.push(asset);
+                }
+                for (_, _, _, _, path, mime, bytes, digest) in rows {
+                    let Some(asset) = draft_asset_from_columns(path, mime, bytes, digest) else {
+                        return Ok(None);
+                    };
+                    let DraftAssetColumns::Asset(asset) = asset else {
+                        return Ok(None);
+                    };
+                    assets.push(asset);
+                }
+                assets.sort_by(|left, right| left.path.cmp(&right.path));
+                Ok(Some(ThemeDraft { theme_id: ThemeId::from(id), manifest, stylesheet, source_digest, assets }))
             }
-            async fn replace_draft(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, draft: &ThemeDraft) -> Result<(), sqlx::Error> {
+            async fn replace_draft(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, draft: &ThemeDraft, limits: ThemeQuotaLimits) -> Result<(), ReplaceDraftError> {
                 let connection = $conn(transaction)?;
-                let result = sqlx::query(
-                    "UPDATE theme_drafts SET manifest = $1, stylesheet = $2, source_digest = $3 WHERE theme_id = $4 AND EXISTS (SELECT 1 FROM themes WHERE id = $4 AND catalog_owner_key = $5)",
-                )
-                .bind(&draft.manifest).bind(&draft.stylesheet).bind(draft.source_digest.as_ref())
-                .bind(i64::from(draft.theme_id)).bind(catalog_owner_key(owner))
-                .execute(&mut *connection).await?;
-                if result.rows_affected() == 0 { return Err(sqlx::Error::RowNotFound); }
+                let owner_key = catalog_owner_key(owner);
+                let new_bytes = draft_storage_bytes(draft)?;
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
+                sqlx::query("UPDATE theme_owner_quotas SET retained_revisions = retained_revisions WHERE catalog_owner_key = $1").bind(&owner_key).execute(&mut *connection).await?;
+                let old: Option<(String, i64)> = sqlx::query_as("SELECT charge.source_digest, charge.logical_bytes FROM theme_draft_charges charge JOIN themes theme ON theme.id = charge.theme_id WHERE charge.theme_id = $1 AND theme.catalog_owner_key = $2").bind(i64::from(draft.theme_id)).bind(&owner_key).fetch_optional(&mut *connection).await?;
+                let Some((old_digest, old_bytes)) = old else { return Err(ReplaceDraftError::OwnerNotFound); };
+                let (logical,): (i64,) = sqlx::query_as("SELECT logical_bytes FROM theme_owner_quotas WHERE catalog_owner_key = $1").bind(&owner_key).fetch_one(&mut *connection).await?;
+                let (site_bytes,): (i64,) = sqlx::query_as("SELECT physical_bytes FROM theme_site_quota WHERE singleton = 1").fetch_one(&mut *connection).await?;
+                let old_refs: (i64,) = sqlx::query_as("SELECT live_references FROM theme_draft_content_charges WHERE source_digest = $1").bind(&old_digest).fetch_one(&mut *connection).await?;
+                let new_refs: Option<(i64,)> = if old_digest == draft.source_digest.as_ref() { Some(old_refs) } else { sqlx::query_as("SELECT live_references FROM theme_draft_content_charges WHERE source_digest = $1").bind(draft.source_digest.as_ref()).fetch_optional(&mut *connection).await? };
+                let logical_after = logical.checked_sub(old_bytes).and_then(|value| value.checked_add(new_bytes)).ok_or(ReplaceDraftError::QuotaExceeded)?;
+                let physical_after = site_bytes.checked_sub(if old_digest != draft.source_digest.as_ref() && old_refs.0 == 1 { old_bytes } else { 0 }).and_then(|value| value.checked_add(if old_digest != draft.source_digest.as_ref() && new_refs.is_none() { new_bytes } else { 0 })).ok_or(ReplaceDraftError::QuotaExceeded)?;
+                if logical_after > limits.logical_bytes || physical_after > limits.site_physical_bytes { return Err(ReplaceDraftError::QuotaExceeded); }
+                sqlx::query("UPDATE theme_owner_quotas SET logical_bytes = $1 WHERE catalog_owner_key = $2").bind(logical_after).bind(&owner_key).execute(&mut *connection).await?;
+                sqlx::query("UPDATE theme_site_quota SET physical_bytes = $1 WHERE singleton = 1").bind(physical_after).execute(&mut *connection).await?;
+                if old_digest != draft.source_digest.as_ref() {
+                    if old_refs.0 == 1 { sqlx::query("DELETE FROM theme_draft_content_charges WHERE source_digest = $1").bind(&old_digest).execute(&mut *connection).await?; } else { sqlx::query("UPDATE theme_draft_content_charges SET live_references = live_references - 1 WHERE source_digest = $1 AND live_references > 1").bind(&old_digest).execute(&mut *connection).await?; }
+                    sqlx::query("INSERT INTO theme_draft_content_charges (source_digest, physical_bytes, live_references) VALUES ($1, $2, 1) ON CONFLICT (source_digest) DO UPDATE SET live_references = theme_draft_content_charges.live_references + 1").bind(draft.source_digest.as_ref()).bind(new_bytes).execute(&mut *connection).await?;
+                }
+                let result = sqlx::query("UPDATE theme_drafts SET manifest = $1, stylesheet = $2, source_digest = $3 WHERE theme_id = $4").bind(&draft.manifest).bind(&draft.stylesheet).bind(draft.source_digest.as_ref()).bind(i64::from(draft.theme_id)).execute(&mut *connection).await?;
+                if result.rows_affected() != 1 { return Err(ReplaceDraftError::OwnerNotFound); }
+                sqlx::query("UPDATE theme_draft_charges SET source_digest = $1, logical_bytes = $2, physical_bytes = $2 WHERE theme_id = $3").bind(draft.source_digest.as_ref()).bind(new_bytes).bind(i64::from(draft.theme_id)).execute(&mut *connection).await?;
+                sqlx::query("DELETE FROM theme_draft_assets WHERE theme_id = $1").bind(i64::from(draft.theme_id)).execute(&mut *connection).await?;
+                for asset in &draft.assets { sqlx::query("INSERT INTO theme_draft_assets (theme_id, path, mime, bytes, digest) VALUES ($1, $2, $3, $4, $5)").bind(i64::from(draft.theme_id)).bind(&asset.path).bind(&asset.mime).bind(&asset.bytes).bind(asset.digest.as_ref()).execute(&mut *connection).await?; }
                 Ok(())
             }
             async fn rename_theme(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, theme_id: ThemeId, name: &str) -> Result<(), sqlx::Error> {
-                let name_key = canonical_theme_name_key(name);
+                let name = validate_theme_catalog_name(name)
+                    .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+                let name_key = canonical_theme_name_key(&name);
                 let connection = $conn(transaction)?;
-                let result = sqlx::query("UPDATE themes SET name = $1, name_key = $2 WHERE id = $3 AND catalog_owner_key = $4").bind(name).bind(name_key).bind(i64::from(theme_id)).bind(catalog_owner_key(owner)).execute(&mut *connection).await?;
+                let result = sqlx::query("UPDATE themes SET name = $1, name_key = $2 WHERE id = $3 AND catalog_owner_key = $4").bind(&name).bind(name_key).bind(i64::from(theme_id)).bind(catalog_owner_key(owner)).execute(&mut *connection).await?;
                 if result.rows_affected() == 0 { return Err(sqlx::Error::RowNotFound); }
                 Ok(())
             }
@@ -448,8 +611,21 @@ macro_rules! impl_theme_storage {
                 sqlx::query("UPDATE theme_owner_quotas SET retained_revisions = retained_revisions WHERE catalog_owner_key = $1").bind(&owner_key).execute(&mut *connection).await?;
                 let owned: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM themes WHERE id = $1 AND catalog_owner_key = $2)").bind(i64::from(theme_id)).bind(&owner_key).fetch_one(&mut *connection).await?;
                 if !owned.0 { return Err(sqlx::Error::RowNotFound); }
+                let draft_charge: (String, i64) = sqlx::query_as("SELECT source_digest, logical_bytes FROM theme_draft_charges WHERE theme_id = $1").bind(i64::from(theme_id)).fetch_one(&mut *connection).await?;
+                let draft_refs: (i64,) = sqlx::query_as("SELECT live_references FROM theme_draft_content_charges WHERE source_digest = $1").bind(&draft_charge.0).fetch_one(&mut *connection).await?;
+                let owner_bytes: (i64,) = sqlx::query_as("SELECT logical_bytes FROM theme_owner_quotas WHERE catalog_owner_key = $1").bind(&owner_key).fetch_one(&mut *connection).await?;
+                if owner_bytes.0 < draft_charge.1 { return Err(sqlx::Error::RowNotFound); }
+                sqlx::query("UPDATE theme_owner_quotas SET logical_bytes = logical_bytes - $1 WHERE catalog_owner_key = $2").bind(draft_charge.1).bind(&owner_key).execute(&mut *connection).await?;
+                if draft_refs.0 == 1 {
+                    let site_bytes: (i64,) = sqlx::query_as("SELECT physical_bytes FROM theme_site_quota WHERE singleton = 1").fetch_one(&mut *connection).await?;
+                    if site_bytes.0 < draft_charge.1 { return Err(sqlx::Error::RowNotFound); }
+                    sqlx::query("UPDATE theme_site_quota SET physical_bytes = physical_bytes - $1 WHERE singleton = 1").bind(draft_charge.1).execute(&mut *connection).await?;
+                    sqlx::query("DELETE FROM theme_draft_content_charges WHERE source_digest = $1 AND live_references = 1").bind(&draft_charge.0).execute(&mut *connection).await?;
+                } else {
+                    sqlx::query("UPDATE theme_draft_content_charges SET live_references = live_references - 1 WHERE source_digest = $1 AND live_references > 1").bind(&draft_charge.0).execute(&mut *connection).await?;
+                }
                 let (revision_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM theme_revisions WHERE theme_id = $1").bind(i64::from(theme_id)).fetch_one(&mut *connection).await?;
-                let charges: Vec<(String, i64)> = sqlx::query_as("SELECT content_digest, COUNT(*) FROM (SELECT revision.digest AS revision_digest, revision.stylesheet_digest AS content_digest FROM theme_revisions revision WHERE revision.theme_id = $1 UNION SELECT asset.revision_digest, asset.digest AS content_digest FROM theme_revision_assets asset WHERE asset.theme_id = $1) content GROUP BY content_digest ORDER BY content_digest").bind(i64::from(theme_id)).fetch_all(&mut *connection).await?;
+                let charges: Vec<(String, i64)> = sqlx::query_as("SELECT content_digest, COUNT(*) FROM (SELECT revision.digest AS revision_digest, revision.stylesheet_digest AS content_digest FROM theme_revisions revision WHERE revision.theme_id = $1 UNION ALL SELECT asset.revision_digest, asset.digest AS content_digest FROM theme_revision_assets asset WHERE asset.theme_id = $1) content GROUP BY content_digest ORDER BY content_digest").bind(i64::from(theme_id)).fetch_all(&mut *connection).await?;
                 for (digest, _) in &charges {
                     sqlx::query("UPDATE theme_content_eligibility SET digest = digest WHERE digest = $1").bind(digest).execute(&mut *connection).await?;
                     sqlx::query("UPDATE theme_retained_content_charges SET live_references = live_references WHERE catalog_owner_key = $1 AND digest = $2").bind(&owner_key).bind(digest).execute(&mut *connection).await?;
@@ -481,7 +657,7 @@ macro_rules! impl_theme_storage {
                     .bind(i64::from(binding.theme_id)).bind(catalog_owner_key(owner)).fetch_one(&mut *connection).await?;
                 if !owned.0 { return Err(sqlx::Error::RowNotFound); }
                 if binding.mode == ThemeImageBindingMode::PackageAsset {
-                    let valid: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM theme_revision_assets asset JOIN themes theme ON theme.id = asset.theme_id AND theme.current_revision_digest = asset.revision_digest WHERE asset.theme_id = $1 AND asset.path = $2)")
+                    let valid: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM theme_draft_assets WHERE theme_id = $1 AND path = $2 AND mime LIKE 'image/%')")
                         .bind(i64::from(binding.theme_id))
                         .bind(binding.package_path.as_deref())
                         .fetch_one(&mut *connection)
@@ -553,7 +729,7 @@ macro_rules! impl_theme_storage {
                         return Err(sqlx::Error::RowNotFound);
                     }
                     let valid: (bool,) = match (&entry.package_path, entry.media_user_id, &entry.media_source, &entry.media_digest, &entry.media_filename) {
-                        (Some(path), None, None, None, None) => sqlx::query_as("SELECT EXISTS (SELECT 1 FROM theme_revision_assets asset JOIN themes theme ON theme.id = asset.theme_id AND theme.current_revision_digest = asset.revision_digest WHERE asset.theme_id = $1 AND asset.path = $2)").bind(i64::from(theme_id)).bind(path).fetch_one(&mut *connection).await?,
+                        (Some(path), None, None, None, None) => sqlx::query_as("SELECT EXISTS (SELECT 1 FROM theme_draft_assets WHERE theme_id = $1 AND path = $2 AND mime LIKE 'image/%')").bind(i64::from(theme_id)).bind(path).fetch_one(&mut *connection).await?,
                         (None, Some(user_id), Some(source), Some(digest), Some(filename)) => sqlx::query_as("SELECT EXISTS (SELECT 1 FROM media WHERE user_id = $1 AND source = $2 AND sha256 = $3 AND filename = $4)").bind(i64::from(user_id)).bind(source).bind(digest.as_ref()).bind(filename).fetch_one(&mut *connection).await?,
                         _ => return Err(sqlx::Error::RowNotFound),
                     };
@@ -807,6 +983,25 @@ fn parse_binding_mode(value: &str) -> Option<ThemeImageBindingMode> {
     }
 }
 
+fn draft_storage_bytes(draft: &ThemeDraft) -> Result<i64, sqlx::Error> {
+    draft
+        .assets
+        .iter()
+        .try_fold(
+            draft
+                .manifest
+                .len()
+                .checked_add(draft.stylesheet.len())
+                .ok_or(sqlx::Error::RowNotFound)?,
+            |total, asset| {
+                total
+                    .checked_add(asset.bytes.len())
+                    .ok_or(sqlx::Error::RowNotFound)
+            },
+        )
+        .and_then(|total| i64::try_from(total).map_err(|_| sqlx::Error::RowNotFound))
+}
+
 fn catalog_owner_key(owner: ThemeOwner) -> String {
     match owner {
         ThemeOwner::Site => "site".to_owned(),
@@ -835,13 +1030,23 @@ mod tests {
 
     use common::{
         ids::{ThemeId, UserId},
-        theme::{PublicThemeSelection, Theme, ThemeImageRole},
+        theme::{PublicThemeSelection, Theme, ThemeImageBindingMode, ThemeImageRole},
     };
     use rstest::*;
     use rstest_reuse::*;
 
     use super::*;
     use crate::test_support::{Backend, backends, confirmed};
+
+    fn draft_limits() -> ThemeQuotaLimits {
+        ThemeQuotaLimits {
+            active_themes: 2,
+            retained_revisions: 2,
+            logical_bytes: 1_024,
+            site_retained_revisions: 2,
+            site_physical_bytes: 1_024,
+        }
+    }
 
     #[apply(backends)]
     #[tokio::test]
@@ -855,6 +1060,20 @@ mod tests {
             manifest: b"{}".to_vec(),
             stylesheet: b"body{}".to_vec(),
             source_digest: "a".repeat(64).parse().unwrap(),
+            assets: vec![
+                ThemeDraftAsset {
+                    path: "assets/logo.svg".to_owned(),
+                    mime: "image/svg+xml".to_owned(),
+                    bytes: b"<svg/>".to_vec(),
+                    digest: "b".repeat(64).parse().unwrap(),
+                },
+                ThemeDraftAsset {
+                    path: "assets/header.webp".to_owned(),
+                    mime: "image/webp".to_owned(),
+                    bytes: vec![1, 2, 3],
+                    digest: "c".repeat(64).parse().unwrap(),
+                },
+            ],
         };
         let created = confirmed(
             env.state
@@ -870,9 +1089,9 @@ mod tests {
                                 ThemeQuotaLimits {
                                     active_themes: 1,
                                     retained_revisions: 2,
-                                    logical_bytes: 3,
+                                    logical_bytes: 64,
                                     site_retained_revisions: 2,
-                                    site_physical_bytes: 3,
+                                    site_physical_bytes: 64,
                                 },
                             )
                             .await
@@ -889,6 +1108,75 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+        assert_eq!(
+            env.state
+                .themes
+                .get_draft(ThemeOwner::Site, created)
+                .await
+                .unwrap()
+                .unwrap()
+                .assets,
+            vec![
+                ThemeDraftAsset {
+                    path: "assets/header.webp".to_owned(),
+                    mime: "image/webp".to_owned(),
+                    bytes: vec![1, 2, 3],
+                    digest: "c".repeat(64).parse().unwrap(),
+                },
+                ThemeDraftAsset {
+                    path: "assets/logo.svg".to_owned(),
+                    mime: "image/svg+xml".to_owned(),
+                    bytes: b"<svg/>".to_vec(),
+                    digest: "b".repeat(64).parse().unwrap(),
+                },
+            ]
+        );
+        let replacement = ThemeDraft {
+            theme_id: created,
+            manifest: b"{\"replacement\":true}".to_vec(),
+            stylesheet: b"main{}".to_vec(),
+            source_digest: "d".repeat(64).parse().unwrap(),
+            assets: vec![ThemeDraftAsset {
+                path: "assets/replacement.png".to_owned(),
+                mime: "image/png".to_owned(),
+                bytes: vec![4, 5, 6],
+                digest: "e".repeat(64).parse().unwrap(),
+            }],
+        };
+        let expected_replacement = replacement.clone();
+        let themes = Arc::clone(&env.state.themes);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .replace_draft(
+                                transaction,
+                                ThemeOwner::Site,
+                                &replacement,
+                                ThemeQuotaLimits {
+                                    active_themes: 1,
+                                    retained_revisions: 2,
+                                    logical_bytes: 64,
+                                    site_retained_revisions: 2,
+                                    site_physical_bytes: 64,
+                                },
+                            )
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            env.state
+                .themes
+                .get_draft(ThemeOwner::Site, created)
+                .await
+                .unwrap(),
+            Some(expected_replacement)
         );
 
         let themes = Arc::clone(&env.state.themes);
@@ -939,7 +1227,7 @@ mod tests {
             theme_id: created,
             role: ThemeImageRole::Logo,
             mode: ThemeImageBindingMode::PackageAsset,
-            package_path: Some("assets/logo.webp".into()),
+            package_path: Some("assets/replacement.png".into()),
             media_user_id: None,
             media_source: None,
             media_digest: None,
@@ -969,13 +1257,13 @@ mod tests {
                 .unwrap()
                 .package_path
                 .as_deref(),
-            Some("assets/logo.webp")
+            Some("assets/replacement.png")
         );
 
         let themes = Arc::clone(&env.state.themes);
         let pool = vec![ThemeHeaderPoolEntry {
             ordinal: 0,
-            package_path: Some("assets/header.webp".into()),
+            package_path: Some("assets/replacement.png".into()),
             media_user_id: None,
             media_source: None,
             media_digest: None,
@@ -1036,7 +1324,730 @@ mod tests {
             Some(ThemeOwnerQuota {
                 active_themes: 1,
                 retained_revisions: 0,
-                logical_bytes: 0,
+                logical_bytes: 29,
+            })
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn draft_bytes_admit_replace_and_release_atomically(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let limits = ThemeQuotaLimits {
+            active_themes: 2,
+            retained_revisions: 1,
+            logical_bytes: 4,
+            site_retained_revisions: 1,
+            site_physical_bytes: 4,
+        };
+        let draft = |id, digest: char, size| ThemeDraft {
+            theme_id: ThemeId::from(id),
+            manifest: vec![b'x'; size],
+            stylesheet: Vec::new(),
+            source_digest: digest.to_string().repeat(64).parse().unwrap(),
+            assets: Vec::new(),
+        };
+
+        let rejected = draft(0, 'a', 5);
+        let themes = Arc::clone(&env.state.themes);
+        assert!(
+            env.state
+                .write_scope
+                .run(move |transaction| Box::pin(async move {
+                    themes
+                        .create_theme(transaction, ThemeOwner::Site, "Rejected", &rejected, limits)
+                        .await
+                }))
+                .await
+                .is_err()
+        );
+        assert!(
+            env.state
+                .themes
+                .list_themes(ThemeOwner::Site)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let initial = draft(0, 'b', 4);
+        let themes = Arc::clone(&env.state.themes);
+        let id = confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .create_theme(transaction, ThemeOwner::Site, "Draft", &initial, limits)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            env.state
+                .themes
+                .owner_quota(ThemeOwner::Site)
+                .await
+                .unwrap()
+                .unwrap()
+                .logical_bytes,
+            4
+        );
+        assert_eq!(
+            env.state.themes.site_quota().await.unwrap().physical_bytes,
+            4
+        );
+
+        let growth = draft(id.into(), 'c', 5);
+        let expected = env
+            .state
+            .themes
+            .get_draft(ThemeOwner::Site, id)
+            .await
+            .unwrap()
+            .unwrap();
+        let themes = Arc::clone(&env.state.themes);
+        let error = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    themes
+                        .replace_draft(transaction, ThemeOwner::Site, &growth, limits)
+                        .await
+                })
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::WriteScopeError::Operation(ReplaceDraftError::QuotaExceeded)
+        ));
+        assert_eq!(
+            env.state
+                .themes
+                .get_draft(ThemeOwner::Site, id)
+                .await
+                .unwrap()
+                .unwrap(),
+            expected
+        );
+        let missing = draft(999, 'e', 2);
+        let themes = Arc::clone(&env.state.themes);
+        let error = env
+            .state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    themes
+                        .replace_draft(transaction, ThemeOwner::Site, &missing, limits)
+                        .await
+                })
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::WriteScopeError::Operation(ReplaceDraftError::OwnerNotFound)
+        ));
+
+        let shrink = draft(id.into(), 'd', 2);
+        let themes = Arc::clone(&env.state.themes);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .replace_draft(transaction, ThemeOwner::Site, &shrink, limits)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            env.state
+                .themes
+                .owner_quota(ThemeOwner::Site)
+                .await
+                .unwrap()
+                .unwrap()
+                .logical_bytes,
+            2
+        );
+        assert_eq!(
+            env.state.themes.site_quota().await.unwrap().physical_bytes,
+            2
+        );
+
+        let exact = draft(0, 'e', 2);
+        let themes = Arc::clone(&env.state.themes);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .create_theme(transaction, ThemeOwner::Site, "Exact", &exact, limits)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            env.state.themes.site_quota().await.unwrap().physical_bytes,
+            4
+        );
+
+        let themes = Arc::clone(&env.state.themes);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .remove_theme(transaction, ThemeOwner::Site, id, 0)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            env.state
+                .themes
+                .owner_quota(ThemeOwner::Site)
+                .await
+                .unwrap()
+                .unwrap()
+                .logical_bytes,
+            2
+        );
+        assert_eq!(
+            env.state.themes.site_quota().await.unwrap().physical_bytes,
+            2
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn catalog_names_are_trimmed_and_reject_empty_and_fixed_roles(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let limits = ThemeQuotaLimits {
+            active_themes: 2,
+            retained_revisions: 2,
+            logical_bytes: 1_024,
+            site_retained_revisions: 2,
+            site_physical_bytes: 1_024,
+        };
+        let draft = ThemeDraft {
+            theme_id: ThemeId::from(0),
+            manifest: b"{}".to_vec(),
+            stylesheet: Vec::new(),
+            source_digest: "a".repeat(64).parse().unwrap(),
+            assets: Vec::new(),
+        };
+
+        for name in ["  ", "tErMiNaL", "STUDIO", "reader"] {
+            let themes = Arc::clone(&env.state.themes);
+            let draft = draft.clone();
+            assert!(
+                env.state
+                    .write_scope
+                    .run(move |transaction| Box::pin(async move {
+                        themes
+                            .create_theme(transaction, ThemeOwner::Site, name, &draft, limits)
+                            .await
+                    }))
+                    .await
+                    .is_err()
+            );
+        }
+        let themes = Arc::clone(&env.state.themes);
+        let created = confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .create_theme(
+                                transaction,
+                                ThemeOwner::Site,
+                                "  Parchment  ",
+                                &draft,
+                                limits,
+                            )
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            env.state
+                .themes
+                .list_themes(ThemeOwner::Site)
+                .await
+                .unwrap()[0]
+                .name,
+            "Parchment"
+        );
+
+        let themes = Arc::clone(&env.state.themes);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .rename_theme(transaction, ThemeOwner::Site, created, "  Canvas  ")
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        for name in ["", "  TeRmInAl  ", "studio", "READER"] {
+            let themes = Arc::clone(&env.state.themes);
+            assert!(
+                env.state
+                    .write_scope
+                    .run(move |transaction| Box::pin(async move {
+                        themes
+                            .rename_theme(transaction, ThemeOwner::Site, created, name)
+                            .await
+                    }))
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            env.state
+                .themes
+                .list_themes(ThemeOwner::Site)
+                .await
+                .unwrap()[0]
+                .name,
+            "Canvas"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn fixed_roles_and_header_pools_reject_package_fonts(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let limits = ThemeQuotaLimits {
+            active_themes: 1,
+            retained_revisions: 1,
+            logical_bytes: 1_024,
+            site_retained_revisions: 1,
+            site_physical_bytes: 1_024,
+        };
+        let draft = ThemeDraft {
+            theme_id: ThemeId::from(0),
+            manifest: b"{}".to_vec(),
+            stylesheet: Vec::new(),
+            source_digest: "a".repeat(64).parse().unwrap(),
+            assets: vec![ThemeDraftAsset {
+                path: "assets/type.woff2".to_owned(),
+                mime: "font/woff2".to_owned(),
+                bytes: vec![1, 2, 3],
+                digest: "b".repeat(64).parse().unwrap(),
+            }],
+        };
+        let themes = Arc::clone(&env.state.themes);
+        let theme_id = confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .create_theme(
+                                transaction,
+                                ThemeOwner::Site,
+                                "Font package",
+                                &draft,
+                                limits,
+                            )
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+
+        let binding = ThemeRoleBinding {
+            theme_id,
+            role: ThemeImageRole::Logo,
+            mode: ThemeImageBindingMode::PackageAsset,
+            package_path: Some("assets/type.woff2".to_owned()),
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+            pool_revision: None,
+            shuffle_seed: None,
+        };
+        let themes = Arc::clone(&env.state.themes);
+        assert!(
+            env.state
+                .write_scope
+                .run(move |transaction| Box::pin(async move {
+                    themes
+                        .replace_role_binding(transaction, ThemeOwner::Site, &binding)
+                        .await
+                }))
+                .await
+                .is_err()
+        );
+
+        let pool = vec![ThemeHeaderPoolEntry {
+            ordinal: 0,
+            package_path: Some("assets/type.woff2".to_owned()),
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+        }];
+        let themes = Arc::clone(&env.state.themes);
+        assert!(
+            env.state
+                .write_scope
+                .run(move |transaction| Box::pin(async move {
+                    themes
+                        .replace_header_pool(transaction, ThemeOwner::Site, theme_id, &pool)
+                        .await
+                }))
+                .await
+                .is_err()
+        );
+        assert!(
+            env.state
+                .themes
+                .role_binding(ThemeOwner::Site, theme_id, ThemeImageRole::Logo)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            env.state
+                .themes
+                .header_pool(ThemeOwner::Site, theme_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn draft_assets_round_trip_in_canonical_path_order(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let draft = ThemeDraft {
+            theme_id: ThemeId::from(0),
+            manifest: br#"{"name":"ordered"}"#.to_vec(),
+            stylesheet: b"body { color: black; }".to_vec(),
+            source_digest: "a".repeat(64).parse().unwrap(),
+            assets: vec![
+                ThemeDraftAsset {
+                    path: "images/zebra.svg".to_owned(),
+                    mime: "image/svg+xml".to_owned(),
+                    bytes: b"<svg>zebra</svg>".to_vec(),
+                    digest: "b".repeat(64).parse().unwrap(),
+                },
+                ThemeDraftAsset {
+                    path: "images/apple.webp".to_owned(),
+                    mime: "image/webp".to_owned(),
+                    bytes: vec![0, 1, 2, 3],
+                    digest: "c".repeat(64).parse().unwrap(),
+                },
+            ],
+        };
+        let themes = Arc::clone(&env.state.themes);
+        let created = confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .create_theme(
+                                transaction,
+                                ThemeOwner::Site,
+                                "Ordered assets",
+                                &draft,
+                                draft_limits(),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+
+        assert_eq!(
+            env.state
+                .themes
+                .get_draft(ThemeOwner::Site, created)
+                .await
+                .unwrap(),
+            Some(ThemeDraft {
+                theme_id: created,
+                manifest: br#"{"name":"ordered"}"#.to_vec(),
+                stylesheet: b"body { color: black; }".to_vec(),
+                source_digest: "a".repeat(64).parse().unwrap(),
+                assets: vec![
+                    ThemeDraftAsset {
+                        path: "images/apple.webp".to_owned(),
+                        mime: "image/webp".to_owned(),
+                        bytes: vec![0, 1, 2, 3],
+                        digest: "c".repeat(64).parse().unwrap(),
+                    },
+                    ThemeDraftAsset {
+                        path: "images/zebra.svg".to_owned(),
+                        mime: "image/svg+xml".to_owned(),
+                        bytes: b"<svg>zebra</svg>".to_vec(),
+                        digest: "b".repeat(64).parse().unwrap(),
+                    },
+                ],
+            })
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn replacing_draft_assets_removes_stale_assets_and_preserves_new_data(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let initial = ThemeDraft {
+            theme_id: ThemeId::from(0),
+            manifest: b"{}".to_vec(),
+            stylesheet: b"body{}".to_vec(),
+            source_digest: "a".repeat(64).parse().unwrap(),
+            assets: vec![
+                ThemeDraftAsset {
+                    path: "images/stale-logo.svg".to_owned(),
+                    mime: "image/svg+xml".to_owned(),
+                    bytes: b"stale-logo".to_vec(),
+                    digest: "b".repeat(64).parse().unwrap(),
+                },
+                ThemeDraftAsset {
+                    path: "images/stale-header.webp".to_owned(),
+                    mime: "image/webp".to_owned(),
+                    bytes: b"stale-header".to_vec(),
+                    digest: "c".repeat(64).parse().unwrap(),
+                },
+            ],
+        };
+        let themes = Arc::clone(&env.state.themes);
+        let created = confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .create_theme(
+                                transaction,
+                                ThemeOwner::Site,
+                                "Replacement assets",
+                                &initial,
+                                draft_limits(),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        let replacement = ThemeDraft {
+            theme_id: created,
+            manifest: br#"{"name":"replaced"}"#.to_vec(),
+            stylesheet: b"main { display: block; }".to_vec(),
+            source_digest: "d".repeat(64).parse().unwrap(),
+            assets: vec![
+                ThemeDraftAsset {
+                    path: "images/new-zebra.png".to_owned(),
+                    mime: "image/png".to_owned(),
+                    bytes: vec![137, 80, 78, 71],
+                    digest: "e".repeat(64).parse().unwrap(),
+                },
+                ThemeDraftAsset {
+                    path: "images/new-apple.avif".to_owned(),
+                    mime: "image/avif".to_owned(),
+                    bytes: vec![0, 0, 0, 32, 102, 116, 121, 112],
+                    digest: "f".repeat(64).parse().unwrap(),
+                },
+            ],
+        };
+        let themes = Arc::clone(&env.state.themes);
+        confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .replace_draft(
+                                transaction,
+                                ThemeOwner::Site,
+                                &replacement,
+                                draft_limits(),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+
+        assert_eq!(
+            env.state
+                .themes
+                .get_draft(ThemeOwner::Site, created)
+                .await
+                .unwrap(),
+            Some(ThemeDraft {
+                theme_id: created,
+                manifest: br#"{"name":"replaced"}"#.to_vec(),
+                stylesheet: b"main { display: block; }".to_vec(),
+                source_digest: "d".repeat(64).parse().unwrap(),
+                assets: vec![
+                    ThemeDraftAsset {
+                        path: "images/new-apple.avif".to_owned(),
+                        mime: "image/avif".to_owned(),
+                        bytes: vec![0, 0, 0, 32, 102, 116, 121, 112],
+                        digest: "f".repeat(64).parse().unwrap(),
+                    },
+                    ThemeDraftAsset {
+                        path: "images/new-zebra.png".to_owned(),
+                        mime: "image/png".to_owned(),
+                        bytes: vec![137, 80, 78, 71],
+                        digest: "e".repeat(64).parse().unwrap(),
+                    },
+                ],
+            })
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn draft_assets_are_masked_from_other_owners(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let owner = ThemeOwner::Author(UserId::from(41));
+        let draft = ThemeDraft {
+            theme_id: ThemeId::from(0),
+            manifest: b"{}".to_vec(),
+            stylesheet: b"body{}".to_vec(),
+            source_digest: "a".repeat(64).parse().unwrap(),
+            assets: vec![ThemeDraftAsset {
+                path: "images/private.svg".to_owned(),
+                mime: "image/svg+xml".to_owned(),
+                bytes: b"<svg>private</svg>".to_vec(),
+                digest: "b".repeat(64).parse().unwrap(),
+            }],
+        };
+        let themes = Arc::clone(&env.state.themes);
+        let created = confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .create_theme(
+                                transaction,
+                                owner,
+                                "Private assets",
+                                &draft,
+                                draft_limits(),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+
+        assert_eq!(
+            env.state
+                .themes
+                .get_draft(owner, created)
+                .await
+                .unwrap()
+                .unwrap()
+                .assets,
+            vec![ThemeDraftAsset {
+                path: "images/private.svg".to_owned(),
+                mime: "image/svg+xml".to_owned(),
+                bytes: b"<svg>private</svg>".to_vec(),
+                digest: "b".repeat(64).parse().unwrap(),
+            }]
+        );
+
+        assert_eq!(
+            env.state
+                .themes
+                .get_draft(ThemeOwner::Author(UserId::from(42)), created)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            env.state
+                .themes
+                .get_draft(ThemeOwner::Site, created)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn draft_without_assets_decodes_as_an_empty_asset_list(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let draft = ThemeDraft {
+            theme_id: ThemeId::from(0),
+            manifest: br#"{"name":"empty"}"#.to_vec(),
+            stylesheet: b"body { margin: 0; }".to_vec(),
+            source_digest: "a".repeat(64).parse().unwrap(),
+            assets: Vec::new(),
+        };
+        let themes = Arc::clone(&env.state.themes);
+        let created = confirmed(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .create_theme(
+                                transaction,
+                                ThemeOwner::Site,
+                                "Empty assets",
+                                &draft,
+                                draft_limits(),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+
+        assert_eq!(
+            env.state
+                .themes
+                .get_draft(ThemeOwner::Site, created)
+                .await
+                .unwrap(),
+            Some(ThemeDraft {
+                theme_id: created,
+                manifest: br#"{"name":"empty"}"#.to_vec(),
+                stylesheet: b"body { margin: 0; }".to_vec(),
+                source_digest: "a".repeat(64).parse().unwrap(),
+                assets: Vec::new(),
             })
         );
     }
@@ -1522,6 +2533,7 @@ mod tests {
             manifest: b"{}".to_vec(),
             stylesheet: b"body{}".to_vec(),
             source_digest: "b".repeat(64).parse().unwrap(),
+            assets: Vec::new(),
         };
         let owners = [
             ThemeOwner::Author(UserId::from(-1)),

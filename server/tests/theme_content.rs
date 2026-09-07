@@ -8,7 +8,7 @@ use common::{MutationOutcome, theme::ThemeContentDigest};
 use rstest::*;
 use rstest_reuse::*;
 use storage::{
-    ThemeAssetManager, ThemeOwner,
+    ThemeAssetManager, ThemeDraft, ThemeDraftAsset, ThemeOwner,
     test_support::{
         Backend, TestEnv, backends, compiled_theme_fixture, confirmed_for, create_site_theme,
         theme_quota_limits,
@@ -17,7 +17,7 @@ use storage::{
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use crate::helpers::make_app;
+use crate::helpers::{create_user_and_session, make_app};
 
 struct PublishedFixture {
     stylesheet_digest: String,
@@ -77,6 +77,115 @@ async fn get(app: &axum::Router, uri: String) -> axum::response::Response {
         .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
         .await
         .expect("router response")
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn author_draft_asset_is_private_to_its_owner(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let owner = create_user_and_session(&state).await;
+    let stranger = create_user_and_session(&state).await;
+    let asset = ThemeDraftAsset {
+        path: "assets/private.png".to_owned(),
+        mime: "image/png".to_owned(),
+        bytes: vec![
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 4, 0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 31,
+            0, 2, 235, 1, 245, 105, 91, 156, 64, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ],
+        digest: "b".repeat(64).parse().expect("valid asset digest"),
+    };
+    let draft = ThemeDraft {
+        theme_id: 0.into(),
+        manifest: br#"{"assets":{"assets/private.png":"image/png"},"defaults":{},"name":"Private","schema":1,"style_contract":1}"#.to_vec(),
+        stylesheet: b"body { color: black; }".to_vec(),
+        source_digest: "a".repeat(64).parse().expect("valid source digest"),
+        assets: vec![asset.clone()],
+    };
+    let themes = Arc::clone(&state.themes);
+    let owner_id = owner.user_id;
+    let theme_id = confirmed_for(
+        state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    themes
+                        .create_theme(
+                            transaction,
+                            ThemeOwner::Author(owner_id),
+                            "Private",
+                            &draft,
+                            theme_quota_limits(i64::MAX),
+                        )
+                        .await
+                })
+            })
+            .await
+            .expect("create author draft"),
+        "author draft creation",
+    );
+    let storage = TempDir::new().expect("temporary content root");
+    let app = make_app(&state, &storage);
+    let uri = format!("/themes/draft/{theme_id}/{}", asset.path);
+
+    let owner_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&uri)
+                .header(header::COOKIE, owner.cookie())
+                .body(Body::empty())
+                .expect("owner request builds"),
+        )
+        .await
+        .expect("owner router response");
+    assert_eq!(owner_response.status(), StatusCode::OK);
+    assert_eq!(owner_response.headers()[header::CONTENT_TYPE], asset.mime);
+    assert_eq!(
+        owner_response.headers()[header::CACHE_CONTROL],
+        "private, no-store"
+    );
+    assert_eq!(
+        owner_response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+        "nosniff"
+    );
+    let owner_body = axum::body::to_bytes(owner_response.into_body(), usize::MAX)
+        .await
+        .expect("owner response body");
+    assert_eq!(owner_body.as_ref(), asset.bytes);
+
+    for (request, expected_status) in [
+        (
+            Request::builder()
+                .uri(&uri)
+                .header(header::COOKIE, stranger.cookie())
+                .body(Body::empty())
+                .expect("stranger request builds"),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            Request::builder()
+                .uri(&uri)
+                .body(Body::empty())
+                .expect("anonymous request builds"),
+            StatusCode::UNAUTHORIZED,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("denied router response");
+        assert_eq!(
+            response.status(),
+            expected_status,
+            "draft asset denial must not disclose cross-owner existence"
+        );
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+    }
 }
 
 #[apply(backends)]

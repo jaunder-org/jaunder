@@ -13,12 +13,13 @@ use std::sync::Arc;
 
 use crate::publisher::PublisherService;
 use common::mailer::MailSender;
+use host::theme_operations::ThemeOperationCoordinator;
 use leptos::prelude::provide_context;
 use storage::{
     AppState, AudienceStorage, EmailVerificationStorage, FeedEventStorage, InviteStorage,
     MediaContentLocks, MediaManager, MediaStorage, PasswordResetStorage, PostStorage,
-    SessionStorage, SiteConfigStorage, SubscriptionStorage, ThemeAssetManager, ThemeStorage,
-    UserConfigStorage, UserStorage, WriteScope,
+    SessionStorage, SiteConfigStorage, SubscriptionStorage, ThemeAssetManager, ThemeManager,
+    ThemeStorage, UserConfigStorage, UserStorage, WriteScope,
 };
 use web::websub::WebsubPublisher;
 
@@ -59,6 +60,16 @@ pub fn provide_media_manager_context(manager: &Arc<MediaManager>) {
 /// Places immutable Theme content lifecycle operations in the request context.
 pub fn provide_theme_asset_manager_context(manager: &Arc<ThemeAssetManager>) {
     provide_context(Arc::clone(manager));
+}
+
+/// Places theme binding/removal orchestration in the request context.
+pub fn provide_theme_manager_context(manager: &Arc<ThemeManager>) {
+    provide_context(Arc::clone(manager));
+}
+
+/// Places principal-scoped Theme Package admission in the request context.
+pub fn provide_theme_operation_coordinator_context(coordinator: &Arc<ThemeOperationCoordinator>) {
+    provide_context(Arc::clone(coordinator));
 }
 
 /// Place the mailer in the current Leptos context. Server functions that

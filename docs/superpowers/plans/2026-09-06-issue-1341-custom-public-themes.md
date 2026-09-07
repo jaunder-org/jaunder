@@ -151,7 +151,7 @@ Out:
     byte/ETag determinism and CSR coincidence; fresh-load/pushState smoke proves
     no theme flash, stale stylesheet/image, or custom CSS on private routes.
 
-- [ ] Task 8: Expose complete owner-authorized management and preview APIs.
+- [x] Task 8: Expose complete owner-authorized management and preview APIs.
   - Contract: a new web theme vertical owns catalog CRUD, CSS/ZIP import/export,
     draft/assets/defaults, publish, selection, atomic removal, Media
     binding/pool, shuffle, and preview endpoints. Session identity is the sole

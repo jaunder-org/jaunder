@@ -184,10 +184,9 @@ async fn resolve_custom(
         header_url,
     }))
 }
-
-fn resolve_role(
+fn resolve_role_with_package_url(
     binding: Option<&ThemeRoleBinding>,
-    assets: &[ThemePackageAsset],
+    package_url: &dyn Fn(&str) -> Option<RootRelativeUrl>,
     revision: &ThemeRevisionDigest,
     route: &PublicThemeRoute,
     pool_entries: Option<&[crate::ThemeHeaderPoolEntry]>,
@@ -195,14 +194,11 @@ fn resolve_role(
 ) -> Option<RootRelativeUrl> {
     let binding = binding?;
     match binding.mode {
-        ThemeImageBindingMode::PackagedDefault => {
-            packaged_default.and_then(|path| package_url(assets, path))
-        }
+        ThemeImageBindingMode::PackagedDefault => packaged_default.and_then(package_url),
         ThemeImageBindingMode::ExplicitAbsent => None,
-        ThemeImageBindingMode::PackageAsset => binding
-            .package_path
-            .as_deref()
-            .and_then(|path| package_url(assets, path)),
+        ThemeImageBindingMode::PackageAsset => {
+            binding.package_path.as_deref().and_then(package_url)
+        }
         ThemeImageBindingMode::Media => media_url(binding),
         ThemeImageBindingMode::HeaderPool => {
             if binding.role != ThemeImageRole::Header {
@@ -217,7 +213,7 @@ fn resolve_role(
                 return None;
             }
             match pool.select(route, revision, &shuffle_seed) {
-                ThemePoolEntry::Package(path) => package_url(assets, path),
+                ThemePoolEntry::Package(path) => package_url(path),
                 ThemePoolEntry::Media {
                     source,
                     digest,
@@ -228,10 +224,98 @@ fn resolve_role(
     }
 }
 
+fn resolve_role(
+    binding: Option<&ThemeRoleBinding>,
+    assets: &[ThemePackageAsset],
+    revision: &ThemeRevisionDigest,
+    route: &PublicThemeRoute,
+    pool_entries: Option<&[crate::ThemeHeaderPoolEntry]>,
+    packaged_default: Option<&str>,
+) -> Option<RootRelativeUrl> {
+    let package_url = |path: &str| package_url(assets, path);
+    resolve_role_with_package_url(
+        binding,
+        &package_url,
+        revision,
+        route,
+        pool_entries,
+        packaged_default,
+    )
+}
 fn role_is_invalid(binding: Option<&ThemeRoleBinding>, url: Option<&RootRelativeUrl>) -> bool {
     binding.is_some_and(|binding| {
         binding.mode != ThemeImageBindingMode::ExplicitAbsent && url.is_none()
     })
+}
+
+/// Resolves the effective logo and header for an owned draft preview.
+///
+/// The same role and pool policy as public presentations applies, but callers
+/// supply owner-authenticated draft package URLs instead of immutable revision URLs.
+///
+/// # Errors
+///
+/// Returns a storage error for missing or corrupt bindings and pool reads.
+pub async fn resolve_draft_theme_images(
+    owner: ThemeOwner,
+    theme_id: ThemeId,
+    manifest: &[u8],
+    package_asset_urls: &std::collections::BTreeMap<String, String>,
+    revision: &ThemeRevisionDigest,
+    route: &PublicThemeRoute,
+    themes: &dyn ThemeStorage,
+) -> Result<(Option<RootRelativeUrl>, Option<RootRelativeUrl>), sqlx::Error> {
+    let logo = match read_role_binding(themes, owner, theme_id, ThemeImageRole::Logo).await? {
+        RoleBindingRead::Valid(binding) => binding,
+        RoleBindingRead::Corrupt => return Err(sqlx::Error::RowNotFound),
+    };
+    let header = match read_role_binding(themes, owner, theme_id, ThemeImageRole::Header).await? {
+        RoleBindingRead::Valid(binding) => binding,
+        RoleBindingRead::Corrupt => return Err(sqlx::Error::RowNotFound),
+    };
+    let header_pool = if header
+        .as_ref()
+        .is_some_and(|binding| binding.mode == ThemeImageBindingMode::HeaderPool)
+    {
+        Some(themes.header_pool(owner, theme_id).await?)
+    } else {
+        None
+    };
+    let defaults = manifest_defaults(manifest);
+    let logo_default = defaults
+        .as_ref()
+        .and_then(|defaults| defaults.logo.as_deref());
+    let header_default = defaults
+        .as_ref()
+        .and_then(|defaults| defaults.header.as_deref())
+        .and_then(|header| header.first().map(String::as_str));
+    let package_url = |path: &str| {
+        package_asset_urls
+            .get(path)
+            .and_then(|url| url.parse::<RootRelativeUrl>().ok())
+    };
+    let logo_url = resolve_role_with_package_url(
+        logo.as_ref(),
+        &package_url,
+        revision,
+        route,
+        None,
+        logo_default,
+    );
+    let header_url = resolve_role_with_package_url(
+        header.as_ref(),
+        &package_url,
+        revision,
+        route,
+        header_pool.as_deref(),
+        header_default,
+    );
+    if role_is_invalid(logo.as_ref(), logo_url.as_ref())
+        || role_is_invalid(header.as_ref(), header_url.as_ref())
+    {
+        return Err(sqlx::Error::RowNotFound);
+    }
+    Ok((logo_url, header_url))
 }
 
 fn package_url(assets: &[ThemePackageAsset], path: &str) -> Option<RootRelativeUrl> {

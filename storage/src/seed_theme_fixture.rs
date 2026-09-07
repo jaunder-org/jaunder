@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, fmt::Write as _, sync::Arc};
 use common::ids::ThemeId;
 use host::theme_package::{CompiledThemeRevision, ThemePackageLimits, validate_theme_package};
 
-use crate::{ThemeDraft, ThemeOwner, ThemeQuotaLimits, ThemeStorage, WriteScope};
+use crate::{ThemeDraft, ThemeDraftAsset, ThemeOwner, ThemeQuotaLimits, ThemeStorage, WriteScope};
 
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = !0_u32;
@@ -104,27 +104,33 @@ pub fn try_compiled_theme_fixture() -> anyhow::Result<CompiledThemeRevision> {
     Ok(validated.compile(&BTreeMap::new(), ThemePackageLimits::default())?)
 }
 
-/// Returns one-theme quota limits for `bytes` of immutable content.
+/// Returns one-theme quota limits with room for both the mutable fixture draft
+/// and `bytes` of immutable content.
 ///
+/// The fixture's canonical manifest, stylesheet, and asset bytes remain charged
+/// while its revision is published, so the limit reserves conservative draft
+/// headroom rather than modeling published content alone.
 #[must_use]
 pub fn theme_quota_limits(bytes: i64) -> ThemeQuotaLimits {
+    let total_bytes = bytes.saturating_mul(4);
     ThemeQuotaLimits {
         active_themes: 1,
         retained_revisions: 1,
-        logical_bytes: bytes,
+        logical_bytes: total_bytes,
         site_retained_revisions: 1,
-        site_physical_bytes: bytes,
+        site_physical_bytes: total_bytes,
     }
 }
 
-/// Creates one site catalog entry with the compiled fixture as its mutable draft.
+/// Creates one catalog entry with the compiled fixture as its mutable draft.
 ///
 /// # Errors
 ///
 /// Returns an error if the draft cannot be created or its commit is indeterminate.
-pub async fn try_create_site_theme(
+pub async fn try_create_theme(
     themes: Arc<dyn ThemeStorage>,
     scope: WriteScope,
+    owner: ThemeOwner,
     compiled: &CompiledThemeRevision,
 ) -> anyhow::Result<ThemeId> {
     let digest = compiled.source_digest();
@@ -132,13 +138,31 @@ pub async fn try_create_site_theme(
     for byte in digest {
         let _ = write!(hex, "{byte:02x}");
     }
+    let assets = compiled
+        .assets()
+        .map(|(path, mime, bytes, digest)| {
+            let mut hex = String::with_capacity(digest.len() * 2);
+            for byte in digest {
+                let _ = write!(hex, "{byte:02x}");
+            }
+            Ok(ThemeDraftAsset {
+                path: path.to_owned(),
+                mime: mime.to_owned(),
+                bytes: bytes.to_vec(),
+                digest: hex
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("fixture asset digest was invalid"))?,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let draft = ThemeDraft {
         theme_id: ThemeId::from(0),
         manifest: compiled.canonical_manifest().to_vec(),
-        stylesheet: b"body { color: black; }".to_vec(),
+        stylesheet: compiled.css().bytes().to_vec(),
         source_digest: hex
             .parse()
             .map_err(|_| anyhow::anyhow!("fixture source digest was invalid"))?,
+        assets,
     };
     let outcome = scope
         .run(move |transaction| {
@@ -146,7 +170,7 @@ pub async fn try_create_site_theme(
                 themes
                     .create_theme(
                         transaction,
-                        ThemeOwner::Site,
+                        owner,
                         "Test",
                         &draft,
                         theme_quota_limits(i64::MAX),

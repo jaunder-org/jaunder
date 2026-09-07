@@ -128,13 +128,14 @@ pub async fn seed_posts_for_user(
 
     confirmed_fixture_outcome(outcome, format_args!("batch seed of {count} posts"))
 }
-async fn site_fixture_theme(
+async fn author_fixture_theme(
     state: &Arc<AppState>,
+    owner: ThemeOwner,
     compiled: &host::theme_package::CompiledThemeRevision,
 ) -> anyhow::Result<(common::ids::ThemeId, bool)> {
     let existing = state
         .themes
-        .list_themes(ThemeOwner::Site)
+        .list_themes(owner)
         .await?
         .into_iter()
         .find(|entry| entry.name == "Test");
@@ -151,9 +152,10 @@ async fn site_fixture_theme(
     let theme_id = match existing {
         Some(entry) => entry.id,
         None => {
-            storage::seed_theme_fixture::try_create_site_theme(
+            storage::seed_theme_fixture::try_create_theme(
                 Arc::clone(&state.themes),
                 state.write_scope.clone(),
+                owner,
                 compiled,
             )
             .await?
@@ -162,7 +164,7 @@ async fn site_fixture_theme(
     Ok((theme_id, already_published))
 }
 
-/// Publish the shared compiled fixture as the site's selected custom theme.
+/// Publish the shared compiled fixture as the author's selected custom theme.
 ///
 /// This is deliberately an out-of-process e2e fixture: it uses the same
 /// immutable asset publisher and transactional selection write as production,
@@ -172,7 +174,7 @@ async fn site_fixture_theme(
 ///
 /// Returns `Err` if the fixture cannot be published, selected, or its commit
 /// acknowledgement is indeterminate.
-pub async fn seed_published_site_theme(
+pub async fn seed_published_author_theme(
     state: &Arc<AppState>,
     storage_path: &Path,
     author_username: &str,
@@ -185,8 +187,9 @@ pub async fn seed_published_site_theme(
         .get_user_by_username(&author_username)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no such user: {author_username}"))?;
+    let owner = ThemeOwner::Author(author.user_id);
     let compiled = storage::seed_theme_fixture::try_compiled_theme_fixture()?;
-    let (theme_id, already_published) = site_fixture_theme(state, &compiled).await?;
+    let (theme_id, already_published) = author_fixture_theme(state, owner, &compiled).await?;
     let content_bytes = compiled
         .css()
         .bytes()
@@ -194,6 +197,12 @@ pub async fn seed_published_site_theme(
         .checked_add(compiled.assets().map(|(_, _, bytes, _)| bytes.len()).sum())
         .and_then(|bytes| i64::try_from(bytes).ok())
         .ok_or_else(|| anyhow::anyhow!("fixture theme content exceeds quota size"))?;
+    // E2E scenarios share one instance and may already have unrelated published
+    // revisions. Keep the fixture's owner cap tight while avoiding a false
+    // dependency on globally empty site quota state.
+    let mut limits = storage::seed_theme_fixture::theme_quota_limits(content_bytes);
+    limits.site_retained_revisions = i64::MAX;
+    limits.site_physical_bytes = i64::MAX;
     let manager = ThemeAssetManager::new(
         Arc::clone(&state.themes),
         state.write_scope.clone(),
@@ -202,14 +211,14 @@ pub async fn seed_published_site_theme(
     if !already_published {
         let publication = manager
             .publish(
-                ThemeOwner::Site,
+                owner,
                 theme_id,
                 &compiled,
-                storage::seed_theme_fixture::theme_quota_limits(content_bytes),
+                limits,
                 chrono::Utc::now().timestamp(),
             )
             .await?;
-        confirmed_fixture_outcome(publication, "publish fixture site theme")?;
+        confirmed_fixture_outcome(publication, "publish fixture author theme")?;
     }
 
     let bindings = [ThemeImageRole::Logo, ThemeImageRole::Header].map(|role| ThemeRoleBinding {
@@ -231,36 +240,29 @@ pub async fn seed_published_site_theme(
             Box::pin(async move {
                 for binding in &bindings {
                     themes
-                        .replace_role_binding(transaction, ThemeOwner::Site, binding)
+                        .replace_role_binding(transaction, owner, binding)
                         .await?;
                 }
                 themes
                     .set_selection(
                         transaction,
-                        ThemeOwner::Author(author.user_id),
-                        Some(PublicThemeSelection::BuiltIn(Theme::Terminal)),
-                    )
-                    .await?;
-                themes
-                    .set_selection(
-                        transaction,
-                        ThemeOwner::Site,
+                        owner,
                         Some(PublicThemeSelection::Custom(theme_id)),
                     )
                     .await
             })
         })
         .await
-        .map_err(|error| anyhow::anyhow!("select fixture site theme failed: {error}"))?;
-    confirmed_fixture_outcome(selection, "select fixture site theme")?;
+        .map_err(|error| anyhow::anyhow!("select fixture author theme failed: {error}"))?;
+    confirmed_fixture_outcome(selection, "select fixture author theme")?;
     Ok(())
 }
-/// Restore public selections changed by [`seed_published_site_theme`].
+/// Restore the author selection changed by [`seed_published_author_theme`].
 ///
 /// # Errors
 ///
-/// Returns `Err` when the author is unknown or either selection cannot be reset.
-pub async fn reset_public_theme_fixture(
+/// Returns `Err` when the author is unknown or the selection cannot be reset.
+pub async fn reset_author_theme_fixture(
     state: &Arc<AppState>,
     author_username: &str,
 ) -> anyhow::Result<()> {
@@ -279,13 +281,6 @@ pub async fn reset_public_theme_fixture(
             Box::pin(async move {
                 themes
                     .set_selection(transaction, ThemeOwner::Author(author.user_id), None)
-                    .await?;
-                themes
-                    .set_selection(
-                        transaction,
-                        ThemeOwner::Site,
-                        Some(PublicThemeSelection::BuiltIn(Theme::Studio)),
-                    )
                     .await
             })
         })
@@ -1094,6 +1089,48 @@ mod seed_tests {
             .await
             .expect("list ok");
         assert_eq!(page.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn publishes_and_resets_the_author_theme_fixture() {
+        let test_support::TestEnv { state, base: _base } =
+            test_support::Backend::Sqlite.setup().await;
+        let user = test_support::SeedUser::new().seed(&state).await;
+        let storage = tempfile::TempDir::new().expect("temporary storage");
+        let compiled =
+            storage::seed_theme_fixture::try_compiled_theme_fixture().expect("valid theme fixture");
+        let site_theme = storage::seed_theme_fixture::try_create_theme(
+            Arc::clone(&state.themes),
+            state.write_scope.clone(),
+            ThemeOwner::Site,
+            &compiled,
+        )
+        .await
+        .expect("site fixture theme");
+        let manager = ThemeAssetManager::new(
+            Arc::clone(&state.themes),
+            state.write_scope.clone(),
+            Arc::new(storage.path().to_path_buf()),
+        );
+        let site_publication = manager
+            .publish(
+                ThemeOwner::Site,
+                site_theme,
+                &compiled,
+                storage::seed_theme_fixture::theme_quota_limits(i64::MAX),
+                chrono::Utc::now().timestamp(),
+            )
+            .await
+            .expect("site fixture publishes");
+        confirmed_fixture_outcome(site_publication, "publish site fixture")
+            .expect("site fixture commit confirmed");
+
+        seed_published_author_theme(&state, storage.path(), user.username.as_ref())
+            .await
+            .expect("theme fixture publishes");
+        reset_author_theme_fixture(&state, user.username.as_ref())
+            .await
+            .expect("theme fixture resets");
     }
 
     #[tokio::test]

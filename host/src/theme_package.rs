@@ -8,7 +8,7 @@ mod css;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::{Cursor, Read},
+    io::{Cursor, Read, Write},
 };
 
 use image::{ImageFormat, ImageReader};
@@ -328,6 +328,43 @@ fn validate_defaults(
     }
     Ok(())
 }
+/// Builds a deterministic portable Theme Package from validated package members.
+///
+/// Entries are written in lexical order and intentionally contain only package
+/// source. Runtime Media bindings are relational owner state and never portable.
+///
+/// # Errors
+///
+/// Returns an archive error when ZIP construction fails.
+pub fn export_theme_package(
+    manifest: &[u8],
+    css: &[u8],
+    assets: &BTreeMap<String, Vec<u8>>,
+) -> Result<Vec<u8>, ThemePackageError> {
+    use zip::{ZipWriter, write::SimpleFileOptions};
+
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    for (path, bytes) in std::iter::once(("theme.json", manifest))
+        .chain(std::iter::once(("style.css", css)))
+        .chain(
+            assets
+                .iter()
+                .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
+        )
+    {
+        writer
+            .start_file(path, SimpleFileOptions::default())
+            .map_err(|error| zip_error(&error))?;
+        writer
+            .write_all(bytes)
+            .map_err(|error| ThemePackageError::Archive(error.to_string()))?;
+    }
+    writer
+        .finish()
+        .map_err(|error| zip_error(&error))
+        .map(Cursor::into_inner)
+}
+
 impl ValidatedThemePackage {
     #[must_use]
     pub fn source_digest(&self) -> [u8; 32] {
@@ -346,6 +383,10 @@ impl ValidatedThemePackage {
         self.assets
             .get(path)
             .map(|asset| (asset.mime.as_str(), asset.bytes.as_slice(), asset.digest))
+    }
+    /// Enumerates package asset paths in the canonical archive order.
+    pub fn asset_paths(&self) -> impl Iterator<Item = &str> {
+        self.assets.keys().map(String::as_str)
     }
     /// Compiles the validated source with storage-chosen immutable asset URLs.
     ///
@@ -772,6 +813,48 @@ mod tests {
     }
 
     #[test]
+    fn exports_a_deterministic_validated_round_trip_with_canonical_source() {
+        let manifest = br#"{"style_contract":1,"defaults":{"logo":"assets/logo.png","header":["assets/header.png"]},"name":"Paper","assets":{"assets/logo.png":"image/png","assets/header.png":"image/png"},"schema":1}"#;
+        let css = b"body { background: url(\"assets/logo.png\"); }";
+        let logo = raster(ImageFormat::Png, 1, 1);
+        let header = raster(ImageFormat::Png, 2, 1);
+        let assets = BTreeMap::from([
+            ("assets/logo.png".to_owned(), logo.clone()),
+            ("assets/header.png".to_owned(), header.clone()),
+        ]);
+
+        let exported = export_theme_package(manifest, css, &assets).expect("export package");
+        assert_eq!(
+            export_theme_package(manifest, css, &assets).expect("repeat export"),
+            exported
+        );
+
+        let validated = validate_theme_package(&exported, ThemePackageLimits::default())
+            .expect("validate export");
+        assert_eq!(
+            validated.canonical_manifest(),
+            br#"{"assets":{"assets/header.png":"image/png","assets/logo.png":"image/png"},"defaults":{"header":["assets/header.png"],"logo":"assets/logo.png"},"name":"Paper","schema":1,"style_contract":1}"#
+        );
+        assert_eq!(validated.authored_css(), css);
+        assert_eq!(
+            validated.asset_paths().collect::<Vec<_>>(),
+            ["assets/header.png", "assets/logo.png"]
+        );
+        assert_eq!(
+            validated
+                .asset("assets/logo.png")
+                .map(|(mime, bytes, _)| (mime, bytes)),
+            Some(("image/png", logo.as_slice()))
+        );
+        assert_eq!(
+            validated
+                .asset("assets/header.png")
+                .map(|(mime, bytes, _)| (mime, bytes)),
+            Some(("image/png", header.as_slice()))
+        );
+    }
+
+    #[test]
     fn rejects_unknown_manifest_fields_before_any_result_is_minted() {
         let package = package(
             r#"{"schema":1,"name":"Paper","style_contract":1,"assets":{},"defaults":{},"unexpected":true}"#,
@@ -1061,6 +1144,21 @@ mod tests {
             validate_theme_package(&missing, ThemePackageLimits::default()),
             Err(ThemePackageError::UndeclaredAsset(path)) if path == "assets/missing.png"
         ));
+    }
+
+    #[test]
+    fn accepts_minimal_png_package_asset() {
+        let png = [
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 15, 73, 68, 65, 84, 120, 1, 1, 4, 0, 251,
+            255, 0, 18, 52, 86, 0, 248, 0, 157, 248, 215, 100, 140, 0, 0, 0, 0, 73, 69, 78, 68,
+            174, 66, 96, 130,
+        ];
+        validate_theme_package(
+            &single_asset_package("assets/image.png", "image/png", &png),
+            ThemePackageLimits::default(),
+        )
+        .unwrap();
     }
 
     #[test]

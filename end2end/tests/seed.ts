@@ -177,8 +177,8 @@ export async function seedPostsViaTool(
   });
 }
 /**
- * Publish and select the shared compiled custom-theme fixture through the
- * live server's database and immutable-content root.
+ * Publish and select the shared compiled custom-theme fixture for one author
+ * through the live server's database and immutable-content root.
  */
 export async function seedThemeViaTool(authorUsername: string): Promise<void> {
   await withTimedAction(null, "tool.themes.seed", async () => {

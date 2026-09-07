@@ -28,6 +28,7 @@ common.workspace = true
 host = { path = "../host", optional = true }
 macros = { path = "../macros" }
 storage = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
 http.workspace = true
 jiff.workspace = true
 maud.workspace = true
@@ -53,7 +54,6 @@ storage = { workspace = true, features = ["test-support", "test-utils"] }
 serde_qs = "0.15"
 httparse = "1"
 mime = "0.3"
-sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
 
@@ -71,6 +71,7 @@ server = [
     "dep:multer",
     "dep:axum",
     "dep:storage",
+    "dep:sqlx",
     "dep:tokio",
 ]
 

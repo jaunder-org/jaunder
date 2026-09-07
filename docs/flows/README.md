@@ -21,6 +21,7 @@ routes and server functions fit into one user-visible journey.
 | Media management                         | Task 3 pending                                                                   |
 | Password reset                           | [`password-reset.md`](password-reset.md)                                         |
 | Tag browsing                             | Task 3 pending                                                                   |
+| Theme management                         | [`theme-management.md`](theme-management.md)                                     |
 
 ## Route map
 

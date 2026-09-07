@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { goto } from "./helpers";
+import { goto, signInAsNewUser } from "./helpers";
 import { navigateInApp } from "./navigate";
 import {
   resetThemeViaTool,
@@ -55,11 +55,11 @@ test(
   },
 );
 
-test("published custom site theme survives cold load and in-app navigation", async ({
+test("published custom author theme survives cold load and in-app navigation", async ({
   page,
 }) => {
-  await seedUserViaTool("themenav", "visualpassword123");
-  await seedPostsViaTool("themenav", 1, "Visual Theme Navigation");
+  const username = await signInAsNewUser(page);
+  await seedPostsViaTool(username, 1, "Visual Theme Navigation");
 
   const expectCustomPresentation = async () => {
     const presentation = await page.evaluate(() => {
@@ -87,20 +87,20 @@ test("published custom site theme survives cold load and in-app navigation", asy
   };
 
   try {
-    await seedThemeViaTool("themenav");
-    await goto(page, "/");
+    await seedThemeViaTool(username);
+    await goto(page, `/~${username}`);
     await expectCustomPresentation();
 
     await navigateInApp(
       page,
       () =>
         page.evaluate(() => {
-          history.pushState({}, "", "/~themenav");
+          history.pushState({}, "", "/");
           window.dispatchEvent(new PopStateEvent("popstate"));
         }),
-      { url: "/~themenav", ready: '.j-root[data-theme="terminal"]' },
+      { url: "/", ready: '.j-root[data-theme="studio"]' },
     );
-    await expect(page.locator(".j-topbar h1")).toHaveText("Posts by themenav");
+    await expect(page.locator(".j-topbar h1")).toHaveText("jaunder.local");
     await expect(
       page.locator("link[data-jaunder-theme-stylesheet]"),
     ).toHaveCount(0);
@@ -109,6 +109,6 @@ test("published custom site theme survives cold load and in-app navigation", asy
       page.locator('[data-jaunder-part="header-image"]'),
     ).toHaveCount(0);
   } finally {
-    await resetThemeViaTool("themenav");
+    await resetThemeViaTool(username);
   }
 });

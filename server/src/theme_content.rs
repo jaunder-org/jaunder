@@ -5,6 +5,7 @@ use axum::{
     body::Body,
     extract::{OriginalUri, Path, rejection::PathRejection},
     http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware,
     response::Response,
     routing::get,
 };
@@ -29,6 +30,10 @@ where
     Router::new().nest(
         "/themes",
         Router::new()
+            .route(
+                "/draft/{theme_id}/{*path}",
+                get(serve_draft).layer(middleware::map_response(private_no_store)),
+            )
             .route("/{digest}", get(serve))
             // Do not let malformed theme-content addresses fall through to the CSR
             // shell. The typed route above is the only public content address.
@@ -38,6 +43,57 @@ where
 
 async fn not_found() -> StatusCode {
     StatusCode::NOT_FOUND
+}
+async fn private_no_store(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response
+}
+
+/// Serves a package asset from an unselected draft only to its catalog owner.
+async fn serve_draft(
+    user: web::auth::User,
+    Extension(themes): Extension<Arc<dyn ThemeStorage>>,
+    Extension(users): Extension<Arc<dyn storage::UserStorage>>,
+    Path((theme_id, path)): Path<(common::ids::ThemeId, String)>,
+) -> Result<Response, StatusCode> {
+    let author_owner = storage::ThemeOwner::Author(user.user_id);
+    let site_owner = users
+        .get_user(user.user_id)
+        .await
+        .map_err(storage_failure)?
+        .filter(|record| record.is_operator.is_operator())
+        .map(|_| storage::ThemeOwner::Site);
+    let draft = themes
+        .get_draft(author_owner, theme_id)
+        .await
+        .map_err(storage_failure)?
+        .or(match site_owner {
+            Some(owner) => themes
+                .get_draft(owner, theme_id)
+                .await
+                .map_err(storage_failure)?,
+            None => None,
+        })
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let asset = draft
+        .assets
+        .into_iter()
+        .find(|asset| asset.path == path)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let content_type =
+        HeaderValue::from_str(&asset.mime).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut response = Response::new(Body::from(asset.bytes));
+    *response.status_mut() = StatusCode::OK;
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, content_type);
+    response
+        .headers_mut()
+        .insert(header::X_CONTENT_TYPE_OPTIONS, NOSNIFF);
+    Ok(response)
 }
 
 /// Serves immutable custom-theme content only after durable eligibility admits it.

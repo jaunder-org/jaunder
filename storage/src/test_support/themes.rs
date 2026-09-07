@@ -3,7 +3,7 @@ use std::sync::Arc;
 use common::ids::ThemeId;
 use host::theme_package::CompiledThemeRevision;
 
-use crate::{ThemeStorage, WriteScope};
+use crate::{ThemeOwner, ThemeStorage, WriteScope};
 
 pub use crate::seed_theme_fixture::theme_quota_limits;
 
@@ -27,7 +27,7 @@ pub async fn create_site_theme(
     scope: WriteScope,
     compiled: &CompiledThemeRevision,
 ) -> ThemeId {
-    crate::seed_theme_fixture::try_create_site_theme(themes, scope, compiled)
+    crate::seed_theme_fixture::try_create_theme(themes, scope, ThemeOwner::Site, compiled)
         .await
         .expect("create site theme fixture")
 }

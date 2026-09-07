@@ -44,8 +44,9 @@ use crate::{
 };
 use ::storage::{
     AppState, InstanceId, MediaContentLocks, MediaManager, MediaReferenceOwnershipResolver,
-    PostMediaOwnership, SessionStorage, ThemeAssetManager, WriteScope,
+    PostMediaOwnership, SessionStorage, ThemeAssetManager, ThemeManager, WriteScope,
 };
+use host::theme_operations::ThemeOperationCoordinator;
 
 async fn retire_session_cookie(
     axum::extract::State(secure): axum::extract::State<bool>,
@@ -205,6 +206,13 @@ where
         state.write_scope.clone(),
         Arc::clone(&storage_path),
     ));
+    let theme_operation_coordinator = Arc::new(ThemeOperationCoordinator::new());
+    let theme_manager = Arc::new(ThemeManager::new(
+        state.themes.clone(),
+        state.media.clone(),
+        state.write_scope.clone(),
+        Arc::clone(&media_content_locks),
+    ));
     let sessions = state.sessions.clone();
     let write_scope = state.write_scope.clone();
     let posts = state.posts.clone();
@@ -222,7 +230,8 @@ where
         let media_content_locks = Arc::clone(&media_content_locks);
         let media_manager = Arc::clone(&media_manager);
         let post_media_ownership = post_media_ownership.clone();
-
+        let theme_operation_coordinator = Arc::clone(&theme_operation_coordinator);
+        let theme_manager = Arc::clone(&theme_manager);
         move || {
             prelude::provide_context(post_media_ownership.clone());
             context::provide_app_state_contexts(&state, &publisher_service);
@@ -231,6 +240,8 @@ where
             provide_additional_contexts();
             context::provide_media_manager_context(&media_manager);
             context::provide_theme_asset_manager_context(&theme_asset_manager);
+            context::provide_theme_operation_coordinator_context(&theme_operation_coordinator);
+            context::provide_theme_manager_context(&theme_manager);
             prelude::provide_context(web::auth::CookieSettings {
                 secure: secure_cookies,
             });

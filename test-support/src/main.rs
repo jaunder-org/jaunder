@@ -8,9 +8,9 @@ use common::display_name::DisplayName;
 use host::{capture, feed::FeedEventPhase};
 use storage::{DbConnectOptions, StorageRuntimeConfig};
 use test_support::{
-    SandboxProfile, create_session_for_user, create_user, reset_mail, reset_public_theme_fixture,
-    sandbox_profile_anchor, seed_dead_letters, seed_posts_for_user, seed_published_site_theme,
-    seed_sandbox_profile, seed_user,
+    SandboxProfile, create_session_for_user, create_user, reset_author_theme_fixture, reset_mail,
+    reset_public_theme_fixture, sandbox_profile_anchor, seed_dead_letters, seed_posts_for_user,
+    seed_published_author_theme, seed_published_site_theme, seed_sandbox_profile, seed_user,
 };
 
 #[derive(Parser)]
@@ -376,9 +376,9 @@ async fn cmd_seed_theme(
     let runtime = storage_runtime_config(db)?;
     let state = storage::open_existing_database(db, &runtime).await?;
     if reset {
-        reset_public_theme_fixture(&state, author_username).await
+        reset_author_theme_fixture(&state, author_username).await
     } else {
-        seed_published_site_theme(&state, storage_path, author_username).await
+        seed_published_author_theme(&state, storage_path, author_username).await
     }
 }
 

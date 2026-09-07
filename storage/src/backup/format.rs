@@ -49,6 +49,7 @@ pub(crate) fn restore_table_order(tables: &[String]) -> Vec<&str> {
         | "posts"
         | "themes"
         | "theme_content_eligibility"
+        | "theme_draft_content_charges"
         | "theme_retained_content_charges"
         | "user_config" => 2,
         "audience_members"
@@ -59,6 +60,7 @@ pub(crate) fn restore_table_order(tables: &[String]) -> Vec<&str> {
         | "post_tags"
         | "sessions"
         | "post_revisions"
+        | "theme_draft_charges"
         | "theme_drafts"
         | "theme_revisions"
         | "theme_role_bindings"
@@ -66,7 +68,10 @@ pub(crate) fn restore_table_order(tables: &[String]) -> Vec<&str> {
         | "theme_selections"
         | "theme_owner_quotas"
         | "theme_site_quota" => 3,
-        "post_revision_audiences" | "post_revision_tags" | "theme_revision_assets" => 4,
+        "post_revision_audiences"
+        | "post_revision_tags"
+        | "theme_draft_assets"
+        | "theme_revision_assets" => 4,
         "post_media" => 5,
         _ => 0,
     });
