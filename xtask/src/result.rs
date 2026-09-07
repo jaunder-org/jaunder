@@ -147,6 +147,10 @@ pub struct CommandResult {
     pub duration_ms: u128,
     pub finished_at_unix: u64,
     pub steps: Vec<StepResult>,
+    /// A command-specific process status, used when xtask supervises or forwards
+    /// a child whose conventional exit code must survive the result envelope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_override: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coverage: Option<crate::coverage::CoverageReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -213,6 +217,7 @@ impl CommandResult {
             duration_ms: 0,
             finished_at_unix: 0,
             steps: Vec::new(),
+            exit_override: None,
             coverage: None,
             audit: None,
             breakdown: None,
@@ -230,7 +235,7 @@ impl CommandResult {
     }
 
     pub fn exit_code(&self) -> i32 {
-        if self.ok { 0 } else { 1 }
+        self.exit_override.unwrap_or(if self.ok { 0 } else { 1 })
     }
 
     pub fn report(&self, json: bool) {

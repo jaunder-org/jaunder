@@ -16,6 +16,7 @@ pub(super) struct Process {
     running: Option<RunningProcess>,
     runtime: Runtime,
     stopped: bool,
+    identity: Option<(u32, Option<u64>)>,
 }
 
 impl Process {
@@ -28,10 +29,19 @@ impl Process {
         let running = runtime
             .block_on(command.start())
             .map_err(anyhow::Error::from)?;
+        let (identity, stopped) = match running.pid() {
+            Some(pid) => match processkit::process_info(pid) {
+                Ok(Some(info)) => (Some((pid, info.start_time())), false),
+                Ok(None) => (None, true),
+                Err(_) => (None, false),
+            },
+            None => (None, true),
+        };
         Ok(Self {
             running: Some(running),
             runtime,
-            stopped: false,
+            stopped,
+            identity,
         })
     }
 
@@ -79,12 +89,41 @@ impl Process {
         result
     }
 
+    pub(super) fn shutdown_interruptible<F>(
+        &mut self,
+        grace: Duration,
+        escalation: F,
+    ) -> anyhow::Result<Option<Outcome>>
+    where
+        F: Future<Output = ()>,
+    {
+        let running = self.take_running()?;
+        let result = self.runtime.block_on(async move {
+            let shutdown = running.shutdown(grace);
+            tokio::pin!(shutdown);
+            tokio::pin!(escalation);
+            tokio::select! {
+                outcome = &mut shutdown => outcome.map(Some).map_err(anyhow::Error::from),
+                () = &mut escalation => Ok(None),
+            }
+        });
+        self.stopped = result.is_ok();
+        result
+    }
+
     pub(super) fn is_stopped(&self) -> bool {
         self.stopped
+            || self
+                .identity
+                .is_some_and(|(pid, start_time)| process_identity_is_stopped(pid, start_time))
             || self
                 .running
                 .as_ref()
                 .is_some_and(|running| running.pid().is_none())
+    }
+
+    pub(super) fn identity(&self) -> Option<(u32, Option<u64>)> {
+        self.identity
     }
 
     fn take_running(&mut self) -> anyhow::Result<RunningProcess> {
@@ -92,6 +131,24 @@ impl Process {
             .take()
             .ok_or_else(|| anyhow::anyhow!("process was already stopped"))
     }
+}
+
+fn process_identity_is_stopped(pid: u32, start_time: Option<u64>) -> bool {
+    if processkit::process_is_alive(pid, start_time).is_ok_and(|alive| !alive) {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let stat_path = format!("/proc/{pid}/stat");
+        std::fs::read_to_string(stat_path)
+            .map(|stat| {
+                stat.rsplit_once(") ")
+                    .is_some_and(|(_, fields)| fields.starts_with("Z "))
+            })
+            .unwrap_or(true)
+    }
+    #[cfg(not(target_os = "linux"))]
+    false
 }
 
 impl Drop for Process {
@@ -128,6 +185,35 @@ mod tests {
             .expect("missing program must fail to start");
 
         assert!(!error.to_string().is_empty());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn second_signal_path_forces_cleanup_without_waiting_for_grace() {
+        let mut process = Process::start(Command::new("sh").args(["-c", "trap '' TERM; sleep 60"]))
+            .expect("start signal-resistant process");
+        let pid = process
+            .running
+            .as_ref()
+            .and_then(|running| running.pid())
+            .expect("running process id");
+        let start_time = processkit::process_info(pid)
+            .expect("inspect process")
+            .expect("process remains alive")
+            .start_time();
+
+        let started = Instant::now();
+        let outcome = process
+            .shutdown_interruptible(Duration::from_secs(60), async {})
+            .expect("force shutdown");
+
+        assert_eq!(outcome, None);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while original_process_is_running(pid, start_time) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!original_process_is_running(pid, start_time));
     }
 
     #[test]
@@ -195,8 +281,7 @@ mod tests {
             Ok(stat) => stat
                 .rsplit_once(") ")
                 .is_none_or(|(_, fields)| !fields.starts_with("Z ")),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => panic!("inspect process state: {error}"),
+            Err(_) => false,
         }
     }
 

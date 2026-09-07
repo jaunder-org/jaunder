@@ -13,11 +13,23 @@
 
 use std::sync::Arc;
 
+use chrono::{Duration, Timelike};
 use common::display_name::DisplayName;
 use common::ids::{FeedEventId, PostId, UserId};
+use common::post_body::PostBody;
+use common::post_title::PostTitle;
+use common::site::SiteTitle;
+use common::slug::Slug;
+use common::time::UtcInstant;
 use common::username::Username;
+use common::visibility::AudienceTarget;
+use host::config_key::SiteConfigKey;
 use host::feed::{FeedEventPhase, FeedPath};
-use storage::{AppState, OperatorStatus, seed_post_input};
+use storage::{
+    AppState, OperatorStatus, PostBookkeepingExpectation, PostFormat, PostStorage,
+    RenderedPostContent, SiteConfigStorage, UserStorage, WriteScope, render_post_input,
+    seed_post_input,
+};
 
 pub mod panic_gate;
 
@@ -229,6 +241,241 @@ pub async fn create_user(
     confirmed_fixture_outcome(outcome, "fixture user creation")
 }
 
+/// The two profile states accepted by the sandbox seed boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SandboxProfile {
+    /// Two loginable accounts and no Posts.
+    Standard,
+    /// The standard accounts plus authored Markdown and Org fixture Posts.
+    Demo,
+}
+
+/// One expected sandbox Post. The manifest is both the fixture definition and
+/// the independent expected value used by profile tests.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SandboxPost {
+    /// Canonical local author username.
+    pub author: &'static str,
+    /// Authored title.
+    pub title: String,
+    /// Per-author Post slug.
+    pub slug: String,
+    /// Native Markdown or Org source.
+    pub body: &'static str,
+    /// Source format used by the real renderer.
+    pub format: PostFormat,
+    /// Exact publication timestamp, or `None` for a draft.
+    pub published_at: Option<UtcInstant>,
+}
+const SANDBOX_TITLE: &str = "Jaunder Sandbox";
+const SANDBOX_PASSWORD: &str = "jaunder-dev";
+const SANDBOX_USERS: [(&str, bool); 4] = [
+    ("user", false),
+    ("operator", true),
+    ("alice", false),
+    ("bob", false),
+];
+const SHORT_MARKDOWN: &str = "A short sandbox note with one clear idea.";
+const MEDIUM_MARKDOWN: &str = "A medium sandbox note has enough detail to make a timeline card feel lived in.\n\nIt remains concise enough to scan.";
+const SHORT_ORG: &str = "* A short Org sandbox note\n\nA clear idea in Org.";
+const MEDIUM_ORG: &str = "* A medium Org sandbox note\n\nThis fixture has enough detail to exercise the rendered detail surface.\n\n- a stable item\n- another stable item";
+const LONG_MARKDOWN: &str = "\
+The first paragraph establishes a long-form sandbox post.
+
+The second paragraph adds a concrete observation for a detail view.
+
+The third paragraph keeps the reading rhythm deliberately calm.
+
+The fourth paragraph supplies enough prose for a substantial excerpt.
+
+The fifth paragraph gives the fixture a stable middle section.
+
+The sixth paragraph describes a small decision and its consequence.
+
+The seventh paragraph makes scrolling necessary in an ordinary browser.
+
+The eighth paragraph retains plain Markdown without incidental syntax.
+
+The ninth paragraph lets archive and timeline views meet real length.
+
+The tenth paragraph remains readable without introducing dynamic data.
+
+The eleventh paragraph closes the main thought with a useful detail.
+
+The twelfth paragraph is the stable long-body terminus.";
+
+/// Captures the profile creation instant at minute precision.
+#[must_use]
+pub fn sandbox_profile_anchor() -> UtcInstant {
+    let now = UtcInstant::now().value();
+    UtcInstant::from(
+        now - Duration::seconds(i64::from(now.second()))
+            - Duration::nanoseconds(i64::from(now.nanosecond())),
+    )
+}
+
+/// Produces the complete typed fixture manifest for a profile creation anchor.
+///
+/// The offset sequence is deliberately allocated globally: all 60 published
+/// Posts have a distinct timestamp while every author still receives the same
+/// 12 Markdown / 3 Org distribution.
+#[must_use]
+pub fn sandbox_profile_manifest(anchor: UtcInstant) -> Vec<SandboxPost> {
+    let mut posts = Vec::with_capacity(68);
+    let mut first_offset = 1_i64;
+    for &(author, _) in &SANDBOX_USERS {
+        for sequence in 1..=15_i64 {
+            let (body, format) = match sequence {
+                1 => (LONG_MARKDOWN, PostFormat::Markdown),
+                2..=12 if sequence % 2 == 0 => (SHORT_MARKDOWN, PostFormat::Markdown),
+                2..=12 => (MEDIUM_MARKDOWN, PostFormat::Markdown),
+                13 | 15 => (SHORT_ORG, PostFormat::Org),
+                14 => (MEDIUM_ORG, PostFormat::Org),
+                _ => unreachable!("published sequence is bounded to 1..=15"),
+            };
+            posts.push(SandboxPost {
+                author,
+                title: format!("{author} sandbox post {sequence:02}"),
+                slug: format!("sandbox-post-{sequence:02}"),
+                body,
+                format,
+                published_at: Some(UtcInstant::from(
+                    anchor.value() - Duration::days(first_offset + sequence - 1),
+                )),
+            });
+        }
+        first_offset += 15;
+        posts.push(SandboxPost {
+            author,
+            title: format!("{author} sandbox Markdown draft"),
+            slug: "sandbox-markdown-draft".to_owned(),
+            body: SHORT_MARKDOWN,
+            format: PostFormat::Markdown,
+            published_at: None,
+        });
+        posts.push(SandboxPost {
+            author,
+            title: format!("{author} sandbox Org draft"),
+            slug: "sandbox-org-draft".to_owned(),
+            body: SHORT_ORG,
+            format: PostFormat::Org,
+            published_at: None,
+        });
+    }
+    posts
+}
+
+/// Seeds the exact non-idempotent sandbox profile through the normal typed
+/// storage write services. All profile rows share one write scope, so a failed
+/// creation cannot leave a workspace with a partial fixture.
+///
+/// # Errors
+///
+/// Returns an error when password preparation, typed input construction, or the
+/// single profile write fails.
+pub async fn seed_sandbox_profile(
+    site_config: Arc<dyn SiteConfigStorage>,
+    users: Arc<dyn UserStorage>,
+    posts: Arc<dyn PostStorage>,
+    write_scope: WriteScope,
+    profile: SandboxProfile,
+    anchor: UtcInstant,
+) -> anyhow::Result<()> {
+    let sandbox_users = match profile {
+        SandboxProfile::Standard => &SANDBOX_USERS[..2],
+        SandboxProfile::Demo => &SANDBOX_USERS,
+    };
+    let manifest = match profile {
+        SandboxProfile::Standard => Vec::new(),
+        SandboxProfile::Demo => sandbox_profile_manifest(anchor),
+    };
+    let password = SANDBOX_PASSWORD
+        .parse::<host::password::Password>()
+        .map_err(|error| anyhow::anyhow!("invalid fixed sandbox password: {error}"))?;
+    let mut passwords = Vec::with_capacity(sandbox_users.len());
+    for _ in sandbox_users {
+        passwords.push(
+            storage::prepare_password(password.clone())
+                .await
+                .map_err(|error| anyhow::anyhow!("sandbox password preparation failed: {error}"))?,
+        );
+    }
+    let title = SANDBOX_TITLE
+        .parse::<SiteTitle>()
+        .map_err(|error| anyhow::anyhow!("invalid fixed sandbox title: {error}"))?
+        .to_string();
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                site_config
+                    .set(transaction, SiteConfigKey::SiteTitle, &title)
+                    .await?;
+                let mut user_ids = Vec::with_capacity(sandbox_users.len());
+                for ((username_text, operator), password) in
+                    sandbox_users.iter().copied().zip(passwords)
+                {
+                    let username = username_text.parse::<Username>().map_err(|error| {
+                        anyhow::anyhow!("invalid fixed sandbox username `{username_text}`: {error}")
+                    })?;
+                    let role = if operator {
+                        OperatorStatus::OPERATOR
+                    } else {
+                        OperatorStatus::STANDARD
+                    };
+                    let user_id = users
+                        .create_user(transaction, &username, &password, None, role)
+                        .await?;
+                    user_ids.push((username_text, user_id));
+                }
+                let mut inputs = Vec::with_capacity(manifest.len());
+                for fixture in manifest {
+                    let user_id = user_ids
+                        .iter()
+                        .find_map(|(username, user_id)| {
+                            (*username == fixture.author).then_some(*user_id)
+                        })
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "sandbox manifest author `{}` has no seeded user",
+                                fixture.author
+                            )
+                        })?;
+                    let title = fixture
+                        .title
+                        .parse::<PostTitle>()
+                        .map_err(|error| anyhow::anyhow!("invalid sandbox Post title: {error}"))?;
+                    let slug = fixture
+                        .slug
+                        .parse::<Slug>()
+                        .map_err(|error| anyhow::anyhow!("invalid sandbox Post slug: {error}"))?;
+                    let body = fixture
+                        .body
+                        .parse::<PostBody>()
+                        .map_err(|error| anyhow::anyhow!("invalid sandbox Post body: {error}"))?;
+                    inputs.push(render_post_input(RenderedPostContent {
+                        user_id,
+                        title: Some(title),
+                        slug,
+                        body,
+                        format: fixture.format,
+                        published_at: fixture.published_at,
+                        summary: None,
+                        audiences: vec![AudienceTarget::Public],
+                        tags: Vec::new(),
+                        idempotency_key: None,
+                        expectations: PostBookkeepingExpectation::default(),
+                    }));
+                }
+                let ids = posts.create_posts(transaction, &inputs).await?;
+                Ok::<_, anyhow::Error>(ids)
+            })
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("sandbox profile write failed: {error}"))?;
+    confirmed_fixture_outcome(outcome, "sandbox profile write")?;
+    Ok(())
+}
+
 /// Reset the mail-capture file: delete `path` if it exists. A missing file is
 /// success (`rm -f` semantics); any other error propagates. The one fixture
 /// step that is not storage-linked.
@@ -355,6 +602,245 @@ pub async fn create_session_for_user(
         label,
     )
     .await
+}
+
+#[cfg(test)]
+mod sandbox_profile_tests {
+    use super::*;
+    use storage::test_support;
+    type StoredSandboxPost = (
+        String,
+        String,
+        String,
+        String,
+        PostFormat,
+        Option<UtcInstant>,
+    );
+
+    fn assert_demo_aggregates(actual: &[StoredSandboxPost], anchor: UtcInstant) {
+        assert_eq!(actual.len(), 68);
+        assert_eq!(
+            actual
+                .iter()
+                .filter(|(_, _, _, _, _, published_at)| published_at.is_some())
+                .count(),
+            60
+        );
+        assert_eq!(
+            actual
+                .iter()
+                .filter(|(_, _, _, _, format, _)| *format == PostFormat::Markdown)
+                .count(),
+            52
+        );
+        assert_eq!(
+            actual
+                .iter()
+                .filter(|(_, _, _, _, format, _)| *format == PostFormat::Org)
+                .count(),
+            16
+        );
+        assert_eq!(
+            actual
+                .iter()
+                .filter(|(_, _, _, body, _, _)| body == LONG_MARKDOWN)
+                .count(),
+            4
+        );
+        let offsets = actual
+            .iter()
+            .filter_map(|(_, _, _, _, _, published_at)| *published_at)
+            .map(|published_at| (anchor.value() - published_at.value()).num_days())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(offsets, (1_i64..=60).collect());
+        assert_eq!(anchor.value().second(), 0);
+        assert_eq!(anchor.value().nanosecond(), 0);
+        let generated_anchor = sandbox_profile_anchor();
+        assert_eq!(generated_anchor.value().second(), 0);
+        assert_eq!(generated_anchor.value().nanosecond(), 0);
+    }
+
+    async fn assert_loginable(state: &Arc<AppState>, username: &str) {
+        let username = username.parse::<Username>().expect("fixed username");
+        let password = SANDBOX_PASSWORD
+            .parse::<host::password::Password>()
+            .expect("fixed password");
+        state
+            .users
+            .prepare_authentication(&username, &password)
+            .await
+            .expect("fixed fixture credentials authenticate");
+    }
+
+    async fn assert_sandbox_users(state: &Arc<AppState>, expected: &[(&str, bool)]) {
+        for &(username, operator) in expected {
+            let username = username.parse::<Username>().expect("fixed username");
+            let user = state
+                .users
+                .get_user_by_username(&username)
+                .await
+                .expect("user lookup")
+                .expect("fixture user exists");
+            assert_eq!(
+                user.is_operator,
+                if operator {
+                    OperatorStatus::OPERATOR
+                } else {
+                    OperatorStatus::STANDARD
+                }
+            );
+            assert_loginable(state, username.as_ref()).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn standard_profile_has_only_its_explicit_configuration_and_loginable_users() {
+        let test_support::TestEnv { state, base: _base } =
+            test_support::Backend::Sqlite.setup().pristine().await;
+        let anchor = "2026-09-06T12:34:00Z"
+            .parse::<UtcInstant>()
+            .expect("fixed anchor");
+
+        seed_sandbox_profile(
+            Arc::clone(&state.site_config),
+            Arc::clone(&state.users),
+            Arc::clone(&state.posts),
+            state.write_scope.clone(),
+            SandboxProfile::Standard,
+            anchor,
+        )
+        .await
+        .expect("standard profile seeds");
+
+        assert_eq!(
+            state.site_config.list().await.expect("site config list"),
+            vec![("site.title".to_owned(), SANDBOX_TITLE.to_owned())]
+        );
+        assert!(
+            state
+                .site_config
+                .get_raw(SiteConfigKey::SiteBaseUrl)
+                .await
+                .expect("base URL lookup")
+                .is_none()
+        );
+        assert!(
+            state
+                .site_config
+                .get_raw(SiteConfigKey::SiteRegistrationPolicy)
+                .await
+                .expect("registration policy lookup")
+                .is_none()
+        );
+        assert_sandbox_users(&state, &SANDBOX_USERS[..2]).await;
+        for &(username, _) in &SANDBOX_USERS[2..] {
+            assert!(
+                state
+                    .users
+                    .get_user_by_username(&username.parse().expect("fixed username"))
+                    .await
+                    .expect("user lookup")
+                    .is_none()
+            );
+        }
+        for &(username, _) in &SANDBOX_USERS[..2] {
+            let user = state
+                .users
+                .get_user_by_username(&username.parse().expect("fixed username"))
+                .await
+                .expect("user lookup")
+                .expect("fixture user exists");
+            assert!(
+                state
+                    .posts
+                    .list_collection_by_user(
+                        user.user_id,
+                        None,
+                        common::test_support::parse_row_limit("100"),
+                    )
+                    .await
+                    .expect("post listing")
+                    .is_empty()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn demo_profile_matches_the_typed_manifest_and_rounded_anchor() {
+        let test_support::TestEnv { state, base: _base } =
+            test_support::Backend::Sqlite.setup().pristine().await;
+        let anchor = "2026-09-06T12:34:00Z"
+            .parse::<UtcInstant>()
+            .expect("fixed minute anchor");
+        let expected = sandbox_profile_manifest(anchor);
+
+        seed_sandbox_profile(
+            Arc::clone(&state.site_config),
+            Arc::clone(&state.users),
+            Arc::clone(&state.posts),
+            state.write_scope.clone(),
+            SandboxProfile::Demo,
+            anchor,
+        )
+        .await
+        .expect("demo profile seeds");
+
+        assert_eq!(
+            state.site_config.list().await.expect("site config list"),
+            vec![("site.title".to_owned(), SANDBOX_TITLE.to_owned())]
+        );
+        assert_sandbox_users(&state, &SANDBOX_USERS).await;
+
+        let mut actual = Vec::new();
+        for &(username, _) in &SANDBOX_USERS {
+            let user = state
+                .users
+                .get_user_by_username(&username.parse().expect("fixed username"))
+                .await
+                .expect("user lookup")
+                .expect("fixture user exists");
+            actual.extend(
+                state
+                    .posts
+                    .list_collection_by_user(
+                        user.user_id,
+                        None,
+                        common::test_support::parse_row_limit("100"),
+                    )
+                    .await
+                    .expect("post listing")
+                    .into_iter()
+                    .map(|record| {
+                        (
+                            record.author_username.to_string(),
+                            record.title.expect("manifest title").to_string(),
+                            record.slug.to_string(),
+                            record.body.to_string(),
+                            record.format,
+                            record.published_at,
+                        )
+                    }),
+            );
+        }
+        let mut expected = expected
+            .into_iter()
+            .map(|fixture| {
+                (
+                    fixture.author.to_owned(),
+                    fixture.title,
+                    fixture.slug,
+                    fixture.body.to_owned(),
+                    fixture.format,
+                    fixture.published_at,
+                )
+            })
+            .collect::<Vec<_>>();
+        actual.sort_by(|left, right| left.2.cmp(&right.2).then(left.0.cmp(&right.0)));
+        expected.sort_by(|left, right| left.2.cmp(&right.2).then(left.0.cmp(&right.0)));
+        assert_eq!(actual, expected);
+
+        assert_demo_aggregates(&actual, anchor);
+    }
 }
 
 #[cfg(test)]

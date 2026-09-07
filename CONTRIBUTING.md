@@ -297,6 +297,66 @@ production helper it calls) through a constructor that `env_remove`s those vars
 (`rev-parse`/`log`/`diff`/`ls-files`) are safe unscrubbed since they don't
 mutate.
 
+### Evaluating the web UX interactively
+
+Use `cargo xtask sandbox` for a host-native browser session without the
+Playwright runner or telemetry collector:
+
+```bash
+# Disposable empty instance; removed when the command exits.
+cargo xtask sandbox
+
+# Persistent named instance with ordinary and operator accounts.
+cargo xtask sandbox writing-flow --profile standard
+
+# Persistent named instance with four accounts and representative Posts.
+cargo xtask sandbox timeline --profile demo
+```
+
+The `standard` profile creates `user` and `operator`; `demo` also creates
+`alice` and `bob`. Every seeded account uses the development-only password
+`jaunder-dev`. Named workspaces live under `.xtask/sandboxes/<name>/` and resume
+without a profile:
+
+```bash
+cargo xtask sandbox writing-flow
+cargo xtask sandbox writing-flow --reset
+cargo xtask sandbox writing-flow --reset --profile demo
+```
+
+`--profile` applies only when creating or resetting a named workspace. `--reset`
+requires an existing name; without an explicit profile it reuses the recorded
+profile. Stop the foreground supervisor with Ctrl-C. A second Ctrl-C forces
+immediate process-tree cleanup.
+
+Run one admitted operational Jaunder command against a named workspace after
+`--`:
+
+```bash
+cargo xtask sandbox writing-flow -- user-create --username reviewer
+cargo xtask sandbox writing-flow -- site-config set site.title "Writing review"
+cargo xtask sandbox writing-flow -- backup
+```
+
+Command mode pins the same workspace generation for the complete child lifetime
+and returns the child's exact exit status. It accepts only `site-config`,
+`user-create`, `app-password-create`, `user-invite`, `smtp-test`, `backup`, and
+`websub`; storage selectors and lifecycle commands remain owned by the sandbox
+supervisor.
+
+Each named workspace stores its database, configuration, Media, and versioned
+profile metadata together. Stable control locks and current-server metadata live
+under `.xtask/sandboxes/.locks/`; they let interrupted reset operations recover
+without publishing a partial profile. Resume runs the current startup
+migrations. Command mode refuses to open storage while an unmanaged server holds
+the runtime lock or while the managed server's executable digest differs from
+the newly built command; stop and restart the sandbox to move both onto the same
+generation.
+
+This command optimizes the local UX-review loop; it is not deployment-fidelity
+proof. Use the Nix VM E2E lanes below when backend, browser, release-build, or
+hermetic environment parity matters.
+
 ### Running e2e tests locally
 
 The host and the CI VM load the **same** `end2end/playwright.config.ts`, so

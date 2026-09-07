@@ -2743,6 +2743,25 @@ is streamed unchanged to the live terminal and a per-run file; stopping the
 child closes the pipe so the driver can drain that journal-equivalent input
 before invoking the shared zero-panic verifier.
 
+The same host process-control seam also serves interactive UX sandboxes
+([host UX sandbox lifecycle](adr/drafts/host-ux-sandbox-lifecycle.md)).
+`cargo xtask sandbox [NAME]` builds current host artifacts, starts on an
+ephemeral loopback port, prints the discovered URL, and owns foreground signal
+handling. Omitted names use disposable storage; named workspaces persist
+database, configuration, Media, and profile metadata under
+`.xtask/sandboxes/NAME`. A stable parent-directory workspace lock is exclusive
+for recovery/create/reset and server-generation transitions, then shared by a
+ready server or one-shot operational command for its full active lifetime; a
+separate server lease rejects a second sandbox server. The server retains its
+distinct storage-local runtime lock. Reset publishes a fully seeded sibling
+through a recoverable two-rename protocol; resume runs migrations but never
+reapplies profile fixtures. Passing arguments after `--` runs an allowlisted
+Jaunder operational command against an existing named workspace without exposing
+lifecycle or storage selectors. Atomically published ready/stopping lease
+metadata pins the executable generation: a live command must match the server's
+content fingerprint, while mismatch or an unmanaged runtime-lock holder rejects
+before the command opens and potentially migrates the database.
+
 Specs are parallel-safe by construction, via per-test identity fixtures in
 `end2end/tests/provisioning.ts`, composed only by `end2end/tests/fixtures.ts`
 ([ADR-0039](adr/0039-e2e-parallelism-via-per-test-identity-fixtures.md)): `user`
