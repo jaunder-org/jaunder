@@ -12,7 +12,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::soft_path::SoftPath;
 
-use super::{PublicProjection, PublicProjector};
+use super::{PublicProjector, public_projector::PublicProjection};
 
 /// Register the public projector routes. Generic over the router state because
 /// the handlers extract only the owned projector and request inputs, never
