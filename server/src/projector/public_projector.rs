@@ -13,7 +13,7 @@ use common::{
     visibility::ViewerIdentity,
 };
 use std::sync::Arc;
-use storage::{PostStorage, ThemeStorage, UserStorage};
+use storage::{PostStorage, PublicThemeOwner, ThemeStorage, UserStorage};
 use web::{
     error::{self, InternalError, SwallowedSource},
     posts, timeline,
@@ -34,7 +34,8 @@ pub(crate) enum PublicProjection {
 }
 
 /// Projects anonymous public routes into their final HTTP responses.
-pub(crate) struct PublicProjector {
+#[derive(Clone)]
+pub struct PublicProjector {
     posts: Arc<dyn PostStorage>,
     users: Arc<dyn UserStorage>,
     themes: Arc<dyn ThemeStorage>,
@@ -42,8 +43,9 @@ pub(crate) struct PublicProjector {
 }
 
 impl PublicProjector {
+    /// Creates a projector from its exact storage and shell dependencies.
     #[must_use]
-    pub(crate) fn new(
+    pub fn new(
         posts: Arc<dyn PostStorage>,
         users: Arc<dyn UserStorage>,
         themes: Arc<dyn ThemeStorage>,
@@ -79,12 +81,25 @@ impl PublicProjector {
     fn response_for(&self, outcome: &ProjectionResult, headers: &HeaderMap) -> Response {
         match outcome {
             Ok(presentation) => document::cacheable_presentation(headers, presentation),
-            Err(ProjectionFailure::Shell) => document::shell_response(&self.shell),
-            Err(ProjectionFailure::Boundary(error)) => {
+            Err(ProjectionFailure::ShellFallback) => document::shell_response(&self.shell),
+            Err(ProjectionFailure::SwallowedFailure { error, context }) => {
+                error::report_swallowed(
+                    error.kind(),
+                    error.class(),
+                    context,
+                    SwallowedSource::Error(error),
+                );
+                document::shell_response(&self.shell)
+            }
+            Err(ProjectionFailure::BoundaryFailure(error)) => {
                 error.emit_boundary_failure();
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
         }
+    }
+
+    pub(crate) fn shell_response(&self) -> Response {
+        document::shell_response(&self.shell)
     }
 
     async fn permalink(&self, route: PermalinkRoute) -> ProjectionResult {
@@ -99,11 +114,11 @@ impl PublicProjector {
         .await
         {
             Ok(Some(record)) => record,
-            Ok(None) => return Err(ProjectionFailure::Shell),
+            Ok(None) => return Err(ProjectionFailure::ShellFallback),
             Err(error) => return Err(Self::boundary(error, "server.projector.permalink")),
         };
         let theme = match storage::resolve_public_theme(
-            storage::PublicThemeOwner::Author(record.user_id),
+            PublicThemeOwner::Author(record.user_id),
             &PublicThemeRoute::permalink(&route),
             self.themes.as_ref(),
         )
@@ -131,7 +146,7 @@ impl PublicProjector {
             Err(error) => return Err(Self::boundary(error, "server.projector.timeline")),
         };
         let theme = match storage::resolve_public_theme(
-            storage::PublicThemeOwner::Site,
+            PublicThemeOwner::Site,
             &PublicThemeRoute::site(),
             self.themes.as_ref(),
         )
@@ -157,7 +172,7 @@ impl PublicProjector {
         .await
         {
             Ok(page) => page,
-            Err(error) => return Err(Self::swallowed(&error, "server.projector.profile")),
+            Err(error) => return Err(Self::swallowed(error, "server.projector.profile")),
         };
         let theme = self
             .author_theme(
@@ -183,10 +198,10 @@ impl PublicProjector {
         .await
         {
             Ok(page) => page,
-            Err(error) => return Err(Self::swallowed(&error, "server.projector.site_tag")),
+            Err(error) => return Err(Self::swallowed(error, "server.projector.site_tag")),
         };
         let theme = match storage::resolve_public_theme(
-            storage::PublicThemeOwner::Site,
+            PublicThemeOwner::Site,
             &PublicThemeRoute::site_tag(&tag),
             self.themes.as_ref(),
         )
@@ -214,7 +229,7 @@ impl PublicProjector {
         .await
         {
             Ok(page) => page,
-            Err(error) => return Err(Self::swallowed(&error, "server.projector.user_tag")),
+            Err(error) => return Err(Self::swallowed(error, "server.projector.user_tag")),
         };
         let theme = self
             .author_theme(
@@ -240,8 +255,8 @@ impl PublicProjector {
         context: &'static str,
     ) -> Result<PublishedThemePresentation, ProjectionFailure> {
         let owner = match self.users.get_user_by_username(username).await {
-            Ok(Some(author)) => storage::PublicThemeOwner::Author(author.user_id),
-            Ok(None) => storage::PublicThemeOwner::Site,
+            Ok(Some(author)) => PublicThemeOwner::Author(author.user_id),
+            Ok(None) => PublicThemeOwner::Site,
             Err(error) => return Err(Self::boundary(error, context)),
         };
         storage::resolve_public_theme(owner, &route, self.themes.as_ref())
@@ -249,18 +264,12 @@ impl PublicProjector {
             .map_err(|error| Self::boundary(error, context))
     }
 
-    fn swallowed(error: &InternalError, context: &'static str) -> ProjectionFailure {
-        error::report_swallowed(
-            error.kind(),
-            error.class(),
-            context,
-            SwallowedSource::Error(error),
-        );
-        ProjectionFailure::Shell
+    fn swallowed(error: InternalError, context: &'static str) -> ProjectionFailure {
+        ProjectionFailure::SwallowedFailure { error, context }
     }
 
     fn boundary(error: impl Into<InternalError>, context: &'static str) -> ProjectionFailure {
-        ProjectionFailure::Boundary(error.into().with_context("boundary", context))
+        ProjectionFailure::BoundaryFailure(error.into().with_context("boundary", context))
     }
 }
 
@@ -268,6 +277,10 @@ impl PublicProjector {
 type ProjectionResult = Result<PublicPresentation<PageSeed>, ProjectionFailure>;
 
 enum ProjectionFailure {
-    Shell,
-    Boundary(InternalError),
+    ShellFallback,
+    SwallowedFailure {
+        error: InternalError,
+        context: &'static str,
+    },
+    BoundaryFailure(InternalError),
 }

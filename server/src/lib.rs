@@ -39,12 +39,16 @@ use common::mailer::MailSender;
 use leptos::prelude;
 
 use crate::{
-    assets::StaticAssets, feed::handlers, media_ownership::LiveMediaReferenceOwnershipResolver,
+    assets::StaticAssets,
+    feed::handlers,
+    media_ownership::LiveMediaReferenceOwnershipResolver,
+    projector::{PublicProjector, Shell},
     publisher::PublisherService,
 };
 use ::storage::{
     AppState, InstanceId, MediaContentLocks, MediaManager, MediaReferenceOwnershipResolver,
-    PostMediaOwnership, SessionStorage, ThemeAssetManager, ThemeManager, WriteScope,
+    PostMediaOwnership, PostStorage, SessionStorage, ThemeAssetManager, ThemeManager, ThemeStorage,
+    UserStorage, WriteScope,
 };
 use host::theme_operations::ThemeOperationCoordinator;
 
@@ -167,6 +171,30 @@ pub fn create_router_with_media_reference_ownership_resolver(
     )
 }
 
+/// Places cacheable anonymous projection ahead of the embedded CSR fallback.
+fn build_page_routes(
+    app: Router,
+    public_projector: PublicProjector,
+    post_media_ownership: PostMediaOwnership,
+) -> Router {
+    let app = crate::projector::register(app, public_projector);
+    app.fallback(site::serve_site)
+        .layer(axum::Extension(post_media_ownership))
+}
+
+fn build_public_projector(
+    posts: &Arc<dyn PostStorage>,
+    users: &Arc<dyn UserStorage>,
+    themes: &Arc<dyn ThemeStorage>,
+) -> PublicProjector {
+    PublicProjector::new(
+        Arc::clone(posts),
+        Arc::clone(users),
+        Arc::clone(themes),
+        Shell(site::shell_html()),
+    )
+}
+
 fn create_router_with_dependencies<F>(
     state: Arc<AppState>,
     instance_id: InstanceId,
@@ -224,6 +252,7 @@ where
     let media = state.media.clone();
     let feed_cache = state.feed_cache.clone();
     let feed_events = state.feed_events.clone();
+    let public_projector = build_public_projector(&posts, &users, &themes);
 
     let provide_server_function_contexts = {
         let publisher_service = Arc::clone(&publisher_service);
@@ -253,21 +282,7 @@ where
         provide_server_function_contexts,
     );
 
-    // --- The page path: no reactive render (#180, closes #173). Serve the
-    //     embedded CSR site tree (pkg/*, public/*) plus the public projector's
-    //     cacheable anonymous HTML. The /api server fns and the raw HTTP routes
-    //     (feed, media, atompub, style) above are untouched, so server fns remain
-    //     the data API; only the page render leaves the request path. ---
-    let app = {
-        // The CSR bundle + public assets are embedded (#237, ADR-0003/0008).
-        // `build.rs` stages the producer-rendered shell and verified pkg inventory;
-        // `site::serve_site` negotiates precompressed variants and falls through
-        // to that static shell for paths with no embedded file. Projected public
-        // HTML sits ahead of this fallback.
-        let app = crate::projector::register(app, crate::projector::Shell(site::shell_html()));
-        app.fallback(site::serve_site)
-            .layer(axum::Extension(post_media_ownership))
-    };
+    let app = build_page_routes(app, public_projector, post_media_ownership);
     // Raw Axum handlers receive only the storage traits they declare
     // (ADR-0016); server functions receive their separate Leptos contexts.
     let app = app

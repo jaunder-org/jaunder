@@ -11,20 +11,18 @@ use common::username::Username;
 use serde::{Deserialize, Deserializer};
 
 use crate::soft_path::SoftPath;
-use std::sync::Arc;
-use storage::{PostStorage, ThemeStorage, UserStorage};
 
-use super::{PublicProjection, PublicProjector, Shell, document};
+use super::{PublicProjection, PublicProjector};
 
 /// Register the public projector routes. Generic over the router state because
-/// the handlers extract only request `Extension`s (the storage traits + the
-/// shell), never `State`, so they compose onto the bare `Router<()>` in
-/// `create_router` and in tests alike.
+/// the handlers extract only the owned projector and request inputs, never
+/// `State`, so they compose onto the bare `Router<()>` in `create_router` and in
+/// tests alike.
 ///
 /// The route table covers every cacheable public surface. Private, malformed, and
 /// semantically missing public content still falls through to the SPA shell so
 /// the client may resolve session-specific state.
-pub fn register<S>(router: Router<S>, shell: Shell) -> Router<S>
+pub fn register<S>(router: Router<S>, projector: PublicProjector) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -34,7 +32,7 @@ where
         .route("/~{username}/{year}/{month}/{day}/{slug}", get(permalink))
         .route("/tags/{tag}", get(site_tag))
         .route("/~{username}/tags/{tag}", get(user_tag))
-        .layer(Extension(shell))
+        .layer(Extension(projector))
 }
 
 /// A decoded permalink capture set, softly parsed as one all-or-nothing route value.
@@ -55,56 +53,44 @@ impl<'de> Deserialize<'de> for PermalinkPath {
 }
 
 async fn permalink(
-    Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(users): Extension<Arc<dyn UserStorage>>,
-    Extension(themes): Extension<Arc<dyn ThemeStorage>>,
-    Extension(shell): Extension<Shell>,
+    Extension(projector): Extension<PublicProjector>,
     headers: HeaderMap,
     Path(PermalinkPath(route)): Path<PermalinkPath>,
 ) -> Response {
     let Some(route) = route else {
         // A semantically invalid decoded permalink is never public content: let the client
         // resolve it, preserving the projector's uniform shell soft-404.
-        return document::shell_response(&shell);
+        return projector.shell_response();
     };
-    PublicProjector::new(posts, users, themes, shell)
+    projector
         .project(PublicProjection::Permalink(route), &headers)
         .await
 }
 
 async fn site_timeline(
-    Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(users): Extension<Arc<dyn UserStorage>>,
-    Extension(themes): Extension<Arc<dyn ThemeStorage>>,
-    Extension(shell): Extension<Shell>,
+    Extension(projector): Extension<PublicProjector>,
     headers: HeaderMap,
 ) -> Response {
-    PublicProjector::new(posts, users, themes, shell)
+    projector
         .project(PublicProjection::SiteTimeline, &headers)
         .await
 }
 
 async fn profile(
-    Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(users): Extension<Arc<dyn UserStorage>>,
-    Extension(themes): Extension<Arc<dyn ThemeStorage>>,
-    Extension(shell): Extension<Shell>,
+    Extension(projector): Extension<PublicProjector>,
     headers: HeaderMap,
     Path(username): Path<SoftPath<Username>>,
 ) -> Response {
     let Some(username) = username.into() else {
-        return document::shell_response(&shell);
+        return projector.shell_response();
     };
-    PublicProjector::new(posts, users, themes, shell)
+    projector
         .project(PublicProjection::Profile(username), &headers)
         .await
 }
 
 async fn site_tag(
-    Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(users): Extension<Arc<dyn UserStorage>>,
-    Extension(themes): Extension<Arc<dyn ThemeStorage>>,
-    Extension(shell): Extension<Shell>,
+    Extension(projector): Extension<PublicProjector>,
     headers: HeaderMap,
     // malformed segment is parsed *inside* the handler and falls back to the SPA
     // shell (client-rendered 404) below — a typed extractor would reject it with a
@@ -116,25 +102,22 @@ async fn site_tag(
     // `Tag::from_str` lowercases, so the projected heading and the client render
     // coincide. An unparseable tag is never public content — let the client route it.
     let Some(tag) = tag.into() else {
-        return document::shell_response(&shell);
+        return projector.shell_response();
     };
-    PublicProjector::new(posts, users, themes, shell)
+    projector
         .project(PublicProjection::SiteTag(tag), &headers)
         .await
 }
 
 async fn user_tag(
-    Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(users): Extension<Arc<dyn UserStorage>>,
-    Extension(themes): Extension<Arc<dyn ThemeStorage>>,
-    Extension(shell): Extension<Shell>,
+    Extension(projector): Extension<PublicProjector>,
     headers: HeaderMap,
     Path((username, tag)): Path<(SoftPath<Username>, SoftPath<Tag>)>,
 ) -> Response {
     let (Some(username), Some(tag)) = (username.into(), tag.into()) else {
-        return document::shell_response(&shell);
+        return projector.shell_response();
     };
-    PublicProjector::new(posts, users, themes, shell)
+    projector
         .project(PublicProjection::UserTag { username, tag }, &headers)
         .await
 }
