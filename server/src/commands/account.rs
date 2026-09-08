@@ -65,10 +65,12 @@ pub async fn cmd_user_create(
     is_operator: bool,
 ) -> anyhow::Result<()> {
     let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime)
-        .await
-        .context(support::INIT_FIRST_CONTEXT)?
-        .app_state();
+    let (users, write_scope) = {
+        let factory = storage::open_existing_database(&storage.db, &runtime)
+            .await
+            .context(support::INIT_FIRST_CONTEXT)?;
+        (factory.users(), factory.write_scope())
+    };
 
     let password = if let Some(p) = password {
         p
@@ -84,8 +86,8 @@ pub async fn cmd_user_create(
     };
 
     let user_id = create_command_user(
-        &state.write_scope,
-        Arc::clone(&state.users),
+        &write_scope,
+        users,
         username.clone(),
         password,
         display_name.cloned(),
@@ -153,14 +155,16 @@ pub async fn cmd_app_password_create(
     label: &SessionLabel,
 ) -> anyhow::Result<()> {
     let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime)
-        .await
-        .context(support::INIT_FIRST_CONTEXT)?
-        .app_state();
+    let (users, sessions, write_scope) = {
+        let factory = storage::open_existing_database(&storage.db, &runtime)
+            .await
+            .context(support::INIT_FIRST_CONTEXT)?;
+        (factory.users(), factory.sessions(), factory.write_scope())
+    };
     let token = app_password_create(
-        &state.write_scope,
-        state.users(),
-        Arc::clone(&state.sessions),
+        &write_scope,
+        users.as_ref(),
+        sessions,
         username,
         label.clone(),
     )
@@ -180,12 +184,18 @@ pub async fn cmd_user_invite(
     expires_in: Option<InviteTtlHours>,
 ) -> anyhow::Result<()> {
     let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime)
-        .await
-        .context(support::INIT_FIRST_CONTEXT)?
-        .app_state();
+    let (site_config, invites, write_scope) = {
+        let factory = storage::open_existing_database(&storage.db, &runtime)
+            .await
+            .context(support::INIT_FIRST_CONTEXT)?;
+        (
+            factory.site_config(),
+            factory.invites(),
+            factory.write_scope(),
+        )
+    };
 
-    let policy = state.site_config().get_registration_policy().await?;
+    let policy = site_config.get_registration_policy().await?;
     if !policy.may_issue_invitation(true) {
         return Err(anyhow::anyhow!(
             "invitation issuance is disabled by registration policy '{policy}'"
@@ -202,9 +212,7 @@ pub async fn cmd_user_invite(
             .context("invite expiry is outside Jiff's supported timestamp range")?,
     );
 
-    let invites = Arc::clone(&state.invites);
-    let outcome = state
-        .write_scope
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move { invites.create_invite(transaction, expires_at).await })
         })
@@ -215,7 +223,7 @@ pub async fn cmd_user_invite(
     host::metrics::invite(host::metrics::InviteEvent::Created);
     // Deliberate operator-facing reveal via `AsRef` (InviteCode has no Display/serde). With a
     // configured base URL, print a ready-to-send invitation link; otherwise the bare code.
-    match state.site_config().get_identity().await?.base_url {
+    match site_config.get_identity().await?.base_url {
         Some(base_url) => {
             let register_url: MailConfirmUrl = tagged_url::compose(&base_url, "/register");
             println!("{register_url}?invite_code={}", code.as_ref());
@@ -233,12 +241,14 @@ pub async fn cmd_user_invite(
 /// sent.
 pub async fn cmd_smtp_test(storage: &StorageArgs, to: &Email) -> anyhow::Result<()> {
     let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime)
-        .await
-        .context(support::INIT_FIRST_CONTEXT)?
-        .app_state();
+    let site_config = {
+        let factory = storage::open_existing_database(&storage.db, &runtime)
+            .await
+            .context(support::INIT_FIRST_CONTEXT)?;
+        factory.site_config()
+    };
 
-    smtp_test_with(state.site_config(), to, |config| {
+    smtp_test_with(site_config.as_ref(), to, |config| {
         Ok(Box::new(LettreMailSender::from_config(config)?) as Box<dyn MailSender>)
     })
     .await

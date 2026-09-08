@@ -39,7 +39,7 @@ Out:
     factory-handle, and observer tests pass; opening and initialization visibly
     construct no handles or `WriteScope` before a factory method requests them.
 
-- [ ] Task 2: Narrow account command composition
+- [x] Task 2: Narrow account command composition
   - Contract: user creation receives user storage and `WriteScope`; App Password
     creation receives user storage, session storage, and `WriteScope`;
     Invitation issuance receives site-configuration storage, Invitation storage,
