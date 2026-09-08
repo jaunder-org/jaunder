@@ -1083,6 +1083,46 @@ pub fn eval_coverage_drvpath(flake_dir: &Path) -> Result<String> {
     )
 }
 
+/// Evaluate the probe-only identity of the filtered coverage source.
+pub(crate) fn eval_coverage_source_probe_drvpath(flake_dir: &Path) -> Result<String> {
+    nix_eval_raw(
+        Some(flake_dir),
+        &format!(".#checks.{SYSTEM}.coverage-source-probe.drvPath"),
+    )
+}
+
+/// Realize the coverage producer and return its output directory.
+pub(crate) fn build_coverage_out_path(flake_dir: &Path) -> Result<String> {
+    let installable = format!(".#checks.{SYSTEM}.coverage");
+    let out = Command::new("nix")
+        .current_dir(flake_dir)
+        .args([
+            "build",
+            "--no-link",
+            "--print-out-paths",
+            "--accept-flake-config",
+            &installable,
+        ])
+        .output()
+        .with_context(|| format!("spawning `nix build {installable}`"))?;
+    if !out.status.success() {
+        bail!(
+            "`nix build {installable}` failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let path = String::from_utf8(out.stdout)
+        .with_context(|| format!("`nix build {installable}` output was not UTF-8"))?
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    if path.is_empty() {
+        bail!("`nix build {installable}` returned an empty output path");
+    }
+    Ok(path)
+}
+
 /// Named derivation identities guarded by `nix probe-source`.
 pub(crate) struct SourceProbeDrvPaths {
     pub(crate) static_docs: String,

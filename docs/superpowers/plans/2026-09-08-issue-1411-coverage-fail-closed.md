@@ -53,7 +53,7 @@ Out:
     accounting, category contradictions, and nonzero outcomes at every required
     stage—including the PR #1401 metadata-101/no-`FAIL [` shape.
 
-- [ ] Task 2: Make the coverage source closure Cargo-complete and bounded
+- [x] Task 2: Make the coverage source closure Cargo-complete and bounded
   - Files: `nix/packages.nix`, `nix/checks.nix`, `xtask/src/coverage/probe.rs`,
     and its focused tests.
   - Contract: export the existing `workspaceMembers` and `cargoTargetSource`

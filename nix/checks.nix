@@ -10,6 +10,9 @@ let
     wasmTestSrc
     siteSrc
     appOfflineCargoHome
+    workspaceMembers
+    cargoMemberSource
+    cargoPackageClosure
     toolsOfflineCargoHome
     cargoArtifacts
     leanTestProfile
@@ -30,6 +33,48 @@ let
     emacsSrc
     emacsForCi
     ;
+  # The root workspace remains the coverage population. Its Cargo manifests
+  # define the recursively discovered local path package build closure.
+  coverageMembers = cargoPackageClosure workspaceMembers;
+  # Coverage source remains bounded to the package closure. The root profile is
+  # explicit producer configuration; every file beneath a covered Cargo package
+  # can be a runtime fixture loaded through CARGO_MANIFEST_DIR.
+  coverageAuxiliarySource =
+    relative:
+    let
+      isCoverageMember = builtins.any (
+        member: relative == member || pkgs.lib.hasPrefix "${member}/" relative
+      ) coverageMembers;
+    in
+    relative == ".config/nextest.toml" || isCoverageMember;
+  coverageSrc =
+    # Pure source-filter negative case: excluded auxiliary assets cannot perturb
+    # coverage source identity.
+    assert !(coverageAuxiliarySource "tools/devtool/fixture.css");
+    assert builtins.elem "tools/csr_bundle" coverageMembers;
+    assert !(builtins.elem "xtask" coverageMembers);
+    assert !(builtins.elem "tools/devtool" coverageMembers);
+    assert !(builtins.elem "tools/doctests" coverageMembers);
+    assert !(builtins.elem "tools/diagnostic-coverage-runtime" coverageMembers);
+    pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter =
+        path: type:
+        let
+          relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+        in
+        # Nix assembly is not coverage source; exclude only its top-level root.
+        !(type == "directory" && path == "${toString (craneLib.path ../.)}/nix")
+        && !(pkgs.lib.hasInfix "/xtask/" path)
+        && !(pkgs.lib.hasInfix "/docs/" path)
+        && !(pkgs.lib.hasInfix "/.github/" path)
+        && !(pkgs.lib.hasInfix "/elisp/" path)
+        && !(pkgs.lib.hasSuffix ".md" path)
+        && (
+          coverageAuxiliarySource relative
+          || cargoMemberSource coverageMembers path type
+        );
+    };
 
 # #93 / ADR-0032: shared zero-panic gate appended to each e2e testScript.
 # A server Rust panic is isolated (tests still pass), so without this it
@@ -908,40 +953,7 @@ static-code =
 coverage = craneLib.mkCargoDerivation (
   hostArgs
   // {
-    src = pkgs.lib.cleanSourceWith {
-      src = craneLib.path ../.;
-      filter =
-        path: type:
-        # Coverage-specific exclusions: none of these are
-        # instrumented, and admitting them would let unrelated edits
-        # bust the coverage cache. xtask/ is the host-only driver;
-        # tools/, docs/, .github/, elisp/, and top-level *.md are
-        # non-source.
-        # Nix assembly is not coverage source; exclude only its top-level root.
-        !(type == "directory" && path == "${toString (craneLib.path ../.)}/nix")
-        && !(pkgs.lib.hasInfix "/xtask/" path)
-        && !(pkgs.lib.hasInfix "/tools/" path)
-        && !(pkgs.lib.hasInfix "/docs/" path)
-        && !(pkgs.lib.hasInfix "/.github/" path)
-        && !(pkgs.lib.hasInfix "/elisp/" path)
-        && !(pkgs.lib.hasSuffix ".md" path)
-        && (
-          # Cargo-source ADMISSION clause (mirrors commonArgs.src
-          # :272-289): without it, ANY untracked non-gitignored file
-          # (a stray .txt, an editor temp) would enter the derivation
-          # and change its hash — impure (#37). Only buildable inputs
-          # are admitted.
-          (pkgs.lib.hasSuffix ".sql" path)
-          || (pkgs.lib.hasSuffix ".css" path)
-          || (builtins.match "scripts/.*" path != null)
-          # web/src/app/render.rs `include_str!`s csr/index.html
-          # inside a #[test], so the instrumented coverage BUILD needs
-          # it at compile time. filterCargoSources drops .html, so
-          # re-admit it explicitly or the build fails to compile.
-          || (pkgs.lib.hasSuffix "csr/index.html" path)
-          || (craneLib.filterCargoSources path type)
-        );
-    };
+    src = coverageSrc;
     inherit cargoArtifacts;
     pname = "jaunder-coverage";
     # Source-based coverage uses LLVM's embedded coverage map
@@ -976,8 +988,8 @@ coverage = craneLib.mkCargoDerivation (
     buildPhaseCargoCommand = ''
       export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
       mkdir -p emit-out
-      # devtool always exits 0 after writing emit-out/status.json;
-      # gating is the coverage-gate consumer derivation + host xtask.
+      # The producer emits checked stage evidence; the Nix gate and host xtask
+      # consume its status and reports as separate authoritative boundaries.
       devtool coverage emit --out emit-out
     '';
     installPhaseCommand = ''
@@ -992,6 +1004,11 @@ coverage = craneLib.mkCargoDerivation (
     '';
   }
 );
+  # Probe-only identity: its sole varying input is the filtered coverage source.
+  # Keep this separate from coverage.drvPath, which also includes producer inputs.
+  coverage-source-probe = pkgs.runCommand "jaunder-coverage-source-probe" { src = coverageSrc; } ''
+    touch $out
+  '';
 # Belt-and-suspenders: an independent Nix-level red for in-sandbox
 # failures (test/infra) even if a caller bypasses host xtask. The
 # coverage-regression verdict is host-only (needs committed baselines
