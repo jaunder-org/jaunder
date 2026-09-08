@@ -70,7 +70,7 @@ Out:
     routes' content, themes, cache behavior, shell outcomes, and swallowed
     versus boundary observability.
 
-- [ ] Task 4: Complete the clean cutover
+- [x] Task 4: Complete the clean cutover
   - Contract: `username_page_response`, route-supplied fetch callbacks,
     duplicated handler orchestration, and superseded document helpers are
     removed. `projector/mod.rs` remains assembly-only with explicit re-exports,
