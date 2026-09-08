@@ -535,7 +535,6 @@ let
         diagnosticClang
         devtoolBin
         pkgs.binaryen
-        pkgs.python3
         wasm-bindgen-cli
       ];
     }
@@ -555,66 +554,19 @@ let
       mkdir -p "$work"
       cp -r ${siteSrc}/. "$work/source"
       chmod -R u+w "$work/source"
-      python3 - "$work/source" "${diagnosticMinicov}" "${../tools/diagnostic-coverage-runtime}" <<'PY'
-      import pathlib
-      import sys
-
-      source, minicov, runtime = map(pathlib.Path, sys.argv[1:])
-      root_manifest = source / "Cargo.toml"
-      root = root_manifest.read_text()
-      root = root.replace(
-          "[patch.crates-io]\n",
-          f'[patch.crates-io]\nminicov = {{ path = "{minicov}" }}\n',
-          1,
-      )
-      root_manifest.write_text(root)
-      client_manifest = source / "client/Cargo.toml"
-      client = client_manifest.read_text()
-      client = client.replace(
-          "diagnostic-coverage = []",
-          'diagnostic-coverage = ["dep:diagnostic-coverage-runtime"]',
-          1,
-      )
-      client += f'\n[target.\'cfg(target_arch = "wasm32")\'.dependencies]\ndiagnostic-coverage-runtime = {{ path = "{runtime}", optional = true }}\n'
-      client_manifest.write_text(client)
-      PY
-      python3 - "$out/source-identity.json" "$work/source" "${siteSrc}" <<'PY'
-      import json
-      import pathlib
-      import sys
-
-      output, compilation_directory, nix_source = map(pathlib.Path, sys.argv[1:])
-      output.write_text(json.dumps({
-          "version": 1,
-          "source_identity": {
-              "kind": "nix-store-source",
-              "value": str(nix_source),
-          },
-          "compilation_directory": str(compilation_directory.resolve()),
-          "path_equivalence": {
-              "compiled_source_prefix": str(compilation_directory.resolve()),
-              "retained_source_mappable_module": "instrumented/csr.wasm",
-              "relationship": "The retained module is linked from LLVM IR compiled below compiled_source_prefix; the content-addressed wasm selected by pkg/manifest.json is its wasm-bindgen/wasm-opt derivative.",
-          },
-      }, indent=2) + "\n")
-      PY
+      devtool diagnostic-build prepare-source \
+        --source "$work/source" \
+        --minicov "${diagnosticMinicov}" \
+        --runtime "${../tools/diagnostic-coverage-runtime}" \
+        --source-identity "$out/source-identity.json" \
+        --nix-source "${siteSrc}"
 
       set +e
       (
         set -e
-        python3 - "$out/toolchain-rustc-vv.txt" "$out/toolchain-clang-version.txt" <<'PY'
-      import pathlib
-      import re
-      import sys
-
-      rustc, clang = (pathlib.Path(path).read_text() for path in sys.argv[1:])
-      rust_llvm = re.search(r"^LLVM version: ([0-9]+)", rustc, re.MULTILINE)
-      clang_llvm = re.search(r"clang version ([0-9]+)", clang)
-      if rust_llvm is None or clang_llvm is None:
-          raise SystemExit("could not establish Rust and Clang LLVM major versions")
-      if {rust_llvm.group(1), clang_llvm.group(1)} != {"22"}:
-          raise SystemExit(f"coverage pipeline requires LLVM 22; rustc={rust_llvm.group(1)} clang={clang_llvm.group(1)}")
-      PY
+        devtool diagnostic-build validate-llvm \
+          --rustc-version "$out/toolchain-rustc-vv.txt" \
+          --clang-version "$out/toolchain-clang-version.txt"
         cd "$work/source"
         export CARGO_HOME=${appOfflineCargoHome}
         export CARGO_TARGET_DIR="$work/target"
@@ -623,126 +575,34 @@ let
         export CFLAGS_wasm32_unknown_unknown="--target=wasm32-unknown-unknown"
         cargo rustc -p csr --features diagnostic-coverage --target wasm32-unknown-unknown --release --lib --message-format=json-render-diagnostics -- -Cinstrument-coverage -Zno-profiler-runtime --emit=llvm-ir -C link-arg=--no-gc-sections -Zno-link > "$work/cargo-artifacts.jsonl"
         cp "$work/cargo-artifacts.jsonl" "$out/instrumented/cargo-artifacts.jsonl"
-        python3 - "$work/target/wasm32-unknown-unknown/release" "$work/root-ir" "$work/root-rlink" "$out/instrumented/ir-manifest.json" <<'PY'
-      import json
-      import pathlib
-      import sys
-
-      target_release, ir_output, rlink_output, manifest = map(pathlib.Path, sys.argv[1:])
-      target_release = target_release.resolve()
-      search_roots = (target_release, target_release / "deps")
-      root_ir = sorted(
-          path for directory in search_roots for path in directory.glob("csr*.ll") if path.is_file()
-      )
-      root_rlink = sorted(
-          path for directory in search_roots for path in directory.glob("csr*.rlink") if path.is_file()
-      )
-      if len(root_ir) != 1 or len(root_rlink) != 1:
-          raise SystemExit(f"expected one fresh csr LLVM IR and rlink; ir={root_ir}, rlink={root_rlink}")
-      ir_output.write_text(f"{root_ir[0]}\n")
-      rlink_output.write_text(f"{root_rlink[0]}\n")
-      manifest.write_text(json.dumps({
-          "version": 4,
-          "root_ir_selection": ["release/csr*.ll", "release/deps/csr*.ll"],
-          "root_rlink_selection": ["release/csr*.rlink", "release/deps/csr*.rlink"],
-          "instrumented_root_ir": str(root_ir[0]),
-          "rustc_link_metadata": str(root_rlink[0]),
-          "cargo_artifacts": "cargo-artifacts.jsonl",
-      }, indent=2) + "\n")
-      PY
+        devtool diagnostic-build discover-root \
+          --target-release "$work/target/wasm32-unknown-unknown/release" \
+          --root-ir "$work/root-ir" \
+          --root-rlink "$work/root-rlink" \
+          --manifest "$out/instrumented/ir-manifest.json"
         root_ir="$(cat "$work/root-ir")"
         root_rlink="$(cat "$work/root-rlink")"
         cp "$root_ir" "$out/instrumented/csr.ll"
         cp "$root_rlink" "$out/instrumented/csr.rlink"
         rustc --target wasm32-unknown-unknown -Zlink-only "$out/instrumented/csr.rlink"
-        python3 - "$work/target/wasm32-unknown-unknown/release" "$out/instrumented/ir-manifest.json" "$out/instrumented/csr.wasm" <<'PY'
-      import json
-      import pathlib
-      import shutil
-      import sys
-
-      target_release, manifest_path, retained_wasm = map(pathlib.Path, sys.argv[1:])
-      candidates = sorted(
-          path
-          for directory in (target_release, target_release / "deps")
-          for path in directory.glob("csr*.wasm")
-          if path.is_file()
-      )
-      if len(candidates) != 1:
-          raise SystemExit(f"expected exactly one fresh CSR wasm after rustc -Zlink-only; found {candidates}")
-      shutil.copyfile(candidates[0], retained_wasm)
-      manifest = json.loads(manifest_path.read_text())
-      manifest["linked_wasm_selection"] = ["release/csr*.wasm", "release/deps/csr*.wasm"]
-      manifest["linked_wasm"] = str(candidates[0])
-      manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-      PY
+        devtool diagnostic-build retain-linked-wasm \
+          --target-release "$work/target/wasm32-unknown-unknown/release" \
+          --manifest "$out/instrumented/ir-manifest.json" \
+          --retained-wasm "$out/instrumented/csr.wasm"
         devtool csr-bundle \
           --wasm "$out/instrumented/csr.wasm" \
           --out "$out/pkg" \
           --diagnostic-coverage-metadata "$out/coverage-metadata.json" \
           --diagnostic-toolchain-identity "$out/toolchain-identity.json" \
           --diagnostic-minicov-version 0.3.8
-        python3 - "$out/coverage-metadata.json" <<'PY'
-      import json
-      import pathlib
-      import sys
-
-      metadata = json.loads(pathlib.Path(sys.argv[1]).read_text())
-      if metadata["result"] != "preserved":
-          raise SystemExit(f"coverage metadata was not retained: {metadata['result']}")
-      if not metadata["input"]["wasm_bindgen_metadata"]:
-          raise SystemExit("manual link omitted __wasm_bindgen_unstable before wasm-bindgen")
-      PY
+        devtool diagnostic-build assert-coverage --metadata "$out/coverage-metadata.json"
       ) > "$out/pipeline.log" 2>&1
       pipeline_exit=$?
       set -e
 
-      python3 - "$out/status.json" "$pipeline_exit" <<'PY'
-      import hashlib
-      import json
-      import pathlib
-      import sys
-
-      status_path = pathlib.Path(sys.argv[1])
-      pipeline_exit = int(sys.argv[2])
-      root = status_path.parent
-      succeeded = pipeline_exit == 0
-
-      def sha256(relative_path):
-          path = root / relative_path
-          if not path.is_file():
-              return None
-          return hashlib.sha256(path.read_bytes()).hexdigest()
-
-      retained_module = "instrumented/csr.wasm"
-      served_module = None
-      if succeeded:
-          manifest = json.loads((root / "pkg/manifest.json").read_text())
-          wasm = next(asset for asset in manifest["assets"] if asset.get("role") == "wasm")
-          served_module = wasm["path"]
-      status = {
-          "version": 3,
-          "outcome": "succeeded" if succeeded else "failed",
-          "pipeline_exit": pipeline_exit,
-          "module": retained_module if succeeded else None,
-          "bundle": served_module if succeeded else None,
-          "served_module": {
-              "path": served_module,
-              "sha256": sha256(f"pkg/{served_module}"),
-          } if succeeded else None,
-          "source_mappable_module": {
-              "path": retained_module,
-              "sha256": sha256(retained_module),
-              "relationship_to_served_module": "input to wasm-bindgen and wasm-opt that produced the content-addressed module selected by pkg/manifest.json",
-          } if succeeded else None,
-          "source_identity": "source-identity.json",
-          "coverage_metadata": "coverage-metadata.json" if (root / "coverage-metadata.json").is_file() else None,
-          "toolchain_identity": "toolchain-identity.json" if (root / "toolchain-identity.json").is_file() else None,
-          "ir_manifest": "instrumented/ir-manifest.json" if (root / "instrumented/ir-manifest.json").is_file() else None,
-          "diagnostic_log": "pipeline.log",
-      }
-      status_path.write_text(json.dumps(status, indent=2) + "\n")
-      PY
+      devtool diagnostic-build write-instrumented-status \
+        --status "$out/status.json" \
+        --pipeline-exit "$pipeline_exit"
     '';
 
   # The timing baseline intentionally shares the diagnostic pinned nightly, source
@@ -751,7 +611,7 @@ let
   # exports; those are unavoidable because they are what this experiment measures.
   diagnosticBaselineCsrWasmBundle = pkgs.runCommand "jaunder-diagnostic-baseline-csr-wasm-bundle"
     {
-      nativeBuildInputs = [ pkgs.stdenv.cc diagnosticToolchain devtoolBin pkgs.binaryen pkgs.python3 wasm-bindgen-cli ];
+      nativeBuildInputs = [ pkgs.stdenv.cc diagnosticToolchain devtoolBin pkgs.binaryen wasm-bindgen-cli ];
     }
     ''
       export PATH=${diagnosticToolchain}/bin:$PATH
@@ -765,27 +625,8 @@ let
       cargo build -p csr --target wasm32-unknown-unknown --release
       mkdir -p "$out"
       devtool csr-bundle --wasm "$work/target/wasm32-unknown-unknown/release/csr.wasm" --out "$out/pkg"
-      python3 - "$out/status.json" <<'PY'
-      import hashlib, json, pathlib, sys
-      status = pathlib.Path(sys.argv[1])
-      root = status.parent
-      manifest = json.loads((root / "pkg/manifest.json").read_text())
-      wasm = next(asset for asset in manifest["assets"] if asset.get("role") == "wasm")
-      served_module = wasm["path"]
-      status.write_text(json.dumps({
-          "version": 1, "outcome": "succeeded",
-          "served_module": {
-              "path": served_module,
-              "sha256": hashlib.sha256((root / "pkg" / served_module).read_bytes()).hexdigest(),
-          },
-          "unavoidable_deviations": [
-              "omits -Cinstrument-coverage and minicov profiler runtime",
-              "omits diagnostic-coverage feature and diagnostic browser exports",
-          ],
-      }, indent=2) + "\n")
-      PY
+      devtool diagnostic-build write-baseline-status --status "$out/status.json"
     '';
-
   diagnosticBaselineJaunderBin = craneLib.buildPackage (
     hostArgs
     // {

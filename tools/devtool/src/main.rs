@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand};
 mod check;
 mod coverage;
 mod csr_bundle;
+mod diagnostic_build;
 mod doctests;
 mod pg;
 mod provision;
@@ -35,6 +36,9 @@ enum Command {
     /// WebAssembly coverage evidence lifecycle for the Nix browser producers.
     #[command(subcommand)]
     WasmCoverage(WasmCoverageCmd),
+    /// Structured preparation and artifact recording for diagnostic CSR builds.
+    #[command(subcommand)]
+    DiagnosticBuild(DiagnosticBuildCmd),
     /// Doctest gate subcommands.
     #[command(subcommand)]
     Doctests(DoctestsCmd),
@@ -176,6 +180,67 @@ enum WasmCoverageCmd {
 }
 
 #[derive(Subcommand)]
+enum DiagnosticBuildCmd {
+    /// Rewrite copied manifests and record the source identity.
+    PrepareSource {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        minicov: PathBuf,
+        #[arg(long)]
+        runtime: PathBuf,
+        #[arg(long)]
+        source_identity: PathBuf,
+        #[arg(long)]
+        nix_source: PathBuf,
+    },
+    /// Require the Rust and Clang compiler reports to identify LLVM 22.
+    ValidateLlvm {
+        #[arg(long)]
+        rustc_version: PathBuf,
+        #[arg(long)]
+        clang_version: PathBuf,
+    },
+    /// Locate Cargo's unique root LLVM IR and rlink artifacts.
+    DiscoverRoot {
+        #[arg(long)]
+        target_release: PathBuf,
+        #[arg(long)]
+        root_ir: PathBuf,
+        #[arg(long)]
+        root_rlink: PathBuf,
+        #[arg(long)]
+        manifest: PathBuf,
+    },
+    /// Retain Cargo's uniquely linked CSR wasm and update the IR manifest.
+    RetainLinkedWasm {
+        #[arg(long)]
+        target_release: PathBuf,
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        retained_wasm: PathBuf,
+    },
+    /// Assert that wasm-bindgen retained coverage metadata after bundling.
+    AssertCoverage {
+        #[arg(long)]
+        metadata: PathBuf,
+    },
+    /// Write the durable status after the failure-retaining diagnostic pipeline.
+    WriteInstrumentedStatus {
+        #[arg(long)]
+        status: PathBuf,
+        #[arg(long)]
+        pipeline_exit: i32,
+    },
+    /// Write the successful baseline bundle status.
+    WriteBaselineStatus {
+        #[arg(long)]
+        status: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum DoctestsCmd {
     /// Run the workspace doctests and emit the reconciliation status.
     Emit {
@@ -202,6 +267,44 @@ fn main() -> Result<()> {
         Command::WasmCoverage(WasmCoverageCmd::Initialize) => wasm_coverage::initialize(),
         Command::WasmCoverage(WasmCoverageCmd::Map { site_src }) => wasm_coverage::map(&site_src),
         Command::WasmCoverage(WasmCoverageCmd::Finalize) => wasm_coverage::finalize(),
+        Command::DiagnosticBuild(DiagnosticBuildCmd::PrepareSource {
+            source,
+            minicov,
+            runtime,
+            source_identity,
+            nix_source,
+        }) => diagnostic_build::prepare_source(
+            &source,
+            &minicov,
+            &runtime,
+            &source_identity,
+            &nix_source,
+        ),
+        Command::DiagnosticBuild(DiagnosticBuildCmd::ValidateLlvm {
+            rustc_version,
+            clang_version,
+        }) => diagnostic_build::validate_llvm(&rustc_version, &clang_version),
+        Command::DiagnosticBuild(DiagnosticBuildCmd::DiscoverRoot {
+            target_release,
+            root_ir,
+            root_rlink,
+            manifest,
+        }) => diagnostic_build::discover_root(&target_release, &root_ir, &root_rlink, &manifest),
+        Command::DiagnosticBuild(DiagnosticBuildCmd::RetainLinkedWasm {
+            target_release,
+            manifest,
+            retained_wasm,
+        }) => diagnostic_build::retain_linked_wasm(&target_release, &manifest, &retained_wasm),
+        Command::DiagnosticBuild(DiagnosticBuildCmd::AssertCoverage { metadata }) => {
+            diagnostic_build::assert_coverage(&metadata)
+        }
+        Command::DiagnosticBuild(DiagnosticBuildCmd::WriteInstrumentedStatus {
+            status,
+            pipeline_exit,
+        }) => diagnostic_build::write_instrumented_status(&status, pipeline_exit),
+        Command::DiagnosticBuild(DiagnosticBuildCmd::WriteBaselineStatus { status }) => {
+            diagnostic_build::write_baseline_status(&status)
+        }
         Command::Doctests(DoctestsCmd::Emit { out }) => doctests::emit::run(&out),
         Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
         Command::Run(args) => run::run(&args.cmd, args.cwd, args.timeout),

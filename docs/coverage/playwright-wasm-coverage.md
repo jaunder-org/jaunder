@@ -13,10 +13,10 @@ The successful executable commands were:
 
 ```bash
 cargo xtask wasm-coverage probe
-cargo xtask wasm-coverage measure --quiescent-window "2026-09-07 user-confirmed idle host"
+cargo xtask wasm-coverage measure --quiescent-window "2026-09-08 user-confirmed idle host"
 ```
 
-The latter completed with exit 0 in 1,094,165 ms. The retained primary evidence
+The latter completed with exit 0 in 1,058,962 ms. The retained primary evidence
 is `.xtask/gcroots/wasm-coverage-csr/`; the executable browser and reconciled
 evidence is `.xtask/wasm-coverage/`.
 
@@ -151,17 +151,17 @@ cache-buster, Nix realization, and retained run root under
 The metric is focused-flow milliseconds and raw uncompressed bytes of the
 content-addressed wasm selected by each bundle's `pkg/manifest.json`.
 
-| Browser  | Baseline median [range] | Instrumented median [range] |                   Delta |
-| -------- | ----------------------: | --------------------------: | ----------------------: |
-| Chromium |       593 ms [577, 607] |           598 ms [574, 605] |      +5 ms (+0.843170%) |
-| Firefox  | 5,069 ms [4,088, 8,807] |    6,363 ms [4,707, 15,191] | +1,294 ms (+25.527717%) |
+| Browser  | Baseline median [range] | Instrumented median [range] |                 Delta |
+| -------- | ----------------------: | --------------------------: | --------------------: |
+| Chromium |       609 ms [583, 635] |           597 ms [595, 605] |   -12 ms (-1.970443%) |
+| Firefox  | 4,239 ms [3,060, 5,566] |     5,062 ms [3,160, 7,367] | +823 ms (+19.414956%) |
 
 The baseline served wasm was 3,333,996 bytes at
 `pkg/01a228c4bb955c1f8056c5d66428cecc4f0c48d5d9c1c5834d725718b555841a.wasm`. The
 instrumented served wasm was 3,365,676 bytes at the content-addressed path named
 above: +31,680 bytes (+0.950211%). The timing ranges overlap in both browsers.
 Therefore this experiment makes **no measured slowdown claim and no speedup
-claim**; the higher instrumented medians are not evidence of a slowdown.
+claim**; the median differences are not evidence of either.
 
 ## Ownership, costs, and remaining risk
 
@@ -179,7 +179,7 @@ ownership model only; the concrete browser and reconciliation outcomes remain
 local executable evidence.
 
 Remaining costs and risks are the 31,680-byte served-WASM overhead; the
-1,124,282 ms quiescent-host experiment wall time; two browser/Nix realization
+1,058,962 ms quiescent-host experiment wall time; two browser/Nix realization
 cost; continued compatibility of the pinned Rust/LLVM raw-profile, profdata, and
 line-report formats; optimizer/bundler preservation; and the need to retain and
 validate both complete browser evidence sets. A future permanent gate must keep
@@ -227,8 +227,8 @@ would not be supported by this finding.
 - Primary producer evidence:
   `.xtask/gcroots/wasm-coverage-csr/{status.json,build-configuration.json,coverage-metadata.json,source-identity.json,toolchain-identity.json}`.
 - Browser evidence:
-  `.xtask/wasm-coverage/{chromium,firefox}/{status.json,module/jaunder.wasm,profiles/browser.profraw,mapped/browser.profdata,mapped/llvm-cov.txt,diagnostics/}`.
+  `.xtask/wasm-coverage/{chromium,firefox}/{status.json,module/pkg/6f648f91c83f3d96df60be4e2c58a0c468a1533fa1fb148aabee3da70804396a.wasm,profiles/browser.profraw,mapped/browser.profdata,mapped/llvm-cov.txt,diagnostics/}`.
 - Reconciled evidence:
   `.xtask/wasm-coverage/{status.json,merged/browser.profdata,merged/llvm-cov.txt}`.
 - Measurement evidence: `.xtask/wasm-coverage/measurement/manifest-v1.json` and
-  its retained `warmups/` and `runs/` realizations.
+  its retained `runs/` realizations.

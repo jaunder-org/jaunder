@@ -445,24 +445,52 @@ fn probe_with(runner: &dyn CommandRunner) -> Result<Aggregate> {
     Ok(aggregate)
 }
 
-fn realize_and_unpack(runner: &dyn CommandRunner, browser: &str, root: &Path) -> Result<()> {
-    let package = format!("wasm-coverage-{browser}");
-    let output = Path::new(".xtask/gcroots").join(&package);
-    fs::create_dir_all(".xtask/gcroots")?;
-    clear_destination(root, &format!("clearing stale {}", root.display()))?;
+struct NixRealization<'a> {
+    package: &'a str,
+    output: &'a Path,
+    impure_environment: Option<(&'a str, &'a str)>,
+}
+
+fn realize_nix(runner: &dyn CommandRunner, realization: NixRealization<'_>) -> Result<()> {
+    if let Some(parent) = realization.output.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let mut command = Command::new("nix");
+    command.args(["build", "-L"]);
+    if realization.impure_environment.is_some() {
+        command.arg("--impure");
+    }
     command
-        .args(["build", "-L", "--accept-flake-config", "--out-link"])
-        .arg(&output)
-        .arg(format!(".#{}", package));
+        .args(["--accept-flake-config", "--out-link"])
+        .arg(realization.output)
+        .arg(format!(".#{}", realization.package));
+    if let Some((name, value)) = realization.impure_environment {
+        command.env(name, value);
+    }
     let result = runner.run(&mut command)?;
     if !result.status.success() {
         bail!(
-            "nix build exited with {}: {}",
+            "nix build for {} exited with {}: {}",
+            realization.package,
             result.status,
             String::from_utf8_lossy(&result.stderr).trim()
         );
     }
+    Ok(())
+}
+
+fn realize_and_unpack(runner: &dyn CommandRunner, browser: &str, root: &Path) -> Result<()> {
+    let package = format!("wasm-coverage-{browser}");
+    let output = Path::new(".xtask/gcroots").join(&package);
+    clear_destination(root, &format!("clearing stale {}", root.display()))?;
+    realize_nix(
+        runner,
+        NixRealization {
+            package: &package,
+            output: &output,
+            impure_environment: None,
+        },
+    )?;
     unpack_archive(
         &output.join(format!("{package}.tar.gz")),
         root,
@@ -817,20 +845,14 @@ fn prove_count_union(
 }
 fn realize_csr(runner: &dyn CommandRunner) -> Result<PathBuf> {
     let output = Path::new(".xtask/gcroots/wasm-coverage-csr");
-    fs::create_dir_all(".xtask/gcroots")?;
-    let mut command = Command::new("nix");
-    command
-        .args(["build", "-L", "--accept-flake-config", "--out-link"])
-        .arg(output)
-        .arg(".#wasm-coverage-csr");
-    let result = runner.run(&mut command)?;
-    if !result.status.success() {
-        bail!(
-            "diagnostic CSR build exited with {}: {}",
-            result.status,
-            String::from_utf8_lossy(&result.stderr).trim()
-        );
-    }
+    realize_nix(
+        runner,
+        NixRealization {
+            package: "wasm-coverage-csr",
+            output,
+            impure_environment: None,
+        },
+    )?;
     Ok(output.to_owned())
 }
 
@@ -950,27 +972,14 @@ fn realize_measurement(
     }
     let package = format!("wasm-coverage-measure-{browser}-{mode}");
     let output = Path::new(".xtask/gcroots").join(format!("{package}-{cache_buster}"));
-    fs::create_dir_all(".xtask/gcroots")?;
-    let mut command = Command::new("nix");
-    command
-        .args([
-            "build",
-            "-L",
-            "--impure",
-            "--accept-flake-config",
-            "--out-link",
-        ])
-        .arg(&output)
-        .arg(format!(".#{package}"))
-        .env("JAUNDER_WASM_COVERAGE_CACHE_BUSTER", cache_buster);
-    let result = runner.run(&mut command)?;
-    if !result.status.success() {
-        bail!(
-            "nix build exited with {}: {}",
-            result.status,
-            String::from_utf8_lossy(&result.stderr).trim()
-        );
-    }
+    realize_nix(
+        runner,
+        NixRealization {
+            package: &package,
+            output: &output,
+            impure_environment: Some(("JAUNDER_WASM_COVERAGE_CACHE_BUSTER", cache_buster)),
+        },
+    )?;
     unpack_archive(
         &output.join(format!("{package}.tar.gz")),
         evidence,
