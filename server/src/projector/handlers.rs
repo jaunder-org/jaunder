@@ -2,23 +2,17 @@ use axum::{
     Router,
     extract::{Extension, Path},
     http::HeaderMap,
-    response::{IntoResponse, Response},
+    response::Response,
     routing::get,
 };
-use common::pagination::PageSize;
 use common::permalink_route::PermalinkRoute;
-use common::seed::{PageSeed, PublicPresentation};
 use common::tag::Tag;
-use common::theme::PublicThemeRoute;
 use common::username::Username;
-use common::visibility::ViewerIdentity;
 use serde::{Deserialize, Deserializer};
 
 use crate::soft_path::SoftPath;
-use std::{future::Future, sync::Arc};
+use std::sync::Arc;
 use storage::{PostStorage, ThemeStorage, UserStorage};
-use web::error::{self, SwallowedSource};
-use web::timeline;
 
 use super::{PublicProjection, PublicProjector, Shell, document};
 
@@ -62,6 +56,7 @@ impl<'de> Deserialize<'de> for PermalinkPath {
 
 async fn permalink(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(users): Extension<Arc<dyn UserStorage>>,
     Extension(themes): Extension<Arc<dyn ThemeStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
@@ -72,82 +67,21 @@ async fn permalink(
         // resolve it, preserving the projector's uniform shell soft-404.
         return document::shell_response(&shell);
     };
-    PublicProjector::new(posts, themes, shell)
+    PublicProjector::new(posts, users, themes, shell)
         .project(PublicProjection::Permalink(route), &headers)
         .await
 }
 
 async fn site_timeline(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(users): Extension<Arc<dyn UserStorage>>,
     Extension(themes): Extension<Arc<dyn ThemeStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
 ) -> Response {
-    PublicProjector::new(posts, themes, shell)
+    PublicProjector::new(posts, users, themes, shell)
         .project(PublicProjection::SiteTimeline, &headers)
         .await
-}
-
-struct ThemeStores<'a> {
-    users: &'a dyn UserStorage,
-    themes: &'a dyn ThemeStorage,
-}
-
-/// Project a username-keyed public page with the route owner's effective theme.
-///
-/// The route fetch remains authoritative for unknown-user semantics: profiles
-/// project an empty page, while user-tag routes soft-fall back to the shell.
-async fn username_page_response<F, R, Fut>(
-    username: SoftPath<Username>,
-    headers: &HeaderMap,
-    shell: &Shell,
-    context: &'static str,
-    stores: ThemeStores<'_>,
-    route: R,
-    fetch_seed: F,
-) -> Response
-where
-    F: FnOnce(Username) -> Fut,
-    R: FnOnce(&Username) -> PublicThemeRoute,
-    Fut: Future<Output = web::error::InternalResult<PageSeed>>,
-{
-    let Some(username): Option<Username> = username.into() else {
-        return document::shell_response(shell);
-    };
-    let lookup_username = username.clone();
-    let seed = match fetch_seed(username).await {
-        Ok(seed) => seed,
-        Err(error) => {
-            error::report_swallowed(
-                error.kind(),
-                error.class(),
-                context,
-                SwallowedSource::Error(&error),
-            );
-            return document::shell_response(shell);
-        }
-    };
-    let owner = match stores.users.get_user_by_username(&lookup_username).await {
-        Ok(Some(author)) => storage::PublicThemeOwner::Author(author.user_id),
-        Ok(None) => storage::PublicThemeOwner::Site,
-        Err(error) => {
-            error::InternalError::from(error)
-                .with_context("boundary", context)
-                .emit_boundary_failure();
-            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-    let theme_route = route(&lookup_username);
-    let theme = match storage::resolve_public_theme(owner, &theme_route, stores.themes).await {
-        Ok(theme) => theme,
-        Err(error) => {
-            error::InternalError::from(error)
-                .with_context("boundary", context)
-                .emit_boundary_failure();
-            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-    document::cacheable_presentation(headers, &PublicPresentation { theme, page: seed })
 }
 
 async fn profile(
@@ -158,33 +92,17 @@ async fn profile(
     headers: HeaderMap,
     Path(username): Path<SoftPath<Username>>,
 ) -> Response {
-    username_page_response(
-        username,
-        &headers,
-        &shell,
-        "server.projector.profile",
-        ThemeStores {
-            users: users.as_ref(),
-            themes: themes.as_ref(),
-        },
-        PublicThemeRoute::author,
-        |username| async move {
-            timeline::fetch_user_posts(
-                posts.as_ref(),
-                &ViewerIdentity::Anonymous,
-                &username,
-                None,
-                Some(PageSize::default()),
-            )
-            .await
-            .map(|page| PageSeed::Profile { username, page })
-        },
-    )
-    .await
+    let Some(username) = username.into() else {
+        return document::shell_response(&shell);
+    };
+    PublicProjector::new(posts, users, themes, shell)
+        .project(PublicProjection::Profile(username), &headers)
+        .await
 }
 
 async fn site_tag(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
+    Extension(users): Extension<Arc<dyn UserStorage>>,
     Extension(themes): Extension<Arc<dyn ThemeStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
@@ -200,49 +118,9 @@ async fn site_tag(
     let Some(tag) = tag.into() else {
         return document::shell_response(&shell);
     };
-    let result = timeline::fetch_posts_by_tag(
-        posts.as_ref(),
-        &ViewerIdentity::Anonymous,
-        &tag,
-        None,
-        Some(PageSize::default()),
-    )
-    .await;
-    match result {
-        Ok(page) => {
-            let theme = match storage::resolve_public_theme(
-                storage::PublicThemeOwner::Site,
-                &PublicThemeRoute::site_tag(&tag),
-                themes.as_ref(),
-            )
-            .await
-            {
-                Ok(theme) => theme,
-                Err(error) => {
-                    error::InternalError::from(error)
-                        .with_context("boundary", "server.projector.site_tag")
-                        .emit_boundary_failure();
-                    return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
-                }
-            };
-            document::cacheable_presentation(
-                &headers,
-                &PublicPresentation {
-                    theme,
-                    page: PageSeed::SiteTag { tag, page },
-                },
-            )
-        }
-        Err(error) => {
-            error::report_swallowed(
-                error.kind(),
-                error.class(),
-                "server.projector.site_tag",
-                SwallowedSource::Error(&error),
-            );
-            document::shell_response(&shell)
-        }
-    }
+    PublicProjector::new(posts, users, themes, shell)
+        .project(PublicProjection::SiteTag(tag), &headers)
+        .await
 }
 
 async fn user_tag(
@@ -253,38 +131,10 @@ async fn user_tag(
     headers: HeaderMap,
     Path((username, tag)): Path<(SoftPath<Username>, SoftPath<Tag>)>,
 ) -> Response {
-    let Some(tag): Option<Tag> = tag.into() else {
+    let (Some(username), Some(tag)) = (username.into(), tag.into()) else {
         return document::shell_response(&shell);
     };
-    let fetch_users = Arc::clone(&users);
-    let route_tag = tag.clone();
-    username_page_response(
-        username,
-        &headers,
-        &shell,
-        "server.projector.user_tag",
-        ThemeStores {
-            users: users.as_ref(),
-            themes: themes.as_ref(),
-        },
-        move |username| PublicThemeRoute::author_tag(username, &route_tag),
-        |username| async move {
-            timeline::fetch_user_posts_by_tag(
-                posts.as_ref(),
-                fetch_users.as_ref(),
-                &ViewerIdentity::Anonymous,
-                &username,
-                &tag,
-                None,
-                Some(PageSize::default()),
-            )
-            .await
-            .map(|page| PageSeed::UserTag {
-                username,
-                tag,
-                page,
-            })
-        },
-    )
-    .await
+    PublicProjector::new(posts, users, themes, shell)
+        .project(PublicProjection::UserTag { username, tag }, &headers)
+        .await
 }

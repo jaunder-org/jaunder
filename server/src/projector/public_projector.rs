@@ -6,28 +6,37 @@ use common::{
     pagination::PageSize,
     permalink_route::PermalinkRoute,
     seed::{PageSeed, PublicPresentation},
-    theme::PublicThemeRoute,
+    tag::Tag,
+    theme::{PublicThemeRoute, PublishedThemePresentation},
     time::UtcInstant,
+    username::Username,
     visibility::ViewerIdentity,
 };
 use std::sync::Arc;
-use storage::{PostStorage, ThemeStorage};
-use web::{error::InternalError, posts, timeline};
+use storage::{PostStorage, ThemeStorage, UserStorage};
+use web::{
+    error::{self, InternalError, SwallowedSource},
+    posts, timeline,
+};
 
 use super::{Shell, document};
 
-/// The public routes currently served by the projector.
+/// The public routes served by the projector.
 ///
 /// Route handlers decode their soft path segments before selecting an operation,
 /// preserving their SPA-shell behavior for malformed paths.
 pub(crate) enum PublicProjection {
     Permalink(PermalinkRoute),
     SiteTimeline,
+    Profile(Username),
+    SiteTag(Tag),
+    UserTag { username: Username, tag: Tag },
 }
 
 /// Projects anonymous public routes into their final HTTP responses.
 pub(crate) struct PublicProjector {
     posts: Arc<dyn PostStorage>,
+    users: Arc<dyn UserStorage>,
     themes: Arc<dyn ThemeStorage>,
     shell: Shell,
 }
@@ -36,11 +45,13 @@ impl PublicProjector {
     #[must_use]
     pub(crate) fn new(
         posts: Arc<dyn PostStorage>,
+        users: Arc<dyn UserStorage>,
         themes: Arc<dyn ThemeStorage>,
         shell: Shell,
     ) -> Self {
         Self {
             posts,
+            users,
             themes,
             shell,
         }
@@ -59,6 +70,9 @@ impl PublicProjector {
         match operation {
             PublicProjection::Permalink(route) => self.permalink(route).await,
             PublicProjection::SiteTimeline => self.site_timeline().await,
+            PublicProjection::Profile(username) => self.profile(username).await,
+            PublicProjection::SiteTag(tag) => self.site_tag(tag).await,
+            PublicProjection::UserTag { username, tag } => self.user_tag(username, tag).await,
         }
     }
 
@@ -130,6 +144,119 @@ impl PublicProjector {
             theme,
             page: PageSeed::SiteTimeline(page),
         })
+    }
+
+    async fn profile(&self, username: Username) -> ProjectionResult {
+        let page = match timeline::fetch_user_posts(
+            self.posts.as_ref(),
+            &ViewerIdentity::Anonymous,
+            &username,
+            None,
+            Some(PageSize::default()),
+        )
+        .await
+        {
+            Ok(page) => page,
+            Err(error) => return Err(Self::swallowed(&error, "server.projector.profile")),
+        };
+        let theme = self
+            .author_theme(
+                &username,
+                PublicThemeRoute::author(&username),
+                "server.projector.profile",
+            )
+            .await?;
+        Ok(PublicPresentation {
+            theme,
+            page: PageSeed::Profile { username, page },
+        })
+    }
+
+    async fn site_tag(&self, tag: Tag) -> ProjectionResult {
+        let page = match timeline::fetch_posts_by_tag(
+            self.posts.as_ref(),
+            &ViewerIdentity::Anonymous,
+            &tag,
+            None,
+            Some(PageSize::default()),
+        )
+        .await
+        {
+            Ok(page) => page,
+            Err(error) => return Err(Self::swallowed(&error, "server.projector.site_tag")),
+        };
+        let theme = match storage::resolve_public_theme(
+            storage::PublicThemeOwner::Site,
+            &PublicThemeRoute::site_tag(&tag),
+            self.themes.as_ref(),
+        )
+        .await
+        {
+            Ok(theme) => theme,
+            Err(error) => return Err(Self::boundary(error, "server.projector.site_tag")),
+        };
+        Ok(PublicPresentation {
+            theme,
+            page: PageSeed::SiteTag { tag, page },
+        })
+    }
+
+    async fn user_tag(&self, username: Username, tag: Tag) -> ProjectionResult {
+        let page = match timeline::fetch_user_posts_by_tag(
+            self.posts.as_ref(),
+            self.users.as_ref(),
+            &ViewerIdentity::Anonymous,
+            &username,
+            &tag,
+            None,
+            Some(PageSize::default()),
+        )
+        .await
+        {
+            Ok(page) => page,
+            Err(error) => return Err(Self::swallowed(&error, "server.projector.user_tag")),
+        };
+        let theme = self
+            .author_theme(
+                &username,
+                PublicThemeRoute::author_tag(&username, &tag),
+                "server.projector.user_tag",
+            )
+            .await?;
+        Ok(PublicPresentation {
+            theme,
+            page: PageSeed::UserTag {
+                username,
+                tag,
+                page,
+            },
+        })
+    }
+
+    async fn author_theme(
+        &self,
+        username: &Username,
+        route: PublicThemeRoute,
+        context: &'static str,
+    ) -> Result<PublishedThemePresentation, ProjectionFailure> {
+        let owner = match self.users.get_user_by_username(username).await {
+            Ok(Some(author)) => storage::PublicThemeOwner::Author(author.user_id),
+            Ok(None) => storage::PublicThemeOwner::Site,
+            Err(error) => return Err(Self::boundary(error, context)),
+        };
+        storage::resolve_public_theme(owner, &route, self.themes.as_ref())
+            .await
+            .map_err(|error| Self::boundary(error, context))
+    }
+
+    fn swallowed(error: &InternalError, context: &'static str) -> ProjectionFailure {
+        error::report_swallowed(
+            error.kind(),
+            error.class(),
+            context,
+            SwallowedSource::Error(error),
+        );
+        ProjectionFailure::Shell
     }
 
     fn boundary(error: impl Into<InternalError>, context: &'static str) -> ProjectionFailure {

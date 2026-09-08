@@ -56,7 +56,7 @@ Out:
     authenticated/anonymous byte identity, themes, shell misses, and one-time
     boundary observability.
 
-- [ ] Task 3: Migrate the soft-failure listing routes
+- [x] Task 3: Migrate the soft-failure listing routes
   - Contract: this task extends `PublicProjector` to its final exact Post, User,
     Theme, and Shell dependencies and closed `Permalink`, `SiteTimeline`,
     `Profile`, `SiteTag`, and `UserTag` operations. Profile, site-tag, and
