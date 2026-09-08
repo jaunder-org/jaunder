@@ -33,7 +33,7 @@ where
         return;
     };
     spawn_local(async move {
-        state.append(fetch(claim.cursor, Some(PageSize::default())).await);
+        state.append(claim, fetch(claim.cursor, Some(PageSize::default())).await);
     });
 }
 
