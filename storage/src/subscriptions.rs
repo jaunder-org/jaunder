@@ -116,78 +116,69 @@ pub trait SubscriptionStorage: Send + Sync {
     async fn local_channel_id(&self) -> InternalResult<ChannelId>;
 }
 
-/// Per-backend marker for [`SubscriptionStore`].
-///
-/// The statements intentionally use the shared SQL subset both backends accept:
-/// numbered `$n` bind markers (accepted by `SQLite` and required by `Postgres`) and
-/// standard `CAST(... AS TEXT)` rather than backend-specific `::text`.
-pub trait SubscriptionDialect: Database {
-    /// Idempotent upsert: resolves the status name to its `status_id` via a
-    /// subquery and, on the `(author_user_id, channel_id, subscriber_ref)`
-    /// conflict, rewrites `subscriber_ref` to the value it already holds. That
-    /// deliberate no-op write is what makes `RETURNING` emit the row on the
-    /// conflict path too — so the statement returns the `subscription_id` on
-    /// both paths, and no second `SELECT` (and no TOCTOU window) is needed.
-    /// `status_id` stays out of the `SET` list, so an existing subscription
-    /// keeps its status. Bind order:
-    /// `author_user_id, channel_id, subscriber_ref, status_name`.
-    const INSERT_SUBSCRIPTION: &'static str = "INSERT INTO subscriptions \
-         (author_user_id, channel_id, subscriber_ref, status_id) \
-         VALUES ($1, $2, $3, (SELECT status_id FROM subscription_statuses WHERE name = $4)) \
-         ON CONFLICT (author_user_id, channel_id, subscriber_ref) \
-         DO UPDATE SET subscriber_ref = excluded.subscriber_ref \
-         RETURNING subscription_id";
-    /// Deletes the row for the unique triple. Bind order:
-    /// `author_user_id, channel_id, subscriber_ref`.
-    const DELETE_SUBSCRIPTION: &'static str = "DELETE FROM subscriptions \
-         WHERE author_user_id = $1 AND channel_id = $2 AND subscriber_ref = $3";
-    /// `EXISTS` of an `active` subscription for the triple. Bind order:
-    /// `author_user_id, channel_id, subscriber_ref`.
-    const IS_ACTIVE_SUBSCRIBER: &'static str = "SELECT EXISTS( \
-           SELECT 1 FROM subscriptions s \
-           JOIN subscription_statuses st ON st.status_id = s.status_id \
-           WHERE s.author_user_id = $1 AND s.channel_id = $2 AND s.subscriber_ref = $3 \
-             AND st.name = 'active')";
-    /// `EXISTS` of an `active` subscription on the seeded `local` channel, whose
-    /// id is resolved by subquery rather than bound — a local viewer's channel is
-    /// never a free parameter (ADR-0020, #6). Bind order:
-    /// `author_user_id, subscriber_ref`.
-    const IS_ACTIVE_LOCAL_SUBSCRIBER: &'static str = "SELECT EXISTS( \
-           SELECT 1 FROM subscriptions s \
-           JOIN subscription_statuses st ON st.status_id = s.status_id \
-           WHERE s.author_user_id = $1 \
-             AND s.channel_id = (SELECT channel_id FROM channels WHERE name = 'local') \
-             AND s.subscriber_ref = $2 \
-             AND st.name = 'active')";
-    /// Lists the author's `active` subscriptions. Bind order: `author_user_id`.
-    const LIST_ACTIVE_SUBSCRIBERS: &'static str = "SELECT \
-           s.subscription_id, s.channel_id, s.subscriber_ref, s.created_at \
-         FROM subscriptions s \
-         JOIN subscription_statuses st ON st.status_id = s.status_id \
-         WHERE s.author_user_id = $1 AND st.name = 'active' \
-         ORDER BY s.subscription_id";
-    /// Lists active subscribers with local-user display labels resolved after
-    /// both the optional username and raw subscriber reference have crossed
-    /// their typed decode boundaries. Bind order: `author_user_id`.
-    const LIST_SUBSCRIBER_SUMMARIES: &'static str = "SELECT \
-           s.subscription_id, u.username, s.subscriber_ref \
-        FROM subscriptions s \
-        JOIN subscription_statuses st ON st.status_id = s.status_id \
-        LEFT JOIN users u \
-          ON s.channel_id = (SELECT channel_id FROM channels WHERE name = 'local') \
-         AND s.subscriber_ref = CAST(u.user_id AS TEXT) \
-        WHERE s.author_user_id = $1 AND st.name = 'active' \
-        ORDER BY s.subscription_id";
-    /// Selects the `channel_id` of the seeded `local` channel. No binds.
-    const SELECT_LOCAL_CHANNEL_ID: &'static str =
-        "SELECT channel_id FROM channels WHERE name = 'local'";
-}
+/// Idempotent upsert: resolves the status name to its `status_id` via a
+/// subquery and, on the `(author_user_id, channel_id, subscriber_ref)`
+/// conflict, rewrites `subscriber_ref` to the value it already holds. That
+/// deliberate no-op write is what makes `RETURNING` emit the row on the
+/// conflict path too — so the statement returns the `subscription_id` on
+/// both paths, and no second `SELECT` (and no TOCTOU window) is needed.
+/// `status_id` stays out of the `SET` list, so an existing subscription
+/// keeps its status. Bind order:
+/// `author_user_id, channel_id, subscriber_ref, status_name`.
+const INSERT_SUBSCRIPTION: &str = "INSERT INTO subscriptions \
+     (author_user_id, channel_id, subscriber_ref, status_id) \
+     VALUES ($1, $2, $3, (SELECT status_id FROM subscription_statuses WHERE name = $4)) \
+     ON CONFLICT (author_user_id, channel_id, subscriber_ref) \
+     DO UPDATE SET subscriber_ref = excluded.subscriber_ref \
+     RETURNING subscription_id";
+/// Deletes the row for the unique triple. Bind order:
+/// `author_user_id, channel_id, subscriber_ref`.
+const DELETE_SUBSCRIPTION: &str = "DELETE FROM subscriptions \
+     WHERE author_user_id = $1 AND channel_id = $2 AND subscriber_ref = $3";
+/// `EXISTS` of an `active` subscription for the triple. Bind order:
+/// `author_user_id, channel_id, subscriber_ref`.
+const IS_ACTIVE_SUBSCRIBER: &str = "SELECT EXISTS( \
+       SELECT 1 FROM subscriptions s \
+       JOIN subscription_statuses st ON st.status_id = s.status_id \
+       WHERE s.author_user_id = $1 AND s.channel_id = $2 AND s.subscriber_ref = $3 \
+         AND st.name = 'active')";
+/// `EXISTS` of an `active` subscription on the seeded `local` channel, whose
+/// id is resolved by subquery rather than bound — a local viewer's channel is
+/// never a free parameter (ADR-0020, #6). Bind order:
+/// `author_user_id, subscriber_ref`.
+const IS_ACTIVE_LOCAL_SUBSCRIBER: &str = "SELECT EXISTS( \
+       SELECT 1 FROM subscriptions s \
+       JOIN subscription_statuses st ON st.status_id = s.status_id \
+       WHERE s.author_user_id = $1 \
+         AND s.channel_id = (SELECT channel_id FROM channels WHERE name = 'local') \
+         AND s.subscriber_ref = $2 \
+         AND st.name = 'active')";
+/// Lists the author's `active` subscriptions. Bind order: `author_user_id`.
+const LIST_ACTIVE_SUBSCRIBERS: &str = "SELECT \
+       s.subscription_id, s.channel_id, s.subscriber_ref, s.created_at \
+     FROM subscriptions s \
+     JOIN subscription_statuses st ON st.status_id = s.status_id \
+     WHERE s.author_user_id = $1 AND st.name = 'active' \
+     ORDER BY s.subscription_id";
+/// Lists active subscribers with local-user display labels resolved after
+/// both the optional username and raw subscriber reference have crossed
+/// their typed decode boundaries. Bind order: `author_user_id`.
+const LIST_SUBSCRIBER_SUMMARIES: &str = "SELECT \
+       s.subscription_id, u.username, s.subscriber_ref \
+    FROM subscriptions s \
+    JOIN subscription_statuses st ON st.status_id = s.status_id \
+    LEFT JOIN users u \
+      ON s.channel_id = (SELECT channel_id FROM channels WHERE name = 'local') \
+     AND s.subscriber_ref = CAST(u.user_id AS TEXT) \
+    WHERE s.author_user_id = $1 AND st.name = 'active' \
+    ORDER BY s.subscription_id";
+/// Selects the `channel_id` of the seeded `local` channel. No binds.
+const SELECT_LOCAL_CHANNEL_ID: &str = "SELECT channel_id FROM channels WHERE name = 'local'";
 
-/// Generic [`SubscriptionStorage`] backed by any database implementing
-/// [`SubscriptionDialect`].
+/// Generic [`SubscriptionStorage`] backed by any supported database.
 ///
-/// Holds the pool **and** the admission [`SubscriptionPolicy`]; backend SQL is
-/// supplied by [`SubscriptionDialect`]. See ADR-0019 / ADR-0020.
+/// Holds the pool **and** the admission [`SubscriptionPolicy`]; its statements
+/// use the SQL subset shared by `SQLite` and `Postgres`. See ADR-0019 / ADR-0020.
 pub struct SubscriptionStore<DB: Database> {
     pool: Pool<DB>,
     policy: Arc<dyn SubscriptionPolicy>,
@@ -204,7 +195,7 @@ impl<DB: Database> SubscriptionStore<DB> {
 #[async_trait]
 impl<DB> SubscriptionStorage for SubscriptionStore<DB>
 where
-    DB: SubscriptionDialect + Backend,
+    DB: Backend,
     (Exists,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SubscriptionId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (ChannelId,): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -240,7 +231,7 @@ where
         // (#343). `RETURNING` fires on the insert arm and on the `DO UPDATE`
         // conflict arm alike, so the row is guaranteed and `fetch_one` is the
         // honest read.
-        sqlx::query_as::<_, (SubscriptionId,)>(DB::INSERT_SUBSCRIPTION)
+        sqlx::query_as::<_, (SubscriptionId,)>(INSERT_SUBSCRIPTION)
             .bind_storage(author_user_id)
             .bind_storage(subscriber.channel_id)
             .bind_storage(&subscriber.subscriber_ref)
@@ -257,7 +248,7 @@ where
         subscriber: &SubscriberIdentity,
     ) -> Result<()> {
         let connection = DB::write_connection(transaction)?;
-        sqlx::query(DB::DELETE_SUBSCRIPTION)
+        sqlx::query(DELETE_SUBSCRIPTION)
             .bind_storage(author_user_id)
             .bind_storage(subscriber.channel_id)
             .bind_storage(&subscriber.subscriber_ref)
@@ -276,7 +267,7 @@ where
             // `local` row, which `IS_ACTIVE_LOCAL_SUBSCRIBER` resolves itself.
             ViewerIdentity::Local { user_id } => {
                 let subscriber_ref = visibility::local_subscriber_ref(*user_id);
-                sqlx::query_as::<_, (Exists,)>(DB::IS_ACTIVE_LOCAL_SUBSCRIBER)
+                sqlx::query_as::<_, (Exists,)>(IS_ACTIVE_LOCAL_SUBSCRIBER)
                     .bind_storage(author_user_id)
                     .bind_storage(&subscriber_ref)
                     .fetch_one(&self.pool)
@@ -286,7 +277,7 @@ where
                 channel_id,
                 subscriber_ref,
             } => {
-                sqlx::query_as::<_, (Exists,)>(DB::IS_ACTIVE_SUBSCRIBER)
+                sqlx::query_as::<_, (Exists,)>(IS_ACTIVE_SUBSCRIBER)
                     .bind_storage(author_user_id)
                     .bind_storage(*channel_id)
                     .bind_storage(subscriber_ref)
@@ -302,7 +293,7 @@ where
         // may skip. That keeps the diversion column-scoped: an invalid
         // `subscriber_ref` costs only its row, while identity, channel, and
         // timestamp failures still fail the batch (ADR-0122).
-        let rows = sqlx::query(DB::LIST_ACTIVE_SUBSCRIBERS)
+        let rows = sqlx::query(LIST_ACTIVE_SUBSCRIBERS)
             .bind_storage(author_user_id)
             .fetch_all(&self.pool)
             .await?;
@@ -345,7 +336,7 @@ where
     ) -> Result<Vec<SubscriberSummaryRecord>> {
         // As above, decode every non-divertible column first so only the
         // validated subscriber reference can make this summary skip a row.
-        let rows = sqlx::query(DB::LIST_SUBSCRIBER_SUMMARIES)
+        let rows = sqlx::query(LIST_SUBSCRIBER_SUMMARIES)
             .bind_storage(author_user_id)
             .fetch_all(&self.pool)
             .await?;
@@ -379,7 +370,7 @@ where
     }
 
     async fn local_channel_id(&self) -> InternalResult<ChannelId> {
-        let row = sqlx::query_as::<_, (ChannelId,)>(DB::SELECT_LOCAL_CHANNEL_ID)
+        let row = sqlx::query_as::<_, (ChannelId,)>(SELECT_LOCAL_CHANNEL_ID)
             .fetch_optional(&self.pool)
             .await?;
         let (id,) = row.require_row("the seeded 'local' channel row")?;
@@ -389,30 +380,76 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::test_support::{Backend, SeedUser, backends, confirmed_for};
+    use common::visibility::{ViewerIdentity, local_subscriber_identity};
+    use rstest::*;
+    use rstest_reuse::*;
+    use std::sync::Arc;
 
-    /// Guards the two dialect constants against drifting apart — the failure mode
-    /// where one backend gains the local-channel statement and the other is
-    /// forgotten, which passes `SQLite` and fails Postgres (ADR-0019, #6).
-    ///
-    /// A *sync* check, not a semantic one: the behaviour it guards is proven on
-    /// both backends by the `is_subscriber` tests in `server/tests/storage`.
-    #[test]
-    fn is_active_local_subscriber_resolves_the_channel_on_both_dialects() {
-        for (name, sql) in [
-            (
-                "sqlite",
-                <sqlx::Sqlite as SubscriptionDialect>::IS_ACTIVE_LOCAL_SUBSCRIBER,
-            ),
-            (
-                "postgres",
-                <sqlx::Postgres as SubscriptionDialect>::IS_ACTIVE_LOCAL_SUBSCRIBER,
-            ),
-        ] {
-            assert!(
-                sql.contains("(SELECT channel_id FROM channels WHERE name = 'local')"),
-                "{name} must resolve the local channel inline: {sql}"
-            );
-        }
+    /// The shared SQL must resolve a local viewer through the seeded `local`
+    /// channel on both backends, rather than accepting a caller-supplied channel.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn local_viewer_subscription_follows_active_row_lifecycle(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let state = &env.state;
+        let author_user_id = SeedUser::new().seed(state).await.user_id;
+        let subscriber_user_id = SeedUser::new().seed(state).await.user_id;
+        let viewer = ViewerIdentity::local(subscriber_user_id);
+        let local_channel_id = state.subscriptions.local_channel_id().await.unwrap();
+        let subscriber = local_subscriber_identity(local_channel_id, subscriber_user_id);
+
+        assert!(
+            !state
+                .subscriptions
+                .is_subscriber(author_user_id, &viewer)
+                .await
+                .unwrap()
+        );
+
+        let subscriptions = Arc::clone(&state.subscriptions);
+        let subscribed_identity = subscriber.clone();
+        let outcome = state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    subscriptions
+                        .subscribe(transaction, author_user_id, &subscribed_identity)
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        confirmed_for(outcome, "local subscription creation");
+
+        assert!(
+            state
+                .subscriptions
+                .is_subscriber(author_user_id, &viewer)
+                .await
+                .unwrap()
+        );
+
+        let subscriptions = Arc::clone(&state.subscriptions);
+        let outcome = state
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    subscriptions
+                        .unsubscribe(transaction, author_user_id, &subscriber)
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        confirmed_for(outcome, "local subscription removal");
+
+        assert!(
+            !state
+                .subscriptions
+                .is_subscriber(author_user_id, &viewer)
+                .await
+                .unwrap()
+        );
     }
 }
