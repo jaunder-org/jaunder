@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use axum::http::{StatusCode, header};
 use tower::ServiceExt;
@@ -13,7 +16,7 @@ use rstest_reuse::*;
 use crate::helpers::body_string;
 
 use storage::{
-    ThemeOwner,
+    MockUserStorage, ThemeOwner, UserStorage,
     test_support::{Backend, TestEnv, backends},
 };
 
@@ -170,6 +173,111 @@ async fn user_tag_unknown_valid_username_serves_shell(#[case] backend: Backend) 
         .await
         .unwrap();
     assert_eq!(body.as_ref(), TEST_SHELL.as_bytes(), "exact CSR shell body");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn user_tag_listing_user_lookup_failure_keeps_no_store_shell_and_reports_once(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let (username, _title) = seed_tagged_post(&state).await;
+    let mut users = MockUserStorage::new();
+    users
+        .expect_get_user_by_username()
+        .times(1)
+        .return_once(|_| {
+            Err(sqlx::Error::Io(std::io::Error::other(
+                "injected user tag listing lookup failure",
+            )))
+        });
+    let app = projector_app_with_dependencies(
+        Arc::clone(&state.posts),
+        Arc::new(users) as Arc<dyn UserStorage>,
+        Arc::clone(&state.themes),
+    );
+
+    let (response, event) = crate::assert_error_signal!(
+        async {
+            app.oneshot(get(&format!("/~{username}/tags/rust")))
+                .await
+                .expect("request")
+        },
+        event = "error swallowed after reporting",
+        event_kind = "storage",
+        event_class = "bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "swallowed",
+        context = "server.projector.user_tag"
+    );
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store")
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    assert_eq!(body.as_ref(), TEST_SHELL.as_bytes(), "exact CSR shell body");
+    assert!(event.contains("injected user tag listing lookup failure"));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn user_tag_theme_owner_lookup_failure_keeps_500_and_reports_boundary_once(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let (username, _title) = seed_tagged_post(&state).await;
+    let parsed_username = username.parse().expect("seeded username");
+    let author = state
+        .users
+        .get_user_by_username(&parsed_username)
+        .await
+        .expect("author lookup")
+        .expect("seeded author");
+    let first_lookup = Arc::new(AtomicBool::new(true));
+    let mut users = MockUserStorage::new();
+    users
+        .expect_get_user_by_username()
+        .times(2)
+        .returning(move |_| {
+            if first_lookup.swap(false, Ordering::SeqCst) {
+                Ok(Some(author.clone()))
+            } else {
+                Err(sqlx::Error::Io(std::io::Error::other(
+                    "injected user tag theme owner lookup failure",
+                )))
+            }
+        });
+    let app = projector_app_with_dependencies(
+        Arc::clone(&state.posts),
+        Arc::new(users) as Arc<dyn UserStorage>,
+        Arc::clone(&state.themes),
+    );
+
+    let (response, event) = crate::assert_error_signal!(
+        async {
+            app.oneshot(get(&format!("/~{username}/tags/rust")))
+                .await
+                .expect("request")
+        },
+        event = "server function failed",
+        event_kind = "Storage",
+        event_class = "Bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "boundary",
+        context = "server.projector.user_tag"
+    );
+
+    assert_sanitized_internal_server_error(response).await;
+    assert!(event.contains("injected user tag theme owner lookup failure"));
 }
 
 #[apply(backends)]
