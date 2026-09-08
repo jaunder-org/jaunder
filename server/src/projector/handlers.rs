@@ -10,7 +10,6 @@ use common::permalink_route::PermalinkRoute;
 use common::seed::{PageSeed, PublicPresentation};
 use common::tag::Tag;
 use common::theme::PublicThemeRoute;
-use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
 use serde::{Deserialize, Deserializer};
@@ -21,8 +20,7 @@ use storage::{PostStorage, ThemeStorage, UserStorage};
 use web::error::{self, SwallowedSource};
 use web::timeline;
 
-use super::Shell;
-use super::document;
+use super::{PublicProjection, PublicProjector, Shell, document};
 
 /// Register the public projector routes. Generic over the router state because
 /// the handlers extract only request `Extension`s (the storage traits + the
@@ -74,86 +72,20 @@ async fn permalink(
         // resolve it, preserving the projector's uniform shell soft-404.
         return document::shell_response(&shell);
     };
-    let record = match storage::fetch_post_record(
-        posts.as_ref(),
-        &ViewerIdentity::Anonymous,
-        &route.username,
-        route.date,
-        &route.slug,
-        UtcInstant::now(),
-    )
-    .await
-    {
-        Ok(Some(record)) => record,
-        Ok(None) => return document::shell_response(&shell),
-        Err(error) => {
-            error
-                .with_context("boundary", "server.projector.permalink")
-                .emit_boundary_failure();
-            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-    let theme = match storage::resolve_public_theme(
-        storage::PublicThemeOwner::Author(record.user_id),
-        &PublicThemeRoute::permalink(&route),
-        themes.as_ref(),
-    )
-    .await
-    {
-        Ok(theme) => theme,
-        Err(error) => {
-            error::InternalError::from(error)
-                .with_context("boundary", "server.projector.permalink")
-                .emit_boundary_failure();
-            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-    document::permalink_response(Ok(Some(record)), &headers, &shell, theme)
+    PublicProjector::new(posts, themes, shell)
+        .project(PublicProjection::Permalink(route), &headers)
+        .await
 }
 
 async fn site_timeline(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(themes): Extension<Arc<dyn ThemeStorage>>,
+    Extension(shell): Extension<Shell>,
     headers: HeaderMap,
 ) -> Response {
-    let page = match timeline::fetch_local_timeline(
-        posts.as_ref(),
-        &ViewerIdentity::Anonymous,
-        None,
-        Some(PageSize::default()),
-    )
-    .await
-    {
-        Ok(page) => page,
-        Err(error) => {
-            error
-                .with_context("boundary", "server.projector.timeline")
-                .emit_boundary_failure();
-            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-    let theme = match storage::resolve_public_theme(
-        storage::PublicThemeOwner::Site,
-        &PublicThemeRoute::site(),
-        themes.as_ref(),
-    )
-    .await
-    {
-        Ok(theme) => theme,
-        Err(error) => {
-            web::error::InternalError::from(error)
-                .with_context("boundary", "server.projector.timeline_theme")
-                .emit_boundary_failure();
-            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-    document::cacheable_presentation(
-        &headers,
-        &PublicPresentation {
-            theme,
-            page: PageSeed::SiteTimeline(page),
-        },
-    )
+    PublicProjector::new(posts, themes, shell)
+        .project(PublicProjection::SiteTimeline, &headers)
+        .await
 }
 
 struct ThemeStores<'a> {

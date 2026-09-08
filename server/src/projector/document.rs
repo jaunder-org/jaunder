@@ -3,10 +3,8 @@ use axum::{
     response::{Html, IntoResponse, Response},
 };
 use common::seed::{PageSeed, PublicPresentation};
-use common::theme::PublishedThemePresentation;
 use host::etag;
 use web::app;
-use web::posts;
 
 use crate::bundle;
 
@@ -90,40 +88,10 @@ pub(super) fn shell_response(shell: &Shell) -> Response {
         .into_response()
 }
 
-/// Map a permalink lookup result to a response. Split from the handler so the
-/// storage-error arm — otherwise reachable only under a live DB failure — stays
-/// unit-testable.
-pub(super) fn permalink_response(
-    result: web::error::InternalResult<Option<storage::PostRecord>>,
-    headers: &HeaderMap,
-    shell: &Shell,
-    theme: PublishedThemePresentation,
-) -> Response {
-    match result {
-        // Anonymous viewer ⇒ never the author, so `is_author = false`.
-        Ok(Some(record)) => cacheable_presentation(
-            headers,
-            &PublicPresentation {
-                theme,
-                page: PageSeed::Permalink(posts::authored_post(record, false)),
-            },
-        ),
-        // No *public* post here: a draft its author must see, or nothing at all.
-        // Serve the shell so the CSR client resolves it with the session.
-        Ok(None) => shell_response(shell),
-        Err(error) => {
-            error
-                .with_context("boundary", "server.projector.permalink")
-                .emit_boundary_failure();
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Shell, cacheable_presentation, document_presentation, permalink_response};
-    use axum::http::{HeaderMap, StatusCode, header};
+    use super::{cacheable_presentation, document_presentation};
+    use axum::http::{HeaderMap, header};
     use common::{
         seed::{Page, PageSeed, PublicPresentation},
         theme::Theme,
@@ -171,18 +139,6 @@ mod tests {
     }
 
     #[test]
-    fn permalink_storage_error_maps_to_500() {
-        let shell = Shell("shell".into());
-        let response = permalink_response(
-            Err(web::error::InternalError::validation("boom")),
-            &HeaderMap::new(),
-            &shell,
-            common::theme::PublishedThemePresentation::built_in(Theme::Studio),
-        );
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[test]
     fn custom_revision_and_role_bindings_change_document_bytes_and_etag() {
         let baseline = custom_presentation('a', 'b', 'c', 'd');
         let revision_changed = custom_presentation('e', 'b', 'c', 'd');
@@ -220,18 +176,6 @@ mod tests {
                 .count(),
             1
         );
-    }
-
-    #[test]
-    fn absent_public_permalink_serves_shell() {
-        let shell = Shell("shell".into());
-        let response = permalink_response(
-            Ok(None),
-            &HeaderMap::new(),
-            &shell,
-            common::theme::PublishedThemePresentation::built_in(Theme::Studio),
-        );
-        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[test]

@@ -41,12 +41,12 @@ Out:
     outcomes and observability classifications without depending on private
     implementation text.
 
-- [ ] Task 2: Establish the seam on boundary-failing routes
-  - Contract: `PublicProjector` accepts exactly the Post, User, Theme, and Shell
-    dependencies plus a closed route operation and request headers. Its typed
-    internal outcome distinguishes cacheable presentation, semantic shell miss,
-    and boundary failure; its single response path owns cache negotiation and
-    final response construction.
+- [x] Task 2: Establish the seam on boundary-failing routes
+  - Contract: at this stage, `PublicProjector` accepts exactly the Post, Theme,
+    and Shell dependencies plus the closed `Permalink` and `SiteTimeline`
+    operations and request headers. Its typed internal outcome distinguishes
+    cacheable presentation, semantic shell miss, and boundary failure; its
+    single response path owns cache negotiation and final response construction.
   - Contract: permalink and site-timeline operations preserve anonymous fetches,
     `PageSeed` construction, author-versus-site theme ownership, absent-Post
     shell misses, boundary-error disposition, and stable observability contexts.
@@ -57,10 +57,12 @@ Out:
     boundary observability.
 
 - [ ] Task 3: Migrate the soft-failure listing routes
-  - Contract: profile, site-tag, and user-tag operations use the same
-    `PublicProjector` interface while preserving their distinct malformed-route,
-    unknown-User, cacheable-empty, swallowed-error, theme-owner, fallback, and
-    boundary-error policies.
+  - Contract: this task extends `PublicProjector` to its final exact Post, User,
+    Theme, and Shell dependencies and closed `Permalink`, `SiteTimeline`,
+    `Profile`, `SiteTag`, and `UserTag` operations. Profile, site-tag, and
+    user-tag operations preserve their distinct malformed-route, unknown-User,
+    cacheable-empty, swallowed-error, theme-owner, fallback, and boundary-error
+    policies.
   - Contract: profile and user-tag handlers retain soft path decoding and select
     typed operations without callbacks or policy flags. User-tag's listing-stage
     and theme-owner User lookups keep their different failure dispositions.
