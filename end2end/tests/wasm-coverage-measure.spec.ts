@@ -1,6 +1,6 @@
-import { expect, test } from "./fixtures";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { expect, test } from "./fixtures";
 import { goto, BASE_URL } from "./helpers";
 
 // This is deliberately separate from the permanent coverage capture: it measures
@@ -10,9 +10,10 @@ test("diagnostic wasm measurement records the mounted CSR flow", async ({
   firstNav,
 }, testInfo) => {
   const root = process.env.JAUNDER_WASM_COVERAGE_OUT;
+  const csr = process.env.JAUNDER_WASM_COVERAGE_CSR;
   const cacheBuster = process.env.JAUNDER_WASM_COVERAGE_CACHE_BUSTER;
   const mode = process.env.JAUNDER_WASM_COVERAGE_MODE;
-  if (!root || !cacheBuster || !mode)
+  if (!root || !csr || !cacheBuster || !mode)
     throw new Error("measurement producer environment is incomplete");
   const started = performance.now();
   await goto(page, "/", { timeout: firstNav });
@@ -21,9 +22,14 @@ test("diagnostic wasm measurement records the mounted CSR flow", async ({
     1,
     Math.round(performance.now() - started),
   );
-  const wasm = await (
-    await page.request.get(`${BASE_URL}/pkg/jaunder.wasm`)
-  ).body();
+  const manifest = JSON.parse(
+    await readFile(join(csr, "pkg", "manifest.json"), "utf8"),
+  ) as { assets?: Array<{ role?: string; path?: string }> };
+  const wasmPath = manifest.assets?.find(
+    (asset) => asset.role === "wasm",
+  )?.path;
+  if (!wasmPath) throw new Error("CSR manifest does not select a wasm module");
+  const wasm = await (await page.request.get(`${BASE_URL}/${wasmPath}`)).body();
   await writeFile(
     join(root, "measurement.json"),
     `${JSON.stringify(
@@ -33,6 +39,7 @@ test("diagnostic wasm measurement records the mounted CSR flow", async ({
         mode,
         cache_buster: cacheBuster,
         focused_flow_milliseconds: focusedFlowMilliseconds,
+        served_wasm_path: wasmPath,
         served_wasm_bytes: wasm.byteLength,
       },
       null,

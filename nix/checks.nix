@@ -25,6 +25,8 @@ let
     e2ePackage
     diagnosticJaunderBin
     diagnosticBaselineJaunderBin
+    diagnosticCsrWasmBundle
+    diagnosticBaselineCsrWasmBundle
     emacsSrc
     emacsForCi
     ;
@@ -509,12 +511,8 @@ wasmCoverageInitialize = pkgs.writeText "wasm-coverage-initialize.py" ''
   csr = pathlib.Path(os.environ["JAUNDER_WASM_COVERAGE_CSR"])
   root = pathlib.Path("/var/lib/jaunder/wasm-coverage")
   root.mkdir(parents=True, exist_ok=True)
-  module = root / "module/jaunder.wasm"
   diagnostics = root / "diagnostics/capture.log"
-  module.parent.mkdir(exist_ok=True)
   diagnostics.parent.mkdir(exist_ok=True)
-  shutil.copyfile(csr / "pkg/jaunder.wasm", module)
-  diagnostics.write_text("Playwright has not started\n")
 
   def artifact(path):
       return {
@@ -524,14 +522,25 @@ wasmCoverageInitialize = pkgs.writeText "wasm-coverage-initialize.py" ''
 
   try:
       csr_status = json.loads((csr / "status.json").read_text())
-      expected = csr_status["served_module"]["sha256"]
+      manifest = json.loads((csr / "pkg/manifest.json").read_text())
+      wasm = next(asset for asset in manifest["assets"] if asset.get("role") == "wasm")
+      served_module = {"path": wasm["path"], "sha256": wasm["sha256"]}
+      module = root / "module" / wasm["path"]
+      module.parent.mkdir(parents=True, exist_ok=True)
+      shutil.copyfile(csr / "pkg" / wasm["path"], module)
       structural = (
           {"outcome": "passed", "blocker": None}
-          if csr_status["outcome"] == "succeeded" and artifact(module)["sha256"] == expected
+          if csr_status["outcome"] == "succeeded"
+          and artifact(module)["sha256"] == served_module["sha256"]
           else {"outcome": "failed", "blocker": "diagnostic CSR status or served module digest is invalid"}
       )
   except Exception as error:
+      module = root / "module/unavailable.wasm"
+      module.parent.mkdir(exist_ok=True)
+      module.write_bytes(b"")
+      served_module = None
       structural = {"outcome": "failed", "blocker": str(error)}
+  diagnostics.write_text("Playwright has not started\n")
   status = {
       "version": "v1",
       "requested_browser": os.environ["JAUNDER_WASM_COVERAGE_BROWSER"],
@@ -541,6 +550,7 @@ wasmCoverageInitialize = pkgs.writeText "wasm-coverage-initialize.py" ''
       "source_mapping": {"outcome": "not-run", "blocker": None},
       "module_signature": None,
       "toolchain_identity": None,
+      "served_module": served_module,
       "artifacts": {"module": artifact(module), "diagnostics": artifact(diagnostics)},
   }
   (root / "status.json").write_text(json.dumps(status, indent=2) + "\n")
@@ -690,7 +700,7 @@ wasmCoverageFinalize = pkgs.writeText "wasm-coverage-finalize.py" ''
       "module_signature": None,
       "toolchain_identity": None,
       "artifacts": {
-          "module": artifact("module/jaunder.wasm"),
+          "module": artifact(status["artifacts"]["module"]["path"]),
           "diagnostics": artifact("diagnostics/playwright.log"),
       },
   })
@@ -773,7 +783,7 @@ mkWasmCoverageProducer =
       )
       if "${failure}" == "early":
         machine.succeed(
-          "${pkgs.python3}/bin/python3 -c 'import json; status = json.load(open(\"/var/lib/jaunder/wasm-coverage/status.json\")); assert status[\"actual_browser\"] == \"not-started\"; assert status[\"csr_structural\"][\"outcome\"] == \"passed\"; assert status[\"diagnostic_export\"][\"outcome\"] == \"failed\"; assert status[\"diagnostic_export\"][\"blocker\"] == \"Playwright exited with status 73 before coverage capture\"; assert status[\"source_mapping\"][\"outcome\"] == \"not-run\"; assert set(status[\"artifacts\"]) == {\"module\", \"diagnostics\"}'"
+          "${pkgs.python3}/bin/python3 -c 'import json; status = json.load(open(\"/var/lib/jaunder/wasm-coverage/status.json\")); served = status[\"served_module\"]; assert status[\"actual_browser\"] == \"not-started\"; assert status[\"csr_structural\"][\"outcome\"] == \"passed\"; assert served[\"path\"].startswith(\"pkg/\"); assert status[\"artifacts\"][\"module\"][\"path\"] == \"module/\" + served[\"path\"]; assert status[\"diagnostic_export\"][\"outcome\"] == \"failed\"; assert status[\"diagnostic_export\"][\"blocker\"] == \"Playwright exited with status 73 before coverage capture\"; assert status[\"source_mapping\"][\"outcome\"] == \"not-run\"; assert set(status[\"artifacts\"]) == {\"module\", \"diagnostics\"}'"
         )
       machine.succeed("tar czf /tmp/wasm-coverage-${browser}.tar.gz -C /var/lib/jaunder wasm-coverage")
       machine.copy_from_machine("/tmp/wasm-coverage-${browser}.tar.gz", "")
@@ -817,6 +827,7 @@ mkWasmCoverageMeasurementProducer =
         + " JAUNDER_DB=sqlite:/var/lib/jaunder/data/jaunder.db"
         + " FONTCONFIG_FILE=${visualFontConfig}"
         + " JAUNDER_WASM_COVERAGE_OUT=/var/lib/jaunder/wasm-coverage"
+        + " JAUNDER_WASM_COVERAGE_CSR=${if mode == "baseline" then diagnosticBaselineCsrWasmBundle else diagnosticCsrWasmBundle}"
         + " JAUNDER_WASM_COVERAGE_CACHE_BUSTER=${cacheBuster}"
         + " JAUNDER_WASM_COVERAGE_MODE=${mode}"
         + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"

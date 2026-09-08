@@ -18,6 +18,7 @@ type BrowserCoverageStatus = {
   source_mapping: Stage;
   module_signature: string | null;
   toolchain_identity: unknown | null;
+  served_module: { path: string; sha256: string } | null;
   artifacts: Record<string, { path: string; sha256: string }>;
 };
 
@@ -42,7 +43,8 @@ async function retain(
 async function diagnosticBundleStatus(): Promise<{
   structural: Stage;
   identity: unknown | null;
-  servedModuleSha256: string | null;
+  servedModule: { path: string; sha256: string } | null;
+  glueModule: string | null;
 }> {
   const root = process.env.JAUNDER_WASM_COVERAGE_CSR;
   if (!root) {
@@ -52,38 +54,49 @@ async function diagnosticBundleStatus(): Promise<{
         blocker: "JAUNDER_WASM_COVERAGE_CSR is not set",
       },
       identity: null,
-      servedModuleSha256: null,
+      servedModule: null,
+      glueModule: null,
     };
   }
   try {
     const status = JSON.parse(
       await readFile(join(root, "status.json"), "utf8"),
+    ) as { outcome?: string };
+    const manifest = JSON.parse(
+      await readFile(join(root, "pkg", "manifest.json"), "utf8"),
     ) as {
-      outcome?: string;
-      served_module?: { sha256?: string };
+      assets?: Array<{ role?: string; path?: string; sha256?: string }>;
     };
+    const wasm = manifest.assets?.find((asset) => asset.role === "wasm");
+    const glue = manifest.assets?.find((asset) => asset.role === "glue");
     const identity = JSON.parse(
       await readFile(join(root, "toolchain-identity.json"), "utf8"),
     );
-    return status.outcome === "succeeded" && status.served_module?.sha256
+    return status.outcome === "succeeded" &&
+      wasm?.path &&
+      wasm.sha256 &&
+      glue?.path
       ? {
           structural: { outcome: "passed", blocker: null },
           identity,
-          servedModuleSha256: status.served_module.sha256,
+          servedModule: { path: wasm.path, sha256: wasm.sha256 },
+          glueModule: `/${glue.path}`,
         }
       : {
           structural: {
             outcome: "failed",
-            blocker: `diagnostic CSR status: ${status.outcome}`,
+            blocker: `diagnostic CSR status or manifest is invalid: ${status.outcome}`,
           },
           identity,
-          servedModuleSha256: null,
+          servedModule: null,
+          glueModule: null,
         };
   } catch (error) {
     return {
       structural: { outcome: "failed", blocker: String(error) },
       identity: null,
-      servedModuleSha256: null,
+      servedModule: null,
+      glueModule: null,
     };
   }
 }
@@ -98,39 +111,50 @@ export async function captureWasmCoverage(
 
   const diagnostics = join(root, "diagnostics");
   await mkdir(diagnostics, { recursive: true });
-  const { structural, identity, servedModuleSha256 } =
+  const { structural, identity, servedModule, glueModule } =
     await diagnosticBundleStatus();
   const actualBrowser =
     page.context().browser()?.browserType().name() ?? "unknown";
   const artifacts: BrowserCoverageStatus["artifacts"] = {};
-  const module = new Uint8Array(
-    await (await page.request.get(`${BASE_URL}/pkg/jaunder.wasm`)).body(),
+  const module = servedModule
+    ? new Uint8Array(
+        await (
+          await page.request.get(`${BASE_URL}/${servedModule.path}`)
+        ).body(),
+      )
+    : new Uint8Array();
+  artifacts.module = await retain(
+    root,
+    servedModule ? `module/${servedModule.path}` : "module/unavailable.wasm",
+    module,
   );
-  artifacts.module = await retain(root, "module/jaunder.wasm", module);
   artifacts.diagnostics = await retain(
     root,
     "diagnostics/capture.log",
     "capture started\n",
   );
+  const servedSha256 = servedModule?.sha256;
 
   const status: BrowserCoverageStatus = {
     version: "v1",
     requested_browser: requestedBrowser,
     actual_browser: actualBrowser,
     csr_structural:
-      structural.outcome === "passed" && digest(module) !== servedModuleSha256
+      structural.outcome === "passed" &&
+      servedSha256 &&
+      digest(module) !== servedSha256
         ? {
             outcome: "failed",
-            blocker: `served module SHA-256 mismatch: expected ${servedModuleSha256}, got ${digest(module)}`,
+            blocker: `served module SHA-256 mismatch: expected ${servedSha256}, got ${digest(module)}`,
           }
         : structural,
     diagnostic_export: { outcome: "not-run", blocker: null },
     source_mapping: { outcome: "not-run", blocker: null },
     module_signature: null,
     toolchain_identity: null,
+    served_module: servedModule,
     artifacts,
   };
-
   try {
     if (structural.outcome !== "passed")
       throw new Error(structural.blocker ?? "diagnostic CSR unavailable");
@@ -143,10 +167,11 @@ export async function captureWasmCoverage(
     if (process.env.JAUNDER_WASM_COVERAGE_INJECT_FAILURE === "export") {
       throw new Error("injected export failure");
     }
-    const capture = await page.evaluate(async () => {
-      // This URL exists only in the diagnostic Nix VM; importing it statically
-      // would make the host Playwright typecheck resolve a generated artifact.
-      const diagnosticModule = "/pkg/jaunder.js";
+    const capture = await page.evaluate(async (diagnosticModule) => {
+      // The manifest selects this diagnostic-only runtime URL, so a static import
+      // would incorrectly make host Playwright resolve an unavailable artifact.
+      if (!diagnosticModule)
+        throw new Error("diagnostic glue module is unavailable");
       const wasm = await import(diagnosticModule);
       const signature: unknown = wasm.jaunderCoverageModuleSignature();
       const profile: unknown = wasm.jaunderCoverageProfile();
@@ -159,7 +184,7 @@ export async function captureWasmCoverage(
         throw new Error("diagnostic export returned a non-byte profile");
       }
       return { signature, profile: [...profile] };
-    });
+    }, glueModule);
     if (capture.profile.length === 0) {
       throw new Error("diagnostic export returned an empty profile");
     }

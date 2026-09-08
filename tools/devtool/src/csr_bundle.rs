@@ -747,6 +747,11 @@ fn write_diagnostic_artifacts(
 /// Generate a content-addressed CSR bundle into a sibling temporary directory,
 /// validate its exact inventory, then rename the complete bundle root into
 /// place. Existing output is rejected instead of being partially overwritten.
+struct BundleTools<'a> {
+    wasm_bindgen: &'a Path,
+    wasm_opt: &'a Path,
+}
+
 pub fn run(
     wasm: &Path,
     out: &Path,
@@ -761,8 +766,10 @@ pub fn run(
         experiment_arm,
         shape_section,
         shape_section_count,
-        Path::new("wasm-bindgen"),
-        Path::new("wasm-opt"),
+        BundleTools {
+            wasm_bindgen: Path::new("wasm-bindgen"),
+            wasm_opt: Path::new("wasm-opt"),
+        },
         diagnostic_artifacts,
     )
 }
@@ -773,8 +780,7 @@ fn run_with_tools(
     experiment_arm: Option<&str>,
     shape_section: Option<&str>,
     shape_section_count: u32,
-    wasm_bindgen: &Path,
-    wasm_opt: &Path,
+    tools: BundleTools<'_>,
     diagnostic_artifacts: Option<&DiagnosticArtifacts<'_>>,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(
@@ -789,12 +795,12 @@ fn run_with_tools(
     let root = temporary.path();
     let generated = root.join("generated");
     fs::create_dir(&generated)?;
-    let status = Command::new(wasm_bindgen)
+    let status = Command::new(tools.wasm_bindgen)
         .args(["--target", "web", "--out-dir"])
         .arg(&generated)
         .arg(wasm)
         .status()
-        .with_context(|| format!("spawning {}", wasm_bindgen.display()))?;
+        .with_context(|| format!("spawning {}", tools.wasm_bindgen.display()))?;
     if !status.success() {
         bail!("wasm-bindgen failed ({status}) for {}", wasm.display());
     }
@@ -808,7 +814,7 @@ fn run_with_tools(
             )
         })?;
     }
-    run_wasm_opt(wasm_opt, &wasm_source)?;
+    run_wasm_opt(tools.wasm_opt, &wasm_source)?;
     if let Some(label) = shape_section {
         append_shape_sections(&wasm_source, label, shape_section_count)?;
     }
@@ -934,8 +940,10 @@ mod tests {
             None,
             None,
             0,
-            &wasm_bindgen,
-            &wasm_opt,
+            BundleTools {
+                wasm_bindgen: &wasm_bindgen,
+                wasm_opt: &wasm_opt,
+            },
             None,
         )
         .unwrap();

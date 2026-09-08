@@ -58,11 +58,14 @@ source-map/report/export tool semantics; the named files remain the evidence for
 this run.
 
 `instrumented/csr.wasm` is the source-mappable module (SHA-256
-`df8f4a9fbefe965e4cded0d6b7875ce012fa7febf7df51f6ac6c4e2f53b10436`). It is
-linked from LLVM IR under the compiled prefix. The served derivative is
-`pkg/jaunder.wasm` (SHA-256
-`6b6a8f6c8a3126343cc7c04f99ece1ae485acebfcc6bbb0f0831e3b5fa7f062f`), the input's
-wasm-bindgen/wasm-opt derivative—not the module used for Rust source mapping.
+`1c66a8b57b4f601d87381bc2bb917681b41321d2d62628a930da49df0cafaa78`). It is
+linked from LLVM IR under the compiled prefix. The served derivative selected by
+`pkg/manifest.json` is
+`pkg/7c79a10e8a6b7482ae5ceae82abe5ce34dceb4e237535faf6d6c59d3f83b40cc.wasm`; its
+filename and SHA-256 are both
+`7c79a10e8a6b7482ae5ceae82abe5ce34dceb4e237535faf6d6c59d3f83b40cc`. It is the
+input's wasm-bindgen/wasm-opt derivative—not the module used for Rust source
+mapping.
 
 ## Optimizer evidence and deviations
 
@@ -96,7 +99,8 @@ Both `.xtask/wasm-coverage/chromium/status.json` and
 `.xtask/wasm-coverage/firefox/status.json` are `v1`, name the requested and
 actual browser identically, and record `passed` for CSR structural validation,
 diagnostic export, and source mapping with no blocker. They agree on module
-signature `14804279403455803896` and on the served-module digest above.
+signature `965284418087900863` and on the content-addressed served-module
+identity above.
 
 [Playwright projects][playwright-projects] and its [browser-execution
 documentation][playwright-browsers] define the configured multi-browser
@@ -109,10 +113,10 @@ versioned status files and retained profiles/reports below do.
 | Firefox  | passed         | passed            | passed         | `firefox/mapped/llvm-cov.txt`; count 1 on CSR lines 30–32, 50, 74, 77, and 79–84  |
 
 Each retains the same nonempty raw profile (SHA-256
-`2e9eaaa48dd5e630a36fe8e9320fad14b4e0588781c1adcfc7c3a5dd86ec2a31`),
+`f6f4a22e07523b4b13acfae0132c85e2abc5846c42ff6818d648319422b27e97`),
 merged-per-browser profile data
-(`d73b423927f9653049f0633628aba9c8e2310654f6781a92ad0d3e8c59077b41`), and mapped
-report (`b7caf9015e273ee0509df1249f209d67f1ec972c7fec90985c33e8e4fb9b96ec`).
+(`58de745634e0c8405fa61985d545b62abfbcbc685ef1b6916d3b7fc880abb052`), and mapped
+report (`c12b8654237b7ef2b74d7de364333599c905a086397ab3eb08330ef878bfb8ff`).
 
 The Chromium and Firefox reports separately map executed original Rust lines in
 the CSR entry module: for example each reports count 1 for lines 30–32
@@ -135,24 +139,10 @@ synthesizing success.
 
 ## Quiescent paired measurement
 
-The user-confirmed quiescent window was `2026-09-07 user-confirmed idle host`.
-Four warm-ups were discarded (baseline and instrumented once in each browser).
-The retained manifest then records five alternating baseline/instrumented pairs
-per browser: 20 retained measured runs. Every run has a distinct cache-buster,
-Nix realization, and retained run root under
-`.xtask/wasm-coverage/measurement/runs/`, proving separate fresh realizations.
-The metric is focused-flow milliseconds and raw uncompressed served
-`pkg/jaunder.wasm` bytes.
-
-| Browser  | Baseline median [range] | Instrumented median [range] |               Delta |
-| -------- | ----------------------: | --------------------------: | ------------------: |
-| Chromium |   1,084 ms [923, 1,099] |       1,073 ms [928, 1,117] | -11 ms (-1.014760%) |
-| Firefox  | 2,263 ms [2,190, 2,353] |     2,201 ms [2,178, 2,236] | -62 ms (-2.739726%) |
-
-Baseline served wasm was 2,633,716 bytes and instrumented served wasm was
-2,663,925 bytes: +30,209 bytes (+1.147011%). The timing ranges overlap in both
-browsers. Therefore this experiment makes **no measured slowdown claim and no
-speedup claim**; the lower instrumented medians are not evidence of a speedup.
+The content-addressed CSR bundle changed after the retained measurement was
+recorded. Those timing and size values therefore do not describe the current
+artifact and are intentionally omitted. A fresh user-confirmed quiescent 24-run
+measurement is required before making an overhead claim for this implementation.
 
 ## Ownership, costs, and remaining risk
 
@@ -169,13 +159,13 @@ orchestration validates the retained result. Those references define the
 ownership model only; the concrete browser and reconciliation outcomes remain
 local executable evidence.
 
-Remaining costs and risks are the 30,209-byte served-WASM overhead; the
-1,094,165 ms quiescent-host experiment wall time; two browser/Nix realization
-cost; continued compatibility of the pinned Rust/LLVM raw-profile, profdata, and
-line-report formats; optimizer/bundler preservation; and the need to retain and
-validate both complete browser evidence sets. A future permanent gate must keep
-those costs and the both-browser fail-closed condition; dropping either browser
-would not be supported by this finding.
+Remaining costs and risks are the as-yet-unmeasured served-WASM and runtime
+overhead; two browser/Nix realization cost; continued compatibility of the
+pinned Rust/LLVM raw-profile, profdata, and line-report formats;
+optimizer/bundler preservation; and the need to retain and validate both
+complete browser evidence sets. A future permanent gate must keep the
+both-browser fail-closed condition; dropping either browser would not be
+supported by this finding.
 
 ## Primary-source index
 

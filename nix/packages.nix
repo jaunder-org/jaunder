@@ -718,8 +718,8 @@ let
       served_module = None
       if succeeded:
           manifest = json.loads((root / "pkg/manifest.json").read_text())
-          wasm = next(asset for asset in manifest["assets"] if asset["role"] == "wasm")
-          served_module = f"pkg/{wasm['path']}"
+          wasm = next(asset for asset in manifest["assets"] if asset.get("role") == "wasm")
+          served_module = wasm["path"]
       status = {
           "version": 3,
           "outcome": "succeeded" if succeeded else "failed",
@@ -728,7 +728,7 @@ let
           "bundle": served_module if succeeded else None,
           "served_module": {
               "path": served_module,
-              "sha256": sha256(served_module),
+              "sha256": sha256(f"pkg/{served_module}"),
           } if succeeded else None,
           "source_mappable_module": {
               "path": retained_module,
@@ -764,12 +764,19 @@ let
       export CARGO_TARGET_DIR="$work/target"
       cargo build -p csr --target wasm32-unknown-unknown --release
       devtool csr-bundle --wasm "$work/target/wasm32-unknown-unknown/release/csr.wasm" --out "$out/pkg"
-      python3 - "$out/status.json" "$out/pkg/jaunder.wasm" <<'PY'
+      python3 - "$out/status.json" <<'PY'
       import hashlib, json, pathlib, sys
-      status, wasm = map(pathlib.Path, sys.argv[1:])
+      status = pathlib.Path(sys.argv[1])
+      root = status.parent
+      manifest = json.loads((root / "pkg/manifest.json").read_text())
+      wasm = next(asset for asset in manifest["assets"] if asset.get("role") == "wasm")
+      served_module = wasm["path"]
       status.write_text(json.dumps({
           "version": 1, "outcome": "succeeded",
-          "served_module": {"path": "pkg/jaunder.wasm", "sha256": hashlib.sha256(wasm.read_bytes()).hexdigest()},
+          "served_module": {
+              "path": served_module,
+              "sha256": hashlib.sha256((root / "pkg" / served_module).read_bytes()).hexdigest(),
+          },
           "unavoidable_deviations": [
               "omits -Cinstrument-coverage and minicov profiler runtime",
               "omits diagnostic-coverage feature and diagnostic browser exports",
@@ -779,7 +786,7 @@ let
     '';
 
   diagnosticBaselineJaunderBin = craneLib.buildPackage (
-    commonArgs
+    hostArgs
     // {
       inherit cargoArtifacts;
       pname = "jaunder-diagnostic-wasm-coverage-baseline";
@@ -787,6 +794,14 @@ let
       JAUNDER_CSR_BUNDLE_DIR = "${diagnosticBaselineCsrWasmBundle}/pkg";
       JAUNDER_PUBLIC_DIR = "${../public}";
       doCheck = false;
+      nativeBuildInputs =
+        hostArgs.nativeBuildInputs
+        ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
+      postFixup = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+        patchelf --add-rpath \
+          "${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}" \
+          "$out/bin/jaunder"
+      '';
     }
   );
 
@@ -794,7 +809,7 @@ let
   # it later records.  Keep this derivative separate from the release binary:
   # only the probe VM selects it through an explicit service override.
   diagnosticJaunderBin = craneLib.buildPackage (
-    commonArgs
+    hostArgs
     // {
       inherit cargoArtifacts;
       pname = "jaunder-diagnostic-wasm-coverage";
@@ -802,6 +817,14 @@ let
       JAUNDER_CSR_BUNDLE_DIR = "${diagnosticCsrWasmBundle}/pkg";
       JAUNDER_PUBLIC_DIR = "${../public}";
       doCheck = false;
+      nativeBuildInputs =
+        hostArgs.nativeBuildInputs
+        ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
+      postFixup = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+        patchelf --add-rpath \
+          "${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}" \
+          "$out/bin/jaunder"
+      '';
     }
   );
 
@@ -893,6 +916,8 @@ in
       jaunderBin
       diagnosticJaunderBin
       diagnosticBaselineJaunderBin
+      diagnosticCsrWasmBundle
+      diagnosticBaselineCsrWasmBundle
       testSupportBin
       devtoolBin
       cargo-crap

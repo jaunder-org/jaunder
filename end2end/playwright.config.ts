@@ -96,7 +96,9 @@ export default defineConfig({
   projects: [
     {
       name: "chromium-visual",
-      testIgnore: ignoreDiagnosticCoverage(/(admin-site|smtp|invite|media)\.spec\.ts/),
+      testIgnore: ignoreDiagnosticCoverage(
+        /(admin-site|smtp|invite|media)\.spec\.ts/,
+      ),
       grep: visualTag,
       retries: 0,
       use: {
@@ -143,7 +145,9 @@ export default defineConfig({
     },
     {
       name: "firefox-visual",
-      testIgnore: ignoreDiagnosticCoverage(/(admin-site|smtp|invite|media)\.spec\.ts/),
+      testIgnore: ignoreDiagnosticCoverage(
+        /(admin-site|smtp|invite|media)\.spec\.ts/,
+      ),
       grep: visualTag,
       retries: 0,
       use: {

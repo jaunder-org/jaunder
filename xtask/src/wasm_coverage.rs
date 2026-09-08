@@ -13,6 +13,7 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use csr_bundle::{Manifest, Role};
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -45,6 +46,7 @@ pub struct BrowserStatus {
     pub source_mapping: Stage,
     pub module_signature: Option<String>,
     pub toolchain_identity: Option<serde_json::Value>,
+    pub served_module: Option<ServedModule>,
     pub artifacts: BTreeMap<String, Artifact>,
 }
 
@@ -64,6 +66,12 @@ pub enum Outcome {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Artifact {
+    pub path: String,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ServedModule {
     pub path: String,
     pub sha256: String,
 }
@@ -139,6 +147,7 @@ pub fn validate_browser(root: &Path, expected_browser: &str) -> Result<BrowserSt
         bail!("successful diagnostic export lacks module signature or toolchain identity");
     }
     validate_conditional_artifacts(&status)?;
+    validate_served_module(&status)?;
     reconcile_manifest(root, &status.artifacts)?;
     Ok(status)
 }
@@ -182,6 +191,31 @@ fn conditional(status: &BrowserStatus, name: &str, required: bool) -> Result<()>
         (false, true) => bail!("forbidden artifact {name} is present"),
         _ => Ok(()),
     }
+}
+
+fn validate_served_module(status: &BrowserStatus) -> Result<()> {
+    match (&status.csr_structural.outcome, &status.served_module) {
+        (Outcome::Passed, Some(module)) => {
+            let path = relative_path(&module.path).context("served module")?;
+            if module.sha256.len() != 64
+                || !module.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                bail!("served module has an invalid SHA-256 digest");
+            }
+            let artifact = &status.artifacts["module"];
+            if artifact.path != format!("module/{}", path.display()) {
+                bail!("retained module path does not identify the served module");
+            }
+            if !artifact.sha256.eq_ignore_ascii_case(&module.sha256) {
+                bail!("retained module digest does not match the served module");
+            }
+        }
+        (Outcome::Passed, None) => {
+            bail!("successful CSR structural validation lacks served module")
+        }
+        (_, Some(_)) | (_, None) => {}
+    }
+    Ok(())
 }
 
 fn relative_path(path: &str) -> Result<&Path> {
@@ -326,6 +360,8 @@ pub fn merge_eligible(statuses: &BTreeMap<String, BrowserStatus>) -> bool {
         && firefox.source_mapping.outcome == Outcome::Passed
         && chromium.module_signature == firefox.module_signature
         && chromium.toolchain_identity == firefox.toolchain_identity
+        && chromium.served_module.is_some()
+        && chromium.served_module == firefox.served_module
         && chromium.artifacts.contains_key("module")
         && chromium
             .artifacts
@@ -472,18 +508,27 @@ fn merge_profiles(
     statuses: &BTreeMap<String, BrowserStatus>,
 ) -> Result<MergedEvidence> {
     let csr = realize_csr(runner)?;
-    let csr_status: serde_json::Value =
-        serde_json::from_slice(&fs::read(csr.join("status.json")).context("reading CSR status")?)
-            .context("parsing CSR status")?;
-    let served = csr_status
-        .pointer("/served_module/sha256")
-        .and_then(serde_json::Value::as_str)
-        .context("missing CSR served-module digest")?;
-    if BROWSERS
-        .iter()
-        .any(|browser| statuses[*browser].artifacts["module"].sha256 != served)
-    {
-        bail!("browser module digest does not match the CSR served module");
+    let bundle_root = csr.join("pkg");
+    let manifest = Manifest::from_json(
+        &fs::read(bundle_root.join("manifest.json")).context("reading CSR manifest")?,
+    )
+    .context("parsing CSR manifest")?;
+    manifest
+        .verify_bundle(&bundle_root)
+        .context("verifying CSR manifest bundle")?;
+    let served = manifest
+        .role(Role::Wasm)
+        .context("finding CSR wasm module")?;
+    let served_path = served.path.as_str();
+    let served_sha256 = served.sha256.as_str();
+    if BROWSERS.iter().any(|browser| {
+        let status = &statuses[*browser];
+        status
+            .served_module
+            .as_ref()
+            .is_none_or(|module| module.path != served_path || module.sha256 != served_sha256)
+    }) {
+        bail!("browser served module does not match the CSR manifest");
     }
     let source_identity: serde_json::Value = serde_json::from_slice(
         &fs::read(csr.join("source-identity.json")).context("reading CSR source identity")?,
@@ -749,6 +794,7 @@ pub struct MeasurementRun {
     #[serde(default)]
     pub artifact_root: String,
     pub focused_flow_milliseconds: u64,
+    pub served_wasm_path: String,
     pub served_wasm_bytes: u64,
 }
 
@@ -971,6 +1017,8 @@ fn validate_measurement_run(run: &MeasurementRun) -> Result<()> {
         || !MODES.contains(&run.mode.as_str())
         || run.artifact_root.trim().is_empty()
         || run.nix_realization.trim().is_empty()
+        || relative_path(&run.served_wasm_path).is_err()
+        || !run.served_wasm_path.ends_with(".wasm")
         || run.focused_flow_milliseconds == 0
         || run.served_wasm_bytes == 0
     {
@@ -998,6 +1046,7 @@ fn validate_retained_measurement(manifest: &MeasurementManifest, root: &Path) ->
             || producer.mode != run.mode
             || producer.cache_buster != run.cache_buster
             || producer.focused_flow_milliseconds != run.focused_flow_milliseconds
+            || producer.served_wasm_path != run.served_wasm_path
             || producer.served_wasm_bytes != run.served_wasm_bytes
         {
             bail!("retained measurement payload does not match manifest");
@@ -1116,6 +1165,7 @@ mod tests {
             },
             module_signature: Some("module".into()),
             toolchain_identity: Some(serde_json::json!({"llvm":"pinned"})),
+            served_module: None,
             artifacts: BTreeMap::new(),
         }
     }
@@ -1123,7 +1173,11 @@ mod tests {
         let root = tempdir().unwrap();
         let mut value = status(browser);
         for (name, path, bytes) in [
-            ("module", "module/jaunder.wasm", b"module".as_slice()),
+            (
+                "module",
+                "module/pkg/served-module.wasm",
+                b"module".as_slice(),
+            ),
             (
                 "diagnostics",
                 "diagnostics/capture.log",
@@ -1152,6 +1206,11 @@ mod tests {
                 },
             );
         }
+        let module = value.artifacts["module"].clone();
+        value.served_module = Some(ServedModule {
+            path: "pkg/served-module.wasm".into(),
+            sha256: module.sha256,
+        });
         fs::write(
             root.path().join("status.json"),
             serde_json::to_vec_pretty(&value).unwrap(),
@@ -1223,6 +1282,20 @@ mod tests {
     }
 
     #[test]
+    fn served_module_identity_must_match_the_retained_module() {
+        let root = valid_root("chromium");
+        let mut value: BrowserStatus =
+            serde_json::from_slice(&fs::read(root.path().join("status.json")).unwrap()).unwrap();
+        value.served_module.as_mut().unwrap().path = "pkg/other-module.wasm".into();
+        fs::write(
+            root.path().join("status.json"),
+            serde_json::to_vec_pretty(&value).unwrap(),
+        )
+        .unwrap();
+        assert!(validate_browser(root.path(), "chromium").is_err());
+    }
+
+    #[test]
     fn reconciliation_rejects_tampered_manifested_artifact() {
         let root = valid_root("firefox");
         fs::write(root.path().join("profiles/browser.profraw"), "tampered").unwrap();
@@ -1265,18 +1338,23 @@ mod tests {
     #[test]
     fn merge_requires_two_matching_passes() {
         let mut chromium = status("chromium");
+        chromium.served_module = Some(ServedModule {
+            path: "pkg/served-module.wasm".into(),
+            sha256: "a".repeat(64),
+        });
         chromium.artifacts.insert(
             "module".into(),
             Artifact {
-                path: "module".into(),
+                path: "module/pkg/served-module.wasm".into(),
                 sha256: "a".repeat(64),
             },
         );
         let mut firefox = status("firefox");
+        firefox.served_module = chromium.served_module.clone();
         firefox.artifacts.insert(
             "module".into(),
             Artifact {
-                path: "module".into(),
+                path: "module/pkg/served-module.wasm".into(),
                 sha256: "a".repeat(64),
             },
         );
@@ -1424,6 +1502,7 @@ mod tests {
                         nix_realization: format!("/nix/store/{browser}-{mode}-{pair}"),
                         artifact_root: format!("runs/{browser}/{pair}-{mode}"),
                         focused_flow_milliseconds: 10 + pair as u64,
+                        served_wasm_path: "pkg/served-module.wasm".into(),
                         served_wasm_bytes: 100 + pair as u64,
                     });
                 }
