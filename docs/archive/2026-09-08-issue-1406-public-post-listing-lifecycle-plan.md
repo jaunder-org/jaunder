@@ -6,7 +6,7 @@
 > host-tested timeline state and wasm listing wiring.
 
 Specification:
-`docs/superpowers/specs/2026-09-08-issue-1406-public-post-listing-lifecycle.md`
+`docs/archive/2026-09-08-issue-1406-public-post-listing-lifecycle-spec.md`
 
 ## Scope
 
