@@ -12,60 +12,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use coverage::wasm::{Artifact, BrowserStatus, Outcome, ServedModule, Stage};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 const ROOT: &str = "/var/lib/jaunder/wasm-coverage";
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-struct Stage {
-    outcome: String,
-    blocker: Option<String>,
-}
-
-impl Stage {
-    fn passed() -> Self {
-        Self {
-            outcome: "passed".into(),
-            blocker: None,
-        }
-    }
-
-    fn failed(blocker: impl Into<String>) -> Self {
-        Self {
-            outcome: "failed".into(),
-            blocker: Some(blocker.into()),
-        }
-    }
-
-    fn not_run(blocker: Option<impl Into<String>>) -> Self {
-        Self {
-            outcome: "not-run".into(),
-            blocker: blocker.map(Into::into),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-struct Artifact {
-    path: String,
-    sha256: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct Status {
-    version: String,
-    requested_browser: String,
-    actual_browser: String,
-    csr_structural: Stage,
-    diagnostic_export: Stage,
-    source_mapping: Stage,
-    module_signature: Option<String>,
-    toolchain_identity: Option<Value>,
-    served_module: Option<Artifact>,
-    artifacts: BTreeMap<String, Artifact>,
-}
 
 #[derive(Deserialize)]
 struct CsrStatus {
@@ -130,13 +81,13 @@ fn initialize_at(root: &Path, csr: &Path, browser: &str) -> Result<()> {
     artifacts.insert("diagnostics".into(), artifact_at(root, &diagnostics)?);
     write_status(
         root,
-        &Status {
+        &BrowserStatus {
             version: "v1".into(),
             requested_browser: browser.into(),
             actual_browser: "not-started".into(),
             csr_structural: structural,
-            diagnostic_export: Stage::not_run(None::<String>),
-            source_mapping: Stage::not_run(None::<String>),
+            diagnostic_export: Stage::not_run("Playwright has not completed"),
+            source_mapping: Stage::not_run("diagnostic export has not completed"),
             module_signature: None,
             toolchain_identity: None,
             served_module,
@@ -145,7 +96,7 @@ fn initialize_at(root: &Path, csr: &Path, browser: &str) -> Result<()> {
     )
 }
 
-fn prepare_module(root: &Path, csr: &Path) -> Result<(PathBuf, Option<Artifact>, Stage)> {
+fn prepare_module(root: &Path, csr: &Path) -> Result<(PathBuf, Option<ServedModule>, Stage)> {
     let csr_status: CsrStatus = read_json(&csr.join("status.json"))?;
     let manifest: Manifest = read_json(&csr.join("pkg/manifest.json"))?;
     let wasm = manifest
@@ -153,7 +104,7 @@ fn prepare_module(root: &Path, csr: &Path) -> Result<(PathBuf, Option<Artifact>,
         .into_iter()
         .find(|asset| asset.role.as_deref() == Some("wasm"))
         .ok_or_else(|| anyhow!("no wasm asset in CSR manifest"))?;
-    let served_module = Artifact {
+    let served_module = ServedModule {
         path: wasm.path.clone(),
         sha256: wasm.sha256,
     };
@@ -176,7 +127,7 @@ fn map_at(root: &Path, csr: &Path, injected_failure: &str, site_src: &Path) -> R
     fs::create_dir_all(&diagnostics)?;
     let mapping_log = diagnostics.join("mapping.log");
 
-    if status.diagnostic_export.outcome != "passed" {
+    if status.diagnostic_export.outcome != Outcome::Passed {
         let blocker = status
             .diagnostic_export
             .blocker
@@ -252,12 +203,12 @@ fn map_at(root: &Path, csr: &Path, injected_failure: &str, site_src: &Path) -> R
 
 fn mapping_skip(
     root: &Path,
-    status: &mut Status,
+    status: &mut BrowserStatus,
     mapping_log: &Path,
     detail: String,
 ) -> Result<()> {
     fs::write(mapping_log, format!("{detail}\n"))?;
-    status.source_mapping = Stage::not_run(Some(detail));
+    status.source_mapping = Stage::not_run(detail);
     status.artifacts.insert(
         "mapping_diagnostics".into(),
         artifact_at(root, mapping_log)?,
@@ -267,7 +218,7 @@ fn mapping_skip(
 
 fn mapping_fail(
     root: &Path,
-    status: &mut Status,
+    status: &mut BrowserStatus,
     mapping_log: &Path,
     mut detail: String,
 ) -> Result<()> {
@@ -325,7 +276,7 @@ fn finalize_at(root: &Path, playwright_exit: &str) -> Result<()> {
         format!("Playwright exited with status {playwright_exit} before coverage capture");
     status.actual_browser = "not-started".into();
     status.diagnostic_export = Stage::failed(blocker);
-    status.source_mapping = Stage::not_run(Some("diagnostic export did not run"));
+    status.source_mapping = Stage::not_run("diagnostic export did not run");
     status.module_signature = None;
     status.toolchain_identity = None;
     status.artifacts = BTreeMap::from([
@@ -341,11 +292,11 @@ fn finalize_at(root: &Path, playwright_exit: &str) -> Result<()> {
     write_status(root, &status)
 }
 
-fn read_status(root: &Path) -> Result<Status> {
+fn read_status(root: &Path) -> Result<BrowserStatus> {
     read_json(&root.join("status.json"))
 }
 
-fn write_status(root: &Path, status: &Status) -> Result<()> {
+fn write_status(root: &Path, status: &BrowserStatus) -> Result<()> {
     fs::write(
         root.join("status.json"),
         format!("{}\n", serde_json::to_string_pretty(status)?),
@@ -411,14 +362,14 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn initialized_status() -> Status {
-        Status {
+    fn initialized_status() -> BrowserStatus {
+        BrowserStatus {
             version: "v1".into(),
             requested_browser: "chromium".into(),
             actual_browser: "not-started".into(),
             csr_structural: Stage::passed(),
-            diagnostic_export: Stage::not_run(None::<String>),
-            source_mapping: Stage::not_run(None::<String>),
+            diagnostic_export: Stage::not_run("Playwright has not completed"),
+            source_mapping: Stage::not_run("diagnostic export has not completed"),
             module_signature: None,
             toolchain_identity: None,
             served_module: None,
@@ -447,10 +398,7 @@ mod tests {
         )
         .unwrap();
         let written = read_status(root).unwrap();
-        assert_eq!(
-            written.source_mapping,
-            Stage::not_run(Some("export failed"))
-        );
+        assert_eq!(written.source_mapping, Stage::not_run("export failed"));
         assert_eq!(
             written.artifacts["mapping_diagnostics"].path,
             "diagnostics/mapping.log"
@@ -504,7 +452,7 @@ mod tests {
         );
         assert_eq!(
             written.source_mapping,
-            Stage::not_run(Some("diagnostic export did not run"))
+            Stage::not_run("diagnostic export did not run")
         );
         assert_eq!(
             written.artifacts.keys().collect::<Vec<_>>(),

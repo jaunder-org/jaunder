@@ -13,9 +13,11 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use coverage::wasm::{Artifact, BrowserStatus, Outcome, Stage};
 use csr_bundle::{Manifest, Role};
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tar::Archive;
 
@@ -35,27 +37,6 @@ impl CommandRunner for ProcessRunner {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub struct BrowserStatus {
-    pub version: String,
-    pub requested_browser: String,
-    pub actual_browser: String,
-    pub csr_structural: Stage,
-    pub diagnostic_export: Stage,
-    pub source_mapping: Stage,
-    pub module_signature: Option<String>,
-    pub toolchain_identity: Option<serde_json::Value>,
-    pub served_module: Option<ServedModule>,
-    pub artifacts: BTreeMap<String, Artifact>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Stage {
-    pub outcome: Outcome,
-    pub blocker: Option<String>,
-}
-
 fn browser_stages(status: &BrowserStatus) -> [(&'static str, &Stage); 3] {
     [
         ("csr_structural", &status.csr_structural),
@@ -68,26 +49,6 @@ fn all_browser_stages_pass(status: &BrowserStatus) -> bool {
     browser_stages(status)
         .into_iter()
         .all(|(_, stage)| stage.outcome == Outcome::Passed)
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum Outcome {
-    Passed,
-    Failed,
-    NotRun,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Artifact {
-    pub path: String,
-    pub sha256: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ServedModule {
-    pub path: String,
-    pub sha256: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -173,7 +134,9 @@ fn validate_stage(name: &str, stage: &Stage) -> Result<()> {
         .filter(|value| !value.trim().is_empty());
     match stage.outcome {
         Outcome::Passed if stage.blocker.is_some() => bail!("{name} passed with a blocker"),
-        Outcome::Failed if blocker.is_none() => bail!("{name} failed without a blocker"),
+        Outcome::Failed | Outcome::NotRun if blocker.is_none() => {
+            bail!("{name} did not pass and has no blocker")
+        }
         _ => Ok(()),
     }
 }
@@ -355,28 +318,41 @@ pub fn derive_verdict(statuses: &BTreeMap<String, BrowserStatus>) -> (Verdict, V
     )
 }
 
-pub fn merge_eligible(statuses: &BTreeMap<String, BrowserStatus>) -> bool {
+fn merge_ineligibility(statuses: &BTreeMap<String, BrowserStatus>) -> Option<&'static str> {
     let Some(chromium) = statuses.get("chromium") else {
-        return false;
+        return Some("Chromium status is missing");
     };
     let Some(firefox) = statuses.get("firefox") else {
-        return false;
+        return Some("Firefox status is missing");
     };
-    all_browser_stages_pass(chromium)
-        && all_browser_stages_pass(firefox)
-        && chromium.module_signature == firefox.module_signature
-        && chromium.toolchain_identity == firefox.toolchain_identity
-        && chromium.served_module.is_some()
-        && chromium.served_module == firefox.served_module
-        && chromium.artifacts.contains_key("module")
-        && chromium
-            .artifacts
-            .get("module")
-            .map(|artifact| &artifact.sha256)
-            == firefox
-                .artifacts
-                .get("module")
-                .map(|artifact| &artifact.sha256)
+    if !all_browser_stages_pass(chromium) {
+        return Some("Chromium has a non-passing stage");
+    }
+    if !all_browser_stages_pass(firefox) {
+        return Some("Firefox has a non-passing stage");
+    }
+    if chromium.module_signature != firefox.module_signature {
+        return Some("Chromium and Firefox module signatures differ");
+    }
+    if chromium.toolchain_identity != firefox.toolchain_identity {
+        return Some("Chromium and Firefox toolchain identities differ");
+    }
+    if chromium.served_module.is_none() || firefox.served_module.is_none() {
+        return Some("a browser lacks served-module identity");
+    }
+    if chromium.served_module != firefox.served_module {
+        return Some("Chromium and Firefox served-module identities differ");
+    }
+    let Some(chromium_module) = chromium.artifacts.get("module") else {
+        return Some("Chromium lacks its retained module artifact");
+    };
+    let Some(firefox_module) = firefox.artifacts.get("module") else {
+        return Some("Firefox lacks its retained module artifact");
+    };
+    if chromium_module.sha256 != firefox_module.sha256 {
+        return Some("Chromium and Firefox retained module digests differ");
+    }
+    None
 }
 
 pub fn probe() -> Result<Aggregate> {
@@ -407,7 +383,12 @@ fn probe_with(runner: &dyn CommandRunner) -> Result<Aggregate> {
     }
     let (verdict, mut blockers) = derive_verdict(&statuses);
     blockers.extend(validation_blockers);
-    let merged = if blockers.is_empty() && merge_eligible(&statuses) {
+    if blockers.is_empty()
+        && let Some(blocker) = merge_ineligibility(&statuses)
+    {
+        blockers.push(format!("merged: {blocker}"));
+    }
+    let merged = if blockers.is_empty() {
         match merge_profiles(runner, &roots, &statuses) {
             Ok(merged) => Some(merged),
             Err(error) => {
@@ -597,7 +578,7 @@ fn merge_profiles(
         &fs::read(csr.join("source-identity.json")).context("reading CSR source identity")?,
     )
     .context("parsing CSR source identity")?;
-    let csr_toolchain: serde_json::Value = serde_json::from_slice(
+    let csr_toolchain: Value = serde_json::from_slice(
         &fs::read(csr.join("toolchain-identity.json")).context("reading CSR toolchain identity")?,
     )
     .context("parsing CSR toolchain identity")?;
@@ -742,25 +723,25 @@ fn export_region_counts(
 }
 
 fn region_counts(export: &[u8]) -> Result<BTreeMap<Region, u64>> {
-    let export: serde_json::Value = serde_json::from_slice(export)?;
+    let export: Value = serde_json::from_slice(export)?;
     let mut counts = BTreeMap::new();
     let data = export
         .get("data")
-        .and_then(serde_json::Value::as_array)
+        .and_then(Value::as_array)
         .context("llvm-cov export lacks data")?;
     for unit in data {
         let functions = unit
             .get("functions")
-            .and_then(serde_json::Value::as_array)
+            .and_then(Value::as_array)
             .context("llvm-cov export data lacks functions")?;
         for function in functions {
             let filenames = function
                 .get("filenames")
-                .and_then(serde_json::Value::as_array)
+                .and_then(Value::as_array)
                 .context("llvm-cov export function lacks filenames")?;
             let regions = function
                 .get("regions")
-                .and_then(serde_json::Value::as_array)
+                .and_then(Value::as_array)
                 .context("llvm-cov export function lacks regions")?;
             for region in regions {
                 let region = region
@@ -775,7 +756,7 @@ fn region_counts(export: &[u8]) -> Result<BTreeMap<Region, u64>> {
                 let file_id = integer(5, "region file ID")?;
                 let filename = filenames
                     .get(usize::try_from(file_id).context("llvm-cov export file ID is too large")?)
-                    .and_then(serde_json::Value::as_str)
+                    .and_then(Value::as_str)
                     .context("llvm-cov export region file ID is out of bounds")?;
                 let key = (
                     filename.to_owned(),
@@ -1110,18 +1091,15 @@ fn validate_retained_measurement(manifest: &MeasurementManifest, root: &Path) ->
         {
             bail!("retained measurement payload does not match manifest");
         }
-        let realization: serde_json::Value = serde_json::from_slice(
+        let realization: Value = serde_json::from_slice(
             &fs::read(evidence.join("nix-realization.json"))
                 .context("reading retained Nix realization")?,
         )
         .context("parsing retained Nix realization")?;
-        if realization
-            .pointer("/cache_buster")
-            .and_then(serde_json::Value::as_str)
-            != Some(&run.cache_buster)
+        if realization.pointer("/cache_buster").and_then(Value::as_str) != Some(&run.cache_buster)
             || realization
                 .pointer("/nix_realization")
-                .and_then(serde_json::Value::as_str)
+                .and_then(Value::as_str)
                 != Some(&run.nix_realization)
         {
             bail!("retained Nix realization does not match manifest");
@@ -1203,6 +1181,7 @@ fn write_measurement_manifest(manifest: &MeasurementManifest) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use coverage::wasm::ServedModule;
     use tempfile::tempdir;
 
     fn status(browser: &str) -> BrowserStatus {
@@ -1323,7 +1302,7 @@ mod tests {
         let status = validate_browser(root.path(), "chromium").unwrap();
         let statuses = BTreeMap::from([("chromium".into(), status)]);
         assert_eq!(derive_verdict(&statuses).0, Verdict::Failed);
-        assert!(!merge_eligible(&statuses));
+        assert!(merge_ineligibility(&statuses).is_some());
     }
 
     #[test]
@@ -1377,6 +1356,22 @@ mod tests {
     }
 
     #[test]
+    fn nonpassing_stage_requires_an_exact_blocker() {
+        let error = validate_stage(
+            "source_mapping",
+            &Stage {
+                outcome: Outcome::NotRun,
+                blocker: None,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "source_mapping did not pass and has no blocker"
+        );
+    }
+
+    #[test]
     fn verdict_accumulates_both_browser_blockers() {
         let mut chromium = status("chromium");
         chromium.diagnostic_export = Stage {
@@ -1421,10 +1416,13 @@ mod tests {
             ("chromium".into(), chromium),
             ("firefox".into(), firefox.clone()),
         ]);
-        assert!(merge_eligible(&statuses));
+        assert!(merge_ineligibility(&statuses).is_none());
         firefox.artifacts.get_mut("module").unwrap().sha256 = "b".repeat(64);
         statuses.insert("firefox".into(), firefox);
-        assert!(!merge_eligible(&statuses));
+        assert_eq!(
+            merge_ineligibility(&statuses),
+            Some("Chromium and Firefox retained module digests differ")
+        );
     }
 
     #[test]

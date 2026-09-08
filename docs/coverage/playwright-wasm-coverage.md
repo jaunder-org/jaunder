@@ -16,7 +16,7 @@ cargo xtask wasm-coverage probe
 cargo xtask wasm-coverage measure --quiescent-window "2026-09-08 user-confirmed idle host"
 ```
 
-The latter completed with exit 0 in 1,058,962 ms. The retained primary evidence
+The latter completed with exit 0 in 1,094,385 ms. The retained primary evidence
 is `.xtask/gcroots/wasm-coverage-csr/`; the executable browser and reconciled
 evidence is `.xtask/wasm-coverage/`.
 
@@ -26,7 +26,7 @@ The diagnostic producer used `nightly-2026-07-27`
 (`rustc 1.99.0-nightly  dc3f85158`, LLVM 22.1.8),
 clang/`llvm-profdata`/`llvm-cov` 22.1.8, `wasm-bindgen` 0.2.121, `wasm-opt` 132,
 and minicov 0.3.8. Its pinned source is
-`/nix/store/0ks4m16sz8wr5ijh17nssi51qqdxybkr-jaunder-site-cargo-source`; the
+`/nix/store/fzpmflls2m9lwnsn629br7k36nh0r87y-jaunder-site-cargo-source`; the
 compiled prefix is `/build/wasm-coverage-csr/source`.
 
 Only first-party crate `csr` was instrumented. First-party crates `client`,
@@ -58,12 +58,12 @@ source-map/report/export tool semantics; the named files remain the evidence for
 this run.
 
 `instrumented/csr.wasm` is the source-mappable module (SHA-256
-`84bb74c76348ed3eb48d58b52ebfb3c32d968586fbff6f00eb3436cc000cda0d`). It is
+`895cbebb290f316dba812d187c081fbbdef57cfb0a291774847c26ce2f5a2950`). It is
 linked from LLVM IR under the compiled prefix. The served derivative selected by
 `pkg/manifest.json` is
-`pkg/6f648f91c83f3d96df60be4e2c58a0c468a1533fa1fb148aabee3da70804396a.wasm`; its
+`pkg/2a989f355bf9973891c40b7eac6f69e24da71309671ab0cd0e67e1beb354f578.wasm`; its
 filename and SHA-256 are both
-`6f648f91c83f3d96df60be4e2c58a0c468a1533fa1fb148aabee3da70804396a`. It is the
+`2a989f355bf9973891c40b7eac6f69e24da71309671ab0cd0e67e1beb354f578`. It is the
 input's wasm-bindgen/wasm-opt derivative—not the module used for Rust source
 mapping.
 
@@ -99,7 +99,7 @@ Both `.xtask/wasm-coverage/chromium/status.json` and
 `.xtask/wasm-coverage/firefox/status.json` are `v1`, name the requested and
 actual browser identically, and record `passed` for CSR structural validation,
 diagnostic export, and source mapping with no blocker. They agree on module
-signature `6362899886360772764` and on the content-addressed served-module
+signature `9457699261485885082` and on the content-addressed served-module
 identity above.
 
 [Playwright projects][playwright-projects] and its [browser-execution
@@ -113,9 +113,9 @@ versioned status files and retained profiles/reports below do.
 | Firefox  | passed         | passed            | passed         | `firefox/mapped/llvm-cov.txt`; count 1 on CSR lines 30–32, 50, 74, 77, and 79–84  |
 
 Each retains the same nonempty raw profile (SHA-256
-`f5b0b03dbf292431041d1a3032db9bb2a948aafa29b9246e3695d2920091d7b0`),
+`b3cfdcac9875ab72827b9b18349d6edc65ebda3fa90169d95e9404b3a13b628c`),
 merged-per-browser profile data
-(`f6e620aa1feae967d727ec093e74964f73d25b1456648d761663878e412d3b14`), and mapped
+(`d78babe0750cc35453e56ea5184387319eeda5de88c7f31651db74aa3004af5b`), and mapped
 report (`c12b8654237b7ef2b74d7de364333599c905a086397ab3eb08330ef878bfb8ff`).
 
 The Chromium and Firefox reports separately map executed original Rust lines in
@@ -151,15 +151,15 @@ cache-buster, Nix realization, and retained run root under
 The metric is focused-flow milliseconds and raw uncompressed bytes of the
 content-addressed wasm selected by each bundle's `pkg/manifest.json`.
 
-| Browser  | Baseline median [range] | Instrumented median [range] |                 Delta |
-| -------- | ----------------------: | --------------------------: | --------------------: |
-| Chromium |       609 ms [583, 635] |           597 ms [595, 605] |   -12 ms (-1.970443%) |
-| Firefox  | 4,239 ms [3,060, 5,566] |     5,062 ms [3,160, 7,367] | +823 ms (+19.414956%) |
+| Browser  |   Baseline median [range] | Instrumented median [range] |                   Delta |
+| -------- | ------------------------: | --------------------------: | ----------------------: |
+| Chromium |         592 ms [532, 618] |           602 ms [576, 625] |     +10 ms (+1.689189%) |
+| Firefox  | 11,199 ms [3,347, 15,303] |    4,586 ms [3,707, 30,367] | -6,613 ms (-59.049915%) |
 
 The baseline served wasm was 3,333,996 bytes at
 `pkg/01a228c4bb955c1f8056c5d66428cecc4f0c48d5d9c1c5834d725718b555841a.wasm`. The
-instrumented served wasm was 3,365,676 bytes at the content-addressed path named
-above: +31,680 bytes (+0.950211%). The timing ranges overlap in both browsers.
+instrumented served wasm was 3,365,744 bytes at the content-addressed path named
+above: +31,748 bytes (+0.952251%). The timing ranges overlap in both browsers.
 Therefore this experiment makes **no measured slowdown claim and no speedup
 claim**; the median differences are not evidence of either.
 
@@ -178,8 +178,8 @@ orchestration validates the retained result. Those references define the
 ownership model only; the concrete browser and reconciliation outcomes remain
 local executable evidence.
 
-Remaining costs and risks are the 31,680-byte served-WASM overhead; the
-1,058,962 ms quiescent-host experiment wall time; two browser/Nix realization
+Remaining costs and risks are the 31,748-byte served-WASM overhead; the
+1,094,385 ms quiescent-host experiment wall time; two browser/Nix realization
 cost; continued compatibility of the pinned Rust/LLVM raw-profile, profdata, and
 line-report formats; optimizer/bundler preservation; and the need to retain and
 validate both complete browser evidence sets. A future permanent gate must keep
@@ -227,7 +227,7 @@ would not be supported by this finding.
 - Primary producer evidence:
   `.xtask/gcroots/wasm-coverage-csr/{status.json,build-configuration.json,coverage-metadata.json,source-identity.json,toolchain-identity.json}`.
 - Browser evidence:
-  `.xtask/wasm-coverage/{chromium,firefox}/{status.json,module/pkg/6f648f91c83f3d96df60be4e2c58a0c468a1533fa1fb148aabee3da70804396a.wasm,profiles/browser.profraw,mapped/browser.profdata,mapped/llvm-cov.txt,diagnostics/}`.
+  `.xtask/wasm-coverage/{chromium,firefox}/{status.json,module/pkg/2a989f355bf9973891c40b7eac6f69e24da71309671ab0cd0e67e1beb354f578.wasm,profiles/browser.profraw,mapped/browser.profdata,mapped/llvm-cov.txt,diagnostics/}`.
 - Reconciled evidence:
   `.xtask/wasm-coverage/{status.json,merged/browser.profdata,merged/llvm-cov.txt}`.
 - Measurement evidence: `.xtask/wasm-coverage/measurement/manifest-v1.json` and
