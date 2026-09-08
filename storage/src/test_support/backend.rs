@@ -823,16 +823,16 @@ impl Backend {
     async fn provision(self) -> TestEnv {
         let dir = TempDir::new().unwrap();
         let runtime = StorageRuntimeConfig::default();
-        let (state, base) = match self {
+        let (factory, base) = match self {
             Backend::Sqlite => {
                 let DbConnectOptions::Sqlite(options) = sqlite_url(&dir) else {
                     unreachable!("sqlite_url always yields Sqlite")
                 };
-                let (state, pool, instance_id) =
+                let (factory, pool, instance_id) =
                     crate::sqlite::open_sqlite_database_with_pool(&options, true, &runtime)
                         .await
                         .unwrap();
-                (state, TestBase::sqlite(dir, pool, instance_id))
+                (factory, TestBase::sqlite(dir, pool, instance_id))
             }
             Backend::Postgres => {
                 let config = PostgresTestConfig::from_env();
@@ -840,16 +840,19 @@ impl Backend {
                 let DbConnectOptions::Postgres { options, .. } = &url else {
                     unreachable!("template_postgres_url always yields Postgres")
                 };
-                let (state, pool, instance_id) =
+                let (factory, pool, instance_id) =
                     crate::postgres::open_postgres_database_with_pool(options, &runtime)
                         .await
                         .unwrap();
                 std::fs::write(dir.path().join(PG_URL_FILE), url.expose_url())
                     .expect("write recorded Postgres URL");
-                (state, TestBase::postgres(dir, guard, pool, instance_id))
+                (factory, TestBase::postgres(dir, guard, pool, instance_id))
             }
         };
-        TestEnv { state, base }
+        TestEnv {
+            state: factory.app_state(),
+            base,
+        }
     }
 }
 #[template]

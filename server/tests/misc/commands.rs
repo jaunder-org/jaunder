@@ -105,7 +105,8 @@ fn uninitialized_storage_args(backend: Backend, base: &TempDir) -> StorageArgs {
 async fn enable_cli_invites(args: &StorageArgs) {
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open db");
+        .expect("open db")
+        .app_state();
     let site_config = Arc::clone(&state.site_config);
     confirmed(
         state
@@ -274,7 +275,8 @@ async fn command_source_chain_cmd_smtp_test_quoted_sender_reaches_send(#[case] b
     let args = env.args;
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open");
+        .expect("open")
+        .app_state();
     crate::helpers::set_site_config(&state, SiteConfigKey::SmtpHost, "mail.example.com")
         .await
         .expect("set host");
@@ -306,7 +308,8 @@ async fn command_source_chain_cmd_smtp_test_send(#[case] backend: Backend) {
     let args = env.args;
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open");
+        .expect("open")
+        .app_state();
     for (key, value) in [
         (SiteConfigKey::SmtpHost, "127.0.0.1"),
         (SiteConfigKey::SmtpPort, "1"),
@@ -337,7 +340,8 @@ async fn websub_dispatch_lists_and_redrives_the_exact_terminal_selection(#[case]
     let args = env.args.clone();
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open initialized database");
+        .expect("open initialized database")
+        .app_state();
     let path = "/feed.rss".parse().expect("feed path");
     let feed_events = Arc::clone(&state.feed_events);
     let id = confirmed(
@@ -458,10 +462,13 @@ async fn after_init_server_responds_to_health_check(#[case] backend: Backend) {
     let args = env.args;
 
     let OpenedDatabase {
-        state, instance_id, ..
+        factory,
+        instance_id,
+        ..
     } = open_existing_database_with_observer(&args.db, &storage::StorageRuntimeConfig::default())
         .await
         .unwrap();
+    let state = factory.app_state();
     let router = jaunder::create_router(
         state,
         instance_id,
@@ -595,7 +602,8 @@ async fn app_password_create_records_the_default_label(#[case] backend: Backend)
 
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("reopen");
+        .expect("reopen")
+        .app_state();
     let user = state
         .users
         .get_user_by_username(&username)
@@ -690,7 +698,8 @@ async fn cmd_user_create_creates_retrievable_user(#[case] backend: Backend) {
 
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open db");
+        .expect("open db")
+        .app_state();
     let user = state
         .users
         .get_user_by_username(&username)
@@ -737,7 +746,8 @@ async fn cmd_user_create_with_operator_flag_sets_is_operator(#[case] backend: Ba
 
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open db");
+        .expect("open db")
+        .app_state();
     let user = state
         .users
         .get_user_by_username(&username)
@@ -763,7 +773,8 @@ async fn cmd_user_invite_creates_retrievable_invite(#[case] backend: Backend) {
 
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open db");
+        .expect("open db")
+        .app_state();
     let invites = state.invites.list_invites().await.expect("list invites");
     assert_eq!(invites.len(), 1, "exactly one invite should exist");
 }
@@ -778,7 +789,8 @@ async fn cmd_user_invite_default_expires_in(#[case] backend: Backend) {
 
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open db");
+        .expect("open db")
+        .app_state();
     let invites = state.invites.list_invites().await.expect("list invites");
     assert_eq!(invites.len(), 1, "exactly one invite should exist");
 }
@@ -1692,7 +1704,8 @@ async fn cmd_smtp_test_succeeds_with_mock_server(#[case] backend: Backend) {
     let args = env.args;
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open db");
+        .expect("open db")
+        .app_state();
     crate::helpers::set_site_config(&state, SiteConfigKey::SmtpHost, &server.host().to_string())
         .await
         .expect("set host");

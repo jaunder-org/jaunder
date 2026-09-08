@@ -174,7 +174,8 @@ pub async fn assert_supported_post_precedes_out_of_range_post(
 ) {
     let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
         .await
-        .expect("open restored database");
+        .expect("open restored database")
+        .app_state();
     assert!(
         state
             .posts
@@ -194,7 +195,8 @@ pub async fn assert_supported_post_precedes_out_of_range_post(
 pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open database");
+        .expect("open database")
+        .app_state();
     let hub: HubUrl = "https://hub.example.test/"
         .parse()
         .expect("valid fixture WebSub hub");
@@ -391,7 +393,8 @@ async fn seed_side_tables(state: &AppState, author: UserId) {
 pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixtureIds) {
     let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
         .await
-        .expect("open restored database");
+        .expect("open restored database")
+        .app_state();
     let username: Username = "backupuser".parse().expect("valid username");
     let user = state
         .users
@@ -493,7 +496,8 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
 pub async fn assert_target_unmodified(args: &StorageArgs) {
     let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
-        .expect("open target");
+        .expect("open target")
+        .app_state();
     let username: Username = "backupuser".parse().expect("valid username");
     assert!(
         state

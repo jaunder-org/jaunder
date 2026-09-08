@@ -14,7 +14,8 @@ mod tests {
         let (url, _pg) = unique_postgres_url(&config).await;
         let state = open_database(&url, &StorageRuntimeConfig::default())
             .await
-            .unwrap();
+            .unwrap()
+            .app_state();
         // A migrated-but-empty database resolves an unwritten config key to None.
         assert_eq!(
             state

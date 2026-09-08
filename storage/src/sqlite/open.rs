@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use log::LevelFilter;
 use sqlx::{
@@ -10,7 +10,7 @@ use crate::backup::CatalogTableName;
 use crate::db::StorageRuntimeConfig;
 use crate::posts::media;
 use crate::sql::Exists;
-use crate::{AppState, instance_identity, make_app_state};
+use crate::{StorageFactory, instance_identity};
 
 /// Resolves application `SQLite` options from the runtime connection snapshot.
 #[must_use]
@@ -32,7 +32,7 @@ pub(crate) async fn open_sqlite_database_with_pool(
     options: &SqliteConnectOptions,
     create_if_missing: bool,
     runtime: &StorageRuntimeConfig,
-) -> sqlx::Result<(Arc<AppState>, SqlitePool, crate::InstanceId)> {
+) -> sqlx::Result<(StorageFactory, SqlitePool, crate::InstanceId)> {
     let mut options = resolved_sqlite_options(options, runtime);
     if create_if_missing {
         options = options.create_if_missing(true);
@@ -54,7 +54,7 @@ pub(crate) async fn open_sqlite_database_with_pool(
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
     let instance_id = instance_identity::ensure(&pool).await?;
     media::backfill_post_media_references(&pool).await?;
-    Ok((make_app_state(pool.clone()), pool, instance_id))
+    Ok((StorageFactory::sqlite(pool.clone()), pool, instance_id))
 }
 
 /// Returns `true` if the `SQLite` database holds no user data — every table

@@ -30,7 +30,8 @@ pub trait Backend: sqlx::Database {
     ) -> Result<&mut Self::Connection, sqlx::Error>;
 }
 
-/// Backend capability used only while composing [`crate::AppState`].
+/// Backend capability used only by [`crate::StorageFactory`] while composing
+/// storage dependencies.
 ///
 /// This remains crate-private so downstream code can use a factory-minted
 /// [`crate::WriteScope`] but cannot construct one from a pool.

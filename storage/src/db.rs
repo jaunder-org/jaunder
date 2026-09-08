@@ -1,18 +1,18 @@
 //! Database connection and initialization.
 //!
 //! Handles opening `SQLite` and `PostgreSQL` databases, running migrations,
-//! and constructing the [`AppState`] with all storage implementations.
+//! and returning a pool-owning [`StorageFactory`] to composition roots.
 
 use std::io;
 use std::io::Write;
 use std::path::Path;
-use std::{fmt, str::FromStr, sync::Arc};
+use std::{fmt, str::FromStr};
 
 use sqlx::postgres::PgConnectOptions;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{PgPool, SqlitePool};
 
-use crate::{AppState, postgres, sqlite};
+use crate::{StorageFactory, postgres, sqlite};
 
 // ---------------------------------------------------------------------------
 // DbConnectOptions
@@ -357,7 +357,7 @@ pub struct DbPoolSnapshot {
 }
 
 pub struct OpenedDatabase {
-    pub state: Arc<AppState>,
+    pub factory: StorageFactory,
     pub instance_id: crate::InstanceId,
     pub pool_observer: DbPoolObserver,
 }
@@ -384,7 +384,7 @@ fn pool_snapshot<DB: sqlx::Database>(pool: &sqlx::Pool<DB>) -> DbPoolSnapshot {
 }
 
 /// Opens (or creates) the database described by `opts`, runs pending
-/// migrations, and returns an [`AppState`] bundling all storage handles.
+/// migrations, and returns its pool-owning storage factory.
 ///
 /// # Errors
 ///
@@ -393,11 +393,11 @@ fn pool_snapshot<DB: sqlx::Database>(pool: &sqlx::Pool<DB>) -> DbPoolSnapshot {
 pub async fn open_database(
     opts: &DbConnectOptions,
     runtime: &StorageRuntimeConfig,
-) -> sqlx::Result<Arc<AppState>> {
-    Ok(open_database_with_observer(opts, runtime).await?.state)
+) -> sqlx::Result<StorageFactory> {
+    Ok(open_database_with_observer(opts, runtime).await?.factory)
 }
 
-/// Opens (or creates) a database and returns its storage state plus a pool observer.
+/// Opens (or creates) a database and returns its storage factory plus a pool observer.
 ///
 /// # Errors
 ///
@@ -409,10 +409,10 @@ pub async fn open_database_with_observer(
 ) -> sqlx::Result<OpenedDatabase> {
     match opts {
         DbConnectOptions::Sqlite(options) => {
-            let (state, pool, instance_id) =
+            let (factory, pool, instance_id) =
                 sqlite::open_sqlite_database_with_pool(options, true, runtime).await?;
             Ok(OpenedDatabase {
-                state,
+                factory,
                 instance_id,
                 pool_observer: DbPoolObserver {
                     inner: DbPoolObserverInner::Sqlite(pool),
@@ -420,10 +420,10 @@ pub async fn open_database_with_observer(
             })
         }
         DbConnectOptions::Postgres { options, .. } => {
-            let (state, pool, instance_id) =
+            let (factory, pool, instance_id) =
                 postgres::open_postgres_database_with_pool(options, runtime).await?;
             Ok(OpenedDatabase {
-                state,
+                factory,
                 instance_id,
                 pool_observer: DbPoolObserver {
                     inner: DbPoolObserverInner::Postgres(pool),
@@ -444,13 +444,13 @@ pub async fn open_database_with_observer(
 pub async fn open_existing_database(
     opts: &DbConnectOptions,
     runtime: &StorageRuntimeConfig,
-) -> sqlx::Result<Arc<AppState>> {
+) -> sqlx::Result<StorageFactory> {
     Ok(open_existing_database_with_observer(opts, runtime)
         .await?
-        .state)
+        .factory)
 }
 
-/// Opens an existing database and returns its storage state plus a pool observer.
+/// Opens an existing database and returns its storage factory plus a pool observer.
 ///
 /// # Errors
 ///
@@ -465,10 +465,10 @@ pub async fn open_existing_database_with_observer(
 ) -> sqlx::Result<OpenedDatabase> {
     match opts {
         DbConnectOptions::Sqlite(options) => {
-            let (state, pool, instance_id) =
+            let (factory, pool, instance_id) =
                 sqlite::open_sqlite_database_with_pool(options, false, runtime).await?;
             Ok(OpenedDatabase {
-                state,
+                factory,
                 instance_id,
                 pool_observer: DbPoolObserver {
                     inner: DbPoolObserverInner::Sqlite(pool),
@@ -476,10 +476,10 @@ pub async fn open_existing_database_with_observer(
             })
         }
         DbConnectOptions::Postgres { options, .. } => {
-            let (state, pool, instance_id) =
+            let (factory, pool, instance_id) =
                 postgres::open_postgres_database_with_pool(options, runtime).await?;
             Ok(OpenedDatabase {
-                state,
+                factory,
                 instance_id,
                 pool_observer: DbPoolObserver {
                     inner: DbPoolObserverInner::Postgres(pool),
@@ -591,7 +591,7 @@ mod tests {
         assert!(snapshot.max >= 1);
         assert!(snapshot.used <= snapshot.max);
         assert!(snapshot.idle <= snapshot.max);
-        assert!(Arc::strong_count(&opened.state) >= 1);
+        let _ = opened.factory.users();
     }
 
     #[test]

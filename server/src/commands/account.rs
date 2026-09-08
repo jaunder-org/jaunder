@@ -67,7 +67,8 @@ pub async fn cmd_user_create(
     let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime)
         .await
-        .context(support::INIT_FIRST_CONTEXT)?;
+        .context(support::INIT_FIRST_CONTEXT)?
+        .app_state();
 
     let password = if let Some(p) = password {
         p
@@ -154,7 +155,8 @@ pub async fn cmd_app_password_create(
     let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime)
         .await
-        .context(support::INIT_FIRST_CONTEXT)?;
+        .context(support::INIT_FIRST_CONTEXT)?
+        .app_state();
     let token = app_password_create(
         &state.write_scope,
         state.users(),
@@ -180,7 +182,8 @@ pub async fn cmd_user_invite(
     let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime)
         .await
-        .context(support::INIT_FIRST_CONTEXT)?;
+        .context(support::INIT_FIRST_CONTEXT)?
+        .app_state();
 
     let policy = state.site_config().get_registration_policy().await?;
     if !policy.may_issue_invitation(true) {
@@ -232,7 +235,8 @@ pub async fn cmd_smtp_test(storage: &StorageArgs, to: &Email) -> anyhow::Result<
     let runtime = support::storage_runtime_config(&storage.db)?;
     let state = storage::open_existing_database(&storage.db, &runtime)
         .await
-        .context(support::INIT_FIRST_CONTEXT)?;
+        .context(support::INIT_FIRST_CONTEXT)?
+        .app_state();
 
     smtp_test_with(state.site_config(), to, |config| {
         Ok(Box::new(LettreMailSender::from_config(config)?) as Box<dyn MailSender>)
@@ -421,7 +425,8 @@ mod tests {
         let storage_args = sqlite_storage_args(&temp);
         let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
-            .expect("open db");
+            .expect("open db")
+            .app_state();
         set_registration_policy(&state, RegistrationPolicy::OperatorInvites).await;
 
         let before = common::time::UtcInstant::now();
@@ -446,7 +451,8 @@ mod tests {
         let storage_args = sqlite_storage_args(&temp);
         let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
-            .expect("open db");
+            .expect("open db")
+            .app_state();
         set_registration_policy(&state, RegistrationPolicy::MemberInvites).await;
         let config = Arc::clone(&state.site_config);
         confirmed(
@@ -482,7 +488,8 @@ mod tests {
             let storage_args = sqlite_storage_args(&temp);
             let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
                 .await
-                .expect("open db");
+                .expect("open db")
+                .app_state();
             set_registration_policy(&state, policy).await;
 
             let error = cmd_user_invite(&storage_args, Some(parse_invite_ttl_hours("24")))

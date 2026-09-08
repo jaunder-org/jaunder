@@ -1,8 +1,8 @@
 //! Wire `AppState`'s storage handles and the mailer into Leptos context.
 //!
-//! `AppState` bundles the handles for ergonomic construction (one call to
-//! `open_database` returns one struct), but consumers (`#[server]` functions)
-//! fetch individual traits from Leptos context so each function advertises
+//! `AppState` bundles the handles for ergonomic construction at the serve
+//! composition root (`open_database` returns a factory), but consumers (`#[server]`
+//! functions) fetch individual traits from Leptos context so each function advertises
 //! exactly which storage capabilities it needs.
 //!
 //! These helpers live in `server` rather than `storage` because the choice to

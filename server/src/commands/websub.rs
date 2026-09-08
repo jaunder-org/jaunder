@@ -18,7 +18,9 @@ pub(super) async fn cmd_dead_letters_list(
     page_size: PageSize,
 ) -> anyhow::Result<()> {
     let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime).await?;
+    let state = storage::open_existing_database(&storage.db, &runtime)
+        .await?
+        .app_state();
     let page = state
         .feed_events
         .dead_letters(phase, cursor, page_size)
@@ -33,7 +35,9 @@ pub(super) async fn cmd_dead_letters_redrive(
     ids: &[FeedEventId],
 ) -> anyhow::Result<()> {
     let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime).await?;
+    let state = storage::open_existing_database(&storage.db, &runtime)
+        .await?
+        .app_state();
     redrive_selected(
         Arc::clone(&state.feed_events),
         &state.write_scope,

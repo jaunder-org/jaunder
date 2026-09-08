@@ -2,26 +2,23 @@
 
 use std::sync::Arc;
 
-use super::backend::AppStateBackend;
 use super::{
-    AudienceStorage, AudienceStore, EmailVerificationStorage, EmailVerificationStore,
-    FeedCacheStorage, FeedCacheStore, FeedEventStorage, FeedEventStore, InviteStorage, InviteStore,
-    MediaStorage, MediaStore, PasswordResetStorage, PasswordResetStore, PostStorage, PostStore,
-    PublisherStorage, PublisherStore, SessionStorage, SessionStore, SiteConfigStorage,
-    SiteConfigStore, SubscriptionStorage, SubscriptionStore, ThemeStorage, ThemeStore,
-    UserConfigStorage, UserConfigStore, UserStorage, UserStore, WriteScope,
+    AudienceStorage, EmailVerificationStorage, FeedCacheStorage, FeedEventStorage, InviteStorage,
+    MediaStorage, PasswordResetStorage, PostStorage, PublisherStorage, SessionStorage,
+    SiteConfigStorage, SubscriptionStorage, ThemeStorage, UserConfigStorage, UserStorage,
+    WriteScope,
 };
 
 /// Bundle of every storage handle the application needs.
 ///
-/// `open_database` constructs this struct so callers get all handles in one
-/// shot; the composition root then unpacks it — into individual Leptos contexts
-/// for `#[server]` functions (see `server::context::provide_app_state_contexts`)
-/// and into per-trait axum `Extension`s for the raw HTTP handlers. Consumers
-/// never receive the whole `AppState`: they take exactly the `Arc<dyn FooStorage>`
-/// handles they need. The bundle is purely a construction convenience; per
-/// [ADR-0016](../../docs/adr/0016-dependency-injection-and-appstate.md) it
-/// holds *only* storage and is never passed beyond the composition root.
+/// [`crate::StorageFactory`] constructs this bundle only when the serve
+/// composition root requests every handle. The root then unpacks it into
+/// individual Leptos contexts for `#[server]` functions (see
+/// `server::context::provide_app_state_contexts`) and per-trait axum
+/// `Extension`s for raw HTTP handlers. Consumers never receive the whole
+/// `AppState`: they take exactly the `Arc<dyn FooStorage>` handles they need.
+/// Per [ADR-0016](../../docs/adr/0016-dependency-injection-and-appstate.md), the
+/// bundle holds only storage and never crosses the composition root.
 ///
 /// Services that are not storage — the mailer and the `WebSub` publisher — are
 /// constructed by the server (which knows about SMTP / file-capture / HTTP
@@ -61,53 +58,6 @@ pub struct AppState {
     pub write_scope: WriteScope,
 }
 
-/// Constructs every application storage handle over one concrete database pool.
-///
-/// The crate-private [`AppStateBackend`] bound keeps pool-to-`WriteScope`
-/// construction at this composition seam; public [`crate::Backend`] users cannot
-/// mint scopes.
-pub(crate) fn make_app_state<DB>(pool: sqlx::Pool<DB>) -> Arc<AppState>
-where
-    DB: AppStateBackend,
-    SiteConfigStore<DB>: SiteConfigStorage,
-    UserStore<DB>: UserStorage,
-    SessionStore<DB>: SessionStorage,
-    InviteStore<DB>: InviteStorage,
-    EmailVerificationStore<DB>: EmailVerificationStorage,
-    PasswordResetStore<DB>: PasswordResetStorage,
-    PostStore<DB>: PostStorage,
-    SubscriptionStore<DB>: SubscriptionStorage,
-    AudienceStore<DB>: AudienceStorage,
-    MediaStore<DB>: MediaStorage,
-    UserConfigStore<DB>: UserConfigStorage,
-    FeedCacheStore<DB>: FeedCacheStorage,
-    FeedEventStore<DB>: FeedEventStorage,
-    PublisherStore<DB>: PublisherStorage,
-    ThemeStore<DB>: ThemeStorage,
-{
-    Arc::new(AppState {
-        site_config: Arc::new(SiteConfigStore::new(pool.clone())),
-        users: Arc::new(UserStore::new(pool.clone())),
-        sessions: Arc::new(SessionStore::new(pool.clone())),
-        invites: Arc::new(InviteStore::new(pool.clone())),
-        email_verifications: Arc::new(EmailVerificationStore::new(pool.clone())),
-        password_resets: Arc::new(PasswordResetStore::new(pool.clone())),
-        posts: Arc::new(PostStore::new(pool.clone())),
-        subscriptions: Arc::new(SubscriptionStore::new(
-            pool.clone(),
-            Arc::new(common::visibility::OpenSubscriptionPolicy),
-        )),
-        audiences: Arc::new(AudienceStore::new(pool.clone())),
-        media: Arc::new(MediaStore::new(pool.clone())),
-        user_config: Arc::new(UserConfigStore::new(pool.clone())),
-        feed_cache: Arc::new(FeedCacheStore::new(pool.clone())),
-        feed_events: Arc::new(FeedEventStore::new(pool.clone())),
-        publisher: Arc::new(PublisherStore::new(pool.clone())),
-        themes: Arc::new(ThemeStore::new(pool.clone())),
-        write_scope: DB::write_scope(pool),
-    })
-}
-
 impl AppState {
     /// Borrows the site configuration store.
     #[must_use]
@@ -124,15 +74,23 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::{Backend, backends};
+    use crate::test_support::{Backend, backends, recorded_postgres_url, sqlite_url};
+    use crate::{StorageRuntimeConfig, open_database};
     use rstest::*;
     use rstest_reuse::*;
 
     #[apply(backends)]
     #[tokio::test]
-    async fn opening_constructs_every_app_state_handle(#[case] backend: Backend) {
+    async fn factory_constructs_every_app_state_handle(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let state = &env.state;
+        let options = match backend {
+            Backend::Sqlite => sqlite_url(&env.base),
+            Backend::Postgres => recorded_postgres_url(&env.base).parse().unwrap(),
+        };
+        let factory = open_database(&options, &StorageRuntimeConfig::default())
+            .await
+            .expect("open database");
+        let state = factory.app_state();
 
         let _ = (
             state.site_config.as_ref(),

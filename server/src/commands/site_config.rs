@@ -20,7 +20,9 @@ pub(super) async fn cmd_site_config_set(
 ) -> anyhow::Result<()> {
     key.validate(value)?;
     let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime).await?;
+    let state = storage::open_existing_database(&storage.db, &runtime)
+        .await?
+        .app_state();
     if key == SiteConfigKey::FeedsWebsubHubUrl {
         let hub = if value.is_empty() {
             None
@@ -67,7 +69,9 @@ pub(super) async fn cmd_site_config_get(
     key: SiteConfigKey,
 ) -> anyhow::Result<()> {
     let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime).await?;
+    let state = storage::open_existing_database(&storage.db, &runtime)
+        .await?
+        .app_state();
     match state.site_config.get_raw(key).await? {
         Some(value) => {
             println!("{value}");
@@ -80,7 +84,9 @@ pub(super) async fn cmd_site_config_get(
 /// Print all `site_config` entries as `key=value`, one per line, ordered by key.
 pub(super) async fn cmd_site_config_list(storage: &StorageArgs) -> anyhow::Result<()> {
     let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime).await?;
+    let state = storage::open_existing_database(&storage.db, &runtime)
+        .await?
+        .app_state();
     let entries = state.site_config.list().await?;
     print!("{}", format_entries(&entries));
     Ok(())
@@ -93,7 +99,9 @@ pub(super) async fn cmd_site_config_unset(
     key: SiteConfigKey,
 ) -> anyhow::Result<()> {
     let runtime = support::storage_runtime_config(&storage.db)?;
-    let state = storage::open_existing_database(&storage.db, &runtime).await?;
+    let state = storage::open_existing_database(&storage.db, &runtime)
+        .await?
+        .app_state();
     let mutation = match key {
         SiteConfigKey::FeedsMinItems => Some(FeedWindowMutation::UnsetMinItems),
         SiteConfigKey::FeedsMinDays => Some(FeedWindowMutation::UnsetMinDays),
@@ -231,7 +239,8 @@ mod tests {
         let (args, _pg) = site_config_args(backend, &base).await;
         let state = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
             .await
-            .expect("reopen");
+            .expect("reopen")
+            .app_state();
         let before = state.site_config.list().await.unwrap().len();
 
         cmd_site_config_set(&args, SiteConfigKey::SiteBaseUrl, "nonsense://x")
@@ -258,7 +267,8 @@ mod tests {
 
         let state = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
             .await
-            .expect("reopen");
+            .expect("reopen")
+            .app_state();
         assert_eq!(
             state
                 .site_config
@@ -289,7 +299,8 @@ mod tests {
 
         let state = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
             .await
-            .expect("reopen");
+            .expect("reopen")
+            .app_state();
         assert_eq!(
             state
                 .site_config
@@ -312,7 +323,8 @@ mod tests {
 
         let state = storage::open_existing_database(&args.db, &StorageRuntimeConfig::default())
             .await
-            .expect("reopen");
+            .expect("reopen")
+            .app_state();
         let mut generation = state
             .publisher
             .snapshot()
@@ -480,7 +492,8 @@ mod tests {
         let state =
             storage::open_existing_database(&storage_args.db, &StorageRuntimeConfig::default())
                 .await
-                .expect("reopen");
+                .expect("reopen")
+                .app_state();
         assert_eq!(
             state
                 .site_config

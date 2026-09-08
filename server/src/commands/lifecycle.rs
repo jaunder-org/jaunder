@@ -68,7 +68,7 @@ trait StartupDatabaseOperations: Sync {
 struct RealStartupDatabaseOperations;
 
 struct StartupDatabase {
-    state: Arc<AppState>,
+    factory: storage::StorageFactory,
     instance_id: InstanceId,
     pool_observer: DbPoolObserver,
 }
@@ -82,7 +82,7 @@ impl StartupDatabaseOperations for RealStartupDatabaseOperations {
     ) -> sqlx::Result<StartupDatabase> {
         let opened = storage::open_existing_database_with_observer(options, runtime).await?;
         Ok(StartupDatabase {
-            state: opened.state,
+            factory: opened.factory,
             instance_id: opened.instance_id,
             pool_observer: opened.pool_observer,
         })
@@ -443,10 +443,11 @@ pub async fn prepare_server(
         .context("failed to prepare media temporary upload directory")?;
     let runtime = support::storage_runtime_config(&storage.db)?;
     let StartupDatabase {
-        state: db,
+        factory,
         instance_id,
         pool_observer,
     } = open_server_database(storage, &runtime, prod).await?;
+    let db = factory.app_state();
     ThemeAssetManager::new(
         db.themes.clone(),
         db.write_scope.clone(),
@@ -771,7 +772,8 @@ mod tests {
     ) -> BackgroundWorkerSetup {
         let state = storage::open_existing_database(&storage.db, &StorageRuntimeConfig::default())
             .await
-            .expect("open test database");
+            .expect("open test database")
+            .app_state();
         BackgroundWorkerSetup {
             maintenance: DatabaseMaintenance::new(
                 state.posts.clone(),
@@ -1063,7 +1065,6 @@ mod tests {
         assert!(snapshot.max >= 1);
         assert!(snapshot.used <= snapshot.max);
         assert!(snapshot.idle <= snapshot.max);
-        assert!(Arc::strong_count(&database.state) >= 1);
     }
 
     #[tokio::test]
@@ -1107,7 +1108,8 @@ mod tests {
         let storage = sqlite_storage_args(&temp);
         let state = storage::open_database(&storage.db, &StorageRuntimeConfig::default())
             .await
-            .expect("open db");
+            .expect("open db")
+            .app_state();
         let destination = temp.path().join("backups");
         let destination_for_config = destination.clone();
         let site_config = Arc::clone(&state.site_config);
@@ -1145,7 +1147,8 @@ mod tests {
         let storage = sqlite_storage_args(&temp);
         let state = storage::open_database(&storage.db, &StorageRuntimeConfig::default())
             .await
-            .expect("open db");
+            .expect("open db")
+            .app_state();
         let destination = temp.path().join("backups");
         let destination_for_config = destination.clone();
         let site_config = Arc::clone(&state.site_config);

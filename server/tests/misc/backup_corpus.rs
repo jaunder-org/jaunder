@@ -1148,7 +1148,8 @@ mod reader_tests {
         let state = compatibility_result(
             open_existing_database(&args.db, &StorageRuntimeConfig::default()).await,
             "open restored database",
-        );
+        )
+        .app_state();
         let user_id = UserId::from(41);
         let post_id = PostId::from(71);
         let username: Username =

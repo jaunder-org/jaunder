@@ -334,7 +334,9 @@ async fn cmd_seed_sandbox_profile(
     runtime: &StorageRuntimeConfig,
     profile: SandboxProfile,
 ) -> anyhow::Result<()> {
-    let state = storage::open_existing_database(db, runtime).await?;
+    let state = storage::open_existing_database(db, runtime)
+        .await?
+        .app_state();
     let site_config = Arc::clone(&state.site_config);
     let users = Arc::clone(&state.users);
     let posts = Arc::clone(&state.posts);
@@ -361,7 +363,9 @@ async fn cmd_seed_posts(
     body_prefix: &str,
     published: bool,
 ) -> anyhow::Result<()> {
-    let state = storage::open_existing_database(db, runtime).await?;
+    let state = storage::open_existing_database(db, runtime)
+        .await?
+        .app_state();
     let ids = seed_posts_for_user(&state, username, count, published, body_prefix).await?;
     eprintln!("seeded {} posts for {username}", ids.len());
     Ok(())
@@ -374,7 +378,9 @@ async fn cmd_seed_theme(
     reset: bool,
 ) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(db)?;
-    let state = storage::open_existing_database(db, &runtime).await?;
+    let state = storage::open_existing_database(db, &runtime)
+        .await?
+        .app_state();
     if reset {
         reset_author_theme_fixture(&state, author_username).await
     } else {
@@ -389,7 +395,9 @@ async fn cmd_seed_dead_letters(
     phase: FeedEventPhase,
     count: usize,
 ) -> anyhow::Result<()> {
-    let state = storage::open_existing_database(db, runtime).await?;
+    let state = storage::open_existing_database(db, runtime)
+        .await?
+        .app_state();
     let ids = seed_dead_letters(&state, phase, count).await?;
     println!("{}", serde_json::to_string(&ids)?);
     Ok(())
@@ -404,7 +412,9 @@ async fn cmd_create_user(
     display_name: Option<&DisplayName>,
     operator: bool,
 ) -> anyhow::Result<()> {
-    let state = storage::open_existing_database(db, runtime).await?;
+    let state = storage::open_existing_database(db, runtime)
+        .await?
+        .app_state();
     let id = create_user(&state, username, password, display_name, operator).await?;
     eprintln!("created user {username} with id {}", i64::from(id));
     Ok(())
@@ -418,7 +428,9 @@ async fn cmd_seed_user(
     password: &str,
     label: Option<&str>,
 ) -> anyhow::Result<()> {
-    let state = storage::open_existing_database(db, runtime).await?;
+    let state = storage::open_existing_database(db, runtime)
+        .await?
+        .app_state();
     let record = seed_user(&state, username, password, label).await?;
     println!("{}", serde_json::to_string(&record)?);
     Ok(())
@@ -430,7 +442,9 @@ async fn cmd_create_session(
     username: &str,
     label: Option<&str>,
 ) -> anyhow::Result<()> {
-    let state = storage::open_existing_database(db, runtime).await?;
+    let state = storage::open_existing_database(db, runtime)
+        .await?
+        .app_state();
     let record = create_session_for_user(&state, username, label).await?;
     println!("{}", serde_json::to_string(&record)?);
     Ok(())
@@ -714,7 +728,8 @@ mod tests {
         // seeded post is published and attributed to alice.
         let state = storage::open_existing_database(&db, &storage::StorageRuntimeConfig::default())
             .await
-            .unwrap();
+            .unwrap()
+            .app_state();
         let published = state
             .posts
             .list_published_by_user(
@@ -809,7 +824,8 @@ mod tests {
 
         let state = storage::open_existing_database(&db, &StorageRuntimeConfig::default())
             .await
-            .expect("reopen seeded database");
+            .expect("reopen seeded database")
+            .app_state();
         assert_eq!(
             state.site_config.list().await.expect("site config list"),
             vec![("site.title".to_owned(), "Jaunder Sandbox".to_owned())]
