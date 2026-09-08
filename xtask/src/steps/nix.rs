@@ -1181,7 +1181,7 @@ mod tests {
     use crate::audit_wasm::{ArtifactMetrics, AuditReport};
     use crate::result::{NixRealization, NixReport};
     use crate::steps::wasm_budget;
-    use coverage::status::{CoverageStatus, StatusCategory};
+    use coverage::status::{COVERAGE_STATUS_VERSION, CoverageStatus, Population, StatusCategory};
     use doctests::check::{Kind, Violation};
     use doctests::status::DoctestStatus;
 
@@ -1334,8 +1334,16 @@ mod tests {
     #[test]
     fn infra_detail_is_labeled_as_infrastructure() {
         let s = CoverageStatus {
+            version: COVERAGE_STATUS_VERSION,
+            stages: vec![],
+            population: Population {
+                expected: 0,
+                executed: 0,
+                ignored: 0,
+            },
             category: StatusCategory::Infra,
             failed_tests: vec![],
+            missing_tests: vec![],
             infra_detail: Some("No space left on device".into()),
         };
         let d = sentinel_detail(&s);
@@ -1346,8 +1354,16 @@ mod tests {
     #[test]
     fn test_failure_lists_tests_and_disclaims_coverage() {
         let s = CoverageStatus {
+            version: COVERAGE_STATUS_VERSION,
+            stages: vec![],
+            population: Population {
+                expected: 1,
+                executed: 1,
+                ignored: 0,
+            },
             category: StatusCategory::TestFailure,
             failed_tests: vec!["web_posts::case_3".into()],
+            missing_tests: vec![],
             infra_detail: None,
         };
         let d = sentinel_detail(&s);

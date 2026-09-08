@@ -1,187 +1,548 @@
 use std::fs;
-use std::io::Write;
+use std::io::ErrorKind;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
 use anyhow::{Context, Result};
-use coverage::status::{CoverageStatus, StatusCategory};
+use coverage::status::{
+    self, CoverageStatus, Population, ProcessOutcome, RequiredStage, StageResult, StatusCategory,
+    TestCensus,
+};
+use serde_json::Value;
 
 use crate::pg;
 
-/// Classify captured `cargo llvm-cov nextest` output into the in-sandbox
-/// sentinel. Infra failures (disk/OOM) take precedence over test failures,
-/// because a disk-full run ALSO produces spurious test FAILs (#28).
-pub fn classify_nextest_output(output: &str) -> CoverageStatus {
-    // Substrings of catastrophic infra failures in the combined nextest output.
-    // `"53100"` is quoted (PG SQLSTATE disk_full, as sqlx Debug prints
-    // `code: "53100"`) so it can't match a bare numeric port/timestamp/count.
-    const INFRA_MARKERS: &[&str] = &[
-        "No space left on device",
-        "\"53100\"",
-        "Cannot allocate memory",
-        "out of memory",
-    ];
-    if let Some(marker) = INFRA_MARKERS.iter().find(|m| output.contains(**m)) {
-        return CoverageStatus {
-            category: StatusCategory::Infra,
-            failed_tests: Vec::new(),
-            infra_detail: Some((*marker).to_string()),
-        };
+const JUNIT_PATH: &str = "/tmp/jaunder-coverage-junit.xml";
+const CSR_BUNDLE_FILENAME_REGEX: &str = r"(^|.*/)tools/csr_bundle/";
+
+#[derive(Debug)]
+struct CommandSpec {
+    stage: RequiredStage,
+    program: &'static str,
+    arguments: Vec<&'static str>,
+}
+
+#[derive(Debug)]
+struct CapturedCommand {
+    status: ExitStatus,
+    stdout: String,
+    output: String,
+}
+
+fn required_stage_commands() -> Vec<CommandSpec> {
+    vec![
+        CommandSpec {
+            stage: RequiredStage::WorkspaceResolution,
+            program: "cargo",
+            arguments: vec![
+                "metadata",
+                "--manifest-path",
+                "Cargo.toml",
+                "--format-version",
+                "1",
+                "--no-deps",
+            ],
+        },
+        CommandSpec {
+            stage: RequiredStage::TestCensus,
+            program: "cargo",
+            arguments: vec!["nextest", "list", "--workspace", "--message-format", "json"],
+        },
+        CommandSpec {
+            stage: RequiredStage::InstrumentedTestRun,
+            program: "cargo",
+            arguments: vec![
+                "llvm-cov",
+                "--no-report",
+                "nextest",
+                "--workspace",
+                "--profile",
+                "coverage",
+                "--no-fail-fast",
+            ],
+        },
+    ]
+}
+
+fn coverage_report_arguments(format: &'static str) -> [&'static str; 5] {
+    [
+        "llvm-cov",
+        "report",
+        format,
+        "--ignore-filename-regex",
+        CSR_BUNDLE_FILENAME_REGEX,
+    ]
+}
+
+fn new_status() -> CoverageStatus {
+    CoverageStatus {
+        version: status::COVERAGE_STATUS_VERSION,
+        category: StatusCategory::Infra,
+        stages: RequiredStage::ALL
+            .into_iter()
+            .map(|stage| StageResult {
+                stage,
+                outcome: ProcessOutcome::NotRun,
+            })
+            .collect(),
+        population: Population {
+            expected: 0,
+            executed: 0,
+            ignored: 0,
+        },
+        failed_tests: vec![],
+        missing_tests: vec![],
+        infra_detail: Some("coverage producer did not complete".into()),
     }
-    let failed_tests: Vec<String> = output
-        .lines()
-        .filter_map(|l| {
-            let l = l.trim_start();
-            // nextest summary line: "FAIL [   0.71s] <suite> <test path>"
-            let rest = l.strip_prefix("FAIL [")?;
-            let after_bracket = rest.split(']').nth(1)?.trim();
-            after_bracket.split_whitespace().last().map(str::to_string)
-        })
-        .collect();
-    if failed_tests.is_empty() {
-        CoverageStatus {
-            category: StatusCategory::TestsOk,
-            failed_tests,
-            infra_detail: None,
-        }
+}
+
+fn set_stage(status: &mut CoverageStatus, stage: RequiredStage, outcome: ProcessOutcome) {
+    status
+        .stages
+        .iter_mut()
+        .find(|result| result.stage == stage)
+        .expect("required stage")
+        .outcome = outcome;
+}
+
+#[cfg(test)]
+fn status_for_required_stage_failure(
+    stage: RequiredStage,
+    outcome: ProcessOutcome,
+) -> CoverageStatus {
+    let mut status = new_status();
+    set_stage(&mut status, stage, outcome);
+    status.infra_detail = Some(format!("{} failed", stage.as_str()));
+    status
+}
+
+fn record_infra(status: &mut CoverageStatus, stage: RequiredStage, detail: &str) {
+    status.category = StatusCategory::Infra;
+    status.infra_detail = Some(format!("{}: {detail}", stage.as_str()));
+}
+
+fn record_evidence_error(status: &mut CoverageStatus, stage: RequiredStage, detail: &str) {
+    set_stage(
+        status,
+        stage,
+        ProcessOutcome::EvidenceError {
+            evidence_error: detail.into(),
+        },
+    );
+    record_infra(status, stage, detail);
+}
+
+fn command_outcome(status: ExitStatus) -> ProcessOutcome {
+    match status.code() {
+        Some(0) => ProcessOutcome::success(),
+        Some(exit_code) => ProcessOutcome::ExitCode { exit_code },
+        None => ProcessOutcome::Signal,
+    }
+}
+
+fn final_category(
+    instrumented_outcome: &ProcessOutcome,
+    failed_tests: &[String],
+) -> StatusCategory {
+    if instrumented_outcome.is_success() {
+        StatusCategory::TestsOk
+    } else if matches!(
+        instrumented_outcome,
+        ProcessOutcome::ExitCode { exit_code } if *exit_code != 0
+    ) && !failed_tests.is_empty()
+    {
+        StatusCategory::TestFailure
     } else {
-        CoverageStatus {
-            category: StatusCategory::TestFailure,
-            failed_tests,
-            infra_detail: None,
+        StatusCategory::Infra
+    }
+}
+
+fn run_capture(command: &mut Command) -> Result<CapturedCommand> {
+    let output = command
+        .output()
+        .with_context(|| format!("spawning {command:?}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let mut combined = stdout.clone();
+    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    Ok(CapturedCommand {
+        status: output.status,
+        stdout,
+        output: combined,
+    })
+}
+
+fn write_status(out: &Path, status: &CoverageStatus) -> Result<()> {
+    status.validate().context("validating coverage status")?;
+    fs::write(out.join("status.json"), status.to_json())
+        .with_context(|| format!("writing {}/status.json", out.display()))
+}
+
+fn write_diagnostic(diag: &Path, name: &str, output: &str) {
+    let _ = fs::write(diag.join(name), output);
+}
+
+fn command_failure(
+    status: &mut CoverageStatus,
+    stage: RequiredStage,
+    command: Result<CapturedCommand>,
+    diag: &Path,
+    log_name: &str,
+) -> Option<CapturedCommand> {
+    match command {
+        Ok(command) => {
+            write_diagnostic(diag, log_name, &command.output);
+            let outcome = command_outcome(command.status);
+            set_stage(status, stage, outcome.clone());
+            if outcome.is_success() {
+                Some(command)
+            } else {
+                record_infra(status, stage, "command exited unsuccessfully");
+                None
+            }
+        }
+        Err(_) => {
+            set_stage(
+                status,
+                stage,
+                ProcessOutcome::SpawnError {
+                    spawn_error: "could not spawn command".into(),
+                },
+            );
+            record_infra(status, stage, "could not spawn command");
+            None
         }
     }
 }
 
+fn load_junit_census() -> Result<TestCensus> {
+    status::parse_junit_census(&fs::read_to_string(JUNIT_PATH).context("reading JUnit report")?)
+}
+
+fn report_command(
+    stage: RequiredStage,
+    command: &mut Command,
+    status: &mut CoverageStatus,
+    diag: &Path,
+    name: &str,
+) -> Option<String> {
+    command_failure(status, stage, run_capture(command), diag, name).map(|command| command.stdout)
+}
+
 /// Run the instrumented suite and emit reports + status + diagnostics into `out`.
-/// Always produces `out/status.json` (and best-effort the rest) so the caller's
-/// Nix producer derivation can always realize `$out`. Returns `Err` only if the
-/// emit could not run at all (e.g. failing to spawn cargo).
+///
+/// Required stages always leave a validated, red `status.json` when they can be
+/// started. Raw process output is diagnostic-only; it never supplies success.
 pub fn run(out: &str) -> Result<()> {
     let out = Path::new(out);
     let diag = out.join("diagnostics");
     fs::create_dir_all(&diag).with_context(|| format!("creating {}", diag.display()))?;
+    let abs_root = std::env::current_dir()?.to_string_lossy().into_owned();
+    let mut status = new_status();
+    let commands = required_stage_commands();
 
-    let abs_root = std::env::current_dir()?.to_string_lossy().to_string();
+    let metadata = &commands[0];
+    let mut command = Command::new(metadata.program);
+    command.args(&metadata.arguments);
+    let Some(_) = command_failure(
+        &mut status,
+        metadata.stage,
+        run_capture(&mut command),
+        &diag,
+        "metadata.log",
+    ) else {
+        write_status(out, &status)?;
+        return Ok(());
+    };
 
-    // 1. Clear stale profraw, keep the instrumented build.
-    run_logged(Command::new("cargo").args(["llvm-cov", "clean", "--profraw-only"]))?;
+    let cleanup = run_capture(Command::new("cargo").args(["llvm-cov", "clean", "--profraw-only"]));
+    let Some(_) = command_failure(
+        &mut status,
+        RequiredStage::ProfileCleanup,
+        cleanup,
+        &diag,
+        "profile-cleanup.log",
+    ) else {
+        write_status(out, &status)?;
+        return Ok(());
+    };
+    if let Err(error) = fs::remove_file(JUNIT_PATH)
+        && error.kind() != ErrorKind::NotFound
+    {
+        record_evidence_error(
+            &mut status,
+            RequiredStage::ProfileCleanup,
+            "could not clear JUnit report",
+        );
+        write_status(out, &status)?;
+        return Ok(());
+    }
 
-    // 2. Instrumented suite under an ephemeral PostgreSQL. Capture combined
-    //    output for classification + the diagnostics bundle. A non-zero exit is
-    //    NOT fatal here: a test failure or infra failure is reported via status.
-    let nextest = pg::with_ephemeral(|env| {
-        let mut command = Command::new("cargo");
-        command.args([
-            "llvm-cov",
-            "--no-report",
-            "nextest",
-            "--show-progress",
-            "none",
-        ]);
+    let census = &commands[1];
+    let mut command = Command::new(census.program);
+    command.args(&census.arguments);
+    let Some(census_output) = command_failure(
+        &mut status,
+        census.stage,
+        run_capture(&mut command),
+        &diag,
+        "nextest-list.json",
+    ) else {
+        write_status(out, &status)?;
+        return Ok(());
+    };
+    let expected = match status::parse_nextest_census(&census_output.stdout) {
+        Ok(expected) => expected,
+        Err(_) => {
+            record_evidence_error(
+                &mut status,
+                RequiredStage::TestCensus,
+                "invalid nextest census",
+            );
+            write_status(out, &status)?;
+            return Ok(());
+        }
+    };
+    status.population.expected = expected.expected.len();
+
+    let run = &commands[2];
+    let test_run = pg::with_ephemeral(|env| {
+        let mut command = Command::new(run.program);
+        command.args(&run.arguments);
         env.configure_command(&mut command);
         run_capture(&mut command)
-    })?;
-    fs::write(diag.join("nextest.log"), &nextest)?;
-    // status.json is best-effort: under TRUE disk-full the write below itself
-    // fails and the producer derivation fails before any sentinel exists — the
-    // host's `--keep-failed` + diagnostics-rescue path is the real ENOSPC net.
-    // The in-band marker scan only catches a disk full enough to fail PG but not
-    // these writes.
-    let status = classify_nextest_output(&nextest);
-    fs::write(out.join("status.json"), status.to_json())?;
+    });
+    let instrumented_outcome = match test_run {
+        Ok(test_run) => {
+            let outcome = command_outcome(test_run.status);
+            write_diagnostic(&diag, "nextest.log", &test_run.output);
+            set_stage(&mut status, run.stage, outcome.clone());
+            outcome
+        }
+        Err(_) => {
+            set_stage(
+                &mut status,
+                run.stage,
+                ProcessOutcome::SpawnError {
+                    spawn_error: "could not spawn command".into(),
+                },
+            );
+            record_infra(
+                &mut status,
+                RequiredStage::InstrumentedTestRun,
+                "could not spawn command",
+            );
+            write_status(out, &status)?;
+            return Ok(());
+        }
+    };
+    let test_run = instrumented_outcome.is_success();
+    let _ = fs::copy(JUNIT_PATH, diag.join("nextest.junit.xml"));
 
-    // 3. Disk-usage snapshot for the diagnostics bundle (#28).
-    let df = run_capture(Command::new("df").arg("-h"))?;
-    fs::write(diag.join("disk-usage.txt"), df)?;
+    let actual = match load_junit_census() {
+        Ok(actual) => actual,
+        Err(_) => {
+            record_evidence_error(
+                &mut status,
+                RequiredStage::PopulationReconciliation,
+                "invalid JUnit census",
+            );
+            write_status(out, &status)?;
+            return Ok(());
+        }
+    };
+    status.population.executed = actual.executed.len();
+    status.population.ignored = actual.ignored.len();
+    status.failed_tests = actual.failed.clone();
+    if let Err(error) = status::reconcile_test_census(&expected, &actual) {
+        status.missing_tests = expected
+            .expected
+            .iter()
+            .filter(|test| !actual.executed.contains(*test) && !actual.ignored.contains(*test))
+            .cloned()
+            .collect();
+        let _ = error;
+        record_evidence_error(
+            &mut status,
+            RequiredStage::PopulationReconciliation,
+            "test population did not reconcile",
+        );
+        write_status(out, &status)?;
+        return Ok(());
+    }
+    set_stage(
+        &mut status,
+        RequiredStage::PopulationReconciliation,
+        ProcessOutcome::success(),
+    );
 
-    // 4. Text + LCOV reports (best-effort; on infra failure they may be partial).
-    let report = run_capture(Command::new("cargo").args(["llvm-cov", "report", "--text"]))?;
+    if !test_run && status.failed_tests.is_empty() {
+        record_infra(
+            &mut status,
+            RequiredStage::InstrumentedTestRun,
+            "unclassified test command failure",
+        );
+        write_status(out, &status)?;
+        return Ok(());
+    }
+    if test_run && !status.failed_tests.is_empty() {
+        record_evidence_error(
+            &mut status,
+            RequiredStage::InstrumentedTestRun,
+            "JUnit reported failures after successful command",
+        );
+        write_status(out, &status)?;
+        return Ok(());
+    }
+
+    let Some(report) = report_command(
+        RequiredStage::TextReport,
+        Command::new("cargo").args(coverage_report_arguments("--text")),
+        &mut status,
+        &diag,
+        "text-report.log",
+    ) else {
+        write_status(out, &status)?;
+        return Ok(());
+    };
     let report = coverage::pathnorm::normalize_report_text(&report, &abs_root);
-    fs::write(out.join("coverage-report.txt"), &report)?;
+    if fs::write(out.join("coverage-report.txt"), report).is_err() {
+        record_evidence_error(
+            &mut status,
+            RequiredStage::TextReport,
+            "could not write text report",
+        );
+        write_status(out, &status)?;
+        return Ok(());
+    }
 
     let lcov = out.join("coverage-report.lcov");
-    run_logged(Command::new("cargo").args([
-        "llvm-cov",
-        "report",
-        "--lcov",
-        "--output-path",
-        lcov.to_str().unwrap(),
-    ]))?;
-
-    // 5. CRAP report, normalized to repo-relative file paths.
-    let raw_crap = out.join("crap-report.raw.json");
-    run_logged(Command::new("cargo").args([
-        "crap",
-        "--workspace",
-        "--lcov",
-        lcov.to_str().unwrap(),
-        "--exclude",
-        "**/tests/**",
-        "--format",
-        "json",
-        "--output",
-        raw_crap.to_str().unwrap(),
-    ]))?;
-    let crap_json = crap_artifact_with(
-        || {
-            let raw = fs::read_to_string(&raw_crap)?;
-            normalize_crap_paths(&raw, &abs_root)
-        },
-        &mut std::io::stderr(),
-    );
-    fs::write(out.join("crap-report.json"), crap_json)?;
-
-    Ok(())
-}
-const EMPTY_CRAP_REPORT: &str = "{\n  \"entries\": []\n}\n";
-
-/// Resolve the optional CRAP artifact without changing the coverage producer's
-/// primary success result. A read or normalization failure emits one redacted
-/// warning and yields the same empty report expected by the install phase.
-fn crap_artifact_with(load: impl FnOnce() -> Result<String>, stderr: &mut impl Write) -> String {
-    match load() {
-        Ok(report) => report,
-        Err(_) => {
-            let _ = writeln!(
-                stderr,
-                "devtool: warning: devtool.coverage.crap_artifact: ignored failure while loading optional CRAP report"
+    let lcov_path = match lcov.to_str() {
+        Some(path) => path,
+        None => {
+            record_evidence_error(
+                &mut status,
+                RequiredStage::LcovReport,
+                "invalid LCOV report path",
             );
-            EMPTY_CRAP_REPORT.to_owned()
+            write_status(out, &status)?;
+            return Ok(());
         }
+    };
+    let Some(_) = report_command(
+        RequiredStage::LcovReport,
+        Command::new("cargo")
+            .args(coverage_report_arguments("--lcov"))
+            .args(["--output-path", lcov_path]),
+        &mut status,
+        &diag,
+        "lcov-report.log",
+    ) else {
+        write_status(out, &status)?;
+        return Ok(());
+    };
+
+    let raw_crap = out.join("crap-report.raw.json");
+    let raw_crap_path = match raw_crap.to_str() {
+        Some(path) => path,
+        None => {
+            record_evidence_error(
+                &mut status,
+                RequiredStage::CrapReport,
+                "invalid CRAP report path",
+            );
+            write_status(out, &status)?;
+            return Ok(());
+        }
+    };
+    let Some(_) = report_command(
+        RequiredStage::CrapReport,
+        Command::new("cargo").args([
+            "crap",
+            "--workspace",
+            "--lcov",
+            lcov_path,
+            "--exclude",
+            "**/tests/**",
+            "--format",
+            "json",
+            "--output",
+            raw_crap_path,
+        ]),
+        &mut status,
+        &diag,
+        "crap-report.log",
+    ) else {
+        write_status(out, &status)?;
+        return Ok(());
+    };
+    let crap = match fs::read_to_string(&raw_crap) {
+        Ok(raw) => match normalize_crap_paths(&raw, &abs_root) {
+            Ok(crap) => crap,
+            Err(_) => {
+                record_evidence_error(
+                    &mut status,
+                    RequiredStage::CrapReport,
+                    "invalid CRAP report",
+                );
+                write_status(out, &status)?;
+                return Ok(());
+            }
+        },
+        Err(_) => {
+            record_evidence_error(
+                &mut status,
+                RequiredStage::CrapReport,
+                "could not read CRAP report",
+            );
+            write_status(out, &status)?;
+            return Ok(());
+        }
+    };
+    if fs::write(out.join("crap-report.json"), crap).is_err() {
+        record_evidence_error(
+            &mut status,
+            RequiredStage::CrapReport,
+            "could not write CRAP report",
+        );
+        write_status(out, &status)?;
+        return Ok(());
     }
+
+    // Disk diagnostics are intentionally best-effort and cannot change status.
+    if let Ok(disk) = run_capture(Command::new("df").arg("-h")) {
+        write_diagnostic(&diag, "disk-usage.txt", &disk.output);
+    }
+
+    match final_category(&instrumented_outcome, &status.failed_tests) {
+        category @ (StatusCategory::TestsOk | StatusCategory::TestFailure) => {
+            status.category = category;
+            status.infra_detail = None;
+        }
+        StatusCategory::Infra => record_infra(
+            &mut status,
+            RequiredStage::InstrumentedTestRun,
+            "test command did not exit normally",
+        ),
+    }
+    write_status(out, &status)
 }
 
-/// Strip the absolute sandbox prefix from each CRAP entry's `.file` (ports the
-/// `jq` rewrite in `normalize_crap_report`).
+/// Strip the absolute sandbox prefix from each CRAP entry's `.file`.
 fn normalize_crap_paths(raw: &str, abs_root: &str) -> Result<String> {
     let prefix = format!("{abs_root}/");
-    let mut v: serde_json::Value = serde_json::from_str(raw)?;
-    if let Some(entries) = v.get_mut("entries").and_then(|e| e.as_array_mut()) {
-        for e in entries {
-            if let Some(f) = e.get("file").and_then(|f| f.as_str()) {
-                let rel = f.strip_prefix(&prefix).unwrap_or(f).to_string();
-                e["file"] = serde_json::Value::String(rel);
-            }
-        }
+    let mut value: Value = serde_json::from_str(raw)?;
+    let entries = value
+        .get_mut("entries")
+        .and_then(Value::as_array_mut)
+        .context("missing CRAP entries")?;
+    for entry in entries {
+        let file = entry
+            .get("file")
+            .and_then(Value::as_str)
+            .context("missing CRAP entry file")?;
+        entry["file"] = Value::String(file.strip_prefix(&prefix).unwrap_or(file).into());
     }
-    Ok(format!("{}\n", serde_json::to_string_pretty(&v)?))
-}
-
-/// Spawn, inheriting stdio, erroring if the process could not be launched.
-fn run_logged(cmd: &mut Command) -> Result<()> {
-    let status = cmd.status().with_context(|| format!("spawning {cmd:?}"))?;
-    // A non-zero exit is tolerated (recorded elsewhere); a spawn failure is not.
-    let _ = status;
-    Ok(())
-}
-
-/// Spawn, capturing combined stdout+stderr as a String.
-fn run_capture(cmd: &mut Command) -> Result<String> {
-    let out = cmd.output().with_context(|| format!("spawning {cmd:?}"))?;
-    let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
-    s.push_str(&String::from_utf8_lossy(&out.stderr));
-    Ok(s)
+    Ok(format!("{}\n", serde_json::to_string_pretty(&value)?))
 }
 
 #[cfg(test)]
@@ -189,65 +550,120 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detects_disk_full_as_infra_even_with_fails() {
-        let out = "\
-FAIL [ 0.71s] jaunder::web web_posts::case_3
-could not extend file \"base/25350/2609_vm\": No space left on device
-";
-        let s = classify_nextest_output(out);
-        assert_eq!(s.category, StatusCategory::Infra);
-        assert_eq!(s.infra_detail.as_deref(), Some("No space left on device"));
-    }
+    fn report_commands_exclude_only_csr_bundle_with_the_same_regex() {
+        let text = coverage_report_arguments("--text");
+        let lcov = coverage_report_arguments("--lcov");
 
-    #[test]
-    fn collects_failed_test_names() {
-        let out = "\
-FAIL [ 0.71s] jaunder::web web_posts::endpoint_rejects_unauthenticated::case_3
-FAIL [ 0.04s] jaunder::web web_posts::get_post_carries_tags::case_2_postgres
-";
-        let s = classify_nextest_output(out);
-        assert_eq!(s.category, StatusCategory::TestFailure);
-        assert_eq!(s.failed_tests.len(), 2);
-        assert!(s.failed_tests[0].ends_with("case_3"));
-    }
-
-    #[test]
-    fn clean_output_is_tests_ok() {
-        let out = "Summary [ 34s] 1531/1531 tests run: 1531 passed";
         assert_eq!(
-            classify_nextest_output(out).category,
-            StatusCategory::TestsOk
+            text,
+            [
+                "llvm-cov",
+                "report",
+                "--text",
+                "--ignore-filename-regex",
+                CSR_BUNDLE_FILENAME_REGEX,
+            ]
+        );
+        assert_eq!(
+            lcov,
+            [
+                "llvm-cov",
+                "report",
+                "--lcov",
+                "--ignore-filename-regex",
+                CSR_BUNDLE_FILENAME_REGEX,
+            ]
+        );
+        assert_eq!(text[4], lcov[4]);
+    }
+
+    #[test]
+    fn required_commands_use_root_workspace_coverage_profile_without_filters() {
+        let commands = required_stage_commands();
+        let metadata = commands
+            .iter()
+            .find(|command| command.stage == RequiredStage::WorkspaceResolution)
+            .expect("metadata command");
+        assert_eq!(metadata.program, "cargo");
+        assert_eq!(
+            metadata.arguments,
+            [
+                "metadata",
+                "--manifest-path",
+                "Cargo.toml",
+                "--format-version",
+                "1",
+                "--no-deps"
+            ]
+        );
+        for command in commands.iter().filter(|command| {
+            matches!(
+                command.stage,
+                RequiredStage::TestCensus | RequiredStage::InstrumentedTestRun
+            )
+        }) {
+            assert!(command.arguments.contains(&"--workspace"));
+            assert!(!command.arguments.iter().any(|argument| matches!(
+                *argument,
+                "-p" | "--package" | "--test" | "--partition" | "-E" | "--expr-filter"
+            )));
+        }
+        assert!(commands.iter().any(|command| {
+            command.stage == RequiredStage::TestCensus
+                && command
+                    .arguments
+                    .windows(2)
+                    .any(|args| args == ["--message-format", "json"])
+        }));
+        assert!(commands.iter().any(|command| {
+            command.stage == RequiredStage::InstrumentedTestRun
+                && command
+                    .arguments
+                    .windows(3)
+                    .any(|args| args == ["--profile", "coverage", "--no-fail-fast"])
+        }));
+    }
+
+    #[test]
+    fn metadata_exit_101_without_a_fail_line_is_never_tests_ok() {
+        let status = status_for_required_stage_failure(
+            RequiredStage::WorkspaceResolution,
+            ProcessOutcome::ExitCode { exit_code: 101 },
+        );
+        assert_eq!(status.category, StatusCategory::Infra);
+        assert_ne!(status.category, StatusCategory::TestsOk);
+        assert!(status.validate().is_ok());
+    }
+
+    #[test]
+    fn checked_nonzero_and_spawn_outcomes_are_red_at_every_required_stage() {
+        for stage in RequiredStage::ALL {
+            for outcome in [
+                ProcessOutcome::ExitCode { exit_code: 101 },
+                ProcessOutcome::SpawnError {
+                    spawn_error: "not-found".into(),
+                },
+            ] {
+                let status = status_for_required_stage_failure(stage, outcome);
+                assert_eq!(status.category, StatusCategory::Infra, "{}", stage.as_str());
+                assert!(status.validate().is_ok(), "{}", stage.as_str());
+            }
+        }
+    }
+
+    #[test]
+    fn signaled_instrumented_run_with_junit_failures_is_infrastructure() {
+        assert_eq!(
+            final_category(&ProcessOutcome::Signal, &["server::interrupted".into()]),
+            StatusCategory::Infra
         );
     }
 
     #[test]
-    fn normalize_crap_paths_strips_prefix() {
+    fn normalizes_complete_crap_report_without_fallback() {
         let raw = r#"{"entries":[{"file":"/build/source/server/src/a.rs","crap":1.0}]}"#;
-        let got = super::normalize_crap_paths(raw, "/build/source").unwrap();
-        assert!(got.contains("\"server/src/a.rs\""));
-        assert!(!got.contains("/build/source"));
-    }
-
-    #[test]
-    fn ancillary_warning_crap_artifact_failures_preserve_empty_report() {
-        for source in ["read", "normalize"] {
-            let mut stderr = Vec::new();
-            let report = crap_artifact_with(
-                || anyhow::bail!("sensitive injected {source} failure"),
-                &mut stderr,
-            );
-
-            assert_eq!(report, EMPTY_CRAP_REPORT);
-            let warning = String::from_utf8(stderr).unwrap();
-            assert_eq!(warning.matches("devtool.coverage.crap_artifact").count(), 1);
-            assert_eq!(warning.lines().count(), 1);
-            assert!(!warning.contains(source));
-            assert!(!warning.contains("sensitive"));
-        }
-
-        let mut stderr = Vec::new();
-        let report = crap_artifact_with(|| Ok("complete".to_owned()), &mut stderr);
-        assert_eq!(report, "complete");
-        assert!(stderr.is_empty());
+        let got = normalize_crap_paths(raw, "/build/source").expect("valid report");
+        assert!(got.contains("server/src/a.rs"));
+        assert!(normalize_crap_paths("{}", "/build/source").is_err());
     }
 }
