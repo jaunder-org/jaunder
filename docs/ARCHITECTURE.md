@@ -174,9 +174,10 @@ be a thin shell over a near-total dialect
 `storage::StorageFactory` (`storage/src/storage_factory.rs`) owns the
 runtime-selected pool and mints any of the fifteen `Arc<dyn *Storage>` handles
 or the sealed `WriteScope` on demand. Database opening returns this factory
-rather than constructing storage handles. It stays at a composition root:
-non-serve commands request only the handles and scope for their selected path
-and inject those dependencies directly, while the serve root alone asks the
+rather than constructing storage handles. It stays at a composition root: the
+`Commands::execute` dispatcher and its nested action dispatchers open non-serve
+storage, request only the selected path's handles and scope, and inject them
+into command handlers as explicit parameters. The serve root alone asks the
 factory to assemble `storage::AppState` with all fifteen handles and the scope.
 `AppState` remains a storage-only construction bundle; services (mailer, WebSub
 client, background workers, and the media manager) are constructed in `server`

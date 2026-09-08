@@ -1,42 +1,39 @@
 use std::sync::Arc;
 
+use super::support;
 use common::ids::FeedEventId;
 use common::pagination::PageSize;
 use common::time::UtcInstant;
 use host::feed::FeedEventPhase;
 use storage::{FeedEventDeadLetterCursor, FeedEventDeadLetterPage, FeedEventStorage, WriteScope};
 
-use crate::cli::StorageArgs;
-
-use super::support;
-
 /// List one bounded, stable page of terminal `WebSub` work.
+///
+/// # Errors
+///
+/// Returns an error if the dead-letter page cannot be read or serialized.
 pub(super) async fn cmd_dead_letters_list(
-    storage: &StorageArgs,
+    feed_events: &dyn FeedEventStorage,
     phase: FeedEventPhase,
     cursor: Option<FeedEventDeadLetterCursor>,
     page_size: PageSize,
 ) -> anyhow::Result<()> {
-    let runtime = support::storage_runtime_config(&storage.db)?;
-    let factory = storage::open_existing_database(&storage.db, &runtime).await?;
-    let page = factory
-        .feed_events()
-        .dead_letters(phase, cursor, page_size)
-        .await?;
+    let page = feed_events.dead_letters(phase, cursor, page_size).await?;
     println!("{}", format_dead_letter_page(&page)?);
     Ok(())
 }
 
 /// Atomically redrive the exact terminal selection.
+///
+/// # Errors
+///
+/// Returns an error if the selected events cannot be redriven.
 pub(super) async fn cmd_dead_letters_redrive(
-    storage: &StorageArgs,
+    feed_events: Arc<dyn FeedEventStorage>,
+    write_scope: &WriteScope,
     ids: &[FeedEventId],
 ) -> anyhow::Result<()> {
-    let runtime = support::storage_runtime_config(&storage.db)?;
-    let factory = storage::open_existing_database(&storage.db, &runtime).await?;
-    let feed_events = factory.feed_events();
-    let write_scope = factory.write_scope();
-    redrive_selected(feed_events, &write_scope, ids.to_vec()).await?;
+    redrive_selected(feed_events, write_scope, ids.to_vec()).await?;
     println!("redriven={}", ids.len());
     Ok(())
 }
