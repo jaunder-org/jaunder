@@ -13,7 +13,7 @@ use sqlx::{Database, Decode, Pool, Row, Type};
 
 use crate::WriteTransaction;
 use crate::backend::Backend;
-use crate::helpers::{self, InviteTokenStateRow, TokenState};
+use crate::helpers::{self, TokenState, TokenStateRow};
 use crate::role_instant::impl_role_instant;
 use crate::sql::{QueryStorageExt, RowCount};
 use common::ids::UserId;
@@ -170,7 +170,7 @@ impl<DB> InviteStorage for InviteStore<DB>
 where
     DB: Backend,
     InviteRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
-    InviteTokenStateRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    TokenStateRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
     for<'q> RowCount: sqlx::Decode<'q, DB> + sqlx::Type<DB>,
@@ -206,14 +206,14 @@ where
 
     async fn precheck_invite(&self, code: &InviteCode) -> Result<(), UseInviteError> {
         let now = UtcInstant::now();
-        let row = sqlx::query_as::<_, InviteTokenStateRow>(
+        let row = sqlx::query_as::<_, TokenStateRow>(
             "SELECT used_at, expires_at FROM invites WHERE code = $1",
         )
         .bind_storage(code)
         .fetch_optional(&self.pool)
         .await?;
 
-        match helpers::classify_invite_token_state(row, now) {
+        match helpers::classify_token_state(row, now) {
             TokenState::Missing => Err(UseInviteError::NotFound),
             TokenState::AlreadyUsed => Err(UseInviteError::AlreadyUsed),
             TokenState::Expired => Err(UseInviteError::Expired),
@@ -231,7 +231,7 @@ where
         let connection = DB::write_connection(transaction)?;
         // RETURNING detects the conditional claim generically; sqlx exposes
         // `rows_affected` only on concrete backend result types.
-        let claimed = sqlx::query_as::<_, InviteTokenStateRow>(
+        let claimed = sqlx::query_as::<_, TokenStateRow>(
             "UPDATE invites SET used_at = $1, used_by = $2
              WHERE code = $3 AND used_at IS NULL AND expires_at > $1
              RETURNING used_at, expires_at",
@@ -246,13 +246,13 @@ where
             return Ok(());
         }
 
-        let row = sqlx::query_as::<_, InviteTokenStateRow>(
+        let row = sqlx::query_as::<_, TokenStateRow>(
             "SELECT used_at, expires_at FROM invites WHERE code = $1",
         )
         .bind_storage(code)
         .fetch_optional(&mut *connection)
         .await?;
-        match helpers::classify_invite_token_state(row, now) {
+        match helpers::classify_token_state(row, now) {
             TokenState::Missing => Err(UseInviteError::NotFound),
             TokenState::Expired => Err(UseInviteError::Expired),
             TokenState::AlreadyUsed | TokenState::Claimable => Err(UseInviteError::AlreadyUsed),

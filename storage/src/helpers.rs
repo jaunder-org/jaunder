@@ -243,20 +243,6 @@ pub(crate) fn session_record_from_row(row: SessionRow) -> SessionRecord {
     })
 }
 
-pub(crate) type InviteTokenStateRow = (Option<UtcInstant>, UtcInstant);
-
-pub(crate) fn classify_invite_token_state(
-    row: Option<InviteTokenStateRow>,
-    now: UtcInstant,
-) -> TokenState {
-    match row {
-        None => TokenState::Missing,
-        Some((Some(_), _)) => TokenState::AlreadyUsed,
-        Some((None, expires_at)) if expires_at <= now => TokenState::Expired,
-        Some((None, _)) => TokenState::Claimable,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Claim verification error helpers
 // ---------------------------------------------------------------------------
@@ -940,32 +926,6 @@ mod tests {
         );
         assert_eq!(
             classify_token_state(Some((None, claimable_at)), now),
-            TokenState::Claimable
-        );
-    }
-
-    #[test]
-    fn invite_token_state_classifier_preserves_roles_and_exact_expiry() {
-        let now: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
-        let expired_at: UtcInstant = "2099-01-02T03:04:05.123455Z".parse().unwrap();
-        let claimable_at: UtcInstant = "2099-01-02T03:04:05.123457Z".parse().unwrap();
-        let used_at: UtcInstant = "2099-01-02T03:04:05.123454Z".parse().unwrap();
-
-        assert_eq!(classify_invite_token_state(None, now), TokenState::Missing);
-        assert_eq!(
-            classify_invite_token_state(Some((Some(used_at), claimable_at)), now),
-            TokenState::AlreadyUsed
-        );
-        assert_eq!(
-            classify_invite_token_state(Some((None, now)), now),
-            TokenState::Expired
-        );
-        assert_eq!(
-            classify_invite_token_state(Some((None, expired_at)), now),
-            TokenState::Expired
-        );
-        assert_eq!(
-            classify_invite_token_state(Some((None, claimable_at)), now),
             TokenState::Claimable
         );
     }
