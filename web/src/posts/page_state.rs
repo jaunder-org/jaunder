@@ -1,13 +1,11 @@
 //! Host-compiled, host-tested decision logic for the posts vertical's pages
 //! (#306/#58, ADR-0083).
 //!
-//! The tag and user-timeline pages each carried the same shaped setup in their
-//! wasm-only component bodies: decide whether a projector seed applies to the route
-//! this render is for, and decide whether a route parameter is usable before
-//! fetching. Neither is browser wiring — both are folds over already-resolved values
-//! — so they belong here, where `nextest` can assert them and the coverage gate can
-//! see them, leaving the component with the `Effect`/`Resource` wiring that genuinely
-//! cannot run on the host.
+//! [`ListingRoute`] is the single public Post-listing decision surface. It owns
+//! typed validation, exact projector-seed adoption, endpoint selection, and
+//! exhaustive route presentation data. Those are folds over resolved values, not
+//! browser wiring, so they live here where host tests can assert them; only
+//! `Effect`/`Resource` construction and spawning remain in the wasm component.
 //!
 //! The post editor's two folds live here for the same reason: [`publish_redirect`]
 //! (did this update publish, and where does the browser go?) and [`with_post_id`]
@@ -29,6 +27,8 @@ use std::future::Future;
 
 use leptos::prelude::*;
 
+use common::feed::FeedSurface;
+use common::pagination::PageSize;
 use common::revision_history::{
     RevisionHistoryAudience, RevisionHistoryDetail, RevisionHistoryTag,
 };
@@ -42,6 +42,9 @@ use common::{MutationOutcome, ids::PostId, permalink_route::PermalinkRoute};
 
 use crate::audiences;
 use crate::error::{WebError, WebResult};
+use crate::taglist::TagCtx;
+use crate::timeline;
+
 use crate::posts::{
     CurrentPostHistory, RevisionHistoryCursor, RevisionHistoryMetadata, RevisionHistoryPage,
     RevisionLifecycle, SavedPost, UnpublishedPost,
@@ -86,12 +89,10 @@ impl NamedAudienceState {
     }
 }
 
-/// Which listing page is rendering, carrying the route segments it has **already**
-/// parsed (`None` = the segment was absent or would not parse).
-///
-/// A data enum rather than one seed-matching fn per page (ADR-0083 §3): the three
-/// pages differ only in which parts of the URL identify them, so the difference
-/// travels as a value and [`seeded_page`] stays one host-tested fold.
+/// The exhaustive public Post listing route. Route parsing stops at the `Username`
+/// and `Tag` boundaries; this value preserves malformed segments as `None` so the
+/// lifecycle can reject them before it constructs an endpoint request.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ListingRoute {
     /// `/~:username` — the user timeline.
     Profile(Option<Username>),
@@ -101,58 +102,194 @@ pub enum ListingRoute {
     UserTag(Option<Username>, Option<Tag>),
 }
 
-/// The projector seed this render may adopt (#178/#179): `Some(page)` only when the
-/// seed the server left in context is the seed for **this** route.
-///
-/// The guard is what makes a client-side navigation safe. The seed is whatever the
-/// initial URL was painted with and it never changes, so a nav from `/~alice` to
-/// `/~bob` would otherwise adopt alice's posts under bob's heading. A non-matching
-/// seed, a seed for a different page kind, and no seed at all all mean the same
-/// thing — nothing to adopt — and the reactive fetch fills the page in.
-#[must_use]
-pub fn seeded_page(seed: Option<PageSeed>, route: &ListingRoute) -> Option<Page<RenderedPost>> {
-    match (seed?, route) {
-        (PageSeed::Profile { username, page }, ListingRoute::Profile(wanted))
-            if wanted.as_ref() == Some(&username) =>
-        {
-            Some(page)
+impl ListingRoute {
+    /// Validate the route before any asynchronous listing work begins.
+    ///
+    /// User-tag routes deliberately validate Username first, preserving the prior
+    /// malformed-route error precedence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error for a malformed route segment, with Username
+    /// taking precedence over Tag for a User-tag route.
+    pub fn validate(&self) -> WebResult<ValidatedListingRoute> {
+        match self {
+            Self::Profile(username) => Ok(ValidatedListingRoute::Profile(
+                username
+                    .clone()
+                    .ok_or_else(|| WebError::validation("Invalid username"))?,
+            )),
+            Self::SiteTag(tag) => Ok(ValidatedListingRoute::SiteTag(
+                tag.clone()
+                    .ok_or_else(|| WebError::validation("Invalid tag"))?,
+            )),
+            Self::UserTag(username, tag) => Ok(ValidatedListingRoute::UserTag(
+                username
+                    .clone()
+                    .ok_or_else(|| WebError::validation("Invalid username"))?,
+                tag.clone()
+                    .ok_or_else(|| WebError::validation("Invalid tag"))?,
+            )),
         }
-        (PageSeed::SiteTag { tag, page }, ListingRoute::SiteTag(wanted))
-            if wanted.as_ref() == Some(&tag) =>
-        {
-            Some(page)
+    }
+
+    /// The route-specific title.
+    #[must_use]
+    pub fn title(&self) -> String {
+        match self {
+            Self::Profile(username) => format!(
+                "Posts by {}",
+                username
+                    .as_ref()
+                    .map_or_else(String::new, ToString::to_string)
+            ),
+            Self::SiteTag(tag) | Self::UserTag(_, tag) => {
+                format!(
+                    "#{}",
+                    tag.as_ref().map_or_else(String::new, ToString::to_string)
+                )
+            }
         }
-        (
-            PageSeed::UserTag {
-                username,
-                tag,
-                page,
-            },
-            ListingRoute::UserTag(wanted_username, wanted_tag),
-        ) if wanted_username.as_ref() == Some(&username) && wanted_tag.as_ref() == Some(&tag) => {
-            Some(page)
+    }
+
+    /// The route-specific topbar subtitle.
+    #[must_use]
+    pub fn subtitle(&self) -> String {
+        match self {
+            Self::Profile(_) => "User timeline".to_owned(),
+            Self::SiteTag(_) => "Posts on this instance".to_owned(),
+            Self::UserTag(username, _) => format!(
+                "Posts by ~{}",
+                username
+                    .as_ref()
+                    .map_or_else(String::new, ToString::to_string)
+            ),
         }
-        _ => None,
+    }
+
+    /// The public discovery surface, absent for malformed route data.
+    #[must_use]
+    pub fn feed_surface(&self) -> Option<FeedSurface> {
+        match self {
+            Self::Profile(Some(username)) => Some(FeedSurface::User {
+                username: username.clone(),
+            }),
+            Self::SiteTag(Some(tag)) => Some(FeedSurface::SiteTag { tag: tag.clone() }),
+            Self::UserTag(Some(username), Some(tag)) => Some(FeedSurface::UserTag {
+                username: username.clone(),
+                tag: tag.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// The profile that receives `AtomPub` RSD and subscription controls.
+    #[must_use]
+    pub fn user_chrome(&self) -> Option<Username> {
+        match self {
+            Self::Profile(Some(username)) => Some(username.clone()),
+            _ => None,
+        }
+    }
+
+    /// The tag context each rendered Post receives.
+    #[must_use]
+    pub fn tag_context(&self) -> Option<TagCtx> {
+        match self {
+            Self::Profile(Some(username)) | Self::UserTag(Some(username), _) => {
+                Some(TagCtx::ForUser(username.clone()))
+            }
+            Self::Profile(None) | Self::UserTag(None, _) => None,
+            Self::SiteTag(_) => Some(TagCtx::SiteWide),
+        }
+    }
+
+    /// The listing's existing route-specific empty state.
+    #[must_use]
+    pub const fn empty_text(&self) -> &'static str {
+        match self {
+            Self::Profile(_) => "No posts yet.",
+            Self::SiteTag(_) | Self::UserTag(_, _) => "No posts with this tag yet.",
+        }
+    }
+
+    /// Adopt only a projector page whose kind and every typed route value match.
+    #[must_use]
+    pub fn seeded_page(&self, seed: Option<PageSeed>) -> Option<Page<RenderedPost>> {
+        match (seed?, self) {
+            (PageSeed::Profile { username, page }, Self::Profile(wanted))
+                if wanted.as_ref() == Some(&username) =>
+            {
+                Some(page)
+            }
+            (PageSeed::SiteTag { tag, page }, Self::SiteTag(wanted))
+                if wanted.as_ref() == Some(&tag) =>
+            {
+                Some(page)
+            }
+            (
+                PageSeed::UserTag {
+                    username,
+                    tag,
+                    page,
+                },
+                Self::UserTag(wanted_username, wanted_tag),
+            ) if wanted_username.as_ref() == Some(&username)
+                && wanted_tag.as_ref() == Some(&tag) =>
+            {
+                Some(page)
+            }
+            _ => None,
+        }
+    }
+
+    /// Fetch the replacement first page after route validation.
+    ///
+    /// The lifecycle calls this only after synchronously advancing its generation;
+    /// invalid values return before an endpoint future is constructed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error for malformed route data or propagates the
+    /// selected public listing endpoint's failure.
+    pub async fn destination(self) -> WebResult<(PublishedThemePresentation, Page<RenderedPost>)> {
+        self.fetch_page(None, Some(PageSize::default()))
+            .await
+            .map(public_destination)
+    }
+
+    /// Fetch one route-specific page using the existing typed endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error for malformed route data or propagates the
+    /// selected public listing endpoint's failure.
+    pub async fn fetch_page(
+        self,
+        cursor: Option<PageCursor>,
+        limit: Option<PageSize>,
+    ) -> WebResult<PublicPresentation<Page<RenderedPost>>> {
+        match self.validate()? {
+            ValidatedListingRoute::Profile(username) => {
+                timeline::list_by_user(username, cursor, limit).await
+            }
+            ValidatedListingRoute::SiteTag(tag) => timeline::list_by_tag(tag, cursor, limit).await,
+            ValidatedListingRoute::UserTag(username, tag) => {
+                timeline::list_by_user_and_tag(username, tag, cursor, limit).await
+            }
+        }
     }
 }
 
-/// The username a user-scoped listing fetch needs.
-///
-/// # Errors
-///
-/// [`WebError::validation`] when the `~username` segment did not parse — the page
-/// paints that error instead of fetching, since no such user can exist.
-pub fn user_query(username: Option<Username>) -> WebResult<Username> {
-    username.ok_or_else(|| WebError::validation("Invalid username"))
-}
-
-/// The tag a tag listing fetch needs.
-///
-/// # Errors
-///
-/// [`WebError::validation`] when the `:tag` segment did not parse.
-pub fn tag_query(tag: Option<Tag>) -> WebResult<Tag> {
-    tag.ok_or_else(|| WebError::validation("Invalid tag"))
+/// Validated endpoint selection for the public listing route matrix.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ValidatedListingRoute {
+    /// Typed profile endpoint arguments.
+    Profile(Username),
+    /// Typed site-tag endpoint arguments.
+    SiteTag(Tag),
+    /// Typed user-tag endpoint arguments.
+    UserTag(Username, Tag),
 }
 
 /// Deconstructs one server-resolved public destination so wasm route wiring can
@@ -162,59 +299,6 @@ pub fn public_destination<Page>(
     presentation: PublicPresentation<Page>,
 ) -> (PublishedThemePresentation, Page) {
     (presentation.theme, presentation.page)
-}
-
-/// Validates a user route before awaiting its presentation fetch.
-///
-/// # Errors
-///
-/// Returns validation failures for malformed route values and propagates fetch
-/// failures.
-pub async fn user_destination<Page, Fetch, FetchFuture>(
-    username: Option<Username>,
-    fetch: Fetch,
-) -> WebResult<(PublishedThemePresentation, Page)>
-where
-    Fetch: FnOnce(Username) -> FetchFuture,
-    FetchFuture: Future<Output = WebResult<PublicPresentation<Page>>>,
-{
-    fetch(user_query(username)?).await.map(public_destination)
-}
-
-/// Validates a site-tag route before awaiting its presentation fetch.
-///
-/// # Errors
-///
-/// Returns validation failures for malformed route values and propagates fetch
-/// failures.
-pub async fn tag_destination<Page, Fetch, FetchFuture>(
-    tag: Option<Tag>,
-    fetch: Fetch,
-) -> WebResult<(PublishedThemePresentation, Page)>
-where
-    Fetch: FnOnce(Tag) -> FetchFuture,
-    FetchFuture: Future<Output = WebResult<PublicPresentation<Page>>>,
-{
-    fetch(tag_query(tag)?).await.map(public_destination)
-}
-
-/// Validates a user-tag route before awaiting its presentation fetch.
-///
-/// # Errors
-///
-/// Returns validation failures for malformed route values and propagates fetch
-/// failures.
-pub async fn user_tag_destination<Page, Fetch, FetchFuture>(
-    username: Option<Username>,
-    tag: Option<Tag>,
-    fetch: Fetch,
-) -> WebResult<(PublishedThemePresentation, Page)>
-where
-    Fetch: FnOnce(Username, Tag) -> FetchFuture,
-    FetchFuture: Future<Output = WebResult<PublicPresentation<Page>>>,
-{
-    let (username, tag) = user_tag_query(username, tag)?;
-    fetch(username, tag).await.map(public_destination)
 }
 
 /// Validates a permalink route before awaiting its presentation fetch.
@@ -233,16 +317,6 @@ where
 {
     let route = route.ok_or_else(|| WebError::validation("Invalid permalink"))?;
     fetch(route).await.map(public_destination)
-}
-
-/// Both route values the per-user tag listing needs, at once.
-///
-/// # Errors
-///
-/// The username's error outranks the tag's, so a page whose *both* segments are
-/// broken names the first one — the order the two separate guards had.
-pub fn user_tag_query(username: Option<Username>, tag: Option<Tag>) -> WebResult<(Username, Tag)> {
-    Ok((user_query(username)?, tag_query(tag)?))
 }
 
 /// Notifies post-create parents and reports whether success UI may reset.
@@ -315,6 +389,45 @@ pub fn refetch_unpublished_post_if_needed(
 pub fn notify(callback: Option<Callback<()>>) {
     if let Some(callback) = callback {
         callback.run(());
+    }
+}
+/// Notify a public listing for a resolved Post mutation.
+///
+/// Confirmed and commit-indeterminate outcomes may have changed the authoritative
+/// page. A rollback-confirmed operation failure is the `Err` branch and never
+/// invalidates.
+pub fn notify_listing_mutation<T>(
+    settled: &WebResult<MutationOutcome<T>>,
+    callback: Option<Callback<()>>,
+) {
+    if matches!(
+        settled,
+        Ok(MutationOutcome::Confirmed(_) | MutationOutcome::CommitIndeterminate(_))
+    ) {
+        notify(callback);
+    }
+}
+
+/// Settle a public listing mutation and return its confirmed value, if any.
+///
+/// Confirmed and commit-indeterminate outcomes notify because either may have
+/// changed the authoritative first page. Only a confirmed outcome yields a value
+/// for the local delete or navigation effect; operation failures yield neither.
+#[must_use]
+pub fn settle_listing_mutation<T>(
+    settled: WebResult<MutationOutcome<T>>,
+    callback: Option<Callback<()>>,
+) -> Option<T> {
+    match settled {
+        Ok(MutationOutcome::Confirmed(value)) => {
+            notify(callback);
+            Some(value)
+        }
+        Ok(MutationOutcome::CommitIndeterminate(_)) => {
+            notify(callback);
+            None
+        }
+        Err(_) => None,
     }
 }
 
@@ -862,46 +975,32 @@ mod tests {
         assert!(page.has_more);
     }
 
+    #[test]
+    fn listing_route_validation_selects_the_typed_route_matrix() {
+        assert_eq!(
+            ListingRoute::Profile(Some(alice())).validate(),
+            Ok(ValidatedListingRoute::Profile(alice()))
+        );
+        assert_eq!(
+            ListingRoute::SiteTag(Some(rust())).validate(),
+            Ok(ValidatedListingRoute::SiteTag(rust()))
+        );
+        assert_eq!(
+            ListingRoute::UserTag(Some(alice()), Some(rust())).validate(),
+            Ok(ValidatedListingRoute::UserTag(alice(), rust()))
+        );
+    }
+
+    #[test]
+    fn user_tag_validation_reports_username_before_tag() {
+        let error = ListingRoute::UserTag(None, None)
+            .validate()
+            .expect_err("both malformed values reject the route");
+
+        assert_eq!(error, WebError::validation("Invalid username"));
+    }
     #[tokio::test]
-    async fn destination_fetches_receive_validated_routes_and_preserve_themes() {
-        let user_page = page(true);
-        assert_eq!(
-            user_destination(Some(alice()), |username| async move {
-                assert_eq!(username, alice());
-                Ok(PublicPresentation {
-                    theme: theme(Theme::Terminal),
-                    page: user_page,
-                })
-            })
-            .await,
-            Ok((theme(Theme::Terminal), page(true)))
-        );
-
-        assert_eq!(
-            tag_destination(Some(rust()), |tag| async move {
-                assert_eq!(tag, rust());
-                Ok(PublicPresentation {
-                    theme: theme(Theme::Reader),
-                    page: page(false),
-                })
-            })
-            .await,
-            Ok((theme(Theme::Reader), page(false)))
-        );
-
-        assert_eq!(
-            user_tag_destination(Some(alice()), Some(rust()), |username, tag| async move {
-                assert_eq!(username, alice());
-                assert_eq!(tag, rust());
-                Ok(PublicPresentation {
-                    theme: theme(Theme::Studio),
-                    page: page(true),
-                })
-            })
-            .await,
-            Ok((theme(Theme::Studio), page(true)))
-        );
-
+    async fn permalink_destination_fetches_a_validated_route() {
         let route =
             PermalinkRoute::parse("alice", "2026", "01", "02", "hello").expect("valid permalink");
         let expected_post = crate::posts::render::test_fixtures::sample_post();
@@ -924,190 +1023,49 @@ mod tests {
     // --- seed adoption ---
 
     #[test]
-    fn a_matching_profile_seed_is_adopted() {
-        let seed = PageSeed::Profile {
-            username: alice(),
-            page: page(true),
-        };
-        let adopted = seeded_page(Some(seed), &ListingRoute::Profile(Some(alice())))
-            .expect("the seed names this route");
-        // Assert the seeded PAGE came through, not merely that something did: a fold
-        // that returned a default page would satisfy `is_some()`.
-        assert!(adopted.has_more);
-    }
-
-    #[test]
-    fn a_profile_seed_for_a_different_user_is_ignored() {
-        // The #178/#179 client-nav hazard: the seed is the INITIAL URL's, so without
-        // the guard `/~alice` → `/~bob` would paint alice's posts under bob's heading.
-        let seed = PageSeed::Profile {
-            username: alice(),
-            page: page(true),
-        };
+    fn listing_seed_adoption_requires_exact_kind_and_route_values() {
+        let profile = ListingRoute::Profile(Some(alice()));
         assert!(
-            seeded_page(
-                Some(seed),
-                &ListingRoute::Profile(Some(parse_username("bob")))
-            )
-            .is_none()
+            profile
+                .seeded_page(Some(PageSeed::Profile {
+                    username: alice(),
+                    page: page(true),
+                }))
+                .is_some()
         );
-    }
-
-    #[test]
-    fn a_profile_seed_is_ignored_when_the_route_segment_did_not_parse() {
-        let seed = PageSeed::Profile {
-            username: alice(),
-            page: page(true),
-        };
-        assert!(seeded_page(Some(seed), &ListingRoute::Profile(None)).is_none());
-    }
-
-    #[test]
-    fn a_matching_site_tag_seed_is_adopted() {
-        let seed = PageSeed::SiteTag {
-            tag: rust(),
-            page: page(true),
-        };
-        let adopted =
-            seeded_page(Some(seed), &ListingRoute::SiteTag(Some(rust()))).expect("tag matches");
-        assert!(adopted.has_more);
-    }
-
-    #[test]
-    fn a_site_tag_seed_for_a_different_tag_is_ignored() {
-        let seed = PageSeed::SiteTag {
-            tag: rust(),
-            page: page(true),
-        };
         assert!(
-            seeded_page(
-                Some(seed),
-                &ListingRoute::SiteTag(Some(parse_tag("leptos")))
-            )
-            .is_none()
+            profile
+                .seeded_page(Some(PageSeed::Profile {
+                    username: parse_username("bob"),
+                    page: page(true),
+                }))
+                .is_none()
         );
-        let seed = PageSeed::SiteTag {
-            tag: rust(),
-            page: page(true),
-        };
-        assert!(seeded_page(Some(seed), &ListingRoute::SiteTag(None)).is_none());
-    }
-
-    #[test]
-    fn a_user_tag_seed_needs_both_halves_to_match() {
-        let matching = seeded_page(
-            Some(PageSeed::UserTag {
-                username: alice(),
-                tag: rust(),
-                page: page(true),
-            }),
-            &ListingRoute::UserTag(Some(alice()), Some(rust())),
-        )
-        .expect("both halves match");
-        assert!(matching.has_more);
-
-        // Half a match is no match — one `&&`, both directions asserted, so dropping
-        // either conjunct fails.
         assert!(
-            seeded_page(
-                Some(PageSeed::UserTag {
+            profile
+                .seeded_page(Some(PageSeed::SiteTimeline(page(true))))
+                .is_none()
+        );
+        assert!(profile.seeded_page(None).is_none());
+
+        let user_tag = ListingRoute::UserTag(Some(alice()), Some(rust()));
+        assert!(
+            user_tag
+                .seeded_page(Some(PageSeed::UserTag {
                     username: alice(),
                     tag: rust(),
                     page: page(true),
-                }),
-                &ListingRoute::UserTag(Some(parse_username("bob")), Some(rust())),
-            )
-            .is_none()
+                }))
+                .is_some()
         );
         assert!(
-            seeded_page(
-                Some(PageSeed::UserTag {
+            user_tag
+                .seeded_page(Some(PageSeed::UserTag {
                     username: alice(),
-                    tag: rust(),
+                    tag: parse_tag("leptos"),
                     page: page(true),
-                }),
-                &ListingRoute::UserTag(Some(alice()), Some(parse_tag("leptos"))),
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn a_seed_of_the_wrong_variant_is_ignored() {
-        // The projector painted a *different kind* of page — e.g. the site timeline or
-        // a permalink — so this route has nothing to adopt even though a seed exists.
-        assert!(
-            seeded_page(
-                Some(PageSeed::SiteTimeline(page(true))),
-                &ListingRoute::Profile(Some(alice())),
-            )
-            .is_none()
-        );
-        assert!(
-            seeded_page(
-                Some(PageSeed::SiteTag {
-                    tag: rust(),
-                    page: page(true),
-                }),
-                &ListingRoute::UserTag(Some(alice()), Some(rust())),
-            )
-            .is_none()
-        );
-        assert!(
-            seeded_page(
-                Some(PageSeed::UserTag {
-                    username: alice(),
-                    tag: rust(),
-                    page: page(true),
-                }),
-                &ListingRoute::SiteTag(Some(rust())),
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn no_seed_at_all_adopts_nothing() {
-        assert!(seeded_page(None, &ListingRoute::Profile(Some(alice()))).is_none());
-        assert!(seeded_page(None, &ListingRoute::SiteTag(Some(rust()))).is_none());
-        assert!(seeded_page(None, &ListingRoute::UserTag(Some(alice()), Some(rust()))).is_none());
-    }
-
-    // --- route-param guards ---
-
-    #[test]
-    fn user_query_passes_a_parsed_username_and_names_the_bad_segment() {
-        assert_eq!(user_query(Some(alice())), Ok(alice()));
-        assert_eq!(
-            user_query(None),
-            Err(WebError::validation("Invalid username"))
-        );
-    }
-
-    #[test]
-    fn tag_query_passes_a_parsed_tag_and_names_the_bad_segment() {
-        assert_eq!(tag_query(Some(rust())), Ok(rust()));
-        assert_eq!(tag_query(None), Err(WebError::validation("Invalid tag")));
-    }
-
-    #[test]
-    fn user_tag_query_reports_the_username_first() {
-        assert_eq!(
-            user_tag_query(Some(alice()), Some(rust())),
-            Ok((alice(), rust()))
-        );
-        assert_eq!(
-            user_tag_query(None, Some(rust())),
-            Err(WebError::validation("Invalid username"))
-        );
-        assert_eq!(
-            user_tag_query(Some(alice()), None),
-            Err(WebError::validation("Invalid tag"))
-        );
-        // Both broken: the username's error wins.
-        assert_eq!(
-            user_tag_query(None, None),
-            Err(WebError::validation("Invalid username"))
+                }))
+                .is_none()
         );
     }
 
@@ -1743,6 +1701,46 @@ mod tests {
             let fired = RwSignal::new(false);
             notify(Some(recorder(fired)));
             assert!(fired.get(), "the callback must actually run");
+        });
+    }
+    #[test]
+    fn listing_mutation_settlement_matches_the_post_outcome_matrix() {
+        Owner::new().with(|| {
+            let confirmed = RwSignal::new(false);
+            let indeterminate = RwSignal::new(false);
+            let rolled_back = RwSignal::new(false);
+
+            assert_eq!(
+                settle_listing_mutation(
+                    Ok(MutationOutcome::Confirmed(7_u8)),
+                    Some(recorder(confirmed)),
+                ),
+                Some(7)
+            );
+            assert_eq!(
+                settle_listing_mutation(
+                    Ok(MutationOutcome::CommitIndeterminate(8_u8)),
+                    Some(recorder(indeterminate)),
+                ),
+                None
+            );
+            assert_eq!(
+                settle_listing_mutation(
+                    Err::<MutationOutcome<u8>, _>(WebError::validation("operation failed")),
+                    Some(recorder(rolled_back)),
+                ),
+                None
+            );
+
+            assert!(confirmed.get(), "a confirmed Post mutation revalidates");
+            assert!(
+                indeterminate.get(),
+                "a commit-indeterminate Post mutation may have committed and revalidates"
+            );
+            assert!(
+                !rolled_back.get(),
+                "a rollback-confirmed operation failure does not revalidate"
+            );
         });
     }
 

@@ -235,16 +235,19 @@ fn TrustedPostActions(
 }
 
 fn notify_unpublish_outcome(
-    outcome: MutationOutcome<SavedPost>,
+    settled: &Result<MutationOutcome<SavedPost>, WebError>,
     on_unpublish: Option<Callback<SavedPost>>,
     on_mutate: Option<Callback<()>>,
 ) {
-    match outcome {
-        MutationOutcome::Confirmed(unpublished) => match on_unpublish {
-            Some(on_unpublish) => on_unpublish.run(unpublished),
-            None => posts::notify(on_mutate),
+    match settled {
+        Ok(MutationOutcome::Confirmed(unpublished)) => match on_unpublish {
+            Some(on_unpublish) => on_unpublish.run(unpublished.clone()),
+            None => posts::notify_listing_mutation(settled, on_mutate),
         },
-        MutationOutcome::CommitIndeterminate(_) => posts::notify(on_mutate),
+        Ok(MutationOutcome::CommitIndeterminate(_)) => {
+            posts::notify_listing_mutation(settled, on_mutate);
+        }
+        Err(_) => {}
     }
 }
 
@@ -282,31 +285,25 @@ pub fn PostCard<'a>(
     let publish_action = ServerAction::<Publish>::new();
     let deleted = RwSignal::new(false);
 
-    support::on_settled_ok(
+    support::on_settled(
         move || delete_action.value().get(),
-        move |outcome| {
-            match outcome {
-                MutationOutcome::Confirmed(()) => deleted.set(true),
-                MutationOutcome::CommitIndeterminate(()) => {}
+        move |settled| {
+            if posts::settle_listing_mutation(settled, on_mutate).is_some() {
+                deleted.set(true);
             }
-            posts::notify(on_mutate);
         },
     );
-    support::on_settled_ok(
+    support::on_settled(
         move || unpublish_action.value().get(),
-        move |outcome| notify_unpublish_outcome(outcome, on_unpublish, on_mutate),
+        move |settled| notify_unpublish_outcome(&settled, on_unpublish, on_mutate),
     );
     let navigate = use_navigate();
-    support::on_settled_ok(
+    support::on_settled(
         move || publish_action.value().get(),
-        move |outcome| {
-            match outcome {
-                MutationOutcome::Confirmed(published) => {
-                    navigate(&published.permalink, NavigateOptions::default());
-                }
-                MutationOutcome::CommitIndeterminate(_) => {}
+        move |settled| {
+            if let Some(published) = posts::settle_listing_mutation(settled, on_publish) {
+                navigate(&published.permalink, NavigateOptions::default());
             }
-            posts::notify(on_publish);
         },
     );
 

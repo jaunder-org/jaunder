@@ -45,7 +45,7 @@ Out:
     `TimelineState` and `spawn_load_more` caller; focused existing behavior
     checks cover the unchanged home and cockpit paths.
 
-- [ ] Task 2: Replace the three public route lifecycles with one typed
+- [x] Task 2: Replace the three public route lifecycles with one typed
       lifecycle.
   - Depends on: Task 1's `TimelineGeneration` and `LoadMoreClaim` settlement
     contracts.
