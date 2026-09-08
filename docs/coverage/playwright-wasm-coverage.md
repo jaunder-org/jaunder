@@ -130,7 +130,7 @@ The aggregate `.xtask/wasm-coverage/status.json` is `v1`, contains exactly
 Chromium and Firefox, has verdict `passed` and no blockers, and names
 `.xtask/wasm-coverage/merged/{browser.profdata,llvm-cov.txt}`. Union is
 conditional count summation, not a boolean OR: the separate browser count of 1
-on representative lines 30–32, 50, 74, 77, and 79–84 becomes count 2 in
+on representative lines 30–32, 50–52, 73, 76, and 78–84 becomes count 2 in
 `merged/llvm-cov.txt`. A missing, stale, malformed, mismatched, partial, or
 failed browser evidence set makes reconciliation fail closed and prevents the
 merge; one browser cannot establish a green result for the other. The retained
