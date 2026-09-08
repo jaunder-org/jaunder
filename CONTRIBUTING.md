@@ -492,6 +492,22 @@ fast local gate rather than an alias for hermetic `validate --no-e2e`. Nix
 static proof, coverage/CRAP, wasm browser tests, Elisp coverage, the wasm
 budget, and e2e retain their stated hermetic or full-validate authorities.
 
+#### Hermetic Rust coverage evidence
+
+The Nix `coverage` producer is the sole execution authority for the unfiltered
+**root-workspace** nextest population. It runs both SQLite and PostgreSQL
+backends in one instrumented pass; backend-common behavior therefore retains
+SQLite/PostgreSQL parity. Its machine-readable census supplies the expected
+identities, and the terminal run records must reconcile exactly:
+`expected = executed + ignored`. Every required producer subprocess has its exit
+status checked; command output never turns a nonzero exit into success.
+
+The producer writes a versioned status record, and both the Nix gate and host
+consumer validate it before coverage/CRAP policy. A missing or empty text
+report, or a parsed report with zero executable lines, is rejected rather than
+reported green. Doctests and the auxiliary `xtask`/`tools` workspaces retain
+their separate test authorities outside this root-workspace nextest population.
+
 Within the host/local gate, health checks are ordered for fast, actionable
 feedback: clean/staged-tree preconditions first, source-format and generated-doc
 consistency before compile/type work, cheap repository-shape invariants before

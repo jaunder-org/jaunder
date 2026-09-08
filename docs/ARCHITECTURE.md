@@ -3241,9 +3241,18 @@ The coverage verdict is **stateless** — a pure function of
 driver ([ADR-0050](adr/0050-stateless-coverage-gate.md)). It replaced an earlier
 stateful ratchet that re-anchored a committed baseline by text identity
 ([ADR-0030](adr/0030-coverage-reanchor-text-identity.md), superseded). The Nix
-`coverage` derivation produces the instrumented report, running the whole suite
-under an ephemeral PostgreSQL via `devtool pg` so `storage/src/postgres/*` is
-instrumented rather than skipped (`nix/checks.nix:643-729`). The host-side gate
+`coverage` derivation is the sole instrumented execution of the unfiltered
+root-workspace nextest population. Its machine-readable census supplies expected
+test identities; terminal execution records must reconcile exactly as
+`expected = executed + ignored`. Every required producer subprocess has its exit
+status checked, so diagnostics can explain a failure but cannot classify a
+nonzero exit as success. The producer runs the whole suite under an ephemeral
+PostgreSQL via `devtool pg`, alongside SQLite, so backend-common tests retain
+SQLite/PostgreSQL parity and `storage/src/postgres/*` is instrumented rather
+than skipped (`nix/checks.nix:643-729`). It writes a versioned status record
+validated by both the sandbox Nix gate and the host consumer; the host also
+rejects missing or empty text evidence and parsed reports with zero executable
+lines before ordinary line/CRAP policy. The host-side gate
 (`xtask/src/coverage/`) then applies:
 
 - **One structural exemption**: a literal `unreachable!("msg")` with a non-empty

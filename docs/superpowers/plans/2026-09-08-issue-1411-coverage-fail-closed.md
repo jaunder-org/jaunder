@@ -77,7 +77,7 @@ Out:
     actual text or LCOV report, and fails if `tools/csr_bundle` contributes any
     executable line. Synthetic report fixtures prove parser behavior only.
 
-- [ ] Task 3: Make every consumer reject incomplete coverage evidence
+- [x] Task 3: Make every consumer reject incomplete coverage evidence
   - Depends on: Task 1's final `CoverageStatus` wire schema and invariant
     validator, and Task 2's completed `nix/checks.nix` source/probe changes.
   - Files: `tools/devtool/src/main.rs`, its coverage command module,

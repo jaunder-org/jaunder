@@ -994,13 +994,23 @@ coverage = craneLib.mkCargoDerivation (
     '';
     installPhaseCommand = ''
       mkdir -p $out
-      # emit-out/coverage-report.lcov is intentionally NOT copied: it
-      # is an intermediate consumed only by `cargo crap`, not a gate
-      # output the host reads.
-      cp emit-out/coverage-report.txt $out/coverage-report.txt
-      cp emit-out/crap-report.json $out/crap-report.json
-      cp emit-out/status.json $out/status.json
-      cp -r emit-out/diagnostics $out/diagnostics
+      # Preserve controlled-red producer status and diagnostics even when report
+      # stages did not run. Reports are copied only when their producer stages
+      # produced them; their host consumer rejects missing or empty evidence.
+      if test -e emit-out/status.json; then
+        cp emit-out/status.json $out/status.json
+      fi
+      if test -d emit-out/diagnostics; then
+        cp -r emit-out/diagnostics $out/diagnostics
+      fi
+      # emit-out/coverage-report.lcov is intentionally NOT copied: it is an
+      # intermediate consumed only by `cargo crap`, not a gate output the host reads.
+      if test -e emit-out/coverage-report.txt; then
+        cp emit-out/coverage-report.txt $out/coverage-report.txt
+      fi
+      if test -e emit-out/crap-report.json; then
+        cp emit-out/crap-report.json $out/crap-report.json
+      fi
     '';
   }
 );
@@ -1009,25 +1019,18 @@ coverage = craneLib.mkCargoDerivation (
   coverage-source-probe = pkgs.runCommand "jaunder-coverage-source-probe" { src = coverageSrc; } ''
     touch $out
   '';
-# Belt-and-suspenders: an independent Nix-level red for in-sandbox
-# failures (test/infra) even if a caller bypasses host xtask. The
-# coverage-regression verdict is host-only (needs committed baselines
-# + git) and lives in xtask, not here. Named `jaunder-coverage-gate`
-# so the cachix pushFilter (jaunder-coverage|jaunder-e2e) excludes it.
+# Belt-and-suspenders: the sandbox gate validates completed producer evidence
+# through the shared Rust contract, while the host separately consumes reports.
+# Named `jaunder-coverage-gate` so the cachix pushFilter
+# (jaunder-coverage|jaunder-e2e) excludes it.
 coverage-gate =
   pkgs.runCommand "jaunder-coverage-gate"
     {
-      nativeBuildInputs = [ pkgs.jq ];
+      nativeBuildInputs = [ devtoolBin ];
     }
     ''
-      cat ${self.checks.${system}.coverage}/status.json
-      cat=$(jq -r .category ${self.checks.${system}.coverage}/status.json)
-      if [ "$cat" != "tests-ok" ]; then
-        echo "coverage gate failed: category=$cat" >&2
-        jq -r '.infra_detail // (.failed_tests | join("\n"))' \
-          ${self.checks.${system}.coverage}/status.json >&2
-        exit 1
-      fi
+      devtool coverage validate-status \
+        --status ${self.checks.${system}.coverage}/status.json
       touch $out
     '';
 
