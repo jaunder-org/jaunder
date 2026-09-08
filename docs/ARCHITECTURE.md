@@ -150,10 +150,10 @@ generic `XStore<DB>` bounded on public `Backend: sqlx::Database`
 (`storage/src/backend.rs`, implemented for `Sqlite` and `Postgres`). `Backend`
 carries the `db.system` span constant and adapts sealed `WriteTransaction`
 capability to the concrete connection. Crate-private `AppStateBackend: Backend`,
-implemented only for those two backends, converts a pool into a backend-erased
-`WriteScope` exclusively for generic `AppState` composition. Downstream code can
-run the factory-minted scope but cannot name that trait or construct one from a
-pool, preserving ADR-0164's downstream-construction invariant without changing
+implemented only for those two backends, lets `StorageFactory` convert its pool
+into a backend-erased `WriteScope` on request. Downstream code can run the
+factory-minted scope but cannot name that trait or construct one from a pool,
+preserving ADR-0164's downstream-construction invariant without changing
 ADR-0019's public marker surface. Backend-specific SQL is isolated in per-trait
 `XDialect` impls under `storage/src/{sqlite,postgres}/*.rs`. Traits with no
 divergence need no dialect at all. Neither `Backend` nor `AppStateBackend`
@@ -171,24 +171,26 @@ be a thin shell over a near-total dialect
 
 ### Dependency injection and AppState
 
-`storage::AppState` (`storage/src/app_state.rs`) is a bundle of thirteen
-`Arc<dyn *Storage>` handles and the factory-minted, sealed `WriteScope`. One
-generic `make_app_state<DB>(Pool<DB>)` builds it for both production backends;
-its crate-private `AppStateBackend` bound converts the pool into the
-backend-erased scope. It holds storage dependencies only; services (mailer,
-WebSub client, background workers, and the media manager) are constructed in
-`server` and injected per-consumer as constructor parameters, and there is no
-services bundle. The durable invariant: no type may be both a heterogeneous
-dependency holder and passed beyond the composition root
+`storage::StorageFactory` (`storage/src/storage_factory.rs`) owns the
+runtime-selected pool and mints any of the fifteen `Arc<dyn *Storage>` handles
+or the sealed `WriteScope` on demand. Database opening returns this factory
+rather than constructing storage handles. It stays at a composition root:
+non-serve commands request only the handles and scope for their selected path
+and inject those dependencies directly, while the serve root alone asks the
+factory to assemble `storage::AppState` with all fifteen handles and the scope.
+`AppState` remains a storage-only construction bundle; services (mailer, WebSub
+client, background workers, and the media manager) are constructed in `server`
+and injected per-consumer as constructor parameters, and there is no services
+bundle. The durable invariant is that no heterogeneous dependency holder crosses
+the composition root
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
 
 The web layer takes most dependencies per-trait via Leptos context and receives
 `WriteScope` and `MediaContentLocks` as separate context values.
-`server::provide_app_state_contexts` (`server/src/context.rs:27`) publishes
-twelve of the handles (all but `feed_cache`, which no `#[server]` fn needs) plus
-the separately injected scope. Each ordinary server fn fetches exactly what it
-uses—`expect_context::<Arc<dyn UserStorage>>()`,
-`expect_context::<WriteScope>()`, or
+`server::provide_app_state_contexts` (`server/src/context.rs:30`) publishes
+thirteen handles (all but `feed_cache` and `publisher`) plus the separately
+injected scope. Each ordinary server fn fetches exactly what it uses—
+`expect_context::<Arc<dyn UserStorage>>()`, `expect_context::<WriteScope>()`, or
 `expect_context::<Arc<MediaContentLocks>>()`. The helper lives in `server`, not
 `storage`, because using Leptos context as the DI mechanism is an
 application-wiring decision
@@ -396,17 +398,11 @@ Details in the testing section.
   (`storage/migrations/sqlite/0019_create_subscriptions.sql`) — outbound WebSub
   delivery, not inbound ingestion. There is no table of fetched external items
   and no fan-out path.
-- **`Backend` handle factory (ADR-0016 Phase B).** A factory that mints
-  `Arc<dyn *Storage>` handles on demand — held only at the composition root,
-  never injected — is decided but not built
-  ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)); no such type
-  exists in `storage`, and every non-serve CLI command still constructs the full
-  `AppState` via `open_existing_database` (`server/src/commands.rs`).
 
 - **Structural write scopes and mutation outcomes.** A factory-minted, sealed,
   backend-erased `WriteScope` is injected separately beside the exact storage
-  traits. Only crate-private `AppStateBackend` can mint it during AppState
-  composition; downstream code cannot construct a scope from a pool
+  traits. `StorageFactory` uses crate-private `AppStateBackend` to mint it on
+  request; downstream code cannot construct a scope from a pool
   ([structural write scopes and mutation outcomes](adr/0164-structural-write-scopes-and-mutation-outcomes.md)).
   Its explicit `run` boundary supplies a sealed mutable `WriteTransaction`
   capability, never storage lookup or arbitrary SQL. The closed audited
@@ -1934,10 +1930,10 @@ walks overlap. A missing or unreadable path, traversal or metadata error,
 symlink, or non-regular non-directory entry fails the whole filesystem sample:
 the collector reports the bounded `server.metrics.media_filesystem_bytes`
 diagnostic, clears that snapshot field, and emits no datapoint rather than zero
-or a partial value. The database pool observer is produced by storage opening
-and retained beside `AppState` at the serve composition root, preserving
-ADR-0016's rule that `AppState` remains storage-only while still allowing pool
-metrics.
+or a partial value. Storage opening returns the database pool observer beside
+`StorageFactory`; the serve composition root retains it beside the assembled
+`AppState`. This preserves ADR-0016's rule that `AppState` remains storage-only
+while still allowing pool metrics.
 
 ### Errors at the boundary
 

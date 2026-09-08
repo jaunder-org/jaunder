@@ -69,7 +69,7 @@ Out:
     Structural inspection confirms neither path accepts a forbidden aggregate
     dependency and listing does not mint a `WriteScope`.
 
-- [ ] Task 5: Record the completed composition-root architecture
+- [x] Task 5: Record the completed composition-root architecture
   - Contract: `docs/ARCHITECTURE.md` describes `StorageFactory`, root-only use,
     lazy exact dependency construction, serve-owned `AppState` assembly, and the
     accurate current handle count while continuing to cite ADR-0016 and the
