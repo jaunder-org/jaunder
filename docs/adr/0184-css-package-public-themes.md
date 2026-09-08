@@ -1,6 +1,6 @@
-# ADR-DRAFT: Custom public themes are scoped CSS packages
+# ADR-0184: Custom public themes are scoped CSS packages
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-06
 - Issue: [#1341](https://github.com/jaunder-org/jaunder/issues/1341)
 
@@ -9,7 +9,7 @@
 [#21](https://github.com/jaunder-org/jaunder/issues/21) established one
 server-resolved public Theme for each route: an operator-owned site default and
 an optional author-owned override.
-[ADR-0041](../0041-public-projector-and-csr-client.md) requires the anonymous
+[ADR-0041](0041-public-projector-and-csr-client.md) requires the anonymous
 projector to produce byte-identical, CDN-cacheable HTML for a route and
 presentation state. The existing built-in themes vary CSS variables over a
 shared document, but issue #1341 must support a much broader WordPress-like
@@ -106,7 +106,7 @@ theme state, and the selected URL remains part of the body-derived public ETag.
 
 Theme Media bindings are persisted presentation references, distinct from the
 Post Media references derived from sanitized `RenderedHtml` by
-[ADR-0090](../0090-media-references-extracted-at-render.md). Binding and guarded
+[ADR-0090](0090-media-references-extracted-at-render.md). Binding and guarded
 deletion share the existing exact Media-key lock: ownership verification and
 binding insertion occur in one storage mutation, and deletion conditionally
 checks theme references under the same lock. Owner-local Media bindings are not

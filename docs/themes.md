@@ -254,4 +254,4 @@ HTML is not broken by deletion.
 
 - [Theme management routes and endpoint census](flows/theme-management.md)
 - [Current custom-theme architecture](ARCHITECTURE.md#custom-public-themes)
-- [Custom-theme architectural decision](adr/drafts/css-package-public-themes.md)
+- [Custom-theme architectural decision](adr/0184-css-package-public-themes.md)
