@@ -73,7 +73,7 @@ async fn assert_media_delete_conflict(
     assert_eq!(
         body_string(response).await,
         format!(
-            r#"{{"type":"https://jaunder.org/problems/media-delete-conflict","title":"Media deletion refused","status":409,"detail":"{detail}","post_ids":[{post_ids}]}}"#
+            r#"{{"type":"https://jaunder.org/problems/media-delete-conflict","title":"Media deletion refused","status":409,"detail":"{detail}","post_ids":[{post_ids}],"theme_reference_count":0}}"#
         )
     );
 }
