@@ -61,7 +61,7 @@ Out:
     rejects `AppState`, `StorageFactory`, raw-pool, aggregate-bundle, unrelated
     handle, or unnecessary `WriteScope` construction.
 
-- [ ] Task 4: Narrow WebSub dead-letter command composition
+- [x] Task 4: Narrow WebSub dead-letter command composition
   - Contract: listing receives feed-event storage; redrive receives feed-event
     storage and `WriteScope`.
   - Verification: focused both-backend WebSub tests preserve deterministic
