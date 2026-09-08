@@ -50,7 +50,7 @@ Out:
     `AppState`, `StorageFactory`, raw pool, or aggregate bundle and that each
     root requests only its listed dependencies.
 
-- [ ] Task 3: Narrow site-configuration command composition
+- [x] Task 3: Narrow site-configuration command composition
   - Contract: reads receive site-configuration storage; ordinary mutations
     receive site-configuration storage and `WriteScope`; publisher-owned
     mutations receive publisher storage, `WriteScope`, and the existing storage
