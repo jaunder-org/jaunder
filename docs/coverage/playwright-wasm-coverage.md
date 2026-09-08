@@ -139,10 +139,26 @@ synthesizing success.
 
 ## Quiescent paired measurement
 
-The content-addressed CSR bundle changed after the retained measurement was
-recorded. Those timing and size values therefore do not describe the current
-artifact and are intentionally omitted. A fresh user-confirmed quiescent 24-run
-measurement is required before making an overhead claim for this implementation.
+The user-confirmed quiescent window was `2026-09-08 user-confirmed idle host`.
+Four warm-ups were discarded (baseline and instrumented once in each browser).
+The retained manifest then records five alternating baseline/instrumented pairs
+per browser: 20 retained measured runs. Every run has a distinct cache-buster,
+Nix realization, and retained run root under
+`.xtask/wasm-coverage/measurement/runs/`, proving separate fresh realizations.
+The metric is focused-flow milliseconds and raw uncompressed bytes of the
+content-addressed wasm selected by each bundle's `pkg/manifest.json`.
+
+| Browser  | Baseline median [range] | Instrumented median [range] |               Delta |
+| -------- | ----------------------: | --------------------------: | ------------------: |
+| Chromium |   1,030 ms [929, 1,050] |         967 ms [962, 1,030] | -63 ms (-6.116505%) |
+| Firefox  | 2,398 ms [2,226, 2,892] |     2,309 ms [2,273, 2,444] | -89 ms (-3.711426%) |
+
+The baseline served wasm was 3,333,996 bytes at
+`pkg/01a228c4bb955c1f8056c5d66428cecc4f0c48d5d9c1c5834d725718b555841a.wasm`. The
+instrumented served wasm was 3,365,650 bytes at the content-addressed path named
+above: +31,654 bytes (+0.949431%). The timing ranges overlap in both browsers.
+Therefore this experiment makes **no measured slowdown claim and no speedup
+claim**; the lower instrumented medians are not evidence of a speedup.
 
 ## Ownership, costs, and remaining risk
 
@@ -159,13 +175,13 @@ orchestration validates the retained result. Those references define the
 ownership model only; the concrete browser and reconciliation outcomes remain
 local executable evidence.
 
-Remaining costs and risks are the as-yet-unmeasured served-WASM and runtime
-overhead; two browser/Nix realization cost; continued compatibility of the
-pinned Rust/LLVM raw-profile, profdata, and line-report formats;
-optimizer/bundler preservation; and the need to retain and validate both
-complete browser evidence sets. A future permanent gate must keep the
-both-browser fail-closed condition; dropping either browser would not be
-supported by this finding.
+Remaining costs and risks are the 31,654-byte served-WASM overhead; the
+1,114,292 ms quiescent-host experiment wall time; two browser/Nix realization
+cost; continued compatibility of the pinned Rust/LLVM raw-profile, profdata, and
+line-report formats; optimizer/bundler preservation; and the need to retain and
+validate both complete browser evidence sets. A future permanent gate must keep
+those costs and the both-browser fail-closed condition; dropping either browser
+would not be supported by this finding.
 
 ## Primary-source index
 
