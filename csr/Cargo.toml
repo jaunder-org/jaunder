@@ -19,5 +19,10 @@ log.workspace = true
 serde_json.workspace = true
 wasm-bindgen.workspace = true
 
+[features]
+# Used only by the Nix-owned nightly diagnostic derivation. Production CSR
+# dependency resolution remains exactly the default feature set.
+diagnostic-coverage = ["client/diagnostic-coverage"]
+
 [lints]
 workspace = true

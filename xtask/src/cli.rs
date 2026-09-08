@@ -4,6 +4,14 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::{issue, steps};
 
+fn nonempty(value: &str) -> Result<String, String> {
+    if value.trim().is_empty() {
+        Err("must not be empty".to_owned())
+    } else {
+        Ok(value.to_owned())
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "xtask", about = "Jaunder dev orchestration")]
 pub struct Cli {
@@ -192,6 +200,11 @@ pub enum Command {
     /// Coverage tooling — the source-filter drift probe (#241).
     #[command(subcommand)]
     Coverage(CoverageCommand),
+    /// Reconcile the independent Chromium and Firefox Playwright/WASM coverage
+    /// evidence. Both producers run before a verdict; raw profiles are merged only
+    /// when both retained status documents pass and identify the same module/toolchain.
+    #[command(subcommand)]
+    WasmCoverage(WasmCoverageCommand),
     /// Nix maintenance commands that evaluate repository derivation boundaries.
     #[command(subcommand)]
     Nix(NixCommand),
@@ -349,6 +362,26 @@ pub enum CoverageCommand {
     #[command(after_help = "EXAMPLES:\n  cargo xtask coverage probe-source")]
     ProbeSource,
 }
+/// `wasm-coverage` subcommands.
+#[derive(Subcommand)]
+pub enum WasmCoverageCommand {
+    /// Realize each browser evidence producer, retain and validate its archive, then
+    /// conditionally count-sum their profiles with the matching pinned LLVM tools.
+    /// The aggregate is always written to `.xtask/wasm-coverage/status.json`.
+    #[command(after_help = "EXAMPLES:\n  cargo xtask wasm-coverage probe")]
+    Probe,
+    /// Measure the separately built baseline and instrumented diagnostic bundles during
+    /// a coordinated quiet host window. The acknowledgement is deliberately required:
+    /// these numbers are invalid when unrelated host work is competing for resources.
+    #[command(
+        after_help = "EXAMPLES:\n  cargo xtask wasm-coverage measure --quiescent-window '2026-09-06 coordinated window'"
+    )]
+    Measure {
+        #[arg(long, value_parser = nonempty)]
+        quiescent_window: String,
+    },
+}
+
 /// `nix` subcommands.
 #[derive(Subcommand)]
 pub enum NixCommand {
@@ -453,6 +486,8 @@ impl Cli {
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
+            Command::WasmCoverage(WasmCoverageCommand::Probe) => "wasm-coverage-probe",
+            Command::WasmCoverage(WasmCoverageCommand::Measure { .. }) => "wasm-coverage-measure",
             Command::Nix(NixCommand::ProbeSource) => "nix-probe-source",
             Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate) => {
                 steps::server_fn_coverage_check::REGENERATE_STEP
@@ -1056,6 +1091,16 @@ mod tests {
                 command,
             } if name == "demo"
                 && command == ["site-config", "get", "site.title"]
+        ));
+    }
+
+    #[test]
+    fn wasm_coverage_probe_parses() {
+        let cli = Cli::try_parse_from(["xtask", "wasm-coverage", "probe"]).unwrap();
+        assert_eq!(cli.command_name(), "wasm-coverage-probe");
+        assert!(matches!(
+            cli.command,
+            Command::WasmCoverage(WasmCoverageCommand::Probe)
         ));
     }
 }

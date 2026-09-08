@@ -27,6 +27,7 @@ mod sh;
 mod test_support;
 mod traces;
 mod wasm_budget;
+mod wasm_coverage;
 mod wasm_sections;
 mod wasm_symbols;
 mod web_server_fns;
@@ -78,7 +79,7 @@ mod steps {
 
 pub use cli::{
     AdrCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser, NixCommand, PrCommand,
-    PrWatchUntil, SandboxProfile, ServerFnCoverageCommand, TracesCommand,
+    PrWatchUntil, SandboxProfile, ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
 };
 pub use dispatch::run;
 pub use lifecycle::ensure_hooks_installed;

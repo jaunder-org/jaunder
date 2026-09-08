@@ -75,9 +75,13 @@ the host coverage denominator
 
 Two sibling trees are outside the root workspace, each its own cargo workspace:
 `xtask/` (the host-only dev/CI driver, also named in the root
-`exclude = ["xtask"]`) and `tools/` (members `devtool`, `coverage`, `doctests`).
-Those boundaries are execution/ownership boundaries, not a claim that every
-`tools/` crate is absent from every Nix derivation
+`exclude = ["xtask"]`) and `tools/` (members `devtool`, `coverage`,
+`diagnostic-coverage-runtime`, and `doctests`). The diagnostic coverage runtime
+is a target-only auxiliary member that is also copied into the diagnostic Nix
+source closure; its manifest therefore keeps direct package metadata so that the
+copied crate remains independently parseable. Those boundaries are
+execution/ownership boundaries, not a claim that every `tools/` crate is absent
+from every Nix derivation
 ([Cargo workspace execution boundaries](adr/0141-cargo-workspace-execution-boundaries.md)).
 `elisp/` (the Emacs client,
 [ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) and `end2end/`
@@ -87,12 +91,14 @@ Those boundaries are execution/ownership boundaries, not a claim that every
 `[workspace.package]` owns the version, edition, and license inherited by its
 nine members (`client`, `common`, `csr`, `host`, `macros`, `server`, `storage`,
 `test-support`, and `web`). The independent `tools/` workspace owns its version,
-edition, and non-publish setting for its three members (`coverage`, `devtool`,
-and `doctests`), but has no workspace license. `xtask/` is a standalone
-single-package workspace, so its package metadata remains direct. Likewise,
-`test-support` keeps its release exception — direct `publish = false` — rather
-than inheriting the root's publish policy. These ownership points follow the
-three workspace roots; they are not one repository-wide metadata workspace.
+edition, and non-publish setting for `coverage`, `devtool`, and `doctests`;
+`diagnostic-coverage-runtime` repeats those values directly for the copied-crate
+constraint above. The tools workspace has no workspace license. `xtask/` is a
+standalone single-package workspace, so its package metadata remains direct.
+Likewise, `test-support` keeps its release exception — direct `publish = false`
+— rather than inheriting the root's publish policy. These ownership points
+follow the three workspace roots; they are not one repository-wide metadata
+workspace.
 
 Across every one of those trees, a `mod.rs` states its module's surface and
 holds nothing else: `mod`/`pub mod` declarations, `use`/`pub use` re-exports,
@@ -324,9 +330,9 @@ _checks_ but not `ON DELETE CASCADE` _actions_, so a per-table delete-then-load
 could cascade away rows already loaded for an earlier table. SQLite cannot
 cascade with FKs off, but keeps the split anyway so the two restore shapes stay
 identical ([ADR-0115](adr/0115-clear-then-load-restore.md)). Restore refuses any
-target that is not empty (every table except the migration-seeded lookups;
-`storage::database_is_empty`, enforced by `ensure_restore_target_empty` in
-`server/src/commands/backup.rs`) — there is no force-overwrite mode
+target that is not empty (every table except migration/identity bootstrap
+tables; `storage::database_is_empty`, enforced by `ensure_restore_target_empty`
+in `server/src/commands/backup.rs`) — there is no force-overwrite mode
 ([ADR-0064](adr/0064-backup-target-auto-derivation.md)). Failure is
 backend-uniform: a constraint-violating restore returns
 `BackupError::ConstraintViolation` and leaves the target unmodified on both

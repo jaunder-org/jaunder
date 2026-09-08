@@ -46,3 +46,8 @@ pub mod reactive;
 /// no `web_sys` type.
 #[cfg(all(target_arch = "wasm32", feature = "csr"))]
 pub mod upload;
+
+/// Diagnostic-only browser export for raw LLVM profiles and their module
+/// signature. The target-independent capture contract lives in `common`.
+#[cfg(all(target_arch = "wasm32", feature = "diagnostic-coverage"))]
+pub mod diagnostic_coverage;

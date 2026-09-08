@@ -1,0 +1,12 @@
+[package]
+name = "diagnostic-coverage-runtime"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "diagnostic_coverage_runtime"
+
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+minicov = "=0.3.8"

@@ -190,8 +190,14 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn second_signal_path_forces_cleanup_without_waiting_for_grace() {
-        let mut process = Process::start(Command::new("sh").args(["-c", "trap '' TERM; sleep 60"]))
-            .expect("start signal-resistant process");
+        let directory = tempfile::tempdir().expect("create temporary directory");
+        let ready_path = directory.path().join("ready");
+        let mut process = Process::start(
+            Command::new("sh")
+                .args(["-c", "trap '' TERM; : > \"$1\"; sleep 60", "--"])
+                .arg(&ready_path),
+        )
+        .expect("start signal-resistant process");
         let pid = process
             .running
             .as_ref()
@@ -201,6 +207,11 @@ mod tests {
             .expect("inspect process")
             .expect("process remains alive")
             .start_time();
+        let ready_deadline = Instant::now() + Duration::from_secs(5);
+        while !ready_path.exists() && Instant::now() < ready_deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(ready_path.exists(), "child installed TERM trap");
 
         let started = Instant::now();
         let outcome = process

@@ -1161,7 +1161,32 @@ guards what CI/PRs carry, not local uncommitted edits. Subtlety worth knowing: a
 _new_ file must be `git add`-ed to be measured — nix ignores untracked files
 even on a dirty tree. The probe runs in CI (the `validate-no-e2e` job) and on
 request; it is deliberately **not** part of per-commit `check`/`validate`
-(#241).
+(#241). **Playwright/WASM coverage evidence
+(`cargo xtask wasm-coverage probe`).** This manual host command realizes the
+independent Chromium and Firefox diagnostic producers before deciding its
+outcome. It retains each unpacked producer root under `.xtask/wasm-coverage/`,
+validates the `v1` status documents and complete digest manifests fail-closed,
+and writes the aggregate verdict to `.xtask/wasm-coverage/status.json` even when
+one browser fails. It only invokes the compiler-matched
+`llvm-profdata`/`llvm-cov` from `.#wasm-coverage-csr` to count-sum profiles when
+both browsers passed with matching module and toolchain identities; otherwise no
+merged evidence is produced. The command exits zero only for two source-mapped
+browser reports and a valid merged Rust-line report.
+
+**WASM coverage overhead measurement
+(`cargo xtask wasm-coverage measure --quiescent-window '<coordinated window acknowledgement>'`).**
+This is a manual, coordinated-host command, never a gate. It refuses an empty
+acknowledgement, warms the same-pinned-nightly baseline and instrumented
+producer for each browser, then retains five alternating baseline/instrumented
+pairs per browser. Every producer receives invocation-owned cache-buster entropy
+which is part of its Nix derivation and retained evidence. The command writes
+`.xtask/wasm-coverage/measurement/manifest-v1.json` only after reconciling all
+20 fresh runs: producer/browser identity, alternating order, unique
+cache-busters, nonempty realization evidence, focused-flow duration, and raw
+uncompressed `pkg/jaunder.wasm` bytes. The baseline uses the same pinned
+nightly, source closure, bundling, service and browser flow, but necessarily
+omits instrumentation/minicov and diagnostic exports—the precisely measured
+differences.
 
 **Nix invalidation-boundary guard (`cargo xtask nix probe-source`).** The
 hermetic static surface is two semantic derivations, not a singular

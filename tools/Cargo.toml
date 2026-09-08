@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["coverage", "csr_bundle", "devtool", "doctests"]
+members = ["coverage", "csr_bundle", "devtool", "diagnostic-coverage-runtime", "doctests"]
 
 [workspace.package]
 version = "0.1.0"

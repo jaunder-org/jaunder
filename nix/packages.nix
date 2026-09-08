@@ -18,6 +18,43 @@ let
   };
 
   craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
+  # wasm-bindgen #5268 identifies nightly-2026-08-05 as the last LLVM 22
+  # nightly; this earlier dated pin stays in that compatible range.  It must
+  # never track Fenix `latest`: LLVM coverage data, minicov's C runtime, and
+  # the manual Clang link are one version-sensitive unit.
+  diagnosticNightlyName = "nightly-2026-07-27";
+  diagnosticNightlySha256 = "sha256-e0NxVNFY345jKKjY/QdZiWrqKmDRBvmohTt4ZuKwx1A=";
+  diagnosticNightly = fenix.packages.${system}.fromToolchainName {
+    name = diagnosticNightlyName;
+    sha256 = diagnosticNightlySha256;
+  };
+  diagnosticToolchain = fenix.packages.${system}.combine [
+    (diagnosticNightly.withComponents [
+      "cargo"
+      "llvm-tools-preview"
+      "rust-std"
+      "rustc"
+    ])
+    (fenix.packages.${system}.targets.wasm32-unknown-unknown.fromToolchainName {
+      name = diagnosticNightlyName;
+      sha256 = diagnosticNightlySha256;
+    }).rust-std
+  ];
+  # minicov builds compiler-rt C for wasm.  The unwrapped Clang avoids Nix's
+  # host cc-wrapper injecting non-wasm sysroot and hardening flags.
+  diagnosticClang = pkgs.llvmPackages_22.clang-unwrapped;
+  # This source is an input only of the diagnostic derivative. The production
+  # workspace lock, vendor source, `csrWasm`, and `csrWasmBundle` never name it.
+  diagnosticMinicov = pkgs.fetchCrate {
+    pname = "minicov";
+    version = "0.3.8";
+    hash = "sha256-MAyEaF1M9mPr0rQRjG21XJaWgxwvOWZrObjCeFidgoA=";
+  };
+  # `llvm-tools-preview` installs profile tools below rustlib rather than the
+  # cargo/rustc bin directory.  Keep this path explicit so every diagnostic
+  # identity and exported analyzer symlink names the compiler-matched tools.
+  diagnosticLlvmTools =
+    "${diagnosticToolchain}/lib/rustlib/${pkgs.stdenv.hostPlatform.config}/bin";
   # Cargo source filters follow target closures. All workspace manifests remain
   # available for resolution; excluded members receive deterministic placeholder
   # targets so Cargo can parse them without hashing unrelated source bytes.
@@ -479,6 +516,160 @@ let
         devtool csr-bundle --wasm ${csrWasm}/lib/csr.wasm --out $out${pkgs.lib.optionalString (wasmExperimentArm != "") " --wasm-experiment-arm ${wasmExperimentArm}"}${pkgs.lib.optionalString (wasmShapeSection != "") " --wasm-shape-section ${wasmShapeSection} --wasm-shape-section-count ${toString wasmShapeSectionCount}"}
       '';
 
+  # Separately instrumented CSR producer for the Playwright/WASM coverage probe.
+  #
+  # Cargo is deliberately only an LLVM-IR producer here.  Its ordinary final
+  # wasm link cannot supply minicov's profiler archive, and treating that failed
+  # link as the diagnostic artifact would lose the exact source-mappable module.
+  # The pinned nightly emits every target crate's IR without a root link; LLVM
+  # 22 Clang compiles that exact closed graph and links it with minicov's archive.
+  # This derivative is not an input to `site` or `jaunderBin`.
+  diagnosticCsrWasmBundle = pkgs.runCommand "jaunder-diagnostic-csr-wasm-bundle"
+    {
+      nativeBuildInputs = [
+        # Cargo build scripts are host programs and require Nix's ordinary
+        # `cc`; the target-specific CC/CFLAGS below still force minicov's C
+        # profiler runtime through unwrapped LLVM 22 Clang.
+        pkgs.stdenv.cc
+        diagnosticToolchain
+        diagnosticClang
+        devtoolBin
+        pkgs.binaryen
+        wasm-bindgen-cli
+      ];
+    }
+    ''
+      mkdir -p $out/{instrumented/ir,tools}
+      ln -s ${diagnosticLlvmTools}/llvm-cov $out/tools/llvm-cov
+      ln -s ${diagnosticLlvmTools}/llvm-profdata $out/tools/llvm-profdata
+      export PATH=${diagnosticToolchain}/bin:${diagnosticLlvmTools}:${diagnosticClang}/bin:$PATH
+      rustc -Vv > $out/toolchain-rustc-vv.txt
+      clang --version > $out/toolchain-clang-version.txt
+      ${diagnosticLlvmTools}/llvm-profdata --version > $out/toolchain-llvm-profdata-version.txt
+      ${diagnosticLlvmTools}/llvm-cov --version > $out/toolchain-llvm-cov-version.txt
+      cat > $out/build-configuration.json <<'EOF'
+      {"version":5,"nightly":"${diagnosticNightlyName} (rustc 1.99.0-nightly dc3f85158; LLVM 22.1.8)","nightly_source_sha256":"${diagnosticNightlySha256}","instrumented_first_party_crates":["csr"],"omitted_first_party_crates":["client","common","macros","web"],"producer":"Cargo emits only CSR LLVM IR and an rlink without a final link; pinned rustc -Zlink-only recreates its complete Cargo/sysroot/minicov link graph.","rustflags":["-Cinstrument-coverage","-Zno-profiler-runtime","--emit=llvm-ir","-C link-arg=--no-gc-sections","-Zno-link"],"linker":"pinned rustc -Zlink-only","c_compiler":"llvmPackages_22.clang-unwrapped","diagnostic_runtime":{"wrapper_crate":"diagnostic-coverage-runtime","crate":"minicov","version":"0.3.8","source_sha256":"4869b6a491569605d66d3952bcdf03df789e5b536e5f0cf7758a7f08a55ae24d"}}
+      EOF
+      work="$TMPDIR/wasm-coverage-csr"
+      mkdir -p "$work"
+      cp -r ${siteSrc}/. "$work/source"
+      chmod -R u+w "$work/source"
+      devtool diagnostic-build prepare-source \
+        --source "$work/source" \
+        --minicov "${diagnosticMinicov}" \
+        --runtime "${../tools/diagnostic-coverage-runtime}" \
+        --source-identity "$out/source-identity.json" \
+        --nix-source "${siteSrc}"
+
+      set +e
+      (
+        set -e
+        devtool diagnostic-build validate-llvm \
+          --rustc-version "$out/toolchain-rustc-vv.txt" \
+          --clang-version "$out/toolchain-clang-version.txt"
+        cd "$work/source"
+        export CARGO_HOME=${appOfflineCargoHome}
+        export CARGO_TARGET_DIR="$work/target"
+        export CARGO_BUILD_TARGET=wasm32-unknown-unknown
+        export CC_wasm32_unknown_unknown=clang
+        export CFLAGS_wasm32_unknown_unknown="--target=wasm32-unknown-unknown"
+        cargo rustc -p csr --features diagnostic-coverage --target wasm32-unknown-unknown --release --lib --message-format=json-render-diagnostics -- -Cinstrument-coverage -Zno-profiler-runtime --emit=llvm-ir -C link-arg=--no-gc-sections -Zno-link > "$work/cargo-artifacts.jsonl"
+        cp "$work/cargo-artifacts.jsonl" "$out/instrumented/cargo-artifacts.jsonl"
+        devtool diagnostic-build discover-root \
+          --target-release "$work/target/wasm32-unknown-unknown/release" \
+          --root-ir "$work/root-ir" \
+          --root-rlink "$work/root-rlink" \
+          --manifest "$out/instrumented/ir-manifest.json"
+        root_ir="$(cat "$work/root-ir")"
+        root_rlink="$(cat "$work/root-rlink")"
+        cp "$root_ir" "$out/instrumented/csr.ll"
+        cp "$root_rlink" "$out/instrumented/csr.rlink"
+        rustc --target wasm32-unknown-unknown -Zlink-only "$out/instrumented/csr.rlink"
+        devtool diagnostic-build retain-linked-wasm \
+          --target-release "$work/target/wasm32-unknown-unknown/release" \
+          --manifest "$out/instrumented/ir-manifest.json" \
+          --retained-wasm "$out/instrumented/csr.wasm"
+        devtool csr-bundle \
+          --wasm "$out/instrumented/csr.wasm" \
+          --out "$out/pkg" \
+          --diagnostic-coverage-metadata "$out/coverage-metadata.json" \
+          --diagnostic-toolchain-identity "$out/toolchain-identity.json" \
+          --diagnostic-minicov-version 0.3.8
+        devtool diagnostic-build assert-coverage --metadata "$out/coverage-metadata.json"
+      ) > "$out/pipeline.log" 2>&1
+      pipeline_exit=$?
+      set -e
+
+      devtool diagnostic-build write-instrumented-status \
+        --status "$out/status.json" \
+        --pipeline-exit "$pipeline_exit"
+    '';
+
+  # The timing baseline intentionally shares the diagnostic pinned nightly, source
+  # closure, wasm-bindgen/wasm-opt bundling, service, and focused browser flow. It
+  # differs only by omitting -Cinstrument-coverage, minicov, and the diagnostic
+  # exports; those are unavoidable because they are what this experiment measures.
+  diagnosticBaselineCsrWasmBundle = pkgs.runCommand "jaunder-diagnostic-baseline-csr-wasm-bundle"
+    {
+      nativeBuildInputs = [ pkgs.stdenv.cc diagnosticToolchain devtoolBin pkgs.binaryen wasm-bindgen-cli ];
+    }
+    ''
+      export PATH=${diagnosticToolchain}/bin:$PATH
+      work="$TMPDIR/wasm-coverage-baseline"
+      mkdir -p "$work"
+      cp -r ${siteSrc}/. "$work/source"
+      chmod -R u+w "$work/source"
+      cd "$work/source"
+      export CARGO_HOME=${appOfflineCargoHome}
+      export CARGO_TARGET_DIR="$work/target"
+      cargo build -p csr --target wasm32-unknown-unknown --release
+      mkdir -p "$out"
+      devtool csr-bundle --wasm "$work/target/wasm32-unknown-unknown/release/csr.wasm" --out "$out/pkg"
+      devtool diagnostic-build write-baseline-status --status "$out/status.json"
+    '';
+  diagnosticBaselineJaunderBin = craneLib.buildPackage (
+    hostArgs
+    // {
+      inherit cargoArtifacts;
+      pname = "jaunder-diagnostic-wasm-coverage-baseline";
+      cargoExtraArgs = "-p jaunder";
+      JAUNDER_CSR_BUNDLE_DIR = "${diagnosticBaselineCsrWasmBundle}/pkg";
+      JAUNDER_PUBLIC_DIR = "${../public}";
+      doCheck = false;
+      nativeBuildInputs =
+        hostArgs.nativeBuildInputs
+        ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
+      postFixup = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+        patchelf --add-rpath \
+          "${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}" \
+          "$out/bin/jaunder"
+      '';
+    }
+  );
+
+  # The diagnostic browser probe must serve the same instrumented bundle that
+  # it later records.  Keep this derivative separate from the release binary:
+  # only the probe VM selects it through an explicit service override.
+  diagnosticJaunderBin = craneLib.buildPackage (
+    hostArgs
+    // {
+      inherit cargoArtifacts;
+      pname = "jaunder-diagnostic-wasm-coverage";
+      cargoExtraArgs = "-p jaunder";
+      JAUNDER_CSR_BUNDLE_DIR = "${diagnosticCsrWasmBundle}/pkg";
+      JAUNDER_PUBLIC_DIR = "${../public}";
+      doCheck = false;
+      nativeBuildInputs =
+        hostArgs.nativeBuildInputs
+        ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.patchelf ];
+      postFixup = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+        patchelf --add-rpath \
+          "${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}" \
+          "$out/bin/jaunder"
+      '';
+    }
+  );
+
   e2ePackage = pkgs.buildNpmPackage {
     name = "jaunder-e2e";
     src = ../end2end;
@@ -542,6 +733,10 @@ in
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,
     # never in the prod artifact or the NixOS module.
+    # The manually linked diagnostic module and its retained IR/link evidence.
+    # A failed producer still exposes its durable `status.json` and `pipeline.log`
+    # for the later browser producer; no independent blocker derivation masks it.
+    wasm-coverage-csr = diagnosticCsrWasmBundle;
     test-support = testSupportBin;
   };
 
@@ -549,16 +744,22 @@ in
     inherit
       visualFontConfig
       toolchain
+      diagnosticToolchain
       craneLib
       commonArgs
       hostArgs
       wasmTestSrc
+      siteSrc
       appOfflineCargoHome
       toolsOfflineCargoHome
       cargoArtifacts
       leanTestProfile
       leanDevAndTestProfile
       jaunderBin
+      diagnosticJaunderBin
+      diagnosticBaselineJaunderBin
+      diagnosticCsrWasmBundle
+      diagnosticBaselineCsrWasmBundle
       testSupportBin
       devtoolBin
       cargo-crap

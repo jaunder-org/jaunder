@@ -14,6 +14,7 @@ use oxc_ast::ast::{Expression, ImportExpression, Statement};
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::{Parser, ParserReturn};
 use oxc_span::SourceType;
+use serde::Serialize;
 
 const IN_JS: &str = "csr.js";
 const IN_WASM: &str = "csr_bg.wasm";
@@ -452,15 +453,311 @@ fn render_shell(glue: &str, wasm: &str) -> anyhow::Result<Vec<u8>> {
     Ok(rendered.into_bytes())
 }
 
-/// Generate into a sibling temporary directory, validate its exact inventory,
-/// then rename the complete bundle root into place. Existing output is rejected
-/// instead of being partially overwritten.
+const COVERAGE_SECTIONS: [&str; 2] = ["__llvm_covfun", "__llvm_covmap"];
+
+/// Diagnostic artifacts emitted only by the separately instrumented CSR build.
+///
+/// Normal callers pass `None`, preserving the production bundle byte path.
+pub struct DiagnosticArtifacts<'a> {
+    /// Where to record whether wasm-bindgen plus wasm-opt retained mapping data.
+    pub metadata_status: &'a Path,
+    /// Where to record the exact producer/analyzer tool identities.
+    pub toolchain_identity: &'a Path,
+    /// The minicov crate version selected by the instrumented Cargo feature.
+    pub minicov_version: &'a str,
+}
+
+#[derive(Serialize)]
+struct WasmBoundary {
+    artifact: &'static str,
+    coverage_sections: [bool; 2],
+    wasm_bindgen_metadata: bool,
+    exports: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct CoverageMetadataStatus {
+    version: u8,
+    required_sections: [SectionPresence; 2],
+    input: WasmBoundary,
+    after_wasm_bindgen: WasmBoundary,
+    after_wasm_opt: WasmBoundary,
+    result: &'static str,
+}
+
+#[derive(Serialize)]
+struct SectionPresence {
+    name: &'static str,
+    present: bool,
+}
+
+#[derive(Serialize)]
+struct ToolchainIdentity<'a> {
+    version: u8,
+    rustc: String,
+    clang: String,
+    llvm_profdata: String,
+    llvm_cov: String,
+    wasm_bindgen: String,
+    wasm_opt: String,
+    minicov: &'a str,
+}
+
+fn read_u32_leb(bytes: &[u8], index: &mut usize, subject: &str) -> anyhow::Result<u32> {
+    let mut value = 0_u32;
+    for shift in (0..35).step_by(7) {
+        let byte = *bytes
+            .get(*index)
+            .with_context(|| format!("truncated {subject}"))?;
+        *index += 1;
+        let bits = u32::from(byte & 0x7f);
+        if shift == 28 && bits > 0x0f {
+            bail!("{subject} overflows u32");
+        }
+        value |= bits << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+    bail!("{subject} is overlong")
+}
+
+/// A checked view of one wasm section. The payload excludes its id and length.
+struct WasmSection<'a> {
+    id: u8,
+    payload: &'a [u8],
+}
+
+/// Checked iterator over a version-1 wasm module's sections.
+struct WasmSections<'a> {
+    wasm: &'a [u8],
+    index: usize,
+}
+
+impl<'a> Iterator for WasmSections<'a> {
+    type Item = anyhow::Result<WasmSection<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index == self.wasm.len() {
+            return None;
+        }
+        let id = match self.wasm.get(self.index) {
+            Some(id) => *id,
+            None => return Some(Err(anyhow::anyhow!("truncated wasm section id"))),
+        };
+        self.index += 1;
+        let length = match read_u32_leb(self.wasm, &mut self.index, "wasm section length") {
+            Ok(length) => length,
+            Err(error) => return Some(Err(error)),
+        };
+        let end = match self.index.checked_add(length as usize) {
+            Some(end) => end,
+            None => return Some(Err(anyhow::anyhow!("wasm section length overflows module"))),
+        };
+        let payload = match self.wasm.get(self.index..end) {
+            Some(payload) => payload,
+            None => return Some(Err(anyhow::anyhow!("wasm section extends past module"))),
+        };
+        self.index = end;
+        Some(Ok(WasmSection { id, payload }))
+    }
+}
+
+fn wasm_sections(wasm: &[u8]) -> anyhow::Result<WasmSections<'_>> {
+    if !wasm.starts_with(b"\0asm\x01\0\0\0") {
+        bail!("not a wasm version-1 module");
+    }
+    Ok(WasmSections { wasm, index: 8 })
+}
+
+fn custom_section_name(section: &[u8]) -> anyhow::Result<&[u8]> {
+    let mut index = 0;
+    let length = read_u32_leb(section, &mut index, "wasm custom-section name length")?;
+    let end = index
+        .checked_add(length as usize)
+        .context("wasm custom-section name length overflows section")?;
+    section
+        .get(index..end)
+        .context("truncated wasm custom-section name")
+}
+
+fn coverage_section_presence(wasm: &[u8]) -> anyhow::Result<[bool; 2]> {
+    let mut found = [false; COVERAGE_SECTIONS.len()];
+    for section in wasm_sections(wasm)? {
+        let section = section?;
+        if section.id != 0 {
+            continue;
+        }
+        let name = custom_section_name(section.payload)?;
+        for (position, required) in COVERAGE_SECTIONS.iter().enumerate() {
+            found[position] |= name == required.as_bytes();
+        }
+    }
+    Ok(found)
+}
+
+fn wasm_exports(wasm: &[u8]) -> anyhow::Result<Vec<String>> {
+    let mut exports = Vec::new();
+    for section in wasm_sections(wasm)? {
+        let section = section?;
+        if section.id != 7 {
+            continue;
+        }
+        let mut index = 0;
+        let count = read_u32_leb(section.payload, &mut index, "wasm export count")?;
+        for _ in 0..count {
+            let name_length = read_u32_leb(section.payload, &mut index, "wasm export name length")?;
+            let name_end = index
+                .checked_add(name_length as usize)
+                .context("wasm export name length overflows section")?;
+            let name = std::str::from_utf8(
+                section
+                    .payload
+                    .get(index..name_end)
+                    .context("truncated wasm export name")?,
+            )
+            .context("wasm export name is not UTF-8")?;
+            exports.push(name.to_owned());
+            index = name_end;
+            let _kind = *section
+                .payload
+                .get(index)
+                .context("truncated wasm export kind")?;
+            index += 1;
+            let _ = read_u32_leb(section.payload, &mut index, "wasm export index")?;
+        }
+        anyhow::ensure!(
+            index == section.payload.len(),
+            "trailing data in wasm export section"
+        );
+    }
+    Ok(exports)
+}
+
+fn wasm_custom_section_present(wasm: &[u8], wanted: &str) -> anyhow::Result<bool> {
+    for section in wasm_sections(wasm)? {
+        let section = section?;
+        if section.id == 0 && custom_section_name(section.payload)? == wanted.as_bytes() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn wasm_boundary(artifact: &'static str, wasm: &[u8]) -> anyhow::Result<WasmBoundary> {
+    Ok(WasmBoundary {
+        artifact,
+        coverage_sections: coverage_section_presence(wasm)?,
+        wasm_bindgen_metadata: wasm_custom_section_present(wasm, "__wasm_bindgen_unstable")?,
+        exports: wasm_exports(wasm)?,
+    })
+}
+
+fn coverage_metadata_status(
+    input: &[u8],
+    after_wasm_bindgen: &[u8],
+    after_wasm_opt: &[u8],
+) -> anyhow::Result<CoverageMetadataStatus> {
+    let input = wasm_boundary("csr.wasm", input)?;
+    let after_wasm_bindgen = wasm_boundary("wasm-bindgen.wasm", after_wasm_bindgen)?;
+    let after_wasm_opt = wasm_boundary("wasm-opt.wasm", after_wasm_opt)?;
+    let result = if input.coverage_sections.iter().all(|present| *present) {
+        if after_wasm_bindgen
+            .coverage_sections
+            .iter()
+            .all(|present| *present)
+            && after_wasm_opt
+                .coverage_sections
+                .iter()
+                .all(|present| *present)
+        {
+            "preserved"
+        } else {
+            "lost-during-bundling"
+        }
+    } else {
+        "missing-before-bundling"
+    };
+    Ok(CoverageMetadataStatus {
+        version: 2,
+        required_sections: [
+            SectionPresence {
+                name: COVERAGE_SECTIONS[0],
+                present: after_wasm_opt.coverage_sections[0],
+            },
+            SectionPresence {
+                name: COVERAGE_SECTIONS[1],
+                present: after_wasm_opt.coverage_sections[1],
+            },
+        ],
+        input,
+        after_wasm_bindgen,
+        after_wasm_opt,
+        result,
+    })
+}
+
+fn command_version(program: &str, args: &[&str]) -> anyhow::Result<String> {
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .with_context(|| format!("spawning {program} for diagnostic identity"))?;
+    if !output.status.success() {
+        bail!("{program} identity command failed ({})", output.status);
+    }
+    String::from_utf8(output.stdout)
+        .with_context(|| format!("{program} identity command wrote non-UTF-8 stdout"))
+}
+
+fn write_diagnostic_artifacts(
+    artifacts: &DiagnosticArtifacts<'_>,
+    input_wasm: &Path,
+    wasm_bindgen_wasm: &Path,
+    bundled_wasm: &Path,
+) -> anyhow::Result<()> {
+    let metadata = coverage_metadata_status(
+        &fs::read(input_wasm).with_context(|| format!("reading {}", input_wasm.display()))?,
+        &fs::read(wasm_bindgen_wasm)
+            .with_context(|| format!("reading {}", wasm_bindgen_wasm.display()))?,
+        &fs::read(bundled_wasm).with_context(|| format!("reading {}", bundled_wasm.display()))?,
+    )?;
+    fs::write(
+        artifacts.metadata_status,
+        serde_json::to_vec_pretty(&metadata).context("serializing coverage metadata status")?,
+    )
+    .with_context(|| format!("writing {}", artifacts.metadata_status.display()))?;
+    let identity = ToolchainIdentity {
+        version: 1,
+        rustc: command_version("rustc", &["-Vv"])?,
+        clang: command_version("clang", &["--version"])?,
+        llvm_profdata: command_version("llvm-profdata", &["--version"])?,
+        llvm_cov: command_version("llvm-cov", &["--version"])?,
+        wasm_bindgen: command_version("wasm-bindgen", &["--version"])?,
+        wasm_opt: command_version("wasm-opt", &["--version"])?,
+        minicov: artifacts.minicov_version,
+    };
+    fs::write(
+        artifacts.toolchain_identity,
+        serde_json::to_vec_pretty(&identity).context("serializing toolchain identity")?,
+    )
+    .with_context(|| format!("writing {}", artifacts.toolchain_identity.display()))
+}
+
+/// Generate a content-addressed CSR bundle into a sibling temporary directory,
+/// validate its exact inventory, then rename the complete bundle root into
+/// place. Existing output is rejected instead of being partially overwritten.
+struct BundleTools<'a> {
+    wasm_bindgen: &'a Path,
+    wasm_opt: &'a Path,
+}
+
 pub fn run(
     wasm: &Path,
     out: &Path,
     experiment_arm: Option<&str>,
     shape_section: Option<&str>,
     shape_section_count: u32,
+    diagnostic_artifacts: Option<&DiagnosticArtifacts<'_>>,
 ) -> anyhow::Result<()> {
     run_with_tools(
         wasm,
@@ -468,8 +765,11 @@ pub fn run(
         experiment_arm,
         shape_section,
         shape_section_count,
-        Path::new("wasm-bindgen"),
-        Path::new("wasm-opt"),
+        BundleTools {
+            wasm_bindgen: Path::new("wasm-bindgen"),
+            wasm_opt: Path::new("wasm-opt"),
+        },
+        diagnostic_artifacts,
     )
 }
 
@@ -479,8 +779,8 @@ fn run_with_tools(
     experiment_arm: Option<&str>,
     shape_section: Option<&str>,
     shape_section_count: u32,
-    wasm_bindgen: &Path,
-    wasm_opt: &Path,
+    tools: BundleTools<'_>,
+    diagnostic_artifacts: Option<&DiagnosticArtifacts<'_>>,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(
         !out.exists(),
@@ -494,21 +794,39 @@ fn run_with_tools(
     let root = temporary.path();
     let generated = root.join("generated");
     fs::create_dir(&generated)?;
-    let status = Command::new(wasm_bindgen)
+    let status = Command::new(tools.wasm_bindgen)
         .args(["--target", "web", "--out-dir"])
         .arg(&generated)
         .arg(wasm)
         .status()
-        .with_context(|| format!("spawning {}", wasm_bindgen.display()))?;
+        .with_context(|| format!("spawning {}", tools.wasm_bindgen.display()))?;
     if !status.success() {
         bail!("wasm-bindgen failed ({status}) for {}", wasm.display());
     }
     let wasm_source = generated.join(IN_WASM);
-    run_wasm_opt(wasm_opt, &wasm_source)?;
+    let wasm_bindgen_snapshot = wasm_source.with_extension("wasm.bindgen");
+    if diagnostic_artifacts.is_some() {
+        fs::copy(&wasm_source, &wasm_bindgen_snapshot).with_context(|| {
+            format!(
+                "capturing post-wasm-bindgen diagnostic module {}",
+                wasm_source.display()
+            )
+        })?;
+    }
+    run_wasm_opt(tools.wasm_opt, &wasm_source)?;
     if let Some(label) = shape_section {
         append_shape_sections(&wasm_source, label, shape_section_count)?;
     }
     let wasm_bytes = fs::read(&wasm_source)?;
+    if let Some(artifacts) = diagnostic_artifacts {
+        write_diagnostic_artifacts(artifacts, wasm, &wasm_bindgen_snapshot, &wasm_source)?;
+        fs::remove_file(&wasm_bindgen_snapshot).with_context(|| {
+            format!(
+                "removing diagnostic boundary snapshot {}",
+                wasm_bindgen_snapshot.display()
+            )
+        })?;
+    }
     let wasm_path = path_for(&wasm_bytes, "wasm");
     let glue_source = generated.join(IN_JS);
     let glue = fs::read_to_string(&glue_source)?;
@@ -615,12 +933,69 @@ mod tests {
         fs::write(&input, b"\0asm\x01\0\0\0").unwrap();
         let (wasm_bindgen, wasm_opt) = fixture_tools();
         let output = directory.join(name);
-        run_with_tools(&input, &output, None, None, 0, &wasm_bindgen, &wasm_opt).unwrap();
+        run_with_tools(
+            &input,
+            &output,
+            None,
+            None,
+            0,
+            BundleTools {
+                wasm_bindgen: &wasm_bindgen,
+                wasm_opt: &wasm_opt,
+            },
+            None,
+        )
+        .unwrap();
         output
     }
 
     fn fixture_manifest(root: &Path) -> Manifest {
         Manifest::from_json(&fs::read(root.join("manifest.json")).unwrap()).unwrap()
+    }
+    fn wasm_with_sections(sections: &[&str]) -> Vec<u8> {
+        let mut wasm = b"\0asm\x01\0\0\0".to_vec();
+        for section in sections {
+            wasm.extend(custom_section(section, b"coverage"));
+        }
+        wasm
+    }
+
+    #[test]
+    fn diagnostic_metadata_reports_preserved_sections_at_each_bundle_boundary() {
+        let wasm = wasm_with_sections(&COVERAGE_SECTIONS);
+        let status = coverage_metadata_status(&wasm, &wasm, &wasm).expect("well-formed test wasm");
+        assert_eq!(status.result, "preserved");
+        assert_eq!(status.input.coverage_sections, [true, true]);
+        assert_eq!(status.after_wasm_bindgen.coverage_sections, [true, true]);
+        assert_eq!(status.after_wasm_opt.coverage_sections, [true, true]);
+    }
+
+    #[test]
+    fn diagnostic_metadata_reports_the_boundary_that_loses_coverage() {
+        let manual_link = wasm_with_sections(&COVERAGE_SECTIONS);
+        let wasm_bindgen = wasm_with_sections(&COVERAGE_SECTIONS);
+        let wasm_opt = wasm_with_sections(&[COVERAGE_SECTIONS[0]]);
+        let status = coverage_metadata_status(&manual_link, &wasm_bindgen, &wasm_opt)
+            .expect("well-formed test wasm");
+        assert_eq!(status.result, "lost-during-bundling");
+        assert_eq!(status.after_wasm_bindgen.coverage_sections, [true, true]);
+        assert_eq!(status.after_wasm_opt.coverage_sections, [true, false]);
+    }
+
+    #[test]
+    fn checked_wasm_section_iterator_rejects_truncated_and_overlong_sections() {
+        let truncated_custom_section = [b"\0asm\x01\0\0\0".as_slice(), &[0, 1]].concat();
+        assert!(coverage_section_presence(&truncated_custom_section).is_err());
+
+        let truncated_export = [b"\0asm\x01\0\0\0".as_slice(), &[7, 1, 1]].concat();
+        assert!(wasm_exports(&truncated_export).is_err());
+
+        let overlong_length = [
+            b"\0asm\x01\0\0\0".as_slice(),
+            &[0, 0x80, 0x80, 0x80, 0x80, 0x80],
+        ]
+        .concat();
+        assert!(wasm_custom_section_present(&overlong_length, "name").is_err());
     }
     #[test]
     fn gzip_is_deterministic() {

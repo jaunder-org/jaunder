@@ -834,6 +834,20 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
             "subscriptions",
             "tags",
             "target_kinds",
+            "theme_content_eligibility",
+            "theme_draft_assets",
+            "theme_draft_charges",
+            "theme_draft_content_charges",
+            "theme_drafts",
+            "theme_header_pool",
+            "theme_owner_quotas",
+            "theme_retained_content_charges",
+            "theme_revision_assets",
+            "theme_revisions",
+            "theme_role_bindings",
+            "theme_selections",
+            "theme_site_quota",
+            "themes",
             "user_config",
             "users",
         ]
@@ -867,7 +881,7 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
         }
     };
     assert_eq!(
-        live_table_count, 28,
+        live_table_count, 42,
         "a table was added or removed — update the golden set and denylist deliberately"
     );
 }
@@ -964,6 +978,7 @@ async fn cmd_restore_rejects_pre_identity_backup(#[case] backend: Backend) {
     let mut manifest: BackupManifest =
         serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read manifest"))
             .expect("parse manifest");
+    let target_schema_version = manifest.schema_version;
     manifest.schema_version = 26;
     manifest.tables.retain(|table| table != "instance_identity");
     std::fs::write(
@@ -982,8 +997,8 @@ async fn cmd_restore_rejects_pre_identity_backup(#[case] backend: Backend) {
         error.downcast_ref::<BackupError>(),
         Some(BackupError::SchemaVersionMismatch {
             backup_version: 26,
-            target_version: 32
-        })
+            target_version
+        }) if *target_version == target_schema_version
     ));
     assert_target_unmodified(&target_args).await;
 }

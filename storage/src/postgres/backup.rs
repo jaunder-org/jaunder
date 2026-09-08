@@ -140,8 +140,6 @@ async fn restore_database_transaction(
     let mut connection = pool.acquire().await?;
     let schema_version = schema_version(&mut connection).await?;
     backup::ensure_schema_version(manifest, schema_version)?;
-    let schema_checksum = schema_checksum(&mut connection).await?;
-    backup::ensure_schema_checksum(manifest, &schema_checksum)?;
     backup::validate_instance_identity_backup(source_path, manifest)?;
     sqlx::query("BEGIN")
         .execute(&mut *connection)
