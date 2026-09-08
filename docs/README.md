@@ -210,6 +210,7 @@ convention). See the Status column below for each ADR's current status.
 | [0181](adr/0181-identity-verified-local-shutdown.md)                   | Identity-verified local shutdown                                                                             | accepted   |
 | [0182](adr/0182-jiff-time-model.md)                                    | Jiff time model                                                                                              | accepted   |
 | [0183](adr/0183-per-user-media-records-from-local-post-references.md)  | Per-user Media Records from local Post references                                                            | accepted   |
+| [0184](adr/0184-css-package-public-themes.md)                          | Custom public themes are scoped CSS packages                                                                 | accepted   |
 
 <!-- adr-table:end -->
 

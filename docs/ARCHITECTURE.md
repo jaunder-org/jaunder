@@ -1310,7 +1310,7 @@ theme changes that representation.
 ### Custom public themes
 
 The custom-theme architecture is governed by the proposed
-[`css-package-public-themes` ADR](adr/drafts/css-package-public-themes.md).
+[`css-package-public-themes` ADR](adr/0184-css-package-public-themes.md).
 
 Public markup exposes a versioned semantic Style Contract shared by built-in and
 custom themes; accessible source order and exact concept hooks are stable while
