@@ -58,7 +58,7 @@ pub(crate) async fn open_sqlite_database_with_pool(
 }
 
 /// Returns `true` if the `SQLite` database holds no user data — every table
-/// except the migration-seeded lookups is empty.
+/// except the migration/identity bootstrap tables is empty.
 pub(crate) async fn database_is_empty(
     options: &SqliteConnectOptions,
     runtime: &StorageRuntimeConfig,

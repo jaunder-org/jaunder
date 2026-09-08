@@ -32,7 +32,7 @@ pub(crate) use catalog::{
     CatalogTypeName, MigrationVersion,
 };
 pub(crate) use format::{
-    ColumnInfo, build_manifest, ensure_schema_checksum, ensure_schema_version, order_by_clause,
-    read_table_rows, restore_table_order, table_set,
+    ColumnInfo, build_manifest, ensure_schema_version, order_by_clause, read_table_rows,
+    restore_table_order, table_set,
 };
 pub(crate) use restore_validation::{validate_instance_identity_backup, validate_restore_row};

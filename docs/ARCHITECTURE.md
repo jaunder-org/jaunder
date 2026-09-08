@@ -330,9 +330,9 @@ _checks_ but not `ON DELETE CASCADE` _actions_, so a per-table delete-then-load
 could cascade away rows already loaded for an earlier table. SQLite cannot
 cascade with FKs off, but keeps the split anyway so the two restore shapes stay
 identical ([ADR-0115](adr/0115-clear-then-load-restore.md)). Restore refuses any
-target that is not empty (every table except the migration-seeded lookups;
-`storage::database_is_empty`, enforced by `ensure_restore_target_empty` in
-`server/src/commands/backup.rs`) — there is no force-overwrite mode
+target that is not empty (every table except migration/identity bootstrap
+tables; `storage::database_is_empty`, enforced by `ensure_restore_target_empty`
+in `server/src/commands/backup.rs`) — there is no force-overwrite mode
 ([ADR-0064](adr/0064-backup-target-auto-derivation.md)). Failure is
 backend-uniform: a constraint-violating restore returns
 `BackupError::ConstraintViolation` and leaves the target unmodified on both

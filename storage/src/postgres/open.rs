@@ -36,7 +36,7 @@ pub(crate) async fn open_postgres_database_with_pool(
 }
 
 /// Returns `true` if the `PostgreSQL` database holds no user data — every table
-/// except the migration-seeded lookups is empty.
+/// except the migration/identity bootstrap tables is empty.
 pub(crate) async fn database_is_empty(
     options: &PgConnectOptions,
     runtime: &crate::StorageRuntimeConfig,
