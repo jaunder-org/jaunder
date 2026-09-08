@@ -639,7 +639,7 @@ mod tests {
         assert!(
             post_content(&view)
                 .as_str()
-                .contains("<span class=\"j-post-time\">2026-01-01 00:00</span>")
+                .contains("<time class=\"j-post-time\" data-jaunder-part=\"published-time\">2026-01-01 00:00</time>")
         );
     }
 
@@ -662,10 +662,15 @@ mod tests {
         };
         let html = post_content(&view).into_string();
         assert!(
-            html.contains("<div class=\"j-post-title\">Draft title</div>"),
+            html.contains(
+                "<h2 class=\"j-post-title\" data-jaunder-part=\"post-title\">Draft title</h2>"
+            ),
             "{html}"
         );
-        assert!(!html.contains("<div class=\"j-post-title\"><a "), "{html}");
+        assert!(
+            !html.contains("<h2 class=\"j-post-title\" data-jaunder-part=\"post-title\"><a "),
+            "{html}"
+        );
     }
 
     #[test]
@@ -691,7 +696,9 @@ mod tests {
             "{html}"
         );
         assert!(
-            html.contains("<p class=\"j-post-summary\">An excerpt</p>"),
+            html.contains(
+                "<p class=\"j-post-summary\" data-jaunder-part=\"post-summary\">An excerpt</p>"
+            ),
             "{html}"
         );
     }
@@ -714,15 +721,18 @@ mod tests {
             tag_ctx: &ctx,
         };
         let html = render_post_article(&view).into_string();
-        assert!(html.starts_with("<article class=\"j-post\">"), "{html}");
+        assert!(
+            html.starts_with("<article class=\"j-post\" data-jaunder-part=\"post\">"),
+            "{html}"
+        );
         assert!(html.ends_with("</article>"), "{html}");
         // Title links to the permalink, mirroring `PostDisplay`.
         assert!(
-            html.contains("<div class=\"j-post-title\"><a href=\"/~bob/x\">T</a></div>"),
+            html.contains("<h2 class=\"j-post-title\" data-jaunder-part=\"post-title\"><a href=\"/~bob/x\">T</a></h2>"),
             "{html}"
         );
         assert!(
-            html.contains("<span class=\"j-post-time\">2026-01-01 00:00</span>"),
+            html.contains("<time class=\"j-post-time\" data-jaunder-part=\"published-time\">2026-01-01 00:00</time>"),
             "{html}"
         );
     }

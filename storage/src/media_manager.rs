@@ -3035,14 +3035,17 @@ mod tests {
             manager.delete_media(actor, &media, false),
         );
         assert!(removal.is_ok(), "fixed-role removal must complete");
-        assert_eq!(
+        assert!(matches!(
             env.state
                 .themes
                 .role_binding(ThemeOwner::Site, theme_id, ThemeImageRole::Logo)
                 .await
                 .expect("read role binding"),
-            None,
-        );
+            Some(crate::ThemeRoleBinding::ExplicitAbsent {
+                theme_id: bound_theme_id,
+                role: ThemeImageRole::Logo,
+            }) if bound_theme_id == theme_id
+        ));
         let deletion = deletion.expect("concurrent delete returns a guarded outcome");
         assert!(matches!(
             deletion.outcome(),

@@ -347,6 +347,7 @@ mod tests {
                 ("history", "/history"),
                 ("media", "/media"),
                 ("audiences", "/audiences"),
+                ("themes", "/themes"),
                 ("settings", "/profile"),
                 ("invites", "/invites"),
                 ("admin-backups", "/admin/backups"),
