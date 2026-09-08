@@ -1277,25 +1277,47 @@ between those two documents without duplicating either artifact here.
 ### Rendering model: projector + CSR client
 
 The mechanism is "SSR the data, not the components"
-([ADR-0041](adr/0041-public-projector-and-csr-client.md)): a thin non-reactive
-**public projector** (`server/src/projector/`) renders the anonymous document
-for public routes, fetching through explicit-viewer `fetch_*` seams as
-`ViewerIdentity::Anonymous` (`server/src/projector/handlers.rs:63-198`), so its
-output is byte-identical per URL and therefore CDN-cacheable. The document is
-assembled from `web::app::render_head` / `render_shell`
-(`server/src/projector/document.rs:7,16-40`), which compose the pure
-per-vertical render fns; those live beside the vertical they serve —
-`web/src/posts/render.rs`, `timeline/render.rs`, `home/render.rs`,
-`sidebar/markup.rs`, `taglist/markup.rs`, `topbar/markup.rs`,
-`avatar/markup.rs`, `icon/markup.rs` — not in a central render module. The
-document embeds a `PageSeed` JSON blob (`common/src/seed.rs`,
-`id="jaunder-seed"`) that the CSR client reads on boot, drops the
-projector-painted `#app` container, and mounts over (`csr/src/lib.rs:29-47`);
-client-side navigation falls back to the `#[server]` fns, still the data API on
-`/api`. Reactive components render their anonymous DOM via `inner_html` of the
-_same_ pure fns the projector uses (`web/src/home/component.rs:70`,
-`sidebar/component.rs:60-70`, `posts/component/display.rs`), so the CSR mount
-causes no reflow: flash-free by coincidence, not markup twins.
+([ADR-0041](adr/0041-public-projector-and-csr-client.md)). One non-reactive
+**`PublicProjector`** (`server/src/projector/`) is the public-projection
+orchestration seam. Its constructor declares exactly its `PostStorage`,
+`UserStorage`, `ThemeStorage`, and `Shell` dependencies rather than accepting an
+`AppState` or service bundle
+([ADR-0016](adr/0016-dependency-injection-and-appstate.md)). Its closed
+`PublicProjection` operation represents permalink, site timeline, profile,
+site-tag, and user-tag projection; the implementation is a leaf module, leaving
+`projector/mod.rs` as declaration and explicit-re-export assembly
+([ADR-0128](adr/0128-mod-rs-assembles-module-surface.md)).
+
+Handlers retain soft route decoding and select an operation only after a valid
+decode, so malformed public paths return the SPA shell instead of an
+extractor-generated `400`. Each operation fetches as
+`ViewerIdentity::Anonymous`, constructs its `PageSeed`, and resolves its
+effective theme owner and route. Thus neither authentication, cookies, nor
+viewer state affect projected bytes or cache identity. The projector's typed
+outcome distinguishes a cacheable `PublicPresentation<PageSeed>`, a semantic
+shell miss, and a boundary failure; its one response path renders and
+cache-negotiates the document, including ETags and conditional requests, maps a
+shell miss to the no-store SPA shell, and emits a boundary failure once before
+returning the sanitized, non-cacheable `500`.
+
+Failure policy remains route-specific within those operations: an absent
+permalink is a shell miss, while its fetch/theme failures and all site-timeline
+fetch/theme failures are boundaries. Profile and site-tag listing failures are
+swallowed to the shell; an unknown valid profile is an empty cacheable
+presentation with site fallback ownership, while user lookup and theme failures
+remain boundaries. User-tag malformed paths, unknown users, and listing-stage
+failures, including that fetch's user lookup, are swallowed to the shell; its
+later theme-owner lookup and theme resolution remain boundaries. Successful
+permalinks and user routes use author ownership, with the existing site
+fallback; site timeline and site-tag use site ownership.
+
+The document is assembled from `web::app::render_head` / `render_shell`, which
+compose pure per-vertical render functions rather than a central render module.
+It embeds a `PageSeed` JSON blob (`id="jaunder-seed"`) that the CSR client reads
+on boot, drops the projector-painted `#app` container, and mounts over; client
+navigation continues through the `#[server]` data API. Reactive components
+render their anonymous DOM through the same pure functions the projector uses,
+so the CSR mount causes no reflow: flash-free by coincidence, not markup twins.
 
 Public presentation carries one server-resolved `Theme` with its page seed in
 `PublicPresentation<PageSeed>`. Aggregate routes use the typed site setting; an

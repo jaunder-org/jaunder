@@ -78,7 +78,7 @@ Out:
   - Verification: the complete server projector integration surface—listing,
     permalink, tags, and caching—passes as one regression set.
 
-- [ ] Task 5: Project and gate the consolidated architecture
+- [x] Task 5: Project and gate the consolidated architecture
   - Contract: `docs/ARCHITECTURE.md` names the single public projection
     orchestration seam consistently with ADR-0041, ADR-0016, and ADR-0128;
     `CONTEXT.md` and the ADR log remain unchanged.
