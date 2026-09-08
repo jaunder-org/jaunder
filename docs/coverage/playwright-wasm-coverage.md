@@ -58,12 +58,12 @@ source-map/report/export tool semantics; the named files remain the evidence for
 this run.
 
 `instrumented/csr.wasm` is the source-mappable module (SHA-256
-`1c66a8b57b4f601d87381bc2bb917681b41321d2d62628a930da49df0cafaa78`). It is
+`84bb74c76348ed3eb48d58b52ebfb3c32d968586fbff6f00eb3436cc000cda0d`). It is
 linked from LLVM IR under the compiled prefix. The served derivative selected by
 `pkg/manifest.json` is
-`pkg/7c79a10e8a6b7482ae5ceae82abe5ce34dceb4e237535faf6d6c59d3f83b40cc.wasm`; its
+`pkg/6f648f91c83f3d96df60be4e2c58a0c468a1533fa1fb148aabee3da70804396a.wasm`; its
 filename and SHA-256 are both
-`7c79a10e8a6b7482ae5ceae82abe5ce34dceb4e237535faf6d6c59d3f83b40cc`. It is the
+`6f648f91c83f3d96df60be4e2c58a0c468a1533fa1fb148aabee3da70804396a`. It is the
 input's wasm-bindgen/wasm-opt derivative—not the module used for Rust source
 mapping.
 
@@ -99,7 +99,7 @@ Both `.xtask/wasm-coverage/chromium/status.json` and
 `.xtask/wasm-coverage/firefox/status.json` are `v1`, name the requested and
 actual browser identically, and record `passed` for CSR structural validation,
 diagnostic export, and source mapping with no blocker. They agree on module
-signature `965284418087900863` and on the content-addressed served-module
+signature `6362899886360772764` and on the content-addressed served-module
 identity above.
 
 [Playwright projects][playwright-projects] and its [browser-execution
@@ -113,17 +113,18 @@ versioned status files and retained profiles/reports below do.
 | Firefox  | passed         | passed            | passed         | `firefox/mapped/llvm-cov.txt`; count 1 on CSR lines 30–32, 50, 74, 77, and 79–84  |
 
 Each retains the same nonempty raw profile (SHA-256
-`f6f4a22e07523b4b13acfae0132c85e2abc5846c42ff6818d648319422b27e97`),
+`f5b0b03dbf292431041d1a3032db9bb2a948aafa29b9246e3695d2920091d7b0`),
 merged-per-browser profile data
-(`58de745634e0c8405fa61985d545b62abfbcbc685ef1b6916d3b7fc880abb052`), and mapped
+(`f6e620aa1feae967d727ec093e74964f73d25b1456648d761663878e412d3b14`), and mapped
 report (`c12b8654237b7ef2b74d7de364333599c905a086397ab3eb08330ef878bfb8ff`).
 
 The Chromium and Firefox reports separately map executed original Rust lines in
 the CSR entry module: for example each reports count 1 for lines 30–32
 (`projector_seed`), line 50 (`mount`), and lines 74, 77, and 79–84 (`main`).
-Source reconciliation uses the retained module/source identity and the stated
-compiled-prefix equivalence; it is not a claim based on the served derivative's
-post-optimization layout.
+Source reconciliation uses the retained module and validates the retained
+`nix-store-source` identity before mapping the compiled prefix to that immutable
+source. It does not read mutable checkout sources or infer mapping from the
+served derivative's post-optimization layout.
 
 The aggregate `.xtask/wasm-coverage/status.json` is `v1`, contains exactly
 Chromium and Firefox, has verdict `passed` and no blockers, and names
@@ -140,25 +141,27 @@ synthesizing success.
 ## Quiescent paired measurement
 
 The user-confirmed quiescent window was `2026-09-08 user-confirmed idle host`.
-Four warm-ups were discarded (baseline and instrumented once in each browser).
-The retained manifest then records five alternating baseline/instrumented pairs
-per browser: 20 retained measured runs. Every run has a distinct cache-buster,
-Nix realization, and retained run root under
+The measurement command first produced and validated fresh passing Chromium and
+Firefox functional evidence. It then recorded five alternating
+baseline/instrumented pairs per browser: 20 retained measured runs. Every
+retained realization performed its own unmeasured mounted-CSR warm-up
+immediately before the timed focused flow. Every run has a distinct
+cache-buster, Nix realization, and retained run root under
 `.xtask/wasm-coverage/measurement/runs/`, proving separate fresh realizations.
 The metric is focused-flow milliseconds and raw uncompressed bytes of the
 content-addressed wasm selected by each bundle's `pkg/manifest.json`.
 
-| Browser  | Baseline median [range] | Instrumented median [range] |               Delta |
-| -------- | ----------------------: | --------------------------: | ------------------: |
-| Chromium |   1,030 ms [929, 1,050] |         967 ms [962, 1,030] | -63 ms (-6.116505%) |
-| Firefox  | 2,398 ms [2,226, 2,892] |     2,309 ms [2,273, 2,444] | -89 ms (-3.711426%) |
+| Browser  | Baseline median [range] | Instrumented median [range] |                   Delta |
+| -------- | ----------------------: | --------------------------: | ----------------------: |
+| Chromium |       593 ms [577, 607] |           598 ms [574, 605] |      +5 ms (+0.843170%) |
+| Firefox  | 5,069 ms [4,088, 8,807] |    6,363 ms [4,707, 15,191] | +1,294 ms (+25.527717%) |
 
 The baseline served wasm was 3,333,996 bytes at
 `pkg/01a228c4bb955c1f8056c5d66428cecc4f0c48d5d9c1c5834d725718b555841a.wasm`. The
-instrumented served wasm was 3,365,650 bytes at the content-addressed path named
-above: +31,654 bytes (+0.949431%). The timing ranges overlap in both browsers.
+instrumented served wasm was 3,365,676 bytes at the content-addressed path named
+above: +31,680 bytes (+0.950211%). The timing ranges overlap in both browsers.
 Therefore this experiment makes **no measured slowdown claim and no speedup
-claim**; the lower instrumented medians are not evidence of a speedup.
+claim**; the higher instrumented medians are not evidence of a slowdown.
 
 ## Ownership, costs, and remaining risk
 
@@ -175,8 +178,8 @@ orchestration validates the retained result. Those references define the
 ownership model only; the concrete browser and reconciliation outcomes remain
 local executable evidence.
 
-Remaining costs and risks are the 31,654-byte served-WASM overhead; the
-1,114,292 ms quiescent-host experiment wall time; two browser/Nix realization
+Remaining costs and risks are the 31,680-byte served-WASM overhead; the
+1,124,282 ms quiescent-host experiment wall time; two browser/Nix realization
 cost; continued compatibility of the pinned Rust/LLVM raw-profile, profdata, and
 line-report formats; optimizer/bundler preservation; and the need to retain and
 validate both complete browser evidence sets. A future permanent gate must keep

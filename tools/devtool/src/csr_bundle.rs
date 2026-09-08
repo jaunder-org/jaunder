@@ -716,13 +716,12 @@ fn write_diagnostic_artifacts(
     bundled_wasm: &Path,
 ) -> anyhow::Result<()> {
     let metadata = coverage_metadata_status(
-        &std::fs::read(input_wasm).with_context(|| format!("reading {}", input_wasm.display()))?,
-        &std::fs::read(wasm_bindgen_wasm)
+        &fs::read(input_wasm).with_context(|| format!("reading {}", input_wasm.display()))?,
+        &fs::read(wasm_bindgen_wasm)
             .with_context(|| format!("reading {}", wasm_bindgen_wasm.display()))?,
-        &std::fs::read(bundled_wasm)
-            .with_context(|| format!("reading {}", bundled_wasm.display()))?,
+        &fs::read(bundled_wasm).with_context(|| format!("reading {}", bundled_wasm.display()))?,
     )?;
-    std::fs::write(
+    fs::write(
         artifacts.metadata_status,
         serde_json::to_vec_pretty(&metadata).context("serializing coverage metadata status")?,
     )
@@ -737,7 +736,7 @@ fn write_diagnostic_artifacts(
         wasm_opt: command_version("wasm-opt", &["--version"])?,
         minicov: artifacts.minicov_version,
     };
-    std::fs::write(
+    fs::write(
         artifacts.toolchain_identity,
         serde_json::to_vec_pretty(&identity).context("serializing toolchain identity")?,
     )

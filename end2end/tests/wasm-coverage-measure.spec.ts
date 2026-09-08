@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "./fixtures";
+import { allowSecondBoot } from "./bootBudget";
 import { goto, BASE_URL } from "./helpers";
 
 // This is deliberately separate from the permanent coverage capture: it measures
@@ -15,9 +16,16 @@ test("diagnostic wasm measurement records the mounted CSR flow", async ({
   const mode = process.env.JAUNDER_WASM_COVERAGE_MODE;
   if (!root || !csr || !cacheBuster || !mode)
     throw new Error("measurement producer environment is incomplete");
-  const started = performance.now();
+  // Each retained Nix realization owns this unmeasured boot, so timing never
+  // inherits warm state from a discarded realization.
   await goto(page, "/", { timeout: firstNav });
   await expect(page.locator("body[data-mounted]")).toBeVisible();
+  allowSecondBoot(
+    page,
+    "measurement timing follows an unmeasured warm-up in this realization",
+  );
+  const started = performance.now();
+  await goto(page, "/", { timeout: firstNav });
   const focusedFlowMilliseconds = Math.max(
     1,
     Math.round(performance.now() - started),

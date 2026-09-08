@@ -501,211 +501,6 @@ e2eSingleWorkerPackages = pkgs.lib.listToAttrs (
   }) e2eCombos
 );
 
-wasmCoverageInitialize = pkgs.writeText "wasm-coverage-initialize.py" ''
-  import hashlib
-  import json
-  import os
-  import pathlib
-  import shutil
-
-  csr = pathlib.Path(os.environ["JAUNDER_WASM_COVERAGE_CSR"])
-  root = pathlib.Path("/var/lib/jaunder/wasm-coverage")
-  root.mkdir(parents=True, exist_ok=True)
-  diagnostics = root / "diagnostics/capture.log"
-  diagnostics.parent.mkdir(exist_ok=True)
-
-  def artifact(path):
-      return {
-          "path": str(path.relative_to(root)),
-          "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-      }
-
-  try:
-      csr_status = json.loads((csr / "status.json").read_text())
-      manifest = json.loads((csr / "pkg/manifest.json").read_text())
-      wasm = next(asset for asset in manifest["assets"] if asset.get("role") == "wasm")
-      served_module = {"path": wasm["path"], "sha256": wasm["sha256"]}
-      module = root / "module" / wasm["path"]
-      module.parent.mkdir(parents=True, exist_ok=True)
-      shutil.copyfile(csr / "pkg" / wasm["path"], module)
-      structural = (
-          {"outcome": "passed", "blocker": None}
-          if csr_status["outcome"] == "succeeded"
-          and artifact(module)["sha256"] == served_module["sha256"]
-          else {"outcome": "failed", "blocker": "diagnostic CSR status or served module digest is invalid"}
-      )
-  except Exception as error:
-      module = root / "module/unavailable.wasm"
-      module.parent.mkdir(exist_ok=True)
-      module.write_bytes(b"")
-      served_module = None
-      structural = {"outcome": "failed", "blocker": str(error)}
-  diagnostics.write_text("Playwright has not started\n")
-  status = {
-      "version": "v1",
-      "requested_browser": os.environ["JAUNDER_WASM_COVERAGE_BROWSER"],
-      "actual_browser": "not-started",
-      "csr_structural": structural,
-      "diagnostic_export": {"outcome": "not-run", "blocker": None},
-      "source_mapping": {"outcome": "not-run", "blocker": None},
-      "module_signature": None,
-      "toolchain_identity": None,
-      "served_module": served_module,
-      "artifacts": {"module": artifact(module), "diagnostics": artifact(diagnostics)},
-  }
-  (root / "status.json").write_text(json.dumps(status, indent=2) + "\n")
-'';
-
-wasmCoverageMap = pkgs.writeText "wasm-coverage-map.py" ''
-  import hashlib
-  import json
-  import os
-  import pathlib
-  import shutil
-  import re
-  import subprocess
-
-  root = pathlib.Path("/var/lib/jaunder/wasm-coverage")
-  status_path = root / "status.json"
-  status = json.loads(status_path.read_text())
-
-  diagnostics = root / "diagnostics"
-  diagnostics.mkdir(exist_ok=True)
-  mapping_log = diagnostics / "mapping.log"
-
-  def artifact(relative):
-      path = root / relative
-      return {
-          "path": relative,
-          "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-      }
-
-  def fail(detail):
-      report = root / "mapped/llvm-cov.txt"
-      excerpt = (
-          "\n--- llvm-cov report ---\n" + report.read_text()
-          if report.is_file()
-          else ""
-      )
-      try:
-          shutil.rmtree(root / "mapped")
-      except FileNotFoundError:
-          pass
-      except OSError as error:
-          detail = f"{detail}; failed to remove partial mapping evidence: {error}"
-      mapping_log.write_text(f"{detail}\n{excerpt}")
-      status["source_mapping"] = {"outcome": "failed", "blocker": detail}
-      status["artifacts"]["mapping_diagnostics"] = artifact("diagnostics/mapping.log")
-      status_path.write_text(json.dumps(status, indent=2) + "\n")
-      raise SystemExit(1)
-  def skip(detail):
-      mapping_log.write_text(f"{detail}\n")
-      status["source_mapping"] = {"outcome": "not-run", "blocker": detail}
-      status["artifacts"]["mapping_diagnostics"] = artifact("diagnostics/mapping.log")
-      status_path.write_text(json.dumps(status, indent=2) + "\n")
-      raise SystemExit(0)
-
-
-  if status["diagnostic_export"]["outcome"] != "passed":
-      skip(status["diagnostic_export"]["blocker"] or "diagnostic export did not produce a profile")
-  if os.environ["JAUNDER_WASM_COVERAGE_INJECT_FAILURE"] == "mapping":
-      fail("injected mapping failure")
-
-  csr = pathlib.Path(os.environ["JAUNDER_WASM_COVERAGE_CSR"])
-  identity = json.loads((csr / "source-identity.json").read_text())
-  compiled = identity["compilation_directory"]
-  mapped = root / "mapped"
-  mapped.mkdir()
-  profile = mapped / "browser.profdata"
-  report = mapped / "llvm-cov.txt"
-  try:
-      profdata = subprocess.run(
-          [str(csr / "tools/llvm-profdata"), "merge", "-sparse", str(root / "profiles/browser.profraw"), "-o", str(profile)],
-          check=True,
-          text=True,
-          capture_output=True,
-      )
-      with report.open("w") as output:
-          coverage = subprocess.run(
-              [
-                  str(csr / "tools/llvm-cov"),
-                  "show",
-                  str(csr / "instrumented/csr.wasm"),
-                  f"-instr-profile={profile}",
-                  f"-path-equivalence={compiled},${siteSrc}",
-              ],
-              check=True,
-              text=True,
-              stdout=output,
-              stderr=subprocess.PIPE,
-          )
-      mapping_log.write_text(profdata.stderr + coverage.stderr)
-      report_text = report.read_text()
-      if re.search(r"^\s*\d+\|\s*[1-9]\d*\|", report_text, re.MULTILINE) is None:
-          fail("llvm-cov report has no executed original Rust source line")
-  except subprocess.CalledProcessError as error:
-      fail((error.stderr or str(error)).strip())
-
-  status["source_mapping"] = {"outcome": "passed", "blocker": None}
-  status["artifacts"]["profile_data"] = artifact("mapped/browser.profdata")
-  status["artifacts"]["mapped_report"] = artifact("mapped/llvm-cov.txt")
-  status["artifacts"]["mapping_diagnostics"] = artifact("diagnostics/mapping.log")
-  status_path.write_text(json.dumps(status, indent=2) + "\n")
-'';
-
-wasmCoverageFinalize = pkgs.writeText "wasm-coverage-finalize.py" ''
-  import hashlib
-  import json
-  import os
-  import pathlib
-  import shutil
-
-  root = pathlib.Path("/var/lib/jaunder/wasm-coverage")
-  status_path = root / "status.json"
-  status = json.loads(status_path.read_text())
-
-  def artifact(relative):
-      path = root / relative
-      return {
-          "path": relative,
-          "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-      }
-
-  # captureWasmCoverage has already recorded the precise export failure once a
-  # browser context existed. Preserve that status and retain the process output.
-  if status["actual_browser"] != "not-started":
-      status["artifacts"]["playwright_diagnostics"] = artifact("diagnostics/playwright.log")
-      status_path.write_text(json.dumps(status, indent=2) + "\n")
-      raise SystemExit(0)
-
-  capture_log = root / "diagnostics/capture.log"
-  if capture_log.exists():
-      capture_log.unlink()
-  for path in [root / "profiles", root / "mapped"]:
-      if path.exists():
-          shutil.rmtree(path)
-  mapping_log = root / "diagnostics/mapping.log"
-  if mapping_log.exists():
-      mapping_log.unlink()
-
-  exit_status = os.environ["JAUNDER_WASM_COVERAGE_PLAYWRIGHT_EXIT"]
-  blocker = f"Playwright exited with status {exit_status} before coverage capture"
-  status.update({
-      "actual_browser": "not-started",
-      "diagnostic_export": {"outcome": "failed", "blocker": blocker},
-      "source_mapping": {
-          "outcome": "not-run",
-          "blocker": "diagnostic export did not run",
-      },
-      "module_signature": None,
-      "toolchain_identity": None,
-      "artifacts": {
-          "module": artifact(status["artifacts"]["module"]["path"]),
-          "diagnostics": artifact("diagnostics/playwright.log"),
-      },
-  })
-  status_path.write_text(json.dumps(status, indent=2) + "\n")
-'';
 
 # Each producer owns one browser and one SQLite VM.  They deliberately are
 # separate derivations: evaluating Chromium must neither short-circuit Firefox
@@ -723,7 +518,8 @@ mkWasmCoverageProducer =
         pkgs.sqlite
         testSupportBin
         diagnosticJaunderBin
-        pkgs.python3
+        devtoolBin
+        pkgs.jq
       ];
       services.jaunder.enable = true;
       services.jaunder.db = "sqlite:/var/lib/jaunder/data/jaunder.db";
@@ -740,7 +536,7 @@ mkWasmCoverageProducer =
       machine.succeed(
         "JAUNDER_WASM_COVERAGE_CSR=${self.packages.${system}.wasm-coverage-csr}"
         + " JAUNDER_WASM_COVERAGE_BROWSER=${browser}"
-        + " ${pkgs.python3}/bin/python3 ${wasmCoverageInitialize}"
+        + " devtool wasm-coverage initialize"
       )
       machine.wait_for_unit("jaunder.service", timeout=60)
       machine.wait_for_open_port(3000, timeout=30)
@@ -772,18 +568,27 @@ mkWasmCoverageProducer =
       map_status, map_output = machine.execute(
         "JAUNDER_WASM_COVERAGE_CSR=${self.packages.${system}.wasm-coverage-csr}"
         + " JAUNDER_WASM_COVERAGE_INJECT_FAILURE=${failure}"
-        + " ${pkgs.python3}/bin/python3 ${wasmCoverageMap}",
+        + " devtool wasm-coverage map --site-src ${siteSrc}",
         timeout=120,
       )
       print(map_output)
       machine.succeed(
         "JAUNDER_WASM_COVERAGE_PLAYWRIGHT_EXIT="
         + str(status)
-        + " ${pkgs.python3}/bin/python3 ${wasmCoverageFinalize}"
+        + " devtool wasm-coverage finalize"
       )
       if "${failure}" == "early":
         machine.succeed(
-          "${pkgs.python3}/bin/python3 -c 'import json; status = json.load(open(\"/var/lib/jaunder/wasm-coverage/status.json\")); served = status[\"served_module\"]; assert status[\"actual_browser\"] == \"not-started\"; assert status[\"csr_structural\"][\"outcome\"] == \"passed\"; assert served[\"path\"].startswith(\"pkg/\"); assert status[\"artifacts\"][\"module\"][\"path\"] == \"module/\" + served[\"path\"]; assert status[\"diagnostic_export\"][\"outcome\"] == \"failed\"; assert status[\"diagnostic_export\"][\"blocker\"] == \"Playwright exited with status 73 before coverage capture\"; assert status[\"source_mapping\"][\"outcome\"] == \"not-run\"; assert set(status[\"artifacts\"]) == {\"module\", \"diagnostics\"}'"
+          "jq -e '"
+          + ".actual_browser == \"not-started\""
+          + " and .csr_structural.outcome == \"passed\""
+          + " and (.served_module.path | startswith(\"pkg/\"))"
+          + " and .artifacts.module.path == (\"module/\" + .served_module.path)"
+          + " and .diagnostic_export.outcome == \"failed\""
+          + " and .diagnostic_export.blocker == \"Playwright exited with status 73 before coverage capture\""
+          + " and .source_mapping.outcome == \"not-run\""
+          + " and (.artifacts | keys | sort) == [\"diagnostics\", \"module\"]'"
+          + " /var/lib/jaunder/wasm-coverage/status.json"
         )
       machine.succeed("tar czf /tmp/wasm-coverage-${browser}.tar.gz -C /var/lib/jaunder wasm-coverage")
       machine.copy_from_machine("/tmp/wasm-coverage-${browser}.tar.gz", "")

@@ -1,8 +1,7 @@
 //! Wasm-only export layer for diagnostic LLVM profile capture.
 //!
-//! The target-independent capture contract lives in
-//! [`common::diagnostic_coverage`]. This module owns the browser-facing
-//! wasm-bindgen exports selected from `lib.rs`.
+//! This module owns the browser-facing wasm-bindgen exports selected from
+//! `lib.rs`.
 
 use wasm_bindgen::prelude::wasm_bindgen;
 

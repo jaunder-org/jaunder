@@ -1,7 +1,9 @@
 //! Diagnostic-only boundary around minicov's unsafe process-global runtime.
 //!
-//! This crate is injected only into the copied Nix diagnostic manifest. It
-//! intentionally stays outside the product workspace and its lint policy.
+#![cfg(target_arch = "wasm32")]
+
+//! This crate is injected only into the copied Nix diagnostic manifest and is
+//! compiled only for the diagnostic wasm target.
 
 /// Capture the current raw LLVM profile bytes, or report that minicov failed.
 pub fn capture_profile() -> Option<Vec<u8>> {

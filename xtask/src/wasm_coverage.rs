@@ -56,6 +56,20 @@ pub struct Stage {
     pub blocker: Option<String>,
 }
 
+fn browser_stages(status: &BrowserStatus) -> [(&'static str, &Stage); 3] {
+    [
+        ("csr_structural", &status.csr_structural),
+        ("diagnostic_export", &status.diagnostic_export),
+        ("source_mapping", &status.source_mapping),
+    ]
+}
+
+fn all_browser_stages_pass(status: &BrowserStatus) -> bool {
+    browser_stages(status)
+        .into_iter()
+        .all(|(_, stage)| stage.outcome == Outcome::Passed)
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Outcome {
@@ -127,9 +141,9 @@ pub fn validate_browser(root: &Path, expected_browser: &str) -> Result<BrowserSt
     if status.actual_browser != expected_browser && !early_failure {
         bail!("actual browser identity does not match {expected_browser}");
     }
-    validate_stage("csr_structural", &status.csr_structural)?;
-    validate_stage("diagnostic_export", &status.diagnostic_export)?;
-    validate_stage("source_mapping", &status.source_mapping)?;
+    for (name, stage) in browser_stages(&status) {
+        validate_stage(name, stage)?;
+    }
     if status.diagnostic_export.outcome == Outcome::Passed
         && status.csr_structural.outcome != Outcome::Passed
     {
@@ -319,11 +333,7 @@ pub fn derive_verdict(statuses: &BTreeMap<String, BrowserStatus>) -> (Verdict, V
     for browser in BROWSERS {
         match statuses.get(browser) {
             Some(status) => {
-                for (name, stage) in [
-                    ("csr_structural", &status.csr_structural),
-                    ("diagnostic_export", &status.diagnostic_export),
-                    ("source_mapping", &status.source_mapping),
-                ] {
+                for (name, stage) in browser_stages(status) {
                     if stage.outcome != Outcome::Passed {
                         blockers.push(format!(
                             "{browser}.{name}: {}",
@@ -352,12 +362,8 @@ pub fn merge_eligible(statuses: &BTreeMap<String, BrowserStatus>) -> bool {
     let Some(firefox) = statuses.get("firefox") else {
         return false;
     };
-    chromium.csr_structural.outcome == Outcome::Passed
-        && chromium.diagnostic_export.outcome == Outcome::Passed
-        && chromium.source_mapping.outcome == Outcome::Passed
-        && firefox.csr_structural.outcome == Outcome::Passed
-        && firefox.diagnostic_export.outcome == Outcome::Passed
-        && firefox.source_mapping.outcome == Outcome::Passed
+    all_browser_stages_pass(chromium)
+        && all_browser_stages_pass(firefox)
         && chromium.module_signature == firefox.module_signature
         && chromium.toolchain_identity == firefox.toolchain_identity
         && chromium.served_module.is_some()
@@ -457,7 +463,11 @@ fn realize_and_unpack(runner: &dyn CommandRunner, browser: &str, root: &Path) ->
             String::from_utf8_lossy(&result.stderr).trim()
         );
     }
-    unpack_archive(&output.join(format!("{package}.tar.gz")), root)
+    unpack_archive(
+        &output.join(format!("{package}.tar.gz")),
+        root,
+        ArchiveLayout::Rooted("wasm-coverage"),
+    )
 }
 
 fn clear_destination(destination: &Path, context: &str) -> Result<()> {
@@ -468,37 +478,62 @@ fn clear_destination(destination: &Path, context: &str) -> Result<()> {
     }
 }
 
-fn unpack_archive(archive: &Path, destination: &Path) -> Result<()> {
+#[derive(Clone, Copy)]
+enum ArchiveLayout<'a> {
+    Rooted(&'a str),
+    SingleFile(&'a str),
+}
+
+/// Extract regular archive content only after normalizing each entry to a contained path.
+fn unpack_archive(archive: &Path, destination: &Path, layout: ArchiveLayout<'_>) -> Result<()> {
     clear_destination(destination, "clearing archive destination")?;
     fs::create_dir_all(destination)?;
     let mut archive = Archive::new(GzDecoder::new(
         fs::File::open(archive).with_context(|| format!("opening {}", archive.display()))?,
     ));
+    let mut extracted = false;
     for entry in archive.entries()? {
         let mut entry = entry?;
         let path = entry.path()?.into_owned();
-        let Some(relative) = path.strip_prefix("wasm-coverage").ok() else {
-            bail!(
-                "archive entry is outside wasm-coverage root: {}",
-                path.display()
-            );
-        };
-        if relative.as_os_str().is_empty() {
-            continue;
-        }
-        let relative_text = relative.to_string_lossy();
-        let relative = relative_path(&relative_text)?;
-        let target = destination.join(relative);
-        if entry.header().entry_type().is_dir() {
-            fs::create_dir_all(target)?;
-        } else if entry.header().entry_type().is_file() {
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)?;
+        let relative = match layout {
+            ArchiveLayout::Rooted(root) => {
+                let Some(relative) = path.strip_prefix(root).ok() else {
+                    bail!("archive entry is outside {root} root: {}", path.display());
+                };
+                if relative.as_os_str().is_empty() {
+                    continue;
+                }
+                relative_path(&relative.to_string_lossy())?.to_owned()
             }
-            entry.unpack(target)?;
-        } else {
-            bail!("archive contains a non-regular entry");
+            ArchiveLayout::SingleFile(expected) => {
+                let path_text = path.to_string_lossy();
+                let relative = relative_path(&path_text)?;
+                if relative != Path::new(expected) {
+                    bail!("archive contains an unexpected entry: {}", path.display());
+                }
+                relative.to_owned()
+            }
+        };
+        let target = destination.join(relative);
+        match (layout, entry.header().entry_type()) {
+            (ArchiveLayout::Rooted(_), entry_type) if entry_type.is_dir() => {
+                fs::create_dir_all(target)?;
+            }
+            (_, entry_type) if entry_type.is_file() => {
+                if extracted && matches!(layout, ArchiveLayout::SingleFile(_)) {
+                    bail!("archive contains duplicate measurement evidence");
+                }
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                entry.unpack(target)?;
+                extracted = true;
+            }
+            _ => bail!("archive contains a non-regular entry"),
         }
+    }
+    if matches!(layout, ArchiveLayout::SingleFile(_)) && !extracted {
+        bail!("archive lacks measurement evidence");
     }
     Ok(())
 }
@@ -530,7 +565,7 @@ fn merge_profiles(
     }) {
         bail!("browser served module does not match the CSR manifest");
     }
-    let source_identity: serde_json::Value = serde_json::from_slice(
+    let source_identity: SourceIdentity = serde_json::from_slice(
         &fs::read(csr.join("source-identity.json")).context("reading CSR source identity")?,
     )
     .context("parsing CSR source identity")?;
@@ -549,10 +584,8 @@ fn merge_profiles(
         .iter()
         .map(|browser| roots[*browser].join(&statuses[*browser].artifacts["profile"].path))
         .collect();
-    let compiled = source_identity
-        .get("compilation_directory")
-        .and_then(serde_json::Value::as_str)
-        .context("missing CSR compilation directory")?;
+    let compiled = source_identity.compilation_directory.as_str();
+    let source = retained_nix_source(&source_identity)?;
     let mut merge = Command::new(csr.join("tools/llvm-profdata"));
     merge
         .arg("merge")
@@ -572,10 +605,7 @@ fn merge_profiles(
     show.arg("show")
         .arg(csr.join("instrumented/csr.wasm"))
         .arg(format!("-instr-profile={}", profdata.display()))
-        .arg(format!(
-            "-path-equivalence={compiled},{}",
-            std::env::current_dir()?.display()
-        ));
+        .arg(format!("-path-equivalence={compiled},{}", source.display()));
     let result = runner.run(&mut show)?;
     if !result.status.success() {
         bail!(
@@ -591,6 +621,7 @@ fn merge_profiles(
         &csr.join("instrumented/csr.wasm"),
         &roots["chromium"].join(&statuses["chromium"].artifacts["profile_data"].path),
         compiled,
+        &source,
         "Chromium",
     )?;
     let firefox = export_region_counts(
@@ -599,6 +630,7 @@ fn merge_profiles(
         &csr.join("instrumented/csr.wasm"),
         &roots["firefox"].join(&statuses["firefox"].artifacts["profile_data"].path),
         compiled,
+        &source,
         "Firefox",
     )?;
     let merged = export_region_counts(
@@ -607,6 +639,7 @@ fn merge_profiles(
         &csr.join("instrumented/csr.wasm"),
         &profdata,
         compiled,
+        &source,
         "merged",
     )?;
     prove_count_union(&chromium, &firefox, &merged)?;
@@ -616,6 +649,41 @@ fn merge_profiles(
     })
 }
 
+#[derive(Deserialize)]
+struct SourceIdentity {
+    source_identity: NixStoreSource,
+    compilation_directory: String,
+}
+
+#[derive(Deserialize)]
+struct NixStoreSource {
+    kind: String,
+    value: String,
+}
+
+fn retained_nix_source(identity: &SourceIdentity) -> Result<PathBuf> {
+    if identity.source_identity.kind != "nix-store-source" {
+        bail!("CSR source identity is not a Nix store source");
+    }
+    if identity.compilation_directory.trim().is_empty()
+        || !Path::new(&identity.compilation_directory).is_absolute()
+    {
+        bail!("CSR compilation directory is not an absolute prefix");
+    }
+    let source = PathBuf::from(&identity.source_identity.value);
+    if !source.starts_with("/nix/store") {
+        bail!("CSR source identity is outside the Nix store");
+    }
+    let metadata = fs::symlink_metadata(&source).context("reading retained Nix source")?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        bail!("CSR source identity is not a retained source directory");
+    }
+    let canonical = fs::canonicalize(&source).context("resolving retained Nix source")?;
+    if canonical != source || !canonical.starts_with("/nix/store") {
+        bail!("CSR source identity does not name an immutable Nix store source");
+    }
+    Ok(source)
+}
 type Region = (String, u64, u64, u64, u64, u64, u64);
 
 fn export_region_counts(
@@ -624,6 +692,7 @@ fn export_region_counts(
     wasm: &Path,
     profile: &Path,
     compiled: &str,
+    source: &Path,
     label: &str,
 ) -> Result<BTreeMap<Region, u64>> {
     let mut export = Command::new(llvm_cov);
@@ -631,10 +700,7 @@ fn export_region_counts(
         .arg("export")
         .arg(wasm)
         .arg(format!("-instr-profile={}", profile.display()))
-        .arg(format!(
-            "-path-equivalence={compiled},{}",
-            std::env::current_dir()?.display()
-        ));
+        .arg(format!("-path-equivalence={compiled},{}", source.display()));
     let output = runner.run(&mut export)?;
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !output.status.success() {
@@ -816,8 +882,9 @@ pub struct MeasurementManifest {
     pub summaries: Vec<MeasurementSummary>,
 }
 
-/// Execute the fixed experiment. Warm-ups are deliberately discarded; retained
-/// runs alternate baseline then instrumented, five times for each browser.
+/// Execute the fixed experiment. Each retained realization warms its focused flow
+/// before timing it; retained runs alternate baseline then instrumented, five times
+/// for each browser.
 pub fn measure(quiescent_window: &str) -> Result<MeasurementManifest> {
     measure_with(&ProcessRunner, quiescent_window)
 }
@@ -826,6 +893,8 @@ fn measure_with(runner: &dyn CommandRunner, quiescent_window: &str) -> Result<Me
     if quiescent_window.trim().is_empty() {
         bail!("measurement requires a nonempty --quiescent-window acknowledgement");
     }
+    let functional = probe_with(runner).context("establishing current functional evidence")?;
+    require_functional_evidence(&functional)?;
     let root = Path::new(MEASUREMENT_ROOT);
     if root.exists() {
         fs::remove_dir_all(root).context("clearing stale measurement evidence")?;
@@ -837,19 +906,9 @@ fn measure_with(runner: &dyn CommandRunner, quiescent_window: &str) -> Result<Me
         .as_nanos();
     let mut runs = Vec::new();
     for browser in BROWSERS {
-        for mode in MODES {
-            let cache_buster = cache_buster(invocation_nonce, browser, mode, "warmup", 0);
-            realize_measurement(
-                runner,
-                browser,
-                mode,
-                &cache_buster,
-                &root.join("warmups").join(browser).join(mode),
-            )?;
-        }
         for pair in 0..5 {
             for mode in MODES {
-                let cache_buster = cache_buster(invocation_nonce, browser, mode, "measured", pair);
+                let cache_buster = cache_buster(invocation_nonce, browser, mode, pair);
                 let evidence = root
                     .join("runs")
                     .join(browser)
@@ -871,16 +930,10 @@ fn measure_with(runner: &dyn CommandRunner, quiescent_window: &str) -> Result<Me
     Ok(manifest)
 }
 
-fn cache_buster(
-    invocation_nonce: u128,
-    browser: &str,
-    mode: &str,
-    phase: &str,
-    ordinal: usize,
-) -> String {
+fn cache_buster(invocation_nonce: u128, browser: &str, mode: &str, ordinal: usize) -> String {
     // Invocation-owned entropy prevents a binary-cache hit and is retained verbatim.
     format!(
-        "{invocation_nonce}-{}-{browser}-{mode}-{phase}-{ordinal}",
+        "{invocation_nonce}-{}-{browser}-{mode}-measured-{ordinal}",
         std::process::id()
     )
 }
@@ -918,7 +971,11 @@ fn realize_measurement(
             String::from_utf8_lossy(&result.stderr).trim()
         );
     }
-    unpack_measurement_archive(&output.join(format!("{package}.tar.gz")), evidence)?;
+    unpack_archive(
+        &output.join(format!("{package}.tar.gz")),
+        evidence,
+        ArchiveLayout::SingleFile("measurement.json"),
+    )?;
     let realization = fs::canonicalize(&output)
         .context("resolving fresh Nix measurement realization")?
         .display()
@@ -950,19 +1007,12 @@ fn realize_measurement(
     Ok(run)
 }
 
-fn unpack_measurement_archive(archive: &Path, destination: &Path) -> Result<()> {
-    clear_destination(destination, "clearing measurement archive destination")?;
-    fs::create_dir_all(destination)?;
-    let mut archive = Archive::new(GzDecoder::new(fs::File::open(archive)?));
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let path = entry.path()?.into_owned();
-        let path_text = path.to_string_lossy();
-        let relative = relative_path(&path_text)?;
-        if !entry.header().entry_type().is_file() || relative != Path::new("measurement.json") {
-            bail!("measurement archive contains an unexpected entry");
-        }
-        entry.unpack(destination.join(relative))?;
+fn require_functional_evidence(aggregate: &Aggregate) -> Result<()> {
+    if aggregate.verdict != Verdict::Passed {
+        bail!("measurement requires current passing functional evidence");
+    }
+    if !aggregate.blockers.is_empty() || aggregate.merged.is_none() {
+        bail!("passing functional evidence is incomplete");
     }
     Ok(())
 }
@@ -1369,6 +1419,13 @@ mod tests {
     }
 
     #[test]
+    fn browser_stage_policy_requires_every_stage_to_pass() {
+        let mut browser = status("chromium");
+        assert!(all_browser_stages_pass(&browser));
+        browser.source_mapping.outcome = Outcome::Failed;
+        assert!(!all_browser_stages_pass(&browser));
+    }
+    #[test]
     fn contained_relative_paths_reject_escape() {
         assert!(relative_path("profiles/browser.profraw").is_ok());
         assert!(relative_path("../profile").is_err());
@@ -1479,6 +1536,22 @@ mod tests {
     }
 
     #[test]
+    fn source_reconciliation_requires_a_tagged_absolute_nix_store_source() {
+        let mut identity = SourceIdentity {
+            source_identity: NixStoreSource {
+                kind: "workspace-source".into(),
+                value: "/tmp/source".into(),
+            },
+            compilation_directory: "/build/source".into(),
+        };
+        assert!(retained_nix_source(&identity).is_err());
+        identity.source_identity.kind = "nix-store-source".into();
+        assert!(retained_nix_source(&identity).is_err());
+        identity.compilation_directory.clear();
+        assert!(retained_nix_source(&identity).is_err());
+    }
+
+    #[test]
     fn destination_cleanup_ignores_absence_but_retains_other_errors() {
         let root = tempdir().unwrap();
         let missing = root.path().join("missing");
@@ -1545,6 +1618,26 @@ mod tests {
     fn measurement_statistics_are_deterministic() {
         assert_eq!(median(vec![5, 1, 3, 2, 4]).unwrap(), 3);
         assert_eq!(range(vec![5, 1, 3, 2, 4]).unwrap(), [1, 5]);
+    }
+
+    #[test]
+    fn functional_evidence_requires_a_clean_merged_pass() {
+        let passing = Aggregate {
+            version: "v1",
+            browsers: BTreeMap::new(),
+            verdict: Verdict::Passed,
+            blockers: Vec::new(),
+            merged: Some(MergedEvidence {
+                profile_data: "profile".into(),
+                report: "report".into(),
+            }),
+        };
+        assert!(require_functional_evidence(&passing).is_ok());
+        let incomplete = Aggregate {
+            merged: None,
+            ..passing
+        };
+        assert!(require_functional_evidence(&incomplete).is_err());
     }
 
     fn retain_measurement(manifest: &MeasurementManifest, root: &Path) {

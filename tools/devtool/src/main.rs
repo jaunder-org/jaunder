@@ -1,7 +1,8 @@
 //! Internal in-sandbox dev tool. Runs inside the Nix coverage/e2e build
 //! sandboxes where `xtask` (host-only) is unavailable. Subcommand tree is
-//! deliberately extensible: `coverage emit`, `csr-bundle`, and `seed-e2e` exist
-//! today; `pg`-migration of the remaining shell scripts is tracked separately.
+//! deliberately extensible: `coverage emit`, `wasm-coverage`, `csr-bundle`, and
+//! `seed-e2e` exist today; `pg`-migration of the remaining shell scripts is
+//! tracked separately.
 
 use std::path::PathBuf;
 
@@ -17,6 +18,7 @@ mod pg;
 mod provision;
 mod run;
 mod seed_e2e;
+mod wasm_coverage;
 
 #[derive(Parser)]
 #[command(name = "devtool", about = "Jaunder in-sandbox dev tooling", version)]
@@ -30,6 +32,9 @@ enum Command {
     /// Coverage pipeline subcommands.
     #[command(subcommand)]
     Coverage(CoverageCmd),
+    /// WebAssembly coverage evidence lifecycle for the Nix browser producers.
+    #[command(subcommand)]
+    WasmCoverage(WasmCoverageCmd),
     /// Doctest gate subcommands.
     #[command(subcommand)]
     Doctests(DoctestsCmd),
@@ -157,6 +162,20 @@ enum CoverageCmd {
 }
 
 #[derive(Subcommand)]
+enum WasmCoverageCmd {
+    /// Create the sentinel status and retain the content-addressed served module.
+    Initialize,
+    /// Merge the browser profile and map it to original Rust source.
+    Map {
+        /// Source root used as the llvm-cov path-equivalence destination.
+        #[arg(long)]
+        site_src: PathBuf,
+    },
+    /// Retain capture status or finalize an early Playwright failure.
+    Finalize,
+}
+
+#[derive(Subcommand)]
 enum DoctestsCmd {
     /// Run the workspace doctests and emit the reconciliation status.
     Emit {
@@ -180,6 +199,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Coverage(CoverageCmd::Emit { out }) => coverage::emit::run(&out),
+        Command::WasmCoverage(WasmCoverageCmd::Initialize) => wasm_coverage::initialize(),
+        Command::WasmCoverage(WasmCoverageCmd::Map { site_src }) => wasm_coverage::map(&site_src),
+        Command::WasmCoverage(WasmCoverageCmd::Finalize) => wasm_coverage::finalize(),
         Command::Doctests(DoctestsCmd::Emit { out }) => doctests::emit::run(&out),
         Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
         Command::Run(args) => run::run(&args.cmd, args.cwd, args.timeout),
@@ -230,6 +252,8 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use clap::Parser;
 
     use super::*;
@@ -293,5 +317,22 @@ mod tests {
         assert!(Cli::try_parse_from(["devtool", "check", "fmt", "--group", "code"]).is_err());
         assert!(Cli::try_parse_from(["devtool", "check", "--group", "docs", "--all"]).is_err());
         assert!(Cli::try_parse_from(["devtool", "check", "--group", "unknown"]).is_err());
+    }
+
+    #[test]
+    fn wasm_coverage_mapping_requires_an_explicit_source_root() {
+        assert!(Cli::try_parse_from(["devtool", "wasm-coverage", "map"]).is_err());
+        assert!(matches!(
+            Cli::try_parse_from([
+                "devtool",
+                "wasm-coverage",
+                "map",
+                "--site-src",
+                "/source/site",
+            ])
+            .expect("mapping command parses")
+            .command,
+            Command::WasmCoverage(WasmCoverageCmd::Map { site_src }) if site_src == Path::new("/source/site")
+        ));
     }
 }
