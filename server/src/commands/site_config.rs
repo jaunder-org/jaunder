@@ -19,51 +19,41 @@ pub(super) async fn cmd_site_config_set(
     key.validate(value)?;
     let runtime = support::storage_runtime_config(&storage.db)?;
     let factory = storage::open_existing_database(&storage.db, &runtime).await?;
-    match key {
-        SiteConfigKey::FeedsWebsubHubUrl => {
-            let hub = if value.is_empty() {
-                None
-            } else {
-                Some(value.parse::<HubUrl>()?)
-            };
-            let publisher = PublisherService::new(
-                storage.storage_path.clone(),
-                factory.publisher(),
-                factory.write_scope(),
-            );
-            publisher.mutate_hub(hub.as_ref()).await?;
-        }
-        SiteConfigKey::FeedsMinItems => {
-            let mutation = FeedWindowMutation::SetMinItems(value.parse()?);
-            let publisher = PublisherService::new(
-                storage.storage_path.clone(),
-                factory.publisher(),
-                factory.write_scope(),
-            );
-            let outcome = publisher.mutate_feed_window_with_feedback(mutation).await?;
-            support::require_confirmed_mutation(outcome, "feed window mutation")?;
-        }
-        SiteConfigKey::FeedsMinDays => {
-            let mutation = FeedWindowMutation::SetMinDays(value.parse()?);
-            let publisher = PublisherService::new(
-                storage.storage_path.clone(),
-                factory.publisher(),
-                factory.write_scope(),
-            );
-            let outcome = publisher.mutate_feed_window_with_feedback(mutation).await?;
-            support::require_confirmed_mutation(outcome, "feed window mutation")?;
-        }
-        _ => {
-            let site_config = factory.site_config();
-            let write_scope = factory.write_scope();
-            let value_for_set = value.to_owned();
-            let outcome = write_scope
-                .run(move |transaction| {
-                    Box::pin(async move { site_config.set(transaction, key, &value_for_set).await })
-                })
-                .await?;
-            support::require_confirmed_mutation(outcome, "site_config set")?;
-        }
+    let feed_window_mutation = match key {
+        SiteConfigKey::FeedsMinItems => Some(FeedWindowMutation::SetMinItems(value.parse()?)),
+        SiteConfigKey::FeedsMinDays => Some(FeedWindowMutation::SetMinDays(value.parse()?)),
+        _ => None,
+    };
+    if let Some(mutation) = feed_window_mutation {
+        let publisher = PublisherService::new(
+            storage.storage_path.clone(),
+            factory.publisher(),
+            factory.write_scope(),
+        );
+        let outcome = publisher.mutate_feed_window_with_feedback(mutation).await?;
+        support::require_confirmed_mutation(outcome, "feed window mutation")?;
+    } else if key == SiteConfigKey::FeedsWebsubHubUrl {
+        let hub = if value.is_empty() {
+            None
+        } else {
+            Some(value.parse::<HubUrl>()?)
+        };
+        let publisher = PublisherService::new(
+            storage.storage_path.clone(),
+            factory.publisher(),
+            factory.write_scope(),
+        );
+        publisher.mutate_hub(hub.as_ref()).await?;
+    } else {
+        let site_config = factory.site_config();
+        let write_scope = factory.write_scope();
+        let value_for_set = value.to_owned();
+        let outcome = write_scope
+            .run(move |transaction| {
+                Box::pin(async move { site_config.set(transaction, key, &value_for_set).await })
+            })
+            .await?;
+        support::require_confirmed_mutation(outcome, "site_config set")?;
     }
     eprintln!("set site_config {key} = {value}");
     Ok(())
@@ -103,54 +93,41 @@ pub(super) async fn cmd_site_config_unset(
 ) -> anyhow::Result<()> {
     let runtime = support::storage_runtime_config(&storage.db)?;
     let factory = storage::open_existing_database(&storage.db, &runtime).await?;
-    match key {
-        SiteConfigKey::FeedsWebsubHubUrl => {
-            let publisher = PublisherService::new(
-                storage.storage_path.clone(),
-                factory.publisher(),
-                factory.write_scope(),
-            );
-            publisher.mutate_hub(None).await?;
+    let feed_window_mutation = match key {
+        SiteConfigKey::FeedsMinItems => Some(FeedWindowMutation::UnsetMinItems),
+        SiteConfigKey::FeedsMinDays => Some(FeedWindowMutation::UnsetMinDays),
+        _ => None,
+    };
+    if let Some(mutation) = feed_window_mutation {
+        let publisher = PublisherService::new(
+            storage.storage_path.clone(),
+            factory.publisher(),
+            factory.write_scope(),
+        );
+        let outcome = publisher.mutate_feed_window_with_feedback(mutation).await?;
+        support::require_confirmed_mutation(outcome, "feed window mutation")?;
+        eprintln!("unset site_config {key}");
+    } else if key == SiteConfigKey::FeedsWebsubHubUrl {
+        let publisher = PublisherService::new(
+            storage.storage_path.clone(),
+            factory.publisher(),
+            factory.write_scope(),
+        );
+        publisher.mutate_hub(None).await?;
+        eprintln!("unset site_config {key}");
+    } else {
+        let site_config = factory.site_config();
+        let write_scope = factory.write_scope();
+        let outcome = write_scope
+            .run(move |transaction| {
+                Box::pin(async move { site_config.delete(transaction, key).await })
+            })
+            .await?;
+        let removed = support::require_confirmed_mutation(outcome, "site_config unset")?;
+        if removed {
             eprintln!("unset site_config {key}");
-        }
-        SiteConfigKey::FeedsMinItems => {
-            let publisher = PublisherService::new(
-                storage.storage_path.clone(),
-                factory.publisher(),
-                factory.write_scope(),
-            );
-            let outcome = publisher
-                .mutate_feed_window_with_feedback(FeedWindowMutation::UnsetMinItems)
-                .await?;
-            support::require_confirmed_mutation(outcome, "feed window mutation")?;
-            eprintln!("unset site_config {key}");
-        }
-        SiteConfigKey::FeedsMinDays => {
-            let publisher = PublisherService::new(
-                storage.storage_path.clone(),
-                factory.publisher(),
-                factory.write_scope(),
-            );
-            let outcome = publisher
-                .mutate_feed_window_with_feedback(FeedWindowMutation::UnsetMinDays)
-                .await?;
-            support::require_confirmed_mutation(outcome, "feed window mutation")?;
-            eprintln!("unset site_config {key}");
-        }
-        _ => {
-            let site_config = factory.site_config();
-            let write_scope = factory.write_scope();
-            let outcome = write_scope
-                .run(move |transaction| {
-                    Box::pin(async move { site_config.delete(transaction, key).await })
-                })
-                .await?;
-            let removed = support::require_confirmed_mutation(outcome, "site_config unset")?;
-            if removed {
-                eprintln!("unset site_config {key}");
-            } else {
-                eprintln!("site_config {key} was not set (no-op)");
-            }
+        } else {
+            eprintln!("site_config {key} was not set (no-op)");
         }
     }
     Ok(())
