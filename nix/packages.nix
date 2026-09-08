@@ -763,6 +763,7 @@ let
       export CARGO_HOME=${appOfflineCargoHome}
       export CARGO_TARGET_DIR="$work/target"
       cargo build -p csr --target wasm32-unknown-unknown --release
+      mkdir -p "$out"
       devtool csr-bundle --wasm "$work/target/wasm32-unknown-unknown/release/csr.wasm" --out "$out/pkg"
       python3 - "$out/status.json" <<'PY'
       import hashlib, json, pathlib, sys
