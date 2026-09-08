@@ -107,10 +107,10 @@ documentation][playwright-browsers] define the configured multi-browser
 execution mechanism. They do not establish the passed browser outcomes; the
 versioned status files and retained profiles/reports below do.
 
-| Browser  | CSR structural | Diagnostic export | Source mapping | Executed original Rust evidence                                                   |
-| -------- | -------------- | ----------------- | -------------- | --------------------------------------------------------------------------------- |
-| Chromium | passed         | passed            | passed         | `chromium/mapped/llvm-cov.txt`; count 1 on CSR lines 30–32, 50, 74, 77, and 79–84 |
-| Firefox  | passed         | passed            | passed         | `firefox/mapped/llvm-cov.txt`; count 1 on CSR lines 30–32, 50, 74, 77, and 79–84  |
+| Browser  | CSR structural | Diagnostic export | Source mapping | Executed original Rust evidence                                              |
+| -------- | -------------- | ----------------- | -------------- | ---------------------------------------------------------------------------- |
+| Chromium | passed         | passed            | passed         | `chromium/mapped/llvm-cov.txt`; count 1 on CSR lines 30–32, 50–52, and 78–84 |
+| Firefox  | passed         | passed            | passed         | `firefox/mapped/llvm-cov.txt`; count 1 on CSR lines 30–32, 50–52, and 78–84  |
 
 Each retains the same nonempty raw profile (SHA-256
 `b3cfdcac9875ab72827b9b18349d6edc65ebda3fa90169d95e9404b3a13b628c`),
@@ -120,7 +120,7 @@ report (`c12b8654237b7ef2b74d7de364333599c905a086397ab3eb08330ef878bfb8ff`).
 
 The Chromium and Firefox reports separately map executed original Rust lines in
 the CSR entry module: for example each reports count 1 for lines 30–32
-(`projector_seed`), line 50 (`mount`), and lines 74, 77, and 79–84 (`main`).
+(`projector_seed`), lines 50–52 (`mount`), and lines 73, 76, and 78–84 (`main`).
 Source reconciliation uses the retained module and validates the retained
 `nix-store-source` identity before mapping the compiled prefix to that immutable
 source. It does not read mutable checkout sources or infer mapping from the
