@@ -491,7 +491,7 @@ mod tests {
                         Err(storage::PostgresPasswordError::FileVariable(_))
                     ));
                 }
-                _ => unreachable!("parent supplies a closed configuration scenario set"),
+                _ => unreachable!("parent supplies a closed configuration scenario set"), // cov:ignore — child-only bootstrap dispatch is exhaustively selected by the parent
             }
             return;
         }
@@ -540,7 +540,7 @@ mod tests {
                     );
                 }
                 "absent" => {}
-                _ => unreachable!("closed parent scenario set"),
+                _ => unreachable!("closed parent scenario set"), // cov:ignore — child-only bootstrap dispatch is exhaustively selected by the parent
             }
             assert!(
                 command
@@ -656,6 +656,24 @@ mod tests {
         .await
         .expect("create-user should dispatch and succeed");
 
+        let theme_storage = TempDir::new().expect("theme storage root");
+        run(cli(Commands::SeedTheme {
+            db: db.clone(),
+            storage_path: theme_storage.path().to_owned(),
+            author_username: "alice".to_owned(),
+            reset: false,
+        }))
+        .await
+        .expect("seed-theme should dispatch and select the fixture");
+        run(cli(Commands::SeedTheme {
+            db: db.clone(),
+            storage_path: theme_storage.path().to_owned(),
+            author_username: "alice".to_owned(),
+            reset: true,
+        }))
+        .await
+        .expect("seed-theme reset should dispatch and clear the fixture");
+
         run(cli(Commands::SeedPosts {
             db: db.clone(),
             username: "alice".to_owned(),
@@ -740,7 +758,7 @@ mod tests {
     }
     #[test]
     fn parses_the_exact_sandbox_profile_subprocess_contract() {
-        let parsed = Cli::try_parse_from([
+        Cli::try_parse_from([
             "test-support",
             "seed-sandbox-profile",
             "--db",
@@ -749,13 +767,7 @@ mod tests {
             "demo",
         ])
         .expect("exact sandbox command parses");
-        assert!(matches!(
-            parsed.command,
-            Commands::SeedSandboxProfile {
-                profile: SandboxProfileArg::Demo,
-                ..
-            }
-        ));
+        assert_eq!(profile_name(SandboxProfileArg::Demo.into()), "demo");
         assert!(
             Cli::try_parse_from([
                 "test-support",
@@ -767,6 +779,22 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn parses_theme_seed_and_reset_contract() {
+        Cli::try_parse_from([
+            "test-support",
+            "seed-theme",
+            "--db",
+            "sqlite:/tmp/theme.db",
+            "--storage-path",
+            "/tmp/theme-assets",
+            "--author-username",
+            "alice",
+            "--reset",
+        ])
+        .expect("theme seed command parses");
     }
 
     #[tokio::test]

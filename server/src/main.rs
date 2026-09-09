@@ -505,6 +505,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_shut_down_dispatches_missing_runtime_identity_refusal() {
+        let base = TempDir::new().expect("storage root");
+        let error = run(test_cli(Commands::ShutDown {
+            storage: test_storage_args(&base),
+            timeout: std::num::NonZeroU64::new(1).expect("positive timeout"),
+        }))
+        .await
+        .expect_err("shutdown without a runtime identity must refuse");
+
+        assert!(
+            error.to_string().contains("missing runtime identity"),
+            "dispatch must preserve the shutdown command's refusal: {error:#}"
+        );
+    }
+
+    #[tokio::test]
     async fn run_serve_dev_auto_inits() {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);

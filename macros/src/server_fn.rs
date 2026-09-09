@@ -32,8 +32,8 @@ pub(crate) struct Derived {
     pub span_name: String,
     /// Arguments forwarded verbatim to `#[server]` (only `input = …`).
     pub server_args: Vec<syn::Meta>,
-    /// Declaration-only `fields(...)` arguments forwarded to the generated span.
-    pub instrument_args: Vec<syn::Meta>,
+    /// Declaration-only `fields(...)` tokens forwarded to the generated span.
+    pub instrument_args: Vec<proc_macro2::TokenStream>,
     /// Parameters explicitly omitted by source `skip(...)`.
     pub skipped: Vec<syn::Ident>,
     /// Whether source `skip_all` suppresses every generated parameter field.
@@ -133,7 +133,7 @@ impl Parse for EmptyFieldDeclaration {
     }
 }
 
-fn validate_empty_fields(arg: &syn::Meta) -> Result<(), syn::Error> {
+fn validate_empty_fields(arg: &syn::Meta) -> Result<proc_macro2::TokenStream, syn::Error> {
     let syn::Meta::List(list) = arg else {
         return Err(syn::Error::new_spanned(
             arg,
@@ -151,7 +151,7 @@ fn validate_empty_fields(arg: &syn::Meta) -> Result<(), syn::Error> {
              `field = tracing::field::Empty` and record bounded values in the body",
         ));
     }
-    Ok(())
+    Ok(list.tokens.clone())
 }
 
 fn route(arg: &syn::Meta, derived: &mut Derived) -> Result<(), syn::Error> {
@@ -171,8 +171,7 @@ fn route(arg: &syn::Meta, derived: &mut Derived) -> Result<(), syn::Error> {
         ));
     }
     if named("fields") {
-        validate_empty_fields(arg)?;
-        derived.instrument_args.push(arg.clone());
+        derived.instrument_args.push(validate_empty_fields(arg)?);
         return Ok(());
     }
     if named("input") {
@@ -283,15 +282,7 @@ pub(crate) fn expand(
             })
             .collect()
     };
-    let declared_fields: Vec<_> = instrument_args
-        .iter()
-        .map(|arg| {
-            let syn::Meta::List(list) = arg else {
-                unreachable!("route stores only declaration-only fields lists")
-            };
-            &list.tokens
-        })
-        .collect();
+    let declared_fields = &instrument_args;
     let fields_arg = if projected_fields.is_empty() && declared_fields.is_empty() {
         quote! {}
     } else {

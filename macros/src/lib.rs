@@ -843,16 +843,14 @@ mod tests {
             (NewtypeShape::PhantomTagged, "StrNewtype"),
         ] {
             // `syn::Field` is not `Debug`, so `expect_err` is unavailable here.
-            let Err(err) = require_newtype_shape(&named, shape, macro_name, "struct X(String)")
-            else {
-                // cov:ignore-start unreachable: this is the test's own assertion-failure
-                // path, reached only if the shape check wrongly accepts named fields
-                panic!("a named-field struct is rejected under either shape")
-                // cov:ignore-stop
-            };
+            let error = require_newtype_shape(&named, shape, macro_name, "struct X(String)")
+                .err()
+                .map(|error| error.to_string());
             assert!(
-                err.to_string().contains(macro_name),
-                "the diagnostic must name the macro, got: {err}"
+                error
+                    .as_deref()
+                    .is_some_and(|message| message.contains(macro_name)),
+                "a named-field struct is rejected with a diagnostic naming {macro_name}"
             );
         }
     }

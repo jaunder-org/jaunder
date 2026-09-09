@@ -59,7 +59,7 @@ async fn retire_session_cookie(
 
     if retirement.requested() {
         let Ok(value) = host::auth::clear_session_cookie_header(secure).parse() else {
-            unreachable!("generated session cookie header must be valid");
+            unreachable!("generated session cookie header must be valid"); // cov:ignore -- host constructs this fixed header from validated literals.
         };
         response
             .headers_mut()

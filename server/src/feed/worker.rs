@@ -720,8 +720,6 @@ impl FeedWorker {
         let scheduler = tokio_cron_scheduler::JobScheduler::new().await?;
         let tracker = WorkTracker::default();
         let job = if interval < Duration::from_secs(1) {
-            // cov:ignore-start -- the closure body fires only when the scheduler
-            // activates it; tick behavior is unit-tested through spawn_tick.
             let job_tracker = tracker.clone();
             let stop_tracker = tracker.clone();
             tokio_cron_scheduler::Job::new_one_shot_async(Duration::ZERO, move |_uuid, _lock| {
@@ -747,7 +745,6 @@ impl FeedWorker {
                 Box::pin(tracker.run(spawn_tick(worker.clone())))
             })?
         };
-        // cov:ignore-stop
         scheduler.add(job).await?;
         ScheduledWorkerGuard::start(scheduler, tracker).await
     }
@@ -765,6 +762,11 @@ fn spawn_tick(worker: Arc<FeedWorker>) -> Pin<Box<dyn Future<Output = ()> + Send
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use super::*;
     use crate::websub::NoopWebSubClient;
     use common::{feed::FeedFormat, tagged_url::HubUrl, test_support::parse_etag};
@@ -1869,6 +1871,70 @@ mod tests {
             .returning(|_, _, _| Ok(vec![]));
         let w = worker(posts, storage::MockFeedCacheStorage::new(), events);
         spawn_tick(Arc::new(w)).await;
+    }
+
+    async fn wait_for_scheduled_tick(observed: &AtomicUsize) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while observed.load(Ordering::Relaxed) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("scheduled worker tick");
+    }
+
+    // guard:no-backend — mock storage proves the scheduler invokes the worker.
+    #[tokio::test]
+    async fn subsecond_worker_start_drives_interval_ticks_and_stops_cleanly() {
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(0..)
+            .returning(|_| Ok(vec![]));
+        let observed = Arc::new(AtomicUsize::new(0));
+        let expected = Arc::clone(&observed);
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_claim_pending_batch()
+            .times(1..)
+            .returning(move |_, _, _| {
+                expected.fetch_add(1, Ordering::Relaxed);
+                Ok(vec![])
+            });
+        let mut guard = worker(posts, storage::MockFeedCacheStorage::new(), events)
+            .start(Duration::from_millis(1))
+            .await
+            .expect("start subsecond feed worker");
+
+        wait_for_scheduled_tick(&observed).await;
+        guard.shutdown().await.expect("stop subsecond feed worker");
+    }
+
+    // guard:no-backend — mock storage proves the cron scheduler invokes the worker.
+    #[tokio::test]
+    async fn second_worker_start_drives_repeated_ticks_and_stops_cleanly() {
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(0..)
+            .returning(|_| Ok(vec![]));
+        let observed = Arc::new(AtomicUsize::new(0));
+        let expected = Arc::clone(&observed);
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_claim_pending_batch()
+            .times(1..)
+            .returning(move |_, _, _| {
+                expected.fetch_add(1, Ordering::Relaxed);
+                Ok(vec![])
+            });
+        let mut guard = worker(posts, storage::MockFeedCacheStorage::new(), events)
+            .start(Duration::from_secs(1))
+            .await
+            .expect("start repeated feed worker");
+
+        wait_for_scheduled_tick(&observed).await;
+        guard.shutdown().await.expect("stop repeated feed worker");
     }
 
     #[apply(backends)]

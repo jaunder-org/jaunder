@@ -40,3 +40,27 @@ impl DefaultPostFormatState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::DefaultPostFormatState;
+    use crate::error::WebError;
+    use common::render::PostFormat;
+
+    #[test]
+    fn only_a_loaded_preference_may_be_saved() {
+        let loading = DefaultPostFormatState::resolve(None);
+        let failed_result: Result<PostFormat, WebError> =
+            Err(WebError::server_message("unavailable"));
+        let ready_result: Result<PostFormat, WebError> = Ok(PostFormat::Org);
+        let failed = DefaultPostFormatState::resolve(Some(&failed_result));
+        let ready = DefaultPostFormatState::resolve(Some(&ready_result));
+
+        assert_eq!(loading, DefaultPostFormatState::Loading);
+        assert_eq!(failed, DefaultPostFormatState::Failed);
+        assert_eq!(ready, DefaultPostFormatState::Ready(PostFormat::Org));
+        assert_eq!(loading.format_to_save(), None);
+        assert_eq!(failed.format_to_save(), None);
+        assert_eq!(ready.format_to_save(), Some(PostFormat::Org));
+    }
+}

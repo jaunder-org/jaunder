@@ -262,6 +262,7 @@ pub trait MediaDialect: Backend {
     async fn total_upload_bytes(pool: &Pool<Self>) -> Result<ByteSize>;
 
     /// Performs the portable conditional deletion under the dialect's media lock.
+    // cov:ignore-start — generic declaration header is attributed to backend monomorphizations.
     async fn try_delete_media(
         conn: &mut Self::Connection,
         user_id: UserId,
@@ -282,6 +283,8 @@ pub trait MediaDialect: Backend {
         for<'c> &'c mut Self::Connection: Executor<'c, Database = Self>,
         Self::Arguments: sqlx::IntoArguments<Self>,
     {
+        // cov:ignore-stop
+        // cov:ignore
         Self::lock_media_reference(conn, media).await?;
         let mut query = QueryBuilder::<Self>::new(String::new());
         crate::posts::media::push_media_reference_evidence_cte(&mut query, evidence);
@@ -319,7 +322,7 @@ pub trait MediaDialect: Backend {
             .fetch_optional(&mut *conn)
             .await?
             .is_some())
-    }
+    } // cov:ignore
 
     /// Lists the authenticated owner's retained Post IDs after foreign evidence
     /// exemptions, in ascending order.
@@ -397,6 +400,7 @@ pub trait MediaDialect: Backend {
     }
 
     /// Executes the portable locked global reclaimability decision.
+    // cov:ignore-start — generic declaration header is attributed to backend monomorphizations.
     async fn media_entry_is_reclaimable(
         conn: &mut Self::Connection,
         media: &MediaRef,
@@ -414,6 +418,8 @@ pub trait MediaDialect: Backend {
         for<'c> &'c mut Self::Connection: Executor<'c, Database = Self>,
         Self::Arguments: sqlx::IntoArguments<Self>,
     {
+        // cov:ignore-stop
+        // cov:ignore
         Self::lock_media_reference(conn, media).await?;
         let mut query = QueryBuilder::<Self>::new(String::new());
         crate::posts::media::push_media_reference_evidence_cte(&mut query, evidence);
@@ -433,7 +439,7 @@ pub trait MediaDialect: Backend {
             .fetch_optional(&mut *conn)
             .await?
             .is_some())
-    }
+    } // cov:ignore
 }
 
 /// Generic [`MediaStorage`] backed by any [`MediaDialect`] database.

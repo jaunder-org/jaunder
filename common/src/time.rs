@@ -377,6 +377,7 @@ mod tests {
             "2026-01-02T03:04Z[UTC]",
             "2026-1-02",
             "-9999-01-01",
+            "202a-01-02",
         ] {
             let encoded = format!("\"{noncanonical}\"");
             assert!(
@@ -384,6 +385,13 @@ mod tests {
                 "{noncanonical}"
             );
         }
+
+        let err = serde_json::from_str::<PermalinkDate>("1").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("a canonical ISO 8601 calendar date"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -425,6 +433,9 @@ mod tests {
         assert!(earlier < later);
         assert_eq!(UtcInstant::from(Timestamp::from(earlier)), earlier);
         assert_eq!(Timestamp::from(earlier), earlier.value());
+
+        let date = PermalinkDate::from_ymd(2024, 7, 1).unwrap();
+        assert_eq!(civil::Date::from(date), date.value());
     }
 
     #[test]

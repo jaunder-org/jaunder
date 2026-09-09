@@ -126,14 +126,77 @@ pub fn revalidation<T, E: ToString>(result: Result<MutationOutcome<T>, E>) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::{Revalidation, ScopeAvailability, revalidation};
+    use super::{Revalidation, ScopeAvailability, ThemePageState, draft_from_editor, revalidation};
     use crate::themes::OwnershipScope;
     use common::MutationOutcome;
+    use leptos::prelude::{GetUntracked, Owner, Set};
 
     #[test]
-    fn operator_can_choose_the_programmatically_distinct_site_scope() {
-        assert!(ScopeAvailability::from_session(true, true).permits(OwnershipScope::Site));
-        assert!(!ScopeAvailability::from_session(true, false).permits(OwnershipScope::Site));
+    fn session_scope_availability_rejects_anonymous_and_allows_author_scope() {
+        assert_eq!(
+            ScopeAvailability::from_session(false, true),
+            ScopeAvailability::Anonymous
+        );
+        assert!(!ScopeAvailability::Anonymous.permits(OwnershipScope::Author));
+        assert!(ScopeAvailability::from_session(true, false).permits(OwnershipScope::Author));
+        assert_eq!(
+            ScopeAvailability::from_session(true, true),
+            ScopeAvailability::AuthorAndSite
+        );
+        assert!(ScopeAvailability::AuthorAndSite.permits(OwnershipScope::Site));
+    }
+
+    #[test]
+    fn selecting_scope_resets_draft_identity_and_feedback() {
+        Owner::new().with(|| {
+            let page = ThemePageState::default();
+            page.selected.set(Some(common::ids::ThemeId::from(42)));
+            page.status.set(Some("saved".into()));
+
+            page.select_scope(OwnershipScope::Site);
+
+            assert_eq!(page.scope.get_untracked(), OwnershipScope::Site);
+            assert_eq!(page.selected.get_untracked(), None);
+            assert_eq!(page.status.get_untracked(), None);
+        });
+    }
+
+    #[test]
+    fn editor_draft_preserves_utf8_source_and_decodes_assets() {
+        let draft = draft_from_editor(
+            r#"{"schema":1}"#.into(),
+            ".theme { color: green; }".into(),
+            r#"[{"path":"logo.png","mime":"image/png","bytes":[1,2,3]}]"#,
+        )
+        .unwrap();
+
+        assert_eq!(draft.manifest, br#"{"schema":1}"#);
+        assert_eq!(draft.stylesheet, b".theme { color: green; }");
+        assert_eq!(draft.assets.len(), 1);
+        assert_eq!(draft.assets[0].path, "logo.png");
+        assert_eq!(draft.assets[0].bytes, [1, 2, 3]);
+    }
+
+    #[test]
+    fn editor_draft_reports_invalid_asset_json_before_mutation() {
+        let error = draft_from_editor("{}".into(), String::new(), "{").unwrap_err();
+
+        assert!(
+            error.starts_with("Package assets must be valid JSON:"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn confirmed_and_failed_writes_have_distinct_revalidation() {
+        assert_eq!(
+            revalidation::<(), String>(Ok(MutationOutcome::Confirmed(()))),
+            Revalidation::Confirmed
+        );
+        assert_eq!(
+            revalidation::<(), _>(Err("write rejected")),
+            Revalidation::Failed("write rejected".into())
+        );
     }
 
     #[test]

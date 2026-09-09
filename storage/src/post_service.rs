@@ -75,6 +75,35 @@ fn map_post_update_scope_error(error: WriteScopeError<UpdatePostError>) -> Perfo
     }
 }
 
+fn map_feed_event_create_error(error: crate::FeedEventError) -> CreatePostError {
+    match error {
+        crate::FeedEventError::Db(error) => CreatePostError::Internal(error),
+    }
+}
+
+fn map_feed_event_update_error(error: crate::FeedEventError) -> UpdatePostError {
+    match error {
+        crate::FeedEventError::Db(error) => UpdatePostError::Internal(error),
+    }
+}
+
+fn map_create_post_attempt_error(
+    error: CreatePostError,
+    is_expected_slug: bool,
+) -> Result<(), PerformCreationError> {
+    match error {
+        CreatePostError::SlugConflict if is_expected_slug => {
+            Err(PerformCreationError::BookkeepingMismatch)
+        }
+        CreatePostError::SlugConflict => Ok(()),
+        CreatePostError::IdempotencyConflict(post_id) => {
+            Err(PerformCreationError::IdempotencyConflict(post_id))
+        }
+        CreatePostError::BookkeepingMismatch => Err(PerformCreationError::BookkeepingMismatch),
+        CreatePostError::Internal(error) => Err(PerformCreationError::Storage(error)),
+    }
+}
+
 fn is_currently_public(record: &PostRecord, has_public_audience: bool, now: UtcInstant) -> bool {
     has_public_audience
         && record.deleted_at.is_none()
@@ -179,9 +208,7 @@ pub async fn create_rendered_post(
                     feed_events
                         .enqueue_many(transaction, &feed_paths)
                         .await
-                        .map_err(|error| match error {
-                            crate::FeedEventError::Db(error) => CreatePostError::Internal(error),
-                        })?;
+                        .map_err(map_feed_event_create_error)?;
                 }
                 Ok(created)
             })
@@ -257,9 +284,7 @@ pub async fn create_rendered_post_with_media_ownership(
                     feed_events
                         .enqueue_many(transaction, &feed_paths)
                         .await
-                        .map_err(|error| match error {
-                            crate::FeedEventError::Db(error) => CreatePostError::Internal(error),
-                        })?;
+                        .map_err(map_feed_event_create_error)?;
                 }
                 Ok(created)
             })
@@ -518,11 +543,7 @@ pub async fn perform_post_update(
                         feed_events
                             .enqueue_many(transaction, &feed_paths)
                             .await
-                            .map_err(|error| match error {
-                                crate::FeedEventError::Db(error) => {
-                                    UpdatePostError::Internal(error)
-                                }
-                            })?;
+                            .map_err(map_feed_event_update_error)?;
                     }
                 }
                 Ok::<PostRecord, UpdatePostError>(mutation.record)
@@ -620,11 +641,7 @@ pub async fn perform_post_update_with_media_ownership(
                         feed_events
                             .enqueue_many(transaction, &feed_paths)
                             .await
-                            .map_err(|error| match error {
-                                crate::FeedEventError::Db(error) => {
-                                    UpdatePostError::Internal(error)
-                                }
-                            })?;
+                            .map_err(map_feed_event_update_error)?;
                     }
                 }
                 Ok::<PostRecord, UpdatePostError>(mutation.record)
@@ -944,22 +961,7 @@ pub async fn perform_post_creation_at(
         .await
         {
             Ok(outcome) => return Ok(outcome),
-            Err(CreatePostError::SlugConflict) if is_expected_slug => {
-                return Err(PerformCreationError::BookkeepingMismatch);
-            }
-            Err(CreatePostError::SlugConflict) => {}
-            // A duplicate key is not a slug collision. Storage chose the live
-            // mapping inside this transaction, so return that immutable decision
-            // rather than performing a racy lookup after rollback.
-            Err(CreatePostError::IdempotencyConflict(post_id)) => {
-                return Err(PerformCreationError::IdempotencyConflict(post_id));
-            }
-            Err(CreatePostError::BookkeepingMismatch) => {
-                return Err(PerformCreationError::BookkeepingMismatch);
-            }
-            Err(CreatePostError::Internal(e)) => {
-                return Err(PerformCreationError::Storage(e));
-            }
+            Err(error) => map_create_post_attempt_error(error, is_expected_slug)?,
         }
     }
 
@@ -1031,19 +1033,7 @@ pub async fn perform_post_creation_with_media_ownership(
         .await
         {
             Ok(outcome) => return Ok(outcome),
-            Err(CreatePostError::SlugConflict) if is_expected_slug => {
-                return Err(PerformCreationError::BookkeepingMismatch);
-            }
-            Err(CreatePostError::SlugConflict) => {}
-            Err(CreatePostError::IdempotencyConflict(post_id)) => {
-                return Err(PerformCreationError::IdempotencyConflict(post_id));
-            }
-            Err(CreatePostError::BookkeepingMismatch) => {
-                return Err(PerformCreationError::BookkeepingMismatch);
-            }
-            Err(CreatePostError::Internal(error)) => {
-                return Err(PerformCreationError::Storage(error));
-            }
+            Err(error) => map_create_post_attempt_error(error, is_expected_slug)?,
         }
     }
     Err(PerformCreationError::Exhausted(max_attempts))
@@ -1063,8 +1053,8 @@ mod tests {
     #[cfg(feature = "test-utils")]
     use crate::test_support::mock_write_scope;
     use crate::test_support::{
-        Backend, SeedUser, backends, confirmed, fetch_post_media, media_ref_for, media_url_for,
-        seed_media, seed_users,
+        Backend, SeedUser, backends, confirmed, fetch_post_media, fixture_post_media_ownership,
+        media_ref_for, media_url_for, seed_media, seed_users,
     };
     #[cfg(feature = "test-utils")]
     use crate::{MockFeedEventStorage, MockPostStorage};
@@ -1086,6 +1076,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::MediaReferenceOwnershipResolver for LocalOnlyResolver {
+        // cov:ignore-start — required test-resolver trait method is irrelevant to local-proof tests
         async fn resolve(
             &self,
             _references: &[crate::PersistedMediaReference],
@@ -1096,6 +1087,7 @@ mod tests {
             let _ = instance_id;
             foreign.finish()
         }
+        // cov:ignore-stop
 
         async fn resolve_local(
             &self,
@@ -1337,27 +1329,30 @@ mod tests {
         // `PerformCreationError::Storage`.
         let mut storage = MockPostStorage::new();
         storage
-            .expect_create_post()
-            .returning(|_, _, _| Err(CreatePostError::Internal(SqlxError::RowNotFound)));
+            .expect_create_post_with_proven_local_media()
+            .returning(|_, _, _, _| Err(CreatePostError::Internal(SqlxError::RowNotFound)));
         let write_scope = mock_write_scope();
         let feed_events = MockFeedEventStorage::new();
         let storage: Arc<dyn PostStorage> = Arc::new(storage);
         let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
         let temp = tempfile::tempdir().unwrap();
         let content_locks = MediaContentLocks::new(Arc::new(temp.path().to_path_buf()));
-        let err = perform_post_creation(
+        let ownership = fixture_post_media_ownership();
+        let err = perform_post_creation_with_media_ownership(
             &write_scope,
             &content_locks,
             Arc::clone(&storage),
             feed_events,
+            &ownership,
+            UtcInstant::now(),
             PostCreation {
-                user_id: UserId::from(1),
+                user_id: UserId::from(1_i64),
                 body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
                 published_at: None,
-                max_attempts: 100,
+                max_attempts: 1,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 tags: Vec::new(),
@@ -1383,11 +1378,17 @@ mod tests {
         let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
         let now = UtcInstant::now();
 
-        let error = perform_post_creation_at(
+        let ownership = PostMediaOwnership::new(
+            Arc::new(LocalOnlyResolver),
+            env.base.instance_id().clone(),
+            Arc::clone(&env.state.site_config),
+        );
+        let error = perform_post_creation_with_media_ownership(
             &env.state.write_scope,
             &env.media_content_locks(),
             Arc::clone(&env.state.posts),
             feed_events,
+            &ownership,
             now,
             PostCreation {
                 user_id: seeded_user.user_id,
@@ -1759,11 +1760,17 @@ mod tests {
             .seed(&env.state)
             .await;
 
-        let error = perform_post_update(
+        let ownership = PostMediaOwnership::new(
+            Arc::new(LocalOnlyResolver),
+            env.base.instance_id().clone(),
+            Arc::clone(&env.state.site_config),
+        );
+        let error = perform_post_update_with_media_ownership(
             &env.state.write_scope,
             &env.media_content_locks(),
             Arc::clone(&env.state.posts),
             feed_events,
+            &ownership,
             PostUpdate {
                 post_id: post.post_id,
                 editor_user_id: seeded_user.user_id,
@@ -2099,12 +2106,20 @@ mod tests {
         )
         .await
         .unwrap();
+        let ownership = PostMediaOwnership::new(
+            Arc::new(LocalOnlyResolver),
+            env.base.instance_id().clone(),
+            Arc::clone(&env.state.site_config),
+        );
+
         assert!(matches!(
-            perform_post_creation(
+            perform_post_creation_with_media_ownership(
                 &env.state.write_scope,
                 &env.media_content_locks(),
                 Arc::clone(&storage),
                 Arc::clone(&env.state.feed_events),
+                &ownership,
+                UtcInstant::now(),
                 create(
                     occupied_expected_user,
                     PostBookkeepingExpectation {
@@ -2471,11 +2486,12 @@ mod tests {
         assert_eq!(confirmed(r1).slug, "hello-world");
         assert_eq!(confirmed(r2).slug, "hello-world-2");
 
-        let err = perform_post_creation(
+        let err = perform_post_creation_at(
             &env.state.write_scope,
             &env.media_content_locks(),
             Arc::clone(&storage),
             Arc::clone(&env.state.feed_events),
+            UtcInstant::now(),
             PostCreation {
                 user_id,
                 body: parse_post_body("Hello, world!"),
@@ -2494,6 +2510,36 @@ mod tests {
         .await
         .unwrap_err();
 
+        assert!(matches!(err, PerformCreationError::Exhausted(2)));
+        let ownership = PostMediaOwnership::new(
+            Arc::new(LocalOnlyResolver),
+            env.base.instance_id().clone(),
+            Arc::clone(&env.state.site_config),
+        );
+        let err = perform_post_creation_with_media_ownership(
+            &env.state.write_scope,
+            &env.media_content_locks(),
+            Arc::clone(&storage),
+            Arc::clone(&env.state.feed_events),
+            &ownership,
+            UtcInstant::now(),
+            PostCreation {
+                user_id,
+                body: parse_post_body("Hello, world!"),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 2,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
+                idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, PerformCreationError::Exhausted(2)));
     }
 

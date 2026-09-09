@@ -10,9 +10,13 @@ pub(crate) struct BootUrls {
 }
 
 pub(crate) fn boot_urls() -> Option<BootUrls> {
+    boot_urls_from(GLUE_URL, WASM_URL)
+}
+
+fn boot_urls_from(glue: Option<&'static str>, wasm: Option<&'static str>) -> Option<BootUrls> {
     Some(BootUrls {
-        glue: GLUE_URL?,
-        wasm: WASM_URL?,
+        glue: glue?,
+        wasm: wasm?,
     })
 }
 
@@ -31,4 +35,16 @@ pub(crate) fn module_init_script(urls: BootUrls, mark: &str) -> String {
         "<script type=\"module\">import {{initMeasured}} from \"{}\"; performance.mark(\"{}\"); initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl);</script>",
         urls.glue, mark
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boot_urls_requires_both_generated_boot_roles() {
+        assert!(boot_urls_from(Some("/pkg/glue.js"), Some("/pkg/client.wasm")).is_some());
+        assert!(boot_urls_from(None, Some("/pkg/client.wasm")).is_none());
+        assert!(boot_urls_from(Some("/pkg/glue.js"), None).is_none());
+    }
 }

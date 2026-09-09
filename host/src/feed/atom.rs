@@ -152,14 +152,9 @@ mod tests {
         metadata.representation_modified_at = representation_time;
 
         let rendered = render_atom(&metadata, &[item()]).expect("canonical timestamps");
+        let body = rendered.body();
 
-        assert!(
-            rendered
-                .body()
-                .contains("<updated>2026-02-03T04:05:06+00:00</updated>"),
-            "out: {}",
-            rendered.body()
-        );
+        assert!(body.contains("<updated>2026-02-03T04:05:06+00:00</updated>"));
     }
 
     #[test]

@@ -130,7 +130,7 @@ pub fn try_compiled_theme_fixture() -> anyhow::Result<CompiledThemeRevision> {
     let validated = theme_package::validate_theme_package(
         &stored_theme_package()?,
         ThemePackageLimits::default(),
-    )?;
+    )?; // cov:ignore
     Ok(validated.compile(&BTreeMap::new(), ThemePackageLimits::default())?)
 }
 
@@ -212,8 +212,31 @@ pub async fn try_create_theme(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn browser_seed_fixture_remains_a_valid_theme_package() {
         super::try_compiled_theme_fixture().expect("compile browser seed fixture");
+    }
+    // guard:no-backend — mocked theme storage and injected acknowledgement loss isolate the outcome mapping
+    #[tokio::test]
+    async fn indeterminate_fixture_theme_commit_is_reported_as_an_error() {
+        let mut themes = crate::MockThemeStorage::new();
+        themes
+            .expect_create_theme()
+            .once()
+            .returning(|_, _, _, _, _| Ok(ThemeId::from(1)));
+        let compiled = super::try_compiled_theme_fixture().expect("compile fixture");
+
+        let error = super::try_create_theme(
+            Arc::new(themes),
+            WriteScope::mock().with_commit_acknowledgement_loss_after_commit_for_test(),
+            ThemeOwner::Site,
+            &compiled,
+        )
+        .await
+        .expect_err("lost commit acknowledgement is indeterminate");
+
+        assert!(error.to_string().contains("commit was indeterminate"));
     }
 }

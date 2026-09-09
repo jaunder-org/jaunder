@@ -92,6 +92,105 @@ let
       || relative == "${member}/build.rs"
       || pkgs.lib.hasPrefix "${member}/src/" relative
     ) members;
+  # Complete Cargo inputs for selected members. Unlike `cargoTargetSource`, this
+  # retains every Cargo-recognized target below each member (tests, examples,
+  # benches, and custom targets) without admitting another workspace's files.
+  cargoMemberSource =
+    members: path: type:
+    let
+      relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+    in
+    type == "directory"
+    || cargoTargetSource members path type
+    || builtins.any (
+      member:
+      (relative == member || pkgs.lib.hasPrefix "${member}/" relative)
+      && craneLib.filterCargoSources path type
+    ) members;
+  # Resolve the Cargo `path` package closure at evaluation time. Every nested
+  # dependency table is searched, including target-specific build/dev tables;
+  # normalizing through the repository-relative member root makes an escaping
+  # path a Nix evaluation error rather than an untracked source admission.
+  normalizeRelativePath =
+    path:
+    let
+      step =
+        parts: part:
+        if part == "" || part == "." then
+          parts
+        else if part == ".." then
+          if parts == [ ] then
+            throw "Cargo path dependency escapes repository: ${path}"
+          else
+            pkgs.lib.init parts
+        else
+          parts ++ [ part ];
+    in
+    pkgs.lib.concatStringsSep "/" (
+      pkgs.lib.foldl' step [ ] (pkgs.lib.splitString "/" path)
+    );
+  cargoDependencyPaths =
+    manifest:
+    let
+      pathsInDependencyTable =
+        value:
+        if builtins.isAttrs value then
+          (pkgs.lib.optional (value ? path && builtins.isString value.path) value.path)
+          ++ pkgs.lib.concatMap pathsInDependencyTable (builtins.attrValues value)
+        else if builtins.isList value then
+          pkgs.lib.concatMap pathsInDependencyTable value
+        else
+          [ ];
+      visit =
+        value:
+        if builtins.isAttrs value then
+          pkgs.lib.concatMap (
+            name:
+            let
+              child = builtins.getAttr name value;
+            in
+            if name == "dependencies" || pkgs.lib.hasSuffix "-dependencies" name then
+              pathsInDependencyTable child
+            else
+              visit child
+          ) (builtins.attrNames value)
+        else if builtins.isList value then
+          pkgs.lib.concatMap visit value
+        else
+          [ ];
+    in
+    visit manifest;
+  cargoPackageClosure =
+    roots:
+    let
+      packageRoot =
+        member: dependency:
+        if pkgs.lib.hasPrefix "/" dependency then
+          throw "Cargo path dependency must be repository-relative: ${dependency}"
+        else
+          normalizeRelativePath "${member}/${dependency}";
+      visit =
+        seen: pending:
+        if pending == [ ] then
+          seen
+        else
+          let
+            member = builtins.head pending;
+            remaining = builtins.tail pending;
+            manifestPath = "${toString ../.}/${member}/Cargo.toml";
+          in
+          if builtins.elem member seen then
+            visit seen remaining
+          else if !builtins.pathExists manifestPath then
+            throw "Cargo path dependency manifest is missing: ${member}/Cargo.toml"
+          else
+            let
+              manifest = builtins.fromTOML (builtins.readFile manifestPath);
+              dependencies = map (packageRoot member) (cargoDependencyPaths manifest);
+            in
+            visit (seen ++ [ member ]) (remaining ++ dependencies);
+    in
+    visit [ ] roots;
   workspacePlaceholderTargets =
     member:
     if member == "server" then
@@ -750,6 +849,10 @@ in
       hostArgs
       wasmTestSrc
       siteSrc
+      workspaceMembers
+      cargoTargetSource
+      cargoMemberSource
+      cargoPackageClosure
       appOfflineCargoHome
       toolsOfflineCargoHome
       cargoArtifacts

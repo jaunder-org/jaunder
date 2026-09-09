@@ -163,6 +163,12 @@ enum CoverageCmd {
         #[arg(long, default_value = ".")]
         out: String,
     },
+    /// Validate completed coverage producer evidence.
+    ValidateStatus {
+        /// Path to the coverage producer status JSON.
+        #[arg(long)]
+        status: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -264,6 +270,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Coverage(CoverageCmd::Emit { out }) => coverage::emit::run(&out),
+        Command::Coverage(CoverageCmd::ValidateStatus { status }) => {
+            coverage::validate_status::run(&status)
+        }
         Command::WasmCoverage(WasmCoverageCmd::Initialize) => wasm_coverage::initialize(),
         Command::WasmCoverage(WasmCoverageCmd::Map { site_src }) => wasm_coverage::map(&site_src),
         Command::WasmCoverage(WasmCoverageCmd::Finalize) => wasm_coverage::finalize(),

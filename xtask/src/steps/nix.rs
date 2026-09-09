@@ -1,5 +1,5 @@
 use std::fmt::{Display, Formatter};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::Poll;
 
 use anyhow::{Context, Result, bail};
+use coverage::status::CoverageStatus;
 use processkit::{Outcome, StdioMode};
 use tokio::io::AsyncWrite;
 
@@ -151,32 +152,39 @@ pub fn check_supporting_test_checks(result: &mut CommandResult, no_test: bool) {
 
 /// The Nix coverage check: the instrumented test suite (SQLite- and
 /// PostgreSQL-backed tests together in one pass under an ephemeral PostgreSQL)
-/// emits the reports; the regression gate + auto-heal then runs host-side over
-/// the check's `$out`.
+/// produces status and reports. The Nix gate validates status before policy;
+/// the host independently validates status and coverage evidence before applying
+/// the stateless report policy.
 pub fn coverage(result: &mut CommandResult) {
-    // The producer always succeeds and always emits `$out` (reports + status +
-    // diagnostics). The consumer (`coverage-gate`) fails iff the in-sandbox
-    // sentinel reports a test/infra failure.
     result.push(build_check("nix-coverage", "coverage"));
     let gate = build_check("nix-coverage-gate", "coverage-gate");
+    let status_path = ".xtask/gcroots/coverage/status.json";
     if !gate.ok {
         // A failed gate is an in-sandbox failure (test or infrastructure) — the
-        // authoritative category lives in the producer's status.json. Report it
-        // precisely (not as an opaque build failure) and skip host
+        // authoritative category lives in the producer's validated status.json.
+        // Report it precisely (not as an opaque build failure) and skip host
         // post-processing (there is no coverage verdict to compute).
-        let status_path = ".xtask/gcroots/coverage/status.json";
         result.push(failed_status_step(
             "coverage",
             "xtask.nix.coverage_status",
-            "coverage gate failed (no status.json)",
-            || std::fs::read_to_string(status_path),
-            coverage::status::CoverageStatus::from_json,
+            "coverage gate failed (no valid status.json)",
+            || fs::read_to_string(status_path),
+            parse_coverage_status,
             sentinel_detail,
             &mut std::io::stderr(),
         ));
         return;
     }
     result.push(gate);
+    if let Err(error) = fs::read_to_string(status_path)
+        .with_context(|| format!("reading coverage status at {status_path}"))
+        .and_then(|raw| coverage_status_after_successful_gate(&raw))
+    {
+        result.push(StepResult::fail("coverage").detail(format!(
+            "invalid coverage status after successful Nix gate: {error:#}"
+        )));
+        return;
+    }
     // `crate::coverage` is xtask's host-side gate module; `coverage` (no
     // `crate::`) is the shared crate holding the sentinel schema.
     let (step, report) = crate::coverage::run(".xtask/gcroots/coverage");
@@ -215,20 +223,20 @@ pub fn elisp_coverage(result: &mut CommandResult) {
 
 fn lift_elisp_coverage_artifacts(source: &Path, destination: &Path) -> StepResult {
     let names = ["lcov.info", "summary.txt", "status.json"];
-    if let Err(error) = std::fs::create_dir_all(destination) {
+    if let Err(error) = fs::create_dir_all(destination) {
         return StepResult::fail("elisp-coverage-artifacts")
             .detail(format!("creating {}: {error}", destination.display()));
     }
     let mut failures = Vec::new();
     for name in names {
         let target = destination.join(name);
-        if let Err(error) = std::fs::remove_file(&target)
+        if let Err(error) = fs::remove_file(&target)
             && error.kind() != io::ErrorKind::NotFound
         {
             failures.push(format!("{name}: removing prior artifact: {error}"));
             continue;
         }
-        if let Err(error) = std::fs::copy(source.join(name), target) {
+        if let Err(error) = fs::copy(source.join(name), target) {
             failures.push(format!("{name}: {error}"));
         }
     }
@@ -273,7 +281,7 @@ pub fn doctests(result: &mut CommandResult) {
             "doctests",
             "xtask.nix.doctest_status",
             "doctest gate failed (no status.json)",
-            || std::fs::read_to_string(status_path),
+            || fs::read_to_string(status_path),
             doctests::status::DoctestStatus::from_json,
             doctest_sentinel_detail,
             &mut std::io::stderr(),
@@ -323,6 +331,14 @@ fn failed_status_detail<T>(
             fallback.to_owned()
         }
     }
+}
+
+fn parse_coverage_status(raw: &str) -> Result<CoverageStatus> {
+    CoverageStatus::from_validated_json(raw).context("validating coverage status")
+}
+
+fn coverage_status_after_successful_gate(raw: &str) -> Result<CoverageStatus> {
+    CoverageStatus::from_completed_json(raw).context("validating completed coverage status")
 }
 
 /// Each located violation renders as `file:line [kind] detail`; an unreadable
@@ -492,9 +508,9 @@ fn copy_e2e_diagnostics_between(src_dir: &Path, dest_dir: &Path) -> DiagnosticsC
     copy_e2e_diagnostics_with_ops(
         src_dir,
         dest_dir,
-        |path| std::fs::remove_file(path),
-        |from, to| std::fs::copy(from, to),
-        |path, permissions| std::fs::set_permissions(path, permissions),
+        |path| fs::remove_file(path),
+        |from, to| fs::copy(from, to),
+        |path, permissions| fs::set_permissions(path, permissions),
     )
 }
 
@@ -519,7 +535,7 @@ fn clear_authoritative_e2e_inputs(
     remove: &mut impl FnMut(&Path) -> io::Result<()>,
     failures: &mut Vec<String>,
 ) {
-    let entries = match std::fs::read_dir(dest_dir) {
+    let entries = match fs::read_dir(dest_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return,
         Err(error) => {
@@ -557,12 +573,12 @@ fn copy_e2e_diagnostics_with_ops(
     dest_dir: &Path,
     mut remove: impl FnMut(&Path) -> io::Result<()>,
     mut copy: impl FnMut(&Path, &Path) -> io::Result<u64>,
-    mut set_permissions: impl FnMut(&Path, std::fs::Permissions) -> io::Result<()>,
+    mut set_permissions: impl FnMut(&Path, fs::Permissions) -> io::Result<()>,
 ) -> DiagnosticsCopy {
     let mut copied = 0;
     let mut failures = Vec::new();
     clear_authoritative_e2e_inputs(dest_dir, &mut remove, &mut failures);
-    let entries = match std::fs::read_dir(src_dir) {
+    let entries = match fs::read_dir(src_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return DiagnosticsCopy { copied, failures };
@@ -572,7 +588,7 @@ fn copy_e2e_diagnostics_with_ops(
             return DiagnosticsCopy { copied, failures };
         }
     };
-    if let Err(error) = std::fs::create_dir_all(dest_dir) {
+    if let Err(error) = fs::create_dir_all(dest_dir) {
         failures.push(format!("creating {}: {error}", dest_dir.display()));
     }
     for entry in entries {
@@ -609,7 +625,7 @@ fn copy_e2e_diagnostics_with_ops(
         }
         match copy(&from, &to) {
             Ok(_) => {
-                if let Err(error) = set_permissions(&to, std::fs::Permissions::from_mode(0o644)) {
+                if let Err(error) = set_permissions(&to, fs::Permissions::from_mode(0o644)) {
                     failures.push(format!("setting permissions on {}: {error}", to.display()));
                 }
                 copied += 1;
@@ -633,9 +649,9 @@ fn lift_e2e_diagnostics_with(src_dir: &Path, dest_dir: &Path, stderr: &mut impl 
     lift_e2e_diagnostics_with_ops(
         src_dir,
         dest_dir,
-        |path| std::fs::remove_file(path),
-        |from, to| std::fs::copy(from, to),
-        |path, permissions| std::fs::set_permissions(path, permissions),
+        |path| fs::remove_file(path),
+        |from, to| fs::copy(from, to),
+        |path, permissions| fs::set_permissions(path, permissions),
         stderr,
     )
 }
@@ -645,7 +661,7 @@ fn lift_e2e_diagnostics_with_ops(
     dest_dir: &Path,
     remove: impl FnMut(&Path) -> io::Result<()>,
     copy: impl FnMut(&Path, &Path) -> io::Result<u64>,
-    set_permissions: impl FnMut(&Path, std::fs::Permissions) -> io::Result<()>,
+    set_permissions: impl FnMut(&Path, fs::Permissions) -> io::Result<()>,
     stderr: &mut impl Write,
 ) -> usize {
     report_diagnostics_copy(
@@ -797,8 +813,8 @@ fn failure_excerpt(build_log: &str) -> String {
 fn write_failure_excerpt(log_path: &str) -> io::Result<String> {
     write_failure_excerpt_with(
         log_path,
-        |path| std::fs::read_to_string(path),
-        |path, body| std::fs::write(path, body),
+        |path| fs::read_to_string(path),
+        |path, body| fs::write(path, body),
     )
 }
 
@@ -954,8 +970,8 @@ fn finish_build_with(
 fn build_check(step_name: &str, check: &str) -> StepResult {
     let start = std::time::Instant::now();
     let mut diagnostic_failed = match prepare_build_dirs_with(
-        || std::fs::create_dir_all(".xtask/gcroots"),
-        || std::fs::create_dir_all(format!(".xtask/diagnostics/{check}")),
+        || fs::create_dir_all(".xtask/gcroots"),
+        || fs::create_dir_all(format!(".xtask/diagnostics/{check}")),
     ) {
         Ok(failed) => failed,
         Err(error) => {
@@ -1083,6 +1099,46 @@ pub fn eval_coverage_drvpath(flake_dir: &Path) -> Result<String> {
     )
 }
 
+/// Evaluate the probe-only identity of the filtered coverage source.
+pub(crate) fn eval_coverage_source_probe_drvpath(flake_dir: &Path) -> Result<String> {
+    nix_eval_raw(
+        Some(flake_dir),
+        &format!(".#checks.{SYSTEM}.coverage-source-probe.drvPath"),
+    )
+}
+
+/// Realize the coverage producer and return its output directory.
+pub(crate) fn build_coverage_out_path(flake_dir: &Path) -> Result<String> {
+    let installable = format!(".#checks.{SYSTEM}.coverage");
+    let out = Command::new("nix")
+        .current_dir(flake_dir)
+        .args([
+            "build",
+            "--no-link",
+            "--print-out-paths",
+            "--accept-flake-config",
+            &installable,
+        ])
+        .output()
+        .with_context(|| format!("spawning `nix build {installable}`"))?;
+    if !out.status.success() {
+        bail!(
+            "`nix build {installable}` failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let path = String::from_utf8(out.stdout)
+        .with_context(|| format!("`nix build {installable}` output was not UTF-8"))?
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    if path.is_empty() {
+        bail!("`nix build {installable}` returned an empty output path");
+    }
+    Ok(path)
+}
+
 /// Named derivation identities guarded by `nix probe-source`.
 pub(crate) struct SourceProbeDrvPaths {
     pub(crate) static_docs: String,
@@ -1109,7 +1165,7 @@ pub(crate) fn eval_source_probe_drvpaths(flake_dir: &Path) -> Result<SourceProbe
 /// aggregate one warning without changing the primary failure.
 fn rescue_diagnostics(check: &str) -> bool {
     let dest = format!(".xtask/diagnostics/{check}");
-    let mut failed = std::fs::create_dir_all(&dest).is_err();
+    let mut failed = fs::create_dir_all(&dest).is_err();
     if check.starts_with("e2e") {
         match eval_out_path(check) {
             Ok(out_path) => {
@@ -1120,7 +1176,7 @@ fn rescue_diagnostics(check: &str) -> bool {
         }
     }
     let prefix = format!("nix-build-jaunder-{check}");
-    let entries = match std::fs::read_dir("/tmp") {
+    let entries = match fs::read_dir("/tmp") {
         Ok(entries) => entries,
         Err(_) => return true,
     };
@@ -1173,15 +1229,19 @@ mod tests {
     use super::{
         BuildCaptureOutcome, BuildCompletion, BuildStderrTee, CommandResult, E2E_COMBOS,
         E2eOutcome, FailedBuildDiagnostics, Process, STATIC_CHECKS, StepResult, build_e2e_combos,
-        check_supporting_test_check_names, doctest_sentinel_detail,
-        failed_build_after_diagnostics_with, failed_status_step, finish_build_with,
-        finish_e2e_combo, lift_elisp_coverage_artifacts, prepare_build_dirs_with,
-        report_build_diagnostic_failure, sentinel_detail, test_check_names, validate_check_names,
+        check_supporting_test_check_names, coverage_status_after_successful_gate,
+        doctest_sentinel_detail, failed_build_after_diagnostics_with, failed_status_step,
+        finish_build_with, finish_e2e_combo, lift_elisp_coverage_artifacts, parse_coverage_status,
+        prepare_build_dirs_with, report_build_diagnostic_failure, sentinel_detail,
+        test_check_names, validate_check_names,
     };
     use crate::audit_wasm::{ArtifactMetrics, AuditReport};
     use crate::result::{NixRealization, NixReport};
     use crate::steps::wasm_budget;
-    use coverage::status::{CoverageStatus, StatusCategory};
+    use coverage::status::{
+        COVERAGE_STATUS_VERSION, CoverageStatus, Population, ProcessOutcome, RequiredStage,
+        StageResult, StatusCategory,
+    };
     use doctests::check::{Kind, Violation};
     use doctests::status::DoctestStatus;
 
@@ -1334,8 +1394,16 @@ mod tests {
     #[test]
     fn infra_detail_is_labeled_as_infrastructure() {
         let s = CoverageStatus {
+            version: COVERAGE_STATUS_VERSION,
+            stages: vec![],
+            population: Population {
+                expected: 0,
+                executed: 0,
+                ignored: 0,
+            },
             category: StatusCategory::Infra,
             failed_tests: vec![],
+            missing_tests: vec![],
             infra_detail: Some("No space left on device".into()),
         };
         let d = sentinel_detail(&s);
@@ -1346,13 +1414,101 @@ mod tests {
     #[test]
     fn test_failure_lists_tests_and_disclaims_coverage() {
         let s = CoverageStatus {
+            version: COVERAGE_STATUS_VERSION,
+            stages: vec![],
+            population: Population {
+                expected: 1,
+                executed: 1,
+                ignored: 0,
+            },
             category: StatusCategory::TestFailure,
             failed_tests: vec!["web_posts::case_3".into()],
+            missing_tests: vec![],
             infra_detail: None,
         };
         let d = sentinel_detail(&s);
         assert!(d.contains("test failure"));
         assert!(d.contains("web_posts::case_3"));
+    }
+
+    fn complete_coverage_status() -> CoverageStatus {
+        CoverageStatus {
+            version: COVERAGE_STATUS_VERSION,
+            category: StatusCategory::TestsOk,
+            stages: RequiredStage::ALL
+                .into_iter()
+                .map(|stage| StageResult {
+                    stage,
+                    outcome: ProcessOutcome::Success,
+                })
+                .collect(),
+            population: Population {
+                expected: 1,
+                executed: 1,
+                ignored: 0,
+            },
+            failed_tests: Vec::new(),
+            missing_tests: Vec::new(),
+            infra_detail: None,
+        }
+    }
+
+    #[test]
+    fn successful_coverage_gate_requires_complete_tests_ok_status() {
+        let complete = complete_coverage_status();
+        assert_eq!(
+            sentinel_detail(&coverage_status_after_successful_gate(&complete.to_json()).unwrap()),
+            "in-sandbox: tests ok"
+        );
+
+        let mut unknown_version = complete.clone();
+        unknown_version.version += 1;
+        let mut contradiction = complete.clone();
+        contradiction.infra_detail = Some("tests cannot be both ok and infra".into());
+        let mut incomplete = complete.clone();
+        incomplete.stages.pop();
+        let mut test_failure = complete;
+        test_failure.category = StatusCategory::TestFailure;
+        test_failure.stages[3].outcome = ProcessOutcome::ExitCode { exit_code: 1 };
+        test_failure.failed_tests = vec!["server::broken".into()];
+
+        for (name, raw) in [
+            ("malformed", "{".to_owned()),
+            ("unknown version", unknown_version.to_json()),
+            ("contradiction", contradiction.to_json()),
+            ("incomplete", incomplete.to_json()),
+            ("non-tests-ok", test_failure.to_json()),
+        ] {
+            assert!(
+                coverage_status_after_successful_gate(&raw).is_err(),
+                "{name} status must fail closed after a successful Nix gate"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_coverage_gate_renders_validated_producer_diagnostics() {
+        let mut failed_status = complete_coverage_status();
+        failed_status.category = StatusCategory::TestFailure;
+        failed_status.stages[3].outcome = ProcessOutcome::ExitCode { exit_code: 1 };
+        failed_status.failed_tests = vec!["server::broken".into()];
+        let mut stderr = Vec::new();
+
+        let step = failed_status_step(
+            "coverage",
+            "xtask.nix.coverage_status",
+            "coverage gate failed (no status.json)",
+            || Ok(failed_status.to_json()),
+            parse_coverage_status,
+            sentinel_detail,
+            &mut stderr,
+        );
+
+        assert!(!step.ok);
+        let detail = step.detail.unwrap();
+        assert!(detail.contains("test failure"), "{detail}");
+        assert!(detail.contains("server::broken"), "{detail}");
+        assert!(detail.contains("not a coverage regression"), "{detail}");
     }
 
     fn assert_status_attempt_warns_once<T>(

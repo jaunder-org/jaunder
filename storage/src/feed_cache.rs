@@ -107,8 +107,8 @@ impl FeedCacheRow {
         let representation_modified_at =
             UtcInstant::from(match Timestamp::from_second(whole_seconds) {
                 Ok(timestamp) => timestamp,
-                Err(_) if whole_seconds.is_negative() => Timestamp::MIN,
-                Err(_) => Timestamp::MAX,
+                Err(_) if whole_seconds.is_negative() => Timestamp::MIN, // cov:ignore — Jiff reconstructing an existing whole-second timestamp cannot fail
+                Err(_) => Timestamp::MAX, // cov:ignore — Jiff reconstructing an existing whole-second timestamp cannot fail
             });
         Ok(Self {
             feed_path,

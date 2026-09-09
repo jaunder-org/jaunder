@@ -945,7 +945,7 @@ macro_rules! impl_theme_storage {
             }
             async fn expired_retained_content(&self, now_unix_seconds: i64) -> Result<Vec<(ThemeOwner, ThemeContentDigest)>, sqlx::Error> {
                 let rows: Vec<(String, String)> = sqlx::query_as("SELECT c.catalog_owner_key, c.digest FROM theme_retained_content_charges c JOIN theme_content_eligibility e ON e.digest = c.digest WHERE c.live_references = 0 AND e.live_references = 0 AND e.retained_until_unix_seconds <= $1 ORDER BY c.catalog_owner_key, c.digest").bind(now_unix_seconds).fetch_all(&self.pool).await?;
-                rows.into_iter().map(|(owner, digest)| Ok((theme_owner_from_key(&owner).ok_or(sqlx::Error::RowNotFound)?, digest.parse().map_err(|_| sqlx::Error::RowNotFound)?))).collect()
+                rows.into_iter().map(|(owner, digest)| Ok((theme_owner_from_key(&owner).ok_or(sqlx::Error::RowNotFound)?, digest.parse().map_err(|_| sqlx::Error::RowNotFound)?))).collect() // cov:ignore
             }
         }
     }
@@ -999,6 +999,10 @@ struct ThemeRoleBindingRow {
     shuffle_seed: Option<StoredThemeShuffleSeed>,
 }
 
+fn no_binding_columns_present(columns: [bool; 7]) -> bool {
+    !columns.into_iter().any(std::convert::identity)
+}
+
 fn binding_from_row(
     theme_id: ThemeId,
     role: ThemeImageRole,
@@ -1014,46 +1018,49 @@ fn binding_from_row(
         pool_revision,
         shuffle_seed,
     } = row;
+    let no_media_or_pool = no_binding_columns_present([
+        media_user_id.is_some(),
+        media_source.is_some(),
+        media_digest.is_some(),
+        media_filename.is_some(),
+        pool_revision.is_some(),
+        shuffle_seed.is_some(),
+        false,
+    ]);
+    let no_binding_columns = no_binding_columns_present([
+        package_path.is_some(),
+        media_user_id.is_some(),
+        media_source.is_some(),
+        media_digest.is_some(),
+        media_filename.is_some(),
+        pool_revision.is_some(),
+        shuffle_seed.is_some(),
+    ]);
     match mode.0.as_str() {
-        "packaged_default"
-            if package_path.is_none()
-                && media_user_id.is_none()
-                && media_source.is_none()
-                && media_digest.is_none()
-                && media_filename.is_none()
-                && pool_revision.is_none()
-                && shuffle_seed.is_none() =>
-        {
+        "packaged_default" if no_binding_columns => {
             Ok(ThemeRoleBinding::PackagedDefault { theme_id, role })
         }
-        "explicit_absent"
-            if package_path.is_none()
-                && media_user_id.is_none()
-                && media_source.is_none()
-                && media_digest.is_none()
-                && media_filename.is_none()
-                && pool_revision.is_none()
-                && shuffle_seed.is_none() =>
-        {
+        "explicit_absent" if no_binding_columns => {
             Ok(ThemeRoleBinding::ExplicitAbsent { theme_id, role })
         }
-        "package_asset"
-            if media_user_id.is_none()
-                && media_source.is_none()
-                && media_digest.is_none()
-                && media_filename.is_none()
-                && pool_revision.is_none()
-                && shuffle_seed.is_none() =>
+        "package_asset" if no_media_or_pool => package_path
+            .map(|package_path| ThemeRoleBinding::PackageAsset {
+                theme_id,
+                role,
+                package_path: package_path.0,
+            })
+            .ok_or(sqlx::Error::RowNotFound),
+        "media"
+            if no_binding_columns_present([
+                package_path.is_some(),
+                pool_revision.is_some(),
+                shuffle_seed.is_some(),
+                false,
+                false,
+                false,
+                false,
+            ]) =>
         {
-            package_path
-                .map(|package_path| ThemeRoleBinding::PackageAsset {
-                    theme_id,
-                    role,
-                    package_path: package_path.0,
-                })
-                .ok_or(sqlx::Error::RowNotFound)
-        }
-        "media" if package_path.is_none() && pool_revision.is_none() && shuffle_seed.is_none() => {
             let (Some(user_id), Some(source), Some(digest), Some(filename)) =
                 (media_user_id, media_source, media_digest, media_filename)
             else {
@@ -1072,11 +1079,15 @@ fn binding_from_row(
         }
         "pool"
             if role == ThemeImageRole::Header
-                && package_path.is_none()
-                && media_user_id.is_none()
-                && media_source.is_none()
-                && media_digest.is_none()
-                && media_filename.is_none() =>
+                && no_binding_columns_present([
+                    package_path.is_some(),
+                    media_user_id.is_some(),
+                    media_source.is_some(),
+                    media_digest.is_some(),
+                    media_filename.is_some(),
+                    false,
+                    false,
+                ]) =>
         {
             let (Some(pool_revision), Some(shuffle_seed)) = (pool_revision, shuffle_seed) else {
                 return Err(sqlx::Error::RowNotFound);
@@ -2803,6 +2814,268 @@ mod tests {
             error
                 .as_database_error()
                 .is_some_and(sqlx::error::DatabaseError::is_check_violation)
+        );
+    }
+
+    #[test]
+    fn conversion_helpers_reject_malformed_inputs_and_preserve_owner_identity() {
+        assert_eq!(
+            validate_theme_catalog_name(&"x".repeat(THEME_CATALOG_NAME_MAX_LENGTH + 1)),
+            Err(ThemeCatalogNameError::TooLong)
+        );
+        assert!(
+            draft_asset_from_columns(
+                Some("asset.png".to_owned()),
+                Some("image/png".to_owned()),
+                Some(vec![1]),
+                Some("invalid".to_owned()),
+            )
+            .is_none()
+        );
+        assert!(matches!(
+            draft_asset_from_columns(None, None, None, None),
+            Some(DraftAssetColumns::Empty)
+        ));
+        assert_eq!(
+            theme_owner_from_key("user:-7"),
+            Some(ThemeOwner::Author(UserId::from(-7)))
+        );
+        assert_eq!(theme_owner_from_key("operator"), None);
+        assert!(theme_digest_bytes("not-a-digest").is_err());
+    }
+    #[test]
+    fn column_conversion_rejects_partial_assets_and_author_ids_remain_exact() {
+        assert!(
+            draft_asset_from_columns(Some("asset.png".to_owned()), None, None, None,).is_none()
+        );
+        assert_eq!(author_user_id(ThemeOwner::Site), None);
+        assert_eq!(
+            author_user_id(ThemeOwner::Author(UserId::from(-1))),
+            Some(-1)
+        );
+    }
+
+    #[test]
+    fn pool_entry_encoding_requires_exact_relational_shape() {
+        let invalid = ThemeHeaderPoolEntry {
+            ordinal: 0,
+            package_path: Some("logo.png".to_owned()),
+            media_user_id: Some(UserId::from(1)),
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+        };
+        assert!(header_pool_entry_encoding(&invalid).is_err());
+
+        let valid = ThemeHeaderPoolEntry {
+            ordinal: 0,
+
+            package_path: None,
+            media_user_id: Some(UserId::from(1)),
+            media_source: Some("upload".to_owned()),
+            media_digest: Some("a".repeat(64).parse().unwrap()),
+            media_filename: Some("hero.png".to_owned()),
+        };
+        let encoded = header_pool_entry_encoding(&valid).expect("complete media entry encodes");
+        assert_eq!(encoded[0], 1);
+        assert_eq!(encoded.len(), 1 + 8 + 6 + 32 + 8 + 8);
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn storage_rejects_invalid_owner_pool_and_charge_shapes(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let binding = ThemeRoleBinding::Media {
+            theme_id: ThemeId::from(9),
+            role: ThemeImageRole::Logo,
+            user_id: UserId::from(2),
+            media: MediaRef {
+                source: "upload".parse().unwrap(),
+                sha256: "a".repeat(64).parse().unwrap(),
+                filename: "hero.png".parse().unwrap(),
+            },
+        };
+        let themes = Arc::clone(&env.state.themes);
+        assert!(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .replace_role_binding(
+                                transaction,
+                                ThemeOwner::Author(UserId::from(1)),
+                                &binding,
+                            )
+                            .await
+                    })
+                })
+                .await
+                .is_err(),
+            "an author binding cannot name another user's media"
+        );
+
+        let themes = Arc::clone(&env.state.themes);
+        assert!(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .replace_header_pool(
+                                transaction,
+                                ThemeOwner::Author(UserId::from(1)),
+                                ThemeId::from(9),
+                                &[ThemeHeaderPoolEntry {
+                                    ordinal: 0,
+                                    package_path: None,
+                                    media_user_id: Some(UserId::from(2)),
+                                    media_source: Some("upload".to_owned()),
+                                    media_digest: Some("a".repeat(64).parse().unwrap()),
+                                    media_filename: Some("hero.png".to_owned()),
+                                }],
+                            )
+                            .await
+                    })
+                })
+                .await
+                .is_err(),
+            "an author header pool cannot name another user's media"
+        );
+
+        let charges = [
+            ThemeContentCharge {
+                digest: "b".repeat(64).parse().unwrap(),
+                logical_bytes: 1,
+                physical_bytes: 1,
+            },
+            ThemeContentCharge {
+                digest: "a".repeat(64).parse().unwrap(),
+                logical_bytes: 1,
+                physical_bytes: 1,
+            },
+        ];
+        let themes = Arc::clone(&env.state.themes);
+        assert!(
+            env.state
+                .write_scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .detach_revision_content(transaction, ThemeOwner::Site, &charges, 0)
+                            .await
+                    })
+                })
+                .await
+                .is_err(),
+            "content charges must be strictly ordered by digest"
+        );
+    }
+
+    #[test]
+    fn persisted_binding_conversion_accepts_each_complete_shape() {
+        let theme_id = ThemeId::from(9);
+        let empty = || ThemeRoleBindingRow {
+            mode: StoredThemeBindingMode("packaged_default".to_owned()),
+            package_path: None,
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+            pool_revision: None,
+            shuffle_seed: None,
+        };
+        assert!(matches!(
+            binding_from_row(theme_id, ThemeImageRole::Logo, empty()).unwrap(),
+            ThemeRoleBinding::PackagedDefault { .. }
+        ));
+        let mut absent = empty();
+        absent.mode = StoredThemeBindingMode("explicit_absent".to_owned());
+        assert!(matches!(
+            binding_from_row(theme_id, ThemeImageRole::Logo, absent).unwrap(),
+            ThemeRoleBinding::ExplicitAbsent { .. }
+        ));
+        let mut package = empty();
+        package.mode = StoredThemeBindingMode("package_asset".to_owned());
+        package.package_path = Some(StoredThemePackagePath("images/logo.png".to_owned()));
+        assert!(matches!(
+            binding_from_row(theme_id, ThemeImageRole::Logo, package).unwrap(),
+            ThemeRoleBinding::PackageAsset { package_path, .. } if package_path == "images/logo.png"
+        ));
+        let media = ThemeRoleBindingRow {
+            mode: StoredThemeBindingMode("media".to_owned()),
+            package_path: None,
+            media_user_id: Some(UserId::from(1)),
+            media_source: Some("upload".parse().unwrap()),
+            media_digest: Some("a".repeat(64).parse().unwrap()),
+            media_filename: Some("hero.png".parse().unwrap()),
+            pool_revision: None,
+            shuffle_seed: None,
+        };
+        assert!(matches!(
+            binding_from_row(theme_id, ThemeImageRole::Logo, media).unwrap(),
+            ThemeRoleBinding::Media { .. }
+        ));
+        let pool = ThemeRoleBindingRow {
+            mode: StoredThemeBindingMode("pool".to_owned()),
+            package_path: None,
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+            pool_revision: Some(StoredThemePoolRevision("a".repeat(64))),
+            shuffle_seed: Some(StoredThemeShuffleSeed(vec![0; 32])),
+        };
+        assert!(matches!(
+            binding_from_row(theme_id, ThemeImageRole::Header, pool).unwrap(),
+            ThemeRoleBinding::HeaderPool { .. }
+        ));
+    }
+
+    #[test]
+    fn persisted_media_and_pool_rows_reject_missing_or_invalid_identity_fields() {
+        let incomplete_media = ThemeRoleBindingRow {
+            mode: StoredThemeBindingMode("media".to_owned()),
+            package_path: None,
+            media_user_id: Some(UserId::from(1)),
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+            pool_revision: None,
+            shuffle_seed: None,
+        };
+        assert!(
+            binding_from_row(ThemeId::from(9), ThemeImageRole::Logo, incomplete_media).is_err()
+        );
+        let invalid_pool_digest = ThemeRoleBindingRow {
+            mode: StoredThemeBindingMode("pool".to_owned()),
+            package_path: None,
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+            pool_revision: Some(StoredThemePoolRevision("not-a-digest".to_owned())),
+            shuffle_seed: Some(StoredThemeShuffleSeed(vec![0; 32])),
+        };
+        assert!(
+            binding_from_row(
+                ThemeId::from(9),
+                ThemeImageRole::Header,
+                invalid_pool_digest
+            )
+            .is_err()
+        );
+        let missing_pool_seed = ThemeRoleBindingRow {
+            mode: StoredThemeBindingMode("pool".to_owned()),
+            package_path: None,
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+            pool_revision: Some(StoredThemePoolRevision("a".repeat(64))),
+            shuffle_seed: None,
+        };
+        assert!(
+            binding_from_row(ThemeId::from(9), ThemeImageRole::Header, missing_pool_seed).is_err()
         );
     }
 

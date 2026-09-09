@@ -133,21 +133,40 @@ impl Process {
     }
 }
 
+/// `ESRCH` means the process vanished while processkit was resolving its
+/// identity, so it is an observed stopped state rather than a probe failure.
 fn process_identity_is_stopped(pid: u32, start_time: Option<u64>) -> bool {
-    if processkit::process_is_alive(pid, start_time).is_ok_and(|alive| !alive) {
-        return true;
+    match processkit::process_is_alive(pid, start_time) {
+        Ok(false) => true,
+        Ok(true) => {
+            #[cfg(target_os = "linux")]
+            {
+                let stat_path = format!("/proc/{pid}/stat");
+                std::fs::read_to_string(stat_path).is_ok_and(|stat| {
+                    stat.rsplit_once(") ")
+                        .is_some_and(|(_, fields)| fields.starts_with("Z "))
+                })
+            }
+            #[cfg(not(target_os = "linux"))]
+            false
+        }
+        Err(error) => match error.reason() {
+            processkit::ErrorReason::Io(source) => process_probe_reports_stopped(source),
+            _ => false,
+        },
     }
-    #[cfg(target_os = "linux")]
-    {
-        let stat_path = format!("/proc/{pid}/stat");
-        std::fs::read_to_string(stat_path)
-            .map(|stat| {
-                stat.rsplit_once(") ")
-                    .is_some_and(|(_, fields)| fields.starts_with("Z "))
-            })
-            .unwrap_or(true)
-    }
-    #[cfg(not(target_os = "linux"))]
+}
+
+#[cfg(unix)]
+fn process_probe_reports_stopped(error: &std::io::Error) -> bool {
+    // POSIX reserves errno 3 for ESRCH.
+    const ESRCH: i32 = 3;
+
+    error.raw_os_error() == Some(ESRCH)
+}
+
+#[cfg(not(unix))]
+fn process_probe_reports_stopped(_: &std::io::Error) -> bool {
     false
 }
 
@@ -166,7 +185,7 @@ mod tests {
 
     use processkit::{Command, Outcome};
 
-    use super::Process;
+    use super::{Process, process_identity_is_stopped, process_probe_reports_stopped};
 
     #[test]
     fn wait_returns_the_child_outcome() {
@@ -221,10 +240,19 @@ mod tests {
         assert_eq!(outcome, None);
         assert!(started.elapsed() < Duration::from_secs(5));
         let deadline = Instant::now() + Duration::from_secs(5);
-        while original_process_is_running(pid, start_time) && Instant::now() < deadline {
+        while !process_identity_is_stopped(pid, start_time) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert!(!original_process_is_running(pid, start_time));
+        assert!(process_identity_is_stopped(pid, start_time));
+    }
+
+    #[test]
+    fn esrch_identity_probe_means_process_stopped() {
+        // The PID can disappear after a liveness check but before its identity
+        // is read. That is a terminal lifecycle state, not a probe failure.
+        let error = std::io::Error::from_raw_os_error(3);
+
+        assert!(process_probe_reports_stopped(&error));
     }
 
     #[test]
@@ -266,7 +294,7 @@ mod tests {
         while Instant::now() < deadline {
             if identities
                 .iter()
-                .all(|(pid, start_time)| !original_process_is_running(*pid, *start_time))
+                .all(|(pid, start_time)| process_identity_is_stopped(*pid, *start_time))
             {
                 assert_eq!(
                     fs::read(&capture_path).expect("read stderr capture"),
@@ -277,23 +305,6 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         panic!("process tree remained alive after its owner dropped");
-    }
-
-    #[cfg(target_os = "linux")]
-    /// A killed orphan can remain as a non-running zombie until the host init
-    /// reaps it. Treat that as terminated while retaining processkit's
-    /// start-time identity check so PID reuse cannot produce a false pass.
-    fn original_process_is_running(pid: u32, start_time: Option<u64>) -> bool {
-        if !processkit::process_is_alive(pid, start_time).expect("check process identity") {
-            return false;
-        }
-        let stat_path = format!("/proc/{pid}/stat");
-        match fs::read_to_string(stat_path) {
-            Ok(stat) => stat
-                .rsplit_once(") ")
-                .is_none_or(|(_, fields)| !fields.starts_with("Z ")),
-            Err(_) => false,
-        }
     }
 
     fn wait_for_pids(path: &std::path::Path) -> Vec<u32> {

@@ -39,7 +39,7 @@ pub(crate) async fn normalize(response: impl IntoResponse) -> Response {
 
     let (mut parts, body) = response.into_parts();
     let Ok(body) = body::to_bytes(body, limit).await else {
-        unreachable!("server_fn constructs error responses from in-memory bytes");
+        unreachable!("server_fn constructs error responses from in-memory bytes"); // cov:ignore -- exact-sized framework error bodies are in-memory and cannot exceed their own limit.
     };
     let status = WebError::server_fn_error_status(&body);
     let body = WebError::normalize_server_fn_error_body(body.clone()).unwrap_or(body);

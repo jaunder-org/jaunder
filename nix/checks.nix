@@ -10,6 +10,9 @@ let
     wasmTestSrc
     siteSrc
     appOfflineCargoHome
+    workspaceMembers
+    cargoMemberSource
+    cargoPackageClosure
     toolsOfflineCargoHome
     cargoArtifacts
     leanTestProfile
@@ -30,6 +33,51 @@ let
     emacsSrc
     emacsForCi
     ;
+  # The root workspace remains the coverage population. Its Cargo manifests
+  # define the recursively discovered local path package build closure.
+  coverageMembers = cargoPackageClosure workspaceMembers;
+  # Coverage source remains bounded to Cargo-recognized package inputs plus the
+  # explicit nextest profile, SQLx migration trees and rust-embed assets consumed
+  # at compile time, and the immutable backup compatibility corpus consumed at
+  # runtime through CARGO_MANIFEST_DIR.
+  coverageAuxiliarySource =
+    relative:
+    relative == ".config/nextest.toml"
+    || pkgs.lib.hasPrefix "server/assets/" relative
+    || pkgs.lib.hasPrefix "storage/migrations/" relative
+    || pkgs.lib.hasPrefix "server/tests/misc/backup_corpus/" relative;
+  coverageSrc =
+    # Pure source-filter negative case: excluded auxiliary assets cannot perturb
+    # coverage source identity.
+    assert !(coverageAuxiliarySource "tools/devtool/fixture.css");
+    assert !(coverageAuxiliarySource "server/notes.txt");
+    assert (coverageAuxiliarySource "server/tests/misc/backup_corpus/index.json");
+    assert (coverageAuxiliarySource "storage/migrations/sqlite/0001_create_site_config.sql");
+    assert (coverageAuxiliarySource "server/assets/jaunder.css");
+    assert builtins.elem "tools/csr_bundle" coverageMembers;
+    assert !(builtins.elem "xtask" coverageMembers);
+    assert !(builtins.elem "tools/devtool" coverageMembers);
+    assert !(builtins.elem "tools/doctests" coverageMembers);
+    assert !(builtins.elem "tools/diagnostic-coverage-runtime" coverageMembers);
+    pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter =
+        path: type:
+        let
+          relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+        in
+        # Nix assembly is not coverage source; exclude only its top-level root.
+        !(type == "directory" && path == "${toString (craneLib.path ../.)}/nix")
+        && !(pkgs.lib.hasInfix "/xtask/" path)
+        && !(pkgs.lib.hasInfix "/docs/" path)
+        && !(pkgs.lib.hasInfix "/.github/" path)
+        && !(pkgs.lib.hasInfix "/elisp/" path)
+        && !(pkgs.lib.hasSuffix ".md" path)
+        && (
+          coverageAuxiliarySource relative
+          || cargoMemberSource coverageMembers path type
+        );
+    };
 
 # #93 / ADR-0032: shared zero-panic gate appended to each e2e testScript.
 # A server Rust panic is isolated (tests still pass), so without this it
@@ -908,40 +956,7 @@ static-code =
 coverage = craneLib.mkCargoDerivation (
   hostArgs
   // {
-    src = pkgs.lib.cleanSourceWith {
-      src = craneLib.path ../.;
-      filter =
-        path: type:
-        # Coverage-specific exclusions: none of these are
-        # instrumented, and admitting them would let unrelated edits
-        # bust the coverage cache. xtask/ is the host-only driver;
-        # tools/, docs/, .github/, elisp/, and top-level *.md are
-        # non-source.
-        # Nix assembly is not coverage source; exclude only its top-level root.
-        !(type == "directory" && path == "${toString (craneLib.path ../.)}/nix")
-        && !(pkgs.lib.hasInfix "/xtask/" path)
-        && !(pkgs.lib.hasInfix "/tools/" path)
-        && !(pkgs.lib.hasInfix "/docs/" path)
-        && !(pkgs.lib.hasInfix "/.github/" path)
-        && !(pkgs.lib.hasInfix "/elisp/" path)
-        && !(pkgs.lib.hasSuffix ".md" path)
-        && (
-          # Cargo-source ADMISSION clause (mirrors commonArgs.src
-          # :272-289): without it, ANY untracked non-gitignored file
-          # (a stray .txt, an editor temp) would enter the derivation
-          # and change its hash — impure (#37). Only buildable inputs
-          # are admitted.
-          (pkgs.lib.hasSuffix ".sql" path)
-          || (pkgs.lib.hasSuffix ".css" path)
-          || (builtins.match "scripts/.*" path != null)
-          # web/src/app/render.rs `include_str!`s csr/index.html
-          # inside a #[test], so the instrumented coverage BUILD needs
-          # it at compile time. filterCargoSources drops .html, so
-          # re-admit it explicitly or the build fails to compile.
-          || (pkgs.lib.hasSuffix "csr/index.html" path)
-          || (craneLib.filterCargoSources path type)
-        );
-    };
+    src = coverageSrc;
     inherit cargoArtifacts;
     pname = "jaunder-coverage";
     # Source-based coverage uses LLVM's embedded coverage map
@@ -976,41 +991,49 @@ coverage = craneLib.mkCargoDerivation (
     buildPhaseCargoCommand = ''
       export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
       mkdir -p emit-out
-      # devtool always exits 0 after writing emit-out/status.json;
-      # gating is the coverage-gate consumer derivation + host xtask.
+      # The producer emits checked stage evidence; the Nix gate and host xtask
+      # consume its status and reports as separate authoritative boundaries.
       devtool coverage emit --out emit-out
     '';
     installPhaseCommand = ''
       mkdir -p $out
-      # emit-out/coverage-report.lcov is intentionally NOT copied: it
-      # is an intermediate consumed only by `cargo crap`, not a gate
-      # output the host reads.
-      cp emit-out/coverage-report.txt $out/coverage-report.txt
-      cp emit-out/crap-report.json $out/crap-report.json
-      cp emit-out/status.json $out/status.json
-      cp -r emit-out/diagnostics $out/diagnostics
+      # Preserve controlled-red producer status and diagnostics even when report
+      # stages did not run. Reports are copied only when their producer stages
+      # produced them; their host consumer rejects missing or empty evidence.
+      if test -e emit-out/status.json; then
+        cp emit-out/status.json $out/status.json
+      fi
+      if test -d emit-out/diagnostics; then
+        cp -r emit-out/diagnostics $out/diagnostics
+      fi
+      # emit-out/coverage-report.lcov is intentionally NOT copied: it is an
+      # intermediate consumed only by `cargo crap`, not a gate output the host reads.
+      if test -e emit-out/coverage-report.txt; then
+        cp emit-out/coverage-report.txt $out/coverage-report.txt
+      fi
+      if test -e emit-out/crap-report.json; then
+        cp emit-out/crap-report.json $out/crap-report.json
+      fi
     '';
   }
 );
-# Belt-and-suspenders: an independent Nix-level red for in-sandbox
-# failures (test/infra) even if a caller bypasses host xtask. The
-# coverage-regression verdict is host-only (needs committed baselines
-# + git) and lives in xtask, not here. Named `jaunder-coverage-gate`
-# so the cachix pushFilter (jaunder-coverage|jaunder-e2e) excludes it.
+  # Probe-only identity: its sole varying input is the filtered coverage source.
+  # Keep this separate from coverage.drvPath, which also includes producer inputs.
+  coverage-source-probe = pkgs.runCommand "jaunder-coverage-source-probe" { src = coverageSrc; } ''
+    touch $out
+  '';
+# Belt-and-suspenders: the sandbox gate validates completed producer evidence
+# through the shared Rust contract, while the host separately consumes reports.
+# Named `jaunder-coverage-gate` so the cachix pushFilter
+# (jaunder-coverage|jaunder-e2e) excludes it.
 coverage-gate =
   pkgs.runCommand "jaunder-coverage-gate"
     {
-      nativeBuildInputs = [ pkgs.jq ];
+      nativeBuildInputs = [ devtoolBin ];
     }
     ''
-      cat ${self.checks.${system}.coverage}/status.json
-      cat=$(jq -r .category ${self.checks.${system}.coverage}/status.json)
-      if [ "$cat" != "tests-ok" ]; then
-        echo "coverage gate failed: category=$cat" >&2
-        jq -r '.infra_detail // (.failed_tests | join("\n"))' \
-          ${self.checks.${system}.coverage}/status.json >&2
-        exit 1
-      fi
+      devtool coverage validate-status \
+        --status ${self.checks.${system}.coverage}/status.json
       touch $out
     '';
 

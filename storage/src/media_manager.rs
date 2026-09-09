@@ -824,9 +824,7 @@ impl MediaManager {
                     })
                 })
                 .await;
-            if let Err(error) = reclaim {
-                return Err(Self::scope_error(error));
-            }
+            reclaim.map_err(Self::scope_error)?;
         }
         Ok(MediaDeletionResult::new(outcome, theme_reference_count))
     }
@@ -950,6 +948,7 @@ mod tests {
             foreign.finish()
         }
 
+        // cov:ignore-start — test resolver trait boilerplate has no production caller
         async fn resolve_local(
             &self,
             _references: &[common::media::MediaReference],
@@ -959,6 +958,7 @@ mod tests {
         ) -> crate::ProvenLocalMediaRefs {
             local.finish()
         }
+        // cov:ignore-stop
     }
 
     fn no_posts() -> Arc<dyn PostStorage> {
@@ -990,6 +990,7 @@ mod tests {
             foreign.finish()
         }
 
+        // cov:ignore-start — test resolver trait boilerplate has no production caller
         async fn resolve_local(
             &self,
             _references: &[common::media::MediaReference],
@@ -999,6 +1000,7 @@ mod tests {
         ) -> crate::ProvenLocalMediaRefs {
             local.finish()
         }
+        // cov:ignore-stop
     }
 
     struct BlockingResolver {
@@ -1041,6 +1043,7 @@ mod tests {
             evidence
         }
 
+        // cov:ignore-start — test resolver trait boilerplate has no production caller
         async fn resolve_local(
             &self,
             _references: &[common::media::MediaReference],
@@ -1050,6 +1053,7 @@ mod tests {
         ) -> crate::ProvenLocalMediaRefs {
             local.finish()
         }
+        // cov:ignore-stop
     }
 
     #[apply(backends)]
@@ -1404,6 +1408,13 @@ mod tests {
             MediaManager::upload_outcome(None),
             UploadOutcome::Error
         ));
+    }
+
+    #[test]
+    fn reclaim_unlink_gate_default_is_debuggable() {
+        let gate = ReclaimUnlinkGate::default();
+
+        assert_eq!(format!("{gate:?}"), "ReclaimUnlinkGate { .. }");
     }
 
     // guard:no-backend — a disabled capability must reject before polling the supplied stream

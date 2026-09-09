@@ -17,39 +17,130 @@
 
 use std::fmt;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{Context, Result};
 
+use crate::coverage::FileCoverage;
 use crate::git;
 use crate::result::StepResult;
-use crate::steps::nix::eval_coverage_drvpath;
+use crate::steps::nix;
 
-/// The two ways the coverage `src` filter can drift — each a distinct contract break.
+/// The ways the coverage source closure or producer boundary can drift.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriftError {
-    /// A filter-excluded file changed `coverage.drvPath`: the filter now admits junk
-    /// (the #37 impurity regressed).
     AdmitsJunk { base: String, junk: String },
-    /// An instrumented `.rs` did NOT change `coverage.drvPath`: the filter drops
-    /// source, so those lines are never measured (a coverage hole).
     DropsSource { base: String },
+    DropsRequiredSource { path: &'static str, base: String },
+    AdmitsXtaskSource { base: String, xtask_source: String },
+    CoverageDoesNotDependOnRequiredSource { path: &'static str, base: String },
+    BuildDependencyInReport { path: String, line: u32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProbeArm {
+    path: &'static str,
+    marker: &'static str,
+    required: bool,
+    requires_coverage_derivation: bool,
+}
+
+const PROBE_ARMS: [ProbeArm; 8] = [
+    ProbeArm {
+        path: "tools/csr_bundle/Cargo.toml",
+        marker: "# coverage source-drift probe; never committed.",
+        required: true,
+        requires_coverage_derivation: true,
+    },
+    ProbeArm {
+        path: "tools/csr_bundle/build.rs",
+        marker: "// coverage source-drift probe; never committed.",
+        required: true,
+        requires_coverage_derivation: false,
+    },
+    ProbeArm {
+        path: "tools/csr_bundle/src/lib.rs",
+        marker: "// coverage source-drift probe; never committed.",
+        required: true,
+        requires_coverage_derivation: false,
+    },
+    ProbeArm {
+        path: "server/src/lib.rs",
+        marker: "// coverage source-drift probe; never committed.",
+        required: true,
+        requires_coverage_derivation: false,
+    },
+    ProbeArm {
+        path: "server/tests/main.rs",
+        marker: "// coverage source-drift probe; never committed.",
+        required: true,
+        requires_coverage_derivation: false,
+    },
+    ProbeArm {
+        path: "server/tests/misc/backup_corpus/index.json",
+        // A space plus stage_probe_arm's trailing newline stays JSON whitespace.
+        marker: " ",
+        required: true,
+        requires_coverage_derivation: false,
+    },
+    ProbeArm {
+        path: ".config/nextest.toml",
+        marker: "# coverage source-drift probe; never committed.",
+        required: true,
+        requires_coverage_derivation: false,
+    },
+    ProbeArm {
+        path: "xtask/src/main.rs",
+        marker: "// coverage source-drift probe; never committed.",
+        required: false,
+        requires_coverage_derivation: false,
+    },
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ObservedProbeArm {
+    arm: ProbeArm,
+    source_identity: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourceProbeMatrix {
+    source_base: String,
+    arms: Vec<ObservedProbeArm>,
+    coverage_drvpath_base: String,
+    coverage_drvpath_required_source: String,
 }
 
 impl fmt::Display for DriftError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DriftError::AdmitsJunk { base, junk } => write!(
+            Self::AdmitsJunk { base, junk } => write!(
                 f,
                 "coverage src filter admits junk: staging an excluded file changed \
                  coverage.drvPath ({base} -> {junk}) — the #37 impurity regressed"
             ),
-            DriftError::DropsSource { base } => write!(
+            Self::DropsSource { base } => write!(
                 f,
                 "coverage src filter drops source: staging an instrumented .rs left \
                  coverage.drvPath unchanged ({base}) — those lines would never be measured"
+            ),
+            Self::DropsRequiredSource { path, base } => {
+                write!(f, "coverage source filter drops required {path} ({base})")
+            }
+            Self::AdmitsXtaskSource { base, xtask_source } => write!(
+                f,
+                "coverage source filter admits host-only xtask source ({base} -> {xtask_source})"
+            ),
+            Self::CoverageDoesNotDependOnRequiredSource { path, base } => write!(
+                f,
+                "coverage derivation does not depend on required {path} ({base})"
+            ),
+            Self::BuildDependencyInReport { path, line } => write!(
+                f,
+                "coverage producer reports executable build-dependency line {path}:{line}"
             ),
         }
     }
@@ -57,10 +148,7 @@ impl fmt::Display for DriftError {
 
 impl std::error::Error for DriftError {}
 
-/// Assert the coverage `src` filter's two invariants over three measured drvPaths:
-/// `base` (clean HEAD), `junk` (base + a staged filter-excluded file), and `rs`
-/// (base + a staged instrumented `.rs`). Impurity (admits-junk) is checked before the
-/// coverage hole (drops-source) so the more severe regression is reported first.
+/// Assert the legacy excluded-junk/instrumented-source contract.
 pub fn probe_verdict(base: &str, junk: &str, rs: &str) -> Result<(), DriftError> {
     if junk != base {
         return Err(DriftError::AdmitsJunk {
@@ -72,6 +160,58 @@ pub fn probe_verdict(base: &str, junk: &str, rs: &str) -> Result<(), DriftError>
         return Err(DriftError::DropsSource {
             base: base.to_owned(),
         });
+    }
+    Ok(())
+}
+
+fn source_probe_verdict(matrix: &SourceProbeMatrix) -> Result<(), DriftError> {
+    for observed in &matrix.arms {
+        if observed.arm.required && observed.source_identity == matrix.source_base {
+            return Err(DriftError::DropsRequiredSource {
+                path: observed.arm.path,
+                base: matrix.source_base.clone(),
+            });
+        }
+    }
+    let xtask = matrix
+        .arms
+        .iter()
+        .find(|observed| !observed.arm.required)
+        .expect("one excluded probe arm");
+    if xtask.source_identity != matrix.source_base {
+        return Err(DriftError::AdmitsXtaskSource {
+            base: matrix.source_base.clone(),
+            xtask_source: xtask.source_identity.clone(),
+        });
+    }
+    let required = matrix
+        .arms
+        .iter()
+        .find(|observed| observed.arm.requires_coverage_derivation)
+        .expect("one end-to-end required probe arm");
+    if matrix.coverage_drvpath_required_source == matrix.coverage_drvpath_base {
+        return Err(DriftError::CoverageDoesNotDependOnRequiredSource {
+            path: required.arm.path,
+            base: matrix.coverage_drvpath_base.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn realized_report_verdict(files: &[FileCoverage]) -> Result<(), DriftError> {
+    const EXTERNAL_PACKAGE: &str = "tools/csr_bundle";
+
+    for file in files {
+        if (file.path == EXTERNAL_PACKAGE
+            || file.path.starts_with("tools/csr_bundle/")
+            || file.path.contains("/tools/csr_bundle/"))
+            && let Some(line) = file.lines.first()
+        {
+            return Err(DriftError::BuildDependencyInReport {
+                path: file.path.clone(),
+                line: line.line,
+            });
+        }
     }
     Ok(())
 }
@@ -124,22 +264,29 @@ fn git_run(dir: &Path, args: &[&str]) -> Result<()> {
     git::run(dir, &full)
 }
 
-/// The user-facing step: measure the three coverage drvPaths and apply
-/// [`probe_verdict`]. Any I/O failure (nix/git) or a drift verdict becomes a failing
-/// [`StepResult`] whose detail names the broken invariant.
+/// The user-facing step: evaluate the bounded source matrix, prove the required
+/// build dependency reaches coverage, then inspect the realized producer report.
 pub fn probe_source() -> StepResult {
     match run_probe() {
-        Ok(()) => StepResult::ok("coverage-probe-source")
-            .detail("coverage src filter contract holds (junk excluded, source measured)"),
+        Ok(()) => StepResult::ok("coverage-probe-source").detail(
+            "coverage source filter contract holds (required Cargo inputs admitted, xtask excluded, build dependency absent from report)",
+        ),
         Err(e) => StepResult::fail("coverage-probe-source").detail(format!("{e:#}")),
     }
 }
 
-/// Measure `coverage.drvPath` across three tree states in an ephemeral worktree and
-/// return the verdict. The worktree is checked out at `HEAD`, so the probe guards the
-/// *committed* filter (what CI/PRs carry), not local uncommitted edits. Probe files
-/// are `git add`-ed, not left untracked — nix ignores untracked new files even on a
-/// dirty tree (see the module docs / spec).
+fn stage_probe_arm(tmp: &Path, arm: ProbeArm) -> Result<()> {
+    git_run(tmp, &["reset", "--hard", "HEAD"])?;
+    dirty_probe_tree(tmp)?;
+    let mut file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(tmp.join(arm.path))
+        .with_context(|| format!("opening {} for source probe", arm.path))?;
+    writeln!(file, "{}", arm.marker)
+        .with_context(|| format!("writing {} for source probe", arm.path))?;
+    git_run(tmp, &["add", arm.path])
+}
 fn worktree_registered_with(tmp: &Path, query: impl FnOnce() -> Result<Vec<u8>>) -> Result<bool> {
     let tmp = tmp.to_str().context("worktree path is not UTF-8")?;
     let fields = query()?;
@@ -163,6 +310,15 @@ fn remove_registered_worktree_with(
         anyhow::bail!("removing registered stale coverage-probe worktree failed with {status}");
     }
     Ok(())
+}
+
+fn dirty_probe_tree(tmp: &Path) -> Result<()> {
+    // A clean tree makes Nix's flake fetcher walk grafted-away history on CI's
+    // shallow checkout (docs/adr/0116-coverage-probe-dirty-tree-workaround.md).
+    let readme = tmp.join("README.md");
+    let mut bytes = fs::read(&readme).context("reading README.md to dirty it")?;
+    bytes.push(b'\n');
+    fs::write(&readme, bytes).context("dirtying README.md")
 }
 
 fn run_probe() -> Result<()> {
@@ -211,37 +367,43 @@ fn run_probe() -> Result<()> {
         stderr: Box::new(std::io::stderr()),
     };
 
-    // Dirty an EXCLUDED tracked file so *every* eval runs against a dirty tree:
-    // a clean tree makes nix's flake fetcher walk grafted-away history on CI's
-    // shallow checkout and fail
-    // (docs/adr/0116-coverage-probe-dirty-tree-workaround.md).
-    let readme = tmp.join("README.md");
-    let mut readme_bytes = fs::read(&readme).context("reading README.md to dirty it")?;
-    readme_bytes.push(b'\n');
-    fs::write(&readme, readme_bytes).context("dirtying README.md")?;
+    dirty_probe_tree(&tmp)?;
+    let source_base = nix::eval_coverage_source_probe_drvpath(&tmp)?;
+    let coverage_drvpath_base = nix::eval_coverage_drvpath(&tmp)?;
+    let mut arms = Vec::with_capacity(PROBE_ARMS.len());
+    let mut coverage_drvpath_required_source = None;
 
-    // State A: base (dirty tree, no probe files staged).
-    let base = eval_coverage_drvpath(&tmp)?;
+    for arm in PROBE_ARMS {
+        stage_probe_arm(&tmp, arm)?;
+        let source_identity = nix::eval_coverage_source_probe_drvpath(&tmp)?;
+        if arm.requires_coverage_derivation {
+            coverage_drvpath_required_source = Some(nix::eval_coverage_drvpath(&tmp)?);
+        }
+        arms.push(ObservedProbeArm {
+            arm,
+            source_identity,
+        });
+    }
 
-    // State B: staged junk (filter-excluded) → drvPath must be unchanged.
-    fs::write(tmp.join("probe.txt"), b"").context("writing probe.txt")?;
-    git_run(&tmp, &["add", "probe.txt"])?;
-    let junk = eval_coverage_drvpath(&tmp)?;
-    git_run(&tmp, &["rm", "--cached", "--quiet", "probe.txt"])?;
-    fs::remove_file(tmp.join("probe.txt")).context("removing probe.txt")?;
+    let matrix = SourceProbeMatrix {
+        source_base,
+        arms,
+        coverage_drvpath_base,
+        coverage_drvpath_required_source: coverage_drvpath_required_source
+            .context("missing end-to-end required source probe")?,
+    };
+    source_probe_verdict(&matrix)?;
 
-    // State C: staged instrumented `.rs` → drvPath must change.
-    let rs_rel = "server/src/__drift_probe.rs";
-    fs::write(
-        tmp.join(rs_rel),
-        b"// coverage source-drift probe (#241); never committed.\n",
-    )
-    .context("writing probe .rs")?;
-    git_run(&tmp, &["add", rs_rel])?;
-    let rs = eval_coverage_drvpath(&tmp)?;
-
-    // `DriftError: std::error::Error`, so `?` lifts it into `anyhow::Error`.
-    probe_verdict(&base, &junk, &rs)?;
+    git_run(&tmp, &["reset", "--hard", "HEAD"])?;
+    dirty_probe_tree(&tmp)?;
+    let out = nix::build_coverage_out_path(&tmp)?;
+    let report_path = Path::new(&out).join("coverage-report.txt");
+    let report = fs::read_to_string(&report_path)
+        .with_context(|| format!("reading realized coverage report {}", report_path.display()))?;
+    let repo_root = tmp.to_str().context("worktree path is not UTF-8")?;
+    let files = crate::coverage::report::parse_text_report(&report, repo_root)
+        .context("parsing realized coverage report")?;
+    realized_report_verdict(&files)?;
     Ok(())
 }
 
@@ -393,5 +555,161 @@ mod tests {
         );
         assert_eq!(warning.lines().count(), 1);
         assert!(!warning.contains("sensitive"));
+    }
+    fn complete_matrix() -> SourceProbeMatrix {
+        SourceProbeMatrix {
+            source_base: "source-base".into(),
+            arms: PROBE_ARMS
+                .into_iter()
+                .map(|arm| ObservedProbeArm {
+                    arm,
+                    source_identity: if arm.required {
+                        format!("source-{}", arm.path)
+                    } else {
+                        "source-base".into()
+                    },
+                })
+                .collect(),
+            coverage_drvpath_base: "coverage-base".into(),
+            coverage_drvpath_required_source: "coverage-manifest".into(),
+        }
+    }
+
+    #[test]
+    fn source_probe_accepts_the_complete_bounded_matrix() {
+        assert_eq!(source_probe_verdict(&complete_matrix()), Ok(()));
+    }
+
+    #[test]
+    fn source_probe_catalog_pins_runtime_fixture_as_non_end_to_end_source() {
+        let fixture = PROBE_ARMS
+            .iter()
+            .find(|arm| arm.path == "server/tests/misc/backup_corpus/index.json")
+            .expect("runtime fixture probe arm");
+
+        assert_eq!(fixture.marker, " ");
+        assert!(fixture.required);
+        assert!(!fixture.requires_coverage_derivation);
+        let matrix = complete_matrix();
+        let observed = matrix
+            .arms
+            .iter()
+            .find(|observed| observed.arm == *fixture)
+            .expect("catalog fixture arm");
+        assert_ne!(
+            observed.source_identity.as_str(),
+            matrix.source_base.as_str()
+        );
+    }
+
+    #[test]
+    fn source_probe_rejects_each_unchanged_required_filtered_source_identity() {
+        for arm in PROBE_ARMS.into_iter().filter(|arm| arm.required) {
+            let mut matrix = complete_matrix();
+            matrix
+                .arms
+                .iter_mut()
+                .find(|observed| observed.arm == arm)
+                .expect("catalog arm")
+                .source_identity = "source-base".into();
+
+            assert_eq!(
+                source_probe_verdict(&matrix),
+                Err(DriftError::DropsRequiredSource {
+                    path: arm.path,
+                    base: "source-base".into(),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn source_probe_rejects_xtask_source_admission() {
+        let mut matrix = complete_matrix();
+        matrix
+            .arms
+            .iter_mut()
+            .find(|observed| !observed.arm.required)
+            .expect("excluded catalog arm")
+            .source_identity = "source-xtask".into();
+
+        assert_eq!(
+            source_probe_verdict(&matrix),
+            Err(DriftError::AdmitsXtaskSource {
+                base: "source-base".into(),
+                xtask_source: "source-xtask".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn source_probe_prioritizes_required_catalog_arms_before_later_failures() {
+        let mut matrix = complete_matrix();
+        matrix.arms[0].source_identity = "source-base".into();
+        matrix
+            .arms
+            .iter_mut()
+            .find(|observed| !observed.arm.required)
+            .expect("excluded catalog arm")
+            .source_identity = "source-xtask".into();
+
+        assert_eq!(
+            source_probe_verdict(&matrix),
+            Err(DriftError::DropsRequiredSource {
+                path: "tools/csr_bundle/Cargo.toml",
+                base: "source-base".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn source_probe_rejects_coverage_drvpath_unchanged_for_csr_bundle_manifest() {
+        let mut matrix = complete_matrix();
+        matrix.coverage_drvpath_required_source = "coverage-base".into();
+        assert_eq!(
+            source_probe_verdict(&matrix),
+            Err(DriftError::CoverageDoesNotDependOnRequiredSource {
+                path: "tools/csr_bundle/Cargo.toml",
+                base: "coverage-base".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn realized_report_rejects_every_csr_bundle_source_boundary() {
+        for path in [
+            "/repo/tools/csr_bundle/build.rs",
+            "/repo/tools/csr_bundle/src/other.rs",
+            "/repo/tools/csr_bundle/src/lib.rs",
+        ] {
+            let files = crate::coverage::report::parse_text_report(
+                &format!("{path}:\n    7|     1|pub fn build_only() {{}}"),
+                "/repo",
+            )
+            .unwrap();
+            assert_eq!(
+                realized_report_verdict(&files),
+                Err(DriftError::BuildDependencyInReport {
+                    path: path.strip_prefix("/repo/").unwrap().into(),
+                    line: 7,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn realized_report_accepts_root_workspace_and_near_name_lines() {
+        let files = crate::coverage::report::parse_text_report(
+            "\
+/repo/server/src/lib.rs:
+    1|     1|pub fn root() {}
+/repo/tools/csr_bundle_extra/src/lib.rs:
+    2|     1|pub fn unrelated() {}
+",
+            "/repo",
+        )
+        .unwrap();
+
+        assert_eq!(realized_report_verdict(&files), Ok(()));
     }
 }
