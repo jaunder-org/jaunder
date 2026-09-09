@@ -81,7 +81,7 @@ Out:
   - Verification: Focused xtask coverage-parser tests prove accepted/rejected
     grammar and fail-closed behavior; a repository scan finds no active legacy
     marker and no unexplained retained exception.
-- [ ] Task 6: Reconcile the complete audit and prove the repository
+- [x] Task 6: Reconcile the complete audit and prove the repository
   - Depends on: Tasks 1–5.
   - Contract: Re-run the active-marker census; enumerate all four structural
     classes from their owning manifests/configuration/source; reconcile every
