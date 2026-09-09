@@ -4,7 +4,10 @@ use axum::{
     body::Body,
     http::{Request, StatusCode, header},
 };
-use common::{MutationOutcome, theme::PublicThemeSelection};
+use common::{
+    MutationOutcome,
+    theme::{PublicThemeSelection, ThemeImageRole},
+};
 use host::theme_package::{ThemePackageLimits, export_theme_package, validate_theme_package};
 use rstest::*;
 use rstest_reuse::*;
@@ -13,7 +16,7 @@ use storage::test_support::{Backend, TestEnv, backends, confirmed_for, seed_medi
 use storage::{ThemeManager, ThemeOwner, ThemePoolInput as StorageThemePoolInput};
 use tempfile::TempDir;
 use tower::ServiceExt;
-use web::themes::{Draft, OwnershipScope, ThemePoolInput};
+use web::themes::{Draft, OwnershipScope, ThemeBindingInput, ThemeMediaInput, ThemePoolInput};
 
 use crate::helpers::{
     body_string, create_operator_and_session, create_user_and_session, make_app, post_server_fn,
@@ -37,6 +40,18 @@ fn archive(css: &str) -> Vec<u8> {
         &BTreeMap::new(),
     )
     .expect("no-asset theme package exports")
+}
+
+fn archive_with_logo(css: &str) -> Vec<u8> {
+    export_theme_package(
+        br#"{"schema":1,"name":"Bindings","style_contract":1,"assets":{"assets/logo.png":"image/png"},"defaults":{}}"#,
+        css.as_bytes(),
+        &BTreeMap::from([(
+            "assets/logo.png".into(),
+            b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x04\x00\x00\x00\xb5\x1c\x0c\x02\x00\x00\x00\x0b\x49\x44\x41\x54\x78\xda\x63\x64\xf8\x0f\x00\x01\x05\x01\x01\x27\x18\xe3\x66\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82".to_vec(),
+        )]),
+    )
+    .expect("valid package asset exports")
 }
 
 async fn create_author_theme(
@@ -679,6 +694,95 @@ async fn theme_import_css_and_presentation_are_owner_private(#[case] backend: Ba
             header_pool: Vec::new(),
             shuffle_seed: None,
         }
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn theme_binding_inputs_persist_and_project_through_server_functions(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let owner = create_user_and_session(&state).await;
+    let storage = TempDir::new().expect("temporary storage");
+    let imported = multipart_response(
+        &state,
+        &storage,
+        multipart_body(
+            "author",
+            "Bindings",
+            &archive_with_logo("body { color: orange; }"),
+        ),
+        &owner.cookie(),
+    )
+    .await;
+    let status = imported.status();
+    let body = body_string(imported).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let theme = confirmed_for(
+        serde_json::from_str::<MutationOutcome<web::themes::CatalogEntry>>(&body)
+            .expect("binding theme import outcome JSON"),
+        "binding theme import",
+    );
+    let media = seed_media(&state, owner.user_id, "logo.png").await;
+
+    let inputs = [
+        ThemeBindingInput::PackagedDefault,
+        ThemeBindingInput::ExplicitAbsent,
+        ThemeBindingInput::PackageAsset("assets/logo.png".into()),
+        ThemeBindingInput::Media(ThemeMediaInput {
+            source: media.source,
+            sha256: media.sha256.clone(),
+            filename: media.filename.clone(),
+        }),
+    ];
+
+    for input in inputs {
+        let (status, body) = post_server_fn(
+            &state,
+            &web::themes::ReplaceBinding {
+                scope: OwnershipScope::Author,
+                theme_id: theme.id,
+                role: ThemeImageRole::Logo,
+                input: input.clone(),
+            },
+            Some(&owner.cookie()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {body}");
+        confirmed_for(
+            serde_json::from_str::<MutationOutcome<()>>(&body)
+                .expect("binding replacement outcome JSON"),
+            "binding replacement",
+        );
+
+        let (status, body) = post_server_fn(
+            &state,
+            &web::themes::GetPresentation {
+                scope: OwnershipScope::Author,
+                theme_id: theme.id,
+            },
+            Some(&owner.cookie()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {body}");
+        let presentation: web::themes::ThemePresentation =
+            serde_json::from_str(&body).expect("presentation JSON");
+        assert_eq!(presentation.logo, Some(input));
+    }
+
+    let (status, body) = post_server_fn(
+        &state,
+        &web::themes::List {
+            scope: OwnershipScope::Author,
+        },
+        Some(&owner.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(
+        serde_json::from_str::<Vec<web::themes::CatalogEntry>>(&body).expect("catalog JSON"),
+        vec![theme],
     );
 }
 

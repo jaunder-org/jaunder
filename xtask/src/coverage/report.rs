@@ -1,5 +1,5 @@
 use crate::coverage::{FileCoverage, LineCov};
-use crate::markers::{comment_marker_is, line_comment, marker_in_comment};
+use crate::markers;
 use anyhow::{Result, bail};
 
 /// Parse `cargo llvm-cov report --text` output. A line is executable iff its
@@ -52,10 +52,10 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
         // Marker detection runs on EVERY report line (executable or not) so a
         // marker sitting on a non-executable comment line is still honored, and
         // is matched only against the line's real trailing comment.
-        let comment = line_comment(text);
+        let comment = markers::line_comment(text);
         let mut line_ignored = false;
         if let Some(c) = comment {
-            if let Some(reason) = marker_in_comment(c, "cov:ignore-start:") {
+            if let Some(reason) = markers::marker_in_comment(c, "cov:ignore-start:") {
                 if reason.is_empty() {
                     bail!("cov:ignore-start at line {lineno} requires a non-empty reason");
                 }
@@ -68,7 +68,7 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
                 block_start = Some(lineno);
                 continue; // the marker line itself is dropped
             }
-            if comment_marker_is(c, "cov:ignore-start") {
+            if markers::comment_marker_is(c, "cov:ignore-start") {
                 bail!(
                     "legacy cov:ignore-start at line {lineno}; use \
                      cov:ignore-start: <specific reason>"
@@ -88,12 +88,12 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
                 block_start = None;
                 continue; // the marker line itself is dropped
             }
-            if let Some(reason) = marker_in_comment(c, "cov:ignore:") {
+            if let Some(reason) = markers::marker_in_comment(c, "cov:ignore:") {
                 if reason.is_empty() {
                     bail!("cov:ignore at line {lineno} requires a non-empty reason");
                 }
                 line_ignored = true;
-            } else if comment_marker_is(c, "cov:ignore") {
+            } else if markers::comment_marker_is(c, "cov:ignore") {
                 bail!("legacy cov:ignore at line {lineno}; use cov:ignore: <specific reason>");
             }
         }

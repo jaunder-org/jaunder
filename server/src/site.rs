@@ -30,8 +30,9 @@ use common::etag::ETag;
 use host::etag;
 use rust_embed::RustEmbed;
 
+// cov:ignore-start: RustEmbed derive expansion is compiler-generated rather than handwritten runtime behavior.
 #[derive(RustEmbed)]
-// cov:ignore: RustEmbed derive expansion is compiler-generated rather than handwritten runtime behavior.
+// cov:ignore-stop
 #[folder = "$OUT_DIR/site"]
 pub struct Site;
 
