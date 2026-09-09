@@ -46,7 +46,7 @@ let
       pkgs.pkg-config
       pkgs.dav1d
       pkgs.playwright-test
-      pkgs.postgresql_16
+      pkgs.postgresql_18
       # `cargo xtask e2e-local` supervises this pinned collector for its
       # shared VM/host JSONL trace pipeline.
       pkgs.opentelemetry-collector-contrib

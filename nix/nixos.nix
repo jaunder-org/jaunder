@@ -144,7 +144,7 @@ let
       users.users.jaunder.extraGroups = [ "wheel" ];
       users.users.jaunder.initialPassword = "jaunder";
       users.users.jaunder.packages = [
-        pkgs.postgresql_16
+        pkgs.postgresql_18
         pkgs.sqlite
       ];
 
@@ -186,7 +186,7 @@ let
 
       services.postgresql = {
         enable = true;
-        package = pkgs.postgresql_16;
+        package = pkgs.postgresql_18;
         ensureDatabases = [ "jaunder" ];
         ensureUsers = [
           {
@@ -208,7 +208,7 @@ let
       };
 
       environment.systemPackages = [
-        pkgs.postgresql_16
+        pkgs.postgresql_18
       ];
 
       system.stateVersion = "26.05";

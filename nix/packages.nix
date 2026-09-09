@@ -14,16 +14,16 @@ let
   };
   toolchain = fenix.packages.${system}.fromToolchainFile {
     file = ../rust-toolchain.toml;
-    sha256 = "sha256-A1abGIbOtcBSdrUMhDGrER3pRM1hQP4fp9gh3Y4PKc8=";
+    sha256 = "sha256-p8h3Sl/YRByZfZTAKXdsvF6xEenXKrXSVvpphmZENH4=";
   };
 
   craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
   # wasm-bindgen #5268 identifies nightly-2026-08-05 as the last LLVM 22
-  # nightly; this earlier dated pin stays in that compatible range.  It must
+  # nightly, so this dated pin stays in that compatible range. It must
   # never track Fenix `latest`: LLVM coverage data, minicov's C runtime, and
   # the manual Clang link are one version-sensitive unit.
-  diagnosticNightlyName = "nightly-2026-07-27";
-  diagnosticNightlySha256 = "sha256-e0NxVNFY345jKKjY/QdZiWrqKmDRBvmohTt4ZuKwx1A=";
+  diagnosticNightlyName = "nightly-2026-08-05";
+  diagnosticNightlySha256 = "sha256-41hI6kTIBH4+SiyMb3wf8Um6q0930AeV2KIksoT8aLU=";
   diagnosticNightly = fenix.packages.${system}.fromToolchainName {
     name = diagnosticNightlyName;
     sha256 = diagnosticNightlySha256;
@@ -47,8 +47,8 @@ let
   # workspace lock, vendor source, `csrWasm`, and `csrWasmBundle` never name it.
   diagnosticMinicov = pkgs.fetchCrate {
     pname = "minicov";
-    version = "0.3.8";
-    hash = "sha256-MAyEaF1M9mPr0rQRjG21XJaWgxwvOWZrObjCeFidgoA=";
+    version = "0.3.9";
+    hash = "sha256-CY9BG0ezG3t5uVmMelz2MGlOxln4j1EscN7lpGA9BIU=";
   };
   # `llvm-tools-preview` installs profile tools below rustlib rather than the
   # cargo/rustc bin directory.  Keep this path explicit so every diagnostic
@@ -454,19 +454,19 @@ let
     let
       crateSrc = fetchCrate {
         pname = "cargo-crap";
-        version = "0.2.2";
-        hash = "sha256-cZ30mdHHLXzpvMhkC6XoPMgfqAdsmdqhEfHq8T15Fmw=";
+        version = "0.5.0";
+        hash = "sha256-5RhRFUh1w5/yItkmc3Vk1B6oyrmzKKl6EEZ3v0aBLwk=";
       };
     in
     rustPlatform.buildRustPackage (finalAttrs: {
       pname = "cargo-crap";
-      version = "0.2.2";
+      version = "0.5.0";
 
       src = fetchFromGitHub {
         owner = "minikin";
         repo = "cargo-crap";
         rev = "v${finalAttrs.version}";
-        hash = "sha256-yDoHqkMittJEFYxjpEb/C4+0sRg7ZnMpRO7a9aw5NvI=";
+        hash = "sha256-90RVGII+CcDBh492b/tJ8wRwl8lPk7bW+02u7q5dG78=";
       };
 
       cargoLock.lockFile = "${crateSrc}/Cargo.lock";
@@ -502,11 +502,11 @@ let
     '';
 
   wasm-bindgen-cli = pkgs.wasm-bindgen-cli.overrideAttrs (old: rec {
-    version = "0.2.121";
+    version = "0.2.128";
     src = pkgs.fetchCrate {
       pname = "wasm-bindgen-cli";
       inherit version;
-      hash = "sha256-ZOMgFNOcGkO66Jz/Z83eoIu+DIzo3Z/vq6Z5g6BDY/w=";
+      hash = "sha256-a7lcXJnnZkYReja+iUO7NqqrWyv3toxnUgQb8s4IS5s=";
     };
     cargoDeps = vendorCargoDepsForBuildRustPackage {
       name = "wasm-bindgen-cli";
@@ -647,7 +647,7 @@ let
       ${diagnosticLlvmTools}/llvm-profdata --version > $out/toolchain-llvm-profdata-version.txt
       ${diagnosticLlvmTools}/llvm-cov --version > $out/toolchain-llvm-cov-version.txt
       cat > $out/build-configuration.json <<'EOF'
-      {"version":5,"nightly":"${diagnosticNightlyName} (rustc 1.99.0-nightly dc3f85158; LLVM 22.1.8)","nightly_source_sha256":"${diagnosticNightlySha256}","instrumented_first_party_crates":["csr"],"omitted_first_party_crates":["client","common","macros","web"],"producer":"Cargo emits only CSR LLVM IR and an rlink without a final link; pinned rustc -Zlink-only recreates its complete Cargo/sysroot/minicov link graph.","rustflags":["-Cinstrument-coverage","-Zno-profiler-runtime","--emit=llvm-ir","-C link-arg=--no-gc-sections","-Zno-link"],"linker":"pinned rustc -Zlink-only","c_compiler":"llvmPackages_22.clang-unwrapped","diagnostic_runtime":{"wrapper_crate":"diagnostic-coverage-runtime","crate":"minicov","version":"0.3.8","source_sha256":"4869b6a491569605d66d3952bcdf03df789e5b536e5f0cf7758a7f08a55ae24d"}}
+      {"version":5,"nightly":"${diagnosticNightlyName} (rustc 1.99.0-nightly 1ed2df61a; LLVM 22.1.8)","nightly_source_sha256":"${diagnosticNightlySha256}","instrumented_first_party_crates":["csr"],"omitted_first_party_crates":["client","common","macros","web"],"producer":"Cargo emits only CSR LLVM IR and an rlink without a final link; pinned rustc -Zlink-only recreates its complete Cargo/sysroot/minicov link graph.","rustflags":["-Cinstrument-coverage","-Zno-profiler-runtime","--emit=llvm-ir","-C link-arg=--no-gc-sections","-Zno-link"],"linker":"pinned rustc -Zlink-only","c_compiler":"llvmPackages_22.clang-unwrapped","diagnostic_runtime":{"wrapper_crate":"diagnostic-coverage-runtime","crate":"minicov","version":"0.3.9","source_sha256":"c3aa3aa12b448ac225b3102217d1ac5cc717908f02722926524b0599c933c7a0"}}
       EOF
       work="$TMPDIR/wasm-coverage-csr"
       mkdir -p "$work"
@@ -693,7 +693,7 @@ let
           --out "$out/pkg" \
           --diagnostic-coverage-metadata "$out/coverage-metadata.json" \
           --diagnostic-toolchain-identity "$out/toolchain-identity.json" \
-          --diagnostic-minicov-version 0.3.8
+          --diagnostic-minicov-version 0.3.9
         devtool diagnostic-build assert-coverage --metadata "$out/coverage-metadata.json"
       ) > "$out/pipeline.log" 2>&1
       pipeline_exit=$?

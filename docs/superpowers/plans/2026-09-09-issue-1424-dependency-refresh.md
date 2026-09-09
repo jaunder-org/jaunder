@@ -35,23 +35,27 @@ Out:
     generated locks inventoried by the spec; no broad surface row stands in for
     individual pins.
 
-- [ ] Task 2: Refresh Nix, toolchain, environments, and Atom identity
+- [x] Task 2: Refresh Nix, toolchain, environments, Atom, and wasm-bindgen
+      identities
   - Contract: own `flake.nix`, `flake.lock`, `rust-toolchain.toml`, Nix package
     and development/test environment definitions, source hashes, NixOS state
-    baseline, database major, and every Atom-specific Cargo patch/lock, flake
-    input/lock, and Crane-vendoring location. Preserve Fenix/toolchain coupling,
-    deployable `packages.jaunder`, and every active override's ADR-defined
-    invariant. Retain, move, or remove the Atom fork only as one reviewed unit.
-    Do not own the e2e npm dependency hash or non-Atom Cargo refresh.
+    baseline, database major, the complete `wasm-bindgen` CLI/runtime/test
+    family and its generated root Cargo lock, and every Atom-specific Cargo
+    patch/lock, flake input/lock, and Crane-vendoring location. Preserve
+    Fenix/toolchain coupling, deployable `packages.jaunder`, and every active
+    override's ADR-defined invariant. Retain, move, or remove the Atom fork only
+    as one reviewed unit. Do not own the e2e npm dependency hash or other
+    non-Atom Cargo refresh.
   - Verification: Atom's Cargo resolution and hermetic Nix source are identical,
     the flake evaluates, the deployable package builds, selected tool versions
     match the snapshot, and `devtool run -- cargo xtask check` passes before
     commit through `jaunder-commit`.
 
 - [ ] Task 3: Refresh all remaining Rust dependency graphs
-  - Contract: own Cargo manifests and generated locks for the product, `xtask`,
-    and `tools` workspaces, excluding the already-reconciled Atom identity, plus
-    source compatibility changes required by selected releases. Preserve the
+  - Contract: own Cargo manifests and generated locks for the remaining product,
+    `xtask`, and `tools` dependencies, excluding the already-reconciled Atom and
+    complete `wasm-bindgen` CLI/runtime/test identities, plus source
+    compatibility changes required by selected releases. Preserve the
     three-workspace execution boundary. Any retained exact pin cites its
     approved snapshot disposition.
   - Verification: all three workspaces resolve on the selected toolchain; their
@@ -182,7 +186,7 @@ selected version.
 | `web/Cargo.toml`: `futures-channel`                                                                                                                                                                                       | 0.3                                                                          | 0.3.34                                                                                      | crates.io, 2026-09-09                                                | Refresh in Task 3.                                                                                                          |
 | `web/Cargo.toml`: `httparse`                                                                                                                                                                                              | 1                                                                            | 1.10.1                                                                                      | crates.io, 2026-09-09                                                | Refresh in Task 3.                                                                                                          |
 | `web/Cargo.toml`: `mime`                                                                                                                                                                                                  | 0.3                                                                          | 0.3.17                                                                                      | crates.io, 2026-09-09                                                | Refresh in Task 3.                                                                                                          |
-| `client/Cargo.toml`: `wasm-bindgen-test`                                                                                                                                                                                  | exact 0.3.71                                                                 | 0.3.78                                                                                      | crates.io, 2026-09-09                                                | Advance with the wasm-bindgen runtime family.                                                                               |
+| `Cargo.toml`, `client/Cargo.toml`, `Cargo.lock`, and `nix/packages.nix`: `wasm-bindgen`, `wasm-bindgen-futures`, `web-sys`, `js-sys`, `wasm-bindgen-test`, and wasm-bindgen CLI                                           | runtime 0.2.106/0.4/0.3.82; test 0.3.71; CLI 0.2.121                         | runtime 0.2.128/0.4.78/0.3.105; test 0.3.78; CLI 0.2.128                                    | crates.io and wasm-bindgen releases, 2026-09-09                      | Advance as the Task-2 atomic wasm-bindgen CLI/runtime/test identity.                                                        |
 | `xtask/Cargo.toml`: `xshell`                                                                                                                                                                                              | 0.2                                                                          | 0.2.7                                                                                       | crates.io, 2026-09-09                                                | Use stable release, not 0.3.0-pre2.                                                                                         |
 | `xtask/Cargo.toml`: `brotli`                                                                                                                                                                                              | 7                                                                            | 9.0.0                                                                                       | crates.io, 2026-09-09                                                | Refresh in Task 3.                                                                                                          |
 | `xtask/Cargo.toml`: `tabled`                                                                                                                                                                                              | 0.21.0                                                                       | 0.22.0                                                                                      | crates.io, 2026-09-09                                                | Refresh in Task 3.                                                                                                          |
@@ -253,8 +257,9 @@ selected version.
 ## Ordering and parallelism
 
 - Task 1 gates every implementation task.
-- Task 2 is the sole owner of Atom's coupled Cargo and Nix identity and lands it
-  atomically before the broad Cargo refresh.
+- Task 2 is the sole owner of Atom's coupled Cargo and Nix identity and the
+  complete wasm-bindgen CLI/runtime/test family; both land atomically before the
+  broad Cargo refresh.
 - After Task 2, Tasks 3 and 5 may run in parallel. Task 4 starts after Task 2
   because refreshed nixpkgs is the Playwright source of truth; it may run in
   parallel with Tasks 3 and 5.

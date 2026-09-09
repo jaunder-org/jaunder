@@ -270,12 +270,12 @@ mkE2eCheck =
         }
       else if backend == "postgres" then
         {
-          package = pkgs.postgresql_16;
+          package = pkgs.postgresql_18;
           jaunderDb = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
           nodeConfig = lib: {
             services.postgresql = {
               enable = true;
-              package = pkgs.postgresql_16;
+              package = pkgs.postgresql_18;
               authentication = ''
                 local all all trust
                 host all all 0.0.0.0/0 trust
@@ -986,7 +986,7 @@ coverage = craneLib.mkCargoDerivation (
       # storage/src/postgres/* gets instrumented coverage. The
       # throwaway cluster needs initdb/pg_ctl/psql available inside
       # the build sandbox.
-      pkgs.postgresql_16
+      pkgs.postgresql_18
     ];
     buildPhaseCargoCommand = ''
       export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
