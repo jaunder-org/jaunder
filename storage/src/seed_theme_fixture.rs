@@ -130,7 +130,7 @@ pub fn try_compiled_theme_fixture() -> anyhow::Result<CompiledThemeRevision> {
     let validated = theme_package::validate_theme_package(
         &stored_theme_package()?,
         ThemePackageLimits::default(),
-    )?; // cov:ignore
+    )?; // cov:ignore: LLVM leaves the static fixture package validation error edge unmarked.
     Ok(validated.compile(&BTreeMap::new(), ThemePackageLimits::default())?)
 }
 

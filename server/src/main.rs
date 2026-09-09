@@ -34,8 +34,8 @@ async fn main() -> anyhow::Result<()> {
             "FATAL: jaunder built with cheap-kdf (test-only password hashing); refusing to start"
         );
         std::process::exit(1);
-    } // cov:ignore process::exit(1) above diverges, so this closing brace is unreachable
-    // cov:ignore-start
+    } // cov:ignore: process::exit(1) diverges before this compiler-inserted closing edge.
+    // cov:ignore-start: Host test binaries exit at the cheap-KDF guard before CLI parsing can run.
     let cli = Cli::parse();
     run(cli).await
     // cov:ignore-stop
@@ -50,7 +50,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let Some(command) = cli.command else {
         // `jaunder` with no subcommand is not runnable — re-parse to trigger
         // clap's built-in help/usage, which prints and exits.
-        // cov:ignore-start
+        // cov:ignore-start: Clap prints help and exits the process instead of returning from this parse.
         Cli::parse_from(["jaunder", "--help"]);
         // cov:ignore-stop
         unreachable!("Cli::parse_from([\"jaunder\", \"--help\"]) prints help and exits the process")
@@ -287,13 +287,13 @@ mod tests {
             "child status: {}; stderr: {}",
             output.status,
             // The root-wiring contract requires child success; this is diagnostic-only.
-            String::from_utf8_lossy(&output.stderr) // cov:ignore
+            String::from_utf8_lossy(&output.stderr) // cov:ignore: This diagnostic is evaluated only when the child root-wiring contract has failed.
         );
         assert!(
             String::from_utf8_lossy(&output.stdout).contains("MAIN_TEST_CHILD_COMPLETED"),
             "child did not complete root wiring: {}",
             // A successful child always emits the projection; this is diagnostic-only.
-            String::from_utf8_lossy(&output.stdout) // cov:ignore
+            String::from_utf8_lossy(&output.stdout) // cov:ignore: This diagnostic is evaluated only when the child omits its required completion projection.
         );
     }
     #[cfg(unix)]
@@ -429,7 +429,7 @@ mod tests {
         // Spawn-and-abort: this pins the dispatch arm, not the serve loop.
         let task = tokio::spawn(async move {
             let _ = run(cli).await;
-        }); // cov:ignore
+        }); // cov:ignore: The test aborts the serve task after dispatch, so its closure never completes.
 
         // Wait a bit for it to start.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -533,7 +533,7 @@ mod tests {
 
         let task = tokio::spawn(async move {
             let _ = run(cli).await;
-        }); // cov:ignore
+        }); // cov:ignore: The test aborts the dev-server task after auto-init, so its closure never completes.
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         task.abort();

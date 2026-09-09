@@ -77,7 +77,7 @@ pub async fn restore_backup(
         &manifest,
     )
     .await?;
-    // cov:ignore-start - an empty media path resolves to the working directory and cannot be exercised safely.
+    // cov:ignore-start: an empty media path resolves to the process working directory, so this parent() error cannot be exercised safely by a backup fixture.
     let content_root = options.media_path.parent().ok_or_else(|| {
         BackupError::InvalidBackup("media storage path has no content-root parent".into())
     })?;
@@ -150,7 +150,7 @@ async fn export_directory_backup(
         &options.destination_path.join("media"),
         previous_backup.as_deref(),
     )?;
-    // cov:ignore-start - an empty media path resolves to the working directory and cannot be exercised safely.
+    // cov:ignore-start: an empty media path resolves to the process working directory, so this parent() error cannot be exercised safely by a backup fixture.
     let content_root = options.media_path.parent().ok_or_else(|| {
         BackupError::InvalidBackup("media storage path has no content-root parent".into())
     })?;
@@ -162,7 +162,7 @@ async fn export_directory_backup(
             .as_deref()
             .map(|path| path.join("themes"))
             .as_deref(),
-    )?; // cov:ignore llvm-cov does not mark this multiline call after its exercised success and failure paths.
+    )?; // cov:ignore: LLVM leaves this exercised multiline theme-mirror call edge unmarked.
     format::write_manifest(options.destination_path, &manifest)?;
     Ok(manifest)
 }
@@ -377,7 +377,7 @@ mod tests {
         fs::write(
             root.join("db").join("theme_content_eligibility.ndjson"),
             rows,
-        )?; // cov:ignore — LLVM records only the unobservable fixture-write error edge.
+        )?; // cov:ignore: LLVM leaves only this unobservable fixture-write error edge unmarked.
         Ok(())
     }
 
@@ -460,7 +460,7 @@ mod tests {
         write_theme_eligibility_backup(
             temp.path(),
             &[(digest.as_ref(), "text/css; charset=utf-8", b"actual")],
-        )?; // cov:ignore — LLVM records only the unobservable fixture-write error edge.
+        )?; // cov:ignore: LLVM leaves only this unobservable fixture-write error edge unmarked.
 
         assert!(matches!(
             validate_theme_content_backup(temp.path()),

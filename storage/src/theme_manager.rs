@@ -92,7 +92,7 @@ impl ThemeManager {
                     if snapshot_for_update(themes.as_ref(), transaction, owner, theme_id).await?
                         != expected
                     {
-                        bail!("theme media references changed while acquiring locks"); // cov:ignore — reaching this requires a concurrent mutation between the snapshot and transaction-owned row locks, which the authoritative single-process coverage harness cannot induce safely
+                        bail!("theme media references changed while acquiring locks"); // cov:ignore: this error requires a mutation after the pre-lock snapshot and before transaction-owned row locks, a window the authoritative harness cannot control safely.
                     }
                     themes
                         .replace_role_binding(transaction, owner, &binding)
@@ -153,7 +153,7 @@ impl ThemeManager {
                     if snapshot_for_update(themes.as_ref(), transaction, owner, theme_id).await?
                         != expected
                     {
-                        bail!("theme media references changed while acquiring locks"); // cov:ignore — reaching this requires a concurrent mutation between the snapshot and transaction-owned row locks, which the authoritative single-process coverage harness cannot induce safely
+                        bail!("theme media references changed while acquiring locks"); // cov:ignore: this error requires a mutation after the pre-lock snapshot and before transaction-owned row locks, a window the authoritative harness cannot control safely.
                     }
                     // The storage primitive persists the pool while this role update remains
                     // in the same transaction, so the revision and entries cannot diverge.
@@ -249,7 +249,7 @@ impl ThemeManager {
                     let current =
                         snapshot_for_update(themes.as_ref(), transaction, owner, theme_id).await?;
                     if current != snapshot {
-                        bail!("theme media references changed while acquiring locks"); // cov:ignore — reaching this requires a concurrent mutation between the snapshot and transaction-owned row locks, which the authoritative single-process coverage harness cannot induce safely
+                        bail!("theme media references changed while acquiring locks"); // cov:ignore: this error requires a mutation after the pre-lock snapshot and before transaction-owned row locks, a window the authoritative harness cannot control safely.
                     }
                     themes
                         .remove_theme(transaction, owner, theme_id, retained_until_unix_seconds)

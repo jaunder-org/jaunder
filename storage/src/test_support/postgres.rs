@@ -157,11 +157,11 @@ fn drop_test_database(db_name: &str, bootstrap_url: &str) {
                 .enable_all()
                 .build()
             else {
-                return; // cov:ignore — current-thread runtime build only fails under OOM
+                return; // cov:ignore: current-thread runtime construction can fail only under OOM, and Drop cannot propagate that failure.
             };
             runtime.block_on(async {
                 let Ok(options) = bootstrap_url.parse::<sqlx::postgres::PgConnectOptions>() else {
-                    return; // cov:ignore — bootstrap URL is always a valid Postgres URL
+                    return; // cov:ignore: the harness constructs this bootstrap URL as a valid PostgreSQL connection URL.
                 };
                 let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), async {
                     let mut conn = sqlx::PgConnection::connect_with(&options).await?;

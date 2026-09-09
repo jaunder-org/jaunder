@@ -948,7 +948,7 @@ mod tests {
             foreign.finish()
         }
 
-        // cov:ignore-start — test resolver trait boilerplate has no production caller
+        // cov:ignore-start: this complete test resolver trait implementation is required, but foreign-resolution tests have no local-resolution caller.
         async fn resolve_local(
             &self,
             _references: &[common::media::MediaReference],
@@ -990,7 +990,7 @@ mod tests {
             foreign.finish()
         }
 
-        // cov:ignore-start — test resolver trait boilerplate has no production caller
+        // cov:ignore-start: this complete test resolver trait implementation is required, but first-foreign-evidence tests have no local-resolution caller.
         async fn resolve_local(
             &self,
             _references: &[common::media::MediaReference],
@@ -1043,7 +1043,7 @@ mod tests {
             evidence
         }
 
-        // cov:ignore-start — test resolver trait boilerplate has no production caller
+        // cov:ignore-start: this complete test resolver trait implementation is required, but the lock-ordering test has no local-resolution caller.
         async fn resolve_local(
             &self,
             _references: &[common::media::MediaReference],
@@ -1444,7 +1444,7 @@ mod tests {
         );
         let polls = Arc::new(AtomicUsize::new(0));
         let stream_polls = Arc::clone(&polls);
-        // cov:ignore-start — executing this sentinel violates the asserted no-poll invariant
+        // cov:ignore-start: polling this sentinel would violate the no-poll invariant asserted by the upload-disabled test.
         let stream = stream::poll_fn(move |_| {
             stream_polls.fetch_add(1, Ordering::Relaxed);
             Poll::Ready(None::<Result<Bytes, io::Error>>)

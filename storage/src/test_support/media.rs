@@ -129,7 +129,7 @@ struct NoMediaOwnership;
 
 #[async_trait]
 impl MediaReferenceOwnershipResolver for NoMediaOwnership {
-    // cov:ignore-start — required test resolver trait method has no fixture caller
+    // cov:ignore-start: this complete test resolver trait implementation is required, but the local-only fixture has no foreign-resolution caller.
     async fn resolve(
         &self,
         _references: &[PersistedMediaReference],

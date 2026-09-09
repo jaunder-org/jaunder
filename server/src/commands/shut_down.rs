@@ -61,8 +61,8 @@ impl ProcessOperations for LinuxProcessOperations {
         match process::pidfd_open(pid, PidfdFlags::empty()) {
             Ok(handle) => Ok(OpenOutcome::Captured(handle)),
             // pidfd error identities depend on the running kernel/process table.
-            Err(error) if error == rustix::io::Errno::SRCH => Ok(OpenOutcome::ProcessExited), // cov:ignore
-            Err(error) => Err(error.into()), // cov:ignore
+            Err(error) if error == rustix::io::Errno::SRCH => Ok(OpenOutcome::ProcessExited), // cov:ignore: No deterministic portable process-table seam can make pidfd_open report ESRCH.
+            Err(error) => Err(error.into()), // cov:ignore: No deterministic portable process-table seam can induce another pidfd_open OS failure.
         }
     }
 
@@ -73,7 +73,7 @@ impl ProcessOperations for LinuxProcessOperations {
     fn signal_term(&self, handle: &Self::Handle) -> io::Result<()> {
         match process::pidfd_send_signal(handle, Signal::TERM) {
             Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
-            Err(error) => Err(error.into()), // cov:ignore -- OS pidfd permission/failure path
+            Err(error) => Err(error.into()), // cov:ignore: Kernel permission and pidfd signaling failures have no deterministic portable host seam.
         }
     }
 
@@ -94,10 +94,10 @@ impl ProcessOperations for LinuxProcessOperations {
             };
             let mut fds = [PollFd::new(handle, PollFlags::IN)];
             match event::poll(&mut fds, Some(&timeout)) {
-                Ok(0) => return Ok(false), // cov:ignore -- kernel poll timeout path
+                Ok(0) => return Ok(false), // cov:ignore: The public zero-duration test returns before poll, while a kernel poll timeout is timing-dependent.
                 Ok(_) => return Ok(true),
-                Err(error) if error == rustix::io::Errno::INTR => {} // cov:ignore -- signal interruption path
-                Err(error) => return Err(error.into()), // cov:ignore -- OS poll failure path
+                Err(error) if error == rustix::io::Errno::INTR => {} // cov:ignore: Delivering an interrupt at this poll point has no deterministic public host seam.
+                Err(error) => return Err(error.into()), // cov:ignore: Kernel poll failures have no deterministic portable host seam.
             }
         }
     }
@@ -290,7 +290,7 @@ mod tests {
             let exited = LinuxProcessOperations.wait_for_exit(handle, timeout)?;
             if exited {
                 fs::remove_file(&self.runtime_path)?;
-            } // cov:ignore
+            } // cov:ignore: LLVM leaves this covered completed-child cleanup edge at zero.
             Ok(exited)
         }
     }

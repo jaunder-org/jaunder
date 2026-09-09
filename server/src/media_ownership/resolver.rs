@@ -162,7 +162,7 @@ impl<T: HeadTransport + 'static> MediaReferenceOwnershipResolver
                     for reference in references {
                         local.prove_local(reference.media().clone());
                     }
-                } // cov:ignore — owned-probe behavior is exercised; LLVM leaves this loop-closing edge at zero.
+                } // cov:ignore: LLVM leaves this covered owned-probe loop-closing edge at zero.
             }
         };
         if let Err(error) = timeout(OPERATION_TIMEOUT, operation).await {

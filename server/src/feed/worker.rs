@@ -924,8 +924,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl WebSubClient for UnexpectedWebSubClient {
-        // cov:ignore-start — this sentinel is required to remain uncalled; a call
-        // panics and fails the stale-finalization caller-boundary test.
+        // cov:ignore-start: This sentinel must remain uncalled; invoking it panics and fails the stale-finalization caller-boundary test.
         async fn send_publish(
             &self,
             _hub_url: &HubUrl,

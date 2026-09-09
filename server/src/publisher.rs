@@ -42,8 +42,7 @@ impl PublisherGateGuard {
                 Err(TryLockError::WouldBlock) => {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-                // cov:ignore-start -- advisory-lock backends expose no deterministic
-                // way to make a successfully opened regular file return this OS error.
+                // cov:ignore-start: The regular-file advisory-lock backend has no deterministic seam for this post-open OS error.
                 Err(TryLockError::Error(error)) => {
                     return Err(error).with_context(|| {
                         format!("cannot acquire publisher gate {}", path.display())
@@ -111,8 +110,7 @@ impl PublisherService {
                 Box::pin(async move { publisher.repair_malformed_hub(transaction, token).await })
             })
             .await?;
-        // cov:ignore-start -- downstream test scopes deliberately expose only confirmed
-        // commits or operation/begin failures, not post-commit acknowledgement loss.
+        // cov:ignore-start: The downstream write-scope test seam cannot synthesize post-commit acknowledgement loss.
         if matches!(committed, MutationOutcome::CommitIndeterminate(_)) {
             return Err(anyhow::anyhow!(
                 "malformed hub repair commit acknowledgement was indeterminate"
@@ -174,8 +172,7 @@ impl PublisherService {
     pub async fn mutate_hub(&self, hub: Option<&HubUrl>) -> anyhow::Result<HubMutationOutcome> {
         match self.mutate_hub_with_feedback(hub).await? {
             MutationOutcome::Confirmed(outcome) => Ok(outcome),
-            // cov:ignore-start -- downstream test scopes cannot synthesize a
-            // post-commit acknowledgement loss; the write-scope crate owns that fault.
+            // cov:ignore-start: The downstream write-scope test seam cannot synthesize post-commit acknowledgement loss.
             MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
                 "hub mutation commit acknowledgement was indeterminate"
             )),
@@ -247,8 +244,7 @@ impl PublisherFinalizationGuard {
             })?;
         match committed {
             MutationOutcome::Confirmed(outcome) => Ok(outcome),
-            // cov:ignore-start — write scopes expose operation/begin failures but
-            // cannot synthesize post-commit acknowledgement loss.
+            // cov:ignore-start: This write scope exposes begin and operation failures but cannot synthesize post-commit acknowledgement loss.
             MutationOutcome::CommitIndeterminate(_) => Err(PublisherStorageError::Db(
                 Error::Protocol("cache commit acknowledgement was indeterminate".to_owned()),
             )),

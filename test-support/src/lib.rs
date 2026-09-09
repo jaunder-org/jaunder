@@ -339,7 +339,7 @@ pub async fn seed_dead_letters(
                     anyhow::anyhow!("atomic WebSub dead-letter fixture failed: {error}")
                 })?,
             "atomic WebSub dead-letter fixture",
-        )?; // cov:ignore — llvm-cov attributes the already-covered outer `?` to its closing span
+        )?; // cov:ignore: llvm-cov omits this executed outer `?` closing span in the real storage fixture
         ids.push(id);
     }
     Ok(ids)

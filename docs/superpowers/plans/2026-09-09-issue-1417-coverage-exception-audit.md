@@ -70,7 +70,7 @@ Out:
   - Verification: Host-testable extracted behavior and the relevant actual web
     surface prove changes; retained WASM-only spans are minimal and
     category-valid.
-- [ ] Task 5: Cut over the coverage exception contract
+- [x] Task 5: Cut over the coverage exception contract
   - Depends on: Tasks 1–4 disposition records and code changes.
   - Contract: Update the marker parser and regression checks to require
     non-empty reasons on line markers and block starts, preserve anchored

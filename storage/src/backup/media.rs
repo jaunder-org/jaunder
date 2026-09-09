@@ -108,7 +108,7 @@ fn mirror_media_entries(
                 previous_backup,
                 &child_relative_path,
             )?;
-        } // cov:ignore is_file arm's closing brace; llvm-cov leaves it unmarked though the arm's copy-success and `?`-failure paths are both tested
+        } // cov:ignore: LLVM leaves the is_file arm's closing brace unmarked although its copy-success and error paths are exercised.
     }
     Ok(())
 }

@@ -293,7 +293,7 @@ pub async fn upload(data: MultipartData) -> WebResult<MutationOutcome<UploadedMe
             value.to_string().parse::<ContentType>().map_err(|_| {
                 // multer only exposes parsed `mime::Mime` values, a strict subset of
                 // `ContentType`; retain the defensive mapping if either contract changes.
-                // cov:ignore-start
+                // cov:ignore-start: multer parses MIME values before domain conversion
                 map_media_error(anyhow::anyhow!(MediaError::BadRequest(
                     "Invalid content type".to_owned()
                 )))

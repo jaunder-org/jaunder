@@ -195,8 +195,8 @@ pub fn report_swallowed(
         TelemetryOrigin::Server,
     );
     tracing::warn!(
-        error.kind = kind.as_metric_str(), // cov:ignore
-        error.class = class.as_metric_str(), // cov:ignore
+        error.kind = kind.as_metric_str(), // cov:ignore: llvm-cov does not attribute this tracing macro field expression, though the subscriber test observes it
+        error.class = class.as_metric_str(), // cov:ignore: llvm-cov does not attribute this tracing macro field expression, though the subscriber test observes it
         error.disposition = "swallowed",
         telemetry.origin = "server",
         error.context = context,

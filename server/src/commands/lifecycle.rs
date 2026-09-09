@@ -328,7 +328,7 @@ impl BackgroundWorkers {
                     stop_worker_after_start_failure(scheduler, "server.backup.start_rollback")
                         .await;
                     // The await body is covered; LLVM assigns this closing edge a zero count.
-                } // cov:ignore
+                } // cov:ignore: LLVM leaves this covered await loop's closing edge at zero.
                 stop_worker_after_start_failure(
                     &mut maintenance,
                     "server.maintenance.start_rollback",
@@ -411,8 +411,7 @@ async fn prepare_saturation_metrics(
 async fn stop_worker_after_start_failure(worker: &mut ScheduledWorkerGuard, context: &'static str) {
     worker.stop();
     if let Err(error) = worker.shutdown().await {
-        // cov:ignore-start -- tokio-cron-scheduler 0.13 shutdown always returns Ok;
-        // retain reporting so a future fallible implementation does not hide cleanup failure.
+        // cov:ignore-start: tokio-cron-scheduler 0.13 shutdown always returns Ok, so this retained future-error report has no host path.
         error::report_swallowed(
             error::ErrorKind::Internal,
             error::ErrorClass::Transient,
@@ -922,9 +921,7 @@ impl ShutdownSupervisor {
         let mut sigterm = signal(SignalKind::terminate())?;
         let (tx, rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            // cov:ignore-start -- async signal wait-loop; the forced branch ends in
-            // process::exit and is unreachable by a survivable test. The synchronous
-            // setup above and serve_with_shutdown are host-covered by the signal tests.
+            // cov:ignore-start: A forced second signal calls process::exit, so the signal loop cannot complete in a survivable host test.
             let mut state = ShutdownState::AwaitingSignal;
             let mut graceful_shutdown = Some(tx);
             loop {
@@ -967,8 +964,8 @@ impl ShutdownSupervisor {
         task.abort();
         match task.await {
             Err(error) if error.is_cancelled() => {}
-            Ok(()) => {} // cov:ignore
-            // cov:ignore-start
+            Ok(()) => {} // cov:ignore: Aborting this task cannot produce a successful join under Tokio's cancellation contract.
+            // cov:ignore-start: After task abortion, a non-cancellation JoinError needs a runtime fault that the public signal seam cannot induce.
             Err(error) => error::report_swallowed(
                 error::ErrorKind::Internal,
                 error::ErrorClass::Transient,
@@ -1042,7 +1039,7 @@ pub async fn cmd_serve(
             saturation_shutdown,
             "server.metrics.shutdown",
         );
-    } // cov:ignore — LLVM assigns this completed shutdown branch's closing edge a zero count.
+    } // cov:ignore: LLVM leaves this covered completed shutdown branch's closing edge at zero.
     let (feed_shutdown, maintenance_shutdown, backup_shutdown) = workers.shutdown().await;
     merge_worker_shutdown(&mut serve_result, feed_shutdown, "server.feed.shutdown");
     merge_worker_shutdown(
@@ -1957,7 +1954,7 @@ mod tests {
         .await
         .is_err()
         {
-            // cov:ignore-start
+            // cov:ignore-start: This timeout cleanup runs only after the test's required runtime identity publication has failed.
             command.abort();
             let _ = command.await;
             panic!("cmd_serve must publish a ready runtime identity");

@@ -3289,8 +3289,17 @@ lines before ordinary line/CRAP policy. The host-side gate
   exempt span. With the `#[component]` arm gone it now protects the
   `unreachable!` exemption only — a covered `unreachable!` means the premise is
   violated.
-- **`// cov:ignore`** (line, or a `cov:ignore-start`/`-stop` block) as the sole
-  manual acceptance path, reviewable in the diff where it lives.
+- **Reason-bearing manual exclusions**: `// cov:ignore: <specific reason>`, or
+  `// cov:ignore-start: <specific reason>` … `// cov:ignore-stop`, are the sole
+  manual acceptance path, reviewable in the diff where they live. Reasons state
+  why authoritative host coverage cannot honestly exercise the exact span;
+  legacy/empty line or start forms, noncanonical stops, nested blocks, and
+  unmatched or stray block boundaries fail closed. Removal through observable
+  coverage or simplification is presumed; no arbitrary formatted block-size cap
+  substitutes for semantic review. The point-in-time exception audit is review
+  evidence in the pull request and issue rather than a committed repository
+  snapshot
+  ([reason-bearing coverage exceptions](adr/drafts/reason-bearing-coverage-exceptions.md)).
 - **A per-function CRAP threshold of 30**, exclusive, waived only by an
   in-source `crap:allow` within the function's span
   (`xtask/src/coverage/crap.rs:32`).

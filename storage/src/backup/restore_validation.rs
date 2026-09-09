@@ -610,7 +610,7 @@ pub(crate) const RESTORE_COLUMN_COVERAGE: &[RestoreColumnCoverage] = &[
     ),
 ];
 
-// cov:ignore-start - test-only inventory constructors are exercised by their generated entries.
+// cov:ignore-start: compiler attribution omits these test-only const inventory constructors although generated entries exercise them.
 #[cfg(test)]
 const fn covered(
     table: &'static str,

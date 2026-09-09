@@ -338,7 +338,7 @@ impl FeedEventDialect for Sqlite {
         }
         q.execute(&mut *connection).await?;
         Ok(())
-    } // cov:ignore — async helper closing brace is unmarked although both success and database-error paths are covered
+    } // cov:ignore: LLVM leaves this async helper's closing edge unmarked after shared success and database-error behavior.
     async fn prune_terminal_events(
         pool: &Pool<Sqlite>,
         now: UtcInstant,
@@ -422,8 +422,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[ignore = "timing-based #18 reproduction; run manually with --ignored"]
     async fn claim_pending_batch_no_lock_contention(#[case] backend: Backend) {
-        // cov:ignore-start — #[ignore]d manual #18 repro; its body never runs in the
-        // automated coverage suite, so these lines are accepted-uncovered.
+        // cov:ignore-start: this ignored timing-dependent SQLite #18 manual reproduction never runs in the automated coverage suite.
         let env = backend.setup().await;
         let feed_events = env.feed_events().clone();
         let write_scope = env.write_scope().clone();

@@ -212,11 +212,11 @@ mod tests {
                 .acquire(UserId::from(1))
                 .expect("operation permit");
             started_tx.send(()).expect("test observes acquired permit");
-            // cov:ignore-start
+            // cov:ignore-start: the cancellation fixture must remain pending until operation.abort(), so it cannot complete under host coverage
             // The cancellation test intentionally holds this future pending.
             std::future::pending::<()>().await;
             // cov:ignore-stop
-        }); // cov:ignore
+        }); // cov:ignore: llvm-cov omits the closure-ending span after the aborted fixture reaches it
 
         started_rx.await.expect("operation acquires its permit");
         assert!(matches!(

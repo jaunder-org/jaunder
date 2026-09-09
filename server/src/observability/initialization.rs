@@ -95,8 +95,8 @@ mod tests {
             output.status.success(),
             "child status: {}; stdout: {}; stderr: {}",
             output.status,
-            String::from_utf8_lossy(&output.stdout), // cov:ignore
-            String::from_utf8_lossy(&output.stderr)  // cov:ignore
+            String::from_utf8_lossy(&output.stdout), // cov:ignore: This diagnostic is evaluated only when the isolated child tracing contract has failed.
+            String::from_utf8_lossy(&output.stderr) // cov:ignore: This diagnostic is evaluated only when the isolated child tracing contract has failed.
         );
         let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
         assert_eq!(

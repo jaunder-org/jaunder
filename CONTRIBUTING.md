@@ -1028,20 +1028,35 @@ line fails the gate** unless one of two things exempts it:
   arm a domain invariant makes unreachable) in preference to a `cov:ignore`: the
   marker is a permanent, prose-only promise, whereas an `unreachable!` re-flags
   itself the moment the line ever goes live.
-- **`// cov:ignore` marker.** A line explicitly marked as an accepted gap.
+- **`// cov:ignore: <specific reason>` marker.** A line explicitly marked as an
+  accepted gap.
 
 `cov:ignore` is the **only** manual acceptance path — there is no baseline file
 to edit, and every marker is visible and reviewable in the diff where it lives.
+The presumption is to remove the gap with consumer-observable coverage or a
+simplifying refactor. Retain a marker only when authoritative host coverage
+cannot honestly exercise its exact span: non-host behavior, a genuinely
+unreachable path, fault injection that is impractical to arrange, generated or
+build-script code, or compiler bookkeeping. The source-local reason states those
+facts; a category label by itself is not a reason. Point-in-time audit
+dispositions are review evidence in the pull request and issue, not a committed
+repository snapshot.
+
 It has two forms:
 
-- **Line form** — `// cov:ignore` as the line's _real_ trailing comment. The
-  matcher is anchored to the actual `//` comment, so a marker appearing inside a
-  string or doc comment does **not** suppress.
-- **Block form** — `// cov:ignore-start` … `// cov:ignore-stop` around a
-  contiguous region, for lines that cannot carry a trailing comment
-  (mid-expression lines, inside multi-line/raw string literals). Nesting is not
-  allowed, and an unmatched `-start` or a stray `-stop` is a **hard error** (the
-  gate fails loudly rather than leaving an open-ended blind spot).
+- **Line form** — `// cov:ignore: <specific reason>` as the line's _real_
+  trailing comment. The reason must be non-empty. The matcher is anchored to the
+  actual `//` comment, so a marker appearing inside a string or doc comment does
+  **not** suppress.
+- **Block form** — `// cov:ignore-start: <specific reason>` …
+  `// cov:ignore-stop` around a contiguous region, for lines that cannot carry a
+  trailing comment (mid-expression lines, inside multi-line/raw string
+  literals). The start reason must be non-empty; the stop takes no reason or
+  trailing text. Nesting is not allowed, and a legacy bare/empty line or start,
+  unmatched start, stray stop, or noncanonical stop is a **hard error** (the
+  gate fails loudly rather than leaving an open-ended blind spot). There is no
+  arbitrary block-size cap: semantic breadth is reviewed from the exact
+  behavior, not formatted line count.
 
 **CRAP** (Change Risk Anti-Patterns — cyclomatic complexity weighted by test
 coverage) is gated by a **per-function threshold, T = 30**: any function whose

@@ -300,7 +300,7 @@ impl FeedEventDialect for Postgres {
         .execute(&mut *connection)
         .await?;
         Ok(())
-    } // cov:ignore — async helper closing brace is unmarked although both success and database-error paths are covered
+    } // cov:ignore: LLVM leaves this async helper's closing edge unmarked after shared success and database-error behavior.
     async fn prune_terminal_events(
         pool: &Pool<Postgres>,
         now: UtcInstant,

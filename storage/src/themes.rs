@@ -945,7 +945,7 @@ macro_rules! impl_theme_storage {
             }
             async fn expired_retained_content(&self, now_unix_seconds: i64) -> Result<Vec<(ThemeOwner, ThemeContentDigest)>, sqlx::Error> {
                 let rows: Vec<(String, String)> = sqlx::query_as("SELECT c.catalog_owner_key, c.digest FROM theme_retained_content_charges c JOIN theme_content_eligibility e ON e.digest = c.digest WHERE c.live_references = 0 AND e.live_references = 0 AND e.retained_until_unix_seconds <= $1 ORDER BY c.catalog_owner_key, c.digest").bind(now_unix_seconds).fetch_all(&self.pool).await?;
-                rows.into_iter().map(|(owner, digest)| Ok((theme_owner_from_key(&owner).ok_or(sqlx::Error::RowNotFound)?, digest.parse().map_err(|_| sqlx::Error::RowNotFound)?))).collect() // cov:ignore
+                rows.into_iter().map(|(owner, digest)| Ok((theme_owner_from_key(&owner).ok_or(sqlx::Error::RowNotFound)?, digest.parse().map_err(|_| sqlx::Error::RowNotFound)?))).collect() // cov:ignore: LLVM leaves the macro-generated dual-adapter decode closure's error-only edge unmarked.
             }
         }
     }

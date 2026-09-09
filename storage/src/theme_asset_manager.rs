@@ -394,10 +394,7 @@ impl ThemeAssetManager {
                 Self::sync_directory(staging).await?;
                 Ok(true)
             }
-            // cov:ignore-start
-            // Tokio's Linux rename replaces an existing destination atomically; this
-            // collision recovery is retained for platform parity where rename reports
-            // AlreadyExists, and cannot be exercised by the authoritative Linux run.
+            // cov:ignore-start: Tokio's Linux rename replaces an existing destination atomically, so this portable AlreadyExists recovery cannot execute on the authoritative host.
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 let existing = fs::read(&path).await?;
                 fs::remove_file(&temporary).await?;
@@ -405,9 +402,7 @@ impl ThemeAssetManager {
                 Self::verify(&existing, &blob.digest).map(|()| false)
             }
             // cov:ignore-stop
-            // cov:ignore-start — after the missing-destination check, an unexpected
-            // rename failure requires an OS race or fault injection unavailable to the
-            // authoritative host coverage run.
+            // cov:ignore-start: after the missing-destination check, this rename failure needs a post-check OS race or host fault injection unavailable to authoritative coverage.
             Err(error) => Err(finish_install_failure(
                 error,
                 fs::remove_file(&temporary).await,
@@ -495,9 +490,7 @@ impl ThemeAssetManager {
             let mut second = match fs::read_dir(prefix_entry.path()).await {
                 Ok(entries) => entries,
                 Err(error) if error.kind() == io::ErrorKind::NotADirectory => continue,
-                // cov:ignore-start — after this directory has been enumerated, an
-                // unexpected read failure requires a concurrent filesystem race or
-                // host-level fault injection.
+                // cov:ignore-start: reading a directory already enumerated requires a concurrent filesystem race or host-level fault injection.
                 Err(error) => return Err(error.into()),
                 // cov:ignore-stop
             };
@@ -510,9 +503,7 @@ impl ThemeAssetManager {
                 let mut files = match fs::read_dir(shard_entry.path()).await {
                     Ok(entries) => entries,
                     Err(error) if error.kind() == io::ErrorKind::NotADirectory => continue,
-                    // cov:ignore-start — after this shard has been enumerated, an
-                    // unexpected read failure requires a concurrent filesystem race or
-                    // host-level fault injection.
+                    // cov:ignore-start: reading a shard already enumerated requires a concurrent filesystem race or host-level fault injection.
                     Err(error) => return Err(error.into()),
                     // cov:ignore-stop
                 };
@@ -523,8 +514,8 @@ impl ThemeAssetManager {
                     let name = file.file_name();
                     let digest = name.to_string_lossy();
                     if Self::is_canonical_digest_path(&prefix, &shard, &digest) {
-                        digests.push(digest.parse().map_err(|_| ThemeAssetError::InvalidDigest)?); // cov:ignore — canonical lowercase SHA-256 hex was already validated above, so the digest newtype parser cannot reject it.
-                    } // cov:ignore — the parser result's closure edge is compiler bookkeeping; the canonical digest path is exercised by reconciliation.
+                        digests.push(digest.parse().map_err(|_| ThemeAssetError::InvalidDigest)?); // cov:ignore: canonical lowercase SHA-256 validation guarantees this digest newtype parser accepts the path.
+                    } // cov:ignore: LLVM leaves this parser-result closure edge unmarked although reconciliation exercises the canonical digest path.
                 }
             }
         }

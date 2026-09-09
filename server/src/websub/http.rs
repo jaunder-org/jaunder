@@ -63,8 +63,7 @@ impl WebSubClient for HttpWebSubClient {
         // the ADR-0063 §5 carve-out. `IntoUrl` is sealed and has no impl for our
         // newtype, so `post` needs the `&str` explicitly.
         let form = [("hub.mode", "publish"), ("hub.url", feed_url.as_ref())];
-        // cov:ignore-start -- HubUrl validates its serialized URL at construction,
-        // so this defensive parse failure is unreachable through the typed boundary.
+        // cov:ignore-start: HubUrl validates its serialized URL at construction, so this defensive reparse cannot fail through the typed boundary.
         let mut target = Url::parse(hub_url.as_ref()).map_err(|source| WebSubError::Retryable {
             reason: RetryableWebSubError::Transport(Box::new(source)),
             retry_after: None,
@@ -274,8 +273,8 @@ mod tests {
                 .await
                 // The test-owned server is aborted at test teardown, so its terminal
                 // result is not observable by the client scenario.
-                .expect("test hub serves requests"); // cov:ignore
-        }); // cov:ignore
+                .expect("test hub serves requests"); // cov:ignore: The test tears down this server task, so its terminal result is not observable by the client scenario.
+        }); // cov:ignore: The test tears down this server task before its serve closure can complete.
         (addr, received)
     }
 
@@ -691,7 +690,7 @@ mod tests {
     async fn spawn_hanging_hub() -> SocketAddr {
         let app = Router::new().fallback(post(|| async {
             tokio::time::sleep(Duration::from_secs(30)).await;
-            StatusCode::ACCEPTED // cov:ignore timeout cancels this test-only handler first
+            StatusCode::ACCEPTED // cov:ignore: The client timeout cancels this test-only handler before it can return a response.
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -701,8 +700,8 @@ mod tests {
             axum::serve(listener, app)
                 .await
                 // The hanging server is intentionally cancelled after the client times out.
-                .expect("test hub serves requests"); // cov:ignore
-        }); // cov:ignore
+                .expect("test hub serves requests"); // cov:ignore: The test tears down this hanging server, so its terminal result is not observable by the client scenario.
+        }); // cov:ignore: The test tears down this hanging server before its serve closure can complete.
         addr
     }
 

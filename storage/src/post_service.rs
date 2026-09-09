@@ -1076,7 +1076,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::MediaReferenceOwnershipResolver for LocalOnlyResolver {
-        // cov:ignore-start — required test-resolver trait method is irrelevant to local-proof tests
+        // cov:ignore-start: this complete test resolver trait implementation is required, but local-proof tests never request foreign evidence.
         async fn resolve(
             &self,
             _references: &[crate::PersistedMediaReference],

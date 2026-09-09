@@ -590,7 +590,7 @@ mod tests {
             output.status.success(),
             "CLI parser child failed: {}",
             // Parent tests require success; this expression is failure-only diagnostics.
-            String::from_utf8_lossy(&output.stderr) // cov:ignore
+            String::from_utf8_lossy(&output.stderr) // cov:ignore: This diagnostic is evaluated only when the child contract has already failed.
         );
         String::from_utf8(output.stdout)
             .expect("child stdout is UTF-8")

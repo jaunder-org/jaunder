@@ -67,7 +67,7 @@ pub async fn cmd_user_create(
     let password = if let Some(p) = password {
         p
     } else {
-        // cov:ignore-start
+        // cov:ignore-start: The unattended command harness cannot provide interactive TTY password prompts.
         let p1 = rpassword::prompt_password("Password: ")?;
         let p2 = rpassword::prompt_password("Confirm password: ")?;
         if p1 != p2 {

@@ -130,7 +130,7 @@ impl PostWriteGate {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-// cov:ignore-start — test-only synchronization gate Default implementation has no production caller
+// cov:ignore-start: this test-only Default implementation is required to construct the synchronization gate, but production has no caller.
 impl Default for PostWriteGate {
     fn default() -> Self {
         Self::new()

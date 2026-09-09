@@ -30,7 +30,8 @@ use common::etag::ETag;
 use host::etag;
 use rust_embed::RustEmbed;
 
-#[derive(RustEmbed)] // cov:ignore
+#[derive(RustEmbed)]
+// cov:ignore: RustEmbed derive expansion is compiler-generated rather than handwritten runtime behavior.
 #[folder = "$OUT_DIR/site"]
 pub struct Site;
 
@@ -255,7 +256,7 @@ pub async fn serve_site(req: Request) -> Response {
         // build is debug (disk → `Owned`), so the release-only `Borrowed`
         // arm is unreachable under instrumentation.
         let body = match file.data {
-            // cov:ignore-start -- release-embed-only (debug coverage disk-reads → Owned).
+            // cov:ignore-start: Debug host coverage reads staged files into owned buffers, never this release-only borrowed embed variant.
             Cow::Borrowed(bytes) => Bytes::from_static(bytes),
             // cov:ignore-stop
             Cow::Owned(bytes) => Bytes::from(bytes),
@@ -575,7 +576,7 @@ mod tests {
     #[tokio::test]
     async fn manifest_wasm_variants_keep_logical_headers_and_immutable_304s() {
         let Some(urls) = crate::bundle::boot_urls() else {
-            return; // cov:ignore -- host test builds without generated CSR bundle assets.
+            return; // cov:ignore: Host test builds omit the generated CSR bundle required to exercise manifest variants.
         };
         let logical = urls.wasm.trim_start_matches('/');
         for (accept_encoding, expected_encoding) in [
@@ -661,7 +662,7 @@ mod tests {
     #[test]
     fn rendered_static_shell_uses_each_manifest_role_url_once_in_boot_order() {
         let Some(urls) = crate::bundle::boot_urls() else {
-            return; // cov:ignore -- host test builds without generated CSR bundle assets.
+            return; // cov:ignore: Host test builds omit the generated CSR bundle required to render this manifest-backed shell.
         };
         let shell = shell_html();
         for url in [urls.glue, urls.wasm] {
