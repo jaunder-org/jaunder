@@ -20,3 +20,17 @@ where
         }
     });
 }
+
+/// Register an `Effect` that runs for either settled result, leaving the caller's
+/// outcome algebra intact when failure itself affects a host-tested decision.
+pub(super) fn on_settled<T, E, R, F>(resolved: R, on_settled: F)
+where
+    R: Fn() -> Option<Result<T, E>> + 'static,
+    F: Fn(Result<T, E>) + 'static,
+{
+    Effect::new(move |_| {
+        if let Some(value) = resolved() {
+            on_settled(value);
+        }
+    });
+}

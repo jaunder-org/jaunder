@@ -90,16 +90,22 @@ pub enum NoIdentity {
     Redirect(&'static str),
 }
 
+/// An opaque incarnation of a listing. Advancing it synchronously revokes every
+/// load-more claim issued for an older replacement request.
+#[derive(Clone, Copy, PartialEq)]
+pub struct TimelineGeneration(u64);
+
 /// A claimed load-more slot: proof that [`TimelineState::begin_load_more`] found
 /// the timeline fetchable and marked it in flight, so the holder now owes the
 /// state an [`append`](TimelineState::append) to settle it.
 ///
-/// The claim is a named type rather than the cursor alone because "was the slot
-/// claimed?" and "is there a cursor?" are unrelated questions with the same
-/// `Option` answer — the caller must not have to remember which nesting level
-/// means which.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The claim couples the cursor to the generation that exposed it. A replacement
+/// advances the generation before its request starts, so an old completion cannot
+/// mutate the destination listing after navigation or revalidation.
+#[derive(Clone, Copy)]
 pub struct LoadMoreClaim {
+    /// The listing incarnation that issued this claim.
+    generation: TimelineGeneration,
     /// Where to fetch from; `None` on a timeline that has yet to hand a cursor
     /// back, which the listing endpoints read as "from the beginning".
     pub cursor: Option<PageCursor>,
@@ -111,15 +117,38 @@ pub struct LoadMoreClaim {
 /// Every field is an `RwSignal` (a `Copy` handle into the reactive runtime), so the
 /// whole struct is `Copy` and can be handed to each event closure and child callback
 /// without per-signal capture.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct TimelineState {
     pub rows: RwSignal<Vec<RenderedPost>>,
     pub cursor: RwSignal<Option<PageCursor>>,
     pub has_more: RwSignal<bool>,
     pub status: RwSignal<LoadStatus>,
+    generation: RwSignal<TimelineGeneration>,
+}
+
+impl Default for TimelineState {
+    fn default() -> Self {
+        Self {
+            rows: RwSignal::new(Vec::new()),
+            cursor: RwSignal::new(None),
+            has_more: RwSignal::new(false),
+            status: RwSignal::new(LoadStatus::NeverLoaded),
+            generation: RwSignal::new(TimelineGeneration(0)),
+        }
+    }
 }
 
 impl TimelineState {
+    /// Start a replacement listing incarnation and synchronously revoke every
+    /// outstanding load-more completion from the previous one.
+    #[must_use]
+    pub fn advance_generation(&self) -> TimelineGeneration {
+        self.generation.update(|generation| {
+            generation.0 = generation.0.wrapping_add(1);
+        });
+        self.generation.get_untracked()
+    }
+
     /// Adopt a page's rows + cursor — a projector seed or a fresh fetch —
     /// replacing what's shown and settling to idle.
     ///
@@ -173,13 +202,16 @@ impl TimelineState {
         self.clear_to(LoadStatus::Unidentified);
     }
 
-    /// Apply a load-more result: **extend** on success, and on failure mark the
-    /// status *only*.
+    /// Settle a claimed load-more result: **extend** on a current success, and on
+    /// a current failure mark the status *only*. A stale completion is inert.
     ///
     /// Deliberately asymmetric with [`apply`](Self::apply), which clears: page 1
     /// succeeded and only page 2 failed, so throwing page 1 away would lose work
     /// the user already has.
-    pub fn append(&self, result: WebResult<Page<RenderedPost>>) {
+    pub fn append(&self, claim: LoadMoreClaim, result: WebResult<Page<RenderedPost>>) {
+        if claim.generation != self.generation.get_untracked() {
+            return;
+        }
         match result {
             Ok(page) => {
                 self.cursor.set(page.next_cursor);
@@ -192,8 +224,8 @@ impl TimelineState {
     }
 
     /// Claim the load-more slot: `None` when there is nothing to fetch or a fetch
-    /// is already in flight, else a [`LoadMoreClaim`] carrying the cursor, having
-    /// marked the status `InFlight`.
+    /// is already in flight, else a [`LoadMoreClaim`] carrying the current
+    /// generation and cursor, having marked the status `InFlight`.
     ///
     /// Returning the claim rather than a bare `bool` keeps the guarded read
     /// host-tested, leaving the wasm caller a six-line shell.
@@ -204,6 +236,7 @@ impl TimelineState {
         }
         self.status.set(LoadStatus::InFlight);
         Some(LoadMoreClaim {
+            generation: self.generation.get_untracked(),
             cursor: self.cursor.get_untracked(),
         })
     }
@@ -372,7 +405,7 @@ mod tests {
     // All four effects asserted, so an `append` that forgets the cursor — and
     // therefore refetches page 1 forever — cannot pass.
     #[test]
-    fn append_ok_extends_rows_and_advances_the_cursor() {
+    fn current_load_more_success_extends_rows_and_advances_the_cursor() {
         Owner::new().with(|| {
             let state = TimelineState::default();
             state.adopt(page_with(
@@ -380,14 +413,17 @@ mod tests {
                 Some(cursor(instant(), 7)),
                 true,
             ));
-            state.status.set(LoadStatus::InFlight);
+            let claim = state.begin_load_more().expect("the next page is claimable");
 
             let later: UtcInstant = "2026-07-20T10:30:00Z".parse().unwrap();
-            state.append(Ok(page_with(
-                vec![sample_summary(), sample_summary()],
-                Some(cursor(later, 9)),
-                false,
-            )));
+            state.append(
+                claim,
+                Ok(page_with(
+                    vec![sample_summary(), sample_summary()],
+                    Some(cursor(later, 9)),
+                    false,
+                )),
+            );
 
             assert_eq!(state.rows.get().len(), 3, "extends, does not replace");
             assert_eq!(
@@ -403,7 +439,7 @@ mod tests {
     // A load-more failure keeps the pages already fetched — unlike `apply`, which
     // clears. The asymmetry is deliberate: page 1 succeeded, only page 2 failed.
     #[test]
-    fn append_err_marks_the_status_and_retains_the_rows() {
+    fn current_load_more_failure_retains_rows_and_allows_retry() {
         Owner::new().with(|| {
             let state = TimelineState::default();
             state.adopt(page_with(
@@ -411,7 +447,8 @@ mod tests {
                 Some(cursor(instant(), 7)),
                 true,
             ));
-            state.append(Err(WebError::validation("boom")));
+            let claim = state.begin_load_more().expect("the next page is claimable");
+            state.append(claim, Err(WebError::validation("boom")));
 
             assert_eq!(
                 state.rows.get().len(),
@@ -428,34 +465,127 @@ mod tests {
                 state.status.get(),
                 LoadStatus::Failed(WebError::validation("boom"))
             );
+            assert!(
+                state.begin_load_more().is_some(),
+                "a failed page remains retryable"
+            );
         });
     }
 
     #[test]
-    fn begin_load_more_guards_then_marks_in_flight() {
+    fn stale_load_more_success_cannot_change_a_replacement_listing() {
         Owner::new().with(|| {
             let state = TimelineState::default();
+            state.adopt(page_with(
+                vec![sample_summary()],
+                Some(cursor(instant(), 7)),
+                true,
+            ));
+            let previous_claim = state
+                .begin_load_more()
+                .expect("the old listing is fetchable");
 
-            state.has_more.set(false);
-            assert_eq!(state.begin_load_more(), None, "nothing more to fetch");
-
-            state.has_more.set(true);
-            state.status.set(LoadStatus::InFlight);
-            assert_eq!(state.begin_load_more(), None, "already in flight");
-
-            state.status.set(LoadStatus::Idle);
-            state.cursor.set(Some(cursor(instant(), 7)));
-            assert_eq!(
-                state.begin_load_more(),
-                Some(LoadMoreClaim {
-                    cursor: Some(cursor(instant(), 7))
-                }),
-                "hands the cursor straight back"
+            let _replacement = state.advance_generation();
+            let replacement_cursor = cursor(instant(), 11);
+            state.adopt(page_with(
+                vec![sample_summary(), sample_summary()],
+                Some(replacement_cursor),
+                true,
+            ));
+            state.append(
+                previous_claim,
+                Ok(page_with(vec![sample_summary()], None, false)),
             );
+
+            assert_eq!(state.rows.get().len(), 2);
+            assert_eq!(state.cursor.get(), Some(replacement_cursor));
+            assert!(state.has_more.get());
+            assert_eq!(state.status.get(), LoadStatus::Idle);
+        });
+    }
+
+    #[test]
+    fn stale_load_more_failure_cannot_change_a_replacement_failure() {
+        Owner::new().with(|| {
+            let state = TimelineState::default();
+            state.adopt(page_with(
+                vec![sample_summary()],
+                Some(cursor(instant(), 7)),
+                true,
+            ));
+            let previous_claim = state
+                .begin_load_more()
+                .expect("the old listing is fetchable");
+
+            let _replacement = state.advance_generation();
+            state.apply(Err(WebError::validation("replacement failed")));
+            state.append(previous_claim, Err(WebError::validation("old page failed")));
+
+            assert!(state.rows.get().is_empty());
+            assert_eq!(state.cursor.get(), None);
+            assert!(!state.has_more.get());
             assert_eq!(
                 state.status.get(),
-                LoadStatus::InFlight,
-                "and marks it in flight"
+                LoadStatus::Failed(WebError::validation("replacement failed"))
+            );
+        });
+    }
+
+    #[test]
+    fn a_load_more_completion_before_replacement_is_later_replaced() {
+        Owner::new().with(|| {
+            let state = TimelineState::default();
+            state.adopt(page_with(
+                vec![sample_summary()],
+                Some(cursor(instant(), 7)),
+                true,
+            ));
+            let old_claim = state
+                .begin_load_more()
+                .expect("the old listing is fetchable");
+            state.append(
+                old_claim,
+                Ok(page_with(
+                    vec![sample_summary()],
+                    Some(cursor(instant(), 9)),
+                    true,
+                )),
+            );
+
+            let _replacement = state.advance_generation();
+            state.apply(Ok(page_with(vec![sample_summary()], None, false)));
+
+            assert_eq!(
+                state.rows.get().len(),
+                1,
+                "the replacement supersedes page 2"
+            );
+            assert_eq!(state.cursor.get(), None);
+            assert!(!state.has_more.get());
+            assert_eq!(state.status.get(), LoadStatus::Idle);
+        });
+    }
+
+    #[test]
+    fn load_more_dispatch_is_single_flight_until_its_claim_settles() {
+        Owner::new().with(|| {
+            let state = TimelineState::default();
+            state.adopt(page_with(
+                vec![sample_summary()],
+                Some(cursor(instant(), 7)),
+                true,
+            ));
+
+            let claim = state.begin_load_more().expect("the first dispatch starts");
+            assert!(
+                state.begin_load_more().is_none(),
+                "a second dispatch cannot start while the first is pending"
+            );
+
+            state.append(claim, Err(WebError::validation("boom")));
+            assert!(
+                state.begin_load_more().is_some(),
+                "settlement restores retry eligibility"
             );
         });
     }
@@ -465,10 +595,10 @@ mod tests {
         Owner::new().with(|| {
             let state = TimelineState::default();
             state.has_more.set(true);
-            assert_eq!(
-                state.begin_load_more(),
-                Some(LoadMoreClaim { cursor: None })
-            );
+            let claim = state
+                .begin_load_more()
+                .expect("has_more makes it claimable");
+            assert_eq!(claim.cursor, None);
         });
     }
 

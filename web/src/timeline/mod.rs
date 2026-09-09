@@ -25,7 +25,9 @@ mod server;
 
 pub(crate) mod render;
 mod state;
-pub use state::{LoadStatus, NoIdentity, TimelinePaint, TimelineState};
+pub use state::{
+    LoadMoreClaim, LoadStatus, NoIdentity, TimelineGeneration, TimelinePaint, TimelineState,
+};
 
 pub use api::{
     ListByTag, ListByUser, ListByUserAndTag, ListHomeFeed, ListLocalTimeline, list_by_tag,
