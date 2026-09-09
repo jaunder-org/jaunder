@@ -18,12 +18,9 @@ mod site_config;
 mod websub_capturing;
 pub(crate) use http::make_app_macro as make_app;
 
-// Two items are deliberately absent from the re-export lists below —
-// `atompub_authed` and `basic_header`. Each is now consumed only from inside
-// this directory (`atompub_authed` by its own file's builders, `basic_header`
-// by `atompub.rs` directly), so re-exporting them would be an import nothing
-// outside consumes — and `unused_imports` is denied. Each definition keeps its
-// `pub`, so nothing narrowed; only unreachable paths went away.
+// `basic_header` is consumed only by `atompub.rs`, so it is not re-exported.
+// Exporting it would create an unused import, which this crate denies. The
+// definition remains `pub` for sibling-module access.
 pub use atompub::{
     atompub, atompub_at, atompub_authed, atompub_get, atompub_location, atompub_post_xml,
     atompub_put_xml, atompub_upload, atompub_xml,

@@ -301,19 +301,18 @@ assemble every handle, and preserved a ready-made seam for dependencies to
 accumulate. The distinction between an allowed root-local bundle and a forbidden
 injected bundle also made the durable invariant harder to apply than necessary.
 
-**Resolution.** `AppState` is deleted. Every executable, command, and
-test-harness composition root retains `StorageFactory` only long enough to mint
-the named storage handles and `WriteScope` values required by its consumers. The
-broad serve path uses one private `ServeStorage` value solely to organize
-lifecycle composition helpers; it is neither public nor injected into any
-router, worker, manager, metrics subsystem, or other runtime component. Route
-families publish focused Leptos contexts and Axum extensions. `TestEnv`
-privately owns the factory and exposes focused accessors plus its
-backend-specific `TestBase`; it never assembles application state. No service
-locator or runtime dependency bundle exists.
+**Resolution.** As of 2026-09-08, `AppState` had been deleted. Every executable,
+command, and test-harness composition root retained `StorageFactory` only long
+enough to mint the named storage handles and `WriteScope` values required by its
+consumers. The broad serve path used one private `ServeStorage` value solely to
+organize lifecycle composition helpers; it was neither public nor injected into
+any router, worker, manager, metrics subsystem, or other runtime component.
+Route families published focused Leptos contexts and Axum extensions. `TestEnv`
+privately owned the factory and exposed focused accessors plus its
+backend-specific `TestBase`; it did not assemble application state. No service
+locator or runtime dependency bundle existed.
 
-This strengthens rather than reverses the original decision: breadth remains
-lexical wiring at composition roots, while every typed seam declares only the
-dependencies it uses. The historical Phase A/Phase B account above explains the
-migration sequence; current state is
+This strengthened rather than reversed the original decision: breadth remained
+lexical wiring at composition roots, while every typed seam declared only the
+dependencies it used. Current state:
 [ARCHITECTURE.md](../ARCHITECTURE.md#dependency-injection-and-composition-roots).
