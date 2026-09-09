@@ -461,7 +461,7 @@ mod tests {
             "/non-http" => "non-HTTP(S) Location",
             "/loop" => "redirect loop",
             "/fourth" => "redirect limit",
-            _ => unreachable!("known redirect case"),
+            _ => unreachable!("known redirect case"), // cov:ignore -- closed helper cases are declared immediately above.
         };
         assert!(error.to_string().contains(expected_diagnostic));
         assert!(matches!(

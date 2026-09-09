@@ -196,3 +196,103 @@ fn file_failure(error: io::Error) -> StatusCode {
         .emit_boundary_failure();
     StatusCode::INTERNAL_SERVER_ERROR
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn draft(theme_id: common::ids::ThemeId) -> storage::ThemeDraft {
+        let source_digest: common::theme::ThemeSourceDigest =
+            DIGEST.parse().expect("valid source digest");
+        let asset_digest: common::theme::ThemeAssetDigest =
+            DIGEST.parse().expect("valid asset digest");
+        storage::ThemeDraft {
+            theme_id,
+            manifest: Vec::new(),
+            stylesheet: Vec::new(),
+            source_digest,
+            assets: vec![storage::ThemeDraftAsset {
+                path: "assets/logo.png".to_owned(),
+                mime: "image/png".to_owned(),
+                bytes: b"draft asset".to_vec(),
+                digest: asset_digest,
+            }],
+        }
+    }
+
+    fn operator(user_id: common::ids::UserId) -> storage::UserRecord {
+        storage::UserRecord {
+            user_id,
+            username: "operator".parse().expect("valid username"),
+            display_name: None,
+            bio: None,
+            created_at: common::time::UtcInstant::now(),
+            last_authenticated_at: None,
+            email: None,
+            email_verified: storage::EmailVerified::UNVERIFIED,
+            is_operator: storage::OperatorStatus::OPERATOR,
+        }
+    }
+
+    #[tokio::test]
+    async fn operator_draft_lookup_falls_back_to_the_site_catalog() {
+        let user_id = common::ids::UserId::from(1);
+        let theme_id = common::ids::ThemeId::from(7);
+        let mut users = storage::MockUserStorage::new();
+        users
+            .expect_get_user()
+            .withf(move |actual| *actual == user_id)
+            .return_once(move |_| Ok(Some(operator(user_id))));
+        let mut themes = storage::MockThemeStorage::new();
+        themes
+            .expect_get_draft()
+            .withf(move |owner, actual| {
+                *owner == storage::ThemeOwner::Author(user_id) && *actual == theme_id
+            })
+            .return_once(|_, _| Ok(None));
+        themes
+            .expect_get_draft()
+            .withf(move |owner, actual| *owner == storage::ThemeOwner::Site && *actual == theme_id)
+            .return_once(move |_, _| Ok(Some(draft(theme_id))));
+
+        let response = serve_draft(
+            web::auth::User {
+                user_id,
+                username: "operator".parse().expect("valid username"),
+                token_hash: common::token::TokenHash::from_digest("test"),
+            },
+            Extension(Arc::new(themes) as Arc<dyn ThemeStorage>),
+            Extension(Arc::new(users) as Arc<dyn storage::UserStorage>),
+            Path((theme_id, "assets/logo.png".to_owned())),
+        )
+        .await
+        .expect("operator may read a site draft asset");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read response body");
+        assert_eq!(body.as_ref(), b"draft asset");
+    }
+
+    const DIGEST: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    #[test]
+    fn response_rejects_invalid_stored_mime_without_serving_content() {
+        let digest: ThemeContentDigest = DIGEST.parse().expect("valid content digest");
+        let etag = theme_etag(&digest).expect("digest produces an ETag");
+
+        assert!(matches!(
+            response(StatusCode::OK, Body::empty(), "invalid\r\nmime", &etag),
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        ));
+    }
+
+    #[test]
+    fn storage_failures_are_internal_errors() {
+        assert_eq!(
+            storage_failure(sqlx::Error::PoolClosed),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+}

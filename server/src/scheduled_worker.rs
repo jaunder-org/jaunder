@@ -200,7 +200,7 @@ mod tests {
         tracker
             .clone()
             .run(async move {
-                unreachable!("stopped tracker must reject new work");
+                unreachable!("stopped tracker must reject new work"); // cov:ignore -- executing this test closure is the failure being guarded against.
             })
             .await;
 

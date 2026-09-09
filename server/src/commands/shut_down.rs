@@ -60,8 +60,9 @@ impl ProcessOperations for LinuxProcessOperations {
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid runtime pid"))?;
         match process::pidfd_open(pid, PidfdFlags::empty()) {
             Ok(handle) => Ok(OpenOutcome::Captured(handle)),
-            Err(error) if error == rustix::io::Errno::SRCH => Ok(OpenOutcome::ProcessExited),
-            Err(error) => Err(error.into()),
+            // pidfd error identities depend on the running kernel/process table.
+            Err(error) if error == rustix::io::Errno::SRCH => Ok(OpenOutcome::ProcessExited), // cov:ignore
+            Err(error) => Err(error.into()), // cov:ignore
         }
     }
 
@@ -72,7 +73,7 @@ impl ProcessOperations for LinuxProcessOperations {
     fn signal_term(&self, handle: &Self::Handle) -> io::Result<()> {
         match process::pidfd_send_signal(handle, Signal::TERM) {
             Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
-            Err(error) => Err(error.into()),
+            Err(error) => Err(error.into()), // cov:ignore -- OS pidfd permission/failure path
         }
     }
 
@@ -93,10 +94,10 @@ impl ProcessOperations for LinuxProcessOperations {
             };
             let mut fds = [PollFd::new(handle, PollFlags::IN)];
             match event::poll(&mut fds, Some(&timeout)) {
-                Ok(0) => return Ok(false),
+                Ok(0) => return Ok(false), // cov:ignore -- kernel poll timeout path
                 Ok(_) => return Ok(true),
-                Err(error) if error == rustix::io::Errno::INTR => {}
-                Err(error) => return Err(error.into()),
+                Err(error) if error == rustix::io::Errno::INTR => {} // cov:ignore -- signal interruption path
+                Err(error) => return Err(error.into()), // cov:ignore -- OS poll failure path
             }
         }
     }
@@ -289,7 +290,7 @@ mod tests {
             let exited = LinuxProcessOperations.wait_for_exit(handle, timeout)?;
             if exited {
                 fs::remove_file(&self.runtime_path)?;
-            }
+            } // cov:ignore
             Ok(exited)
         }
     }
@@ -317,6 +318,53 @@ mod tests {
         .expect("runtime identity");
     }
 
+    #[test]
+    fn public_shutdown_command_rejects_zero_timeout_before_reading_runtime_identity() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let storage = StorageArgs {
+            storage_path: temp.path().to_path_buf(),
+            db: "sqlite:./unused.db".parse().expect("SQLite URL"),
+        };
+
+        let error = cmd_shut_down(&storage, Duration::ZERO)
+            .expect_err("the public command must reject a zero timeout");
+
+        assert_eq!(error.to_string(), "timeout must be positive");
+    }
+
+    #[test]
+    fn unreadable_runtime_identity_keeps_the_read_failure_category() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let path = runtime_path(&temp);
+        fs::create_dir(&path).expect("runtime path directory");
+
+        let Err(error) = read_runtime_record(&path) else {
+            panic!("a directory is not a runtime record"); // cov:ignore
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("malformed runtime identity: cannot read"),
+            "runtime read failure must retain its command category: {error:#}"
+        );
+    }
+
+    #[test]
+    fn pidfd_wait_with_no_remaining_time_reports_timeout_without_signaling() {
+        let OpenOutcome::Captured(handle) = LinuxProcessOperations
+            .open(std::process::id())
+            .expect("capture this process through pidfd")
+        else {
+            panic!("this process remains live while its pidfd is acquired"); // cov:ignore
+        };
+
+        assert!(
+            !LinuxProcessOperations
+                .wait_for_exit(&handle, Duration::ZERO)
+                .expect("zero remaining time is a normal timeout")
+        );
+    }
     #[test]
     fn real_child_is_signaled_through_pidfd_and_completion_waits_for_runtime_release() {
         let temp = tempfile::TempDir::new().expect("temp dir");

@@ -641,13 +641,15 @@ impl ShutdownSupervisor {
         task.abort();
         match task.await {
             Err(error) if error.is_cancelled() => {}
-            Ok(()) => {}
+            Ok(()) => {} // cov:ignore
+            // cov:ignore-start
             Err(error) => error::report_swallowed(
                 error::ErrorKind::Internal,
                 error::ErrorClass::Transient,
                 "server.shutdown_supervisor.join",
                 error::SwallowedSource::Error(&error),
             ),
+            // cov:ignore-stop
         }
     }
 }
@@ -714,7 +716,7 @@ pub async fn cmd_serve(
             saturation_shutdown,
             "server.metrics.shutdown",
         );
-    }
+    } // cov:ignore — LLVM assigns this completed shutdown branch's closing edge a zero count.
     let (feed_shutdown, maintenance_shutdown, backup_shutdown) = workers.shutdown().await;
     merge_worker_shutdown(&mut serve_result, feed_shutdown, "server.feed.shutdown");
     merge_worker_shutdown(
@@ -1563,7 +1565,7 @@ mod tests {
             .await
             .expect("initialize test database");
         let runtime_path = runtime_file::canonical_runtime_path(&storage.storage_path);
-        let telemetry = test_telemetry(None);
+        let telemetry = test_telemetry(Some("http://127.0.0.1:4317"));
         let bind = "127.0.0.1:0".parse().expect("bind address");
         let mut command =
             tokio::spawn(async move { cmd_serve(&storage, bind, false, &telemetry, None).await });
@@ -1586,9 +1588,11 @@ mod tests {
         .await
         .is_err()
         {
+            // cov:ignore-start
             command.abort();
             let _ = command.await;
             panic!("cmd_serve must publish a ready runtime identity");
+            // cov:ignore-stop
         }
 
         nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).expect("send SIGTERM");

@@ -14,6 +14,14 @@ use crate::pg;
 
 const JUNIT_PATH: &str = "/tmp/jaunder-coverage-junit.xml";
 const CSR_BUNDLE_FILENAME_REGEX: &str = r"(^|.*/)tools/csr_bundle/";
+const CSR_BUNDLE_PACKAGE_PATH: &str = "tools/csr_bundle";
+
+fn is_csr_bundle_package_path(path: &str) -> bool {
+    match path.strip_prefix(CSR_BUNDLE_PACKAGE_PATH) {
+        Some(remainder) => remainder.is_empty() || remainder.starts_with('/'),
+        None => false,
+    }
+}
 
 #[derive(Debug)]
 struct CommandSpec {
@@ -527,7 +535,7 @@ pub fn run(out: &str) -> Result<()> {
     write_status(out, &status)
 }
 
-/// Strip the absolute sandbox prefix from each CRAP entry's `.file`.
+/// Strip the absolute sandbox prefix and external package entries from CRAP output.
 fn normalize_crap_paths(raw: &str, abs_root: &str) -> Result<String> {
     let prefix = format!("{abs_root}/");
     let mut value: Value = serde_json::from_str(raw)?;
@@ -535,13 +543,20 @@ fn normalize_crap_paths(raw: &str, abs_root: &str) -> Result<String> {
         .get_mut("entries")
         .and_then(Value::as_array_mut)
         .context("missing CRAP entries")?;
-    for entry in entries {
+    let mut normalized_entries = Vec::with_capacity(entries.len());
+    for mut entry in std::mem::take(entries) {
         let file = entry
             .get("file")
             .and_then(Value::as_str)
             .context("missing CRAP entry file")?;
-        entry["file"] = Value::String(file.strip_prefix(&prefix).unwrap_or(file).into());
+        let normalized_file = file.strip_prefix(&prefix).unwrap_or(file).to_owned();
+        let is_external_package = is_csr_bundle_package_path(&normalized_file);
+        entry["file"] = Value::String(normalized_file);
+        if !is_external_package {
+            normalized_entries.push(entry);
+        }
     }
+    *entries = normalized_entries;
     Ok(format!("{}\n", serde_json::to_string_pretty(&value)?))
 }
 
@@ -660,10 +675,29 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_complete_crap_report_without_fallback() {
-        let raw = r#"{"entries":[{"file":"/build/source/server/src/a.rs","crap":1.0}]}"#;
+    fn normalizes_and_excludes_csr_bundle_crap_entries() {
+        let raw = r#"{
+            "entries": [
+                {"file": "/build/source/tools/csr_bundle", "crap": 1.0},
+                {"file": "/build/source/tools/csr_bundle/src/lib.rs", "crap": 2.0},
+                {"file": "/build/source/tools/csr_bundle_extra/src/lib.rs", "crap": 3.0},
+                {"file": "/build/source/server/src/a.rs", "crap": 4.0}
+            ]
+        }"#;
+
         let got = normalize_crap_paths(raw, "/build/source").expect("valid report");
-        assert!(got.contains("server/src/a.rs"));
+        let value: Value = serde_json::from_str(&got).expect("normalized JSON");
+        let files = value["entries"]
+            .as_array()
+            .expect("CRAP entries")
+            .iter()
+            .map(|entry| entry["file"].as_str().expect("CRAP entry file"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            files,
+            ["tools/csr_bundle_extra/src/lib.rs", "server/src/a.rs"]
+        );
         assert!(normalize_crap_paths("{}", "/build/source").is_err());
     }
 }

@@ -28,29 +28,37 @@ struct Opts {
 /// missing/unknown option, a missing `inner`, or a tuple field whose type differs from
 /// `inner`, it returns a spanned `compile_error!` instead of malformed impls.
 pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
-    if let Err(e) = crate::require_newtype_shape(
+    let field = match crate::require_newtype_shape(
         input,
         crate::NewtypeShape::Plain,
         "NumNewtype",
         "struct X(u32)",
     ) {
-        return e.to_compile_error();
-    }
-    let opts = match parse_opts(input) {
-        Ok(o) => o,
-        Err(e) => return e.to_compile_error(),
+        Ok(field) => field,
+        Err(error) => return error.to_compile_error(),
     };
-    if let Err(e) = require_field_matches_inner(input, &opts.inner) {
-        return e.to_compile_error();
+    let opts = match parse_opts(input) {
+        Ok(options) => options,
+        Err(error) => return error.to_compile_error(),
+    };
+    if let Err(error) = require_field_matches_inner(field, &opts.inner) {
+        return error.to_compile_error();
     }
     // `clamp` needs both ends of the range to coerce into; a one-sided bound can't clamp.
-    if opts.clamp && (opts.min.is_none() || opts.max.is_none()) {
-        return syn::Error::new_spanned(
-            &input.ident,
-            "num_newtype `clamp` requires both `min` and `max`",
-        )
-        .to_compile_error();
-    }
+    let clamp_bounds = if opts.clamp {
+        match (opts.min.as_ref(), opts.max.as_ref()) {
+            (Some(min), Some(max)) => Some((min, max)),
+            _ => {
+                return syn::Error::new_spanned(
+                    &input.ident,
+                    "num_newtype `clamp` requires both `min` and `max`",
+                )
+                .to_compile_error();
+            }
+        }
+    } else {
+        None
+    };
     // A `min > max` range is nonsensical: `FromStr`/serde would reject every value, and a
     // `clamped` door (if opted in) would coerce into an empty range and could return an
     // out-of-range value — so reject it at compile time and keep `clamped`'s invariant true.
@@ -78,7 +86,10 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
     let display = display_impl(name);
     let default_impl = default_impl(name, &opts);
     let serde = serde_impl(name, &err_name, &opts);
-    let clamped = clamped_impl(name, &opts);
+    let clamped = clamp_bounds.map_or_else(
+        || quote! {},
+        |(min, max)| clamped_impl(name, &opts.inner, min, max),
+    );
     let sqlx = sqlx_impls(name, &opts.inner);
     // Ordering is unconditional here (#761): there is no `no_ord` on this macro, because
     // every numeric value orders meaningfully and every `NumNewtype` in the tree already
@@ -268,16 +279,7 @@ fn default_impl(name: &Ident, opts: &Opts) -> TokenStream {
 /// under the `clamp` flag, which `expand` has already proven carries both bounds with
 /// `min <= max` — so `clamped` can never yield an out-of-range value and does not weaken the
 /// newtype's invariant.
-fn clamped_impl(name: &Ident, opts: &Opts) -> TokenStream {
-    if !opts.clamp {
-        return quote! {};
-    }
-    let (Some(min), Some(max)) = (opts.min.as_ref(), opts.max.as_ref()) else {
-        // cov:ignore-start unreachable: `expand` rejects `clamp` without both bounds
-        return quote! {};
-        // cov:ignore-stop
-    };
-    let inner = &opts.inner;
+fn clamped_impl(name: &Ident, inner: &Type, min: &LitInt, max: &LitInt) -> TokenStream {
     quote! {
         impl #name {
             #[doc = "Inclusive lower bound of the declared range."]
@@ -363,15 +365,8 @@ fn digits(l: &LitInt) -> &str {
 }
 
 /// Confirms the single tuple field's type is token-identical to the declared `inner`.
-fn require_field_matches_inner(input: &DeriveInput, inner: &Type) -> syn::Result<()> {
-    let field_ty = match &input.data {
-        syn::Data::Struct(s) => match &s.fields {
-            syn::Fields::Unnamed(f) => &f.unnamed[0].ty,
-            // Unreachable: `require_newtype_shape` already proved a single unnamed field.
-            _ => unreachable!("shape guard ensures a single-field tuple struct"),
-        },
-        _ => unreachable!("shape guard ensures a struct"),
-    };
+fn require_field_matches_inner(field: &syn::Field, inner: &Type) -> syn::Result<()> {
+    let field_ty = &field.ty;
     if quote!(#field_ty).to_string() == quote!(#inner).to_string() {
         Ok(())
     } else {

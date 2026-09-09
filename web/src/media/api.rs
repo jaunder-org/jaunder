@@ -174,7 +174,15 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MutationOutcome<Me
         .map_err(map_delete_error)?;
 
     let theme_reference_count = result.referenced_theme_bindings();
-    Ok(result.into_outcome().map(|outcome| match outcome {
+    Ok(result
+        .into_outcome()
+        .map(|outcome| map_delete_outcome(outcome, theme_reference_count)))
+}
+
+/// Maps a storage deletion disposition to the stable browser wire vocabulary.
+#[cfg(feature = "server")]
+fn map_delete_outcome(outcome: TryDeleteOutcome, theme_reference_count: u64) -> MediaDeletion {
+    match outcome {
         TryDeleteOutcome::Deleted => MediaDeletion::Deleted,
         TryDeleteOutcome::Missing => MediaDeletion::Missing,
         TryDeleteOutcome::OwnerRetainedHistory(post_ids) => MediaDeletion::OwnerRetainedHistory {
@@ -184,7 +192,7 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MutationOutcome<Me
         TryDeleteOutcome::GlobalSafety => MediaDeletion::GlobalSafety {
             theme_reference_count,
         },
-    }))
+    }
 }
 
 /// Maps an owned media operation failure to its bounded public classification while
@@ -302,8 +310,12 @@ pub async fn upload(data: MultipartData) -> WebResult<MutationOutcome<UploadedMe
 
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::{MediaError, map_delete_error, map_media_error, map_multipart_error};
+    use super::{
+        MediaDeletion, MediaError, map_delete_error, map_delete_outcome, map_media_error,
+        map_multipart_error,
+    };
     use crate::error::{ErrorKind, InternalError};
+    use common::ids::PostId;
     use std::error::Error;
     use std::fmt;
     use storage::DeleteMediaError;
@@ -361,6 +373,35 @@ mod tests {
         assert_eq!(
             map_media_error(anyhow::anyhow!("io boom")).kind(),
             ErrorKind::Internal
+        );
+    }
+
+    #[test]
+    fn deletion_wire_mapping_preserves_each_storage_disposition() {
+        assert_eq!(
+            map_delete_outcome(storage::TryDeleteOutcome::Deleted, 9),
+            MediaDeletion::Deleted
+        );
+        assert_eq!(
+            map_delete_outcome(storage::TryDeleteOutcome::Missing, 9),
+            MediaDeletion::Missing,
+            "an already-absent item is an idempotent browser outcome"
+        );
+        assert_eq!(
+            map_delete_outcome(
+                storage::TryDeleteOutcome::OwnerRetainedHistory(vec![PostId::from(7)]),
+                3,
+            ),
+            MediaDeletion::OwnerRetainedHistory {
+                post_ids: vec![PostId::from(7)],
+                theme_reference_count: 3,
+            }
+        );
+        assert_eq!(
+            map_delete_outcome(storage::TryDeleteOutcome::GlobalSafety, 4),
+            MediaDeletion::GlobalSafety {
+                theme_reference_count: 4,
+            }
         );
     }
 

@@ -92,7 +92,7 @@ impl ThemeManager {
                     if snapshot_for_update(themes.as_ref(), transaction, owner, theme_id).await?
                         != expected
                     {
-                        bail!("theme media references changed while acquiring locks");
+                        bail!("theme media references changed while acquiring locks"); // cov:ignore — reaching this requires a concurrent mutation between the snapshot and transaction-owned row locks, which the authoritative single-process coverage harness cannot induce safely
                     }
                     themes
                         .replace_role_binding(transaction, owner, &binding)
@@ -153,7 +153,7 @@ impl ThemeManager {
                     if snapshot_for_update(themes.as_ref(), transaction, owner, theme_id).await?
                         != expected
                     {
-                        bail!("theme media references changed while acquiring locks");
+                        bail!("theme media references changed while acquiring locks"); // cov:ignore — reaching this requires a concurrent mutation between the snapshot and transaction-owned row locks, which the authoritative single-process coverage harness cannot induce safely
                     }
                     // The storage primitive persists the pool while this role update remains
                     // in the same transaction, so the revision and entries cannot diverge.
@@ -249,7 +249,7 @@ impl ThemeManager {
                     let current =
                         snapshot_for_update(themes.as_ref(), transaction, owner, theme_id).await?;
                     if current != snapshot {
-                        bail!("theme media references changed while acquiring locks");
+                        bail!("theme media references changed while acquiring locks"); // cov:ignore — reaching this requires a concurrent mutation between the snapshot and transaction-owned row locks, which the authoritative single-process coverage harness cannot induce safely
                     }
                     themes
                         .remove_theme(transaction, owner, theme_id, retained_until_unix_seconds)
@@ -375,14 +375,15 @@ fn pool_entry_for_media(media: &MediaRef) -> Result<ThemePoolEntry> {
 fn header_entry_encoding(entry: &ThemeHeaderPoolEntry) -> Vec<u8> {
     match (
         &entry.package_path,
+        entry.media_user_id,
         &entry.media_source,
         &entry.media_digest,
         &entry.media_filename,
     ) {
-        (Some(path), None, None, None) => {
+        (Some(path), None, None, None, None) => {
             ThemePoolEntry::Package(path.clone()).canonical_encoding()
         }
-        (None, Some(source), Some(digest), Some(filename)) => ThemePoolEntry::Media {
+        (None, Some(_), Some(source), Some(digest), Some(filename)) => ThemePoolEntry::Media {
             source: source.clone(),
             digest: digest.clone(),
             filename: filename.clone(),
@@ -498,6 +499,282 @@ mod tests {
             seed_media, theme_quota_limits,
         },
     };
+    // guard:no-backend — acknowledgement-loss confirmation is a write-scope contract
+    #[tokio::test]
+    async fn role_commit_acknowledgement_loss_rechecks_the_persisted_binding() {
+        let theme_id = ThemeId::from(9);
+        let binding = ThemeRoleBinding::PackagedDefault {
+            theme_id,
+            role: ThemeImageRole::Logo,
+        };
+        let mut themes = crate::MockThemeStorage::new();
+        themes
+            .expect_role_binding()
+            .times(3)
+            .returning(move |_, _, role| {
+                Ok((role == ThemeImageRole::Logo).then_some(binding.clone()))
+            });
+        themes
+            .expect_header_pool()
+            .once()
+            .returning(|_, _| Ok(Vec::new()));
+        themes
+            .expect_locked_media_references()
+            .once()
+            .returning(|_, _, _| Ok(Vec::new()));
+        themes
+            .expect_replace_role_binding()
+            .once()
+            .returning(|_, _, _| Ok(()));
+        let lock_root = tempfile::TempDir::new().expect("create lock root");
+        let manager = ThemeManager::new(
+            Arc::new(themes),
+            Arc::new(crate::MockMediaStorage::new()),
+            crate::test_support::mock_write_scope_with_commit_acknowledgement_loss(),
+            Arc::new(crate::MediaContentLocks::new(Arc::new(
+                lock_root.path().to_path_buf(),
+            ))),
+        );
+
+        assert!(matches!(
+            manager
+                .replace_role(
+                    UserId::from(0),
+                    ThemeOwner::Site,
+                    theme_id,
+                    ThemeImageRole::Logo,
+                    ThemeRoleInput::PackagedDefault,
+                )
+                .await
+                .expect("persisted binding confirms acknowledgement loss"),
+            MutationOutcome::Confirmed(())
+        ));
+    }
+    // guard:no-backend — snapshot decoding is isolated from database mechanics
+    #[tokio::test]
+    async fn media_snapshot_includes_complete_pool_media_once() {
+        let theme_id = ThemeId::from(9);
+        let mut themes = crate::MockThemeStorage::new();
+        themes.expect_role_binding().returning(|_, _, _| Ok(None));
+        themes.expect_header_pool().once().returning(|_, _| {
+            Ok(vec![ThemeHeaderPoolEntry {
+                ordinal: 0,
+                package_path: None,
+                media_user_id: Some(UserId::from(1)),
+                media_source: Some("upload".to_owned()),
+                media_digest: Some("a".repeat(64).parse().unwrap()),
+                media_filename: Some("hero.png".to_owned()),
+            }])
+        });
+        let references = snapshot_for(&themes, ThemeOwner::Site, theme_id)
+            .await
+            .expect("complete pool media decodes");
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].filename.as_ref(), "hero.png");
+    }
+
+    // guard:no-backend — snapshot decoding is isolated from database mechanics
+    #[tokio::test]
+    async fn media_snapshot_rejects_incomplete_pool_media() {
+        let theme_id = ThemeId::from(9);
+        let mut themes = crate::MockThemeStorage::new();
+        themes.expect_role_binding().returning(|_, _, _| Ok(None));
+        themes.expect_header_pool().once().returning(|_, _| {
+            Ok(vec![ThemeHeaderPoolEntry {
+                ordinal: 0,
+                package_path: None,
+                media_user_id: Some(UserId::from(1)),
+                media_source: None,
+                media_digest: None,
+                media_filename: None,
+            }])
+        });
+
+        assert!(
+            snapshot_for(&themes, ThemeOwner::Site, theme_id)
+                .await
+                .expect_err("incomplete pool media must be rejected")
+                .to_string()
+                .contains("missing source")
+        );
+    }
+    // guard:no-backend — shuffle confirmation depends only on the persisted seed
+    #[tokio::test]
+    async fn shuffle_acknowledgement_loss_confirms_the_reloaded_seed() {
+        let theme_id = ThemeId::from(9);
+        let mut themes = crate::MockThemeStorage::new();
+        themes
+            .expect_shuffle_header_pool()
+            .once()
+            .returning(|_, _, _, _| Ok(()));
+        themes
+            .expect_role_binding()
+            .once()
+            .returning(move |_, _, _| {
+                Ok(Some(ThemeRoleBinding::HeaderPool {
+                    theme_id,
+                    pool_revision: "a".repeat(64).parse().unwrap(),
+                    shuffle_seed: [7; 32],
+                }))
+            });
+        let lock_root = tempfile::TempDir::new().expect("create lock root");
+        let manager = ThemeManager::new(
+            Arc::new(themes),
+            Arc::new(crate::MockMediaStorage::new()),
+            crate::test_support::mock_write_scope_with_commit_acknowledgement_loss(),
+            Arc::new(crate::MediaContentLocks::new(Arc::new(
+                lock_root.path().to_path_buf(),
+            ))),
+        );
+        assert!(matches!(
+            manager
+                .shuffle_header_pool(UserId::from(0), ThemeOwner::Site, theme_id, [7; 32])
+                .await
+                .expect("matching persisted seed confirms acknowledgement loss"),
+            MutationOutcome::Confirmed(())
+        ));
+    }
+
+    // guard:no-backend — acknowledgement-loss confirmation must preserve uncertainty on mismatch
+    #[tokio::test]
+    async fn shuffle_acknowledgement_loss_preserves_uncertainty_for_a_different_seed() {
+        let theme_id = ThemeId::from(9);
+        let mut themes = crate::MockThemeStorage::new();
+        themes
+            .expect_shuffle_header_pool()
+            .once()
+            .returning(|_, _, _, _| Ok(()));
+        themes
+            .expect_role_binding()
+            .once()
+            .returning(move |_, _, _| {
+                Ok(Some(ThemeRoleBinding::HeaderPool {
+                    theme_id,
+                    pool_revision: "a".repeat(64).parse().unwrap(),
+                    shuffle_seed: [0; 32],
+                }))
+            });
+        let lock_root = tempfile::TempDir::new().expect("create lock root");
+        let manager = ThemeManager::new(
+            Arc::new(themes),
+            Arc::new(crate::MockMediaStorage::new()),
+            crate::test_support::mock_write_scope_with_commit_acknowledgement_loss(),
+            Arc::new(crate::MediaContentLocks::new(Arc::new(
+                lock_root.path().to_path_buf(),
+            ))),
+        );
+        assert!(matches!(
+            manager
+                .shuffle_header_pool(UserId::from(0), ThemeOwner::Site, theme_id, [7; 32])
+                .await
+                .expect("a mismatched seed remains indeterminate"),
+            MutationOutcome::CommitIndeterminate(())
+        ));
+    }
+
+    // guard:no-backend — acknowledgement-loss confirmation is a write-scope contract
+    #[tokio::test]
+    async fn header_pool_commit_acknowledgement_loss_rechecks_binding_and_entries() {
+        let theme_id = ThemeId::from(9);
+        let (pool, expected_entries, _) = ThemeManager::pool(
+            UserId::from(0),
+            vec![ThemePoolInput::PackageAsset("header.png".to_owned())],
+        )
+        .expect("complete package pool");
+        let expected_binding = ThemeRoleBinding::HeaderPool {
+            theme_id,
+            pool_revision: pool.revision().clone(),
+            shuffle_seed: [7; 32],
+        };
+        let mut themes = crate::MockThemeStorage::new();
+        themes
+            .expect_role_binding()
+            .times(3)
+            .returning(move |_, _, role| {
+                Ok((role == ThemeImageRole::Header).then_some(expected_binding.clone()))
+            });
+        let entries_for_reads = expected_entries.clone();
+        themes
+            .expect_header_pool()
+            .times(2)
+            .returning(move |_, _| Ok(entries_for_reads.clone()));
+        themes
+            .expect_locked_media_references()
+            .once()
+            .returning(|_, _, _| Ok(Vec::new()));
+        themes
+            .expect_replace_header_pool()
+            .once()
+            .returning(|_, _, _, _| Ok(()));
+        themes
+            .expect_replace_role_binding()
+            .once()
+            .returning(|_, _, _| Ok(()));
+        let lock_root = tempfile::TempDir::new().expect("create lock root");
+        let manager = ThemeManager::new(
+            Arc::new(themes),
+            Arc::new(crate::MockMediaStorage::new()),
+            crate::test_support::mock_write_scope_with_commit_acknowledgement_loss(),
+            Arc::new(crate::MediaContentLocks::new(Arc::new(
+                lock_root.path().to_path_buf(),
+            ))),
+        );
+
+        assert!(matches!(
+            manager
+                .replace_header_pool(
+                    UserId::from(0),
+                    ThemeOwner::Site,
+                    theme_id,
+                    vec![ThemePoolInput::PackageAsset("header.png".to_owned())],
+                    [7; 32],
+                )
+                .await
+                .expect("persisted pool confirms acknowledgement loss"),
+            MutationOutcome::Confirmed(())
+        ));
+    }
+
+    // guard:no-backend — acknowledgement-loss confirmation is a write-scope contract
+    #[tokio::test]
+    async fn remove_commit_acknowledgement_loss_rechecks_catalog_membership() {
+        let theme_id = ThemeId::from(9);
+        let mut themes = crate::MockThemeStorage::new();
+        themes.expect_role_binding().returning(|_, _, _| Ok(None));
+        themes
+            .expect_header_pool()
+            .once()
+            .returning(|_, _| Ok(Vec::new()));
+        themes
+            .expect_locked_media_references()
+            .once()
+            .returning(|_, _, _| Ok(Vec::new()));
+        themes
+            .expect_remove_theme()
+            .once()
+            .returning(|_, _, _, _| Ok(()));
+        themes
+            .expect_list_themes()
+            .once()
+            .returning(|_| Ok(Vec::new()));
+        let lock_root = tempfile::TempDir::new().expect("create lock root");
+        let manager = ThemeManager::new(
+            Arc::new(themes),
+            Arc::new(crate::MockMediaStorage::new()),
+            crate::test_support::mock_write_scope_with_commit_acknowledgement_loss(),
+            Arc::new(crate::MediaContentLocks::new(Arc::new(
+                lock_root.path().to_path_buf(),
+            ))),
+        );
+
+        assert!(matches!(
+            manager
+                .remove_theme(UserId::from(0), ThemeOwner::Site, theme_id, 10)
+                .await
+                .expect("missing persisted theme confirms acknowledgement loss"),
+            MutationOutcome::Confirmed(())
+        ));
+    }
 
     async fn published_site_theme(env: &crate::test_support::TestEnv) -> common::ids::ThemeId {
         let compiled = compiled_theme_fixture();
@@ -936,6 +1213,74 @@ mod tests {
                 .await
                 .expect("read author catalog")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn binding_and_reference_conversion_preserve_complete_media_identity() {
+        let media = common::media::MediaRef {
+            source: "upload".parse().unwrap(),
+            sha256: "b".repeat(64).parse().unwrap(),
+            filename: "hero.png".parse().unwrap(),
+        };
+        assert!(matches!(
+            ThemeManager::binding(
+                UserId::from(1),
+                ThemeId::from(9),
+                ThemeImageRole::Logo,
+                ThemeRoleInput::PackagedDefault,
+            ),
+            ThemeRoleBinding::PackagedDefault { .. }
+        ));
+        let restored = reference_from_fields(
+            Some(media.source.to_string()),
+            Some(media.sha256.to_string().parse().unwrap()),
+            Some(media.filename.to_string()),
+        )
+        .expect("complete stored fields restore their exact media reference");
+        assert_eq!(restored, media);
+        assert!(
+            reference_from_fields(None, None, None)
+                .expect_err("partial stored fields are corrupt")
+                .to_string()
+                .contains("missing source")
+        );
+    }
+
+    #[test]
+    fn scope_error_preserves_write_scope_begin_failures() {
+        assert!(matches!(
+            scope_error(WriteScopeError::Begin(sqlx::Error::RowNotFound)),
+            error if error.downcast_ref::<sqlx::Error>().is_some_and(|error| matches!(
+                error,
+                sqlx::Error::RowNotFound
+            ))
+        ));
+    }
+
+    #[test]
+    fn media_sorting_and_invalid_pool_rows_are_deterministic() {
+        let first = common::media::MediaRef {
+            source: "upload".parse().unwrap(),
+            sha256: "a".repeat(64).parse().unwrap(),
+            filename: "a.png".parse().unwrap(),
+        };
+        let second = common::media::MediaRef {
+            source: "upload".parse().unwrap(),
+            sha256: "b".repeat(64).parse().unwrap(),
+            filename: "b.png".parse().unwrap(),
+        };
+        assert!(media_sort_key(&first) < media_sort_key(&second));
+        assert_eq!(
+            header_entry_encoding(&ThemeHeaderPoolEntry {
+                ordinal: 0,
+                package_path: Some("logo.png".to_owned()),
+                media_user_id: Some(UserId::from(1)),
+                media_source: None,
+                media_digest: None,
+                media_filename: None,
+            }),
+            Vec::<u8>::new()
         );
     }
 

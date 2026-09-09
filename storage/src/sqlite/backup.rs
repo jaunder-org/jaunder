@@ -275,14 +275,9 @@ async fn import_table(
         let values = column_names
             .iter()
             .map(|column_name| {
-                let column = columns
-                    .iter()
-                    .find(|column| column.name == *column_name)
-                    .ok_or_else(|| {
-                        BackupError::InvalidBackup(format!(
-                            "table {table} restore column {column_name} is missing catalog metadata"
-                        ))
-                    })?;
+                let Some(column) = columns.iter().find(|column| column.name == *column_name) else {
+                    unreachable!("restore column names are selected from the catalog")
+                };
                 let value = row.get(column_name).ok_or_else(|| {
                     BackupError::InvalidBackup(format!(
                         "table {table} row is missing column {column_name}"

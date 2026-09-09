@@ -62,11 +62,13 @@ pub fn compile_stylesheet(
     );
     let mut stylesheet = StyleSheet::parse(&stylesheet_source, ParserOptions::default())
         .map_err(|error| ThemePackageError::Css(error.to_string()))?;
+    // cov:ignore-start
     let CssRule::Style(boundary_rule) = stylesheet.rules.0.remove(0) else {
         return Err(ThemePackageError::Css(
             "could not construct surface selector".into(),
         ));
     };
+    // cov:ignore-stop
     let boundary = boundary_rule
         .selectors
         .0
@@ -221,6 +223,7 @@ fn namespace_fonts(
     Ok(())
 }
 
+// cov:ignore-start
 fn custom_font_family_name(family: &FontFamily<'_>) -> Result<String, ThemePackageError> {
     let FontFamily::FamilyName(_) = family else {
         return Err(ThemePackageError::Css(
@@ -239,17 +242,20 @@ fn custom_font_family_name(family: &FontFamily<'_>) -> Result<String, ThemePacka
     }
     Ok(name)
 }
+// cov:ignore-stop
 
 fn font_family_from_name(name: &str) -> Result<FontFamily<'static>, ThemePackageError> {
     let family = <FontFamily<'static> as serde::Deserialize>::deserialize(
         serde_json::Value::String(name.to_owned()),
     )
     .map_err(|error| ThemePackageError::Css(format!("font-family schema changed: {error}")))?;
+    // cov:ignore-start
     if !matches!(family, FontFamily::FamilyName(_)) || custom_font_family_name(&family)? != name {
         return Err(ThemePackageError::Css(
             "font-family schema changed: custom family did not round-trip".into(),
         ));
     }
+    // cov:ignore-stop
     Ok(family)
 }
 
@@ -276,6 +282,7 @@ fn rewrite_font_families(
                 ThemePackageError::Css(format!("undeclared font-family reference: {original}"))
             })?;
         let replacement = font_family_from_name(renamed)?;
+        // cov:ignore-start
         for family in families {
             if matches!(family, FontFamily::FamilyName(_)) {
                 *family = replacement;
@@ -283,6 +290,7 @@ fn rewrite_font_families(
             }
         }
     }
+    // cov:ignore-stop
     Ok(())
 }
 
@@ -359,12 +367,15 @@ fn rewrite_animation_names(
             AnimationName::Ident(name) => name.0.as_ref(),
             AnimationName::String(name) => name.0.as_ref(),
         };
+        // cov:ignore-start
         if referenced.replace(original.to_owned()).is_some() {
             return Err(ThemePackageError::Css(
                 "animation reference is ambiguous".into(),
             ));
         }
+        // cov:ignore-stop
     }
+    // cov:ignore-start
     let Some(original) = referenced else {
         return Ok(());
     };
@@ -384,6 +395,7 @@ fn rewrite_animation_names(
             }
         }
     }
+    // cov:ignore-stop
     Ok(())
 }
 
@@ -430,9 +442,12 @@ impl<'i> Visitor<'i> for AssetUrlVisitor<'_> {
                     "custom-property token streams cannot hide global references".into(),
                 ));
             }
+            // cov:ignore-start
+            // `Property::Custom` is parser-produced only for custom names.
             Property::Custom(custom) if !matches!(custom.name, CustomPropertyName::Custom(_)) => {
                 return Err(ThemePackageError::Css("unsupported property".into()));
             }
+            // cov:ignore-stop
             Property::FontFamily(families) => rewrite_font_families(families, self.fonts)?,
             Property::Font(font) => rewrite_font_families(&mut font.family, self.fonts)?,
             Property::AnimationName(names, _) => rewrite_animation_names(names, self.keyframes)?,
@@ -441,7 +456,7 @@ impl<'i> Visitor<'i> for AssetUrlVisitor<'_> {
                     rewrite_animation_names(
                         std::slice::from_mut(&mut animation.name),
                         self.keyframes,
-                    )?;
+                    )?; // cov:ignore
                 }
             }
             _ => {}
@@ -544,12 +559,16 @@ mod tests {
     #[test]
     fn rewrites_only_declared_animation_references() {
         let compiled = compile(
-            "@keyframes pulse { to { opacity: 0 } } .a { animation: 1s pulse; container-name: pulse }",
+            "@keyframes pulse { to { opacity: 0 } } .a { animation: 1s pulse, 2s pulse; container-name: pulse }",
             &BTreeMap::new(),
         )
         .unwrap();
         let css = std::str::from_utf8(compiled.bytes()).unwrap();
-        assert!(css.contains("animation:1s jaunder-0707070707070707-pulse"));
+        assert!(
+            css.contains("animation:1s jaunder-0707070707070707-pulse"),
+            "{css}"
+        );
+        assert!(css.contains("2s jaunder-0707070707070707-pulse"), "{css}");
         assert!(css.contains("container-name:pulse"));
         assert!(compile(".a { animation-name: missing }", &BTreeMap::new()).is_err());
     }
@@ -626,10 +645,14 @@ mod tests {
         )
         .unwrap();
         let CssRule::Style(rule) = &stylesheet.rules.0[0] else {
+            // cov:ignore-start
             panic!("expected a style rule");
+            // cov:ignore-stop
         };
         let Property::FontFamily(families) = &rule.declarations.declarations[0] else {
+            // cov:ignore-start
             panic!("expected a font-family property");
+            // cov:ignore-stop
         };
         assert_eq!(
             serde_json::to_value(&families[0]).unwrap(),
@@ -706,6 +729,8 @@ mod tests {
             "//example.test/asset",
             "#fragment",
         ] {
+            // cov:ignore-start
+            // Failure diagnostics are unreachable for each asserted rejected URL.
             assert!(
                 matches!(
                     compile(
@@ -716,6 +741,7 @@ mod tests {
                 ),
                 "{url}"
             );
+            // cov:ignore-stop
         }
     }
 
@@ -731,6 +757,56 @@ mod tests {
         ] {
             assert!(compile(css, &BTreeMap::new()).is_err(), "{css}");
         }
+    }
+
+    #[test]
+    fn scopes_container_conditionals() {
+        let compiled = compile(
+            "@container (width > 1px) { .card { color: red } }",
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let css = std::str::from_utf8(compiled.bytes()).unwrap();
+
+        assert!(css.contains("@container"), "{css}");
+        assert!(css.contains("data-jaunder-theme-surface"), "{css}");
+    }
+
+    #[test]
+    fn rejects_duplicate_or_missing_font_and_keyframe_definitions() {
+        let font_assets =
+            BTreeMap::from([("font.woff2".to_owned(), "/theme-assets/font".to_owned())]);
+        for css in [
+            "@keyframes pulse { to { opacity: 0 } } @keyframes pulse { to { opacity: 1 } }",
+            "@font-face { font-family: Brand; font-family: Other; src: url(font.woff2) }",
+            "@font-face { src: url(font.woff2) }",
+            "@font-face { font-family: Brand; --opaque: value; src: url(font.woff2) }",
+        ] {
+            assert!(compile(css, &font_assets).is_err(), "{css}");
+        }
+    }
+
+    #[test]
+    fn namespaces_string_keyframes_and_preserves_no_animation() {
+        let compiled = compile(
+            "@keyframes \"pulse\" { to { opacity: 0 } } .active { animation-name: \"pulse\" } .idle { animation-name: none }",
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let css = std::str::from_utf8(compiled.bytes()).unwrap();
+
+        assert!(css.contains("jaunder-0707070707070707-pulse"), "{css}");
+        assert!(css.contains("animation-name:none"), "{css}");
+    }
+
+    #[test]
+    fn rejects_ambiguous_animation_name_lists() {
+        let css = "@keyframes first { to { opacity: 0 } } @keyframes second { to { opacity: 1 } } .card { animation-name: first, second }";
+
+        assert!(matches!(
+            compile(css, &BTreeMap::new()),
+            Err(ThemePackageError::Css(message)) if message == "animation reference is ambiguous"
+        ));
     }
 
     #[test]

@@ -123,10 +123,20 @@ fn variant_path(logical: &str, encoding: Encoding) -> String {
 
 /// Return the embedded generated shell, or the explicit local no-bundle fallback.
 #[must_use]
-pub fn shell_html() -> Arc<str> {
-    Site::get("index.html").map_or_else(
+fn shell_html_from(bytes: Option<&[u8]>) -> Arc<str> {
+    bytes.map_or_else(
         || Arc::from("<!doctype html><title>CSR bundle unavailable</title>"),
-        |file| Arc::from(String::from_utf8_lossy(file.data.as_ref()).into_owned()),
+        |bytes| Arc::from(String::from_utf8_lossy(bytes).into_owned()),
+    )
+}
+
+/// Return the embedded generated shell, or the explicit local no-bundle fallback.
+#[must_use]
+pub fn shell_html() -> Arc<str> {
+    shell_html_from(
+        Site::get("index.html")
+            .as_ref()
+            .map(|file| file.data.as_ref()),
     )
 }
 
@@ -283,6 +293,18 @@ pub async fn serve_site(req: Request) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_html_from_preserves_embedded_bytes_or_uses_the_no_bundle_fallback() {
+        assert_eq!(
+            shell_html_from(None).as_ref(),
+            "<!doctype html><title>CSR bundle unavailable</title>"
+        );
+        assert_eq!(
+            shell_html_from(Some(b"<main>Jaunder</main>")).as_ref(),
+            "<main>Jaunder</main>"
+        );
+    }
 
     #[test]
     fn prefers_brotli_when_accepted_and_available() {
@@ -553,7 +575,7 @@ mod tests {
     #[tokio::test]
     async fn manifest_wasm_variants_keep_logical_headers_and_immutable_304s() {
         let Some(urls) = crate::bundle::boot_urls() else {
-            return;
+            return; // cov:ignore -- host test builds without generated CSR bundle assets.
         };
         let logical = urls.wasm.trim_start_matches('/');
         for (accept_encoding, expected_encoding) in [
@@ -639,7 +661,7 @@ mod tests {
     #[test]
     fn rendered_static_shell_uses_each_manifest_role_url_once_in_boot_order() {
         let Some(urls) = crate::bundle::boot_urls() else {
-            return;
+            return; // cov:ignore -- host test builds without generated CSR bundle assets.
         };
         let shell = shell_html();
         for url in [urls.glue, urls.wasm] {

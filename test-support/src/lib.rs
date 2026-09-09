@@ -49,12 +49,19 @@ pub fn seed_body(prefix: &str, i: usize) -> String {
 /// invocation collision-free even against the shared e2e database.
 #[must_use]
 pub fn seed_slug(prefix: &str, i: usize) -> String {
-    let base: String = prefix
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    let base = base.trim_matches('-');
+    let mut base = String::with_capacity(prefix.len());
+    let mut separator_pending = false;
+    for character in prefix.chars() {
+        if character.is_ascii_alphanumeric() {
+            if separator_pending && !base.is_empty() {
+                base.push('-');
+            }
+            base.push(character.to_ascii_lowercase());
+            separator_pending = false;
+        } else {
+            separator_pending = true;
+        }
+    }
     format!("{base}-{i}")
 }
 
@@ -519,6 +526,37 @@ pub fn sandbox_profile_manifest(anchor: UtcInstant) -> Vec<SandboxPost> {
     posts
 }
 
+fn sandbox_post_content(
+    fixture: &SandboxPost,
+    user_id: UserId,
+) -> anyhow::Result<RenderedPostContent> {
+    let title = fixture
+        .title
+        .parse::<PostTitle>()
+        .map_err(|error| anyhow::anyhow!("invalid sandbox Post title: {error}"))?;
+    let slug = fixture
+        .slug
+        .parse::<Slug>()
+        .map_err(|error| anyhow::anyhow!("invalid sandbox Post slug: {error}"))?;
+    let body = fixture
+        .body
+        .parse::<PostBody>()
+        .map_err(|error| anyhow::anyhow!("invalid sandbox Post body: {error}"))?;
+    Ok(RenderedPostContent {
+        user_id,
+        title: Some(title),
+        slug,
+        body,
+        format: fixture.format,
+        published_at: fixture.published_at,
+        summary: None,
+        audiences: vec![AudienceTarget::Public],
+        tags: Vec::new(),
+        idempotency_key: None,
+        expectations: PostBookkeepingExpectation::default(),
+    })
+}
+
 /// Seeds the exact non-idempotent sandbox profile through the normal typed
 /// storage write services. All profile rows share one write scope, so a failed
 /// creation cannot leave a workspace with a partial fixture.
@@ -568,9 +606,9 @@ pub async fn seed_sandbox_profile(
                 for ((username_text, operator), password) in
                     sandbox_users.iter().copied().zip(passwords)
                 {
-                    let username = username_text.parse::<Username>().map_err(|error| {
-                        anyhow::anyhow!("invalid fixed sandbox username `{username_text}`: {error}")
-                    })?;
+                    let Ok(username) = username_text.parse::<Username>() else {
+                        unreachable!("fixed sandbox usernames are valid");
+                    };
                     let role = if operator {
                         OperatorStatus::OPERATOR
                     } else {
@@ -583,42 +621,12 @@ pub async fn seed_sandbox_profile(
                 }
                 let mut inputs = Vec::with_capacity(manifest.len());
                 for fixture in manifest {
-                    let user_id = user_ids
-                        .iter()
-                        .find_map(|(username, user_id)| {
-                            (*username == fixture.author).then_some(*user_id)
-                        })
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "sandbox manifest author `{}` has no seeded user",
-                                fixture.author
-                            )
-                        })?;
-                    let title = fixture
-                        .title
-                        .parse::<PostTitle>()
-                        .map_err(|error| anyhow::anyhow!("invalid sandbox Post title: {error}"))?;
-                    let slug = fixture
-                        .slug
-                        .parse::<Slug>()
-                        .map_err(|error| anyhow::anyhow!("invalid sandbox Post slug: {error}"))?;
-                    let body = fixture
-                        .body
-                        .parse::<PostBody>()
-                        .map_err(|error| anyhow::anyhow!("invalid sandbox Post body: {error}"))?;
-                    inputs.push(render_post_input(RenderedPostContent {
-                        user_id,
-                        title: Some(title),
-                        slug,
-                        body,
-                        format: fixture.format,
-                        published_at: fixture.published_at,
-                        summary: None,
-                        audiences: vec![AudienceTarget::Public],
-                        tags: Vec::new(),
-                        idempotency_key: None,
-                        expectations: PostBookkeepingExpectation::default(),
-                    }));
+                    let Some(user_id) = user_ids.iter().find_map(|(username, user_id)| {
+                        (*username == fixture.author).then_some(*user_id)
+                    }) else {
+                        unreachable!("sandbox manifest authors are seeded users");
+                    };
+                    inputs.push(render_post_input(sandbox_post_content(&fixture, user_id)?));
                 }
                 let ids = posts.create_posts(transaction, &inputs).await?;
                 Ok::<_, anyhow::Error>(ids)
@@ -1012,9 +1020,35 @@ mod content_tests {
     }
 
     #[test]
-    fn seed_slug_is_slug_safe() {
+    fn seed_slug_is_slug_safe_and_collapses_separator_runs() {
         assert_eq!(seed_slug("Timeline Post", 0), "timeline-post-0");
         assert_eq!(seed_slug("Home Feed Mine", 12), "home-feed-mine-12");
+        assert_eq!(
+            seed_slug("  Timeline__Post — Mine!  ", 7),
+            "timeline-post-mine-7"
+        );
+    }
+
+    #[test]
+    fn sandbox_post_content_rejects_invalid_fixed_fixture_fields() {
+        let anchor = "2026-09-06T12:34:00Z"
+            .parse::<UtcInstant>()
+            .expect("fixed anchor");
+        let mut fixture = sandbox_profile_manifest(anchor)
+            .pop()
+            .expect("manifest contains posts");
+        fixture.title.clear();
+        let title_error = sandbox_post_content(&fixture, UserId::from(1))
+            .err()
+            .expect("blank fixture title is invalid");
+        assert!(title_error.to_string().contains("sandbox Post title"));
+
+        fixture.title = "valid title".to_owned();
+        fixture.slug.clear();
+        let slug_error = sandbox_post_content(&fixture, UserId::from(1))
+            .err()
+            .expect("blank fixture slug is invalid");
+        assert!(slug_error.to_string().contains("sandbox Post slug"));
     }
 
     #[test]
@@ -1115,9 +1149,14 @@ mod seed_tests {
         confirmed_fixture_outcome(site_publication, "publish site fixture")
             .expect("site fixture commit confirmed");
 
+        // Seed twice: the second call must recognize the immutable revision it
+        // created, reuse that theme row, and retain the selected fixture.
         seed_published_author_theme(&state, storage.path(), user.username.as_ref())
             .await
             .expect("theme fixture publishes");
+        seed_published_author_theme(&state, storage.path(), user.username.as_ref())
+            .await
+            .expect("existing published fixture is reused");
         reset_author_theme_fixture(&state, user.username.as_ref())
             .await
             .expect("theme fixture resets");

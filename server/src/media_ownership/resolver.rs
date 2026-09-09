@@ -57,6 +57,19 @@ impl<T> LiveMediaReferenceOwnershipResolver<T> {
     }
 
     #[cfg(test)]
+    pub(super) async fn resolve_rendered(
+        &self,
+        references: &[MediaReference],
+        instance_id: &InstanceId,
+        base_url: Option<&BaseUrl>,
+    ) -> ProvenLocalMediaRefs
+    where
+        T: HeadTransport + 'static,
+    {
+        storage::resolve_local_media_references(self, references, instance_id, base_url).await
+    }
+
+    #[cfg(test)]
     pub(super) fn transport(&self) -> &T {
         self.transport.as_ref()
     }
@@ -149,7 +162,7 @@ impl<T: HeadTransport + 'static> MediaReferenceOwnershipResolver
                     for reference in references {
                         local.prove_local(reference.media().clone());
                     }
-                }
+                } // cov:ignore — owned-probe behavior is exercised; LLVM leaves this loop-closing edge at zero.
             }
         };
         if let Err(error) = timeout(OPERATION_TIMEOUT, operation).await {

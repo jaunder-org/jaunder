@@ -161,7 +161,7 @@ fn resolve_role_with_package_url(
             ThemeImageRole::Logo => packaged_defaults?
                 .first()
                 .and_then(|path| package_url(path)),
-            ThemeImageRole::Header => None,
+            ThemeImageRole::Header => None, // cov:ignore — callers route header defaults through resolve_packaged_header_default before this helper
         },
         ThemeRoleBinding::ExplicitAbsent { .. } => None,
         ThemeRoleBinding::PackageAsset { package_path, .. } => package_url(package_path),
@@ -333,16 +333,19 @@ fn media_url_parts(source: &str, digest: &str, filename: &str) -> Option<RootRel
 fn pool_entry(entry: &crate::ThemeHeaderPoolEntry) -> Option<ThemePoolEntry> {
     match (
         entry.package_path.as_deref(),
+        entry.media_user_id,
         entry.media_source.as_deref(),
         entry.media_digest.as_ref(),
         entry.media_filename.as_deref(),
     ) {
-        (Some(path), None, None, None) => Some(ThemePoolEntry::Package(path.to_owned())),
-        (None, Some(source), Some(digest), Some(filename)) => Some(ThemePoolEntry::Media {
-            source: source.to_owned(),
-            digest: digest.clone(),
-            filename: filename.to_owned(),
-        }),
+        (Some(path), None, None, None, None) => Some(ThemePoolEntry::Package(path.to_owned())),
+        (None, Some(_), Some(source), Some(digest), Some(filename)) => {
+            Some(ThemePoolEntry::Media {
+                source: source.to_owned(),
+                digest: digest.clone(),
+                filename: filename.to_owned(),
+            })
+        }
         _ => None,
     }
 }
@@ -403,7 +406,9 @@ mod tests {
             Ok(match owner {
                 ThemeOwner::Site => Some(PublicThemeSelection::BuiltIn(Theme::Terminal)),
                 ThemeOwner::Author(user_id) if user_id == author => None,
-                ThemeOwner::Author(_) => unreachable!(),
+                ThemeOwner::Author(_) => {
+                    unreachable!("resolver requests only the specified author")
+                }
             })
         });
 
@@ -430,7 +435,9 @@ mod tests {
                 ThemeOwner::Author(user_id) if user_id == author => {
                     Some(PublicThemeSelection::BuiltIn(Theme::Reader))
                 }
-                ThemeOwner::Author(_) => unreachable!(),
+                ThemeOwner::Author(_) => {
+                    unreachable!("resolver requests only the specified author")
+                }
             })
         });
 
@@ -609,6 +616,69 @@ mod tests {
         );
     }
 
+    // guard:no-backend — exercises custom pool retrieval through the aggregate storage mock
+    #[tokio::test]
+    async fn selected_custom_theme_resolves_its_persisted_header_pool() {
+        let theme_id = ThemeId::from(9);
+        let entries = vec![crate::ThemeHeaderPoolEntry {
+            ordinal: 0,
+            package_path: Some("images/header-a.png".to_owned()),
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+        }];
+        let pool = ThemeHeaderPool::new(
+            entries
+                .iter()
+                .map(pool_entry)
+                .collect::<Option<Vec<_>>>()
+                .unwrap(),
+        )
+        .unwrap();
+        let binding = ThemeRoleBinding::HeaderPool {
+            theme_id,
+            pool_revision: pool.revision().clone(),
+            shuffle_seed: [0; 32],
+        };
+        let mut themes = crate::MockThemeStorage::new();
+        themes
+            .expect_selection()
+            .return_once(move |_| Ok(Some(PublicThemeSelection::Custom(theme_id))));
+        themes.expect_list_themes().return_once(move |_| {
+            Ok(vec![custom_entry(
+                ThemeOwner::Site,
+                theme_id,
+                Some(&"a".repeat(64)),
+            )])
+        });
+        themes.expect_list_revisions().return_once(move |_, _| {
+            Ok(vec![custom_revision(
+                theme_id,
+                &"a".repeat(64),
+                &"b".repeat(64),
+            )])
+        });
+        themes
+            .expect_revision_assets()
+            .return_once(|_, _, _| Ok(assets()));
+        themes.expect_role_binding().returning(move |_, _, role| {
+            Ok((role == ThemeImageRole::Header).then_some(binding.clone()))
+        });
+        themes
+            .expect_header_pool()
+            .return_once(move |_, _| Ok(entries));
+
+        let presentation =
+            resolve_public_theme(PublicThemeOwner::Site, &PublicThemeRoute::site(), &themes)
+                .await
+                .expect("complete persisted header pool resolves");
+        assert_eq!(
+            presentation.header_url.unwrap().as_ref(),
+            format!("/theme/{}", "d".repeat(64))
+        );
+    }
+
     // guard:no-backend — malformed persistence must reach the storage error boundary
     #[tokio::test]
     async fn corrupt_persisted_custom_site_role_propagates_error() {
@@ -658,7 +728,9 @@ mod tests {
                 ThemeOwner::Author(user_id) if user_id == author => {
                     Some(PublicThemeSelection::Custom(theme_id))
                 }
-                ThemeOwner::Author(_) => unreachable!(),
+                ThemeOwner::Author(_) => {
+                    unreachable!("resolver requests only the specified author")
+                }
             })
         });
         themes.expect_list_themes().return_once(move |_| {
@@ -752,6 +824,7 @@ mod tests {
             theme_id: ThemeId::from(9),
             role: ThemeImageRole::Header,
             user_id: UserId::from(1),
+
             media: common::media::MediaRef {
                 source: "upload".parse().unwrap(),
                 sha256: "b".repeat(64).parse().unwrap(),
@@ -770,6 +843,27 @@ mod tests {
             .unwrap()
             .as_ref(),
             format!("/media/upload/bb/bb/{}/hero.jpg", "b".repeat(64))
+        );
+    }
+    #[test]
+    fn header_default_binding_uses_the_packaged_header_pool_policy() {
+        let defaults = vec!["images/header-a.png".to_owned()];
+        let binding = ThemeRoleBinding::PackagedDefault {
+            theme_id: ThemeId::from(9),
+            role: ThemeImageRole::Header,
+        };
+        assert_eq!(
+            resolve_role(
+                Some(&binding),
+                &assets(),
+                &revision(),
+                &PublicThemeRoute::site(),
+                None,
+                Some(&defaults),
+            )
+            .unwrap()
+            .as_ref(),
+            format!("/theme/{}", "d".repeat(64))
         );
     }
 
@@ -857,6 +951,188 @@ mod tests {
                 Some(&entries),
                 None,
             )
+        );
+    }
+
+    #[test]
+    fn role_resolution_rejects_stale_pools_and_preserves_explicit_absence() {
+        let stale_pool = ThemeRoleBinding::HeaderPool {
+            theme_id: ThemeId::from(9),
+            pool_revision: "f".repeat(64).parse().unwrap(),
+            shuffle_seed: [0; 32],
+        };
+        let entries = vec![crate::ThemeHeaderPoolEntry {
+            ordinal: 0,
+            package_path: Some("images/logo.png".to_owned()),
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+        }];
+        assert_eq!(
+            resolve_role(
+                Some(&stale_pool),
+                &assets(),
+                &revision(),
+                &PublicThemeRoute::site(),
+                Some(&entries),
+                None,
+            ),
+            None,
+            "a persisted pool revision must match its canonical entries"
+        );
+        let absent = ThemeRoleBinding::ExplicitAbsent {
+            theme_id: ThemeId::from(9),
+            role: ThemeImageRole::Logo,
+        };
+        assert_eq!(
+            resolve_role(
+                Some(&absent),
+                &assets(),
+                &revision(),
+                &PublicThemeRoute::site(),
+                None,
+                None,
+            ),
+            None
+        );
+        assert!(!role_is_invalid(Some(&absent), None));
+    }
+
+    #[test]
+    fn package_defaults_and_pool_media_require_complete_valid_inputs() {
+        let logo_default = ThemeRoleBinding::PackagedDefault {
+            theme_id: ThemeId::from(9),
+            role: ThemeImageRole::Logo,
+        };
+        assert_eq!(
+            resolve_role(
+                Some(&logo_default),
+                &assets(),
+                &revision(),
+                &PublicThemeRoute::site(),
+                None,
+                Some(&["images/logo.png".to_owned()]),
+            )
+            .unwrap()
+            .as_ref(),
+            format!("/theme/{}", "c".repeat(64))
+        );
+        assert!(media_url_parts("invalid", &"b".repeat(64), "hero.jpg").is_none());
+        assert!(
+            pool_entry(&crate::ThemeHeaderPoolEntry {
+                ordinal: 0,
+                package_path: Some("images/logo.png".to_owned()),
+                media_user_id: Some(UserId::from(1)),
+                media_source: None,
+                media_digest: None,
+                media_filename: None,
+            })
+            .is_none()
+        );
+        let media = ThemePoolEntry::Media {
+            source: "upload".to_owned(),
+            digest: "b".repeat(64).parse().unwrap(),
+            filename: "hero.jpg".to_owned(),
+        };
+        assert_eq!(
+            resolve_pool_entry(&media, &|_| None).unwrap().as_ref(),
+            format!("/media/upload/bb/bb/{}/hero.jpg", "b".repeat(64))
+        );
+    }
+
+    // guard:no-backend — draft URL resolution is isolated from relational persistence
+    #[tokio::test]
+    async fn draft_preview_resolves_packaged_header_defaults_and_pool_media() {
+        let theme_id = ThemeId::from(9);
+        let revision = revision();
+        let mut themes = crate::MockThemeStorage::new();
+        themes.expect_role_binding().returning(move |_, _, role| {
+            Ok(
+                (role == ThemeImageRole::Header).then_some(ThemeRoleBinding::PackagedDefault {
+                    theme_id,
+                    role: ThemeImageRole::Header,
+                }),
+            )
+        });
+        let urls = std::collections::BTreeMap::from([
+            ("images/header-a.png".to_owned(), "/draft/a".to_owned()),
+            ("images/header-b.png".to_owned(), "/draft/b".to_owned()),
+        ]);
+        let (_, header) = resolve_draft_theme_images(
+            ThemeOwner::Site,
+            theme_id,
+            br#"{"defaults":{"header":["images/header-a.png","images/header-b.png"]}}"#,
+            &urls,
+            &revision,
+            &PublicThemeRoute::site(),
+            &themes,
+        )
+        .await
+        .expect("complete package defaults resolve for draft preview");
+        assert!(matches!(header.unwrap().as_ref(), "/draft/a" | "/draft/b"));
+
+        let entry = crate::ThemeHeaderPoolEntry {
+            ordinal: 0,
+            package_path: None,
+            media_user_id: Some(UserId::from(1)),
+            media_source: Some("upload".to_owned()),
+            media_digest: Some("b".repeat(64).parse().unwrap()),
+            media_filename: Some("hero.jpg".to_owned()),
+        };
+        assert!(matches!(
+            pool_entry(&entry),
+            Some(ThemePoolEntry::Media { .. })
+        ));
+    }
+
+    // guard:no-backend — draft pool retrieval and invalid-role rejection are resolver policy
+    #[tokio::test]
+    async fn draft_preview_rejects_unresolvable_persisted_header_pool() {
+        let theme_id = ThemeId::from(9);
+        let entries = vec![crate::ThemeHeaderPoolEntry {
+            ordinal: 0,
+            package_path: Some("images/header-a.png".to_owned()),
+            media_user_id: None,
+            media_source: None,
+            media_digest: None,
+            media_filename: None,
+        }];
+        let pool = ThemeHeaderPool::new(
+            entries
+                .iter()
+                .map(pool_entry)
+                .collect::<Option<Vec<_>>>()
+                .unwrap(),
+        )
+        .unwrap();
+        let binding = ThemeRoleBinding::HeaderPool {
+            theme_id,
+            pool_revision: pool.revision().clone(),
+            shuffle_seed: [0; 32],
+        };
+        let mut themes = crate::MockThemeStorage::new();
+        themes.expect_role_binding().returning(move |_, _, role| {
+            Ok((role == ThemeImageRole::Header).then_some(binding.clone()))
+        });
+        themes
+            .expect_header_pool()
+            .once()
+            .return_once(move |_, _| Ok(entries));
+
+        assert!(
+            resolve_draft_theme_images(
+                ThemeOwner::Site,
+                theme_id,
+                b"{}",
+                &std::collections::BTreeMap::new(),
+                &revision(),
+                &PublicThemeRoute::site(),
+                &themes,
+            )
+            .await
+            .is_err(),
+            "a persisted binding whose selected asset has no draft URL is invalid"
         );
     }
 

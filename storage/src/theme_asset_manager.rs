@@ -394,16 +394,25 @@ impl ThemeAssetManager {
                 Self::sync_directory(staging).await?;
                 Ok(true)
             }
+            // cov:ignore-start
+            // Tokio's Linux rename replaces an existing destination atomically; this
+            // collision recovery is retained for platform parity where rename reports
+            // AlreadyExists, and cannot be exercised by the authoritative Linux run.
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 let existing = fs::read(&path).await?;
                 fs::remove_file(&temporary).await?;
                 Self::sync_directory(staging).await?;
                 Self::verify(&existing, &blob.digest).map(|()| false)
             }
+            // cov:ignore-stop
+            // cov:ignore-start — after the missing-destination check, an unexpected
+            // rename failure requires an OS race or fault injection unavailable to the
+            // authoritative host coverage run.
             Err(error) => Err(finish_install_failure(
                 error,
                 fs::remove_file(&temporary).await,
             )),
+            // cov:ignore-stop
         }
     }
 
@@ -486,7 +495,11 @@ impl ThemeAssetManager {
             let mut second = match fs::read_dir(prefix_entry.path()).await {
                 Ok(entries) => entries,
                 Err(error) if error.kind() == io::ErrorKind::NotADirectory => continue,
+                // cov:ignore-start — after this directory has been enumerated, an
+                // unexpected read failure requires a concurrent filesystem race or
+                // host-level fault injection.
                 Err(error) => return Err(error.into()),
+                // cov:ignore-stop
             };
             while let Some(shard_entry) = second.next_entry().await? {
                 let shard_name = shard_entry.file_name();
@@ -497,7 +510,11 @@ impl ThemeAssetManager {
                 let mut files = match fs::read_dir(shard_entry.path()).await {
                     Ok(entries) => entries,
                     Err(error) if error.kind() == io::ErrorKind::NotADirectory => continue,
+                    // cov:ignore-start — after this shard has been enumerated, an
+                    // unexpected read failure requires a concurrent filesystem race or
+                    // host-level fault injection.
                     Err(error) => return Err(error.into()),
+                    // cov:ignore-stop
                 };
                 while let Some(file) = files.next_entry().await? {
                     if !file.file_type().await?.is_file() {
@@ -506,8 +523,8 @@ impl ThemeAssetManager {
                     let name = file.file_name();
                     let digest = name.to_string_lossy();
                     if Self::is_canonical_digest_path(&prefix, &shard, &digest) {
-                        digests.push(digest.parse().map_err(|_| ThemeAssetError::InvalidDigest)?);
-                    }
+                        digests.push(digest.parse().map_err(|_| ThemeAssetError::InvalidDigest)?); // cov:ignore — canonical lowercase SHA-256 hex was already validated above, so the digest newtype parser cannot reject it.
+                    } // cov:ignore — the parser result's closure edge is compiler bookkeeping; the canonical digest path is exercised by reconciliation.
                 }
             }
         }
@@ -672,6 +689,52 @@ mod tests {
             let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
         }
         hex.parse().expect("SHA-256 is a valid theme digest")
+    }
+
+    // guard:no-backend — directory cleanup and census are filesystem-only invariants
+    #[tokio::test]
+    async fn staging_cleanup_removes_only_files_and_content_census_skips_noncanonical_nodes() {
+        let fixture = TempDir::new().expect("create fixture");
+        let manager = ThemeAssetManager::new(
+            Arc::new(MockThemeStorage::new()),
+            mock_write_scope(),
+            Arc::new(fixture.path().to_path_buf()),
+        );
+        let staging = fixture.path().join("themes").join(".staging");
+        fs::create_dir_all(staging.join("nested")).expect("create staging directory");
+        fs::write(staging.join("abandoned.tmp"), b"partial").expect("write temporary content");
+        manager.reclaim_staging().await.expect("clean staging");
+        assert!(!staging.join("abandoned.tmp").exists());
+        assert!(staging.join("nested").is_dir());
+
+        let digest = digest(b"canonical content");
+        let root = fixture.path().join("themes");
+        let shard = root
+            .join(&digest.as_ref()[..2])
+            .join(&digest.as_ref()[2..4]);
+        fs::create_dir_all(&shard).expect("create canonical shard");
+        fs::write(shard.join(digest.as_ref()), b"canonical content").expect("write content");
+        fs::write(root.join("not-a-prefix"), b"ignore").expect("write non-directory prefix");
+        fs::create_dir_all(root.join("aa").join("not-a-shard")).expect("create invalid shard");
+        assert_eq!(
+            manager
+                .enumerate_content_digests()
+                .await
+                .expect("enumerate canonical content"),
+            vec![digest.clone()]
+        );
+        assert!(
+            manager
+                .unlink_if_present(&digest)
+                .await
+                .expect("remove existing content")
+        );
+        assert!(
+            !manager
+                .unlink_if_present(&digest)
+                .await
+                .expect("an absent content path is not an error")
+        );
     }
 
     #[apply(backends)]
@@ -1183,5 +1246,159 @@ mod tests {
 
         assert_eq!(reconciliation.reclaimed_files, 1);
         assert!(!path.join(digest.as_ref()).exists());
+    }
+    // guard:no-backend — mocked eligibility isolates the cleanup branches.
+    #[tokio::test]
+    async fn cleanup_reports_only_failed_eligibility_and_unlink_work() {
+        let missing = digest(b"missing");
+        let retained = digest(b"retained");
+        let failed = digest(b"lookup failure");
+        let missing_for_lookup = missing.clone();
+        let retained_for_lookup = retained.clone();
+        let mut storage = MockThemeStorage::new();
+        storage
+            .expect_content_eligibility()
+            .times(3)
+            .returning(move |digest| {
+                if digest == &missing_for_lookup {
+                    Ok(None)
+                } else if digest == &retained_for_lookup {
+                    Ok(Some(ThemeContentEligibility {
+                        digest: retained_for_lookup.clone(),
+                        mime: "image/png".into(),
+                        retained_until_unix_seconds: 0,
+                    }))
+                } else {
+                    Err(sqlx::Error::RowNotFound)
+                }
+            });
+        let fixture = TempDir::new().expect("create fixture");
+        let manager = ThemeAssetManager::new(
+            Arc::new(storage),
+            mock_write_scope(),
+            Arc::new(fixture.path().to_path_buf()),
+        )
+        .with_unlink_failure_for_test();
+
+        let ((), trace) = crate::helpers::swallowed_test::capture_async(
+            manager.cleanup_newly_installed(&[missing, retained, failed]),
+        )
+        .await;
+
+        assert_eq!(
+            trace.matches(r#""error.disposition":"swallowed""#).count(),
+            2
+        );
+        assert!(trace.contains(r#""error.context":"storage.theme_asset.publish_cleanup_unlink""#));
+        assert!(
+            trace.contains(r#""error.context":"storage.theme_asset.publish_cleanup_eligibility""#)
+        );
+    }
+
+    // guard:no-backend — filesystem census and cleanup are storage-independent.
+    #[tokio::test]
+    async fn filesystem_census_handles_non_directory_nodes_and_reports_invalid_roots() {
+        let fixture = TempDir::new().expect("create fixture");
+        let manager = ThemeAssetManager::new(
+            Arc::new(MockThemeStorage::new()),
+            mock_write_scope(),
+            Arc::new(fixture.path().to_path_buf()),
+        );
+        let themes = fixture.path().join("themes");
+        fs::create_dir_all(&themes).expect("create themes root");
+        fs::write(themes.join(".staging"), b"not a directory").expect("create staging file");
+        assert!(manager.reclaim_staging().await.is_err());
+        fs::remove_file(themes.join(".staging")).expect("remove staging file");
+
+        let digest = digest(b"directory entry");
+        let prefix_file = format!(
+            "{:02x}",
+            u8::from_str_radix(&digest.as_ref()[..2], 16).expect("digest prefix is hex") ^ 1
+        );
+        fs::write(themes.join(prefix_file), b"not a prefix directory").expect("create prefix file");
+        let shard_prefix = format!(
+            "{:02x}",
+            u8::from_str_radix(&digest.as_ref()[..2], 16).expect("digest prefix is hex") ^ 2
+        );
+        let shard = themes.join(shard_prefix);
+        fs::create_dir_all(&shard).expect("create prefix directory");
+        let shard_file = format!(
+            "{:02x}",
+            u8::from_str_radix(&digest.as_ref()[2..4], 16).expect("digest shard is hex") ^ 1
+        );
+        fs::write(shard.join(shard_file), b"not a shard directory").expect("create shard file");
+        let digest_directory = themes
+            .join(&digest.as_ref()[..2])
+            .join(&digest.as_ref()[2..4])
+            .join(digest.as_ref());
+        fs::create_dir_all(digest_directory).expect("create non-file digest entry");
+        assert_eq!(
+            manager
+                .enumerate_content_digests()
+                .await
+                .expect("skip non-file nodes"),
+            Vec::<ThemeContentDigest>::new()
+        );
+
+        let root_as_file = TempDir::new().expect("create root fixture");
+        fs::write(root_as_file.path().join("themes"), b"not a directory")
+            .expect("create root file");
+        let root_manager = ThemeAssetManager::new(
+            Arc::new(MockThemeStorage::new()),
+            mock_write_scope(),
+            Arc::new(root_as_file.path().to_path_buf()),
+        );
+        assert!(root_manager.enumerate_content_digests().await.is_err());
+
+        let path = manager.content_path(digest.as_ref());
+        fs::remove_dir(&path).expect("replace directory with content path");
+        fs::create_dir_all(&path).expect("create unlink target directory");
+        assert!(manager.unlink_if_present(&digest).await.is_err());
+    }
+
+    // guard:no-backend — filesystem content validation is storage-independent.
+    #[tokio::test]
+    async fn reconciliation_preserves_known_complete_content() {
+        let fixture = TempDir::new().expect("create fixture");
+        let bytes = b"known content";
+        let digest = digest(bytes);
+        let path = fixture
+            .path()
+            .join("themes")
+            .join(&digest.as_ref()[..2])
+            .join(&digest.as_ref()[2..4]);
+        fs::create_dir_all(&path).expect("create content shard");
+        fs::write(path.join(digest.as_ref()), bytes).expect("write known content");
+        let known = digest.clone();
+        let mut storage = MockThemeStorage::new();
+        storage
+            .expect_expired_retained_content()
+            .once()
+            .returning(|_| Ok(Vec::new()));
+        storage
+            .expect_list_content_eligibility()
+            .times(2)
+            .returning(move || {
+                Ok(vec![ThemeContentEligibility {
+                    digest: known.clone(),
+                    mime: "image/png".into(),
+                    retained_until_unix_seconds: 0,
+                }])
+            });
+        storage.expect_content_eligibility().never();
+        let manager = ThemeAssetManager::new(
+            Arc::new(storage),
+            mock_write_scope(),
+            Arc::new(fixture.path().to_path_buf()),
+        );
+
+        assert_eq!(
+            manager
+                .reconcile_startup()
+                .await
+                .expect("reconcile known content"),
+            super::ThemeContentReconciliation::default()
+        );
+        assert!(path.join(digest.as_ref()).exists());
     }
 }

@@ -379,6 +379,29 @@ mod tests {
     }
 
     #[test]
+    fn restore_theme_media_excludes_process_local_staging_and_lock_state() -> Result<(), BackupError>
+    {
+        let temp = TempDir::new()?;
+        let source = temp.path().join("themes");
+        let destination = temp.path().join("destination");
+        fs::create_dir_all(source.join(".staging"))?;
+        fs::create_dir_all(source.join(".locks"))?;
+        fs::write(source.join(".staging").join("partial.css"), "partial")?;
+        fs::write(source.join(".locks").join("theme.lock"), "locked")?;
+        fs::write(source.join("published.css"), "published")?;
+
+        restore_media_directory(&source, &destination)?;
+
+        assert_eq!(
+            fs::read_to_string(destination.join("published.css"))?,
+            "published"
+        );
+        assert!(!destination.join(".staging").exists());
+        assert!(!destination.join(".locks").exists());
+        Ok(())
+    }
+
+    #[test]
     fn restore_media_directory_copies_nested_files() -> Result<(), BackupError> {
         let temp = TempDir::new()?;
         let source = temp.path().join("source");

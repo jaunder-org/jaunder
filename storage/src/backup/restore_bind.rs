@@ -99,7 +99,7 @@ mod tests {
         let RestoreBindValue::Binary(binary) =
             restore_bind_value(&binary_column(), &value).expect("decode binary wire value")
         else {
-            panic!("binary column must yield a binary binding")
+            panic!("binary column must yield a binary binding"); // cov:ignore this assertion only runs if the tested success contract fails.
         };
         assert_eq!(binary.0, [0, 0, 0xff, 0x80]);
     }
@@ -108,7 +108,9 @@ mod tests {
     fn binary_wire_rejects_malformed_values() {
         for value in [
             serde_json::json!("00ff"),
+            serde_json::json!({}),
             serde_json::json!({"$jaunder_binary_hex": "0"}),
+            serde_json::json!({"$jaunder_binary_hex": "0z"}),
             serde_json::json!({"$jaunder_binary_hex": "zz"}),
             serde_json::json!({"$jaunder_binary_hex": "00", "extra": true}),
         ] {

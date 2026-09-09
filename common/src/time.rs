@@ -377,6 +377,7 @@ mod tests {
             "2026-01-02T03:04Z[UTC]",
             "2026-1-02",
             "-9999-01-01",
+            "202a-01-02",
         ] {
             let encoded = format!("\"{noncanonical}\"");
             assert!(
@@ -384,6 +385,13 @@ mod tests {
                 "{noncanonical}"
             );
         }
+
+        let err = serde_json::from_str::<PermalinkDate>("1").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("a canonical ISO 8601 calendar date"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -425,6 +433,9 @@ mod tests {
         assert!(earlier < later);
         assert_eq!(UtcInstant::from(Timestamp::from(earlier)), earlier);
         assert_eq!(Timestamp::from(earlier), earlier.value());
+
+        let date = PermalinkDate::from_ymd(2024, 7, 1).unwrap();
+        assert_eq!(civil::Date::from(date), date.value());
     }
 
     #[test]
@@ -488,5 +499,38 @@ mod tests {
             local_datetime_from_utc_in(instant, &timezone),
             "2024-07-01T16:24"
         );
+    }
+
+    #[cfg(feature = "sqlx")]
+    #[tokio::test]
+    async fn sqlite_bridge_preserves_timestamp_text_and_accepts_numeric_storage() {
+        use sqlx::Connection;
+
+        let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let instant = "2024-07-01T16:24:45.123456Z".parse::<UtcInstant>().unwrap();
+
+        let encoded: String = sqlx::query_scalar("SELECT ?")
+            .bind(instant)
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(encoded, "2024-07-01T16:24:45.123456+00:00");
+
+        let decoded: UtcInstant = sqlx::query_scalar("SELECT ?")
+            .bind(&encoded)
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(decoded, instant);
+
+        let julian_day_zero: UtcInstant = sqlx::query_scalar("SELECT 0")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(julian_day_zero.to_string(), "-004713-11-24T12:00:00Z");
+
+        let _ = <UtcInstant as sqlx::Type<sqlx::Sqlite>>::type_info();
     }
 }

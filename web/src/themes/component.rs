@@ -307,6 +307,7 @@ fn import_package_zip(
     refresh: Invalidator,
     status: RwSignal<Option<String>>,
 ) {
+    // crap:allow: Browser File and FormData APIs are wasm-only; host coverage cannot execute the upload handler.
     let Some(file) = package_file
         .get()
         .and_then(|input| input.files())
@@ -710,6 +711,7 @@ fn export_selected(
     selected: RwSignal<Option<ThemeId>>,
     status: RwSignal<Option<String>>,
 ) {
+    // crap:allow: Browser download initiation is wasm-only; host coverage cannot execute the export handler.
     if let Some(id) = selected.get_untracked() {
         let scope = scope.get_untracked();
         task::spawn_local(async move {
@@ -1059,6 +1061,7 @@ fn fresh_seed() -> Result<[u8; 32], String> {
 }
 
 fn download_package(filename: &str, bytes: &[u8]) -> Result<(), String> {
+    // crap:allow: Browser Blob, URL, and anchor APIs are wasm-only; host coverage cannot execute package downloads.
     use wasm_bindgen::JsCast;
 
     let values = js_sys::Array::new();

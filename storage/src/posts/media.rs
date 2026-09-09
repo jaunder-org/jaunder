@@ -603,6 +603,24 @@ mod tests {
     }
 
     #[test]
+    fn persisted_reference_exposes_optional_owner() {
+        let parsed =
+            common::media::parse_media_url(&media_url_for("owned.jpg")).expect("media form parses");
+        let reference = PersistedMediaReference::new(
+            PostId::from(1_i64),
+            parsed.media().clone(),
+            parsed.kind(),
+            parsed.reference_form().clone(),
+        );
+
+        assert_eq!(reference.owner_id(), None);
+        assert_eq!(
+            reference.with_owner(UserId::from(2_i64)).owner_id(),
+            Some(UserId::from(2_i64))
+        );
+    }
+
+    #[test]
     fn foreign_evidence_rejects_another_instance_and_encodes_multiple_proofs() {
         let expected: InstanceId = "123e4567-e89b-12d3-a456-426614174000"
             .parse()

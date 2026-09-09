@@ -166,6 +166,24 @@ async fn exactly_one_canonical_matching_uuid_is_owned() {
 }
 
 #[tokio::test]
+async fn rendered_local_references_bypass_the_network_and_owned_remote_references_are_proved() {
+    let expected = instance_id().to_string().into_bytes();
+    let resolver =
+        LiveMediaReferenceOwnershipResolver::with_transport(FakeTransport::with_responses(vec![
+            HeadResponse::new(vec![expected]),
+        ]));
+    let local = parse_media_url(media_path()).expect("valid local media reference");
+    let remote = parse_media_url(&format!("https://example.test{}", media_path()))
+        .expect("valid absolute media reference");
+
+    let _proof = resolver
+        .resolve_rendered(&[local, remote], &instance_id(), None)
+        .await;
+
+    assert_eq!(resolver.transport().heads.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
 async fn absent_or_different_uuid_is_foreign() {
     let other = b"123e4567-e89b-12d3-a456-426614174001".to_vec();
     let resolver =

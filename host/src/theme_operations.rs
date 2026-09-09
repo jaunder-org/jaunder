@@ -119,6 +119,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn refills_at_the_elapsed_second_boundary_and_caps_at_the_burst() {
+        let now = Instant::now();
+        let mut bucket = Bucket {
+            tokens: 0,
+            last: now.checked_sub(REFILL_AFTER).expect("monotonic instant"),
+        };
+
+        bucket.refill(now);
+        assert_eq!(bucket.tokens, 1);
+        assert_eq!(bucket.last, now);
+
+        bucket.tokens = BURST - 1;
+        bucket.last = now
+            .checked_sub(REFILL_AFTER * u32::from(BURST))
+            .expect("monotonic instant");
+        bucket.refill(now);
+        assert_eq!(bucket.tokens, BURST);
+    }
+
+    #[test]
+    fn default_coordinator_is_ready_to_admit_operations() {
+        let coordinator = ThemeOperationCoordinator::default();
+
+        assert!(coordinator.acquire(UserId::from(1)).is_ok());
+    }
+
+    #[test]
     fn rejects_a_second_operation_while_its_principal_is_in_flight() {
         let coordinator = ThemeOperationCoordinator::new();
         let permit = coordinator.acquire(UserId::from(1)).expect("first permit");
@@ -185,8 +212,11 @@ mod tests {
                 .acquire(UserId::from(1))
                 .expect("operation permit");
             started_tx.send(()).expect("test observes acquired permit");
+            // cov:ignore-start
+            // The cancellation test intentionally holds this future pending.
             std::future::pending::<()>().await;
-        });
+            // cov:ignore-stop
+        }); // cov:ignore
 
         started_rx.await.expect("operation acquires its permit");
         assert!(matches!(

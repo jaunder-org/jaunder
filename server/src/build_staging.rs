@@ -87,6 +87,7 @@ pub fn stage_bundle(
     public_src: &Path,
     manifest: &Manifest,
 ) -> Result<(), BundleStageError> {
+    // crap:allow: Cargo executes this build-script staging path outside normal coverage targets; inline behavior tests exercise the verified copy contract.
     reject_public_collisions(public_src, manifest)?;
     copy_file(&root.join("index.html"), &site.join("index.html"))?;
     for asset in &manifest.assets {
@@ -128,6 +129,7 @@ fn reject_public_collisions_below(
     relative: &Path,
     reserved: &BTreeSet<&str>,
 ) -> Result<(), BundleStageError> {
+    // crap:allow: Cargo executes this recursive build-script validation outside normal coverage targets; inline behavior tests exercise nested collisions.
     for entry in fs::read_dir(directory)
         .map_err(|error| BundleStageError(format!("reading {}: {error}", directory.display())))?
     {
@@ -178,6 +180,7 @@ fn verify_staged_bundle(site: &Path, manifest: &Manifest) -> Result<(), BundleSt
 }
 
 fn validate_shell(shell: &str, glue: &str, wasm: &str) -> Result<(), BundleStageError> {
+    // crap:allow: Cargo executes this generated-shell validation outside normal coverage targets; inline behavior tests exercise its ordering checks.
     for (role, url) in [("glue", glue), ("WASM", wasm)] {
         if shell.matches(url).count() != 1 {
             return Err(BundleStageError(format!(
@@ -241,6 +244,7 @@ pub fn stage_public_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError>
 }
 
 fn copy_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
+    // crap:allow: Cargo executes this recursive build-script copy outside normal coverage targets; inline behavior tests exercise nested public assets.
     fs::create_dir_all(dst)
         .map_err(|error| BundleStageError(format!("creating {}: {error}", dst.display())))?;
     for entry in fs::read_dir(src)
@@ -261,4 +265,172 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, fs};
+
+    use csr_bundle::{Asset, Manifest, Representation, Role};
+
+    use super::{reject_public_collisions, stage_bundle, stage_public_tree, validate_shell};
+
+    fn shell(glue: &str, wasm: &str) -> String {
+        format!(
+            r#"<script>const __jaunderWasmUrl = "{wasm}"; window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);</script>
+<link rel="stylesheet" href="/style/jaunder.css" />
+<script type="module">import {{initMeasured}} from "{glue}"; performance.mark("jaunder.module.before_init"); initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl);</script>"#
+        )
+    }
+
+    fn bundle_asset(role: Role, extension: &str, bytes: &[u8]) -> Asset {
+        let digest = csr_bundle::digest(bytes);
+        let path = format!("pkg/{digest}.{extension}");
+        let gzip = format!("{path}.gz");
+        let brotli = format!("{path}.br");
+        let representations = BTreeMap::from([
+            (
+                "identity".into(),
+                Representation {
+                    path: path.clone(),
+                    sha256: digest.clone(),
+                },
+            ),
+            (
+                "gzip".into(),
+                Representation {
+                    path: gzip,
+                    sha256: csr_bundle::digest(b"gzip"),
+                },
+            ),
+            (
+                "br".into(),
+                Representation {
+                    path: brotli,
+                    sha256: csr_bundle::digest(b"brotli"),
+                },
+            ),
+        ]);
+        Asset {
+            role: Some(role),
+            path,
+            sha256: digest,
+            representations,
+        }
+    }
+
+    fn write_bundle(root: &std::path::Path) -> Manifest {
+        let manifest = Manifest {
+            version: csr_bundle::VERSION,
+            assets: vec![
+                bundle_asset(Role::Glue, "js", b"glue"),
+                bundle_asset(Role::Wasm, "wasm", b"wasm"),
+            ],
+        };
+        for asset in &manifest.assets {
+            for representation in asset.representations.values() {
+                let bytes = match std::path::Path::new(&representation.path).extension() {
+                    Some(extension) if extension == "gz" => b"gzip".as_slice(),
+                    Some(extension) if extension == "br" => b"brotli".as_slice(),
+                    Some(extension) if extension == "js" => b"glue".as_slice(),
+                    _ => b"wasm".as_slice(),
+                };
+                let path = root.join(&representation.path);
+                fs::create_dir_all(path.parent().expect("bundle parent")).expect("create parent");
+                fs::write(path, bytes).expect("write representation");
+            }
+        }
+        let glue = manifest.role(Role::Glue).expect("glue role");
+        let wasm = manifest.role(Role::Wasm).expect("WASM role");
+        fs::write(
+            root.join("index.html"),
+            shell(&format!("/{}", glue.path), &format!("/{}", wasm.path)),
+        )
+        .expect("write shell");
+        manifest
+    }
+
+    #[test]
+    fn stages_verified_bundle_and_nested_public_assets() {
+        let bundle = tempfile::tempdir().expect("bundle root");
+        let site = tempfile::tempdir().expect("site root");
+        let public = tempfile::tempdir().expect("public root");
+        let manifest = write_bundle(bundle.path());
+        let stylesheet = public.path().join("style/jaunder.css");
+        fs::create_dir_all(stylesheet.parent().expect("stylesheet parent"))
+            .expect("create stylesheet parent");
+        fs::write(&stylesheet, "body {}").expect("write stylesheet");
+
+        stage_bundle(bundle.path(), site.path(), public.path(), &manifest).expect("stage bundle");
+
+        manifest
+            .verify_bundle(site.path())
+            .expect("staged bundle verifies");
+        assert_eq!(
+            fs::read_to_string(site.path().join("style/jaunder.css")).unwrap(),
+            "body {}"
+        );
+    }
+
+    #[test]
+    fn rejects_nested_public_bundle_collision() {
+        let bundle = tempfile::tempdir().expect("bundle root");
+        let public = tempfile::tempdir().expect("public root");
+        let manifest = write_bundle(bundle.path());
+        let glue = manifest.role(Role::Glue).expect("glue role");
+        let collision = public.path().join(&glue.path);
+        fs::create_dir_all(collision.parent().expect("collision parent"))
+            .expect("create collision parent");
+        fs::write(collision, "replacement").expect("write collision");
+
+        let error = reject_public_collisions(public.path(), &manifest).expect_err("collision");
+
+        assert!(
+            error
+                .to_string()
+                .contains("overwrites a reserved CSR bundle path")
+        );
+    }
+
+    #[test]
+    fn shell_requires_unique_urls_and_required_order() {
+        let glue = "/pkg/glue.js";
+        let wasm = "/pkg/module.wasm";
+        validate_shell(&shell(glue, wasm), glue, wasm).expect("valid shell");
+
+        let duplicate = format!("{}\n{glue}", shell(glue, wasm));
+        assert!(
+            validate_shell(&duplicate, glue, wasm)
+                .expect_err("duplicate glue URL")
+                .to_string()
+                .contains("exactly one glue URL")
+        );
+        let misordered = format!(
+            r#"<link rel="stylesheet" href="/style/jaunder.css" />window.__jaunderWasmFetch = fetch import {{initMeasured}} performance.mark initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl) {glue} {wasm}"#
+        );
+        assert!(
+            validate_shell(&misordered, glue, wasm)
+                .expect_err("misordered shell")
+                .to_string()
+                .contains("does not preserve")
+        );
+    }
+
+    #[test]
+    fn public_tree_ignores_missing_source_and_copies_nested_assets() {
+        let source = tempfile::tempdir().expect("source root");
+        let destination = tempfile::tempdir().expect("destination root");
+        let nested = source.path().join("nested/asset");
+        fs::create_dir_all(nested.parent().expect("nested parent")).expect("create nested parent");
+        fs::write(&nested, "asset").expect("write asset");
+
+        stage_public_tree(source.path(), destination.path()).expect("copy public tree");
+        stage_public_tree(&source.path().join("missing"), destination.path())
+            .expect("ignore missing source");
+
+        assert_eq!(
+            fs::read_to_string(destination.path().join("nested/asset")).unwrap(),
+            "asset"
+        );
+    }
 }
