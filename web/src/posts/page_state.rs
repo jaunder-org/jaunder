@@ -255,7 +255,7 @@ impl ListingRoute {
     // Server-function client calls require the hydrated browser transport. The
     // host suite exhaustively covers the validated route-to-endpoint matrix; the
     // public listing browser flow covers this transport adapter.
-    // cov:ignore-start
+    // cov:ignore-start: server-function client calls require the hydrated browser transport unavailable to authoritative host coverage.
     pub async fn destination(self) -> WebResult<(PublishedThemePresentation, Page<RenderedPost>)> {
         self.fetch_page(None, Some(PageSize::default()))
             .await
