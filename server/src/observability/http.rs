@@ -53,7 +53,7 @@ fn make_request_span(request: &Request) -> Span {
         headers = ?request.headers(),
     );
     if let Some(parent) = request.extensions().get::<ExtractedTraceContext>() {
-        span.set_parent(parent.0.clone());
+        let _ = span.set_parent(parent.0.clone());
     }
     span
 }

@@ -13,6 +13,7 @@ use crate::backup::{
     self, BINARY_WIRE_KEY, BackupError, BackupManifest, BackupMode, BackupRowJson,
     CatalogColumnName, CatalogNullability, CatalogTableName, CatalogTypeName, ColumnInfo,
     MigrationVersion, RestoreBindValue, RestoreText, RestoreValidationReport, is_binary_column,
+    lowercase_hex,
 };
 use crate::helpers;
 use crate::sql;
@@ -494,7 +495,7 @@ async fn schema_checksum(connection: &mut PgConnection) -> Result<String, Backup
         hasher.update(is_nullable.as_bytes());
         hasher.update(b"\0");
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(lowercase_hex(hasher.finalize()))
 }
 
 #[cfg(test)]

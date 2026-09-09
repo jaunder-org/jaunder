@@ -278,10 +278,10 @@ fn static_module_specifiers(source: &str, importer: &Path) -> anyhow::Result<Vec
     let ParserReturn {
         program,
         diagnostics,
-        panicked,
+        fatal_error,
         ..
     } = Parser::new(&allocator, source, SourceType::mjs()).parse();
-    if panicked || !diagnostics.is_empty() {
+    if fatal_error || !diagnostics.is_empty() {
         let diagnostics = diagnostics
             .iter()
             .map(|diagnostic| format!("{diagnostic:?}"))

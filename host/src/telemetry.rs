@@ -661,9 +661,22 @@ mod tests {
     use super::*;
     use opentelemetry::Value;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
-    use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+    use opentelemetry_sdk::trace::{
+        InMemorySpanExporter, SdkTracerProvider, SpanData, SpanExporter,
+    };
     use std::io::Write as _;
     use std::sync::{Arc, Mutex};
+
+    /// Keeps exported spans available after processor shutdown. The SDK's
+    /// in-memory exporter intentionally clears its records during shutdown.
+    #[derive(Clone, Debug, Default)]
+    struct RetainingSpanExporter(InMemorySpanExporter);
+
+    impl SpanExporter for RetainingSpanExporter {
+        async fn export(&self, batch: Vec<SpanData>) -> opentelemetry_sdk::error::OTelSdkResult {
+            self.0.export(batch).await
+        }
+    }
 
     /// An in-memory `MakeWriter` capturing every write into a shared buffer, so a
     /// layer's output can be asserted on. `Arc<Mutex<Vec<u8>>>` is not itself a
@@ -1312,7 +1325,7 @@ mod tests {
     #[tokio::test]
     async fn guard_drop_flushes_tracer_provider() {
         use opentelemetry::trace::{Tracer as _, TracerProvider as _};
-        let exporter = InMemorySpanExporter::default();
+        let exporter = RetainingSpanExporter::default();
         let provider = SdkTracerProvider::builder()
             .with_batch_exporter(exporter.clone())
             .build();
@@ -1325,7 +1338,7 @@ mod tests {
             tracer_shutdown: shutdown_tracer,
         });
 
-        let spans = exporter.get_finished_spans().expect("spans");
+        let spans = exporter.0.get_finished_spans().expect("spans");
         assert!(
             spans.iter().any(|span| span.name == "test-span"),
             "span not exported on guard drop"

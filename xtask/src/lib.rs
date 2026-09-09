@@ -5,6 +5,7 @@ mod census;
 mod cli;
 mod compile_cache;
 pub mod coverage;
+mod digest;
 mod dispatch;
 mod doc_links;
 pub mod elisp_coverage;

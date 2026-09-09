@@ -53,20 +53,20 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 futures-util.workspace = true
-http-body-util = "0.1"
-httpdate = "1"
-tokio-util = { version = "0.7", features = ["io"] }
+http-body-util = "0.1.5"
+httpdate = "1.0.3"
+tokio-util = { version = "0.7.19", features = ["io"] }
 flate2.workspace = true
 tar.workspace = true
 tokio-cron-scheduler.workspace = true
 jiff.workspace = true
 croner.workspace = true
-rust-embed = { version = "8.11.0", features = ["axum", "interpolate-folder-path"] }
+rust-embed = { version = "8.12.0", features = ["axum", "interpolate-folder-path"] }
 axum-embed = "0.1.0"
-mime_guess = "2"
+mime_guess = "2.0.5"
 urlencoding.workspace = true
 percent-encoding.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "form"] }
 url = { workspace = true }
 
 [build-dependencies]
@@ -82,10 +82,10 @@ host = { workspace = true, features = ["test-support", "test-utils"] }
 storage = { workspace = true, features = ["test-utils", "test-support"] }
 csr_bundle = { path = "../tools/csr_bundle" }
 maik = "0.2.0"
-nix = { version = "0.29", features = ["signal"] }
+nix = { version = "0.31.3", features = ["signal"] }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
-server_fn = { version = "0.8", features = ["axum-no-default"] }
+server_fn = { version = "0.8.13", features = ["axum-no-default"] }
 serde_qs = "0.15"
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

@@ -122,7 +122,7 @@ fn typescript_modules(path: &str, source: &str) -> Result<Vec<String>, String> {
     let ParserReturn {
         program,
         diagnostics,
-        panicked,
+        fatal_error,
         ..
     } = Parser::new(
         &allocator,
@@ -132,7 +132,7 @@ fn typescript_modules(path: &str, source: &str) -> Result<Vec<String>, String> {
             .expect("TypeScript language has a parser mode"),
     )
     .parse();
-    if panicked || !diagnostics.is_empty() {
+    if fatal_error || !diagnostics.is_empty() {
         return Err(diagnostics
             .iter()
             .map(|error| format!("{error:?}"))

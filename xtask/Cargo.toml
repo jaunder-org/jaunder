@@ -17,44 +17,44 @@ publish = false
 workspace = true
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
-xshell = "0.2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
-flate2 = "1"
-tar = "0.4"
-brotli = "7"
+clap = { version = "4.6.6", features = ["derive"] }
+xshell = "0.2.7"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+anyhow = "1.0.104"
+flate2 = "1.1.10"
+tar = "0.4.46"
+brotli = "9.0.0"
 coverage = { path = "../tools/coverage" }
 csr_bundle = { path = "../tools/csr_bundle" }
 doctests = { path = "../tools/doctests" }
-tabled = "0.21.0"
+tabled = "0.22.0"
 url = "2.5.8"
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }
-proc-macro2 = { version = "1", features = ["span-locations"] }
+proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
 # `ToTokens`, to render structurally found decode targets and diagnostics. Already in the tree
 # via `syn`.
-quote = "1"
-oxc_allocator = "0.146.0"
-oxc_ast = "0.146.0"
-oxc_ast_visit = "0.146.0"
-oxc_parser = "0.146.0"
-oxc_syntax = "0.146.0"
-oxc_span = "0.146.0"
-tempfile = "3"
+quote = "1.0.47"
+oxc_allocator = "0.149.0"
+oxc_ast = "0.149.0"
+oxc_ast_visit = "0.149.0"
+oxc_parser = "0.149.0"
+oxc_syntax = "0.149.0"
+oxc_span = "0.149.0"
+tempfile = "3.27.0"
 # Wasm bundle attribution (#836): section spans and the name section, so
 # `audit-wasm --breakdown` can say which crates the bytes belong to. Host-side
 # analysis, in xtask for ADR-0028's stated reason.
-wasmparser = "0.244"
+wasmparser = "0.258.0"
 # Demangles Rust symbols so a function body's bytes can be charged to the crate
 # that emitted it.
-rustc-demangle = "0.1"
+rustc-demangle = "0.1.28"
 processkit = "3.3.4"
-sha2 = "0.10"
+sha2 = "0.11.0"
 # `e2e-local` bridges processkit's async supervision into xtask's synchronous
 # command runner; a background worker keeps process I/O pumps live between calls.
-tokio = { version = "1", features = ["rt-multi-thread", "signal", "time"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "signal", "time"] }
 [dev-dependencies]
 # Synthesizes the fixture modules the attribution tests parse, so no binary wasm
 # blob is checked into the tree.
-wasm-encoder = "0.244"
+wasm-encoder = "0.258.0"

@@ -1003,7 +1003,7 @@ fn executable_digest(path: &Path) -> anyhow::Result<String> {
         }
         digest.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(crate::digest::lowercase_hex(digest.finalize()))
 }
 
 struct LockPaths {

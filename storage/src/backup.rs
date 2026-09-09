@@ -5,6 +5,7 @@
 
 mod archive;
 mod catalog;
+mod digest;
 mod error;
 mod format;
 mod media;
@@ -13,6 +14,7 @@ mod restore_bind;
 mod restore_validation;
 
 pub use common::backup::BackupMode;
+pub(crate) use digest::lowercase_hex;
 pub use error::BackupError;
 pub use format::BackupManifest;
 pub use orchestration::{BackupExportOptions, BackupRestoreOptions, export_backup, restore_backup};

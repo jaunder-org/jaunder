@@ -14,6 +14,7 @@ mod check;
 mod coverage;
 mod csr_bundle;
 mod diagnostic_build;
+mod digest;
 mod doctests;
 mod pg;
 mod provision;

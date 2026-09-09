@@ -316,7 +316,7 @@ fn artifact_at(root: &Path, path: &Path) -> Result<Artifact> {
             .context("artifact lies outside coverage root")?
             .display()
             .to_string(),
-        sha256: format!("{:x}", Sha256::digest(fs::read(path)?)),
+        sha256: crate::digest::lowercase_hex(Sha256::digest(fs::read(path)?)),
     })
 }
 

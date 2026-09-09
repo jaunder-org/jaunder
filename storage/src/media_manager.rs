@@ -2406,7 +2406,7 @@ mod tests {
         let bytes: &[u8] = &[
             0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02, 0x03,
         ];
-        let expected_sha = format!("{:x}", Sha256::digest(bytes));
+        let expected_sha = crate::backup::lowercase_hex(Sha256::digest(bytes));
 
         let first = manager
             .upload_bytes_with_disposition(

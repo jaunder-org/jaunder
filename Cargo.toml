@@ -42,88 +42,88 @@ client = { path = "client" }
 common = { path = "common" }
 host = { path = "host" }
 storage = { path = "storage" }
-leptos = { version = "0.8.2" }
-leptos_dom = { version = "0.8.2" }
-leptos_meta = { version = "0.8.2" }
-leptos_router = { version = "0.8.2" }
-leptos_axum = { version = "0.8.2" }
+leptos = { version = "0.8.20" }
+leptos_dom = { version = "0.8.8" }
+leptos_meta = { version = "0.8.6" }
+leptos_router = { version = "0.8.15" }
+leptos_axum = { version = "0.8.10" }
 reactive_stores = { version = "0.4.3" }
-# Version-matched to leptos 0.8.2's transitive `server_fn` (Cargo.lock) so the
+# Version-matched to leptos 0.8.20's transitive `server_fn` (Cargo.lock) so the
 # `multipart` codec reuses the existing vendor rather than pulling a second copy.
-server_fn = { version = "0.8.12" }
+server_fn = { version = "0.8.13" }
 
-async-trait = "0.1"
-axum = "0.8.4"
-clap = { version = "4", features = ["derive", "env"] }
+async-trait = "0.1.92"
+axum = "0.8.9"
+clap = { version = "4.6.6", features = ["derive", "env"] }
 console_error_panic_hook = "0.1.7"
-console_log = "1.0.0"
-http = "1.3.1"
-log = "0.4.27"
+console_log = "1.1.0"
+http = "1.5.0"
+log = "0.4.34"
 # Compile-time HTML macro for `web`'s pure render layer (#333). Auto-escaping
 # subsumes the hand-rolled `escape_html`; permissive about element/attribute
 # names, which the SVG icons and `og:` meta properties need.
-maud = "0.27"
-simple_logger = "5.0.0"
-tracing = "0.1.41"
+maud = "0.27.0"
+simple_logger = "5.2.0"
+tracing = "0.1.44"
 tracing-log = "0.2.0"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "json"] }
-tracing-opentelemetry = "0.31.0"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
+tracing-opentelemetry = "0.33.0"
 tracing-error = "0.2.1"
-opentelemetry = "0.30.0"
-opentelemetry_sdk = { version = "0.30.0", features = ["rt-tokio", "metrics", "testing"] }
-opentelemetry-otlp = { version = "0.30.0", features = ["grpc-tonic", "metrics"] }
-sqlx = { version = "0.9", features = ["sqlite", "postgres", "migrate", "runtime-tokio"] }
+opentelemetry = "0.32.0"
+opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio", "metrics", "testing"] }
+opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic", "metrics"] }
+sqlx = { version = "0.9.0", features = ["sqlite", "postgres", "migrate", "runtime-tokio"] }
 # All first-party time seams use Jiff. Its bundled IANA TZDB is forced even on
 # native targets so named-zone behavior never depends on host zoneinfo.
-jiff = { version = "0.2", default-features = false, features = ["std", "serde", "tz-system", "tz-fat", "tzdb-bundle-always"] }
-jiff-sqlx = { version = "0.2", default-features = false, features = ["postgres", "sqlite"] }
-croner = "2.2"
-tempfile = "3"
-rstest = "0.26"
-rstest_reuse = "0.7"
-mockall = "0.13"
-anyhow = "1"
-argon2 = { version = "0.5", features = ["std"] }
-base64 = "0.22"
-bytes = "1"
-rand = "0.9"
-sha2 = "0.10"
-unicode-casefold = "0.2"
-rpassword = "7"
+jiff = { version = "0.2.35", default-features = false, features = ["std", "serde", "tz-system", "tz-fat", "tzdb-bundle-always"] }
+jiff-sqlx = { version = "0.2.0", default-features = false, features = ["postgres", "sqlite"] }
+croner = "4.0.0"
+tempfile = "3.27.0"
+rstest = "0.27.0"
+rstest_reuse = "0.7.0"
+mockall = "0.15.0"
+anyhow = "1.0.104"
+argon2 = "0.6.0"
+base64 = "0.23.1"
+bytes = "1.12.1"
+rand = "0.10.2"
+sha2 = "0.11.0"
+unicode-casefold = "0.2.0"
+rpassword = "7.5.4"
 rustix = { version = "1.1.4", default-features = false, features = ["event", "process", "std"] }
-email_address = "0.2"
+email_address = "0.2.9"
 lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder"] }
 orgize = "0.10.0-alpha.10"
-pulldown-cmark = "0.13"
-ammonia = "4"
+pulldown-cmark = "0.13.4"
+ammonia = "4.1.4"
 # Version-matched to ammonia 4's transitive `html5ever` (Cargo.lock) so the media-reference
 # walk re-parses ammonia's own output with the same tokenizer, reusing the existing vendor
 # rather than pulling a second copy (#711).
-html5ever = "0.39"
-thiserror = "2.0.12"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-strum = { version = "0.28", features = ["derive"] }
-futures-util = "0.3"
-flate2 = "1"
-tar = "0.4"
-tokio-cron-scheduler = "0.13"
-tokio = { version = "1.45.0", features = ["full"] }
-tower = { version = "0.5.2", features = ["full"] }
-tower-http = { version = "0.6.4", features = ["full"] }
+html5ever = "0.39.0"
+thiserror = "2.0.20"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+strum = { version = "0.28.0", features = ["derive"] }
+futures-util = "0.3.34"
+flate2 = "1.1.10"
+tar = "0.4.46"
+tokio-cron-scheduler = "0.15.1"
+tokio = { version = "1.53.1", features = ["full"] }
+tower = { version = "0.5.3", features = ["full"] }
+tower-http = { version = "0.7.1", features = ["full"] }
 wasm-bindgen = "0.2.128"
 wasm-bindgen-futures = "0.4.78"
 web-sys = "0.3.105"
 js-sys = "0.3.105"
-urlencoding = "2"
-percent-encoding = "2"
+urlencoding = "2.1.3"
+percent-encoding = "2.3.2"
 url = "2.5.8"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1.26.0", features = ["v4"] }
 
 # proc-macro toolchain for the `macros` crate (build-time only)
 syn = "2"
-quote = "1"
-proc-macro2 = "1"
+quote = "1.0.47"
+proc-macro2 = "1.0.107"
 
 # Jaunder #813 / docs/adr/0172-temporary-atom-namespace-fork.md pin the
 # upstream AtomPub namespace fix until upstream releases the same complete

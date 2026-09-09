@@ -56,7 +56,7 @@ pub fn section_sizes(wasm: &[u8]) -> Result<Vec<SectionSize>> {
         let Some((id, range)) = payload.as_section() else {
             continue;
         };
-        let payload_len = (range.end - range.start) as u64;
+        let payload_len = range.end - range.start;
         let span = 1 + leb128_len(payload_len) + payload_len;
         let name = match payload {
             Payload::CustomSection(ref c) => format!("custom:{}", c.name()),

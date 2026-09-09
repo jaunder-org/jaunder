@@ -342,7 +342,9 @@ fn served_module(root: &Path) -> Result<ServedModule> {
 }
 
 fn sha256(path: PathBuf) -> Result<String> {
-    Ok(format!("{:x}", Sha256::digest(fs::read(path)?)))
+    Ok(crate::digest::lowercase_hex(Sha256::digest(fs::read(
+        path,
+    )?)))
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {

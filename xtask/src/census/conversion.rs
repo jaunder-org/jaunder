@@ -162,7 +162,7 @@ fn typescript_conversion_sequence(path: &str, source: &str) -> Result<bool, Stri
     let ParserReturn {
         program,
         diagnostics,
-        panicked,
+        fatal_error,
         ..
     } = Parser::new(
         &allocator,
@@ -172,7 +172,7 @@ fn typescript_conversion_sequence(path: &str, source: &str) -> Result<bool, Stri
             .expect("TypeScript language has a parser mode"),
     )
     .parse();
-    if panicked || !diagnostics.is_empty() {
+    if fatal_error || !diagnostics.is_empty() {
         return Err(diagnostics
             .iter()
             .map(|error| format!("{error:?}"))

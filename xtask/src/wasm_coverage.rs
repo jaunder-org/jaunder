@@ -286,7 +286,7 @@ fn sha256(path: &Path) -> Result<String> {
         }
         digest.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(crate::digest::lowercase_hex(digest.finalize()))
 }
 
 /// The verdict is intentionally independent of runner/build mechanics: only the three
