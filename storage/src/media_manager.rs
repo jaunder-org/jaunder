@@ -1583,9 +1583,7 @@ mod tests {
                     return Poll::Ready(None::<Result<Bytes, io::Error>>);
                 }
                 if let Some(admitted_tx) = admitted_tx.take() {
-                    admitted_tx
-                        .send(())
-                        .unwrap_or_else(|()| unreachable!("test observes admitted upload"));
+                    admitted_tx.send(()).expect("test observes admitted upload");
                 }
                 match Pin::new(&mut release_rx).poll(context) {
                     Poll::Pending => Poll::Pending,

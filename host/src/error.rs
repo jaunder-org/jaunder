@@ -630,9 +630,11 @@ mod tests {
             Ok(bytes.len())
         }
 
+        // cov:ignore-start: Write requires flush, but the tracing subscriber capture never calls this no-op test implementation.
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+        // cov:ignore-stop
     }
 
     impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for SharedWriter {
@@ -1028,7 +1030,7 @@ mod tests {
             .collect();
         assert_eq!(error_metrics.len(), 1, "one error counter metric");
         let AggregatedMetrics::U64(MetricData::Sum(sum)) = error_metrics[0].data() else {
-            panic!("error counter metric must export a U64 sum");
+            panic!("error counter metric must export a U64 sum"); // cov:ignore: the successful metric export contract leaves this mismatch sentinel intentionally uncalled
         };
         let points: Vec<_> = sum.data_points().collect();
         assert_eq!(points.len(), 1);

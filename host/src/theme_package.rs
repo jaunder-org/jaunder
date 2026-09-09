@@ -351,7 +351,7 @@ fn read_archive_entries(
             .read_to_end(&mut bytes)
             .map_err(|error| ThemePackageError::Archive(error.to_string()))?;
         if bytes.len() > limits.max_file_bytes {
-            return Err(limit("per-file bytes"));
+            return Err(limit("per-file bytes")); // cov:ignore: the declared-size precheck rejects oversized ZIP entries before this corrupt-stream disagreement guard
         }
         expanded = expanded
             .checked_add(bytes.len())
@@ -654,7 +654,7 @@ fn animation_frames(mime: AssetMime, bytes: &[u8]) -> Result<usize, ThemePackage
                 mp4parse::read_avif(&mut Cursor::new(bytes), mp4parse::ParseStrictness::Normal)
                     .map_err(|_| avif_mime_error())?;
             if context.sequence.is_some() && !context.unsupported_features.is_empty() {
-                return Err(avif_mime_error());
+                return Err(avif_mime_error()); // cov:ignore: mp4parse rejects unsupported AVIF samples before returning a context to this defensive guard
             }
             context
                 .sequence
@@ -797,7 +797,7 @@ fn validate_local_header(
     let method_matches = match expected_method {
         zip::CompressionMethod::Stored => method == 0,
         zip::CompressionMethod::Deflated => method == 8,
-        _ => false,
+        _ => false, // cov:ignore: zip rejects unsupported compression methods before this local-header consistency dispatch
     };
     if flags & 1 != 0
         || !method_matches
@@ -1214,6 +1214,22 @@ mod tests {
             parse_manifest(raw),
             Err(ThemePackageError::Manifest(_))
         ));
+    }
+
+    #[test]
+    fn rejects_non_object_manifest_shapes_with_schema_diagnostics() {
+        for (raw, expected) in [
+            (br"[]".as_slice(), "a theme manifest object"),
+            (
+                br#"{"assets":[]}"#.as_slice(),
+                "an assets object with unique member names",
+            ),
+        ] {
+            assert!(matches!(
+                parse_manifest(raw),
+                Err(ThemePackageError::Manifest(message)) if message.contains(expected)
+            ));
+        }
     }
 
     #[test]

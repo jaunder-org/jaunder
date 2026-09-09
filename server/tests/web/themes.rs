@@ -408,6 +408,12 @@ async fn theme_import_zip_creates_drafts_and_rejects_invalid_packages(#[case] ba
         env.write_scope(),
     )
     .await;
+    let operator = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let storage = TempDir::new().expect("temporary storage");
 
     let imported = multipart_response(
@@ -424,6 +430,24 @@ async fn theme_import_zip_creates_drafts_and_rejects_invalid_packages(#[case] ba
         "theme ZIP import",
     );
     assert_eq!(imported.name, "Imported");
+    let site_import = multipart_response(
+        make_app!(&env, &storage),
+        multipart_body("site", "Site imported", &archive("body { color: navy; }")),
+        &operator.cookie(),
+    )
+    .await;
+    assert_eq!(site_import.status(), StatusCode::OK);
+    let site_catalog = themes
+        .list_themes(ThemeOwner::Site)
+        .await
+        .expect("site catalog lookup");
+    assert_eq!(
+        site_catalog
+            .iter()
+            .map(|theme| theme.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Site imported"]
+    );
 
     let malformed = multipart_response(
         make_app!(&env, &storage),

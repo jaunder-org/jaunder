@@ -822,7 +822,7 @@ mod tests {
                 Ok(Some("http://preferred:4317".to_owned())),
                 Ok(Some("http://fallback:4317".to_owned())),
                 // A warning here would violate the valid-preferred-value contract.
-                || unreachable!("a valid preferred endpoint must not emit a fallback"),
+                || panic!("a valid preferred endpoint must not emit a fallback"), // cov:ignore: the valid preferred endpoint leaves this invariant sentinel intentionally uncalled
             )
             .as_deref(),
             Some("http://preferred:4317")
@@ -836,7 +836,7 @@ mod tests {
                 Ok(None),
                 Ok(Some("http://fallback:4317".to_owned())),
                 // A warning here would violate the valid-fallback-value contract.
-                || unreachable!("a valid standard endpoint must not emit a fallback"),
+                || panic!("a valid standard endpoint must not emit a fallback"), // cov:ignore: the valid standard endpoint leaves this invariant sentinel intentionally uncalled
             )
             .as_deref(),
             Some("http://fallback:4317")

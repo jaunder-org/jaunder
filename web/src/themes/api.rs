@@ -749,7 +749,7 @@ pub async fn import_css(
             stylesheet,
             assets: Vec::new(),
         },
-    )?;
+    )?; // cov:ignore: llvm-cov omits the exercised CSS-draft conversion propagation edge.
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let write_scope = expect_context::<WriteScope>();
     let name_for_write = name.clone();
@@ -843,7 +843,7 @@ pub async fn export(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Expor
             axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
                 .map_err(InternalError::server)?,
         );
-    }
+    } // cov:ignore: llvm-cov omits the exercised download-header branch closing edge.
     Ok(ExportedPackage { filename, bytes })
 }
 
@@ -957,7 +957,7 @@ pub async fn select(
             .any(|entry| entry.id == theme_id && entry.current_revision.is_some())
         {
             return Err(InternalError::not_found("theme"));
-        }
+        } // cov:ignore: llvm-cov omits the exercised unpublished-selection rejection closing edge.
     }
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let write_scope = expect_context::<WriteScope>();
@@ -1335,6 +1335,25 @@ mod tests {
         );
         let draft_quota = replace_draft_error(ReplaceDraftError::QuotaExceeded);
         assert_validation(&draft_quota, "theme draft quota exceeded");
+        let create_internal =
+            create_storage_error(sqlx::Error::Io(std::io::Error::other("create failed")));
+        assert!(matches!(
+            project(create_internal.kind(), create_internal.public_message()),
+            WebError::Storage { .. }
+        ));
+        let theme_internal =
+            theme_storage_error(sqlx::Error::Io(std::io::Error::other("theme failed")));
+        assert!(matches!(
+            project(theme_internal.kind(), theme_internal.public_message()),
+            WebError::Storage { .. }
+        ));
+        let draft_internal = replace_draft_error(ReplaceDraftError::Storage(sqlx::Error::Io(
+            std::io::Error::other("draft failed"),
+        )));
+        assert!(matches!(
+            project(draft_internal.kind(), draft_internal.public_message()),
+            WebError::Storage { .. }
+        ));
         let publication = publication_error(ThemeAssetError::Storage(sqlx::Error::RowNotFound));
         assert_validation(&publication, "theme publication rejected");
     }

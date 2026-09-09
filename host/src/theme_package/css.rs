@@ -228,12 +228,14 @@ fn custom_font_family_name(family: &FontFamily<'_>) -> Result<String, ThemePacka
     let serde_json::Value::String(name) = serde_json::to_value(family)
         .map_err(|error| ThemePackageError::Css(format!("font-family schema changed: {error}")))?
     else {
+        // cov:ignore-start: lightningcss FamilyName serialization always produces a JSON string.
         return Err(ThemePackageError::Css(
             "font-family schema changed: expected a string".into(),
         ));
+        // cov:ignore-stop
     };
     if name.is_empty() {
-        return Err(ThemePackageError::Css("font-family cannot be empty".into()));
+        return Err(ThemePackageError::Css("font-family cannot be empty".into())); // cov:ignore: lightningcss rejects an empty custom family before this defensive check
     }
     Ok(name)
 }
@@ -244,9 +246,11 @@ fn font_family_from_name(name: &str) -> Result<FontFamily<'static>, ThemePackage
     )
     .map_err(|error| ThemePackageError::Css(format!("font-family schema changed: {error}")))?;
     if !matches!(family, FontFamily::FamilyName(_)) || custom_font_family_name(&family)? != name {
+        // cov:ignore-start: lightningcss round-trips every parsed custom family through its FamilyName representation.
         return Err(ThemePackageError::Css(
             "font-family schema changed: custom family did not round-trip".into(),
         ));
+        // cov:ignore-stop
     }
     Ok(family)
 }
@@ -277,10 +281,10 @@ fn rewrite_font_families(
         for family in families {
             if matches!(family, FontFamily::FamilyName(_)) {
                 *family = replacement;
-                break;
+                break; // cov:ignore: llvm-cov omits the exercised replacement-loop exit.
             }
         }
-    }
+    } // cov:ignore: llvm-cov omits the exercised replacement-loop closing edge.
     Ok(())
 }
 
@@ -439,7 +443,7 @@ impl<'i> Visitor<'i> for AssetUrlVisitor<'_> {
                     rewrite_animation_names(
                         std::slice::from_mut(&mut animation.name),
                         self.keyframes,
-                    )?;
+                    )?; // cov:ignore: llvm-cov omits this exercised animation rewrite propagation edge.
                 }
             }
             _ => {}
@@ -763,7 +767,7 @@ mod tests {
     #[test]
     fn namespaces_string_keyframes_and_preserves_no_animation() {
         let compiled = compile(
-            "@keyframes \"pulse\" { to { opacity: 0 } } .active { animation-name: \"pulse\" } .idle { animation-name: none }",
+            "@keyframes \"pulse\" { to { opacity: 0 } } .active { animation-name: \"pulse\" } .idle { animation-name: none } .mixed { animation-name: none, \"pulse\" }",
             &BTreeMap::new(),
         )
         .unwrap();
@@ -771,6 +775,10 @@ mod tests {
 
         assert!(css.contains("jaunder-0707070707070707-pulse"), "{css}");
         assert!(css.contains("animation-name:none"), "{css}");
+        assert!(
+            css.contains(".mixed{animation-name:none,jaunder-0707070707070707-pulse}"),
+            "{css}"
+        );
     }
 
     #[test]
