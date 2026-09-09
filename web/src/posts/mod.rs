@@ -53,9 +53,9 @@ pub use page_state::{
     DraftLoadMorePaint, HistoryCollectionDisplay, HistoryDisplayRow, HistoryListState,
     ListingRoute, NamedAudienceState, ValidatedListingRoute, authenticated_history_state,
     current_history_rows, load_authenticated_history, notify, notify_create_settlement,
-    notify_listing_mutation, notify_with_fallback, permalink_destination, public_destination,
-    publish_redirect, refetch_unpublished_post_if_needed, revision_collection_displays,
-    revision_history_rows, settle_listing_mutation, with_post_id,
+    notify_with_fallback, permalink_destination, public_destination, publish_redirect,
+    refetch_unpublished_post_if_needed, revision_collection_displays, revision_history_rows,
+    settle_listing_mutation, settle_unpublish_mutation, with_post_id,
 };
 
 // Same reason again: the composer and editor state seams are consumed by the

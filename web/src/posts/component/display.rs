@@ -234,23 +234,6 @@ fn TrustedPostActions(
     })
 }
 
-fn notify_unpublish_outcome(
-    settled: &Result<MutationOutcome<SavedPost>, WebError>,
-    on_unpublish: Option<Callback<SavedPost>>,
-    on_mutate: Option<Callback<()>>,
-) {
-    match settled {
-        Ok(MutationOutcome::Confirmed(unpublished)) => match on_unpublish {
-            Some(on_unpublish) => on_unpublish.run(unpublished.clone()),
-            None => posts::notify_listing_mutation(settled, on_mutate),
-        },
-        Ok(MutationOutcome::CommitIndeterminate(_)) => {
-            posts::notify_listing_mutation(settled, on_mutate);
-        }
-        Err(_) => {}
-    }
-}
-
 #[component]
 pub fn PostCard<'a>(
     post: &'a RenderedPost,
@@ -295,7 +278,7 @@ pub fn PostCard<'a>(
     );
     support::on_settled(
         move || unpublish_action.value().get(),
-        move |settled| notify_unpublish_outcome(&settled, on_unpublish, on_mutate),
+        move |settled| posts::settle_unpublish_mutation(settled, on_unpublish, on_mutate),
     );
     let navigate = use_navigate();
     support::on_settled(

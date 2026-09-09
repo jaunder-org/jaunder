@@ -252,6 +252,10 @@ impl ListingRoute {
     ///
     /// Returns a validation error for malformed route data or propagates the
     /// selected public listing endpoint's failure.
+    // Server-function client calls require the hydrated browser transport. The
+    // host suite exhaustively covers the validated route-to-endpoint matrix; the
+    // public listing browser flow covers this transport adapter.
+    // cov:ignore-start
     pub async fn destination(self) -> WebResult<(PublishedThemePresentation, Page<RenderedPost>)> {
         self.fetch_page(None, Some(PageSize::default()))
             .await
@@ -279,6 +283,7 @@ impl ListingRoute {
             }
         }
     }
+    // cov:ignore-stop
 }
 
 /// Validated endpoint selection for the public listing route matrix.
@@ -391,20 +396,24 @@ pub fn notify(callback: Option<Callback<()>>) {
         callback.run(());
     }
 }
-/// Notify a public listing for a resolved Post mutation.
+/// Settle `PostCard`'s unpublish mutation using its callback precedence.
 ///
-/// Confirmed and commit-indeterminate outcomes may have changed the authoritative
-/// page. A rollback-confirmed operation failure is the `Err` branch and never
-/// invalidates.
-pub fn notify_listing_mutation<T>(
-    settled: &WebResult<MutationOutcome<T>>,
-    callback: Option<Callback<()>>,
+/// A confirmed result goes to the specific unpublish callback when present and
+/// otherwise invalidates the shared listing. A commit-indeterminate result
+/// always invalidates because no confirmed value exists for the specific
+/// callback. A rollback-confirmed operation failure notifies neither callback.
+pub fn settle_unpublish_mutation(
+    settled: WebResult<MutationOutcome<SavedPost>>,
+    on_unpublish: Option<Callback<SavedPost>>,
+    on_mutate: Option<Callback<()>>,
 ) {
-    if matches!(
-        settled,
-        Ok(MutationOutcome::Confirmed(_) | MutationOutcome::CommitIndeterminate(_))
-    ) {
-        notify(callback);
+    match settled {
+        Ok(MutationOutcome::Confirmed(unpublished)) => match on_unpublish {
+            Some(on_unpublish) => on_unpublish.run(unpublished),
+            None => notify(on_mutate),
+        },
+        Ok(MutationOutcome::CommitIndeterminate(_)) => notify(on_mutate),
+        Err(_) => {}
     }
 }
 
@@ -999,6 +1008,63 @@ mod tests {
 
         assert_eq!(error, WebError::validation("Invalid username"));
     }
+
+    #[test]
+    fn listing_route_presentation_preserves_each_public_surface() {
+        let profile = ListingRoute::Profile(Some(alice()));
+        assert_eq!(profile.title(), "Posts by alice");
+        assert_eq!(profile.subtitle(), "User timeline");
+        assert_eq!(
+            profile.feed_surface(),
+            Some(FeedSurface::User { username: alice() })
+        );
+        assert_eq!(profile.user_chrome(), Some(alice()));
+        assert_eq!(profile.tag_context(), Some(TagCtx::ForUser(alice())));
+        assert_eq!(profile.empty_text(), "No posts yet.");
+
+        let site_tag = ListingRoute::SiteTag(Some(rust()));
+        assert_eq!(site_tag.title(), "#rust");
+        assert_eq!(site_tag.subtitle(), "Posts on this instance");
+        assert_eq!(
+            site_tag.feed_surface(),
+            Some(FeedSurface::SiteTag { tag: rust() })
+        );
+        assert_eq!(site_tag.user_chrome(), None);
+        assert_eq!(site_tag.tag_context(), Some(TagCtx::SiteWide));
+        assert_eq!(site_tag.empty_text(), "No posts with this tag yet.");
+
+        let user_tag = ListingRoute::UserTag(Some(alice()), Some(rust()));
+        assert_eq!(user_tag.title(), "#rust");
+        assert_eq!(user_tag.subtitle(), "Posts by ~alice");
+        assert_eq!(
+            user_tag.feed_surface(),
+            Some(FeedSurface::UserTag {
+                username: alice(),
+                tag: rust(),
+            })
+        );
+        assert_eq!(user_tag.user_chrome(), None);
+        assert_eq!(user_tag.tag_context(), Some(TagCtx::ForUser(alice())));
+        assert_eq!(user_tag.empty_text(), "No posts with this tag yet.");
+    }
+
+    #[test]
+    fn malformed_listing_presentation_never_invents_discovery_context() {
+        let profile = ListingRoute::Profile(None);
+        assert_eq!(profile.title(), "Posts by ");
+        assert_eq!(profile.feed_surface(), None);
+        assert_eq!(profile.user_chrome(), None);
+        assert_eq!(profile.tag_context(), None);
+
+        let site_tag = ListingRoute::SiteTag(None);
+        assert_eq!(site_tag.title(), "#");
+        assert_eq!(site_tag.feed_surface(), None);
+
+        let user_tag = ListingRoute::UserTag(None, None);
+        assert_eq!(user_tag.subtitle(), "Posts by ~");
+        assert_eq!(user_tag.feed_surface(), None);
+        assert_eq!(user_tag.tag_context(), None);
+    }
     #[tokio::test]
     async fn permalink_destination_fetches_a_validated_route() {
         let route =
@@ -1062,6 +1128,27 @@ mod tests {
             user_tag
                 .seeded_page(Some(PageSeed::UserTag {
                     username: alice(),
+                    tag: parse_tag("leptos"),
+                    page: page(true),
+                }))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn site_tag_seed_adoption_requires_the_exact_tag() {
+        let route = ListingRoute::SiteTag(Some(rust()));
+        assert!(
+            route
+                .seeded_page(Some(PageSeed::SiteTag {
+                    tag: rust(),
+                    page: page(true),
+                }))
+                .is_some()
+        );
+        assert!(
+            route
+                .seeded_page(Some(PageSeed::SiteTag {
                     tag: parse_tag("leptos"),
                     page: page(true),
                 }))
@@ -1741,6 +1828,47 @@ mod tests {
                 !rolled_back.get(),
                 "a rollback-confirmed operation failure does not revalidate"
             );
+        });
+    }
+
+    #[test]
+    fn unpublish_settlement_preserves_specific_callback_precedence() {
+        Owner::new().with(|| {
+            let preferred = RwSignal::new(false);
+            let shared_for_preferred = RwSignal::new(false);
+            settle_unpublish_mutation(
+                Ok(MutationOutcome::Confirmed(saved_post(None))),
+                Some(Callback::new(move |_post| preferred.set(true))),
+                Some(recorder(shared_for_preferred)),
+            );
+            assert!(preferred.get());
+            assert!(!shared_for_preferred.get());
+
+            let shared_confirmed = RwSignal::new(false);
+            settle_unpublish_mutation(
+                Ok(MutationOutcome::Confirmed(saved_post(None))),
+                None,
+                Some(recorder(shared_confirmed)),
+            );
+            assert!(shared_confirmed.get());
+
+            let shared_indeterminate = RwSignal::new(false);
+            settle_unpublish_mutation(
+                Ok(MutationOutcome::CommitIndeterminate(saved_post(None))),
+                Some(Callback::new(|_post| panic!("no confirmed value exists"))),
+                Some(recorder(shared_indeterminate)),
+            );
+            assert!(shared_indeterminate.get());
+
+            let preferred_rolled_back = RwSignal::new(false);
+            let shared_rolled_back = RwSignal::new(false);
+            settle_unpublish_mutation(
+                Err(WebError::validation("operation failed")),
+                Some(Callback::new(move |_post| preferred_rolled_back.set(true))),
+                Some(recorder(shared_rolled_back)),
+            );
+            assert!(!preferred_rolled_back.get());
+            assert!(!shared_rolled_back.get());
         });
     }
 
