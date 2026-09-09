@@ -3299,7 +3299,7 @@ lines before ordinary line/CRAP policy. The host-side gate
   substitutes for semantic review. The point-in-time exception audit is review
   evidence in the pull request and issue rather than a committed repository
   snapshot
-  ([reason-bearing coverage exceptions](adr/drafts/reason-bearing-coverage-exceptions.md)).
+  ([reason-bearing coverage exceptions](adr/0185-reason-bearing-coverage-exceptions.md)).
 - **A per-function CRAP threshold of 30**, exclusive, waived only by an
   in-source `crap:allow` within the function's span
   (`xtask/src/coverage/crap.rs:32`).

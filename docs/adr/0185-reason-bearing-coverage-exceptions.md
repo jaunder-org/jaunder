@@ -1,16 +1,16 @@
-# ADR-DRAFT: Reason-bearing Rust coverage exceptions
+# ADR-0185: Reason-bearing Rust coverage exceptions
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-09
 - Issue: [#1417](https://github.com/jaunder-org/jaunder/issues/1417)
 
 ## Context
 
-[ADR-0050](../0050-stateless-coverage-gate.md) made `cov:ignore` the stateless
-Rust coverage gate's sole manual acceptance path. Its original grammar allowed
-bare line and block-start markers. That makes a permanent coverage blind spot
-too easy to add without recording why authoritative host coverage cannot
-honestly exercise the exact span.
+[ADR-0050](0050-stateless-coverage-gate.md) made `cov:ignore` the stateless Rust
+coverage gate's sole manual acceptance path. Its original grammar allowed bare
+line and block-start markers. That makes a permanent coverage blind spot too
+easy to add without recording why authoritative host coverage cannot honestly
+exercise the exact span.
 
 The #1417 audit establishes a presumption against retaining an exception:
 consumer-observable coverage or a simplifying refactor is preferred. A retained
