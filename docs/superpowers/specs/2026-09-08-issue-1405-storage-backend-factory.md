@@ -5,9 +5,10 @@ Issue: #1405
 ## Outcome
 
 Opening Jaunder storage yields a pool-owning `StorageFactory` from which each
-composition root constructs only the storage dependencies it needs. Non-serve
-commands stop constructing the complete `AppState`; the serve composition root
-continues to assemble the full storage state required by the running server.
+executable, CLI, or test-harness composition root constructs only the storage
+dependencies it needs. The obsolete `AppState` aggregate is deleted; serve,
+commands, application functions, fixtures, and tests receive exact storage
+handles and `WriteScope`.
 
 This is a behavior-preserving architectural cutover for SQLite and PostgreSQL.
 
@@ -16,25 +17,27 @@ This is a behavior-preserving architectural cutover for SQLite and PostgreSQL.
 - `StorageFactory` is the canonical public name for the pool-owning storage
   factory. It is distinct from the existing `Backend` marker, which continues to
   identify a generic SQLx database implementation.
-- The existing database-opening interface returns `StorageFactory` rather than
-  an eagerly assembled `AppState`. This is a clean cutover: all callers migrate,
-  and no parallel legacy opener family or compatibility alias remains.
+- The existing database-opening interface returns `StorageFactory`. This is a
+  clean cutover: all callers migrate, `AppState` and `StorageFactory::app_state`
+  are deleted, and no parallel legacy opener family or compatibility alias
+  remains.
 - Observer-bearing database opening returns the same factory together with the
   existing instance identity and pool observer information. Pool observation is
   not coupled to full-state assembly.
 - The factory owns exactly one runtime-selected SQLite or PostgreSQL pool. Every
   storage handle and `WriteScope` minted from one factory uses that same pool.
-- The factory can mint every storage trait handle needed to construct the full
-  server state, but callers request handles individually. Creating one handle
-  must not create unrelated handles.
+- The factory can mint every storage trait handle required by the running
+  server, but every composition root requests handles individually. Creating one
+  handle must not create unrelated handles.
 - `WriteScope` remains factory-owned construction. Application and command code
   may receive and use a scope but cannot select its backend, construct one from
   a raw pool, or execute arbitrary SQL through it.
-- A factory is used only at a composition root. It is never injected into a
-  command, application module, or long-lived service as a storage locator.
-- `AppState` remains the storage-only aggregate for the running server. The
-  serve composition root explicitly asks the factory to assemble it; no other
-  affected command receives or constructs it.
+- A factory is used only at an executable, CLI, or test-harness composition
+  root. It is never injected into a command, application module, fixture
+  operation, or long-lived service as a storage locator.
+- No heterogeneous storage aggregate replaces `AppState`. Serve keeps broad
+  wiring local to its composition root and injects exact handles into router,
+  context, worker, manager, and metrics modules.
 - Each affected command receives its exact storage dependencies directly:
   - user creation: user storage and `WriteScope`;
   - App Password creation: user storage, session storage, and `WriteScope`;
@@ -48,6 +51,14 @@ This is a behavior-preserving architectural cutover for SQLite and PostgreSQL.
     `WriteScope`;
   - WebSub dead-letter listing: feed-event storage;
   - WebSub dead-letter redrive: feed-event storage and `WriteScope`.
+- Storage fixture operations and server test helpers receive only their exact
+  storage handles and `WriteScope`. Test harnesses retain the factory and raw
+  pool only at the test root for dependency minting, raw-SQL inspection, fault
+  injection, and resource lifetime ownership; neither crosses a fixture or
+  application seam.
+- The external `test-support` seed binary opens storage at each command root and
+  injects exact handles into sandbox, Post, Theme, session, and feed-event seed
+  operations.
 - Existing non-storage composition inputs remain explicit. In particular,
   publisher-owned site-configuration mutations retain their storage path for
   generation fencing; it does not become factory state.
@@ -62,24 +73,29 @@ This is a behavior-preserving architectural cutover for SQLite and PostgreSQL.
 - Opening and downstream storage failures retain their typed source chains.
   Existing command-specific initialization guidance and contextual errors remain
   unchanged.
-- The architecture projection is updated to describe the completed ADR-0016
-  Phase B design and the current storage-handle count accurately.
+- ADR-0016 is amended to record that the completed Phase B factory makes
+  `AppState` obsolete; `docs/ARCHITECTURE.md` and `CONTRIBUTING.md` describe the
+  exact composition-root and test-harness design accurately.
 
 ## Acceptance
 
-- The ordinary and observer-bearing storage openers expose `StorageFactory`, not
-  an eagerly constructed `AppState`.
+- The ordinary and observer-bearing storage openers expose `StorageFactory`.
 - Opening storage alone creates neither storage handles nor a `WriteScope`;
   requesting one dependency does not create any unrelated dependency.
-- The serve path constructs its complete `AppState` from one factory and retains
-  its current pool-observer and instance-identity behavior.
-- `jaunder init` completes initialization without constructing the full server
-  state.
+- `AppState`, its module/export, `StorageFactory::app_state`, and every
+  construction/import/reference in live Rust code are removed.
+- The serve path mints exact dependencies from one factory and retains current
+  pool-observer, instance-identity, worker, router, and startup behavior without
+  passing a heterogeneous holder across a function interface.
+- `jaunder init` completes initialization without constructing storage handles.
 - The account, site-configuration, and WebSub command roots listed in #1405 mint
   only the handles and `WriteScope` required by the selected command, then pass
   those dependencies directly into command logic.
-- No affected command accepts `AppState`, `StorageFactory`, a raw pool, or a new
-  aggregate dependency bundle.
+- Router/context functions, lifecycle helpers, storage fixtures, server test
+  helpers, and the external seed binary accept exact dependencies rather than
+  `AppState`, `StorageFactory`, a raw pool, or a replacement aggregate.
+- `TestEnv` preserves SQLite/PostgreSQL lifetime, raw-SQL inspection, and pool
+  fault-injection behavior while ceasing to expose an assembled storage state.
 - Existing successful command output and state changes remain unchanged for both
   SQLite and PostgreSQL.
 - Missing or uninitialized storage retains the current create-versus-existing
@@ -89,19 +105,22 @@ This is a behavior-preserving architectural cutover for SQLite and PostgreSQL.
   commit-outcome behavior; WebSub redrive retains exact-selection atomicity.
 - Pool-observer saturation reporting and concurrent database-opening identity
   tests continue to pass.
-- Repository architecture documentation no longer says that the Phase B factory
-  is unbuilt or that affected non-serve commands construct full `AppState`.
+- ADR-0016, repository architecture documentation, and contributor guidance
+  describe the completed exact-dependency design rather than retaining
+  `AppState` as a serve or test convenience.
 
 ## Boundaries
 
 - No storage traits, persisted schema, migrations, command syntax, command
   output, or user-visible policy changes.
 - No change to the public meaning or generic bounds of `Backend`.
-- No factory injection, service-locator access, raw-pool escape hatch, or second
-  services bundle.
+- No factory or raw pool is injected into production, application, or fixture
+  modules; the existing test-root-only raw-SQL, fault-injection, and resource
+  lifetime capability remains. No service locator, replacement storage
+  aggregate, or second services bundle.
 - No refactor of backup, restore, PostgreSQL bootstrap, publisher mutation
-  semantics, or unrelated command composition.
-- No compatibility shim for the former opener return type; workspace callers
-  migrate in the same change.
-- Tests are added or changed only where needed to prove the new composition
-  contract and preserve the observable behavior above.
+  semantics, or unrelated application behavior.
+- No compatibility shim for `AppState` or the former opener return type;
+  workspace callers migrate in the same change.
+- Tests change only where needed to use exact dependency seams and preserve the
+  observable behavior above on both SQLite and PostgreSQL.
