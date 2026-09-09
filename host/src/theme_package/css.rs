@@ -223,13 +223,13 @@ fn namespace_fonts(
     Ok(())
 }
 
-// cov:ignore-start
 fn custom_font_family_name(family: &FontFamily<'_>) -> Result<String, ThemePackageError> {
     let FontFamily::FamilyName(_) = family else {
         return Err(ThemePackageError::Css(
             "@font-face font-family must be a custom family name".into(),
         ));
     };
+    // cov:ignore-start
     let serde_json::Value::String(name) = serde_json::to_value(family)
         .map_err(|error| ThemePackageError::Css(format!("font-family schema changed: {error}")))?
     else {
@@ -240,9 +240,9 @@ fn custom_font_family_name(family: &FontFamily<'_>) -> Result<String, ThemePacka
     if name.is_empty() {
         return Err(ThemePackageError::Css("font-family cannot be empty".into()));
     }
+    // cov:ignore-stop
     Ok(name)
 }
-// cov:ignore-stop
 
 fn font_family_from_name(name: &str) -> Result<FontFamily<'static>, ThemePackageError> {
     let family = <FontFamily<'static> as serde::Deserialize>::deserialize(

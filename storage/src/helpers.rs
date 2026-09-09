@@ -583,6 +583,27 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn numeric_timestamp_decoding_follows_the_backend_contract(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let decoded = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_scalar::<_, UtcInstant>("SELECT 0")
+                .fetch_one(pool)
+                .await
+        });
+
+        match backend {
+            Backend::Sqlite => {
+                assert_eq!(decoded.unwrap().to_string(), "-004713-11-24T12:00:00Z");
+            }
+            Backend::Postgres => assert!(decoded.is_err()),
+        }
+        let type_info = <UtcInstant as sqlx::Type<sqlx::Sqlite>>::type_info();
+        assert_eq!(sqlx::TypeInfo::name(&type_info), "TEXT");
+        assert!(<String as sqlx::Type<sqlx::Sqlite>>::compatible(&type_info));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn utc_instant_preserves_legacy_rows_and_backend_timestamp_contracts(
         #[case] backend: Backend,
     ) {

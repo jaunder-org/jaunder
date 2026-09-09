@@ -500,37 +500,4 @@ mod tests {
             "2024-07-01T16:24"
         );
     }
-
-    #[cfg(feature = "sqlx")]
-    #[tokio::test]
-    async fn sqlite_bridge_preserves_timestamp_text_and_accepts_numeric_storage() {
-        use sqlx::Connection;
-
-        let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
-            .await
-            .unwrap();
-        let instant = "2024-07-01T16:24:45.123456Z".parse::<UtcInstant>().unwrap();
-
-        let encoded: String = sqlx::query_scalar("SELECT ?")
-            .bind(instant)
-            .fetch_one(&mut connection)
-            .await
-            .unwrap();
-        assert_eq!(encoded, "2024-07-01T16:24:45.123456+00:00");
-
-        let decoded: UtcInstant = sqlx::query_scalar("SELECT ?")
-            .bind(&encoded)
-            .fetch_one(&mut connection)
-            .await
-            .unwrap();
-        assert_eq!(decoded, instant);
-
-        let julian_day_zero: UtcInstant = sqlx::query_scalar("SELECT 0")
-            .fetch_one(&mut connection)
-            .await
-            .unwrap();
-        assert_eq!(julian_day_zero.to_string(), "-004713-11-24T12:00:00Z");
-
-        let _ = <UtcInstant as sqlx::Type<sqlx::Sqlite>>::type_info();
-    }
 }

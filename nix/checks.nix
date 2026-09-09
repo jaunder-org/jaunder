@@ -36,21 +36,24 @@ let
   # The root workspace remains the coverage population. Its Cargo manifests
   # define the recursively discovered local path package build closure.
   coverageMembers = cargoPackageClosure workspaceMembers;
-  # Coverage source remains bounded to the package closure. The root profile is
-  # explicit producer configuration; every file beneath a covered Cargo package
-  # can be a runtime fixture loaded through CARGO_MANIFEST_DIR.
+  # Coverage source remains bounded to Cargo-recognized package inputs plus the
+  # explicit nextest profile, SQLx migration trees and rust-embed assets consumed
+  # at compile time, and the immutable backup compatibility corpus consumed at
+  # runtime through CARGO_MANIFEST_DIR.
   coverageAuxiliarySource =
     relative:
-    let
-      isCoverageMember = builtins.any (
-        member: relative == member || pkgs.lib.hasPrefix "${member}/" relative
-      ) coverageMembers;
-    in
-    relative == ".config/nextest.toml" || isCoverageMember;
+    relative == ".config/nextest.toml"
+    || pkgs.lib.hasPrefix "server/assets/" relative
+    || pkgs.lib.hasPrefix "storage/migrations/" relative
+    || pkgs.lib.hasPrefix "server/tests/misc/backup_corpus/" relative;
   coverageSrc =
     # Pure source-filter negative case: excluded auxiliary assets cannot perturb
     # coverage source identity.
     assert !(coverageAuxiliarySource "tools/devtool/fixture.css");
+    assert !(coverageAuxiliarySource "server/notes.txt");
+    assert (coverageAuxiliarySource "server/tests/misc/backup_corpus/index.json");
+    assert (coverageAuxiliarySource "storage/migrations/sqlite/0001_create_site_config.sql");
+    assert (coverageAuxiliarySource "server/assets/jaunder.css");
     assert builtins.elem "tools/csr_bundle" coverageMembers;
     assert !(builtins.elem "xtask" coverageMembers);
     assert !(builtins.elem "tools/devtool" coverageMembers);

@@ -573,6 +573,42 @@ async fn theme_selection_rejects_unpublished_custom_and_preview_isolated(#[case]
     assert!(preview.html.contains("data-jaunder-theme-surface"));
     assert!(preview.css.contains("purple"), "CSS: {}", preview.css);
 
+    let operator = create_operator_and_session(&state).await;
+    let (site_status, site_body) = post_server_fn(
+        &state,
+        &web::themes::Create {
+            scope: OwnershipScope::Site,
+            name: "Site preview".to_owned(),
+            draft: package_draft("body { color: teal; }"),
+        },
+        Some(&operator.cookie()),
+    )
+    .await;
+    assert_eq!(site_status, StatusCode::OK, "body: {site_body}");
+    let site_theme: web::themes::CatalogEntry = confirmed_for(
+        serde_json::from_str::<MutationOutcome<_>>(&site_body).expect("site create outcome JSON"),
+        "site theme creation",
+    );
+    let site_preview = server_fn_response(
+        &state,
+        &storage,
+        &web::themes::Preview {
+            scope: OwnershipScope::Site,
+            theme_id: site_theme.id,
+        },
+        Some(&operator.cookie()),
+    )
+    .await;
+    assert_eq!(site_preview.status(), StatusCode::OK);
+    let site_preview: web::themes::ThemePreview =
+        serde_json::from_str(&body_string(site_preview).await).expect("site preview JSON");
+    assert!(site_preview.html.contains("data-jaunder-theme-surface"));
+    assert!(
+        site_preview.css.contains("teal"),
+        "CSS: {}",
+        site_preview.css
+    );
+
     assert_eq!(
         state
             .themes

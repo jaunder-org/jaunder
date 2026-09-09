@@ -1084,9 +1084,6 @@ pub async fn shuffle(
 /// Renders an owned draft through the real Style Contract renderer without changing selection.
 #[macros::server(skip_all)]
 pub async fn preview(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<ThemePreview> {
-    // Leptos shell rendering is browser-route integration behavior; the host coverage producer
-    // cannot provide its required route/view contexts.
-    // cov:ignore-start
     let (actor, owner) = owner(scope).await?;
     no_store();
     let coordinator = expect_context::<Arc<ThemeOperationCoordinator>>();
@@ -1174,7 +1171,6 @@ pub async fn preview(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Them
         },
         page,
     };
-    // cov:ignore-stop
     Ok(ThemePreview {
         html: crate::app::render_shell(&presentation).into_string(),
         css: String::from_utf8(compiled.css().bytes().to_vec())

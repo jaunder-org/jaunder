@@ -341,7 +341,11 @@ impl CoverageStatus {
         let stages_ok = self.stages.iter().all(|result| result.outcome.is_success());
         let population_ok = self.population.expected > 0
             && self.population.executed > 0
-            && self.population.executed + self.population.ignored == self.population.expected;
+            && self
+                .population
+                .executed
+                .checked_add(self.population.ignored)
+                == Some(self.population.expected);
         let stage_outcome = |stage| {
             self.stages
                 .iter()
@@ -511,6 +515,12 @@ mod tests {
             (
                 "unreconciled-population",
                 serde_json::json!({"population": {"expected": 3, "executed": 1, "ignored": 1}}),
+            ),
+            (
+                "overflowing-population",
+                serde_json::json!({
+                    "population": {"expected": 1, "executed": usize::MAX, "ignored": 2}
+                }),
             ),
         ];
 
