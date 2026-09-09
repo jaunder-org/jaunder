@@ -319,6 +319,26 @@ mod tests {
     }
 
     #[test]
+    fn mirror_media_skips_non_regular_entries() -> Result<(), BackupError> {
+        let temp = TempDir::new()?;
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        fs::create_dir_all(&source)?;
+        let _listener =
+            std::os::unix::net::UnixListener::bind(source.join("sock")).expect("bind unix socket");
+        fs::write(source.join("real.txt"), "keep")?;
+
+        mirror_media_directory(&source, &destination, None)?;
+
+        assert_eq!(fs::read_to_string(destination.join("real.txt"))?, "keep");
+        assert!(
+            !destination.join("sock").exists(),
+            "a non-regular entry must not be mirrored"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn previous_directory_backup_returns_none_for_parentless_path() -> Result<(), BackupError> {
         // The filesystem root has no parent, so there is no sibling directory to
         // source a previous backup from.

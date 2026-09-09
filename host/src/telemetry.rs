@@ -817,9 +817,9 @@ mod tests {
     }
     #[test]
     fn otlp_endpoint_prefers_jaunder_specific_setting() {
-        fn preferred_fallback_must_not_run() {
+        let preferred_fallback_must_not_run = || {
             unreachable!("a valid preferred endpoint must not emit a fallback");
-        }
+        };
 
         assert_eq!(
             otel_exporter_otlp_endpoint(
@@ -834,9 +834,9 @@ mod tests {
 
     #[test]
     fn otlp_endpoint_falls_back_to_standard_value() {
-        fn standard_fallback_must_not_run() {
+        let standard_fallback_must_not_run = || {
             unreachable!("a valid standard endpoint must not emit a fallback");
-        }
+        };
 
         assert_eq!(
             otel_exporter_otlp_endpoint(

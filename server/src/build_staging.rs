@@ -265,7 +265,7 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs};
+    use std::{collections::BTreeMap, fs, io, path::Path};
 
     use csr_bundle::{Asset, Manifest, Representation, Role};
 
@@ -442,5 +442,77 @@ mod tests {
             .expect("prepare staging");
 
         assert!(staged);
+    }
+
+    #[test]
+    fn staging_preparation_reports_remove_and_create_failures() {
+        let path = Path::new("/injected/site");
+        let remove_error = prepare_staging_with(
+            path,
+            |_| {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "remove denied",
+                ))
+            },
+            |_| Ok(()),
+            || unreachable!("remove failure must stop"),
+        )
+        .expect_err("remove failure");
+        assert_eq!(
+            remove_error.to_string(),
+            "removing staging directory /injected/site: remove denied"
+        );
+        assert_eq!(
+            std::error::Error::source(&remove_error)
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("remove denied")
+        );
+
+        let create_error = prepare_staging_with(
+            path,
+            |_| Err(io::Error::new(io::ErrorKind::NotFound, "absent")),
+            |_| {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "create denied",
+                ))
+            },
+            || unreachable!("create failure must stop"),
+        )
+        .expect_err("create failure");
+        assert_eq!(
+            create_error.to_string(),
+            "creating staging directory /injected/site: create denied"
+        );
+    }
+
+    #[test]
+    fn staging_handles_missing_public_tree_and_missing_shell_positions() {
+        let bundle = tempfile::tempdir().expect("bundle");
+        let site = tempfile::tempdir().expect("site");
+        let manifest = write_bundle(bundle.path());
+        stage_bundle(
+            bundle.path(),
+            site.path(),
+            &bundle.path().join("missing"),
+            &manifest,
+        )
+        .expect("missing public tree is permitted");
+
+        for required in [
+            "window.__jaunderWasmFetch = fetch",
+            r#"<link rel="stylesheet" href="/style/jaunder.css" />"#,
+            "import {initMeasured}",
+            "performance.mark",
+            "initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)",
+        ] {
+            let error =
+                validate_shell(required, "glue", "wasm").expect_err("missing required position");
+            assert!(
+                error.to_string().contains("missing") || error.to_string().contains("exactly one")
+            );
+        }
     }
 }

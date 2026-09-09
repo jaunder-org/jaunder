@@ -717,6 +717,7 @@ mod tests {
             .join(&digest.as_ref()[2..4]);
         fs::create_dir_all(&shard).expect("create canonical shard");
         fs::write(shard.join(digest.as_ref()), b"canonical content").expect("write content");
+        fs::write(shard.join("not-a-digest"), b"ignore").expect("write noncanonical digest");
         fs::write(root.join("not-a-prefix"), b"ignore").expect("write non-directory prefix");
         fs::create_dir_all(root.join("aa").join("not-a-shard")).expect("create invalid shard");
         assert_eq!(

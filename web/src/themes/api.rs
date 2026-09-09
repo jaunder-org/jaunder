@@ -172,11 +172,9 @@ async fn validate_custom_selection(
         .map_err(InternalError::storage)?
         .into_iter()
         .any(|entry| entry.id == *theme_id && entry.current_revision.is_some());
-    if published {
-        Ok(())
-    } else {
-        Err(InternalError::not_found("theme"))
-    }
+    published
+        .then_some(())
+        .ok_or_else(|| InternalError::not_found("theme"))
 }
 
 #[cfg(feature = "server")]

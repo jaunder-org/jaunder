@@ -59,9 +59,11 @@ trait PasswordPrompt {
 struct TerminalPasswordPrompt;
 
 impl PasswordPrompt for TerminalPasswordPrompt {
+    // cov:ignore-start: Authoritative host tests cannot supply interactive TTY input to invoke this terminal adapter.
     fn prompt(&self, message: &str) -> io::Result<String> {
-        rpassword::prompt_password(message) // cov:ignore: Authoritative host tests cannot supply interactive TTY input to this terminal adapter.
+        rpassword::prompt_password(message)
     }
+    // cov:ignore-stop
 }
 
 fn interactive_password_with(

@@ -166,10 +166,11 @@ async fn export_directory_backup(
         previous_backup.as_deref(),
     )?;
     let content_root = media_content_root(options.media_path)?;
+    let previous_theme_backup = previous_backup.as_deref();
     mirror_theme_directory(
         content_root,
         options.destination_path,
-        previous_backup.as_deref(),
+        previous_theme_backup,
     )?;
     format::write_manifest(options.destination_path, &manifest)?;
     Ok(manifest)
