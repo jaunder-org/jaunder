@@ -471,23 +471,22 @@ mod tests {
     }
 
     async fn export_published_theme_backup(
-        backend: Backend,
-        source: &crate::test_support::TestEnv,
+        source_database: crate::DbConnectOptions,
+        source_root: std::path::PathBuf,
+        themes: Arc<dyn crate::ThemeStorage>,
+        media_storage: Arc<dyn crate::MediaStorage>,
+        users: Arc<dyn crate::UserStorage>,
+        write_scope: crate::WriteScope,
+        media_content_locks: crate::MediaContentLocks,
     ) -> (
         std::path::PathBuf,
         host::theme_package::CompiledThemeRevision,
         crate::ThemeRevision,
     ) {
-        let source_database = backup_database_options(backend, &source.base);
-        let source_media_path = source.base.path().join("media");
+        let source_media_path = source_root.join("media");
         fs::create_dir_all(&source_media_path).expect("create source media directory");
         let compiled = compiled_theme_fixture();
-        let theme_id = create_site_theme(
-            Arc::clone(&source.themes()),
-            source.write_scope().clone(),
-            &compiled,
-        )
-        .await;
+        let theme_id = create_site_theme(Arc::clone(&themes), write_scope.clone(), &compiled).await;
         let content_bytes = compiled
             .css()
             .bytes()
@@ -496,9 +495,9 @@ mod tests {
             .and_then(|bytes| i64::try_from(bytes).ok())
             .expect("fixture content bytes fit");
         let manager = ThemeAssetManager::new(
-            Arc::clone(&source.themes()),
-            source.write_scope().clone(),
-            Arc::new(source.base.path().to_path_buf()),
+            Arc::clone(&themes),
+            write_scope.clone(),
+            Arc::new(source_root.clone()),
         );
         let revision = confirmed(
             manager
@@ -513,15 +512,12 @@ mod tests {
                 .expect("publish fixture theme"),
         );
         let actor = SeedUser::new()
-            .seed(
-                std::sync::Arc::clone(&source.users()),
-                source.write_scope().clone(),
-            )
+            .seed(users, write_scope.clone())
             .await
             .user_id;
         let media = seed_media(
-            std::sync::Arc::clone(&source.media()),
-            source.write_scope().clone(),
+            Arc::clone(&media_storage),
+            write_scope.clone(),
             actor,
             "backup-theme-header.png",
         )
@@ -535,10 +531,10 @@ mod tests {
             .expect("create media file parent");
         fs::write(&media_file, b"theme header").expect("write media fixture");
         let theme_manager = ThemeManager::new(
-            Arc::clone(&source.themes()),
-            Arc::clone(&source.media()),
-            source.write_scope().clone(),
-            Arc::new(source.media_content_locks()),
+            themes,
+            media_storage,
+            write_scope,
+            Arc::new(media_content_locks),
         );
         confirmed(
             theme_manager
@@ -555,7 +551,7 @@ mod tests {
                 .await
                 .expect("bind backup theme pool"),
         );
-        let backup = source.base.path().join("backup");
+        let backup = source_root.join("backup");
         let runtime = StorageRuntimeConfig::default();
         export_backup(BackupExportOptions {
             database: &source_database,
@@ -575,7 +571,16 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let source = backend.setup().await;
-        let (backup, compiled, _) = export_published_theme_backup(backend, &source).await;
+        let (backup, compiled, _) = export_published_theme_backup(
+            backup_database_options(backend, &source.base),
+            source.base.path().to_path_buf(),
+            source.themes(),
+            source.media(),
+            source.users(),
+            source.write_scope(),
+            source.media_content_locks(),
+        )
+        .await;
         let stylesheet_digest = theme_digest(compiled.css().bytes());
         fs::remove_file(theme_content_path(&backup, stylesheet_digest.as_ref()))
             .expect("remove backup stylesheet");
@@ -619,7 +624,16 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let source = backend.setup().await;
-        let (backup, compiled, _) = export_published_theme_backup(backend, &source).await;
+        let (backup, compiled, _) = export_published_theme_backup(
+            backup_database_options(backend, &source.base),
+            source.base.path().to_path_buf(),
+            source.themes(),
+            source.media(),
+            source.users(),
+            source.write_scope(),
+            source.media_content_locks(),
+        )
+        .await;
         let stylesheet_digest = theme_digest(compiled.css().bytes());
         fs::write(
             theme_content_path(&backup, stylesheet_digest.as_ref()),
@@ -665,7 +679,16 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let source = backend.setup().await;
-        let (backup, _, _) = export_published_theme_backup(backend, &source).await;
+        let (backup, _, _) = export_published_theme_backup(
+            backup_database_options(backend, &source.base),
+            source.base.path().to_path_buf(),
+            source.themes(),
+            source.media(),
+            source.users(),
+            source.write_scope(),
+            source.media_content_locks(),
+        )
+        .await;
         let manifest_path = backup.join("manifest.json");
         let mut manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(&manifest_path).expect("read manifest"))
@@ -707,7 +730,16 @@ mod tests {
     #[tokio::test]
     async fn restore_row_rejection_leaves_target_theme_content_unchanged(#[case] backend: Backend) {
         let source = backend.setup().await;
-        let (backup, _, _) = export_published_theme_backup(backend, &source).await;
+        let (backup, _, _) = export_published_theme_backup(
+            backup_database_options(backend, &source.base),
+            source.base.path().to_path_buf(),
+            source.themes(),
+            source.media(),
+            source.users(),
+            source.write_scope(),
+            source.media_content_locks(),
+        )
+        .await;
         fs::write(backup.join("db").join("site_config.ndjson"), "null\n")
             .expect("write invalid backup row");
 
@@ -743,8 +775,16 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let source = backend.setup().await;
-        let (backup, compiled, expected_revision) =
-            export_published_theme_backup(backend, &source).await;
+        let (backup, compiled, expected_revision) = export_published_theme_backup(
+            backup_database_options(backend, &source.base),
+            source.base.path().to_path_buf(),
+            source.themes(),
+            source.media(),
+            source.users(),
+            source.write_scope(),
+            source.media_content_locks(),
+        )
+        .await;
         let expected_catalog = source
             .themes()
             .list_themes(ThemeOwner::Site)

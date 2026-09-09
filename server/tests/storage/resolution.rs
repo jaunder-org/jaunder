@@ -10,8 +10,6 @@ use storage::test_support::{
 };
 use storage::{AudienceStorage, WriteScope};
 
-use super::fixtures::{activitypub_channel_id, raw_exec};
-
 // The full resolution matrix: viewers {anonymous, author A, active subscriber S,
 // named-member M (in audience G, also subscribed), non-member N (not subscribed)}
 // × posts {Public, Private, Subscribers, Named(G), Named(G2), Public+Named(G)},
@@ -71,13 +69,9 @@ async fn resolution_matrix(#[case] backend: Backend) {
     let viewer_m = ViewerIdentity::local(m);
     let viewer_n = ViewerIdentity::local(n);
 
-    raw_exec(
-        backend,
-        &env,
-        "INSERT INTO channels (name) VALUES ('activitypub')",
-    )
-    .await;
-    let remote_channel = activitypub_channel_id(backend, &env).await;
+    env.execute_raw_sql("INSERT INTO channels (name) VALUES ('activitypub')")
+        .await;
+    let remote_channel = env.channel_id_by_fixed_name("activitypub").await;
     let impostor = ViewerIdentity::Remote {
         channel_id: remote_channel,
         subscriber_ref: a.to_string().parse().unwrap(),

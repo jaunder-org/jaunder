@@ -15,15 +15,13 @@ use storage::{
     SubscriptionStorage, WriteScope,
 };
 
-use super::fixtures::{
-    activitypub_channel_id, local_channel_id, open_pool, raw_exec, update_subscription_created_at,
-};
+use super::fixtures::open_pool;
 
 #[apply(backends)]
 #[tokio::test]
 async fn local_channel_id_returns_seeded_local(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let expected = local_channel_id(backend, &env).await;
+    let expected = env.channel_id_by_fixed_name("local").await;
     let actual = env.subscriptions().local_channel_id().await.unwrap();
     assert_eq!(actual, expected);
 }
@@ -32,7 +30,8 @@ async fn local_channel_id_returns_seeded_local(#[case] backend: Backend) {
 #[tokio::test]
 async fn local_channel_id_names_the_row_when_the_seed_is_missing(#[case] backend: Backend) {
     let env = backend.setup().await;
-    raw_exec(backend, &env, "DELETE FROM channels WHERE name = 'local'").await;
+    env.execute_raw_sql("DELETE FROM channels WHERE name = 'local'")
+        .await;
     let error = env.subscriptions().local_channel_id().await.unwrap_err();
     assert_eq!(error.kind(), host::error::ErrorKind::Internal);
     assert_eq!(error.class(), host::error::ErrorClass::Bug);
@@ -59,7 +58,7 @@ async fn subscribe_round_trips_fixed_created_at_and_preserves_order(#[case] back
         .seed(env.users(), env.write_scope())
         .await
         .user_id;
-    let local = local_channel_id(backend, &env).await;
+    let local = env.channel_id_by_fixed_name("local").await;
     let bob_subscriber = local_subscriber_identity(local, bob);
     let carol_subscriber = local_subscriber_identity(local, carol);
     let bob_id = subscribe_confirmed(
@@ -87,8 +86,10 @@ async fn subscribe_round_trips_fixed_created_at_and_preserves_order(#[case] back
 
     let bob_created_at: UtcInstant = "2026-01-02T03:04:05.123457Z".parse().unwrap();
     let carol_created_at: UtcInstant = "2026-01-02T03:04:05.123456Z".parse().unwrap();
-    update_subscription_created_at(backend, &env, bob_id, bob_created_at).await;
-    update_subscription_created_at(backend, &env, carol_id, carol_created_at).await;
+    env.update_subscription_created_at(bob_id, bob_created_at)
+        .await;
+    env.update_subscription_created_at(carol_id, carol_created_at)
+        .await;
 
     let subs = env.subscriptions().list_subscribers(author).await.unwrap();
     assert_eq!(subs.len(), 2);
@@ -154,14 +155,10 @@ async fn list_subscriber_summaries_resolves_labels_on_both_dialects(#[case] back
         .await
         .user_id;
     let local_user = SeedUser::new().seed(env.users(), env.write_scope()).await;
-    let local = local_channel_id(backend, &env).await;
-    raw_exec(
-        backend,
-        &env,
-        "INSERT INTO channels (name) VALUES ('activitypub')",
-    )
-    .await;
-    let remote = activitypub_channel_id(backend, &env).await;
+    let local = env.channel_id_by_fixed_name("local").await;
+    env.execute_raw_sql("INSERT INTO channels (name) VALUES ('activitypub')")
+        .await;
+    let remote = env.channel_id_by_fixed_name("activitypub").await;
 
     let resolved = subscribe_confirmed(
         &env.write_scope(),
@@ -213,7 +210,7 @@ async fn subscriber_bulk_reads_skip_unicode_blank_stored_refs(#[case] backend: B
         .await
         .user_id;
     let valid_subscriber = SeedUser::new().seed(env.users(), env.write_scope()).await;
-    let local = local_channel_id(backend, &env).await;
+    let local = env.channel_id_by_fixed_name("local").await;
     let valid_identity = local_subscriber_identity(local, valid_subscriber.user_id);
     let valid_subscription_id = subscribe_confirmed(
         &env.write_scope(),
@@ -269,14 +266,10 @@ async fn subscriber_bulk_reads_skip_unicode_blank_stored_refs(#[case] backend: B
 async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backend: Backend) {
     let env = backend.setup().await;
     let [author] = seed_users(env.users(), env.write_scope()).await;
-    let local = local_channel_id(backend, &env).await;
-    raw_exec(
-        backend,
-        &env,
-        "INSERT INTO channels (name) VALUES ('activitypub')",
-    )
-    .await;
-    let remote = activitypub_channel_id(backend, &env).await;
+    let local = env.channel_id_by_fixed_name("local").await;
+    env.execute_raw_sql("INSERT INTO channels (name) VALUES ('activitypub')")
+        .await;
+    let remote = env.channel_id_by_fixed_name("activitypub").await;
 
     let actor = "https://remote.example/users/alice";
     subscribe_confirmed(
@@ -352,7 +345,7 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
         }
     };
     let [author, bob] = seed_users(std::sync::Arc::clone(&env.users()), env.write_scope()).await;
-    let local = local_channel_id(backend, &env).await;
+    let local = env.channel_id_by_fixed_name("local").await;
     subscribe_confirmed(
         &env.write_scope(),
         Arc::clone(&store),

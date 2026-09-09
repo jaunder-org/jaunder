@@ -7,7 +7,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{create_operator_and_session, create_user_and_session, make_app, post_form};
-use storage::test_support::{Backend, backends, backends_matrix, inject_invalid_site_config};
+use storage::test_support::{Backend, backends, backends_matrix};
 
 #[apply(backends)]
 #[tokio::test]
@@ -89,13 +89,13 @@ async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Bac
     )
     .await
     .cookie();
-    inject_invalid_site_config(&env, SiteConfigKey::BackupSchedule, "not-a-schedule")
+    env.inject_invalid_site_config(SiteConfigKey::BackupSchedule, "not-a-schedule")
         .await
         .unwrap();
-    inject_invalid_site_config(&env, SiteConfigKey::BackupRetentionCount, "daily")
+    env.inject_invalid_site_config(SiteConfigKey::BackupRetentionCount, "daily")
         .await
         .unwrap();
-    inject_invalid_site_config(&env, SiteConfigKey::BackupMode, "surprise")
+    env.inject_invalid_site_config(SiteConfigKey::BackupMode, "surprise")
         .await
         .unwrap();
 
@@ -348,7 +348,7 @@ async fn backup_warning_visible_when_configured_schedule_is_invalid(#[case] back
     )
     .await
     .cookie();
-    inject_invalid_site_config(&env, SiteConfigKey::BackupSchedule, "not-a-schedule")
+    env.inject_invalid_site_config(SiteConfigKey::BackupSchedule, "not-a-schedule")
         .await
         .unwrap();
 

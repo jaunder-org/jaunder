@@ -12,7 +12,6 @@ use storage::{
     WriteScopeError,
 };
 
-use super::fixtures::raw_exec;
 #[apply(backends)]
 #[tokio::test]
 async fn create_email_verification_and_use_returns_user_id_and_email(#[case] backend: Backend) {
@@ -216,12 +215,8 @@ async fn use_email_verification_with_corrupt_stored_email_returns_internal(
     // Corrupt the stored address out-of-band so claiming the token yields a
     // value that no longer parses as an email. The `email` column is plain
     // TEXT on both backends, so the same UPDATE is portable.
-    raw_exec(
-        backend,
-        &env,
-        "UPDATE email_verifications SET email = 'not-an-email'",
-    )
-    .await;
+    env.execute_raw_sql("UPDATE email_verifications SET email = 'not-an-email'")
+        .await;
 
     let err =
         use_email_verification_result(env.email_verifications(), env.write_scope(), raw_token)

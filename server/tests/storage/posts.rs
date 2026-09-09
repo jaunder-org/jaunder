@@ -13,10 +13,10 @@ use common::visibility::{AudienceTarget, ViewerIdentity};
 use jiff::{Timestamp, ToSpan};
 use rstest::*;
 use rstest_reuse::*;
-use sqlx::{AssertSqlSafe, query};
+use sqlx::query;
 use storage::sql::QueryStorageExt;
 use storage::test_support::{
-    Backend, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends, confirmed, confirmed_for,
+    Backend, SeedRawPost, SeedUser, UpdateRawPost, backends, confirmed, confirmed_for,
     media_url_for,
 };
 use storage::{
@@ -25,7 +25,7 @@ use storage::{
     perform_post_update,
 };
 
-use super::fixtures::{anon_by_tag, open_pool};
+use super::fixtures::anon_by_tag;
 
 async fn create_audience_confirmed(
     audiences: Arc<dyn AudienceStorage>,
@@ -424,37 +424,6 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     );
 }
 
-// Raw read of a post's `post_audiences` rows as `(target_kind name, audience_id)`,
-// ordered by kind name. Used by the audience-targeting persistence test.
-async fn post_audience_rows(
-    backend: Backend,
-    env: &TestEnv,
-    post_id: PostId,
-) -> Vec<(String, Option<AudienceId>)> {
-    let sql = "SELECT tk.name, pa.audience_id \
-               FROM post_audiences pa \
-               JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id \
-               WHERE pa.post_id = $1 \
-               ORDER BY tk.name, pa.audience_id";
-    match backend {
-        // Only the fixed placeholder syntax changes for SQLite; the query text
-        // remains structurally identical to the static PostgreSQL statement.
-        Backend::Sqlite => sqlx::query_as(AssertSqlSafe(sql.replace("$1", "?")))
-            .bind(post_id)
-            .fetch_all(&open_pool(&env.base).await)
-            .await
-            .unwrap(),
-        Backend::Postgres => {
-            let pool = env.base.pool().postgres();
-            sqlx::query_as(sql)
-                .bind(post_id)
-                .fetch_all(pool)
-                .await
-                .unwrap()
-        }
-    }
-}
-
 // Create persists `post_audiences` rows matching the input vec; update replaces
 // them (delete-all-then-insert). `Private`/empty → no rows. See ADR-0020.
 #[apply(backends)]
@@ -480,7 +449,7 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
         .seed(env.posts(), env.write_scope())
         .await
         .post_id;
-    let rows = post_audience_rows(backend, &env, post_id).await;
+    let rows = env.post_audience_rows(post_id).await;
     assert_eq!(
         rows,
         vec![
@@ -511,7 +480,7 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
         .unwrap(),
     );
     assert!(
-        post_audience_rows(backend, &env, post_id).await.is_empty(),
+        env.post_audience_rows(post_id).await.is_empty(),
         "[Private] should leave no rows"
     );
 
@@ -527,7 +496,7 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
         .unwrap(),
     );
     assert!(
-        post_audience_rows(backend, &env, post_id).await.is_empty(),
+        env.post_audience_rows(post_id).await.is_empty(),
         "an empty audience vec should leave no rows"
     );
 
@@ -543,7 +512,7 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
         .unwrap(),
     );
     assert_eq!(
-        post_audience_rows(backend, &env, post_id).await,
+        env.post_audience_rows(post_id).await,
         vec![("subscribers".to_string(), None)],
         "update to [Subscribers] should leave exactly one subscribers row"
     );

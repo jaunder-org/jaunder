@@ -413,8 +413,9 @@ mod tests {
     use tokio::sync::Barrier;
 
     use super::*;
+    use crate::FeedCacheStorage;
     use crate::test_support::fp;
-    use crate::test_support::{Backend, TestEnv, backends, confirmed, inject_invalid_site_config};
+    use crate::test_support::{Backend, backends, confirmed};
     use common::{
         MutationOutcome,
         test_support::{parse_etag, parse_url},
@@ -426,12 +427,12 @@ mod tests {
     use rstest_reuse::*;
 
     async fn mutate_feed_window(
-        env: &TestEnv,
+        publisher: Arc<dyn PublisherStorage>,
+        write_scope: crate::WriteScope,
         mutation: FeedWindowMutation,
     ) -> FeedWindowMutationOutcome {
-        let publisher = Arc::clone(&env.publisher());
         confirmed(
-            env.write_scope()
+            write_scope
                 .run(move |transaction| {
                     Box::pin(
                         async move { publisher.mutate_feed_window(transaction, mutation).await },
@@ -442,10 +443,13 @@ mod tests {
         )
     }
 
-    async fn seed_cache(env: &TestEnv, row: FeedCacheRow) {
-        let cache = Arc::clone(&env.feed_cache());
+    async fn seed_cache(
+        cache: Arc<dyn FeedCacheStorage>,
+        write_scope: crate::WriteScope,
+        row: FeedCacheRow,
+    ) {
         confirmed(
-            env.write_scope()
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move { cache.upsert(transaction, row).await })
                 })
@@ -454,11 +458,14 @@ mod tests {
         );
     }
 
-    async fn mutate(env: &TestEnv, hub: Option<&HubUrl>) -> HubMutationOutcome {
-        let publisher = Arc::clone(&env.publisher());
+    async fn mutate(
+        publisher: Arc<dyn PublisherStorage>,
+        write_scope: crate::WriteScope,
+        hub: Option<&HubUrl>,
+    ) -> HubMutationOutcome {
         let hub = hub.cloned();
         confirmed(
-            env.write_scope()
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move { publisher.mutate_hub(transaction, hub).await })
                 })
@@ -498,13 +505,14 @@ mod tests {
     async fn normalized_hub_noop_preserves_generation(#[case] backend: Backend) {
         let env = backend.setup().await;
         let hub: HubUrl = parse_url("https://hub.example.test/");
-        let first = match mutate(&env, Some(&hub)).await {
+        let first = match mutate(Arc::clone(&env.publisher()), env.write_scope(), Some(&hub)).await
+        {
             HubMutationOutcome::Changed { generation } => generation,
             HubMutationOutcome::Unchanged { .. } => panic!("first hub write must change"),
         };
 
         assert_eq!(
-            mutate(&env, Some(&hub)).await,
+            mutate(Arc::clone(&env.publisher()), env.write_scope(), Some(&hub)).await,
             HubMutationOutcome::Unchanged { generation: first }
         );
         assert_eq!(env.publisher().snapshot().await.unwrap().generation, first);
@@ -536,7 +544,8 @@ mod tests {
         let env = backend.setup().await;
 
         mutate_feed_window(
-            &env,
+            Arc::clone(&env.publisher()),
+            env.write_scope(),
             FeedWindowMutation::SetMinItems(parse_feed_min_items("42")),
         )
         .await;
@@ -545,7 +554,8 @@ mod tests {
         assert_eq!(snapshot.feeds.min_days, FeedMinDays::default());
 
         mutate_feed_window(
-            &env,
+            Arc::clone(&env.publisher()),
+            env.write_scope(),
             FeedWindowMutation::SetMinDays(parse_feed_min_days("7")),
         )
         .await;
@@ -553,12 +563,22 @@ mod tests {
         assert_eq!(snapshot.feeds.min_items, parse_feed_min_items("42"));
         assert_eq!(snapshot.feeds.min_days, parse_feed_min_days("7"));
 
-        mutate_feed_window(&env, FeedWindowMutation::UnsetMinItems).await;
+        mutate_feed_window(
+            Arc::clone(&env.publisher()),
+            env.write_scope(),
+            FeedWindowMutation::UnsetMinItems,
+        )
+        .await;
         let snapshot = env.publisher().snapshot().await.unwrap();
         assert_eq!(snapshot.feeds.min_items, FeedMinItems::default());
         assert_eq!(snapshot.feeds.min_days, parse_feed_min_days("7"));
 
-        mutate_feed_window(&env, FeedWindowMutation::UnsetMinDays).await;
+        mutate_feed_window(
+            Arc::clone(&env.publisher()),
+            env.write_scope(),
+            FeedWindowMutation::UnsetMinDays,
+        )
+        .await;
         let snapshot = env.publisher().snapshot().await.unwrap();
         assert_eq!(snapshot.feeds.min_items, FeedMinItems::default());
         assert_eq!(snapshot.feeds.min_days, FeedMinDays::default());
@@ -573,12 +593,18 @@ mod tests {
     ) {
         let env = backend.setup().await;
         for path in ["/feed.rss", "/feed.atom", "/feed.json"] {
-            seed_cache(&env, cache_row_at(path)).await;
+            seed_cache(
+                Arc::clone(&env.feed_cache()),
+                env.write_scope(),
+                cache_row_at(path),
+            )
+            .await;
         }
         let stale = env.publisher().snapshot().await.unwrap().generation;
 
         let outcome = mutate_feed_window(
-            &env,
+            Arc::clone(&env.publisher()),
+            env.write_scope(),
             FeedWindowMutation::SetMinItems(FeedMinItems::default()),
         )
         .await;
@@ -613,7 +639,12 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        seed_cache(&env, cache_row()).await;
+        seed_cache(
+            Arc::clone(&env.feed_cache()),
+            env.write_scope(),
+            cache_row(),
+        )
+        .await;
         let existing = env
             .feed_cache()
             .get(&fp("/feed.rss"))
@@ -690,7 +721,7 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let existing = cache_row();
-        seed_cache(&env, existing).await;
+        seed_cache(Arc::clone(&env.feed_cache()), env.write_scope(), existing).await;
         let existing = env
             .feed_cache()
             .get(&fp("/feed.rss"))
@@ -813,7 +844,12 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        seed_cache(&env, cache_row()).await;
+        seed_cache(
+            Arc::clone(&env.feed_cache()),
+            env.write_scope(),
+            cache_row(),
+        )
+        .await;
         let before = env.publisher().snapshot().await.unwrap();
         let publisher = Arc::clone(&env.publisher());
 
@@ -881,7 +917,7 @@ mod tests {
     async fn snapshot_rejects_a_corrupt_feed_minimum(#[case] backend: Backend) {
         let env = backend.setup().await;
         let corrupt = "corrupt-min-items-value";
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinItems, corrupt)
+        env.inject_invalid_site_config(SiteConfigKey::FeedsMinItems, corrupt)
             .await
             .expect("seed corrupt feed minimum");
 
@@ -908,10 +944,11 @@ mod tests {
         let before = env.publisher().snapshot().await.unwrap();
         let hub: HubUrl = parse_url("https://hub.example.test/");
 
-        let generation = match mutate(&env, Some(&hub)).await {
-            HubMutationOutcome::Changed { generation } => generation,
-            HubMutationOutcome::Unchanged { .. } => panic!("absent hub must change"),
-        };
+        let generation =
+            match mutate(Arc::clone(&env.publisher()), env.write_scope(), Some(&hub)).await {
+                HubMutationOutcome::Changed { generation } => generation,
+                HubMutationOutcome::Unchanged { .. } => panic!("absent hub must change"),
+            };
         let after = env.publisher().snapshot().await.unwrap();
 
         assert!(generation > before.generation);
@@ -923,12 +960,12 @@ mod tests {
     #[tokio::test]
     async fn malformed_hub_repair_advances_generation(#[case] backend: Backend) {
         let env = backend.setup().await;
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "not a hub URL")
+        env.inject_invalid_site_config(SiteConfigKey::FeedsWebsubHubUrl, "not a hub URL")
             .await
             .expect("seed malformed hub");
         let before = env.publisher().snapshot().await.unwrap().generation;
 
-        let generation = match mutate(&env, None).await {
+        let generation = match mutate(Arc::clone(&env.publisher()), env.write_scope(), None).await {
             HubMutationOutcome::Changed { generation } => generation,
             HubMutationOutcome::Unchanged { .. } => panic!("malformed hub must repair"),
         };
@@ -947,12 +984,12 @@ mod tests {
     #[tokio::test]
     async fn empty_hub_row_is_repaired(#[case] backend: Backend) {
         let env = backend.setup().await;
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "")
+        env.inject_invalid_site_config(SiteConfigKey::FeedsWebsubHubUrl, "")
             .await
             .expect("seed empty hub row");
 
         assert!(matches!(
-            mutate(&env, None).await,
+            mutate(Arc::clone(&env.publisher()), env.write_scope(), None).await,
             HubMutationOutcome::Changed { .. }
         ));
         assert_eq!(
@@ -970,7 +1007,7 @@ mod tests {
         let env = backend.setup().await;
         let stale = env.publisher().snapshot().await.unwrap().generation;
         let hub: HubUrl = parse_url("https://hub.example.test/");
-        let _ = mutate(&env, Some(&hub)).await;
+        let _ = mutate(Arc::clone(&env.publisher()), env.write_scope(), Some(&hub)).await;
         let publisher = Arc::clone(&env.publisher());
         let row = cache_row();
         let outcome = confirmed(
@@ -1008,7 +1045,7 @@ mod tests {
                 .expect("seed cache"),
         );
         let hub: HubUrl = parse_url("https://hub.example.test/");
-        let _ = mutate(&env, Some(&hub)).await;
+        let _ = mutate(Arc::clone(&env.publisher()), env.write_scope(), Some(&hub)).await;
         assert!(env.feed_cache().get(&path).await.unwrap().is_none());
     }
 
@@ -1017,7 +1054,7 @@ mod tests {
     async fn normalized_hub_noop_preserves_cached_feed(#[case] backend: Backend) {
         let env = backend.setup().await;
         let hub: HubUrl = parse_url("https://hub.example.test/");
-        let _ = mutate(&env, Some(&hub)).await;
+        let _ = mutate(Arc::clone(&env.publisher()), env.write_scope(), Some(&hub)).await;
         let row = cache_row();
         let path = row.feed_path().clone();
         let cache = Arc::clone(&env.feed_cache());
@@ -1029,7 +1066,7 @@ mod tests {
                 .await
                 .expect("seed cache"),
         );
-        let _ = mutate(&env, Some(&hub)).await;
+        let _ = mutate(Arc::clone(&env.publisher()), env.write_scope(), Some(&hub)).await;
         assert!(env.feed_cache().get(&path).await.unwrap().is_some());
     }
 
@@ -1037,7 +1074,7 @@ mod tests {
     #[tokio::test]
     async fn compare_token_repair_preserves_valid_replacement(#[case] backend: Backend) {
         let env = backend.setup().await;
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "invalid A")
+        env.inject_invalid_site_config(SiteConfigKey::FeedsWebsubHubUrl, "invalid A")
             .await
             .expect("seed invalid hub");
         let snapshot = env.publisher().snapshot().await.unwrap();
@@ -1046,7 +1083,7 @@ mod tests {
             .expect("invalid row exposes repair token");
         let before = snapshot.generation;
         let valid = "https://replacement.example.test/";
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, valid)
+        env.inject_invalid_site_config(SiteConfigKey::FeedsWebsubHubUrl, valid)
             .await
             .expect("concurrent valid replacement");
         let publisher = Arc::clone(&env.publisher());

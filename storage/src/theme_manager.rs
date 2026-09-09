@@ -776,14 +776,13 @@ mod tests {
         ));
     }
 
-    async fn published_site_theme(env: &crate::test_support::TestEnv) -> common::ids::ThemeId {
+    async fn published_site_theme(
+        themes: Arc<dyn ThemeStorage>,
+        write_scope: crate::WriteScope,
+        media_root: std::path::PathBuf,
+    ) -> common::ids::ThemeId {
         let compiled = compiled_theme_fixture();
-        let theme_id = create_site_theme(
-            Arc::clone(&env.themes()),
-            env.write_scope().clone(),
-            &compiled,
-        )
-        .await;
+        let theme_id = create_site_theme(Arc::clone(&themes), write_scope.clone(), &compiled).await;
         let content_bytes = compiled
             .css()
             .bytes()
@@ -791,11 +790,7 @@ mod tests {
             .checked_add(compiled.assets().map(|(_, _, bytes, _)| bytes.len()).sum())
             .and_then(|bytes| i64::try_from(bytes).ok())
             .expect("fixture content bytes fit");
-        let manager = ThemeAssetManager::new(
-            Arc::clone(&env.themes()),
-            env.write_scope().clone(),
-            Arc::new(env.base.path().to_path_buf()),
-        );
+        let manager = ThemeAssetManager::new(themes, write_scope, Arc::new(media_root));
         confirmed(
             manager
                 .publish(
@@ -812,7 +807,9 @@ mod tests {
     }
 
     async fn published_author_theme(
-        env: &crate::test_support::TestEnv,
+        themes: Arc<dyn ThemeStorage>,
+        write_scope: crate::WriteScope,
+        media_root: std::path::PathBuf,
         author: UserId,
     ) -> common::ids::ThemeId {
         let compiled = compiled_theme_fixture();
@@ -823,12 +820,13 @@ mod tests {
             source_digest: "a".repeat(64).parse().unwrap(),
             assets: Vec::new(),
         };
-        let themes = Arc::clone(&env.themes());
+        let create_themes = Arc::clone(&themes);
         let theme_id = confirmed(
-            env.write_scope()
+            write_scope
+                .clone()
                 .run(move |transaction| {
                     Box::pin(async move {
-                        themes
+                        create_themes
                             .create_theme(
                                 transaction,
                                 ThemeOwner::Author(author),
@@ -849,11 +847,7 @@ mod tests {
             .checked_add(compiled.assets().map(|(_, _, bytes, _)| bytes.len()).sum())
             .and_then(|bytes| i64::try_from(bytes).ok())
             .expect("fixture content bytes fit");
-        let manager = ThemeAssetManager::new(
-            Arc::clone(&env.themes()),
-            env.write_scope().clone(),
-            Arc::new(env.base.path().to_path_buf()),
-        );
+        let manager = ThemeAssetManager::new(themes, write_scope, Arc::new(media_root));
         confirmed(
             manager
                 .publish(
@@ -896,7 +890,12 @@ mod tests {
             "theme-logo.png",
         )
         .await;
-        let theme_id = published_site_theme(&env).await;
+        let theme_id = published_site_theme(
+            Arc::clone(&env.themes()),
+            env.write_scope(),
+            env.base.path().to_path_buf(),
+        )
+        .await;
         let manager = ThemeManager::new(
             Arc::clone(&env.themes()),
             Arc::clone(&env.media()),
@@ -982,7 +981,12 @@ mod tests {
             "theme-header.png",
         )
         .await;
-        let theme_id = published_site_theme(&env).await;
+        let theme_id = published_site_theme(
+            Arc::clone(&env.themes()),
+            env.write_scope(),
+            env.base.path().to_path_buf(),
+        )
+        .await;
         let manager = ThemeManager::new(
             Arc::clone(&env.themes()),
             Arc::clone(&env.media()),
@@ -1072,7 +1076,12 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let theme_id = published_site_theme(&env).await;
+        let theme_id = published_site_theme(
+            Arc::clone(&env.themes()),
+            env.write_scope(),
+            env.base.path().to_path_buf(),
+        )
+        .await;
         let themes = Arc::clone(&env.themes());
         confirmed(
             env.write_scope()
@@ -1134,7 +1143,12 @@ mod tests {
     #[tokio::test]
     async fn removing_unselected_site_theme_preserves_site_selection(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let theme_id = published_site_theme(&env).await;
+        let theme_id = published_site_theme(
+            Arc::clone(&env.themes()),
+            env.write_scope(),
+            env.base.path().to_path_buf(),
+        )
+        .await;
         let themes = Arc::clone(&env.themes());
         confirmed(
             env.write_scope()
@@ -1189,7 +1203,13 @@ mod tests {
             )
             .await
             .user_id;
-        let theme_id = published_author_theme(&env, author).await;
+        let theme_id = published_author_theme(
+            Arc::clone(&env.themes()),
+            env.write_scope(),
+            env.base.path().to_path_buf(),
+            author,
+        )
+        .await;
         let themes = Arc::clone(&env.themes());
         confirmed(
             env.write_scope()
@@ -1317,7 +1337,12 @@ mod tests {
             )
             .await
             .user_id;
-        let theme_id = published_site_theme(&env).await;
+        let theme_id = published_site_theme(
+            Arc::clone(&env.themes()),
+            env.write_scope(),
+            env.base.path().to_path_buf(),
+        )
+        .await;
         let manager = ThemeManager::new(
             Arc::clone(&env.themes()),
             Arc::clone(&env.media()),

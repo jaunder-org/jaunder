@@ -2116,17 +2116,6 @@ where
     }
 }
 
-/// Database-provided physical identity retained only by the no-write regression.
-#[cfg(test)]
-#[derive(Debug, macros::SqlxBridge)]
-pub(crate) struct PhysicalPostTagRowId(String);
-
-#[cfg(test)]
-impl PhysicalPostTagRowId {
-    pub(crate) fn into_inner(self) -> String {
-        self.0
-    }
-}
 /// Deliberately malformed value for the `tags.tag_slug` decode fixture.
 #[cfg(test)]
 #[derive(macros::SqlxBridge)]
@@ -2160,16 +2149,15 @@ pub(crate) struct CorruptPostBody(String);
 mod tests {
     use super::*;
     use crate::posts::media::PersistedMediaSubjectKind;
-    use crate::posts::models::{PostBookkeepingExpectation, RenderedHtml};
+    use crate::posts::models::PostBookkeepingExpectation;
     use crate::test_support::{
-        Backend, CloseablePool, MEDIA_TEST_SHA256, SeedFeedCache, SeedRawPost, SeedUser, TestEnv,
+        Backend, MEDIA_TEST_SHA256, RawPostRevision, SeedFeedCache, SeedRawPost, SeedUser,
         UpdateRawPost, backends, create_draft_via_service, create_post_via_service,
         create_posts_confirmed, fetch_post_media, fp, media_ref_for, media_row_exists,
         media_url_for, seed_media, seed_users, set_post_tags_confirmed,
         update_post_body_via_service,
     };
 
-    use common::post_body::PostBody;
     use common::render::PostFormat;
     use common::test_support::{
         parse_etag, parse_post_body, parse_post_summary, parse_post_title, parse_row_limit,
@@ -2178,7 +2166,6 @@ mod tests {
     use common::time::UtcInstant;
     use rstest::*;
     use rstest_reuse::*;
-    use sqlx::Row;
     use std::{sync::Arc, time::Duration};
     use tokio::sync::Barrier;
 
@@ -2614,35 +2601,6 @@ mod tests {
         assert_eq!(reverse_ids.len(), 2);
     }
 
-    /// Physical row identity for the post's `post_tags` rows: `ctid` on Postgres,
-    /// `rowid` on `SQLite`. Column values cannot serve — a DELETE+INSERT
-    /// reproduces `tag_id`/`tag_display` exactly, which is exactly what the
-    /// no-write-when-unchanged test must detect.
-    async fn physical_row_ids(env: &TestEnv, post_id: PostId) -> Vec<String> {
-        match env.base.pool() {
-            CloseablePool::Postgres(pool) => {
-                sqlx::query_scalar::<_, PhysicalPostTagRowId>(
-                    "SELECT ctid::text FROM post_tags WHERE post_id = $1 ORDER BY tag_id",
-                )
-                .bind_storage(post_id)
-                .fetch_all(pool)
-                .await
-            }
-            CloseablePool::Sqlite(pool) => {
-                sqlx::query_scalar::<_, PhysicalPostTagRowId>(
-                    "SELECT CAST(rowid AS TEXT) FROM post_tags WHERE post_id = $1 ORDER BY tag_id",
-                )
-                .bind_storage(post_id)
-                .fetch_all(pool)
-                .await
-            }
-        }
-        .expect("read physical row ids")
-        .into_iter()
-        .map(PhysicalPostTagRowId::into_inner)
-        .collect()
-    }
-
     /// The post's tag slugs, slug-ordered, read through the normal post read path.
     async fn slugs_of(posts: &dyn PostStorage, post_id: PostId) -> Vec<String> {
         posts
@@ -2652,7 +2610,7 @@ mod tests {
             .expect("post exists")
             .tags
             .iter()
-            .map(|t| t.tag_slug.to_string())
+            .map(|tag| tag.tag_slug.to_string())
             .collect()
     }
 
@@ -2672,121 +2630,32 @@ mod tests {
             .collect()
     }
 
-    #[derive(sqlx::FromRow)]
-    struct RevisionRow {
-        revision_id: RevisionId,
-        post_id: PostId,
-        user_id: UserId,
-        title: Option<PostTitle>,
-        slug: Slug,
-        body: PostBody,
-        format: PostFormat,
-        rendered_html: RenderedHtml,
-        summary: Option<PostSummary>,
-        created_at: UtcInstant,
-        updated_at: UtcInstant,
-        published_at: Option<UtcInstant>,
-        deleted_at: Option<UtcInstant>,
-        captured_at: UtcInstant,
+    struct CapturedPriorRevision {
+        count: i64,
+        revision: RawPostRevision,
+        tags: Vec<(String, String)>,
+        audiences: Vec<(String, String)>,
+        media: Vec<(MediaRef, MediaReferenceKind, MediaReferenceForm)>,
     }
 
-    async fn single_revision(env: &TestEnv, post_id: PostId) -> RevisionRow {
-        macro_rules! decode {
-            ($row:expr) => {{
-                let row = $row;
-                RevisionRow {
-                    revision_id: row.try_get::<RevisionId, _>("revision_id").unwrap(),
-                    post_id: row.try_get::<PostId, _>("post_id").unwrap(),
-                    user_id: row.try_get::<UserId, _>("user_id").unwrap(),
-                    title: row.try_get::<Option<PostTitle>, _>("title").unwrap(),
-                    slug: row.try_get::<Slug, _>("slug").unwrap(),
-                    body: row.try_get::<PostBody, _>("body").unwrap(),
-                    format: row.try_get::<PostFormat, _>("format").unwrap(),
-                    rendered_html: row.try_get::<RenderedHtml, _>("rendered_html").unwrap(),
-                    summary: row.try_get::<Option<PostSummary>, _>("summary").unwrap(),
-                    created_at: row.try_get::<UtcInstant, _>("created_at").unwrap(),
-                    updated_at: row.try_get::<UtcInstant, _>("updated_at").unwrap(),
-                    published_at: row
-                        .try_get::<Option<UtcInstant>, _>("published_at")
-                        .unwrap(),
-                    deleted_at: row.try_get::<Option<UtcInstant>, _>("deleted_at").unwrap(),
-                    captured_at: row.try_get::<UtcInstant, _>("captured_at").unwrap(),
-                }
-            }};
-        }
-        let sql = "SELECT revision_id, post_id, user_id, title, slug, body, format, rendered_html, summary,
-                          created_at, updated_at, published_at, deleted_at, captured_at
-                   FROM post_revisions
-                   WHERE post_id = $1";
-        match env.base.pool() {
-            CloseablePool::Postgres(pool) => decode!(
-                sqlx::query(sql)
-                    .bind_storage(post_id)
-                    .fetch_one(pool)
-                    .await
-                    .expect("read revision")
-            ),
-            CloseablePool::Sqlite(pool) => decode!(
-                sqlx::query(sql)
-                    .bind_storage(post_id)
-                    .fetch_one(pool)
-                    .await
-                    .expect("read revision")
-            ),
-        }
-    }
-
-    async fn media_for_subject(
-        env: &TestEnv,
-        post_id: PostId,
-        subject_kind: PersistedMediaSubjectKind,
-        revision_id: RevisionId,
-    ) -> Vec<(MediaRef, MediaReferenceKind, MediaReferenceForm)> {
-        crate::with_closeable_pool!(env.base.pool(), pool, {
-            sqlx::query_as::<_, (String, String, String, String, String)>(
-                "SELECT source, sha256, filename, reference_kind, reference_form
-                 FROM post_media
-                 WHERE post_id = $1 AND subject_kind = $2 AND revision_id = $3
-                 ORDER BY source, sha256, filename, reference_kind, reference_form",
-            )
-            .bind_storage(post_id)
-            .bind_storage(subject_kind)
-            .bind_storage(revision_id)
-            .fetch_all(pool)
-            .await
-        })
-        .expect("read post media subject")
-        .into_iter()
-        .map(|(source, sha256, filename, kind, form)| {
-            (
-                MediaRef {
-                    source: source.parse().expect("valid media source"),
-                    sha256: sha256.parse().expect("valid media hash"),
-                    filename: filename.parse().expect("valid media filename"),
-                },
-                kind.parse().expect("valid media reference kind"),
-                form.parse().expect("valid media reference form"),
-            )
-        })
-        .collect()
-    }
-
-    async fn assert_complete_prior_revision(
-        env: &TestEnv,
-        post_id: PostId,
+    fn assert_complete_prior_revision(
+        captured: CapturedPriorRevision,
         prior: &PostRecord,
         prior_audiences: &[AudienceTarget],
         prior_media: &[(MediaRef, MediaReferenceKind, MediaReferenceForm)],
         captured_at: UtcInstant,
     ) -> RevisionId {
+        let CapturedPriorRevision {
+            count,
+            revision,
+            tags,
+            audiences,
+            media,
+        } = captured;
         assert_eq!(
-            crate::test_support::count_post_revisions(env, post_id)
-                .await
-                .expect("count post revisions"),
-            1,
+            count, 1,
             "one meaningful mutation creates exactly one revision"
         );
-        let revision = single_revision(env, post_id).await;
         let revision_id = revision.revision_id;
         assert_eq!(revision.post_id, prior.post_id);
         assert_eq!(revision.user_id, prior.user_id);
@@ -2801,44 +2670,16 @@ mod tests {
         assert_eq!(revision.published_at, prior.published_at);
         assert_eq!(revision.deleted_at, prior.deleted_at);
         assert_eq!(revision.captured_at, captured_at);
-
-        let tags = crate::with_closeable_pool!(env.base.pool(), pool, {
-            sqlx::query_as::<_, (String, String, String, String, String)>(
-                "SELECT tag_slug, tag_display, '', '', ''
-                 FROM post_revision_tags WHERE revision_id = $1 ORDER BY tag_slug",
-            )
-            .bind_storage(revision_id)
-            .fetch_all(pool)
-            .await
-        })
-        .expect("read revision tags");
         assert_eq!(
-            tags.into_iter()
-                .map(|(slug, display, _, _, _)| (slug, display))
-                .collect::<Vec<_>>(),
+            tags,
             prior
                 .tags
                 .iter()
                 .map(|tag| (tag.tag_slug.to_string(), tag.tag_display.to_string()))
                 .collect::<Vec<_>>()
         );
-
-        let audiences = crate::with_closeable_pool!(env.base.pool(), pool, {
-            sqlx::query_as::<_, (String, String, String, String, String)>(
-                "SELECT target_kind, COALESCE(CAST(audience_id AS TEXT), ''), '', '', ''
-                 FROM post_revision_audiences
-                 WHERE revision_id = $1 ORDER BY target_kind, audience_id",
-            )
-            .bind_storage(revision_id)
-            .fetch_all(pool)
-            .await
-        })
-        .expect("read revision audiences");
         assert_eq!(
-            audiences
-                .into_iter()
-                .map(|(kind, audience_id, _, _, _)| (kind, audience_id))
-                .collect::<Vec<_>>(),
+            audiences,
             prior_audiences
                 .iter()
                 .filter_map(visibility::audience_target_row)
@@ -2851,14 +2692,7 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(
-            media_for_subject(
-                env,
-                post_id,
-                PersistedMediaSubjectKind::Revision,
-                revision_id
-            )
-            .await,
-            prior_media,
+            media, prior_media,
             "a revision copies the exact current media references rather than extracting anew"
         );
         revision_id
@@ -3352,7 +3186,7 @@ mod tests {
         .await
         .expect("seed decoy");
 
-        let before = physical_row_ids(&env, post).await;
+        let before = env.physical_post_tag_row_ids(post).await;
         set_post_tags_confirmed(
             &env.write_scope(),
             Arc::clone(&env.posts()),
@@ -3362,7 +3196,7 @@ mod tests {
         )
         .await
         .expect("re-apply the identical set");
-        let after = physical_row_ids(&env, post).await;
+        let after = env.physical_post_tag_row_ids(post).await;
 
         assert_eq!(
             before, after,
@@ -3401,9 +3235,7 @@ mod tests {
         )
         .await;
         let revision_count = env
-            .base
-            .pool()
-            .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+            .count_post_revisions(post)
             .await
             .expect("count revisions");
 
@@ -3418,9 +3250,7 @@ mod tests {
 
         assert_eq!(unchanged.updated_at, first.updated_at);
         assert_eq!(
-            env.base
-                .pool()
-                .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+            env.count_post_revisions(post)
                 .await
                 .expect("count revisions after no-op"),
             revision_count,
@@ -3483,13 +3313,13 @@ mod tests {
             .get_post_audiences(post_id)
             .await
             .expect("read prior audiences");
-        let prior_media = media_for_subject(
-            &env,
-            post_id,
-            PersistedMediaSubjectKind::Current,
-            RevisionId::from(0),
-        )
-        .await;
+        let prior_media = env
+            .post_media_for_subject(
+                post_id,
+                PersistedMediaSubjectKind::Current,
+                RevisionId::from(0),
+            )
+            .await;
         assert_eq!(
             prior_media,
             vec![(
@@ -3523,18 +3353,32 @@ mod tests {
         )
         .await;
 
+        let revision_count = env
+            .count_post_revisions(post_id)
+            .await
+            .expect("count post revisions");
+        let revision = env.single_post_revision(post_id).await;
+        let revision_id = revision.revision_id;
+        let revision_tags = env.post_revision_tags(revision_id).await;
+        let revision_audiences = env.post_revision_audiences(revision_id).await;
+        let revision_media = env
+            .post_media_for_subject(post_id, PersistedMediaSubjectKind::Revision, revision_id)
+            .await;
         let revision_id = assert_complete_prior_revision(
-            &env,
-            post_id,
+            CapturedPriorRevision {
+                count: revision_count,
+                revision,
+                tags: revision_tags,
+                audiences: revision_audiences,
+                media: revision_media,
+            },
             &prior,
             &prior_audiences,
             &prior_media,
             capture_clock,
-        )
-        .await;
+        );
         assert_eq!(
-            media_for_subject(
-                &env,
+            env.post_media_for_subject(
                 post_id,
                 PersistedMediaSubjectKind::Current,
                 RevisionId::from(0),
@@ -3550,17 +3394,12 @@ mod tests {
             "the current subject is replaced while the revision retains the prior form"
         );
         assert_eq!(
-            crate::with_closeable_pool!(env.base.pool(), pool, {
-                sqlx::query_scalar::<_, i64>(
-                    "SELECT COUNT(*) FROM post_media
-                     WHERE post_id = $1 AND subject_kind = 'revision' AND revision_id = $2",
-                )
-                .bind_storage(post_id)
-                .bind_storage(revision_id)
-                .fetch_one(pool)
-                .await
-            })
-            .expect("count revision media"),
+            env.count_post_media_for_subject(
+                post_id,
+                PersistedMediaSubjectKind::Revision,
+                revision_id,
+            )
+            .await,
             1,
             "the copied row carries the revision subject key"
         );
@@ -3605,13 +3444,13 @@ mod tests {
             .unwrap()
             .unwrap();
         let audiences = env.posts().get_post_audiences(post_id).await.unwrap();
-        let media = media_for_subject(
-            &env,
-            post_id,
-            PersistedMediaSubjectKind::Current,
-            RevisionId::from(0),
-        )
-        .await;
+        let media = env
+            .post_media_for_subject(
+                post_id,
+                PersistedMediaSubjectKind::Current,
+                RevisionId::from(0),
+            )
+            .await;
         let clock = parse_utc_instant("2026-08-27T12:01:00Z");
 
         update_post_confirmed(
@@ -3631,7 +3470,30 @@ mod tests {
         )
         .await;
 
-        assert_complete_prior_revision(&env, post_id, &prior, &audiences, &media, clock).await;
+        let revision_count = env
+            .count_post_revisions(post_id)
+            .await
+            .expect("count post revisions");
+        let revision = env.single_post_revision(post_id).await;
+        let revision_id = revision.revision_id;
+        let revision_tags = env.post_revision_tags(revision_id).await;
+        let revision_audiences = env.post_revision_audiences(revision_id).await;
+        let revision_media = env
+            .post_media_for_subject(post_id, PersistedMediaSubjectKind::Revision, revision_id)
+            .await;
+        assert_complete_prior_revision(
+            CapturedPriorRevision {
+                count: revision_count,
+                revision,
+                tags: revision_tags,
+                audiences: revision_audiences,
+                media: revision_media,
+            },
+            &prior,
+            &audiences,
+            &media,
+            clock,
+        );
         assert_eq!(
             owner_slugs_of(&*env.posts(), post_id, owner).await,
             vec!["newtag"]
@@ -3641,8 +3503,7 @@ mod tests {
             audiences
         );
         assert_eq!(
-            media_for_subject(
-                &env,
+            env.post_media_for_subject(
                 post_id,
                 PersistedMediaSubjectKind::Current,
                 RevisionId::from(0),
@@ -3692,13 +3553,13 @@ mod tests {
             .unwrap()
             .unwrap();
         let audiences = env.posts().get_post_audiences(post_id).await.unwrap();
-        let media = media_for_subject(
-            &env,
-            post_id,
-            PersistedMediaSubjectKind::Current,
-            RevisionId::from(0),
-        )
-        .await;
+        let media = env
+            .post_media_for_subject(
+                post_id,
+                PersistedMediaSubjectKind::Current,
+                RevisionId::from(0),
+            )
+            .await;
         let clock = parse_utc_instant("2026-08-27T12:02:00Z");
 
         update_post_confirmed(
@@ -3718,7 +3579,30 @@ mod tests {
         )
         .await;
 
-        assert_complete_prior_revision(&env, post_id, &prior, &audiences, &media, clock).await;
+        let revision_count = env
+            .count_post_revisions(post_id)
+            .await
+            .expect("count post revisions");
+        let revision = env.single_post_revision(post_id).await;
+        let revision_id = revision.revision_id;
+        let revision_tags = env.post_revision_tags(revision_id).await;
+        let revision_audiences = env.post_revision_audiences(revision_id).await;
+        let revision_media = env
+            .post_media_for_subject(post_id, PersistedMediaSubjectKind::Revision, revision_id)
+            .await;
+        assert_complete_prior_revision(
+            CapturedPriorRevision {
+                count: revision_count,
+                revision,
+                tags: revision_tags,
+                audiences: revision_audiences,
+                media: revision_media,
+            },
+            &prior,
+            &audiences,
+            &media,
+            clock,
+        );
         assert_eq!(
             owner_slugs_of(&*env.posts(), post_id, owner).await,
             vec!["kepttag"]
@@ -3728,8 +3612,7 @@ mod tests {
             vec![AudienceTarget::Public]
         );
         assert_eq!(
-            media_for_subject(
-                &env,
+            env.post_media_for_subject(
                 post_id,
                 PersistedMediaSubjectKind::Current,
                 RevisionId::from(0),
@@ -3786,13 +3669,13 @@ mod tests {
             .unwrap()
             .unwrap();
         let audiences = env.posts().get_post_audiences(post_id).await.unwrap();
-        let media = media_for_subject(
-            &env,
-            post_id,
-            PersistedMediaSubjectKind::Current,
-            RevisionId::from(0),
-        )
-        .await;
+        let media = env
+            .post_media_for_subject(
+                post_id,
+                PersistedMediaSubjectKind::Current,
+                RevisionId::from(0),
+            )
+            .await;
         let clock = parse_utc_instant("2026-08-27T12:03:00Z");
 
         update_post_confirmed(
@@ -3815,7 +3698,30 @@ mod tests {
         )
         .await;
 
-        assert_complete_prior_revision(&env, post_id, &prior, &audiences, &media, clock).await;
+        let revision_count = env
+            .count_post_revisions(post_id)
+            .await
+            .expect("count post revisions");
+        let revision = env.single_post_revision(post_id).await;
+        let revision_id = revision.revision_id;
+        let revision_tags = env.post_revision_tags(revision_id).await;
+        let revision_audiences = env.post_revision_audiences(revision_id).await;
+        let revision_media = env
+            .post_media_for_subject(post_id, PersistedMediaSubjectKind::Revision, revision_id)
+            .await;
+        assert_complete_prior_revision(
+            CapturedPriorRevision {
+                count: revision_count,
+                revision,
+                tags: revision_tags,
+                audiences: revision_audiences,
+                media: revision_media,
+            },
+            &prior,
+            &audiences,
+            &media,
+            clock,
+        );
         assert_eq!(
             owner_slugs_of(&*env.posts(), post_id, owner).await,
             vec!["kepttag"]
@@ -3825,8 +3731,7 @@ mod tests {
             audiences
         );
         assert_eq!(
-            media_for_subject(
-                &env,
+            env.post_media_for_subject(
                 post_id,
                 PersistedMediaSubjectKind::Current,
                 RevisionId::from(0),
@@ -4176,7 +4081,7 @@ mod tests {
                 .unwrap(),
             revisions_before + 1
         );
-        let revision = single_revision(&env, seeded.post_id).await;
+        let revision = env.single_post_revision(seeded.post_id).await;
         assert_eq!(revision.title, before.title);
         assert_eq!(revision.slug, before.slug);
         assert_eq!(revision.body, before.body);
@@ -4392,7 +4297,7 @@ mod tests {
                 .unwrap(),
             revisions_before + 1
         );
-        let revision = single_revision(&env, seeded.post_id).await;
+        let revision = env.single_post_revision(seeded.post_id).await;
         assert_eq!(revision.title, before.title);
         assert_eq!(revision.slug, before.slug);
         assert_eq!(revision.body, before.body);
@@ -4471,7 +4376,7 @@ mod tests {
                 .unwrap(),
             revisions_before + 1
         );
-        let revision = single_revision(&env, post_id).await;
+        let revision = env.single_post_revision(post_id).await;
         assert_eq!(revision.title, before.title);
         assert_eq!(revision.slug, before.slug);
         assert_eq!(revision.body, before.body);

@@ -272,7 +272,7 @@ mod tests {
     use sqlx::Error;
     use storage::{
         FeedCacheRow, FeedWindowMutation, MockPublisherStorage, PublisherStorageError,
-        test_support::{Backend, backends, inject_invalid_site_config},
+        test_support::{Backend, backends},
     };
 
     fn cache_row() -> FeedCacheRow {
@@ -484,7 +484,7 @@ mod tests {
     #[tokio::test]
     async fn snapshot_repairs_malformed_hub_before_exposure(#[case] backend: Backend) {
         let env = backend.setup().await;
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "malformed")
+        env.inject_invalid_site_config(SiteConfigKey::FeedsWebsubHubUrl, "malformed")
             .await
             .expect("seed malformed hub");
         let publisher = env.publisher();

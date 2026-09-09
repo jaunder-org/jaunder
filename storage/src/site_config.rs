@@ -883,9 +883,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{FeedsConfigReadGate, SMTP_CONFIG_KEYS, SiteConfigKey, SmtpConfigUpdateError};
-    use crate::test_support::{
-        Backend, TestEnv, backends, backends_matrix, confirmed, inject_invalid_site_config,
-    };
+    use crate::test_support::{Backend, backends, backends_matrix, confirmed};
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::media::{MaxFileSize, UserQuota};
     use common::registration::RegistrationPolicy;
@@ -915,16 +913,21 @@ mod tests {
         ));
     }
 
-    async fn set_config(env: &TestEnv, key: SiteConfigKey, value: &str) -> anyhow::Result<()> {
+    async fn set_config(
+        publisher: Arc<dyn crate::PublisherStorage>,
+        site_config: Arc<dyn crate::SiteConfigStorage>,
+        write_scope: crate::WriteScope,
+        key: SiteConfigKey,
+        value: &str,
+    ) -> anyhow::Result<()> {
         let mutation = match key {
             SiteConfigKey::FeedsMinItems => Some(FeedWindowMutation::SetMinItems(value.parse()?)),
             SiteConfigKey::FeedsMinDays => Some(FeedWindowMutation::SetMinDays(value.parse()?)),
             _ => None,
         };
         if let Some(mutation) = mutation {
-            let publisher = Arc::clone(&env.publisher());
             confirmed(
-                env.write_scope()
+                write_scope
                     .run(move |transaction| {
                         Box::pin(async move {
                             publisher.mutate_feed_window(transaction, mutation).await
@@ -934,22 +937,24 @@ mod tests {
             );
             return Ok(());
         }
-        let storage = Arc::clone(&env.site_config());
         let value = value.to_owned();
         confirmed(
-            env.write_scope()
+            write_scope
                 .run(move |transaction| {
-                    Box::pin(async move { storage.set(transaction, key, &value).await })
+                    Box::pin(async move { site_config.set(transaction, key, &value).await })
                 })
                 .await?,
         );
         Ok(())
     }
 
-    async fn delete_config(env: &TestEnv, key: SiteConfigKey) -> anyhow::Result<bool> {
-        let storage = std::sync::Arc::clone(&env.site_config());
+    async fn delete_config(
+        storage: Arc<dyn crate::SiteConfigStorage>,
+        write_scope: crate::WriteScope,
+        key: SiteConfigKey,
+    ) -> anyhow::Result<bool> {
         Ok(confirmed(
-            env.write_scope()
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move { storage.delete(transaction, key).await })
                 })
@@ -957,10 +962,13 @@ mod tests {
         ))
     }
 
-    async fn update_smtp_config(env: &TestEnv, update: SmtpConfigUpdate) -> anyhow::Result<()> {
-        let storage = Arc::clone(&env.site_config());
+    async fn update_smtp_config(
+        storage: Arc<dyn crate::SiteConfigStorage>,
+        write_scope: crate::WriteScope,
+        update: SmtpConfigUpdate,
+    ) -> anyhow::Result<()> {
         confirmed(
-            env.write_scope()
+            write_scope
                 .run(move |transaction| {
                     Box::pin(async move { storage.update_smtp_config(transaction, &update).await })
                 })
@@ -974,12 +982,24 @@ mod tests {
     async fn site_config_primitives_round_trip(#[case] backend: Backend) {
         let env = backend.setup().pristine().await;
         let store = &*env.site_config();
-        set_config(&env, SiteConfigKey::SiteTitle, "T")
-            .await
-            .unwrap();
-        set_config(&env, SiteConfigKey::BackupMode, "archive")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SiteTitle,
+            "T",
+        )
+        .await
+        .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::BackupMode,
+            "archive",
+        )
+        .await
+        .unwrap();
         assert_eq!(
             store.get_raw(SiteConfigKey::SiteTitle).await.unwrap(),
             Some("T".to_string())
@@ -991,8 +1011,24 @@ mod tests {
                 ("site.title".to_string(), "T".to_string()),
             ],
         );
-        assert!(delete_config(&env, SiteConfigKey::SiteTitle).await.unwrap());
-        assert!(!delete_config(&env, SiteConfigKey::SiteTitle).await.unwrap());
+        assert!(
+            delete_config(
+                Arc::clone(&env.site_config()),
+                env.write_scope(),
+                SiteConfigKey::SiteTitle,
+            )
+            .await
+            .unwrap()
+        );
+        assert!(
+            !delete_config(
+                Arc::clone(&env.site_config()),
+                env.write_scope(),
+                SiteConfigKey::SiteTitle,
+            )
+            .await
+            .unwrap()
+        );
         assert_eq!(store.get_raw(SiteConfigKey::SiteTitle).await.unwrap(), None);
     }
 
@@ -1076,8 +1112,7 @@ mod tests {
     async fn get_feeds_config_applies_the_existing_hub_read_policy(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        inject_invalid_site_config(
-            &env,
+        env.inject_invalid_site_config(
             SiteConfigKey::FeedsWebsubHubUrl,
             "https://hub.example.com/",
         )
@@ -1089,7 +1124,7 @@ mod tests {
             Some(parse_url("https://hub.example.com/"))
         );
 
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "not-a-url")
+        env.inject_invalid_site_config(SiteConfigKey::FeedsWebsubHubUrl, "not-a-url")
             .await
             .unwrap();
         let config = storage.get_feeds_config().await.unwrap();
@@ -1147,10 +1182,10 @@ mod tests {
         let storage = &*env.site_config();
         let corrupt_items = "corrupt-min-items-value";
         let corrupt_days = "corrupt-min-days-value";
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinItems, corrupt_items)
+        env.inject_invalid_site_config(SiteConfigKey::FeedsMinItems, corrupt_items)
             .await
             .unwrap();
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinDays, corrupt_days)
+        env.inject_invalid_site_config(SiteConfigKey::FeedsMinDays, corrupt_days)
             .await
             .unwrap();
 
@@ -1179,16 +1214,28 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        set_config(&env, SiteConfigKey::FeedsMinItems, "42")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::FeedsMinItems,
+            "42",
+        )
+        .await
+        .unwrap();
         let config = storage.get_feeds_config().await.unwrap();
         assert_eq!(config.min_items, parse_feed_min_items("42"));
         assert_eq!(config.min_days, parse_feed_min_days("30"));
 
-        set_config(&env, SiteConfigKey::FeedsMinDays, "7")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::FeedsMinDays,
+            "7",
+        )
+        .await
+        .unwrap();
         let config = storage.get_feeds_config().await.unwrap();
         assert_eq!(config.min_items, parse_feed_min_items("42"));
         assert_eq!(config.min_days, parse_feed_min_days("7"));
@@ -1262,7 +1309,15 @@ mod tests {
             (SiteConfigKey::SmtpUsername, "user@example.com"),
             (SiteConfigKey::SmtpPassword, "s3cr3t"),
         ] {
-            set_config(&env, key, value).await.unwrap();
+            set_config(
+                Arc::clone(&env.publisher()),
+                Arc::clone(&env.site_config()),
+                env.write_scope(),
+                key,
+                value,
+            )
+            .await
+            .unwrap();
         }
 
         let got = storage
@@ -1296,12 +1351,24 @@ mod tests {
     async fn get_smtp_config_rejects_a_bad_stored_port(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        set_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
-            .await
-            .unwrap();
-        set_config(&env, SiteConfigKey::SmtpPort, "not-a-port")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpHost,
+            "mail.example.com",
+        )
+        .await
+        .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpPort,
+            "not-a-port",
+        )
+        .await
+        .unwrap();
         let err = storage.get_smtp_config().await.unwrap_err();
         assert!(
             matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "smtp.port"),
@@ -1324,10 +1391,16 @@ mod tests {
     async fn get_smtp_config_rejects_a_stored_port_the_newtype_forbids(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        set_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
-            .await
-            .unwrap();
-        inject_invalid_site_config(&env, SiteConfigKey::SmtpPort, "0")
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpHost,
+            "mail.example.com",
+        )
+        .await
+        .unwrap();
+        env.inject_invalid_site_config(SiteConfigKey::SmtpPort, "0")
             .await
             .unwrap();
         let err = storage.get_smtp_config().await.unwrap_err();
@@ -1344,7 +1417,15 @@ mod tests {
     async fn get_smtp_config_rejects_an_empty_stored_host(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        set_config(&env, SiteConfigKey::SmtpHost, "").await.unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpHost,
+            "",
+        )
+        .await
+        .unwrap();
         let err = storage.get_smtp_config().await.unwrap_err();
         assert!(
             matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "smtp.host"),
@@ -1357,21 +1438,37 @@ mod tests {
     async fn get_smtp_config_rejects_an_empty_credential(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        set_config(&env, SiteConfigKey::SmtpHost, "mail.example.com")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SmtpHost,
+            "mail.example.com",
+        )
+        .await
+        .unwrap();
         // An empty stored credential bypasses the non-empty invariant only via tampering;
         // the bridge decode rejects it. Symmetric for username and password — and neither
         // error echoes the value, unlike the sibling keys above.
         for key in [SiteConfigKey::SmtpUsername, SiteConfigKey::SmtpPassword] {
             let dotted = key.as_ref();
-            set_config(&env, key, "").await.unwrap();
+            set_config(
+                Arc::clone(&env.publisher()),
+                Arc::clone(&env.site_config()),
+                env.write_scope(),
+                key,
+                "",
+            )
+            .await
+            .unwrap();
             let err = storage.get_smtp_config().await.unwrap_err();
             assert!(
                 matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == dotted),
                 "expected a column-decode error for {dotted}, got: {err:?}"
             );
-            delete_config(&env, key).await.unwrap();
+            delete_config(Arc::clone(&env.site_config()), env.write_scope(), key)
+                .await
+                .unwrap();
         }
     }
 
@@ -1380,15 +1477,33 @@ mod tests {
     async fn get_backup_config_ignores_invalid_stored_values(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        set_config(&env, SiteConfigKey::BackupSchedule, "not a cron")
-            .await
-            .unwrap();
-        set_config(&env, SiteConfigKey::BackupRetentionCount, "daily")
-            .await
-            .unwrap();
-        set_config(&env, SiteConfigKey::BackupMode, "floppy")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::BackupSchedule,
+            "not a cron",
+        )
+        .await
+        .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::BackupRetentionCount,
+            "daily",
+        )
+        .await
+        .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::BackupMode,
+            "floppy",
+        )
+        .await
+        .unwrap();
         let config = storage.get_backup_config().await.unwrap();
         assert_eq!(config, BackupConfig::default());
     }
@@ -1400,7 +1515,7 @@ mod tests {
         // (7) rather than being kept — pruning can never be configured to remove every backup.
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        inject_invalid_site_config(&env, SiteConfigKey::BackupRetentionCount, "0")
+        env.inject_invalid_site_config(SiteConfigKey::BackupRetentionCount, "0")
             .await
             .unwrap();
         let config = storage.get_backup_config().await.unwrap();
@@ -1413,15 +1528,27 @@ mod tests {
         let env = backend.setup().pristine().await;
         let storage = &*env.site_config();
         // Insert out of key order to prove the ORDER BY, not insertion order.
-        set_config(&env, SiteConfigKey::SiteTitle, "T")
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SiteTitle,
+            "T",
+        )
+        .await
+        .unwrap();
+        env.inject_invalid_site_config(SiteConfigKey::FeedsWebsubHubUrl, "https://h/")
             .await
             .unwrap();
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "https://h/")
-            .await
-            .unwrap();
-        set_config(&env, SiteConfigKey::BackupMode, "archive")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::BackupMode,
+            "archive",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             storage.list().await.unwrap(),
@@ -1439,13 +1566,25 @@ mod tests {
     async fn delete_removes_a_key_and_reports_whether_present(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        set_config(&env, SiteConfigKey::SiteTitle, "T")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SiteTitle,
+            "T",
+        )
+        .await
+        .unwrap();
 
         // Deleting a present key reports true and the row is gone.
         assert!(
-            delete_config(&env, SiteConfigKey::SiteTitle).await.unwrap(),
+            delete_config(
+                Arc::clone(&env.site_config()),
+                env.write_scope(),
+                SiteConfigKey::SiteTitle,
+            )
+            .await
+            .unwrap(),
             "deleting a present key reports true",
         );
         assert_eq!(
@@ -1456,7 +1595,13 @@ mod tests {
 
         // Deleting an absent key is an idempotent no-op reporting false.
         assert!(
-            !delete_config(&env, SiteConfigKey::SiteTitle).await.unwrap(),
+            !delete_config(
+                Arc::clone(&env.site_config()),
+                env.write_scope(),
+                SiteConfigKey::SiteTitle,
+            )
+            .await
+            .unwrap(),
             "deleting an absent key reports false (no-op)",
         );
     }
@@ -1477,9 +1622,15 @@ mod tests {
     async fn feeds_min_items_returns_override_value(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        set_config(&env, SiteConfigKey::FeedsMinItems, "50")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::FeedsMinItems,
+            "50",
+        )
+        .await
+        .unwrap();
         assert_eq!(
             storage.get_feeds_min_items().await.unwrap(),
             parse_feed_min_items("50")
@@ -1494,7 +1645,7 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.site_config();
         let corrupt = "corrupt-min-items-value";
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinItems, corrupt)
+        env.inject_invalid_site_config(SiteConfigKey::FeedsMinItems, corrupt)
             .await
             .unwrap();
 
@@ -1530,9 +1681,15 @@ mod tests {
     async fn feeds_min_days_returns_override_value(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        set_config(&env, SiteConfigKey::FeedsMinDays, "60")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::FeedsMinDays,
+            "60",
+        )
+        .await
+        .unwrap();
         assert_eq!(
             storage.get_feeds_min_days().await.unwrap(),
             parse_feed_min_days("60")
@@ -1546,7 +1703,7 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.site_config();
         let corrupt = "corrupt-min-days-value";
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsMinDays, corrupt)
+        env.inject_invalid_site_config(SiteConfigKey::FeedsMinDays, corrupt)
             .await
             .unwrap();
 
@@ -1575,14 +1732,20 @@ mod tests {
             storage.get_media_max_file_size().await.unwrap(),
             MaxFileSize::default()
         );
-        set_config(&env, SiteConfigKey::MediaMaxFileSizeBytes, "1024")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::MediaMaxFileSizeBytes,
+            "1024",
+        )
+        .await
+        .unwrap();
         assert_eq!(
             storage.get_media_max_file_size().await.unwrap(),
             parse_max_file_size("1024")
         );
-        inject_invalid_site_config(&env, SiteConfigKey::MediaMaxFileSizeBytes, "0")
+        env.inject_invalid_site_config(SiteConfigKey::MediaMaxFileSizeBytes, "0")
             .await
             .unwrap();
         assert_eq!(
@@ -1603,15 +1766,21 @@ mod tests {
             storage.get_media_user_quota().await.unwrap(),
             UserQuota::default()
         );
-        set_config(&env, SiteConfigKey::MediaUserQuotaBytes, "2048")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::MediaUserQuotaBytes,
+            "2048",
+        )
+        .await
+        .unwrap();
         assert_eq!(
             storage.get_media_user_quota().await.unwrap(),
             parse_user_quota("2048")
         );
         for invalid in ["0", "-5"] {
-            inject_invalid_site_config(&env, SiteConfigKey::MediaUserQuotaBytes, invalid)
+            env.inject_invalid_site_config(SiteConfigKey::MediaUserQuotaBytes, invalid)
                 .await
                 .unwrap();
             assert_eq!(
@@ -1653,7 +1822,7 @@ mod tests {
             );
         }
 
-        inject_invalid_site_config(&env, SiteConfigKey::MediaUploadsEnabled, "TRUE")
+        env.inject_invalid_site_config(SiteConfigKey::MediaUploadsEnabled, "TRUE")
             .await
             .unwrap();
         assert!(!storage.get_media_uploads_enabled().await.unwrap());
@@ -1672,8 +1841,7 @@ mod tests {
     async fn feeds_websub_hub_url_returns_some_when_set(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        inject_invalid_site_config(
-            &env,
+        env.inject_invalid_site_config(
             SiteConfigKey::FeedsWebsubHubUrl,
             "https://hub.example.com/",
         )
@@ -1693,7 +1861,7 @@ mod tests {
     async fn feeds_websub_hub_url_treats_empty_as_none(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "")
+        env.inject_invalid_site_config(SiteConfigKey::FeedsWebsubHubUrl, "")
             .await
             .unwrap();
         assert!(storage.get_feeds_websub_hub_url().await.unwrap().is_none());
@@ -1705,7 +1873,7 @@ mod tests {
         // Reads do not acquire write capabilities merely to repair legacy data.
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        inject_invalid_site_config(&env, SiteConfigKey::FeedsWebsubHubUrl, "not-a-url")
+        env.inject_invalid_site_config(SiteConfigKey::FeedsWebsubHubUrl, "not-a-url")
             .await
             .unwrap();
         assert_eq!(storage.get_feeds_websub_hub_url().await.unwrap(), None);
@@ -1733,9 +1901,15 @@ mod tests {
     async fn identity_returns_override_when_title_set(#[case] backend: Backend) {
         let env = backend.setup().base_url(None).await;
         let storage = &*env.site_config();
-        set_config(&env, SiteConfigKey::SiteTitle, "My Blog")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SiteTitle,
+            "My Blog",
+        )
+        .await
+        .unwrap();
         let identity = storage.get_identity().await.expect("get_identity");
         assert_eq!(identity.title, "My Blog");
         assert_eq!(identity.base_url, None);
@@ -1748,9 +1922,15 @@ mod tests {
         let storage = &*env.site_config();
         // A value stored WITHOUT a trailing slash (representable in the column)
         // still parses; the type normalizes it to the canonical slashed form.
-        set_config(&env, SiteConfigKey::SiteBaseUrl, "https://example.com")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SiteBaseUrl,
+            "https://example.com",
+        )
+        .await
+        .unwrap();
         let identity = storage.get_identity().await.expect("get_identity");
         assert_eq!(identity.title, common::site::DEFAULT_SITE_TITLE);
         assert_eq!(identity.base_url.as_deref(), Some("https://example.com/"));
@@ -1762,7 +1942,7 @@ mod tests {
         // Reads do not acquire write capabilities merely to repair legacy data.
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        inject_invalid_site_config(&env, SiteConfigKey::SiteBaseUrl, "not-a-url")
+        env.inject_invalid_site_config(SiteConfigKey::SiteBaseUrl, "not-a-url")
             .await
             .unwrap();
         assert_eq!(storage.get_identity().await.unwrap().base_url, None);
@@ -1777,9 +1957,15 @@ mod tests {
     async fn identity_treats_empty_title_as_unset(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        set_config(&env, SiteConfigKey::SiteTitle, "   ")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SiteTitle,
+            "   ",
+        )
+        .await
+        .unwrap();
         let identity = storage.get_identity().await.expect("get_identity");
         assert_eq!(identity.title, common::site::DEFAULT_SITE_TITLE);
     }
@@ -1789,9 +1975,15 @@ mod tests {
     async fn identity_treats_empty_base_url_as_none(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        set_config(&env, SiteConfigKey::SiteBaseUrl, "")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::SiteBaseUrl,
+            "",
+        )
+        .await
+        .unwrap();
         let identity = storage.get_identity().await.expect("get_identity");
         assert_eq!(identity.base_url, None);
     }
@@ -1826,9 +2018,15 @@ mod tests {
     async fn get_backup_config_treats_empty_destination_as_none(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.site_config();
-        set_config(&env, SiteConfigKey::BackupDestinationPath, "")
-            .await
-            .unwrap();
+        set_config(
+            Arc::clone(&env.publisher()),
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SiteConfigKey::BackupDestinationPath,
+            "",
+        )
+        .await
+        .unwrap();
         let config = storage.get_backup_config().await.unwrap();
         assert_eq!(config.destination_path, None);
     }
@@ -1885,7 +2083,7 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.site_config();
         for value in ["named", "not a real value", " private "] {
-            inject_invalid_site_config(&env, SiteConfigKey::PostsDefaultAudience, value)
+            env.inject_invalid_site_config(SiteConfigKey::PostsDefaultAudience, value)
                 .await
                 .unwrap();
             assert_eq!(
@@ -1956,7 +2154,7 @@ mod tests {
         let env = backend.setup().await;
         let storage = &*env.site_config();
         for value in ["invite_only", "garbage"] {
-            inject_invalid_site_config(&env, SiteConfigKey::SiteRegistrationPolicy, value)
+            env.inject_invalid_site_config(SiteConfigKey::SiteRegistrationPolicy, value)
                 .await
                 .unwrap();
             assert_eq!(
@@ -1982,7 +2180,8 @@ mod tests {
     async fn smtp_update_replaces_and_clears_credentials(#[case] backend: Backend) {
         let env = backend.setup().await;
         update_smtp_config(
-            &env,
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
             enabled_smtp(SmtpCredentialsUpdate::Replace {
                 username: parse_smtp_username("relay-user"),
                 password: parse_smtp_password("secret"),
@@ -1997,9 +2196,13 @@ mod tests {
                 .unwrap(),
             Some("secret".to_owned())
         );
-        update_smtp_config(&env, enabled_smtp(SmtpCredentialsUpdate::Unauthenticated))
-            .await
-            .unwrap();
+        update_smtp_config(
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            enabled_smtp(SmtpCredentialsUpdate::Unauthenticated),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             env.site_config()
                 .get_raw(SiteConfigKey::SmtpUsername)
@@ -2021,7 +2224,8 @@ mod tests {
     async fn smtp_disable_deletes_all_six_keys(#[case] backend: Backend) {
         let env = backend.setup().await;
         update_smtp_config(
-            &env,
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
             enabled_smtp(SmtpCredentialsUpdate::Replace {
                 username: parse_smtp_username("relay-user"),
                 password: parse_smtp_password("secret"),
@@ -2029,9 +2233,13 @@ mod tests {
         )
         .await
         .unwrap();
-        update_smtp_config(&env, SmtpConfigUpdate::Disabled)
-            .await
-            .unwrap();
+        update_smtp_config(
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
+            SmtpConfigUpdate::Disabled,
+        )
+        .await
+        .unwrap();
         for key in SMTP_CONFIG_KEYS {
             assert_eq!(env.site_config().get_raw(key).await.unwrap(), None);
         }
@@ -2172,7 +2380,8 @@ mod tests {
     ) {
         let env = backend.setup().await;
         update_smtp_config(
-            &env,
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
             enabled_smtp(SmtpCredentialsUpdate::Replace {
                 username: parse_smtp_username("original-user"),
                 password: parse_smtp_password("original-secret"),
@@ -2265,7 +2474,8 @@ mod tests {
     ) {
         let env = backend.setup().await;
         update_smtp_config(
-            &env,
+            Arc::clone(&env.site_config()),
+            env.write_scope(),
             enabled_smtp(SmtpCredentialsUpdate::Replace {
                 username: parse_smtp_username("relay-user"),
                 password: parse_smtp_password("secret"),

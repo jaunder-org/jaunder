@@ -566,8 +566,8 @@ impl PostDialect for Postgres {
 #[cfg(test)]
 mod tests {
     use crate::test_support::{
-        Backend, SeedUser, count_post_revisions, create_post_via_service, media_ref_for,
-        media_url_for, set_post_tags_confirmed,
+        Backend, SeedUser, create_post_via_service, media_ref_for, media_url_for,
+        set_post_tags_confirmed,
     };
     use common::test_support::{parse_post_body, parse_tag_label};
     use std::{sync::Arc, time::Duration};
@@ -632,7 +632,7 @@ mod tests {
             .expect("tag update task panicked")
             .expect("tag update failed after lock release");
         assert_eq!(
-            count_post_revisions(&env, post)
+            env.count_post_revisions(post)
                 .await
                 .expect("count captured revisions"),
             1,

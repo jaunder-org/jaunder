@@ -2,6 +2,8 @@
 //! pool/transaction primitives. Postgres clone URL lifecycle lives in [`super::postgres`];
 //! this leaf selects and wires that lifecycle into a uniform harness surface.
 use super::postgres::{PG_URL_FILE, PostgresDbGuard, PostgresTestConfig, template_postgres_url};
+#[cfg(test)]
+use crate::posts::media::PersistedMediaSubjectKind;
 use crate::posts::tags::{INSERT_POST_TAG, UPSERT_TAG_RETURNING_ID};
 use crate::sql::QueryStorageExt;
 use crate::{
@@ -14,8 +16,12 @@ use crate::{
 
 use common::MutationOutcome;
 use common::backup::BackupConfig;
-use common::ids::{PostId, TagId, UserId};
+#[cfg(test)]
+use common::ids::RevisionId;
+use common::ids::{AudienceId, ChannelId, PostId, SubscriptionId, TagId, UserId};
 use common::media::{MaxFileSize, MediaRef, UserQuota};
+#[cfg(test)]
+use common::media::{MediaReferenceForm, MediaReferenceKind};
 use common::registration::RegistrationPolicy;
 use common::tag::TagLabel;
 use common::tagged_url::BaseUrl;
@@ -25,6 +31,37 @@ use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 use std::sync::Arc;
 use tempfile::TempDir;
+
+#[cfg(test)]
+/// Physical post-revision row exposed only to storage tests that assert archival state.
+pub(crate) struct RawPostRevision {
+    pub(crate) revision_id: RevisionId,
+    pub(crate) post_id: PostId,
+    pub(crate) user_id: UserId,
+    pub(crate) title: Option<common::post_title::PostTitle>,
+    pub(crate) slug: common::slug::Slug,
+    pub(crate) body: common::post_body::PostBody,
+    pub(crate) format: common::render::PostFormat,
+    pub(crate) rendered_html: crate::posts::models::RenderedHtml,
+    pub(crate) summary: Option<common::post_summary::PostSummary>,
+    pub(crate) created_at: common::time::UtcInstant,
+    pub(crate) updated_at: common::time::UtcInstant,
+    pub(crate) published_at: Option<common::time::UtcInstant>,
+    pub(crate) deleted_at: Option<common::time::UtcInstant>,
+    pub(crate) captured_at: common::time::UtcInstant,
+}
+
+/// Database-provided physical identity retained only by the no-write regression.
+#[cfg(test)]
+#[derive(Debug, macros::SqlxBridge)]
+struct PhysicalPostTagRowId(String);
+
+#[cfg(test)]
+impl PhysicalPostTagRowId {
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
 
 // This crate only defines the templates, so it needs just the `template`
 // attribute. `#[export]` is consumed by `#[template]` (no import needed), and the
@@ -64,45 +101,19 @@ pub fn sqlite_write_scope(pool: SqlitePool) -> WriteScope {
 ///
 /// Returns an error when the storage operation fails.
 pub async fn set_site_config(
-    env: &TestEnv,
+    site_config: Arc<dyn SiteConfigStorage>,
+    write_scope: WriteScope,
     key: host::config_key::SiteConfigKey,
     value: &str,
 ) -> anyhow::Result<()> {
-    let site_config = env.site_config();
     let value = value.to_owned();
     confirmed(
-        env.write_scope()
+        write_scope
             .run(move |transaction| {
                 Box::pin(async move { site_config.set(transaction, key, &value).await })
             })
             .await?,
     );
-    Ok(())
-}
-
-/// Physically injects an invalid site-config row for defensive-read tests.
-///
-/// This bypasses typed storage deliberately: legacy database state can contain
-/// values rejected at normal write boundaries.
-///
-/// # Errors
-///
-/// Returns an error if inserting the physical row fails.
-pub async fn inject_invalid_site_config(
-    env: &TestEnv,
-    key: host::config_key::SiteConfigKey,
-    value: &str,
-) -> Result<(), sqlx::Error> {
-    crate::with_closeable_pool!(env.base.pool(), pool, {
-        sqlx::query(
-            "INSERT INTO site_config (key, value) VALUES ($1, $2)
-             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-        )
-        .bind(key)
-        .bind(value)
-        .execute(pool)
-        .await?;
-    });
     Ok(())
 }
 
@@ -541,6 +552,349 @@ impl TestEnv {
     pub fn media_content_locks(&self) -> crate::MediaContentLocks {
         crate::MediaContentLocks::new(Arc::new(self.base.path().to_path_buf()))
     }
+
+    /// Physically injects an invalid site-config row for defensive-read tests.
+    ///
+    /// This deliberately bypasses typed storage: legacy database state can contain
+    /// values rejected at normal write boundaries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if inserting the physical row fails.
+    pub async fn inject_invalid_site_config(
+        &self,
+        key: host::config_key::SiteConfigKey,
+        value: &str,
+    ) -> Result<(), sqlx::Error> {
+        crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query(
+                "INSERT INTO site_config (key, value) VALUES ($1, $2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            )
+            .bind(key)
+            .bind(value)
+            .execute(pool)
+            .await?;
+        });
+        Ok(())
+    }
+
+    /// Removes one physical media accounting row for a defensive-read test.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the physical row cannot be removed.
+    pub async fn delete_media_accounting_row(
+        &self,
+        user_id: UserId,
+        media: &MediaRef,
+    ) -> Result<(), sqlx::Error> {
+        crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query(
+                "DELETE FROM media WHERE user_id = $1 AND source = $2 AND sha256 = $3 AND filename = $4",
+            )
+            .bind_storage(user_id)
+            .bind_storage(media.source)
+            .bind_storage(&media.sha256)
+            .bind_storage(&media.filename)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        })
+    }
+
+    /// Inserts a deliberately corrupt physical media row for a decoder test.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the physical row cannot be inserted.
+    pub async fn insert_corrupt_media(
+        &self,
+        user_id: UserId,
+        sha256: &common::media::ContentHash,
+        sql: &'static str,
+    ) -> Result<(), sqlx::Error> {
+        crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query(sql)
+                .bind_storage(user_id)
+                .bind_storage(sha256)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        })
+    }
+    /// Counts physical post-revision rows for a test-owned database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the revision count cannot be read.
+    pub async fn count_post_revisions(&self, post_id: PostId) -> Result<i64, sqlx::Error> {
+        crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM post_revisions WHERE post_id = $1")
+                .bind_storage(post_id)
+                .fetch_one(pool)
+                .await
+        })
+    }
+
+    /// Reads the physical audience rows for one post from this test-owned database.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the physical rows cannot be read.
+    pub async fn post_audience_rows(&self, post_id: PostId) -> Vec<(String, Option<AudienceId>)> {
+        crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query_as(
+                "SELECT tk.name, pa.audience_id
+                 FROM post_audiences pa
+                 JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
+                 WHERE pa.post_id = $1
+                 ORDER BY tk.name, pa.audience_id",
+            )
+            .bind_storage(post_id)
+            .fetch_all(pool)
+            .await
+            .expect("read physical post audience rows")
+        })
+    }
+    /// Executes deliberately raw fixture SQL against this test-owned database.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the fixture SQL cannot be executed.
+    pub async fn execute_raw_sql(&self, sql: &'static str) {
+        let result = crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(pool)
+                .await
+                .map(|_| ())
+        });
+        result.unwrap_or_else(|error| panic!("raw fixture SQL failed: {error}\nSQL: {sql}"));
+    }
+
+    /// Reads a fixed channel row without using channel storage.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the fixed channel row cannot be read.
+    pub async fn channel_id_by_fixed_name(&self, name: &str) -> ChannelId {
+        crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query_scalar::<_, ChannelId>("SELECT channel_id FROM channels WHERE name = $1")
+                .bind(name)
+                .fetch_one(pool)
+                .await
+                .expect("read fixed channel")
+        })
+    }
+
+    /// Overrides one subscription timestamp through a physical fixture update.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the subscription row cannot be updated.
+    pub async fn update_subscription_created_at(
+        &self,
+        subscription_id: SubscriptionId,
+        created_at: common::time::UtcInstant,
+    ) {
+        let result = crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query("UPDATE subscriptions SET created_at = $1 WHERE subscription_id = $2")
+                .bind(created_at)
+                .bind(subscription_id)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        });
+        result.expect("update subscription timestamp");
+    }
+
+    /// Reads the physical identities of a post's tag rows.
+    #[cfg(test)]
+    pub(crate) async fn physical_post_tag_row_ids(&self, post_id: PostId) -> Vec<String> {
+        match self.base.pool() {
+            CloseablePool::Postgres(pool) => {
+                sqlx::query_scalar::<_, PhysicalPostTagRowId>(
+                    "SELECT ctid::text FROM post_tags WHERE post_id = $1 ORDER BY tag_id",
+                )
+                .bind_storage(post_id)
+                .fetch_all(pool)
+                .await
+            }
+            CloseablePool::Sqlite(pool) => {
+                sqlx::query_scalar::<_, PhysicalPostTagRowId>(
+                    "SELECT CAST(rowid AS TEXT) FROM post_tags WHERE post_id = $1 ORDER BY tag_id",
+                )
+                .bind_storage(post_id)
+                .fetch_all(pool)
+                .await
+            }
+        }
+        .expect("read physical post-tag row ids")
+        .into_iter()
+        .map(PhysicalPostTagRowId::into_inner)
+        .collect()
+    }
+
+    /// Reads a post's sole physical archival revision row.
+    #[cfg(test)]
+    pub(crate) async fn single_post_revision(&self, post_id: PostId) -> RawPostRevision {
+        use sqlx::Row;
+
+        macro_rules! decode {
+            ($row:expr) => {{
+                let row = $row;
+                RawPostRevision {
+                    revision_id: row.try_get("revision_id").unwrap(),
+                    post_id: row.try_get("post_id").unwrap(),
+                    user_id: row.try_get("user_id").unwrap(),
+                    title: row.try_get("title").unwrap(),
+                    slug: row.try_get("slug").unwrap(),
+                    body: row.try_get("body").unwrap(),
+                    format: row.try_get("format").unwrap(),
+                    rendered_html: row.try_get("rendered_html").unwrap(),
+                    summary: row.try_get("summary").unwrap(),
+                    created_at: row.try_get("created_at").unwrap(),
+                    updated_at: row.try_get("updated_at").unwrap(),
+                    published_at: row.try_get("published_at").unwrap(),
+                    deleted_at: row.try_get("deleted_at").unwrap(),
+                    captured_at: row.try_get("captured_at").unwrap(),
+                }
+            }};
+        }
+
+        let sql = "SELECT revision_id, post_id, user_id, title, slug, body, format, rendered_html, summary,
+                          created_at, updated_at, published_at, deleted_at, captured_at
+                   FROM post_revisions WHERE post_id = $1";
+        match self.base.pool() {
+            CloseablePool::Postgres(pool) => decode!(
+                sqlx::query(sql)
+                    .bind_storage(post_id)
+                    .fetch_one(pool)
+                    .await
+                    .expect("read revision")
+            ),
+            CloseablePool::Sqlite(pool) => decode!(
+                sqlx::query(sql)
+                    .bind_storage(post_id)
+                    .fetch_one(pool)
+                    .await
+                    .expect("read revision")
+            ),
+        }
+    }
+
+    /// Reads physical media references for one current or archival post subject.
+    #[cfg(test)]
+    pub(crate) async fn post_media_for_subject(
+        &self,
+        post_id: PostId,
+        subject_kind: PersistedMediaSubjectKind,
+        revision_id: RevisionId,
+    ) -> Vec<(MediaRef, MediaReferenceKind, MediaReferenceForm)> {
+        crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query_as::<_, (String, String, String, String, String)>(
+                "SELECT source, sha256, filename, reference_kind, reference_form
+                 FROM post_media
+                 WHERE post_id = $1 AND subject_kind = $2 AND revision_id = $3
+                 ORDER BY source, sha256, filename, reference_kind, reference_form",
+            )
+            .bind_storage(post_id)
+            .bind_storage(subject_kind)
+            .bind_storage(revision_id)
+            .fetch_all(pool)
+            .await
+        })
+        .expect("read post media subject")
+        .into_iter()
+        .map(|(source, sha256, filename, kind, form)| {
+            (
+                MediaRef {
+                    source: source.parse().expect("valid media source"),
+                    sha256: sha256.parse().expect("valid media hash"),
+                    filename: filename.parse().expect("valid media filename"),
+                },
+                kind.parse().expect("valid media reference kind"),
+                form.parse().expect("valid media reference form"),
+            )
+        })
+        .collect()
+    }
+
+    /// Counts physical media references for one current or archival post subject.
+    #[cfg(test)]
+    pub(crate) async fn count_post_media_for_subject(
+        &self,
+        post_id: PostId,
+        subject_kind: PersistedMediaSubjectKind,
+        revision_id: RevisionId,
+    ) -> i64 {
+        crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM post_media
+                 WHERE post_id = $1 AND subject_kind = $2 AND revision_id = $3",
+            )
+            .bind_storage(post_id)
+            .bind_storage(subject_kind)
+            .bind_storage(revision_id)
+            .fetch_one(pool)
+            .await
+        })
+        .expect("count post media subject")
+    }
+
+    /// Reads physical tag rows copied into one archival revision.
+    #[cfg(test)]
+    pub(crate) async fn post_revision_tags(
+        &self,
+        revision_id: RevisionId,
+    ) -> Vec<(String, String)> {
+        crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT tag_slug, tag_display FROM post_revision_tags
+                 WHERE revision_id = $1 ORDER BY tag_slug",
+            )
+            .bind_storage(revision_id)
+            .fetch_all(pool)
+            .await
+        })
+        .expect("read revision tags")
+    }
+
+    /// Reads physical audience rows copied into one archival revision.
+    #[cfg(test)]
+    pub(crate) async fn post_revision_audiences(
+        &self,
+        revision_id: RevisionId,
+    ) -> Vec<(String, String)> {
+        crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT target_kind, COALESCE(CAST(audience_id AS TEXT), '')
+                 FROM post_revision_audiences
+                 WHERE revision_id = $1 ORDER BY target_kind, audience_id",
+            )
+            .bind_storage(revision_id)
+            .fetch_all(pool)
+            .await
+        })
+        .expect("read revision audiences")
+    }
+    /// Reads a fixed lookup table's names through this test-owned database.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the lookup-table rows cannot be read.
+    pub async fn lookup_table_names(&self, table: &str) -> Vec<String> {
+        let sql = sqlx::AssertSqlSafe(format!(
+            "SELECT name FROM \"{}\" ORDER BY name",
+            table.replace('"', "\"\"")
+        ));
+        crate::with_closeable_pool!(self.base.pool(), pool, {
+            sqlx::query_scalar(sql)
+                .fetch_all(pool)
+                .await
+                .expect("read lookup-table names")
+        })
+    }
 }
 
 /// Creates the shared lock seam for fixture Post writers that receive only a
@@ -821,7 +1175,9 @@ impl IntoFuture for SetupBuilder {
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             let env = self.backend.provision().await;
-            seed_site_config(&env, self.seed(), SeedFailure::Never)
+            let site_config = env.site_config();
+            let write_scope = env.write_scope();
+            seed_site_config(site_config, write_scope, self.seed(), SeedFailure::Never)
                 .await
                 .expect("seed site-config fixture");
             env
@@ -848,7 +1204,8 @@ enum SeedFailure {
 }
 
 async fn seed_site_config(
-    env: &TestEnv,
+    site_config: Arc<dyn SiteConfigStorage>,
+    write_scope: WriteScope,
     seed: SiteConfigSeed,
     failure: SeedFailure,
 ) -> anyhow::Result<()> {
@@ -869,9 +1226,7 @@ async fn seed_site_config(
         let _ = failure;
         false
     };
-    let site_config = env.site_config();
-    let outcome = env
-        .write_scope()
+    let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
                 site_config
@@ -1186,7 +1541,8 @@ mod tests {
     ) {
         let env = backend.provision().await;
         let result = seed_site_config(
-            &env,
+            env.site_config(),
+            env.write_scope(),
             SiteConfigSeed::Configured {
                 registration: RegistrationPolicy::Open,
                 base_url: Some("https://example.com/".parse().unwrap()),
