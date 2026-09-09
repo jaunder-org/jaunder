@@ -118,6 +118,28 @@ fn public_tree_stages_without_a_declared_bundle() {
         "body {}"
     );
 }
+
+#[test]
+fn verified_bundle_and_nested_public_assets_stage_together() {
+    let (bundle, manifest) = bundle_root();
+    let public = TempDir::new().expect("public root");
+    let site = TempDir::new().expect("staging root");
+    let stylesheet = public.path().join("style/jaunder.css");
+    fs::create_dir_all(stylesheet.parent().expect("stylesheet parent"))
+        .expect("create stylesheet parent");
+    fs::write(&stylesheet, "body {}").expect("write stylesheet");
+
+    build_impl::stage_bundle(bundle.path(), site.path(), public.path(), &manifest)
+        .expect("stage verified bundle");
+
+    manifest
+        .verify_bundle(site.path())
+        .expect("staged bundle remains verified");
+    assert_eq!(
+        fs::read_to_string(site.path().join("style/jaunder.css")).expect("read public stylesheet"),
+        "body {}"
+    );
+}
 #[test]
 fn build_script_staging_cleanup_failure_aborts_before_create_or_copy() {
     let created = Cell::new(false);
