@@ -921,7 +921,6 @@ impl ShutdownSupervisor {
         let mut sigterm = signal(SignalKind::terminate())?;
         let (tx, rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            // cov:ignore-start: A forced second signal calls process::exit, so the signal loop cannot complete in a survivable host test.
             let mut state = ShutdownState::AwaitingSignal;
             let mut graceful_shutdown = Some(tx);
             loop {
@@ -948,11 +947,10 @@ impl ShutdownSupervisor {
                     ShutdownTransition::ForceExitAndRemoveRuntimeIdentity => {
                         tracing::warn!("received SIGINT while draining; forcing immediate exit");
                         runtime_file::remove_runtime_file(&runtime_path);
-                        std::process::exit(0);
+                        std::process::exit(0); // cov:ignore: A forced second signal terminates the process, so this exact call cannot return in a survivable host test.
                     }
                 }
             }
-            // cov:ignore-stop
         });
         Ok((rx, Self { task: Some(task) }))
     }
@@ -1163,6 +1161,11 @@ mod tests {
             ),
             feed_interval,
         }
+    }
+
+    async fn abort_and_join<T>(task: &mut JoinHandle<T>) -> Result<T, tokio::task::JoinError> {
+        task.abort();
+        task.await
     }
 
     async fn shutdown_prepared_server(mut prepared: PreparedServer) {
@@ -1954,11 +1957,8 @@ mod tests {
         .await
         .is_err()
         {
-            // cov:ignore-start: This timeout cleanup runs only after the test's required runtime identity publication has failed.
-            command.abort();
-            let _ = command.await;
+            let _ = abort_and_join(&mut command).await;
             panic!("cmd_serve must publish a ready runtime identity");
-            // cov:ignore-stop
         }
 
         nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).expect("send SIGTERM");
@@ -1968,8 +1968,7 @@ mod tests {
                 .expect("cmd_serve task must not panic")
                 .expect("cmd_serve must gracefully shut down");
         } else {
-            command.abort();
-            let _ = command.await;
+            let _ = abort_and_join(&mut command).await;
             panic!("cmd_serve must complete after SIGTERM");
         }
         assert!(
@@ -1988,5 +1987,16 @@ mod tests {
     #[tokio::test]
     async fn sigint_drains_and_removes_runtime_file() {
         assert_signal_removes_runtime_file(nix::sys::signal::Signal::SIGINT).await;
+    }
+
+    #[tokio::test]
+    async fn abort_and_join_cancels_the_task() {
+        let mut task = tokio::spawn(std::future::pending::<()>());
+
+        let error = abort_and_join(&mut task)
+            .await
+            .expect_err("aborted task must report cancellation");
+
+        assert!(error.is_cancelled());
     }
 }

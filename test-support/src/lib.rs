@@ -304,42 +304,41 @@ pub async fn seed_dead_letters(
             .map_err(|_| anyhow::anyhow!("generated WebSub fixture feed path was invalid"))?;
         let feed_events = Arc::clone(&feed_events);
         let diagnostic = format!("fixture {phase:?} failure {index}");
-        let id = confirmed_fixture_outcome(
-            write_scope
-                .run(move |transaction| {
-                    Box::pin(async move {
-                        let id = feed_events.enqueue(transaction, &feed_path).await?;
-                        match phase {
-                            FeedEventPhase::Regeneration => {
-                                feed_events
-                                    .dead_letter_regeneration(
-                                        transaction,
-                                        &[id],
-                                        &diagnostic,
-                                        common::time::UtcInstant::now(),
-                                    )
-                                    .await?;
-                            }
-                            FeedEventPhase::Publication => {
-                                feed_events
-                                    .dead_letter_publication(
-                                        transaction,
-                                        &[id],
-                                        &diagnostic,
-                                        common::time::UtcInstant::now(),
-                                    )
-                                    .await?;
-                            }
+        let transaction_outcome = write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    let id = feed_events.enqueue(transaction, &feed_path).await?;
+                    match phase {
+                        FeedEventPhase::Regeneration => {
+                            feed_events
+                                .dead_letter_regeneration(
+                                    transaction,
+                                    &[id],
+                                    &diagnostic,
+                                    common::time::UtcInstant::now(),
+                                )
+                                .await?;
                         }
-                        Ok::<FeedEventId, storage::FeedEventError>(id)
-                    })
+                        FeedEventPhase::Publication => {
+                            feed_events
+                                .dead_letter_publication(
+                                    transaction,
+                                    &[id],
+                                    &diagnostic,
+                                    common::time::UtcInstant::now(),
+                                )
+                                .await?;
+                        }
+                    }
+                    Ok::<FeedEventId, storage::FeedEventError>(id)
                 })
-                .await
-                .map_err(|error| {
-                    anyhow::anyhow!("atomic WebSub dead-letter fixture failed: {error}")
-                })?,
-            "atomic WebSub dead-letter fixture",
-        )?; // cov:ignore: llvm-cov omits this executed outer `?` closing span in the real storage fixture
+            })
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("atomic WebSub dead-letter fixture failed: {error}")
+            })?;
+        let id =
+            confirmed_fixture_outcome(transaction_outcome, "atomic WebSub dead-letter fixture")?;
         ids.push(id);
     }
     Ok(ids)

@@ -48,6 +48,32 @@ trait ProcessOperations {
     fn wait_for_exit(&self, handle: &Self::Handle, timeout: Duration) -> io::Result<bool>;
 }
 
+fn pidfd_open_outcome<Handle>(
+    result: Result<Handle, rustix::io::Errno>,
+) -> io::Result<OpenOutcome<Handle>> {
+    match result {
+        Ok(handle) => Ok(OpenOutcome::Captured(handle)),
+        Err(error) if error == rustix::io::Errno::SRCH => Ok(OpenOutcome::ProcessExited),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn pidfd_signal_outcome(result: Result<(), rustix::io::Errno>) -> io::Result<()> {
+    match result {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn poll_outcome(result: Result<usize, rustix::io::Errno>) -> io::Result<Option<bool>> {
+    match result {
+        Ok(0) => Ok(Some(false)),
+        Ok(_) => Ok(Some(true)),
+        Err(error) if error == rustix::io::Errno::INTR => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 struct LinuxProcessOperations;
 
 impl ProcessOperations for LinuxProcessOperations {
@@ -58,12 +84,7 @@ impl ProcessOperations for LinuxProcessOperations {
             .ok()
             .and_then(Pid::from_raw)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid runtime pid"))?;
-        match process::pidfd_open(pid, PidfdFlags::empty()) {
-            Ok(handle) => Ok(OpenOutcome::Captured(handle)),
-            // pidfd error identities depend on the running kernel/process table.
-            Err(error) if error == rustix::io::Errno::SRCH => Ok(OpenOutcome::ProcessExited),
-            Err(error) => Err(error.into()), // cov:ignore: No deterministic portable process-table seam can induce another pidfd_open OS failure.
-        }
+        pidfd_open_outcome(process::pidfd_open(pid, PidfdFlags::empty()))
     }
 
     fn start_time(&self, pid: u32) -> io::Result<Option<u64>> {
@@ -71,10 +92,7 @@ impl ProcessOperations for LinuxProcessOperations {
     }
 
     fn signal_term(&self, handle: &Self::Handle) -> io::Result<()> {
-        match process::pidfd_send_signal(handle, Signal::TERM) {
-            Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
-            Err(error) => Err(error.into()), // cov:ignore: Kernel permission and pidfd signaling failures have no deterministic portable host seam.
-        }
+        pidfd_signal_outcome(process::pidfd_send_signal(handle, Signal::TERM))
     }
 
     fn wait_for_exit(&self, handle: &Self::Handle, timeout: Duration) -> io::Result<bool> {
@@ -93,11 +111,8 @@ impl ProcessOperations for LinuxProcessOperations {
                 tv_nsec: remaining.subsec_nanos().into(),
             };
             let mut fds = [PollFd::new(handle, PollFlags::IN)];
-            match event::poll(&mut fds, Some(&timeout)) {
-                Ok(0) => return Ok(false),
-                Ok(_) => return Ok(true),
-                Err(error) if error == rustix::io::Errno::INTR => {} // cov:ignore: Delivering an interrupt at this poll point has no deterministic public host seam.
-                Err(error) => return Err(error.into()), // cov:ignore: Kernel poll failures have no deterministic portable host seam.
+            if let Some(exited) = poll_outcome(event::poll(&mut fds, Some(&timeout)))? {
+                return Ok(exited);
             }
         }
     }
@@ -372,6 +387,14 @@ mod tests {
             .expect("an impossible Linux PID is not an OS error");
 
         assert!(matches!(outcome, OpenOutcome::ProcessExited));
+    }
+
+    #[test]
+    fn pidfd_helpers_preserve_kernel_error_outcomes() {
+        assert!(pidfd_open_outcome::<()>(Err(rustix::io::Errno::PERM)).is_err());
+        assert!(pidfd_signal_outcome(Err(rustix::io::Errno::PERM)).is_err());
+        assert_eq!(poll_outcome(Err(rustix::io::Errno::INTR)).unwrap(), None);
+        assert!(poll_outcome(Err(rustix::io::Errno::PERM)).is_err());
     }
 
     #[test]

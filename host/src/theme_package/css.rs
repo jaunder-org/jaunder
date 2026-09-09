@@ -228,14 +228,10 @@ fn custom_font_family_name(family: &FontFamily<'_>) -> Result<String, ThemePacka
     let serde_json::Value::String(name) = serde_json::to_value(family)
         .map_err(|error| ThemePackageError::Css(format!("font-family schema changed: {error}")))?
     else {
-        // cov:ignore-start: lightningcss FamilyName serialization always produces a JSON string.
-        return Err(ThemePackageError::Css(
-            "font-family schema changed: expected a string".into(),
-        ));
-        // cov:ignore-stop
+        unreachable!("lightningcss FamilyName serialization must produce a JSON string");
     };
     if name.is_empty() {
-        return Err(ThemePackageError::Css("font-family cannot be empty".into())); // cov:ignore: lightningcss rejects an empty custom family before this defensive check
+        return Err(ThemePackageError::Css("font-family cannot be empty".into()));
     }
     Ok(name)
 }
@@ -246,11 +242,7 @@ fn font_family_from_name(name: &str) -> Result<FontFamily<'static>, ThemePackage
     )
     .map_err(|error| ThemePackageError::Css(format!("font-family schema changed: {error}")))?;
     if !matches!(family, FontFamily::FamilyName(_)) || custom_font_family_name(&family)? != name {
-        // cov:ignore-start: lightningcss round-trips every parsed custom family through its FamilyName representation.
-        return Err(ThemePackageError::Css(
-            "font-family schema changed: custom family did not round-trip".into(),
-        ));
-        // cov:ignore-stop
+        unreachable!("lightningcss must round-trip custom families as FamilyName");
     }
     Ok(family)
 }
@@ -526,6 +518,14 @@ mod tests {
         let css = std::str::from_utf8(compiled.bytes()).unwrap();
         assert!(css.contains("jaunder-0707070707070707-pulse"));
         assert!(!css.contains("animation-name:pulse"));
+    }
+
+    #[test]
+    fn rejects_empty_custom_font_family_name() {
+        assert!(matches!(
+            font_family_from_name(""),
+            Err(ThemePackageError::Css(message)) if message == "font-family cannot be empty"
+        ));
     }
 
     #[test]

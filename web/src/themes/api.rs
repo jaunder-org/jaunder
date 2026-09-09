@@ -742,14 +742,12 @@ pub async fn import_css(
     if stylesheet.len() > ThemePackageLimits::default().max_file_bytes {
         return Err(InternalError::validation("theme stylesheet is too large"));
     }
-    let draft = draft_from_input(
-        ThemeId::from(0),
-        Draft {
-            manifest: plain_css_manifest(&name)?,
-            stylesheet,
-            assets: Vec::new(),
-        },
-    )?; // cov:ignore: llvm-cov omits the exercised CSS-draft conversion propagation edge.
+    let input = Draft {
+        manifest: plain_css_manifest(&name)?,
+        stylesheet,
+        assets: Vec::new(),
+    };
+    let draft = draft_from_input(ThemeId::from(0), input)?;
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let write_scope = expect_context::<WriteScope>();
     let name_for_write = name.clone();
@@ -837,13 +835,12 @@ pub async fn export(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Expor
     let bytes = theme_package::export_theme_package(&draft.manifest, &draft.stylesheet, &assets)
         .map_err(InternalError::server)?;
     let filename = safe_filename(&entry.name);
+    let content_disposition =
+        axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .map_err(InternalError::server)?;
     if let Some(options) = use_context::<ResponseOptions>() {
-        options.insert_header(
-            axum::http::header::CONTENT_DISPOSITION,
-            axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
-                .map_err(InternalError::server)?,
-        );
-    } // cov:ignore: llvm-cov omits the exercised download-header branch closing edge.
+        options.insert_header(axum::http::header::CONTENT_DISPOSITION, content_disposition);
+    }
     Ok(ExportedPackage { filename, bytes })
 }
 
@@ -949,15 +946,15 @@ pub async fn select(
     let (_, owner) = owner(scope).await?;
     if let Some(PublicThemeSelection::Custom(theme_id)) = selection {
         let themes = expect_context::<Arc<dyn ThemeStorage>>();
-        if !themes
+        let published = themes
             .list_themes(owner)
             .await
             .map_err(InternalError::storage)?
             .into_iter()
-            .any(|entry| entry.id == theme_id && entry.current_revision.is_some())
-        {
+            .any(|entry| entry.id == theme_id && entry.current_revision.is_some());
+        if !published {
             return Err(InternalError::not_found("theme"));
-        } // cov:ignore: llvm-cov omits the exercised unpublished-selection rejection closing edge.
+        }
     }
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let write_scope = expect_context::<WriteScope>();
@@ -1634,6 +1631,33 @@ mod tests {
         drop(reactive_owner);
     }
 
+    // guard:no-backend — mock store rejects the selection before a write is opened
+    #[tokio::test]
+    async fn selecting_an_unpublished_owned_theme_is_rejected_before_write() {
+        let reactive_owner = Owner::new();
+        reactive_owner.set();
+        let theme_id = ThemeId::from(8_i64);
+        let mut themes = MockThemeStorage::new();
+        themes.expect_list_themes().returning(move |_| {
+            Ok(vec![ThemeCatalogEntry {
+                id: theme_id,
+                owner: ThemeOwner::Author(UserId::from(7_i64)),
+                name: "Ocean".into(),
+                current_revision: None,
+            }])
+        });
+        provide_author_and_themes(themes);
+
+        let error = select(
+            OwnershipScope::Author,
+            Some(common::theme::PublicThemeSelection::Custom(theme_id)),
+        )
+        .await
+        .expect_err("unpublished themes cannot be selected");
+
+        drop(reactive_owner);
+        assert!(matches!(error, WebError::NotFound { .. }));
+    }
     // guard:no-backend — concrete manager over mock stores and write scope
     #[tokio::test]
     async fn replacing_an_owned_header_pool_preserves_wire_inputs() {

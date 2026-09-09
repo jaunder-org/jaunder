@@ -316,10 +316,10 @@ where
                 continue;
             }
         };
-        // Construction and decomposition intentionally remain separate contracts.
-        // Skip grammar drift just as a raw cached path decode failure is skipped.
+        // Decoding enforces the same grammar as decomposition, so a decoded path
+        // without a surface would violate the FeedPath invariant.
         let Some((surface, _)) = feed_path.parts() else {
-            continue; // cov:ignore: FeedPath construction/parse grammar drift cannot be synthesized through the validating cache decoder.
+            unreachable!("validated feed paths always have a feed surface");
         };
         if let Some(max) = max_published_at_for_surface::<DB>(pool, &surface, now).await?
             && max > generated_at

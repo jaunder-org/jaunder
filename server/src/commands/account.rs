@@ -1,8 +1,9 @@
-use jiff::ToSpan;
-use std::sync::Arc;
+use std::{io, sync::Arc};
 
 use crate::mailer::LettreMailSender;
 use anyhow::Context;
+use jiff::ToSpan;
+
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::invite::InviteTtlHours;
@@ -51,6 +52,18 @@ async fn create_command_user(
     support::require_confirmed_mutation(outcome, "user creation")
 }
 
+fn interactive_password_with(
+    mut prompt: impl for<'prompt> FnMut(&'prompt str) -> io::Result<String>,
+) -> anyhow::Result<Password> {
+    let password = prompt("Password: ")?;
+    let confirmation = prompt("Confirm password: ")?;
+    if password != confirmation {
+        return Err(anyhow::anyhow!("passwords do not match"));
+    }
+    password
+        .parse::<Password>()
+        .map_err(|error| anyhow::anyhow!("{error}"))
+}
 /// Creates a new user with the injected user store and write capability.
 ///
 /// # Errors
@@ -67,14 +80,7 @@ pub async fn cmd_user_create(
     let password = if let Some(p) = password {
         p
     } else {
-        // cov:ignore-start: The unattended command harness cannot provide interactive TTY password prompts.
-        let p1 = rpassword::prompt_password("Password: ")?;
-        let p2 = rpassword::prompt_password("Confirm password: ")?;
-        if p1 != p2 {
-            return Err(anyhow::anyhow!("passwords do not match"));
-        }
-        p1.parse::<Password>().map_err(|e| anyhow::anyhow!("{e}"))?
-        // cov:ignore-stop
+        interactive_password_with(|prompt| rpassword::prompt_password(prompt))?
     };
 
     let user_id = create_command_user(
@@ -523,5 +529,35 @@ mod tests {
                 "{policy:?} must reject before minting"
             );
         }
+    }
+
+    #[test]
+    fn interactive_password_requires_matching_valid_entries() {
+        let mut entries = ["password123", "password123"].into_iter();
+
+        let password = interactive_password_with(|_| {
+            Ok(entries
+                .next()
+                .expect("the helper asks for exactly two password entries")
+                .to_owned())
+        })
+        .expect("matching valid password");
+
+        assert_eq!(password.as_ref(), "password123");
+    }
+
+    #[test]
+    fn interactive_password_rejects_mismatched_entries() {
+        let mut entries = ["password123", "different123"].into_iter();
+
+        let error = interactive_password_with(|_| {
+            Ok(entries
+                .next()
+                .expect("the helper asks for exactly two password entries")
+                .to_owned())
+        })
+        .expect_err("mismatched entries must be rejected");
+
+        assert_eq!(error.to_string(), "passwords do not match");
     }
 }

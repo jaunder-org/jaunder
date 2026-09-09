@@ -569,6 +569,10 @@ mod tests {
         "JAUNDER_ENV",
     ];
 
+    fn child_failure_diagnostic(stderr: &[u8]) -> String {
+        String::from_utf8_lossy(stderr).into_owned()
+    }
+
     fn parse_in_child(scenario: &str, environment: &[(&str, &str)]) -> String {
         let mut command =
             std::process::Command::new(std::env::current_exe().expect("test executable"));
@@ -589,8 +593,7 @@ mod tests {
         assert!(
             output.status.success(),
             "CLI parser child failed: {}",
-            // Parent tests require success; this expression is failure-only diagnostics.
-            String::from_utf8_lossy(&output.stderr) // cov:ignore: This diagnostic is evaluated only when the child contract has already failed.
+            child_failure_diagnostic(&output.stderr)
         );
         String::from_utf8(output.stdout)
             .expect("child stdout is UTF-8")
@@ -598,6 +601,14 @@ mod tests {
             .find_map(|line| line.strip_prefix("CLI_TEST_PROJECTION="))
             .expect("child emitted CLI projection")
             .to_owned()
+    }
+
+    #[test]
+    fn child_failure_diagnostic_preserves_non_utf8_output() {
+        assert_eq!(
+            child_failure_diagnostic(b"parser \xff failed"),
+            "parser � failed"
+        );
     }
 
     #[test]

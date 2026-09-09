@@ -490,9 +490,7 @@ impl ThemeAssetManager {
             let mut second = match fs::read_dir(prefix_entry.path()).await {
                 Ok(entries) => entries,
                 Err(error) if error.kind() == io::ErrorKind::NotADirectory => continue,
-                // cov:ignore-start: reading a directory already enumerated requires a concurrent filesystem race or host-level fault injection.
                 Err(error) => return Err(error.into()),
-                // cov:ignore-stop
             };
             while let Some(shard_entry) = second.next_entry().await? {
                 let shard_name = shard_entry.file_name();
@@ -503,9 +501,7 @@ impl ThemeAssetManager {
                 let mut files = match fs::read_dir(shard_entry.path()).await {
                     Ok(entries) => entries,
                     Err(error) if error.kind() == io::ErrorKind::NotADirectory => continue,
-                    // cov:ignore-start: reading a shard already enumerated requires a concurrent filesystem race or host-level fault injection.
                     Err(error) => return Err(error.into()),
-                    // cov:ignore-stop
                 };
                 while let Some(file) = files.next_entry().await? {
                     if !file.file_type().await?.is_file() {
@@ -514,8 +510,11 @@ impl ThemeAssetManager {
                     let name = file.file_name();
                     let digest = name.to_string_lossy();
                     if Self::is_canonical_digest_path(&prefix, &shard, &digest) {
-                        digests.push(digest.parse().map_err(|_| ThemeAssetError::InvalidDigest)?); // cov:ignore: canonical lowercase SHA-256 validation guarantees this digest newtype parser accepts the path.
-                    } // cov:ignore: LLVM leaves this parser-result closure edge unmarked although reconciliation exercises the canonical digest path.
+                        let Ok(digest) = digest.parse() else {
+                            unreachable!("a canonical content path is a valid theme digest");
+                        };
+                        digests.push(digest);
+                    }
                 }
             }
         }
@@ -1335,8 +1334,38 @@ mod tests {
 
         let path = manager.content_path(digest.as_ref());
         fs::remove_dir(&path).expect("replace directory with content path");
+
         fs::create_dir_all(&path).expect("create unlink target directory");
         assert!(manager.unlink_if_present(&digest).await.is_err());
+    }
+    // guard:no-backend — dangling directory symlinks deterministically exercise census errors.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn filesystem_census_reports_dangling_prefix_and_shard_symlinks() {
+        let fixture = TempDir::new().expect("create fixture");
+        let manager = ThemeAssetManager::new(
+            Arc::new(MockThemeStorage::new()),
+            mock_write_scope(),
+            Arc::new(fixture.path().to_path_buf()),
+        );
+        let themes = fixture.path().join("themes");
+        fs::create_dir_all(&themes).expect("create themes root");
+        std::os::unix::fs::symlink("missing-prefix", themes.join("ab"))
+            .expect("create dangling prefix symlink");
+        assert!(matches!(
+            manager.enumerate_content_digests().await,
+            Err(ThemeAssetError::Filesystem(error)) if error.kind() == io::ErrorKind::NotFound
+        ));
+        fs::remove_file(themes.join("ab")).expect("remove dangling prefix symlink");
+
+        let prefix = themes.join("ab");
+        fs::create_dir_all(&prefix).expect("create valid prefix directory");
+        std::os::unix::fs::symlink("missing-shard", prefix.join("cd"))
+            .expect("create dangling shard symlink");
+        assert!(matches!(
+            manager.enumerate_content_digests().await,
+            Err(ThemeAssetError::Filesystem(error)) if error.kind() == io::ErrorKind::NotFound
+        ));
     }
 
     // guard:no-backend — filesystem content validation is storage-independent.

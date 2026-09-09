@@ -193,6 +193,13 @@ fn build_response(
     (StatusCode::OK, headers, body).into_response()
 }
 
+fn embedded_body(data: Cow<'static, [u8]>) -> Bytes {
+    match data {
+        Cow::Borrowed(bytes) => Bytes::from_static(bytes),
+        Cow::Owned(bytes) => Bytes::from(bytes),
+    }
+}
+
 /// Serve an embedded site asset with content negotiation + conditional support,
 /// falling through to the SPA shell for any path with no embedded file. The
 /// header/status logic lives in the unit-tested pure fns above; the live `Site`
@@ -213,6 +220,7 @@ fn build_response(
 /// `304 Not Modified` still reports the full representation size while sending no
 /// body at all — content-addressed manifest-role asset requests can be correlated
 /// with `site.status`, the authoritative body-or-no-body signal.
+
 #[tracing::instrument(
     name = "site.serve",
     skip_all,
@@ -253,15 +261,8 @@ pub async fn serve_site(req: Request) -> Response {
     if let Some(file) = Site::get(&variant_path(&logical, encoding)) {
         let hash = file.metadata.sha256_hash();
         // Zero-copy for the embedded (`'static`-borrowed) case; only a
-        // runtime disk-read (debug) yields an owned buffer. The coverage
-        // build is debug (disk → `Owned`), so the release-only `Borrowed`
-        // arm is unreachable under instrumentation.
-        let body = match file.data {
-            // cov:ignore-start: Debug host coverage reads staged files into owned buffers, never this release-only borrowed embed variant.
-            Cow::Borrowed(bytes) => Bytes::from_static(bytes),
-            // cov:ignore-stop
-            Cow::Owned(bytes) => Bytes::from(bytes),
-        };
+        // runtime disk-read (debug) yields an owned buffer.
+        let body = embedded_body(file.data);
         span.record("site.bytes", body.len());
         span.record("site.embedded", true);
         let response = build_response(
@@ -363,6 +364,15 @@ mod tests {
         assert_eq!(Encoding::Br.content_encoding(), Some("br"));
         assert_eq!(Encoding::Gzip.content_encoding(), Some("gzip"));
         assert_eq!(Encoding::Identity.content_encoding(), None);
+    }
+
+    #[test]
+    fn embedded_body_keeps_borrowed_embed_bytes_zero_copy() {
+        let bytes: &'static [u8] = b"embedded bytes";
+        let body = embedded_body(Cow::Borrowed(bytes));
+
+        assert_eq!(body.as_ref(), bytes);
+        assert_eq!(body.as_ptr(), bytes.as_ptr());
     }
 
     #[test]

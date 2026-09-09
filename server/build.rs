@@ -40,8 +40,8 @@ fn decide_bundle_action(bundle_exists: bool, bundle_declared: bool) -> BundleAct
 }
 
 fn main() {
-    // crap:allow: Cargo executes build scripts outside normal test targets. The named
-    // decision and staging helpers are unit-tested in their source modules.
+    // crap:allow: Cargo executes this build-script entrypoint outside host coverage targets;
+    // its exact Cargo environment and staging side effects require build-script runtime.
     let out_dir =
         PathBuf::from(env::var_os("OUT_DIR").unwrap_or_else(|| panic!("cargo sets OUT_DIR")));
     let manifest_dir = PathBuf::from(

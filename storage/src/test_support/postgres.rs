@@ -161,7 +161,7 @@ fn drop_test_database(db_name: &str, bootstrap_url: &str) {
             };
             runtime.block_on(async {
                 let Ok(options) = bootstrap_url.parse::<sqlx::postgres::PgConnectOptions>() else {
-                    return; // cov:ignore: the harness constructs this bootstrap URL as a valid PostgreSQL connection URL.
+                    return;
                 };
                 let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), async {
                     let mut conn = sqlx::PgConnection::connect_with(&options).await?;
@@ -179,10 +179,8 @@ fn drop_test_database(db_name: &str, bootstrap_url: &str) {
     });
 }
 
-/// Logs the outcome of the best-effort per-test database drop. Split out of
-/// [`drop_test_database`] so its failure/timeout arms — which fire only when a
-/// `DROP DATABASE` errors or exceeds the timeout, never in a normal run — can be
-/// `// cov:ignore`-marked at an indentation where the marker fits on the line.
+/// [`drop_test_database`] so its failure/timeout arms can be invoked without a
+/// database; teardown's invalid-URL return path is likewise tested directly.
 fn report_drop_outcome(
     db_name: &str,
     outcome: Result<Result<(), sqlx::Error>, tokio::time::error::Elapsed>,
@@ -445,6 +443,11 @@ mod tests {
             .await
             .unwrap_err();
         report_drop_outcome("test_db", Err(elapsed));
+    }
+
+    #[test]
+    fn dropping_with_an_invalid_bootstrap_url_returns_without_database_access() {
+        super::drop_test_database("test_db", "not a postgres url");
     }
 
     #[test]

@@ -912,6 +912,7 @@ mod tests {
     use std::task::Poll;
 
     use super::*;
+    use futures_util::StreamExt;
 
     use crate::posts::media::{
         MediaReferenceEvidence, MediaReferenceSnapshot, PersistedMediaReference,
@@ -948,7 +949,6 @@ mod tests {
             foreign.finish()
         }
 
-        // cov:ignore-start: this complete test resolver trait implementation is required, but foreign-resolution tests have no local-resolution caller.
         async fn resolve_local(
             &self,
             _references: &[common::media::MediaReference],
@@ -958,7 +958,6 @@ mod tests {
         ) -> crate::ProvenLocalMediaRefs {
             local.finish()
         }
-        // cov:ignore-stop
     }
 
     fn no_posts() -> Arc<dyn PostStorage> {
@@ -973,6 +972,15 @@ mod tests {
 
     fn no_foreign_resolver() -> Arc<dyn MediaReferenceOwnershipResolver> {
         Arc::new(NoForeignResolver)
+    }
+
+    fn polling_empty_stream(
+        polls: Arc<AtomicUsize>,
+    ) -> impl Stream<Item = Result<Bytes, io::Error>> {
+        stream::poll_fn(move |_| {
+            polls.fetch_add(1, Ordering::Relaxed);
+            Poll::Ready(None)
+        })
     }
 
     struct FirstForeignResolver;
@@ -990,7 +998,6 @@ mod tests {
             foreign.finish()
         }
 
-        // cov:ignore-start: this complete test resolver trait implementation is required, but first-foreign-evidence tests have no local-resolution caller.
         async fn resolve_local(
             &self,
             _references: &[common::media::MediaReference],
@@ -1000,7 +1007,6 @@ mod tests {
         ) -> crate::ProvenLocalMediaRefs {
             local.finish()
         }
-        // cov:ignore-stop
     }
 
     struct BlockingResolver {
@@ -1043,7 +1049,6 @@ mod tests {
             evidence
         }
 
-        // cov:ignore-start: this complete test resolver trait implementation is required, but the lock-ordering test has no local-resolution caller.
         async fn resolve_local(
             &self,
             _references: &[common::media::MediaReference],
@@ -1053,7 +1058,39 @@ mod tests {
         ) -> crate::ProvenLocalMediaRefs {
             local.finish()
         }
-        // cov:ignore-stop
+    }
+
+    // guard:no-backend — resolver defaults and their capability sinks are exercised without storage.
+    #[tokio::test]
+    async fn test_resolvers_complete_empty_local_resolution() {
+        let instance_id = test_instance_id();
+        assert!(
+            crate::resolve_local_media_references(&NoForeignResolver, &[], &instance_id, None)
+                .await
+                .media()
+                .is_empty()
+        );
+        assert!(
+            crate::resolve_local_media_references(&FirstForeignResolver, &[], &instance_id, None)
+                .await
+                .media()
+                .is_empty()
+        );
+
+        let (started_tx, _started_rx) = tokio::sync::oneshot::channel();
+        let (_release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let (completed_tx, _completed_rx) = tokio::sync::oneshot::channel();
+        let blocking = BlockingResolver {
+            started: tokio::sync::Mutex::new(Some(started_tx)),
+            release: tokio::sync::Mutex::new(Some(release_rx)),
+            completed: tokio::sync::Mutex::new(Some(completed_tx)),
+        };
+        assert!(
+            crate::resolve_local_media_references(&blocking, &[], &instance_id, None)
+                .await
+                .media()
+                .is_empty()
+        );
     }
 
     #[apply(backends)]
@@ -1423,6 +1460,16 @@ mod tests {
         assert_eq!(format!("{gate:?}"), "ReclaimUnlinkGate { .. }");
     }
 
+    // guard:no-backend — stream polling is a pure local helper contract.
+    #[tokio::test]
+    async fn polling_empty_stream_counts_its_poll() {
+        let polls = Arc::new(AtomicUsize::new(0));
+        let mut stream = polling_empty_stream(Arc::clone(&polls));
+
+        assert!(stream.next().await.is_none());
+        assert_eq!(polls.load(Ordering::Relaxed), 1);
+    }
+
     // guard:no-backend — a disabled capability must reject before polling the supplied stream
     // or calling any media storage method.
     #[tokio::test]
@@ -1443,13 +1490,7 @@ mod tests {
             no_foreign_resolver(),
         );
         let polls = Arc::new(AtomicUsize::new(0));
-        let stream_polls = Arc::clone(&polls);
-        // cov:ignore-start: polling this sentinel would violate the no-poll invariant asserted by the upload-disabled test.
-        let stream = stream::poll_fn(move |_| {
-            stream_polls.fetch_add(1, Ordering::Relaxed);
-            Poll::Ready(None::<Result<Bytes, io::Error>>)
-        });
-        // cov:ignore-stop
+        let stream = polling_empty_stream(Arc::clone(&polls));
 
         let err = manager
             .upload(

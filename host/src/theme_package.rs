@@ -351,7 +351,7 @@ fn read_archive_entries(
             .read_to_end(&mut bytes)
             .map_err(|error| ThemePackageError::Archive(error.to_string()))?;
         if bytes.len() > limits.max_file_bytes {
-            return Err(limit("per-file bytes")); // cov:ignore: the declared-size precheck rejects oversized ZIP entries before this corrupt-stream disagreement guard
+            return Err(limit("per-file bytes")); // cov:ignore: zip::ZipFile caps output at the central-directory uncompressed size, so a larger corrupt stream cannot reach this guard
         }
         expanded = expanded
             .checked_add(bytes.len())
@@ -797,7 +797,7 @@ fn validate_local_header(
     let method_matches = match expected_method {
         zip::CompressionMethod::Stored => method == 0,
         zip::CompressionMethod::Deflated => method == 8,
-        _ => false, // cov:ignore: zip rejects unsupported compression methods before this local-header consistency dispatch
+        _ => false,
     };
     if flags & 1 != 0
         || !method_matches
@@ -1204,6 +1204,18 @@ mod tests {
         assert!(
             validate_local_header(&header, 0, "y", zip::CompressionMethod::Stored, 0, 0, 0,)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_local_header_with_unsupported_expected_compression() {
+        let mut header = vec![0_u8; 31];
+        header[..4].copy_from_slice(b"PK\x03\x04");
+        header[26..28].copy_from_slice(&1_u16.to_le_bytes());
+        header[30] = b'x';
+
+        assert!(
+            validate_local_header(&header, 0, "x", zip::CompressionMethod::MP3, 0, 0, 0,).is_err()
         );
     }
 

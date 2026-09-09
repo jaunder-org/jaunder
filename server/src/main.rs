@@ -86,6 +86,10 @@ mod tests {
     use std::os::unix::ffi::OsStringExt as _;
     use tempfile::TempDir;
 
+    fn child_diagnostic(output: &[u8]) -> String {
+        String::from_utf8_lossy(output).into_owned()
+    }
+
     fn test_storage_args(base: &TempDir) -> StorageArgs {
         StorageArgs {
             storage_path: base.path().join("storage"),
@@ -286,14 +290,12 @@ mod tests {
             output.status.success(),
             "child status: {}; stderr: {}",
             output.status,
-            // The root-wiring contract requires child success; this is diagnostic-only.
-            String::from_utf8_lossy(&output.stderr) // cov:ignore: This diagnostic is evaluated only when the child root-wiring contract has failed.
+            child_diagnostic(&output.stderr)
         );
         assert!(
-            String::from_utf8_lossy(&output.stdout).contains("MAIN_TEST_CHILD_COMPLETED"),
+            child_diagnostic(&output.stdout).contains("MAIN_TEST_CHILD_COMPLETED"),
             "child did not complete root wiring: {}",
-            // A successful child always emits the projection; this is diagnostic-only.
-            String::from_utf8_lossy(&output.stdout) // cov:ignore: This diagnostic is evaluated only when the child omits its required completion projection.
+            child_diagnostic(&output.stdout)
         );
     }
     #[cfg(unix)]
@@ -427,9 +429,7 @@ mod tests {
         });
 
         // Spawn-and-abort: this pins the dispatch arm, not the serve loop.
-        let task = tokio::spawn(async move {
-            let _ = run(cli).await;
-        }); // cov:ignore: The test aborts the serve task after dispatch, so its closure never completes.
+        let task = tokio::spawn(run(cli));
 
         // Wait a bit for it to start.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -531,9 +531,7 @@ mod tests {
             environment: jaunder::cli::DeploymentEnv::Dev,
         });
 
-        let task = tokio::spawn(async move {
-            let _ = run(cli).await;
-        }); // cov:ignore: The test aborts the dev-server task after auto-init, so its closure never completes.
+        let task = tokio::spawn(run(cli));
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         task.abort();
@@ -582,5 +580,10 @@ mod tests {
         }))
         .await
         .expect("restore dispatch should succeed");
+    }
+
+    #[test]
+    fn child_diagnostic_preserves_non_utf8_output() {
+        assert_eq!(child_diagnostic(b"child \xff"), "child �");
     }
 }

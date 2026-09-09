@@ -92,7 +92,7 @@ impl ThemeManager {
                     if snapshot_for_update(themes.as_ref(), transaction, owner, theme_id).await?
                         != expected
                     {
-                        bail!("theme media references changed while acquiring locks"); // cov:ignore: this error requires a mutation after the pre-lock snapshot and before transaction-owned row locks, a window the authoritative harness cannot control safely.
+                        bail!("theme media references changed while acquiring locks");
                     }
                     themes
                         .replace_role_binding(transaction, owner, &binding)
@@ -153,7 +153,7 @@ impl ThemeManager {
                     if snapshot_for_update(themes.as_ref(), transaction, owner, theme_id).await?
                         != expected
                     {
-                        bail!("theme media references changed while acquiring locks"); // cov:ignore: this error requires a mutation after the pre-lock snapshot and before transaction-owned row locks, a window the authoritative harness cannot control safely.
+                        bail!("theme media references changed while acquiring locks");
                     }
                     // The storage primitive persists the pool while this role update remains
                     // in the same transaction, so the revision and entries cannot diverge.
@@ -249,7 +249,7 @@ impl ThemeManager {
                     let current =
                         snapshot_for_update(themes.as_ref(), transaction, owner, theme_id).await?;
                     if current != snapshot {
-                        bail!("theme media references changed while acquiring locks"); // cov:ignore: this error requires a mutation after the pre-lock snapshot and before transaction-owned row locks, a window the authoritative harness cannot control safely.
+                        bail!("theme media references changed while acquiring locks");
                     }
                     themes
                         .remove_theme(transaction, owner, theme_id, retained_until_unix_seconds)
@@ -774,6 +774,91 @@ mod tests {
                 .expect("missing persisted theme confirms acknowledgement loss"),
             MutationOutcome::Confirmed(())
         ));
+    }
+
+    fn changed_media_reference() -> crate::ThemeMediaReference {
+        crate::ThemeMediaReference {
+            user_id: UserId::from(1),
+            media: common::media::MediaRef {
+                source: "upload".parse().unwrap(),
+                sha256: "a".repeat(64).parse().unwrap(),
+                filename: "changed.png".parse().unwrap(),
+            },
+        }
+    }
+
+    fn manager_with_changed_snapshot() -> ThemeManager {
+        let mut themes = crate::MockThemeStorage::new();
+        themes
+            .expect_role_binding()
+            .times(2)
+            .returning(|_, _, _| Ok(None));
+        themes
+            .expect_header_pool()
+            .once()
+            .returning(|_, _| Ok(Vec::new()));
+        themes
+            .expect_locked_media_references()
+            .once()
+            .returning(|_, _, _| Ok(vec![changed_media_reference()]));
+        let lock_root = tempfile::TempDir::new().expect("create lock root");
+        ThemeManager::new(
+            Arc::new(themes),
+            Arc::new(crate::MockMediaStorage::new()),
+            crate::test_support::mock_write_scope(),
+            Arc::new(crate::MediaContentLocks::new(Arc::new(lock_root.keep()))),
+        )
+    }
+
+    // guard:no-backend — mocks deterministically change the aggregate between snapshots.
+    #[tokio::test]
+    async fn replace_role_rejects_a_changed_locked_media_snapshot() {
+        assert!(
+            manager_with_changed_snapshot()
+                .replace_role(
+                    UserId::from(0),
+                    ThemeOwner::Site,
+                    ThemeId::from(9),
+                    ThemeImageRole::Logo,
+                    ThemeRoleInput::PackagedDefault,
+                )
+                .await
+                .expect_err("changed binding must reject")
+                .to_string()
+                .contains("changed while acquiring locks")
+        );
+    }
+
+    // guard:no-backend — mocks deterministically change the aggregate between snapshots.
+    #[tokio::test]
+    async fn replace_header_pool_rejects_a_changed_locked_media_snapshot() {
+        assert!(
+            manager_with_changed_snapshot()
+                .replace_header_pool(
+                    UserId::from(0),
+                    ThemeOwner::Site,
+                    ThemeId::from(9),
+                    vec![ThemePoolInput::PackageAsset("header.png".to_owned())],
+                    [0; 32],
+                )
+                .await
+                .expect_err("changed binding must reject")
+                .to_string()
+                .contains("changed while acquiring locks")
+        );
+    }
+
+    // guard:no-backend — mocks deterministically change the aggregate between snapshots.
+    #[tokio::test]
+    async fn remove_theme_rejects_a_changed_locked_media_snapshot() {
+        assert!(
+            manager_with_changed_snapshot()
+                .remove_theme(UserId::from(0), ThemeOwner::Site, ThemeId::from(9), 10)
+                .await
+                .expect_err("changed binding must reject")
+                .to_string()
+                .contains("changed while acquiring locks")
+        );
     }
 
     async fn published_site_theme(

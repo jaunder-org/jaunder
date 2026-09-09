@@ -36,6 +36,12 @@ pub struct BackupRestoreOptions<'a> {
     pub source_path: &'a Path,
 }
 
+fn media_content_root(media_path: &Path) -> Result<&Path, BackupError> {
+    media_path.parent().ok_or_else(|| {
+        BackupError::InvalidBackup("media storage path has no content-root parent".into())
+    })
+}
+
 /// # Errors
 ///
 /// Returns `Err(BackupError)` if the backup export fails.
@@ -77,11 +83,7 @@ pub async fn restore_backup(
         &manifest,
     )
     .await?;
-    // cov:ignore-start: an empty media path resolves to the process working directory, so this parent() error cannot be exercised safely by a backup fixture.
-    let content_root = options.media_path.parent().ok_or_else(|| {
-        BackupError::InvalidBackup("media storage path has no content-root parent".into())
-    })?;
-    // cov:ignore-stop
+    let content_root = media_content_root(options.media_path)?;
     media::restore_media_directory(&source_path.join("themes"), &content_root.join("themes"))?;
     let validation_report = match manifest.mode {
         BackupMode::Directory | BackupMode::Archive => {
@@ -150,11 +152,7 @@ async fn export_directory_backup(
         &options.destination_path.join("media"),
         previous_backup.as_deref(),
     )?;
-    // cov:ignore-start: an empty media path resolves to the process working directory, so this parent() error cannot be exercised safely by a backup fixture.
-    let content_root = options.media_path.parent().ok_or_else(|| {
-        BackupError::InvalidBackup("media storage path has no content-root parent".into())
-    })?;
-    // cov:ignore-stop
+    let content_root = media_content_root(options.media_path)?;
     media::mirror_media_directory(
         &content_root.join("themes"),
         &options.destination_path.join("themes"),
@@ -162,7 +160,7 @@ async fn export_directory_backup(
             .as_deref()
             .map(|path| path.join("themes"))
             .as_deref(),
-    )?; // cov:ignore: LLVM leaves this exercised multiline theme-mirror call edge unmarked.
+    )?;
     format::write_manifest(options.destination_path, &manifest)?;
     Ok(manifest)
 }
@@ -353,6 +351,15 @@ mod tests {
         hex.parse().expect("SHA-256 is a valid theme digest")
     }
 
+    #[test]
+    fn media_content_root_rejects_a_parentless_path() {
+        assert!(matches!(
+            super::media_content_root(Path::new("")),
+            Err(BackupError::InvalidBackup(message))
+                if message == "media storage path has no content-root parent"
+        ));
+    }
+
     fn theme_content_path(content_root: &Path, digest: &str) -> std::path::PathBuf {
         content_root
             .join("themes")
@@ -377,7 +384,7 @@ mod tests {
         fs::write(
             root.join("db").join("theme_content_eligibility.ndjson"),
             rows,
-        )?; // cov:ignore: LLVM leaves only this unobservable fixture-write error edge unmarked.
+        )?;
         Ok(())
     }
 
@@ -403,6 +410,22 @@ mod tests {
         write_theme_eligibility_backup(temp.path(), &borrowed)?;
 
         validate_theme_content_backup(temp.path())
+    }
+
+    #[test]
+    fn theme_eligibility_fixture_write_failure_is_reported() -> Result<(), BackupError> {
+        let temp = tempfile::TempDir::new()?;
+        fs::create_dir_all(
+            temp.path()
+                .join("db")
+                .join("theme_content_eligibility.ndjson"),
+        )?;
+
+        let error = write_theme_eligibility_backup(temp.path(), &[])
+            .expect_err("writing fixture rows over a directory must fail");
+
+        assert!(matches!(error, BackupError::Io(_)));
+        Ok(())
     }
 
     #[test]
@@ -460,7 +483,8 @@ mod tests {
         write_theme_eligibility_backup(
             temp.path(),
             &[(digest.as_ref(), "text/css; charset=utf-8", b"actual")],
-        )?; // cov:ignore: LLVM leaves only this unobservable fixture-write error edge unmarked.
+        )
+        .expect("write corrupt theme fixture");
 
         assert!(matches!(
             validate_theme_content_backup(temp.path()),

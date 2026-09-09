@@ -194,9 +194,11 @@ pub fn report_swallowed(
         ErrorDisposition::Swallowed,
         TelemetryOrigin::Server,
     );
+    let error_kind = kind.as_metric_str();
+    let error_class = class.as_metric_str();
     tracing::warn!(
-        error.kind = kind.as_metric_str(), // cov:ignore: llvm-cov does not attribute this tracing macro field expression, though the subscriber test observes it
-        error.class = class.as_metric_str(), // cov:ignore: llvm-cov does not attribute this tracing macro field expression, though the subscriber test observes it
+        error.kind = error_kind,
+        error.class = error_class,
         error.disposition = "swallowed",
         telemetry.origin = "server",
         error.context = context,
@@ -630,11 +632,9 @@ mod tests {
             Ok(bytes.len())
         }
 
-        // cov:ignore-start: Write requires flush, but the tracing subscriber capture never calls this no-op test implementation.
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
-        // cov:ignore-stop
     }
 
     impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for SharedWriter {
@@ -643,6 +643,14 @@ mod tests {
         fn make_writer(&'writer self) -> Self::Writer {
             self.clone()
         }
+    }
+
+    #[test]
+    fn shared_writer_flushes() {
+        use std::io::Write;
+
+        let mut writer = SharedWriter(std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+        writer.flush().expect("test writer flushes");
     }
     impl Error for SourceError {}
 

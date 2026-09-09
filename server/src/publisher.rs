@@ -53,6 +53,15 @@ impl PublisherGateGuard {
     }
 }
 
+fn require_confirmed_malformed_hub_repair<T>(committed: &MutationOutcome<T>) -> anyhow::Result<()> {
+    if matches!(committed, MutationOutcome::CommitIndeterminate(_)) {
+        return Err(anyhow::anyhow!(
+            "malformed hub repair commit acknowledgement was indeterminate"
+        ));
+    }
+    Ok(())
+}
+
 /// Shared publisher operation seam. The gate is acquired before every write scope.
 #[derive(Clone)]
 pub struct PublisherService {
@@ -110,13 +119,7 @@ impl PublisherService {
                 Box::pin(async move { publisher.repair_malformed_hub(transaction, token).await })
             })
             .await?;
-        // cov:ignore-start: The downstream write-scope test seam cannot synthesize post-commit acknowledgement loss.
-        if matches!(committed, MutationOutcome::CommitIndeterminate(_)) {
-            return Err(anyhow::anyhow!(
-                "malformed hub repair commit acknowledgement was indeterminate"
-            ));
-        }
-        // cov:ignore-stop
+        require_confirmed_malformed_hub_repair(&committed)?;
         Ok(self.publisher.snapshot().await?)
     }
 
@@ -172,11 +175,9 @@ impl PublisherService {
     pub async fn mutate_hub(&self, hub: Option<&HubUrl>) -> anyhow::Result<HubMutationOutcome> {
         match self.mutate_hub_with_feedback(hub).await? {
             MutationOutcome::Confirmed(outcome) => Ok(outcome),
-            // cov:ignore-start: The downstream write-scope test seam cannot synthesize post-commit acknowledgement loss.
             MutationOutcome::CommitIndeterminate(_) => Err(anyhow::anyhow!(
                 "hub mutation commit acknowledgement was indeterminate"
             )),
-            // cov:ignore-stop
         }
     }
 }
@@ -244,11 +245,9 @@ impl PublisherFinalizationGuard {
             })?;
         match committed {
             MutationOutcome::Confirmed(outcome) => Ok(outcome),
-            // cov:ignore-start: This write scope exposes begin and operation failures but cannot synthesize post-commit acknowledgement loss.
             MutationOutcome::CommitIndeterminate(_) => Err(PublisherStorageError::Db(
                 Error::Protocol("cache commit acknowledgement was indeterminate".to_owned()),
             )),
-            // cov:ignore-stop
         }
     }
 }
@@ -268,7 +267,9 @@ mod tests {
     use sqlx::Error;
     use storage::{
         FeedCacheRow, FeedWindowMutation, MockPublisherStorage, PublisherStorageError,
-        test_support::{Backend, backends},
+        test_support::{
+            Backend, backends, mock_write_scope_with_commit_acknowledgement_loss,
+        },
     };
 
     fn cache_row() -> FeedCacheRow {
@@ -375,6 +376,89 @@ mod tests {
         assert!(matches!(
             outcome,
             MutationOutcome::Confirmed(FeedWindowMutationOutcome::Applied { .. })
+        ));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn mutation_rejects_indeterminate_commit_acknowledgements(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let generation = env
+            .state
+            .publisher
+            .snapshot()
+            .await
+            .expect("snapshot")
+            .generation;
+        let directory = tempfile::tempdir().expect("temporary storage directory");
+        let mut publisher = MockPublisherStorage::new();
+        publisher
+            .expect_mutate_hub()
+            .returning(move |_, _| Ok(HubMutationOutcome::Unchanged { generation }));
+        let service = PublisherService::new(
+            directory.path().to_owned(),
+            Arc::new(publisher),
+            mock_write_scope_with_commit_acknowledgement_loss(),
+        );
+
+        let error = service
+            .mutate_hub(None)
+            .await
+            .expect_err("indeterminate acknowledgement is not a confirmed hub mutation");
+
+        assert!(
+            error
+                .to_string()
+                .contains("hub mutation commit acknowledgement was indeterminate")
+        );
+    }
+
+    #[test]
+    fn malformed_hub_repair_rejects_indeterminate_acknowledgements() {
+        let error =
+            require_confirmed_malformed_hub_repair(&MutationOutcome::CommitIndeterminate(()))
+                .expect_err("indeterminate acknowledgement is not a repaired snapshot");
+
+        assert_eq!(
+            error.to_string(),
+            "malformed hub repair commit acknowledgement was indeterminate"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn cache_commit_rejects_indeterminate_acknowledgements(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let generation = env
+            .state
+            .publisher
+            .snapshot()
+            .await
+            .expect("snapshot")
+            .generation;
+        let directory = tempfile::tempdir().expect("temporary storage directory");
+        let mut publisher = MockPublisherStorage::new();
+        publisher
+            .expect_commit_cache()
+            .returning(|_, _, _| Ok(CacheCommitOutcome::StaleGeneration));
+        let service = PublisherService::new(
+            directory.path().to_owned(),
+            Arc::new(publisher),
+            mock_write_scope_with_commit_acknowledgement_loss(),
+        );
+
+        let error = service
+            .finalization_guard()
+            .await
+            .expect("gate acquired")
+            .commit_cache(generation, cache_row())
+            .await
+            .expect_err("indeterminate acknowledgement is not a committed cache row");
+
+        assert!(matches!(
+            error,
+            PublisherStorageError::Db(Error::Protocol(message))
+                if message == "cache commit acknowledgement was indeterminate"
         ));
     }
 

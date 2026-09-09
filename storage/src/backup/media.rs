@@ -101,14 +101,16 @@ fn mirror_media_entries(
                 previous_backup,
                 &child_relative_path,
             )?;
-        } else if metadata.is_file() {
+            continue;
+        }
+        if metadata.is_file() {
             copy_or_link_media_file(
                 &source_path,
                 &destination_path,
                 previous_backup,
                 &child_relative_path,
             )?;
-        } // cov:ignore: LLVM leaves the is_file arm's closing brace unmarked although its copy-success and error paths are exercised.
+        }
     }
     Ok(())
 }

@@ -87,7 +87,6 @@ pub fn stage_bundle(
     public_src: &Path,
     manifest: &Manifest,
 ) -> Result<(), BundleStageError> {
-    // crap:allow: Cargo executes this build-script staging path outside normal coverage targets; inline behavior tests exercise the verified copy contract.
     reject_public_collisions(public_src, manifest)?;
     copy_file(&root.join("index.html"), &site.join("index.html"))?;
     for asset in &manifest.assets {
@@ -129,7 +128,6 @@ fn reject_public_collisions_below(
     relative: &Path,
     reserved: &BTreeSet<&str>,
 ) -> Result<(), BundleStageError> {
-    // crap:allow: Cargo executes this recursive build-script validation outside normal coverage targets; inline behavior tests exercise nested collisions.
     for entry in fs::read_dir(directory)
         .map_err(|error| BundleStageError(format!("reading {}: {error}", directory.display())))?
     {
@@ -180,7 +178,6 @@ fn verify_staged_bundle(site: &Path, manifest: &Manifest) -> Result<(), BundleSt
 }
 
 fn validate_shell(shell: &str, glue: &str, wasm: &str) -> Result<(), BundleStageError> {
-    // crap:allow: Cargo executes this generated-shell validation outside normal coverage targets; inline behavior tests exercise its ordering checks.
     for (role, url) in [("glue", glue), ("WASM", wasm)] {
         if shell.matches(url).count() != 1 {
             return Err(BundleStageError(format!(
@@ -244,7 +241,6 @@ pub fn stage_public_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError>
 }
 
 fn copy_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
-    // crap:allow: Cargo executes this recursive build-script copy outside normal coverage targets; inline behavior tests exercise nested public assets.
     fs::create_dir_all(dst)
         .map_err(|error| BundleStageError(format!("creating {}: {error}", dst.display())))?;
     for entry in fs::read_dir(src)

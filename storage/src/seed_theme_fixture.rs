@@ -121,17 +121,19 @@ fn stored_theme_package() -> anyhow::Result<Vec<u8>> {
     Ok(archive)
 }
 
+/// Compiles a theme package using the fixture's production package limits.
+fn compile_theme_fixture(package: &[u8]) -> anyhow::Result<CompiledThemeRevision> {
+    let validated = theme_package::validate_theme_package(package, ThemePackageLimits::default())?;
+    Ok(validated.compile(&BTreeMap::new(), ThemePackageLimits::default())?)
+}
+
 /// Returns a valid compiled theme with an immutable stylesheet and PNG asset.
 ///
 /// # Errors
 ///
 /// Returns an error if the static fixture no longer satisfies the Theme Package contract.
 pub fn try_compiled_theme_fixture() -> anyhow::Result<CompiledThemeRevision> {
-    let validated = theme_package::validate_theme_package(
-        &stored_theme_package()?,
-        ThemePackageLimits::default(),
-    )?; // cov:ignore: LLVM leaves the static fixture package validation error edge unmarked.
-    Ok(validated.compile(&BTreeMap::new(), ThemePackageLimits::default())?)
+    compile_theme_fixture(&stored_theme_package()?)
 }
 
 /// Returns one-theme quota limits with room for both the mutable fixture draft
@@ -217,6 +219,11 @@ mod tests {
     #[test]
     fn browser_seed_fixture_remains_a_valid_theme_package() {
         super::try_compiled_theme_fixture().expect("compile browser seed fixture");
+    }
+
+    #[test]
+    fn fixture_compiler_rejects_an_invalid_package() {
+        assert!(super::compile_theme_fixture(b"not a zip").is_err());
     }
     // guard:no-backend — mocked theme storage and injected acknowledgement loss isolate the outcome mapping
     #[tokio::test]
