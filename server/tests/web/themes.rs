@@ -626,9 +626,14 @@ async fn theme_selection_rejects_unpublished_custom_and_preview_isolated(#[case]
     assert!(preview.html.contains("data-jaunder-theme-surface"));
     assert!(preview.css.contains("purple"), "CSS: {}", preview.css);
 
-    let operator = create_operator_and_session(&state).await;
+    let operator = create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
     let (site_status, site_body) = post_server_fn(
-        &state,
+        make_app!(&env, &env.base),
         &web::themes::Create {
             scope: OwnershipScope::Site,
             name: "Site preview".to_owned(),
@@ -643,8 +648,7 @@ async fn theme_selection_rejects_unpublished_custom_and_preview_isolated(#[case]
         "site theme creation",
     );
     let site_preview = server_fn_response(
-        &state,
-        &storage,
+        make_app!(&env, &storage),
         &web::themes::Preview {
             scope: OwnershipScope::Site,
             theme_id: site_theme.id,

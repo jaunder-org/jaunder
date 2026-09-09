@@ -2797,10 +2797,9 @@ mod tests {
                 filename: "hero.png".parse().unwrap(),
             },
         };
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         assert!(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2817,10 +2816,9 @@ mod tests {
             "an author binding cannot name another user's media"
         );
 
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         assert!(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
@@ -2857,10 +2855,9 @@ mod tests {
                 physical_bytes: 1,
             },
         ];
-        let themes = Arc::clone(&env.state.themes);
+        let themes = Arc::clone(&env.themes());
         assert!(
-            env.state
-                .write_scope
+            env.write_scope()
                 .run(move |transaction| {
                     Box::pin(async move {
                         themes
