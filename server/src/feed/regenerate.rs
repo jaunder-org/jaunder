@@ -32,10 +32,11 @@ pub async fn render(
     posts: &dyn PostStorage,
     feed_path: FeedPath,
 ) -> Result<FeedCacheRow, RegenerateError> {
-    // A `FeedPath` is always parseable, so this never yields `None`.
-    let Some((surface, format)) = feed::parse(&feed_path) else {
-        unreachable!("FeedPath always parses into a feed surface and format");
-    };
+    // `FeedPath` construction and parsing are deliberately separate contracts.
+    // Treat future grammar drift as a rendering error rather than a process panic.
+    let (surface, format) = feed_path
+        .parts()
+        .ok_or_else(|| RegenerateError::BadUrl(feed_path.to_string()))?; // cov:ignore: FeedPath construction/parse grammar drift cannot be synthesized through its validating public constructors.
 
     let window = HybridWindow {
         min_items: snapshot.feeds.min_items,

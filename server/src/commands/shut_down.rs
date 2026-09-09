@@ -61,7 +61,7 @@ impl ProcessOperations for LinuxProcessOperations {
         match process::pidfd_open(pid, PidfdFlags::empty()) {
             Ok(handle) => Ok(OpenOutcome::Captured(handle)),
             // pidfd error identities depend on the running kernel/process table.
-            Err(error) if error == rustix::io::Errno::SRCH => Ok(OpenOutcome::ProcessExited), // cov:ignore: No deterministic portable process-table seam can make pidfd_open report ESRCH.
+            Err(error) if error == rustix::io::Errno::SRCH => Ok(OpenOutcome::ProcessExited),
             Err(error) => Err(error.into()), // cov:ignore: No deterministic portable process-table seam can induce another pidfd_open OS failure.
         }
     }
@@ -94,7 +94,7 @@ impl ProcessOperations for LinuxProcessOperations {
             };
             let mut fds = [PollFd::new(handle, PollFlags::IN)];
             match event::poll(&mut fds, Some(&timeout)) {
-                Ok(0) => return Ok(false), // cov:ignore: The public zero-duration test returns before poll, while a kernel poll timeout is timing-dependent.
+                Ok(0) => return Ok(false),
                 Ok(_) => return Ok(true),
                 Err(error) if error == rustix::io::Errno::INTR => {} // cov:ignore: Delivering an interrupt at this poll point has no deterministic public host seam.
                 Err(error) => return Err(error.into()), // cov:ignore: Kernel poll failures have no deterministic portable host seam.
@@ -363,6 +363,30 @@ mod tests {
             !LinuxProcessOperations
                 .wait_for_exit(&handle, Duration::ZERO)
                 .expect("zero remaining time is a normal timeout")
+        );
+    }
+    #[test]
+    fn pidfd_open_for_an_impossible_pid_reports_process_exited() {
+        let outcome = LinuxProcessOperations
+            .open(i32::MAX as u32)
+            .expect("an impossible Linux PID is not an OS error");
+
+        assert!(matches!(outcome, OpenOutcome::ProcessExited));
+    }
+
+    #[test]
+    fn pidfd_wait_with_positive_timeout_reports_a_live_process_timeout() {
+        let OpenOutcome::Captured(handle) = LinuxProcessOperations
+            .open(std::process::id())
+            .expect("capture this process through pidfd")
+        else {
+            unreachable!("this process remains live while its pidfd is acquired");
+        };
+
+        assert!(
+            !LinuxProcessOperations
+                .wait_for_exit(&handle, Duration::from_millis(10))
+                .expect("a live process times out through poll")
         );
     }
     #[test]

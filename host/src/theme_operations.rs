@@ -216,7 +216,7 @@ mod tests {
             // The cancellation test intentionally holds this future pending.
             std::future::pending::<()>().await;
             // cov:ignore-stop
-        }); // cov:ignore: llvm-cov omits the closure-ending span after the aborted fixture reaches it
+        }); // cov:ignore: cancellation fault injection aborts the pending fixture before its closure-ending span can execute
 
         started_rx.await.expect("operation acquires its permit");
         assert!(matches!(

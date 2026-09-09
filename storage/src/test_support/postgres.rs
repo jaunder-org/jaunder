@@ -157,7 +157,7 @@ fn drop_test_database(db_name: &str, bootstrap_url: &str) {
                 .enable_all()
                 .build()
             else {
-                return; // cov:ignore: current-thread runtime construction can fail only under OOM, and Drop cannot propagate that failure.
+                return; // cov:ignore: current-thread runtime-driver/resource failure injection is unavailable here, and Drop cannot propagate construction failure.
             };
             runtime.block_on(async {
                 let Ok(options) = bootstrap_url.parse::<sqlx::postgres::PgConnectOptions>() else {

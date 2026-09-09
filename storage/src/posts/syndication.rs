@@ -316,8 +316,10 @@ where
                 continue;
             }
         };
+        // Construction and decomposition intentionally remain separate contracts.
+        // Skip grammar drift just as a raw cached path decode failure is skipped.
         let Some((surface, _)) = feed_path.parts() else {
-            unreachable!("decoded feed path always has a syndication surface")
+            continue; // cov:ignore: FeedPath construction/parse grammar drift cannot be synthesized through the validating cache decoder.
         };
         if let Some(max) = max_published_at_for_surface::<DB>(pool, &surface, now).await?
             && max > generated_at

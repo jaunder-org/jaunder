@@ -1030,7 +1030,7 @@ mod tests {
             .collect();
         assert_eq!(error_metrics.len(), 1, "one error counter metric");
         let AggregatedMetrics::U64(MetricData::Sum(sum)) = error_metrics[0].data() else {
-            panic!("error counter metric must export a U64 sum"); // cov:ignore: the successful metric export contract leaves this mismatch sentinel intentionally uncalled
+            unreachable!("error counter metric must export a U64 sum");
         };
         let points: Vec<_> = sum.data_points().collect();
         assert_eq!(points.len(), 1);
