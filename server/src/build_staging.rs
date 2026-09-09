@@ -269,7 +269,10 @@ mod tests {
 
     use csr_bundle::{Asset, Manifest, Representation, Role};
 
-    use super::{reject_public_collisions, stage_bundle, stage_public_tree, validate_shell};
+    use super::{
+        prepare_staging_with, reject_public_collisions, stage_bundle, stage_public_tree,
+        validate_shell,
+    };
 
     fn shell(glue: &str, wasm: &str) -> String {
         format!(
@@ -428,5 +431,16 @@ mod tests {
             fs::read_to_string(destination.path().join("nested/asset")).unwrap(),
             "asset"
         );
+    }
+    #[test]
+    fn staging_preparation_recreates_then_stages() {
+        let site = tempfile::tempdir().expect("temp dir");
+        let path = site.path().join("site");
+        let mut staged = false;
+
+        prepare_staging_with(&path, |_| Ok(()), |_| Ok(()), || staged = true)
+            .expect("prepare staging");
+
+        assert!(staged);
     }
 }

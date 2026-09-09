@@ -270,17 +270,23 @@ impl ListingRoute {
         limit: Option<PageSize>,
     ) -> WebResult<PublicPresentation<Page<RenderedPost>>> {
         match self.validate()? {
+            // cov:ignore-start: constructing and awaiting the generated server-function client requires the hydrated browser transport unavailable to authoritative host coverage.
             ValidatedListingRoute::Profile(username) => {
                 let request = timeline::list_by_user(username, cursor, limit);
-                request.await // cov:ignore: awaiting the generated server-function client requires the hydrated browser transport unavailable to authoritative host coverage.
+                request.await
+                // cov:ignore-stop
             }
+            // cov:ignore-start: constructing and awaiting the generated server-function client requires the hydrated browser transport unavailable to authoritative host coverage.
             ValidatedListingRoute::SiteTag(tag) => {
                 let request = timeline::list_by_tag(tag, cursor, limit);
-                request.await // cov:ignore: awaiting the generated server-function client requires the hydrated browser transport unavailable to authoritative host coverage.
+                request.await
+                // cov:ignore-stop
             }
+            // cov:ignore-start: constructing and awaiting the generated server-function client requires the hydrated browser transport unavailable to authoritative host coverage.
             ValidatedListingRoute::UserTag(username, tag) => {
                 let request = timeline::list_by_user_and_tag(username, tag, cursor, limit);
-                request.await // cov:ignore: awaiting the generated server-function client requires the hydrated browser transport unavailable to authoritative host coverage.
+                request.await
+                // cov:ignore-stop
             }
         }
     }

@@ -509,12 +509,11 @@ impl ThemeAssetManager {
                     }
                     let name = file.file_name();
                     let digest = name.to_string_lossy();
-                    if Self::is_canonical_digest_path(&prefix, &shard, &digest) {
-                        let Ok(digest) = digest.parse() else {
-                            unreachable!("a canonical content path is a valid theme digest");
-                        };
-                        digests.push(digest);
-                    }
+                    let Some(digest) = Self::canonical_content_digest(&prefix, &shard, &digest)
+                    else {
+                        continue;
+                    };
+                    digests.push(digest);
                 }
             }
         }
@@ -568,6 +567,20 @@ impl ThemeAssetManager {
         } else {
             Err(ThemeAssetError::InvalidDigest)
         }
+    }
+
+    fn canonical_content_digest(
+        prefix: &str,
+        shard: &str,
+        digest: &str,
+    ) -> Option<ThemeContentDigest> {
+        if !Self::is_canonical_digest_path(prefix, shard, digest) {
+            return None;
+        }
+        let Ok(digest) = digest.parse() else {
+            unreachable!("a canonical content path is a valid theme digest");
+        };
+        Some(digest)
     }
 
     fn hex(bytes: &[u8]) -> String {

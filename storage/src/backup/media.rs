@@ -103,14 +103,15 @@ fn mirror_media_entries(
             )?;
             continue;
         }
-        if metadata.is_file() {
-            copy_or_link_media_file(
-                &source_path,
-                &destination_path,
-                previous_backup,
-                &child_relative_path,
-            )?;
+        if !metadata.is_file() {
+            continue;
         }
+        copy_or_link_media_file(
+            &source_path,
+            &destination_path,
+            previous_backup,
+            &child_relative_path,
+        )?;
     }
     Ok(())
 }

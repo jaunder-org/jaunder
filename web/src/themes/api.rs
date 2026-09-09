@@ -158,6 +158,28 @@ async fn owner(scope: OwnershipScope) -> Result<(common::ids::UserId, ThemeOwner
 }
 
 #[cfg(feature = "server")]
+async fn validate_custom_selection(
+    owner: ThemeOwner,
+    selection: Option<&PublicThemeSelection>,
+) -> Result<(), InternalError> {
+    let Some(PublicThemeSelection::Custom(theme_id)) = selection else {
+        return Ok(());
+    };
+    let themes = expect_context::<Arc<dyn ThemeStorage>>();
+    let published = themes
+        .list_themes(owner)
+        .await
+        .map_err(InternalError::storage)?
+        .into_iter()
+        .any(|entry| entry.id == *theme_id && entry.current_revision.is_some());
+    if published {
+        Ok(())
+    } else {
+        Err(InternalError::not_found("theme"))
+    }
+}
+
+#[cfg(feature = "server")]
 fn admission_error(error: ThemeOperationRejected) -> InternalError {
     match error {
         ThemeOperationRejected::RateLimited => {
@@ -944,18 +966,7 @@ pub async fn select(
     selection: Option<PublicThemeSelection>,
 ) -> WebResult<MutationOutcome<()>> {
     let (_, owner) = owner(scope).await?;
-    if let Some(PublicThemeSelection::Custom(theme_id)) = selection {
-        let themes = expect_context::<Arc<dyn ThemeStorage>>();
-        let published = themes
-            .list_themes(owner)
-            .await
-            .map_err(InternalError::storage)?
-            .into_iter()
-            .any(|entry| entry.id == theme_id && entry.current_revision.is_some());
-        if !published {
-            return Err(InternalError::not_found("theme"));
-        }
-    }
+    validate_custom_selection(owner, selection.as_ref()).await?;
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let write_scope = expect_context::<WriteScope>();
     write_scope

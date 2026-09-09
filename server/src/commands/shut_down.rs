@@ -74,6 +74,26 @@ fn poll_outcome(result: Result<usize, rustix::io::Errno>) -> io::Result<Option<b
     }
 }
 
+trait PollOperations {
+    fn poll(
+        &mut self,
+        fds: &mut [PollFd<'_>],
+        timeout: &Timespec,
+    ) -> Result<usize, rustix::io::Errno>;
+}
+
+struct LinuxPollOperations;
+
+impl PollOperations for LinuxPollOperations {
+    fn poll(
+        &mut self,
+        fds: &mut [PollFd<'_>],
+        timeout: &Timespec,
+    ) -> Result<usize, rustix::io::Errno> {
+        event::poll(fds, Some(timeout))
+    }
+}
+
 struct LinuxProcessOperations;
 
 impl ProcessOperations for LinuxProcessOperations {
@@ -96,25 +116,34 @@ impl ProcessOperations for LinuxProcessOperations {
     }
 
     fn wait_for_exit(&self, handle: &Self::Handle, timeout: Duration) -> io::Result<bool> {
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "timeout is too large"))?;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(false);
-            }
-            let seconds = i64::try_from(remaining.as_secs())
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "timeout is too large"))?;
-            let timeout = Timespec {
-                tv_sec: seconds,
-                tv_nsec: remaining.subsec_nanos().into(),
-            };
-            let mut fds = [PollFd::new(handle, PollFlags::IN)];
-            if let Some(exited) = poll_outcome(event::poll(&mut fds, Some(&timeout)))? {
-                return Ok(exited);
-            }
+        wait_for_exit_with(handle, timeout, &mut LinuxPollOperations)
+    }
+}
+
+fn wait_for_exit_with(
+    handle: &rustix::fd::OwnedFd,
+    timeout: Duration,
+    operations: &mut impl PollOperations,
+) -> io::Result<bool> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "timeout is too large"))?;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(false);
         }
+        let seconds = i64::try_from(remaining.as_secs())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "timeout is too large"))?;
+        let timeout = Timespec {
+            tv_sec: seconds,
+            tv_nsec: remaining.subsec_nanos().into(),
+        };
+        let mut fds = [PollFd::new(handle, PollFlags::IN)];
+        let Some(exited) = poll_outcome(operations.poll(&mut fds, &timeout))? else {
+            continue;
+        };
+        return Ok(exited);
     }
 }
 
@@ -387,6 +416,42 @@ mod tests {
             .expect("an impossible Linux PID is not an OS error");
 
         assert!(matches!(outcome, OpenOutcome::ProcessExited));
+    }
+
+    struct InterruptedThenTimeout {
+        calls: u8,
+    }
+
+    impl PollOperations for InterruptedThenTimeout {
+        fn poll(
+            &mut self,
+            _fds: &mut [PollFd<'_>],
+            _timeout: &Timespec,
+        ) -> Result<usize, rustix::io::Errno> {
+            self.calls += 1;
+            if self.calls == 1 {
+                Err(rustix::io::Errno::INTR)
+            } else {
+                Ok(0)
+            }
+        }
+    }
+
+    #[test]
+    fn pidfd_wait_retries_an_interrupted_poll_before_terminal_outcome() {
+        let OpenOutcome::Captured(handle) = LinuxProcessOperations
+            .open(std::process::id())
+            .expect("capture this process through pidfd")
+        else {
+            unreachable!("this process remains live while its pidfd is acquired");
+        };
+        let mut operations = InterruptedThenTimeout { calls: 0 };
+
+        assert!(
+            !wait_for_exit_with(&handle, Duration::from_secs(1), &mut operations)
+                .expect("terminal poll timeout")
+        );
+        assert_eq!(operations.calls, 2);
     }
 
     #[test]

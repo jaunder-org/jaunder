@@ -24,6 +24,10 @@ pub mod theme_content;
 
 pub mod websub;
 
+#[cfg(test)]
+#[path = "build_staging.rs"]
+mod build_staging;
+
 #[doc(hidden)]
 pub mod test_support;
 

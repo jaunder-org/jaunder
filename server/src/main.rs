@@ -286,16 +286,14 @@ mod tests {
             )
             .output()
             .expect("run isolated root-wiring test");
+        let stderr = child_diagnostic(&output.stderr);
+        let stdout = child_diagnostic(&output.stdout);
+        let success_message = format!("child status: {}; stderr: {stderr}", output.status);
+        let projection_message = format!("child did not complete root wiring: {stdout}");
+        assert!(output.status.success(), "{success_message}");
         assert!(
-            output.status.success(),
-            "child status: {}; stderr: {}",
-            output.status,
-            child_diagnostic(&output.stderr)
-        );
-        assert!(
-            child_diagnostic(&output.stdout).contains("MAIN_TEST_CHILD_COMPLETED"),
-            "child did not complete root wiring: {}",
-            child_diagnostic(&output.stdout)
+            stdout.contains("MAIN_TEST_CHILD_COMPLETED"),
+            "{projection_message}"
         );
     }
     #[cfg(unix)]

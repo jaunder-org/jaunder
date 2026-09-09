@@ -573,6 +573,15 @@ mod tests {
         String::from_utf8_lossy(stderr).into_owned()
     }
 
+    fn child_projection(stdout: Vec<u8>) -> String {
+        String::from_utf8(stdout)
+            .expect("child stdout is UTF-8")
+            .lines()
+            .find_map(|line| line.strip_prefix("CLI_TEST_PROJECTION="))
+            .expect("child emitted CLI projection")
+            .to_owned()
+    }
+
     fn parse_in_child(scenario: &str, environment: &[(&str, &str)]) -> String {
         let mut command =
             std::process::Command::new(std::env::current_exe().expect("test executable"));
@@ -590,17 +599,9 @@ mod tests {
         }
 
         let output = command.output().expect("spawn CLI parser child");
-        assert!(
-            output.status.success(),
-            "CLI parser child failed: {}",
-            child_failure_diagnostic(&output.stderr)
-        );
-        String::from_utf8(output.stdout)
-            .expect("child stdout is UTF-8")
-            .lines()
-            .find_map(|line| line.strip_prefix("CLI_TEST_PROJECTION="))
-            .expect("child emitted CLI projection")
-            .to_owned()
+        let stderr = child_failure_diagnostic(&output.stderr);
+        assert!(output.status.success(), "CLI parser child failed: {stderr}");
+        child_projection(output.stdout)
     }
 
     #[test]
@@ -608,6 +609,14 @@ mod tests {
         assert_eq!(
             child_failure_diagnostic(b"parser \xff failed"),
             "parser � failed"
+        );
+    }
+
+    #[test]
+    fn child_projection_extracts_the_child_output() {
+        assert_eq!(
+            child_projection(b"noise\nCLI_TEST_PROJECTION=ready\n".to_vec()),
+            "ready"
         );
     }
 

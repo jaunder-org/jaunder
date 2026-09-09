@@ -52,6 +52,18 @@ async fn create_command_user(
     support::require_confirmed_mutation(outcome, "user creation")
 }
 
+trait PasswordPrompt {
+    fn prompt(&self, message: &str) -> io::Result<String>;
+}
+
+struct TerminalPasswordPrompt;
+
+impl PasswordPrompt for TerminalPasswordPrompt {
+    fn prompt(&self, message: &str) -> io::Result<String> {
+        rpassword::prompt_password(message) // cov:ignore: Authoritative host tests cannot supply interactive TTY input to this terminal adapter.
+    }
+}
+
 fn interactive_password_with(
     mut prompt: impl for<'prompt> FnMut(&'prompt str) -> io::Result<String>,
 ) -> anyhow::Result<Password> {
@@ -77,10 +89,31 @@ pub async fn cmd_user_create(
     display_name: Option<&DisplayName>,
     is_operator: bool,
 ) -> anyhow::Result<()> {
+    cmd_user_create_with(
+        users,
+        write_scope,
+        username,
+        password,
+        display_name,
+        is_operator,
+        &TerminalPasswordPrompt,
+    )
+    .await
+}
+
+async fn cmd_user_create_with(
+    users: Arc<dyn UserStorage>,
+    write_scope: &WriteScope,
+    username: &Username,
+    password: Option<Password>,
+    display_name: Option<&DisplayName>,
+    is_operator: bool,
+    prompt: &impl PasswordPrompt,
+) -> anyhow::Result<()> {
     let password = if let Some(p) = password {
         p
     } else {
-        interactive_password_with(|prompt| rpassword::prompt_password(prompt))?
+        interactive_password_with(|message| prompt.prompt(message))?
     };
 
     let user_id = create_command_user(
@@ -529,6 +562,34 @@ mod tests {
                 "{policy:?} must reject before minting"
             );
         }
+    }
+
+    struct FixedPasswordPrompt;
+
+    impl PasswordPrompt for FixedPasswordPrompt {
+        fn prompt(&self, _message: &str) -> io::Result<String> {
+            Ok("password123".to_owned())
+        }
+    }
+
+    #[tokio::test]
+    async fn user_creation_with_prompt_uses_the_injected_prompt() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage_args = sqlite_storage_args(&temp);
+        storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open database");
+
+        cmd_user_create_with(
+            &storage_args,
+            &"prompted-user".parse().expect("username"),
+            None,
+            None,
+            false,
+            &FixedPasswordPrompt,
+        )
+        .await
+        .expect("create user from injected password prompt");
     }
 
     #[test]

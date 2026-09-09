@@ -42,6 +42,19 @@ fn media_content_root(media_path: &Path) -> Result<&Path, BackupError> {
     })
 }
 
+fn mirror_theme_directory(
+    content_root: &Path,
+    destination_root: &Path,
+    previous_backup: Option<&Path>,
+) -> Result<(), BackupError> {
+    let previous_themes = previous_backup.map(|path| path.join("themes"));
+    media::mirror_media_directory(
+        &content_root.join("themes"),
+        &destination_root.join("themes"),
+        previous_themes.as_deref(),
+    )
+}
+
 /// # Errors
 ///
 /// Returns `Err(BackupError)` if the backup export fails.
@@ -153,13 +166,10 @@ async fn export_directory_backup(
         previous_backup.as_deref(),
     )?;
     let content_root = media_content_root(options.media_path)?;
-    media::mirror_media_directory(
-        &content_root.join("themes"),
-        &options.destination_path.join("themes"),
-        previous_backup
-            .as_deref()
-            .map(|path| path.join("themes"))
-            .as_deref(),
+    mirror_theme_directory(
+        content_root,
+        options.destination_path,
+        previous_backup.as_deref(),
     )?;
     format::write_manifest(options.destination_path, &manifest)?;
     Ok(manifest)
@@ -389,6 +399,23 @@ mod tests {
     }
 
     #[test]
+    fn mirror_theme_directory_copies_theme_content() -> Result<(), BackupError> {
+        let temp = tempfile::TempDir::new()?;
+        let content_root = temp.path().join("content");
+        let destination = temp.path().join("backup");
+        fs::create_dir_all(content_root.join("themes"))?;
+        fs::write(content_root.join("themes").join("theme.css"), "body {}")?;
+
+        super::mirror_theme_directory(&content_root, &destination, None)?;
+
+        assert_eq!(
+            fs::read_to_string(destination.join("themes").join("theme.css"))?,
+            "body {}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn theme_content_validation_accepts_every_supported_media_mime() -> Result<(), BackupError> {
         let temp = tempfile::TempDir::new()?;
         let content = [
@@ -415,11 +442,11 @@ mod tests {
     #[test]
     fn theme_eligibility_fixture_write_failure_is_reported() -> Result<(), BackupError> {
         let temp = tempfile::TempDir::new()?;
-        fs::create_dir_all(
-            temp.path()
-                .join("db")
-                .join("theme_content_eligibility.ndjson"),
-        )?;
+        let fixture_rows = temp
+            .path()
+            .join("db")
+            .join("theme_content_eligibility.ndjson");
+        fs::create_dir_all(fixture_rows).expect("create conflicting fixture directory");
 
         let error = write_theme_eligibility_backup(temp.path(), &[])
             .expect_err("writing fixture rows over a directory must fail");
