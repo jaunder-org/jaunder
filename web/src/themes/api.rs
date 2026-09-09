@@ -169,13 +169,9 @@ fn admission_error(error: ThemeOperationRejected) -> InternalError {
     }
 }
 #[cfg(feature = "server")]
-// `multer::Error` is constructed only by Axum's streaming multipart decoder.
-// cov:ignore-start: Axum's decoder is the sole multer::Error constructor
 fn multipart_error(error: multer::Error) -> InternalError {
     InternalError::validation_source("invalid multipart theme import", error)
 }
-// cov:ignore-stop
-
 #[cfg(feature = "server")]
 fn catalog(entry: storage::ThemeCatalogEntry) -> CatalogEntry {
     CatalogEntry {
@@ -526,11 +522,11 @@ pub async fn get_presentation(
         .map_err(InternalError::storage)?;
     // Header pools are represented separately on the wire; fixed bindings deliberately omit them.
     let shuffle_seed = match &header_binding {
-        Some(storage::ThemeRoleBinding::HeaderPool { shuffle_seed, .. }) => Some(*shuffle_seed), // cov:ignore: HeaderPool bindings lack a public HTTP fixture
+        Some(storage::ThemeRoleBinding::HeaderPool { shuffle_seed, .. }) => Some(*shuffle_seed),
         _ => None,
     };
     let header = match header_binding {
-        Some(storage::ThemeRoleBinding::HeaderPool { .. }) => None, // cov:ignore: HeaderPool bindings lack a public HTTP fixture
+        Some(storage::ThemeRoleBinding::HeaderPool { .. }) => None,
         binding => binding.map(binding_wire).transpose()?,
     };
     let header_pool = themes
@@ -651,11 +647,9 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         .ok_or_else(|| InternalError::validation("missing theme ownership scope"))?;
     // Multipart field ordering is enforced at the Axum streaming boundary.
     if scope.name() != Some("scope") {
-        // cov:ignore-start: out-of-order first fields require malformed multipart input
         return Err(InternalError::validation(
             "theme import fields must be scope, name, archive",
         ));
-        // cov:ignore-stop
     }
     let owner = match scope.text().await.map_err(multipart_error)?.as_str() {
         "site" => {
@@ -671,11 +665,9 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         .map_err(multipart_error)?
         .ok_or_else(|| InternalError::validation("missing theme name"))?;
     if name.name() != Some("name") {
-        // cov:ignore-start: out-of-order name fields require malformed multipart input
         return Err(InternalError::validation(
             "theme import fields must be scope, name, archive",
         ));
-        // cov:ignore-stop
     }
     let name = theme_name(&name.text().await.map_err(multipart_error)?)?;
     let mut archive = multipart
@@ -684,11 +676,9 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         .map_err(multipart_error)?
         .ok_or_else(|| InternalError::validation("missing theme archive"))?;
     if archive.name() != Some("archive") {
-        // cov:ignore-start: out-of-order archive fields require malformed multipart input
         return Err(InternalError::validation(
             "theme import fields must be scope, name, archive",
         ));
-        // cov:ignore-stop
     }
     let limit = ThemePackageLimits::default().max_archive_bytes;
     let mut bytes = Vec::new();
@@ -705,11 +695,9 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         .map_err(multipart_error)?
         .is_some()
     {
-        // cov:ignore-start: extra multipart fields require malformed multipart input
         return Err(InternalError::validation(
             "theme import fields must be scope, name, archive",
         ));
-        // cov:ignore-stop
     }
     let draft = draft_from_archive(ThemeId::from(0), &bytes)?;
     let themes = expect_context::<Arc<dyn ThemeStorage>>();

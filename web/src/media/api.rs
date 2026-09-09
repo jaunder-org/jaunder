@@ -287,20 +287,12 @@ pub async fn upload(data: MultipartData) -> WebResult<MutationOutcome<UploadedMe
     // The `file_name()`/`content_type()` borrows must end before `field` is moved
     // into `upload` as the byte stream.
     let filename = MediaManager::validate_filename(field.file_name()).map_err(map_media_error)?;
-    let content_type = field
-        .content_type()
-        .map(|value| {
-            value.to_string().parse::<ContentType>().map_err(|_| {
-                // multer only exposes parsed `mime::Mime` values, a strict subset of
-                // `ContentType`; retain the defensive mapping if either contract changes.
-                // cov:ignore-start: multer parses MIME values before domain conversion
-                map_media_error(anyhow::anyhow!(MediaError::BadRequest(
-                    "Invalid content type".to_owned()
-                )))
-                // cov:ignore-stop
-            })
-        })
-        .transpose()?;
+    let content_type = field.content_type().map(|value| {
+        value
+            .to_string()
+            .parse::<ContentType>()
+            .unwrap_or_else(|_| unreachable!("multer's parsed MIME is a valid ContentType"))
+    });
 
     manager
         .upload(auth.user_id, &filename, content_type, field)

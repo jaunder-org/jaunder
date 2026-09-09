@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
     body::Body,
@@ -9,11 +9,11 @@ use host::theme_package::{ThemePackageLimits, export_theme_package, validate_the
 use rstest::*;
 use rstest_reuse::*;
 use server_fn::ServerFn;
-use storage::ThemeOwner;
-use storage::test_support::{Backend, backends, confirmed_for};
+use storage::test_support::{Backend, TestEnv, backends, confirmed_for, seed_media};
+use storage::{ThemeManager, ThemeOwner, ThemePoolInput as StorageThemePoolInput};
 use tempfile::TempDir;
 use tower::ServiceExt;
-use web::themes::{Draft, OwnershipScope};
+use web::themes::{Draft, OwnershipScope, ThemePoolInput};
 
 use crate::helpers::{
     body_string, create_operator_and_session, create_user_and_session, make_app, post_server_fn,
@@ -125,6 +125,21 @@ fn multipart_body(scope: &str, name: &str, archive: &[u8]) -> Vec<u8> {
     .into_bytes();
     body.extend_from_slice(archive);
     body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
+fn multipart_fields(fields: &[(&str, &[u8])]) -> Vec<u8> {
+    let boundary = "----jaunder-theme-test-boundary";
+    let mut body = Vec::new();
+    for (name, value) in fields {
+        body.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n")
+                .as_bytes(),
+        );
+        body.extend_from_slice(value);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
     body
 }
 
@@ -430,6 +445,61 @@ async fn theme_import_zip_creates_drafts_and_rejects_invalid_packages(#[case] ba
 
 #[apply(backends)]
 #[tokio::test]
+async fn theme_import_zip_rejects_out_of_order_and_extra_fields(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let owner = create_user_and_session(&state).await;
+    let storage = TempDir::new().expect("temporary storage");
+    let valid_archive = archive("body { color: green; }");
+    let cases = [
+        multipart_fields(&[("name", b"Wrong first")]),
+        multipart_fields(&[("scope", b"author"), ("archive", b"Wrong second")]),
+        multipart_fields(&[
+            ("scope", b"author"),
+            ("name", b"Wrong third"),
+            ("extra", b"not an archive"),
+        ]),
+        multipart_fields(&[
+            ("scope", b"author"),
+            ("name", b"Extra field"),
+            ("archive", &valid_archive),
+            ("extra", b"unexpected"),
+        ]),
+    ];
+
+    for body in cases {
+        let response = multipart_response(&state, &storage, body, &owner.cookie()).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            body_string(response)
+                .await
+                .contains("theme import fields must be scope, name, archive"),
+            "field order is a public validation error",
+        );
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn theme_import_zip_rejects_truncated_multipart_framing(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let owner = create_user_and_session(&state).await;
+    let storage = TempDir::new().expect("temporary storage");
+    let body =
+        b"------jaunder-theme-test-boundary\r\nContent-Disposition: form-data; name=\"scope\"\r\n\r\nauthor"
+            .to_vec();
+
+    let response = multipart_response(&state, &storage, body, &owner.cookie()).await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        body_string(response)
+            .await
+            .contains("invalid multipart theme import"),
+        "Axum's multipart decoder errors are projected as public validation failures",
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn theme_import_admission_precedes_archive_parsing_and_is_principal_scoped(
     #[case] backend: Backend,
 ) {
@@ -609,6 +679,64 @@ async fn theme_import_css_and_presentation_are_owner_private(#[case] backend: Ba
             header_pool: Vec::new(),
             shuffle_seed: None,
         }
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn theme_presentation_projects_a_seeded_header_pool(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let owner = create_user_and_session(&state).await;
+    let theme =
+        create_author_theme(&state, &owner.cookie(), "Pooled", "body { color: orange; }").await;
+    let media = seed_media(&state, owner.user_id, "header.png").await;
+    let manager = ThemeManager::new(
+        Arc::clone(&state.themes),
+        Arc::clone(&state.media),
+        state.write_scope.clone(),
+        Arc::new(storage::MediaContentLocks::new(Arc::new(
+            base.path().to_path_buf(),
+        ))),
+    );
+    let shuffle_seed = [7; 32];
+    confirmed_for(
+        manager
+            .replace_header_pool(
+                owner.user_id,
+                ThemeOwner::Author(owner.user_id),
+                theme.id,
+                vec![StorageThemePoolInput::Media(media.clone())],
+                shuffle_seed,
+            )
+            .await
+            .expect("seed header-pool state"),
+        "header-pool seed",
+    );
+    let storage = TempDir::new().expect("temporary storage");
+
+    let response = server_fn_response(
+        &state,
+        &storage,
+        &web::themes::GetPresentation {
+            scope: OwnershipScope::Author,
+            theme_id: theme.id,
+        },
+        Some(&owner.cookie()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], NO_STORE);
+    let presentation: web::themes::ThemePresentation =
+        serde_json::from_str(&body_string(response).await).expect("presentation JSON");
+    assert_eq!(presentation.header, None);
+    assert_eq!(presentation.shuffle_seed, Some(shuffle_seed));
+    assert_eq!(
+        presentation.header_pool,
+        vec![ThemePoolInput::Media(web::themes::ThemeMediaInput {
+            source: media.source,
+            sha256: media.sha256,
+            filename: media.filename,
+        })],
     );
 }
 
