@@ -30,7 +30,7 @@ impl MailSender for FileMailSender {
             "body_text": message.body_text,
         });
         let Ok(mut line) = serde_json::to_string(&record) else {
-            unreachable!("serializing a json! of owned strings is infallible"); // cov:ignore -- this JSON value contains no fallible serializer.
+            unreachable!("serializing a json! of owned strings is infallible");
         };
         line.push('\n');
 

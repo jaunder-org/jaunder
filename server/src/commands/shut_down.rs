@@ -339,7 +339,7 @@ mod tests {
         fs::create_dir(&path).expect("runtime path directory");
 
         let Err(error) = read_runtime_record(&path) else {
-            panic!("a directory is not a runtime record"); // cov:ignore
+            unreachable!("a directory is not a runtime record");
         };
 
         assert!(
@@ -356,7 +356,7 @@ mod tests {
             .open(std::process::id())
             .expect("capture this process through pidfd")
         else {
-            panic!("this process remains live while its pidfd is acquired"); // cov:ignore
+            unreachable!("this process remains live while its pidfd is acquired");
         };
 
         assert!(

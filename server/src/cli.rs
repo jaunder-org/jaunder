@@ -662,8 +662,7 @@ mod tests {
                 };
                 format!("db={}", storage.db)
             }
-            // The parent owns a closed scenario set; this arm indicates a broken harness.
-            _ => panic!("unknown CLI parser child scenario: {scenario}"), // cov:ignore
+            _ => unreachable!("parent owns the closed CLI parser child scenario set"),
         };
         println!("CLI_TEST_PROJECTION={projection}");
     }

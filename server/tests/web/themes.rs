@@ -206,6 +206,45 @@ async fn theme_catalog_enforces_authentication_and_scope(#[case] backend: Backen
     assert_eq!(site_status, StatusCode::OK, "body: {site_body}");
 }
 
+// A catalog name collision reaches the real database constraint before the
+// server-function boundary projects the driver error.
+#[apply(backends)]
+#[tokio::test]
+async fn duplicate_theme_names_are_user_facing_for_create_and_rename(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let owner = create_user_and_session(&state).await;
+    let first =
+        create_author_theme(&state, &owner.cookie(), "Paper", "body { color: navy; }").await;
+
+    let (status, body) = post_server_fn(
+        &state,
+        &web::themes::Create {
+            scope: OwnershipScope::Author,
+            name: "Paper".into(),
+            draft: package_draft("body { color: teal; }"),
+        },
+        Some(&owner.cookie()),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "duplicate create must be rejected");
+    assert!(body.contains("already exists"), "body: {body}");
+
+    let second =
+        create_author_theme(&state, &owner.cookie(), "Ink", "body { color: black; }").await;
+    let (status, body) = post_server_fn(
+        &state,
+        &web::themes::Rename {
+            scope: OwnershipScope::Author,
+            theme_id: second.id,
+            name: first.name,
+        },
+        Some(&owner.cookie()),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "duplicate rename must be rejected");
+    assert!(body.contains("already exists"), "body: {body}");
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn theme_drafts_mask_foreign_ids_and_never_cache_private_responses(#[case] backend: Backend) {

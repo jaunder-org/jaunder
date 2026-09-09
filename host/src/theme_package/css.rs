@@ -62,13 +62,9 @@ pub fn compile_stylesheet(
     );
     let mut stylesheet = StyleSheet::parse(&stylesheet_source, ParserOptions::default())
         .map_err(|error| ThemePackageError::Css(error.to_string()))?;
-    // cov:ignore-start
     let CssRule::Style(boundary_rule) = stylesheet.rules.0.remove(0) else {
-        return Err(ThemePackageError::Css(
-            "could not construct surface selector".into(),
-        ));
+        unreachable!("injected CSS boundary must parse as a style rule")
     };
-    // cov:ignore-stop
     let boundary = boundary_rule
         .selectors
         .0
@@ -229,7 +225,6 @@ fn custom_font_family_name(family: &FontFamily<'_>) -> Result<String, ThemePacka
             "@font-face font-family must be a custom family name".into(),
         ));
     };
-    // cov:ignore-start
     let serde_json::Value::String(name) = serde_json::to_value(family)
         .map_err(|error| ThemePackageError::Css(format!("font-family schema changed: {error}")))?
     else {
@@ -240,7 +235,6 @@ fn custom_font_family_name(family: &FontFamily<'_>) -> Result<String, ThemePacka
     if name.is_empty() {
         return Err(ThemePackageError::Css("font-family cannot be empty".into()));
     }
-    // cov:ignore-stop
     Ok(name)
 }
 
@@ -249,13 +243,11 @@ fn font_family_from_name(name: &str) -> Result<FontFamily<'static>, ThemePackage
         serde_json::Value::String(name.to_owned()),
     )
     .map_err(|error| ThemePackageError::Css(format!("font-family schema changed: {error}")))?;
-    // cov:ignore-start
     if !matches!(family, FontFamily::FamilyName(_)) || custom_font_family_name(&family)? != name {
         return Err(ThemePackageError::Css(
             "font-family schema changed: custom family did not round-trip".into(),
         ));
     }
-    // cov:ignore-stop
     Ok(family)
 }
 
@@ -282,7 +274,6 @@ fn rewrite_font_families(
                 ThemePackageError::Css(format!("undeclared font-family reference: {original}"))
             })?;
         let replacement = font_family_from_name(renamed)?;
-        // cov:ignore-start
         for family in families {
             if matches!(family, FontFamily::FamilyName(_)) {
                 *family = replacement;
@@ -290,7 +281,6 @@ fn rewrite_font_families(
             }
         }
     }
-    // cov:ignore-stop
     Ok(())
 }
 
@@ -367,15 +357,12 @@ fn rewrite_animation_names(
             AnimationName::Ident(name) => name.0.as_ref(),
             AnimationName::String(name) => name.0.as_ref(),
         };
-        // cov:ignore-start
         if referenced.replace(original.to_owned()).is_some() {
             return Err(ThemePackageError::Css(
                 "animation reference is ambiguous".into(),
             ));
         }
-        // cov:ignore-stop
     }
-    // cov:ignore-start
     let Some(original) = referenced else {
         return Ok(());
     };
@@ -395,7 +382,6 @@ fn rewrite_animation_names(
             }
         }
     }
-    // cov:ignore-stop
     Ok(())
 }
 
@@ -442,12 +428,9 @@ impl<'i> Visitor<'i> for AssetUrlVisitor<'_> {
                     "custom-property token streams cannot hide global references".into(),
                 ));
             }
-            // cov:ignore-start
-            // `Property::Custom` is parser-produced only for custom names.
             Property::Custom(custom) if !matches!(custom.name, CustomPropertyName::Custom(_)) => {
-                return Err(ThemePackageError::Css("unsupported property".into()));
+                unreachable!("lightningcss produces custom property variants only for custom names")
             }
-            // cov:ignore-stop
             Property::FontFamily(families) => rewrite_font_families(families, self.fonts)?,
             Property::Font(font) => rewrite_font_families(&mut font.family, self.fonts)?,
             Property::AnimationName(names, _) => rewrite_animation_names(names, self.keyframes)?,
@@ -456,7 +439,7 @@ impl<'i> Visitor<'i> for AssetUrlVisitor<'_> {
                     rewrite_animation_names(
                         std::slice::from_mut(&mut animation.name),
                         self.keyframes,
-                    )?; // cov:ignore
+                    )?;
                 }
             }
             _ => {}
@@ -645,14 +628,10 @@ mod tests {
         )
         .unwrap();
         let CssRule::Style(rule) = &stylesheet.rules.0[0] else {
-            // cov:ignore-start
-            panic!("expected a style rule");
-            // cov:ignore-stop
+            unreachable!("fixture stylesheet must contain a style rule")
         };
         let Property::FontFamily(families) = &rule.declarations.declarations[0] else {
-            // cov:ignore-start
-            panic!("expected a font-family property");
-            // cov:ignore-stop
+            unreachable!("fixture style rule must start with a font-family declaration")
         };
         assert_eq!(
             serde_json::to_value(&families[0]).unwrap(),
@@ -729,19 +708,14 @@ mod tests {
             "//example.test/asset",
             "#fragment",
         ] {
-            // cov:ignore-start
-            // Failure diagnostics are unreachable for each asserted rejected URL.
-            assert!(
-                matches!(
-                    compile(
-                        &format!(".a {{ background-image: url(\"{url}\") }}"),
-                        &BTreeMap::new()
-                    ),
-                    Err(ThemePackageError::Url(_))
-                ),
-                "{url}"
+            let result = compile(
+                &format!(".a {{ background-image: url(\"{url}\") }}"),
+                &BTreeMap::new(),
             );
-            // cov:ignore-stop
+            assert!(
+                matches!(result, Err(ThemePackageError::Url(_))),
+                "external or opaque URL must return a URL error: {url}"
+            );
         }
     }
 

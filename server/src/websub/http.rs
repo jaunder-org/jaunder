@@ -293,10 +293,9 @@ mod tests {
                 retry_after,
                 reason,
             } => (retry_after, reason),
-            // cov:ignore-start — assertion helper's impossible variant in retryable-only tests
-            WebSubError::Terminal { reason } => {
-                panic!("expected retryable failure, got terminal {reason}")
-            } // cov:ignore-stop
+            WebSubError::Terminal { .. } => {
+                unreachable!("retryable helper receives only retryable failures")
+            }
         }
     }
 
@@ -461,7 +460,7 @@ mod tests {
             "/non-http" => "non-HTTP(S) Location",
             "/loop" => "redirect loop",
             "/fourth" => "redirect limit",
-            _ => unreachable!("known redirect case"), // cov:ignore -- closed helper cases are declared immediately above.
+            _ => unreachable!("known redirect case"),
         };
         assert!(error.to_string().contains(expected_diagnostic));
         assert!(matches!(
@@ -722,7 +721,7 @@ mod tests {
                 .expect_err("refused connection is retryable"),
         );
         let RetryableWebSubError::Transport(source) = reason else {
-            panic!("transport failure has typed transport reason"); // cov:ignore
+            unreachable!("transport failure has typed transport reason");
         };
         let source = source
             .downcast_ref::<reqwest::Error>()
@@ -737,7 +736,7 @@ mod tests {
                 .expect_err("timeout is retryable"),
         );
         let RetryableWebSubError::Transport(source) = reason else {
-            panic!("timeout has typed transport reason"); // cov:ignore
+            unreachable!("timeout has typed transport reason");
         };
         let source = source
             .downcast_ref::<reqwest::Error>()

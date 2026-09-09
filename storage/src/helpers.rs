@@ -859,7 +859,7 @@ mod tests {
             password::PasswordError::HashingFailed(expected),
         ) = (source, &expected)
         else {
-            panic!("expected typed hashing failures"); // cov:ignore
+            unreachable!("injected hashing failure keeps its typed source");
         };
         assert_eq!(actual, expected);
     }
@@ -883,7 +883,7 @@ mod tests {
             password::PasswordError::VerificationFailed(expected),
         ) = (source, &expected)
         else {
-            panic!("expected typed verification failures"); // cov:ignore
+            unreachable!("injected verification failure keeps its typed source");
         };
         assert_eq!(actual, expected);
     }

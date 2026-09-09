@@ -195,11 +195,9 @@ struct ManifestVisitor;
 impl<'de> Visitor<'de> for ManifestVisitor {
     type Value = ManifestAssetsUnique;
 
-    // cov:ignore-start
     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("a theme manifest object")
     }
-    // cov:ignore-stop
 
     fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
     where
@@ -234,11 +232,9 @@ struct UniqueObjectVisitor;
 impl<'de> Visitor<'de> for UniqueObjectVisitor {
     type Value = ();
 
-    // cov:ignore-start
     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("an assets object with unique member names")
     }
-    // cov:ignore-stop
 
     fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
     where
@@ -302,13 +298,11 @@ fn read_archive_entries(
                 .by_index(index)
                 .map_err(|error| zip_error(&error))
                 .and_then(|file| {
-                    // cov:ignore-start
                     usize::try_from(file.header_start()).map_err(|_| {
-                        ThemePackageError::Archive(
-                            "local header offset exceeds platform limit".into(),
+                        unreachable!(
+                            "archive member header offsets are bounded by validated archive input"
                         )
                     })
-                    // cov:ignore-stop
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -328,11 +322,9 @@ fn read_archive_entries(
         {
             return Err(ThemePackageError::Member(path));
         }
-        // cov:ignore-start
-        let header_start = usize::try_from(file.header_start()).map_err(|_| {
-            ThemePackageError::Archive("local header offset exceeds platform limit".into())
-        })?;
-        // cov:ignore-stop
+        let header_start = usize::try_from(file.header_start()).unwrap_or_else(|_| {
+            unreachable!("archive member header offsets are bounded by validated archive input")
+        });
         let actual_compressed =
             compressed_member_bytes(input, header_start, &member_starts, central_start)?;
         validate_local_header(
@@ -358,11 +350,9 @@ fn read_archive_entries(
         file.take(read_limit)
             .read_to_end(&mut bytes)
             .map_err(|error| ThemePackageError::Archive(error.to_string()))?;
-        // cov:ignore-start
         if bytes.len() > limits.max_file_bytes {
             return Err(limit("per-file bytes"));
         }
-        // cov:ignore-stop
         expanded = expanded
             .checked_add(bytes.len())
             .ok_or_else(|| limit("expanded bytes"))?;
@@ -663,11 +653,9 @@ fn animation_frames(mime: AssetMime, bytes: &[u8]) -> Result<usize, ThemePackage
             let context =
                 mp4parse::read_avif(&mut Cursor::new(bytes), mp4parse::ParseStrictness::Normal)
                     .map_err(|_| avif_mime_error())?;
-            // cov:ignore-start
             if context.sequence.is_some() && !context.unsupported_features.is_empty() {
                 return Err(avif_mime_error());
             }
-            // cov:ignore-stop
             context
                 .sequence
                 .as_ref()
@@ -695,11 +683,9 @@ fn avif_sequence_frames(sequence: &mp4parse::MediaContext) -> Result<usize, Them
                 total.checked_add(usize::try_from(sample.sample_count).ok()?)
             })
             .ok_or_else(avif_mime_error)?;
-        // cov:ignore-start
         if sample_count == 0 || frames.replace(sample_count).is_some() {
             return Err(avif_mime_error());
         }
-        // cov:ignore-stop
     }
     frames.ok_or_else(avif_mime_error)
 }
@@ -808,13 +794,11 @@ fn validate_local_header(
     let local_name = input
         .get(start + 30..start + 30 + name_len)
         .ok_or_else(|| ThemePackageError::Archive("truncated local filename".into()))?;
-    // cov:ignore-start
     let method_matches = match expected_method {
         zip::CompressionMethod::Stored => method == 0,
         zip::CompressionMethod::Deflated => method == 8,
         _ => false,
     };
-    // cov:ignore-stop
     if flags & 1 != 0
         || !method_matches
         || std::str::from_utf8(local_name).ok() != Some(expected_name)

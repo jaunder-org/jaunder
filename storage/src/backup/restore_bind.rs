@@ -99,7 +99,7 @@ mod tests {
         let RestoreBindValue::Binary(binary) =
             restore_bind_value(&binary_column(), &value).expect("decode binary wire value")
         else {
-            panic!("binary column must yield a binary binding"); // cov:ignore this assertion only runs if the tested success contract fails.
+            unreachable!("binary column decodes to a binary binding");
         };
         assert_eq!(binary.0, [0, 0, 0xff, 0x80]);
     }

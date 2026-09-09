@@ -1583,7 +1583,9 @@ mod tests {
                     return Poll::Ready(None::<Result<Bytes, io::Error>>);
                 }
                 if let Some(admitted_tx) = admitted_tx.take() {
-                    admitted_tx.send(()).expect("test observes admitted upload"); // cov:ignore — failure requires violating the test's receiver-before-release invariant
+                    admitted_tx
+                        .send(())
+                        .unwrap_or_else(|()| unreachable!("test observes admitted upload"));
                 }
                 match Pin::new(&mut release_rx).poll(context) {
                     Poll::Pending => Poll::Pending,
@@ -1591,7 +1593,7 @@ mod tests {
                         sent = true;
                         Poll::Ready(Some(Ok(Bytes::from_static(b"admitted"))))
                     }
-                    Poll::Ready(Err(_)) => panic!("test must release admitted upload"), // cov:ignore — sender cancellation violates the test's release-before-await invariant
+                    Poll::Ready(Err(_)) => unreachable!("test must release admitted upload"),
                 }
             });
             first_manager

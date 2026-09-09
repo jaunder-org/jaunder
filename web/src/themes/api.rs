@@ -335,9 +335,8 @@ fn percent_encode_draft_asset_path(path: &str) -> String {
     encoded
 }
 
-// Storage error variants are projected defensively; backend-specific variants require an
-// actual database driver to construct and are exercised by the storage integration suite.
-// cov:ignore-start
+// Storage error variants are projected defensively; backend-specific unique-violation
+// variants require an actual database driver to construct.
 #[cfg(feature = "server")]
 fn create_storage_error(error: sqlx::Error) -> InternalError {
     match &error {
@@ -367,7 +366,6 @@ fn replace_draft_error(error: ReplaceDraftError) -> InternalError {
         ReplaceDraftError::Storage(error) => InternalError::storage(error),
     }
 }
-// cov:ignore-stop
 
 #[cfg(feature = "server")]
 fn theme_name(name: &str) -> Result<String, InternalError> {
@@ -527,16 +525,14 @@ pub async fn get_presentation(
         .await
         .map_err(InternalError::storage)?;
     // Header pools are represented separately on the wire; fixed bindings deliberately omit them.
-    // cov:ignore-start
     let shuffle_seed = match &header_binding {
-        Some(storage::ThemeRoleBinding::HeaderPool { shuffle_seed, .. }) => Some(*shuffle_seed),
+        Some(storage::ThemeRoleBinding::HeaderPool { shuffle_seed, .. }) => Some(*shuffle_seed), // cov:ignore
         _ => None,
     };
     let header = match header_binding {
-        Some(storage::ThemeRoleBinding::HeaderPool { .. }) => None,
+        Some(storage::ThemeRoleBinding::HeaderPool { .. }) => None, // cov:ignore
         binding => binding.map(binding_wire).transpose()?,
     };
-    // cov:ignore-stop
     let header_pool = themes
         .header_pool(owner, theme_id)
         .await
@@ -654,11 +650,12 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         .map_err(multipart_error)?
         .ok_or_else(|| InternalError::validation("missing theme ownership scope"))?;
     // Multipart field ordering is enforced at the Axum streaming boundary.
-    // cov:ignore-start
     if scope.name() != Some("scope") {
+        // cov:ignore-start
         return Err(InternalError::validation(
             "theme import fields must be scope, name, archive",
         ));
+        // cov:ignore-stop
     }
     let owner = match scope.text().await.map_err(multipart_error)?.as_str() {
         "site" => {
@@ -668,17 +665,17 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         "author" => ThemeOwner::Author(actor.user_id),
         _ => return Err(InternalError::validation("invalid theme ownership scope")),
     };
-    // cov:ignore-stop
     let name = multipart
         .next_field()
         .await
         .map_err(multipart_error)?
         .ok_or_else(|| InternalError::validation("missing theme name"))?;
-    // cov:ignore-start
     if name.name() != Some("name") {
+        // cov:ignore-start
         return Err(InternalError::validation(
             "theme import fields must be scope, name, archive",
         ));
+        // cov:ignore-stop
     }
     let name = theme_name(&name.text().await.map_err(multipart_error)?)?;
     let mut archive = multipart
@@ -687,11 +684,12 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         .map_err(multipart_error)?
         .ok_or_else(|| InternalError::validation("missing theme archive"))?;
     if archive.name() != Some("archive") {
+        // cov:ignore-start
         return Err(InternalError::validation(
             "theme import fields must be scope, name, archive",
         ));
+        // cov:ignore-stop
     }
-    // cov:ignore-stop
     let limit = ThemePackageLimits::default().max_archive_bytes;
     let mut bytes = Vec::new();
     while let Some(chunk) = archive.chunk().await.map_err(multipart_error)? {
@@ -701,18 +699,18 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         bytes.extend_from_slice(&chunk);
     }
     drop(archive);
-    // cov:ignore-start
     if multipart
         .next_field()
         .await
         .map_err(multipart_error)?
         .is_some()
     {
+        // cov:ignore-start
         return Err(InternalError::validation(
             "theme import fields must be scope, name, archive",
         ));
+        // cov:ignore-stop
     }
-    // cov:ignore-stop
     let draft = draft_from_archive(ThemeId::from(0), &bytes)?;
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let write_scope = expect_context::<WriteScope>();
@@ -763,7 +761,7 @@ pub async fn import_css(
             stylesheet,
             assets: Vec::new(),
         },
-    )?; // cov:ignore — successful import exercises validation; this is compiler `?` bookkeeping
+    )?;
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let write_scope = expect_context::<WriteScope>();
     let name_for_write = name.clone();
@@ -851,8 +849,6 @@ pub async fn export(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Expor
     let bytes = theme_package::export_theme_package(&draft.manifest, &draft.stylesheet, &assets)
         .map_err(InternalError::server)?;
     let filename = safe_filename(&entry.name);
-    // Response headers are observable only through the Axum HTTP adapter.
-    // cov:ignore-start
     if let Some(options) = use_context::<ResponseOptions>() {
         options.insert_header(
             axum::http::header::CONTENT_DISPOSITION,
@@ -860,7 +856,6 @@ pub async fn export(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Expor
                 .map_err(InternalError::server)?,
         );
     }
-    // cov:ignore-stop
     Ok(ExportedPackage { filename, bytes })
 }
 
@@ -966,9 +961,6 @@ pub async fn select(
     let (_, owner) = owner(scope).await?;
     if let Some(PublicThemeSelection::Custom(theme_id)) = selection {
         let themes = expect_context::<Arc<dyn ThemeStorage>>();
-        // Selection validation is an owner-visible catalog read; the absence projection is
-        // covered by the HTTP authorization integration path.
-        // cov:ignore-start
         if !themes
             .list_themes(owner)
             .await
@@ -978,7 +970,6 @@ pub async fn select(
         {
             return Err(InternalError::not_found("theme"));
         }
-        // cov:ignore-stop
     }
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let write_scope = expect_context::<WriteScope>();
@@ -1006,26 +997,18 @@ pub async fn replace_binding(
     let (actor, owner) = owner(scope).await?;
     ensure_owned(owner, theme_id).await?;
     let manager = expect_context::<Arc<ThemeManager>>();
+    let input = match input {
+        ThemeBindingInput::PackagedDefault => ThemeRoleInput::PackagedDefault,
+        ThemeBindingInput::ExplicitAbsent => ThemeRoleInput::ExplicitAbsent,
+        ThemeBindingInput::PackageAsset(path) => ThemeRoleInput::PackageAsset(path),
+        ThemeBindingInput::Media(media) => ThemeRoleInput::Media(MediaRef {
+            source: media.source,
+            sha256: media.sha256,
+            filename: media.filename,
+        }),
+    };
     manager
-        .replace_role(
-            actor,
-            owner,
-            theme_id,
-            role,
-            // The concrete manager tests exercise every storage role input. This is the
-            // server-function serialization boundary, which has no host-only caller.
-            // cov:ignore-start
-            match input {
-                ThemeBindingInput::PackagedDefault => ThemeRoleInput::PackagedDefault,
-                ThemeBindingInput::ExplicitAbsent => ThemeRoleInput::ExplicitAbsent,
-                ThemeBindingInput::PackageAsset(path) => ThemeRoleInput::PackageAsset(path),
-                ThemeBindingInput::Media(media) => ThemeRoleInput::Media(MediaRef {
-                    source: media.source,
-                    sha256: media.sha256,
-                    filename: media.filename,
-                }),
-            }, // cov:ignore-stop
-        )
+        .replace_role(actor, owner, theme_id, role, input)
         .await
         .map_err(manager_error)
 }
@@ -1644,37 +1627,58 @@ mod tests {
         drop(reactive_owner);
     }
 
-    // guard:no-backend — concrete manager over mock stores and write scope
-    #[tokio::test]
-    async fn replacing_a_packaged_default_binding_commits_owned_mutation() {
+    async fn assert_replace_binding_persists(
+        input: ThemeBindingInput,
+        expected_binding: ThemeRoleBinding,
+    ) {
         let reactive_owner = Owner::new();
         reactive_owner.set();
         let theme_id = ThemeId::from(8_i64);
         let existing = draft_from_input(
             theme_id,
             Draft {
-                manifest: plain_css_manifest("Ocean").unwrap(),
+                manifest: plain_css_manifest("Ocean")
+                    .unwrap_or_else(|error| panic!("test fixture manifest is valid: {error}")),
                 stylesheet: b".j-theme-root { color: blue; }".to_vec(),
                 assets: Vec::new(),
             },
         )
-        .unwrap();
+        .unwrap_or_else(|error| panic!("test fixture draft is valid: {error}"));
+        let media = match &expected_binding {
+            ThemeRoleBinding::Media { media, .. } => Some(media.clone()),
+            _ => None,
+        };
+        let expected_binding_for_write = expected_binding.clone();
         let mut themes = MockThemeStorage::new();
         themes
             .expect_get_draft()
             .returning(move |_, _| Ok(Some(existing.clone())));
-        themes.expect_role_binding().returning(|_, _, _| Ok(None));
+        themes
+            .expect_role_binding()
+            .times(2)
+            .returning(|_, _, _| Ok(None));
         themes.expect_header_pool().returning(|_, _| Ok(Vec::new()));
         themes
             .expect_locked_media_references()
             .returning(|_, _, _| Ok(Vec::new()));
         themes
             .expect_replace_role_binding()
+            .withf(move |_, owner, binding| {
+                *owner == ThemeOwner::Author(UserId::from(7_i64))
+                    && binding == &expected_binding_for_write
+            })
             .returning(|_, _, _| Ok(()));
         let themes: Arc<dyn ThemeStorage> = Arc::new(themes);
+        let mut media_storage = MockMediaStorage::new();
+        if let Some(media) = media {
+            media_storage
+                .expect_lock_media_reference()
+                .withf(move |_, candidate| candidate == &media)
+                .returning(|_, _| Ok(()));
+        }
         let manager = ThemeManager::new(
             Arc::clone(&themes),
-            Arc::new(MockMediaStorage::new()),
+            Arc::new(media_storage),
             mock_write_scope(),
             Arc::new(MediaContentLocks::new(Arc::new(std::env::temp_dir()))),
         );
@@ -1686,13 +1690,63 @@ mod tests {
             OwnershipScope::Author,
             theme_id,
             ThemeImageRole::Logo,
-            ThemeBindingInput::PackagedDefault,
+            input,
         )
         .await
-        .unwrap();
-
-        drop(reactive_owner);
+        .unwrap_or_else(|error| panic!("owned binding replacement succeeds: {error}"));
         assert_eq!(outcome, common::MutationOutcome::Confirmed(()));
+        drop(reactive_owner);
+    }
+
+    // guard:no-backend — concrete manager over mock stores and write scope
+    #[tokio::test]
+    async fn replacing_owned_bindings_persists_each_public_source() {
+        let theme_id = ThemeId::from(8_i64);
+        let cases = [
+            (
+                ThemeBindingInput::PackagedDefault,
+                ThemeRoleBinding::PackagedDefault {
+                    theme_id,
+                    role: ThemeImageRole::Logo,
+                },
+            ),
+            (
+                ThemeBindingInput::ExplicitAbsent,
+                ThemeRoleBinding::ExplicitAbsent {
+                    theme_id,
+                    role: ThemeImageRole::Logo,
+                },
+            ),
+            (
+                ThemeBindingInput::PackageAsset("assets/logo.png".into()),
+                ThemeRoleBinding::PackageAsset {
+                    theme_id,
+                    role: ThemeImageRole::Logo,
+                    package_path: "assets/logo.png".into(),
+                },
+            ),
+            (
+                ThemeBindingInput::Media(ThemeMediaInput {
+                    source: MediaSource::Upload,
+                    sha256: "a".repeat(64).parse().unwrap(),
+                    filename: "hero.png".parse().unwrap(),
+                }),
+                ThemeRoleBinding::Media {
+                    theme_id,
+                    role: ThemeImageRole::Logo,
+                    user_id: UserId::from(7_i64),
+                    media: MediaRef {
+                        source: MediaSource::Upload,
+                        sha256: "a".repeat(64).parse().unwrap(),
+                        filename: "hero.png".parse().unwrap(),
+                    },
+                },
+            ),
+        ];
+
+        for (input, expected_binding) in cases {
+            assert_replace_binding_persists(input, expected_binding).await;
+        }
     }
 
     // guard:no-backend — concrete manager over mock stores and write scope

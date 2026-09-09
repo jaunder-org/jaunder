@@ -298,9 +298,9 @@ pub async fn upload(data: MultipartData) -> WebResult<MutationOutcome<UploadedMe
                     "Invalid content type".to_owned()
                 )))
                 // cov:ignore-stop
-            }) // cov:ignore
+            })
         })
-        .transpose()?; // cov:ignore
+        .transpose()?;
 
     manager
         .upload(auth.user_id, &filename, content_type, field)

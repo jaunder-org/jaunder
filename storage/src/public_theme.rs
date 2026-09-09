@@ -161,7 +161,9 @@ fn resolve_role_with_package_url(
             ThemeImageRole::Logo => packaged_defaults?
                 .first()
                 .and_then(|path| package_url(path)),
-            ThemeImageRole::Header => None, // cov:ignore — callers route header defaults through resolve_packaged_header_default before this helper
+            ThemeImageRole::Header => {
+                unreachable!("header defaults resolve before package URL lookup")
+            }
         },
         ThemeRoleBinding::ExplicitAbsent { .. } => None,
         ThemeRoleBinding::PackageAsset { package_path, .. } => package_url(package_path),

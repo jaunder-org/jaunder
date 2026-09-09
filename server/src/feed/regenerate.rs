@@ -32,10 +32,10 @@ pub async fn render(
     posts: &dyn PostStorage,
     feed_path: FeedPath,
 ) -> Result<FeedCacheRow, RegenerateError> {
-    // A `FeedPath` is always parseable, so this never yields `None`; `BadUrl` is
-    // retained as a mapped (never-hit) error rather than an `expect()`/panic.
-    let (surface, format) =
-        feed::parse(&feed_path).ok_or_else(|| RegenerateError::BadUrl(feed_path.to_string()))?; // cov:ignore
+    // A `FeedPath` is always parseable, so this never yields `None`.
+    let Some((surface, format)) = feed::parse(&feed_path) else {
+        unreachable!("FeedPath always parses into a feed surface and format");
+    };
 
     let window = HybridWindow {
         min_items: snapshot.feeds.min_items,

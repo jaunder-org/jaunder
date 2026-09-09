@@ -538,7 +538,7 @@ mod tests {
                         Err(storage::PostgresPasswordError::FileVariable(_))
                     ));
                 }
-                _ => unreachable!("parent supplies a closed configuration scenario set"), // cov:ignore — child-only bootstrap dispatch is exhaustively selected by the parent
+                _ => unreachable!("parent supplies a closed configuration scenario set"),
             }
             return;
         }
@@ -587,7 +587,7 @@ mod tests {
                     );
                 }
                 "absent" => {}
-                _ => unreachable!("closed parent scenario set"), // cov:ignore — child-only bootstrap dispatch is exhaustively selected by the parent
+                _ => unreachable!("closed parent scenario set"),
             }
             assert!(
                 command
