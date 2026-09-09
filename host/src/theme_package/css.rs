@@ -282,7 +282,7 @@ fn rewrite_font_families(
             if matches!(family, FontFamily::FamilyName(_)) {
                 *family = replacement;
                 break; // cov:ignore: llvm-cov omits the exercised replacement-loop exit.
-            }
+            } // cov:ignore: llvm-cov omits the exercised replacement-branch closing edge.
         }
     } // cov:ignore: llvm-cov omits the exercised replacement-loop closing edge.
     Ok(())
